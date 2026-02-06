@@ -445,7 +445,7 @@ Follows Node.js REPL / Aider / Gemini CLI conventions:
 
 | Context | Action | Result |
 |---------|--------|--------|
-| During `agent.run()` | Ctrl+C | Cancels operation, returns to prompt. Does **not** count toward exit. |
+| During `agent.run()` | Ctrl+C | Cancels operation, patches dangling tool calls (§7.6), returns to prompt. Does **not** count toward exit. |
 | At prompt | Ctrl+C (1st) | Prints "Press Ctrl+C again to exit" |
 | At prompt | Ctrl+C (2nd within 2s) | Exits session |
 | At prompt | Ctrl+C (2nd after 2s) | Treated as new 1st press (timeout reset) |
@@ -724,7 +724,32 @@ agent = Agent(model, history_processors=[trim_history])
 
 **Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine. A processor should be added when long sessions become common.
 
-### 7.5 Future Considerations
+### 7.5 Interrupt Recovery (Dangling Tool Call Patching)
+
+When the user presses Ctrl+C during `agent.run()`, the LLM may have been mid-tool-call. If `message_history` contains a `ModelResponse` with a `ToolCallPart` but no matching `ToolReturnPart`, the next `agent.run()` call would fail because the LLM sees an unanswered tool call.
+
+**Mitigation:** `_patch_dangling_tool_calls()` scans the last message in history after a `KeyboardInterrupt`. If it's a `ModelResponse` containing `ToolCallPart`s, the function appends a synthetic `ModelRequest` with `ToolReturnPart`(s) carrying an "Interrupted by user." error message.
+
+```python
+def _patch_dangling_tool_calls(messages, error_message="Interrupted by user."):
+    last_msg = messages[-1]
+    if last_msg.kind != "response":
+        return messages
+    tool_calls = [p for p in last_msg.parts if isinstance(p, ToolCallPart)]
+    if not tool_calls:
+        return messages
+    return_parts = [
+        ToolReturnPart(tool_name=tc.tool_name, tool_call_id=tc.tool_call_id, content=error_message)
+        for tc in tool_calls
+    ]
+    return messages + [ModelRequest(parts=return_parts)]
+```
+
+**Why this works:** Wrapping `ToolReturnPart`s in a `ModelRequest` is the same pattern pydantic-ai uses internally in `_agent_graph.py:_handle_final_result()`, which explicitly comments: *"To allow this message history to be used in a future run without dangling tool calls, append a new ModelRequest using the tool returns and retries."*
+
+**Current behavior note:** `agent.run()` copies the input list (`list(message_history)`), so on `KeyboardInterrupt` the original `message_history` is unchanged from the previous successful turn — no dangling calls exist. The patch is defensive: it protects against future adoption of `agent.iter()` or streaming where partial state may leak into the caller's list.
+
+### 7.6 Future Considerations
 
 - **Sliding window**: Register a `history_processor` with message count or token-based trimming
 - **Persistence**: Save history to SQLite (alongside OTel traces) to enable session resume

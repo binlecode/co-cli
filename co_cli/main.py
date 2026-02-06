@@ -16,6 +16,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from pydantic_ai import Agent
+from pydantic_ai.messages import ModelRequest, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli.agent import get_agent
@@ -84,6 +85,36 @@ def create_deps() -> CoDeps:
     )
 
 
+def _patch_dangling_tool_calls(
+    messages: list, error_message: str = "Interrupted by user."
+) -> list:
+    """Patch message history if last response has unanswered tool calls.
+
+    LLM models expect both a tool call and its corresponding return in
+    history. Without this patch, the next agent.run() would fail.
+    """
+    if not messages:
+        return messages
+
+    last_msg = messages[-1]
+    if not (hasattr(last_msg, "kind") and last_msg.kind == "response"):
+        return messages
+
+    tool_calls = [p for p in last_msg.parts if isinstance(p, ToolCallPart)]
+    if not tool_calls:
+        return messages
+
+    return_parts = [
+        ToolReturnPart(
+            tool_name=tc.tool_name,
+            tool_call_id=tc.tool_call_id,
+            content=error_message,
+        )
+        for tc in tool_calls
+    ]
+    return messages + [ModelRequest(parts=return_parts)]
+
+
 async def chat_loop():
     agent = get_agent()
     deps = create_deps()
@@ -120,6 +151,8 @@ async def chat_loop():
                     console.print(Markdown(result.output))
                 except KeyboardInterrupt:
                     # Cancel current operation, don't count toward exit
+                    # Patch any dangling tool calls so next turn doesn't fail
+                    message_history = _patch_dangling_tool_calls(message_history)
                     console.print("\n[dim]Interrupted.[/dim]")
 
             except EOFError:

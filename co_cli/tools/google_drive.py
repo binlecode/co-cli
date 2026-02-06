@@ -10,6 +10,8 @@ from co_cli.deps import CoDeps
 def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict[str, Any]]:
     """Search for files in Google Drive.
 
+    Each result contains a 'url' field — always display it so users can click through.
+
     Args:
         query: Search keywords or metadata query.
     """
@@ -30,6 +32,9 @@ def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict[str, Any]]:
         items = results.get("files", [])
         if not items:
             raise ModelRetry("No results. Try different keywords.")
+        for item in items:
+            if "webViewLink" in item:
+                item["url"] = item.pop("webViewLink")
         return items
     except ModelRetry:
         raise
