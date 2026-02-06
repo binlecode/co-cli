@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.instrumented import InstrumentationSettings
+from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
@@ -24,7 +25,7 @@ from co_cli.sandbox import Sandbox
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, PROMPT_CHAR
-from co_cli.banner import display_welcome_banner
+from co_cli.banner import display_welcome_banner, VERSION
 
 # Setup Telemetry - must be done before Agent.instrument_all()
 from opentelemetry.sdk.resources import Resource
@@ -32,7 +33,7 @@ from opentelemetry.sdk.resources import Resource
 exporter = SQLiteSpanExporter()
 resource = Resource.create({
     "service.name": "co-cli",
-    "service.version": "0.2.4",
+    "service.version": VERSION,
 })
 tracer_provider = TracerProvider(resource=resource)
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -51,21 +52,12 @@ app = typer.Typer(help="Co - The Production-Grade Personal Assistant CLI")
 def create_deps() -> CoDeps:
     """Create deps from settings."""
     from pathlib import Path
-    from co_cli.google_auth import ensure_google_credentials, build_google_service, ALL_GOOGLE_SCOPES
+    session_id = uuid4().hex
 
     # Resolve obsidian vault path
     vault_path = None
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
-
-    # Single auth call for all Google services (auto-runs gcloud if needed)
-    google_creds = ensure_google_credentials(
-        settings.google_credentials_path,
-        ALL_GOOGLE_SCOPES,
-    )
-    google_drive = build_google_service("drive", "v3", google_creds)
-    google_gmail = build_google_service("gmail", "v1", google_creds)
-    google_calendar = build_google_service("calendar", "v3", google_creds)
 
     # Build Slack client
     slack_client = None
@@ -74,13 +66,14 @@ def create_deps() -> CoDeps:
         slack_client = WebClient(token=settings.slack_bot_token)
 
     return CoDeps(
-        sandbox=Sandbox(image=settings.docker_image),
+        sandbox=Sandbox(
+            image=settings.docker_image,
+            container_name=f"co-runner-{session_id[:8]}",
+        ),
         auto_confirm=settings.auto_confirm,
-        session_id=uuid4().hex,
+        session_id=session_id,
         obsidian_vault_path=vault_path,
-        google_drive=google_drive,
-        google_gmail=google_gmail,
-        google_calendar=google_calendar,
+        google_credentials_path=settings.google_credentials_path,
         slack_client=slack_client,
     )
 
@@ -146,6 +139,7 @@ async def chat_loop():
                     result = await agent.run(
                         user_input, deps=deps, message_history=message_history,
                         model_settings=model_settings,
+                        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
                     )
                     message_history = result.all_messages()
                     console.print(Markdown(result.output))
