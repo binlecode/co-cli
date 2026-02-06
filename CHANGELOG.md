@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-02-05
+
+### Added
+- **Gmail inbox tools**: `list_emails` and `search_emails` for reading and searching Gmail (Gmail was previously write-only via `draft_email`).
+- **Calendar search**: `search_calendar_events` tool with keyword search, configurable date range, and max results.
+- **Google auth auto-setup**: `ensure_google_credentials()` in `google_auth.py` — automatically runs `gcloud auth application-default login` on first use if no token exists.
+- **Design docs**: `DESIGN-tool-google.md` (Google tools architecture + setup guide) and `DESIGN-tool-slack.md`.
+- **Research doc**: `RESEARCH-cli-agent-tools-landscape-2026.md` — 10-agent competitive analysis, tool roadmap (Batches 7-12), and agentic patterns survey.
+
+### Changed
+- **RunContext migration (Batch 3-4)**: All Google and Slack tools migrated from `tool_plain()` to `agent.tool()` with `RunContext[CoDeps]` pattern.
+- **File layout**: Extracted `comm.py` junk drawer into separate `google_drive.py`, `google_gmail.py`, `google_calendar.py`, `slack.py` modules.
+- **Calendar tool refactored**: Extracted `_get_calendar_service`, `_format_events`, `_handle_calendar_error` helpers for reuse across `list_calendar_events` and `search_calendar_events`.
+- **Google auth centralized**: Single `google_auth.py` module with shared credentials and service builder (was duplicated across tool files).
+- **CoDeps expanded**: Added `google_drive`, `google_gmail`, `google_calendar`, `slack_client` fields — all API clients built once at startup via `create_deps()`.
+
+### Fixed
+- **API-not-enabled errors**: All Google tools now detect "API not enabled" (`accessNotConfigured`) errors and return actionable `ModelRetry` messages with the exact `gcloud services enable` command for each API.
+- **Google setup docs**: Added step-by-step guide covering token acquisition, GCP project discovery, API enablement, and troubleshooting table with 7 common failure scenarios.
+
+---
+
 ## [0.1.0] - 2026-02-03
 
 ### Added
