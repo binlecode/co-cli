@@ -1,0 +1,31 @@
+{
+  "title": "Co CLI - Agent Traces",
+  "description": "OpenTelemetry traces from Co CLI agent runs",
+  "databases": {
+    "co-cli": {
+      "tables": {
+        "traces": {
+          "title": "Traces (Summary)",
+          "description": "Simplified view of agent operations - start here",
+          "sort_desc": "time"
+        },
+        "spans": {
+          "title": "Raw Spans",
+          "description": "Full OpenTelemetry span data with all attributes",
+          "sort_desc": "start_time",
+          "columns": {
+            "id": "Span ID",
+            "name": "Operation",
+            "context": "Trace Context",
+            "kind": "Span Kind",
+            "start_time": "Started",
+            "end_time": "Ended",
+            "attributes": "Attributes (JSON)",
+            "events": "Events",
+            "status": "Status"
+          }
+        }
+      }
+    }
+  }
+}
