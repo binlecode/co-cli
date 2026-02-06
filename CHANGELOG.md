@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-02-06
+
+### Added
+- **Theming**: Light/dark color themes with `--theme`/`-t` flag, `CO_CLI_THEME` env var, and `theme` setting in `settings.json`. Light theme uses blue accents and dark orange status; dark theme uses cyan accents and yellow status.
+- **ASCII art banner**: Theme-aware welcome banner — block characters (`█▀▀`) for dark, box-drawing characters (`┌─┐`) for light — rendered as a Rich Panel with model info and version.
+- **`co_cli/display.py`**: Shared `Console` instance, `_COLORS` theme dict, `_c()` color resolver, Unicode indicators (`❯ ▸ ✦ ✖ ◈`), and display helpers (`display_status`, `display_error`, `display_info`).
+- **`co_cli/banner.py`**: `display_welcome_banner()` with per-theme ASCII art selection.
+- **`docs/DESIGN-theming-ascii.md`**: Comprehensive design doc covering architecture, color semantics, module layout, and a-cli reference.
+
+### Changed
+- **`main.py`**: Uses shared `console` from `display.py` (was local `Console()`), themed welcome banner (was two inline `console.print` lines), `Co ❯` prompt (was `Co > `).
+- **`tools/_confirm.py`**: Uses shared `console` from `display.py` (was private `_console = Console()`).
+- **`config.py`**: Added `theme` field (default: `"light"`) with `CO_CLI_THEME` env var mapping.
+- **`CLAUDE.md`**: Added `display.py`/`banner.py` to Core Flow, color semantics to Coding Standards, updated design doc list.
+
+---
+
 ## [0.2.2] - 2026-02-06
 
 ### Fixed

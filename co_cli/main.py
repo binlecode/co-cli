@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import httpx
 import typer
-from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 from prompt_toolkit import PromptSession
@@ -24,6 +23,8 @@ from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
+from co_cli.display import console, PROMPT_CHAR
+from co_cli.banner import display_welcome_banner
 
 # Setup Telemetry - must be done before Agent.instrument_all()
 from opentelemetry.sdk.resources import Resource
@@ -31,7 +32,7 @@ from opentelemetry.sdk.resources import Resource
 exporter = SQLiteSpanExporter()
 resource = Resource.create({
     "service.name": "co-cli",
-    "service.version": "0.1.0",
+    "service.version": "0.2.4",
 })
 tracer_provider = TracerProvider(resource=resource)
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -45,7 +46,6 @@ Agent.instrument_all(InstrumentationSettings(
 ))
 
 app = typer.Typer(help="Co - The Production-Grade Personal Assistant CLI")
-console = Console()
 
 
 def create_deps() -> CoDeps:
@@ -127,15 +127,14 @@ async def chat_loop():
     else:
         model_info = f"Ollama ({settings.ollama_model})"
 
-    console.print(f"[bold blue]Co is active.[/bold blue] Model: [cyan]{model_info}[/cyan]")
-    console.print("[dim]Type 'exit' or 'quit' to stop[/dim]")
+    display_welcome_banner(model_info)
 
     message_history = []
     last_interrupt_time = 0.0
     try:
         while True:
             try:
-                user_input = await session.prompt_async("Co > ")
+                user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 last_interrupt_time = 0.0  # Reset on successful input
                 if user_input.lower() in ["exit", "quit"]:
                     break
@@ -171,8 +170,12 @@ async def chat_loop():
 
 
 @app.command()
-def chat():
+def chat(
+    theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
+):
     """Start an interactive chat session with Co."""
+    if theme:
+        settings.theme = theme
     asyncio.run(chat_loop())
 
 
@@ -282,6 +285,30 @@ def traces():
     html_path = write_trace_html()
     console.print(f"[bold green]Generated trace viewer:[/bold green] {html_path}")
     webbrowser.open(f"file://{html_path}")
+
+
+@app.command()
+def tail(
+    trace_id: str = typer.Option(None, "--trace", "-t", help="Filter to a specific trace ID"),
+    tools_only: bool = typer.Option(False, "--tools-only", help="Only show tool spans"),
+    models_only: bool = typer.Option(False, "--models-only", help="Only show model/chat spans"),
+    poll: float = typer.Option(1.0, "--poll", "-p", help="Poll interval in seconds"),
+    no_follow: bool = typer.Option(False, "--no-follow", "-n", help="Print recent spans and exit"),
+    last: int = typer.Option(20, "--last", "-l", help="Number of recent spans to show on startup"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show LLM input/output content for model spans"),
+):
+    """Tail agent spans in real time (like tail -f for OTel traces)."""
+    from co_cli.tail import run_tail
+
+    run_tail(
+        trace_id=trace_id,
+        tools_only=tools_only,
+        models_only=models_only,
+        poll_interval=poll,
+        no_follow=no_follow,
+        last=last,
+        verbose=verbose,
+    )
 
 
 if __name__ == "__main__":

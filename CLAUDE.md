@@ -37,6 +37,8 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 - **config.py**: `Settings` (Pydantic BaseModel) loaded from `~/.config/co-cli/settings.json` with env var fallback. Exported as module-level `settings` singleton
 - **sandbox.py**: Docker wrapper — creates a persistent `co-runner` container per session, mounts CWD to `/workspace`
 - **telemetry.py**: Custom `SQLiteSpanExporter` writes OTel spans to `~/.local/share/co-cli/co-cli.db`
+- **display.py**: Themed Rich Console, semantic styles (`THEMES`), `set_theme()`, display helpers (`display_status`, `display_error`, `display_info`), Unicode indicators
+- **banner.py**: ASCII art welcome banner rendered as a Rich Panel
 - **trace_viewer.py**: Generates static HTML with collapsible span trees
 
 ### Tools (`co_cli/tools/`)
@@ -63,6 +65,8 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
 - **Config precedence**: env vars > `~/.config/co-cli/settings.json` > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
+- **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature (e.g. 0.2.3 = bugfix, 0.2.4 = feature). Bump in `pyproject.toml`, `banner.py` default, and `main.py` service.version
+- **Display**: All terminal output goes through `co_cli.display.console` (themed Rich Console). Use semantic style names (`status`, `info`, `success`, `error`, `hint`, `accent`, `yolo`) — never hardcode color names at callsites. Use `display_status()`, `display_error()`, `display_info()` helpers where applicable
 
 ## Testing Policy
 
@@ -92,8 +96,8 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 - `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer, span attribute reference, troubleshooting guide
 - `docs/TODO-approval-flow.md` — Migrate to pydantic-ai `requires_approval` + `DeferredToolRequests`
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler` for direct tool output display
-- `docs/TODO-retry-design.md` — ModelRetry semantics: when to retry vs return empty, industry best practices
-- `docs/TODO-theming-ascii.md` — Theming (light/dark), ASCII art banner, display helpers, color semantics
+- `docs/TODO-tool-call-stability.md` — Tool-call stability: retry budget, ModelRetry semantics, loop guard, system prompt
+- `docs/DESIGN-theming-ascii.md` — Theming (light/dark), ASCII art banner, display helpers, color semantics
 
 ## Reference Implementation
 

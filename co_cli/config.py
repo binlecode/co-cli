@@ -25,6 +25,8 @@ class Settings(BaseModel):
     # Behavior
     auto_confirm: bool = Field(default=False)
     docker_image: str = Field(default="python:3.12-slim")
+    theme: str = Field(default="light")
+    tool_retries: int = Field(default=3)
     
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
@@ -46,6 +48,8 @@ class Settings(BaseModel):
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "auto_confirm": "CO_CLI_AUTO_CONFIRM",
             "docker_image": "CO_CLI_DOCKER_IMAGE",
+            "theme": "CO_CLI_THEME",
+            "tool_retries": "CO_CLI_TOOL_RETRIES",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
