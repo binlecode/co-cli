@@ -68,11 +68,46 @@ def test_drive_search_functional():
     # search_drive raises ModelRetry on no results, so we just check it doesn't error on auth
     try:
         results = search_drive(ctx, "test")
-        assert isinstance(results, list)
+        assert isinstance(results, dict)
+        assert "display" in results
+        assert "page" in results
+        assert "has_more" in results
+        assert "Found" in results["display"]
     except Exception as e:
         # ModelRetry for "No results" is acceptable
         if "No results" not in str(e):
             pytest.fail(f"Drive API returned error: {e}")
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_drive_search_pagination():
+    """Test Drive search pagination with page number."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    drive_service = build_google_service("drive", "v3", google_creds)
+    ctx = _make_ctx(google_drive=drive_service)
+
+    try:
+        page1 = search_drive(ctx, "notes", page=1)
+    except Exception as e:
+        if "No results" in str(e):
+            pytest.skip("Not enough Drive files to test pagination")
+        raise
+
+    assert isinstance(page1, dict)
+    assert page1["page"] == 1
+    assert "Found" in page1["display"]
+
+    if not page1["has_more"]:
+        pytest.skip("First page had no more results — not enough files to paginate")
+
+    page2 = search_drive(ctx, "notes", page=2)
+    assert isinstance(page2, dict)
+    assert page2["page"] == 2
+    assert "Found" in page2["display"]
+    # Page 2 should have different files than page 1
+    assert page2["display"] != page1["display"]
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -87,8 +122,9 @@ def test_list_emails_functional():
     ctx = _make_ctx(google_gmail=gmail_service)
 
     result = list_emails(ctx, max_results=2)
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert "count" in result
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -103,8 +139,9 @@ def test_search_emails_functional():
     ctx = _make_ctx(google_gmail=gmail_service)
 
     result = search_emails(ctx, query="is:unread", max_results=2)
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert "count" in result
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -117,8 +154,9 @@ def test_list_calendar_events_functional():
     ctx = _make_ctx(google_calendar=calendar_service)
 
     result = list_calendar_events(ctx)
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert "count" in result
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -131,8 +169,9 @@ def test_list_calendar_events_with_time_window():
     ctx = _make_ctx(google_calendar=calendar_service)
 
     result = list_calendar_events(ctx, days_back=7, days_ahead=7, max_results=50)
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert result["count"] > 0
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -145,8 +184,9 @@ def test_search_calendar_events_functional():
     ctx = _make_ctx(google_calendar=calendar_service)
 
     result = search_calendar_events(ctx, query="meeting", days_ahead=30, max_results=2)
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert "count" in result
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -161,8 +201,9 @@ def test_search_calendar_events_with_days_back():
     result = search_calendar_events(
         ctx, query="meeting", days_back=30, days_ahead=0, max_results=5
     )
-    assert isinstance(result, str)
-    assert len(result) > 0
+    assert isinstance(result, dict)
+    assert "display" in result
+    assert "count" in result
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")

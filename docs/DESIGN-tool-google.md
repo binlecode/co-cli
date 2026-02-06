@@ -234,35 +234,131 @@ gcloud auth application-default login \
 
 ---
 
+## Structured Output Pattern
+
+All Google tools return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields. This is a **critical design decision** for stable LLM output.
+
+**Problem:** When tools return raw data (`list[dict]` or plain strings), the LLM reformats the output into tables, summaries, or other layouts — dropping URLs, links, and other important details the user needs.
+
+**Solution:** Pre-format the display text in the tool itself. The LLM's system prompt says "show tool output directly — don't summarize," and structured output makes this enforceable.
+
+```python
+# BAD — LLM reformats, drops URLs
+def search_drive(...) -> list[dict[str, Any]]:
+    return [{"name": "doc", "webViewLink": "https://..."}]
+    # LLM output: "Found 1 file: doc" (URL gone)
+
+# GOOD — URLs baked into display, metadata separate
+def search_drive(...) -> dict[str, Any]:
+    return {
+        "display": "- 2026-01-20  Meeting Notes\n  https://docs.google.com/...",
+        "page": 1,
+        "has_more": True,
+    }
+    # LLM output: shows the display text verbatim including URL
+```
+
+**Standard fields across all Google tools:**
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `display` | `str` | Pre-formatted output — LLM shows this directly to the user |
+| `count` | `int` | Number of items returned (Gmail, Calendar) |
+| `page` | `int` | Current page number (Drive) |
+| `has_more` | `bool` | Whether more results are available (Drive) |
+
+**Why `display` as pre-formatted string:**
+- URLs are baked in — LLM cannot drop them
+- Formatting is consistent regardless of LLM model (Gemini, Ollama, etc.)
+- System prompt "show tool output directly" is enforceable
+- LLM still gets metadata fields (`count`, `has_more`) for programmatic decisions
+
+---
+
 ## Tools
 
 ### search_drive (`co_cli/tools/google_drive.py`)
 
-Search for files in Google Drive by keywords.
+Search for files in Google Drive by keywords with server-managed pagination.
 
 ```
-search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict[str, Any]]
+search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]
 
 Args:
     query: Search keywords or metadata query
+    page:  Page number (1-based). Use 1 for first page, 2 for next, etc.
 
 Returns:
-    List of file dicts with id, name, mimeType, modifiedTime
+    dict with:
+      display:  Pre-formatted results with clickable URLs (show directly to user)
+      page:     Current page number
+      has_more: Whether more results are available
 
 Raises:
     ModelRetry: If not configured, no results, or API error
 ```
 
+**Pagination Design — Server-Managed Cursors:**
+
+LLMs cannot reliably pass opaque API cursor tokens between tool calls. Tokens contain special characters that get mangled through function calling serialization, and LLMs are biased toward answering "no more results" from memory instead of making another tool call.
+
+The solution: **store cursor tokens server-side, expose only a simple `page: int` to the LLM.** This follows OpenAI's tool design guidance: "offload the burden from the model and use code where possible, not making the model fill arguments you already know."
+
+```
+_page_tokens: dict[str, list[str]]   # module-level cache
+    │
+    │  key = query string
+    │  value = [token_for_page_2, token_for_page_3, ...]
+    │
+    ▼
+search_drive(query="notes", page=1)
+    │
+    ├── page==1: no pageToken needed
+    ├── API returns nextPageToken
+    └── store token at _page_tokens["notes"][0]
+         │
+         ▼
+search_drive(query="notes", page=2)
+    │
+    ├── page==2: look up _page_tokens["notes"][0]
+    ├── pass as pageToken to API
+    ├── API returns nextPageToken
+    └── store token at _page_tokens["notes"][1]
+         │
+         ▼
+search_drive(query="notes", page=3)  ...and so on
+```
+
+**Why this approach (vs alternatives):**
+
+| Approach | Problem |
+|----------|---------|
+| Expose raw `page_token: str` to LLM | Token has special chars, gets mangled; LLM often skips the tool call entirely |
+| Token in structured output + system prompt | LLM still ignores it or hallucinates "no more results" |
+| Auto-fetch all results (like Calendar) | Drive can have thousands of results; too slow and too much data |
+| Store cursor in `CoDeps` | Would work, but module-level dict is simpler for single-session CLI |
+
+**Contrast with Calendar:** Calendar uses `_fetch_events()` which auto-paginates internally (while loop with pageToken). This works because calendar queries are bounded by time window (days_back/days_ahead). Drive searches are unbounded, so lazy pagination via `page: int` is the right choice.
+
 **Processing Flow:**
 
 ```
-search_drive("meeting notes")
+search_drive("meeting notes", page=1)
        │
        ▼
 ┌──────────────────────────────────────┐
 │ service = ctx.deps.google_drive      │
 │   └── None? ──▶ ModelRetry           │
 │        "Google Drive not configured" │
+└──────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────┐
+│ page > 1?                            │
+│   ├── Yes ──▶ Look up stored token  │
+│   │    from _page_tokens[query]     │
+│   │    (ModelRetry if not available) │
+│   └── No  ──▶ Fresh search          │
 └──────────────────────────────────────┘
        │
        ▼
@@ -278,19 +374,29 @@ search_drive("meeting notes")
 │ service.files().list(                │
 │     q=q, pageSize=10,               │
 │     fields="...files(id, name,      │
-│             mimeType, modifiedTime)" │
+│       mimeType, modifiedTime,       │
+│       webViewLink)",                │
+│     pageToken=... (if page > 1)     │
 │ ).execute()                         │
 └──────────────────────────────────────┘
        │
        ▼
 ┌──────────────────────────────────────┐
-│ No items? ──▶ ModelRetry             │
-│   "No results. Try different         │
-│    keywords."                        │
+│ Store nextPageToken in              │
+│ _page_tokens[query] for next page   │
 └──────────────────────────────────────┘
        │
        ▼
-  Return items list
+┌──────────────────────────────────────┐
+│ Format display with URLs:           │
+│   "Page 1 — Found 10 files:        │
+│    - 2026-01-20  Meeting Notes      │
+│      https://docs.google.com/...    │
+│      (id: abc123)"                  │
+└──────────────────────────────────────┘
+       │
+       ▼
+  Return {"display": ..., "page": 1, "has_more": true}
 ```
 
 ### read_drive_file (`co_cli/tools/google_drive.py`)
@@ -347,13 +453,15 @@ read_drive_file("abc123")
 List recent emails from the user's Gmail inbox. Read-only, no confirmation required.
 
 ```
-list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> str
+list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
 
 Args:
     max_results: Maximum number of emails to return (default 5)
 
 Returns:
-    Formatted email list with From, Subject, Date, and preview snippet
+    dict with:
+      display: Formatted email list with From, Subject, Date, preview snippet, and Gmail link
+      count:   Number of emails returned
 
 Raises:
     ModelRetry: If not configured or API error
@@ -410,14 +518,16 @@ list_emails(max_results=5)
 Search emails using Gmail's native query syntax. Read-only, no confirmation required.
 
 ```
-search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> str
+search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]
 
 Args:
     query:       Gmail search query (same syntax as the Gmail search box)
     max_results: Maximum number of emails to return (default 5)
 
 Returns:
-    Formatted search results with From, Subject, Date, and preview snippet
+    dict with:
+      display: Formatted search results with From, Subject, Date, preview snippet, and Gmail link
+      count:   Number of emails returned
 
 Raises:
     ModelRetry: If not configured or API error
@@ -545,10 +655,12 @@ draft_email("user@example.com", "Subject", "Body")
 List today's calendar events. Read-only, no confirmation required.
 
 ```
-list_calendar_events(ctx: RunContext[CoDeps]) -> str
+list_calendar_events(ctx: RunContext[CoDeps], days_back=0, days_ahead=1, max_results=25) -> dict[str, Any]
 
 Returns:
-    Formatted event list, or "No upcoming events found."
+    dict with:
+      display: Formatted event list with calendar links, Meet links, attendees
+      count:   Number of events returned
 
 Raises:
     ModelRetry: If not configured or API error
@@ -600,17 +712,21 @@ Search calendar events by keyword within a date range. Read-only, no confirmatio
 search_calendar_events(
     ctx: RunContext[CoDeps],
     query: str,
+    days_back: int = 0,
     days_ahead: int = 30,
-    max_results: int = 10,
-) -> str
+    max_results: int = 25,
+) -> dict[str, Any]
 
 Args:
     query:       Text to search for in event summaries, descriptions, and locations
+    days_back:   How many days in the past to search (default 0)
     days_ahead:  How many days ahead to search (default 30)
-    max_results: Maximum number of events to return (default 10)
+    max_results: Maximum number of events to return (default 25)
 
 Returns:
-    Formatted event list, or "No events found matching '...' in the next N days."
+    dict with:
+      display: Formatted event list with calendar links, Meet links, attendees
+      count:   Number of events returned
 
 Raises:
     ModelRetry: If not configured or API error
@@ -1031,8 +1147,8 @@ def get_google_credentials(credentials_path, scopes) -> Any | None:
 def build_google_service(service_name, version, credentials) -> Any | None:
     ...
 
-# google_drive.py — RunContext, client from deps, ModelRetry
-def search_drive(ctx: RunContext[CoDeps], query: str) -> list:
+# google_drive.py — RunContext, client from deps, ModelRetry, structured output
+def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict:
     service = ctx.deps.google_drive
     if not service:
         raise ModelRetry("Not configured...")

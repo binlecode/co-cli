@@ -1,6 +1,7 @@
 """Google Calendar tools using RunContext pattern."""
 
 from datetime import datetime, timezone, timedelta
+from typing import Any
 
 from pydantic_ai import RunContext, ModelRetry
 
@@ -46,6 +47,10 @@ def _format_events(events: list[dict]) -> str:
                 for a in attendees
             ]
             output += f"  Attendees: {', '.join(names)}\n"
+
+        event_link = event.get("htmlLink")
+        if event_link:
+            output += f"  Link: {event_link}\n"
 
         meet_link = event.get("hangoutLink")
         if meet_link:
@@ -95,8 +100,12 @@ def list_calendar_events(
     days_back: int = 0,
     days_ahead: int = 1,
     max_results: int = 25,
-) -> str:
+) -> dict[str, Any]:
     """List calendar events in a time window around today.
+
+    Returns a dict with:
+    - display: pre-formatted event list with clickable links — show this directly to the user
+    - count: number of events returned
 
     Args:
         days_back: How many days in the past to include (default 0 = today onward).
@@ -128,8 +137,9 @@ def list_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return "No events found in the requested time range."
-        return f"Calendar Events ({len(events)}):\n" + _format_events(events)
+            return {"display": "No events found in the requested time range.", "count": 0}
+        display = f"Calendar Events ({len(events)}):\n" + _format_events(events)
+        return {"display": display, "count": len(events)}
     except ModelRetry:
         raise
     except Exception as e:
@@ -142,8 +152,12 @@ def search_calendar_events(
     days_back: int = 0,
     days_ahead: int = 30,
     max_results: int = 25,
-) -> str:
+) -> dict[str, Any]:
     """Search calendar events by keyword.
+
+    Returns a dict with:
+    - display: pre-formatted event list with clickable links — show this directly to the user
+    - count: number of events returned
 
     Args:
         query: Text to search for in event summaries, descriptions, and locations.
@@ -173,8 +187,9 @@ def search_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return f"No events found matching '{query}' in the requested time range."
-        return f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
+            return {"display": f"No events found matching '{query}' in the requested time range.", "count": 0}
+        display = f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
+        return {"display": display, "count": len(events)}
     except ModelRetry:
         raise
     except Exception as e:

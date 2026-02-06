@@ -30,7 +30,7 @@ class Settings(BaseModel):
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
     ollama_host: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="llama3")
+    ollama_model: str = Field(default="glm-4.7-flash:q8_0")
     gemini_model: str = Field(default="gemini-2.0-flash")
 
     @model_validator(mode='before')

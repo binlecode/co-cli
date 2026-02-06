@@ -1,6 +1,7 @@
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import settings
 from co_cli.deps import CoDeps
@@ -12,12 +13,14 @@ from co_cli.tools.google_calendar import list_calendar_events, search_calendar_e
 from co_cli.tools.slack import post_slack_message
 
 
-def get_agent() -> Agent[CoDeps, str]:
+def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
     """Factory function to create the Pydantic AI Agent.
 
     Supports 'ollama' and 'gemini' (default) via config.
     """
     provider_name = settings.llm_provider.lower()
+
+    model_settings: ModelSettings | None = None
 
     if provider_name == "gemini":
         api_key = settings.gemini_api_key
@@ -44,6 +47,15 @@ def get_agent() -> Agent[CoDeps, str]:
             provider=provider
         )
 
+        # GLM-4.7-Flash tuned parameters (from HuggingFace card / official eval config).
+        # Ollama defaults (temp=0.8) compress the distribution tighter than the
+        # model was evaluated with, hurting tool-call accuracy.
+        model_settings = ModelSettings(
+            temperature=1.0,
+            top_p=0.95,
+            max_tokens=16384,
+        )
+
     system_prompt = """You are Co, a CLI assistant running in the user's terminal.
 
 ### Response Style
@@ -56,6 +68,11 @@ def get_agent() -> Agent[CoDeps, str]:
 - Use tools proactively to complete tasks
 - Chain operations: read before modifying, test after changing
 - Shell commands run in a Docker sandbox mounted at /workspace
+
+### Pagination
+- When a tool result has has_more=true, more results are available
+- If the user asks for "more", "next", or "next 10", call the same tool with the same query and page incremented by 1
+- Do NOT say "no more results" unless you called the tool and has_more was false
 """
 
     agent: Agent[CoDeps, str] = Agent(
@@ -80,4 +97,4 @@ def get_agent() -> Agent[CoDeps, str]:
     agent.tool(search_calendar_events)
     agent.tool(post_slack_message)
 
-    return agent
+    return agent, model_settings

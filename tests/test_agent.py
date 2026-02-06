@@ -19,11 +19,14 @@ def test_agent_initialization_gemini(monkeypatch):
     monkeypatch.setattr(agent_module, "settings", test_settings)
 
     from co_cli.agent import get_agent
-    agent = get_agent()
+    agent, model_settings = get_agent()
 
     # Check internal model structure - now uses GoogleModel
     assert isinstance(agent.model, GoogleModel)
     assert agent.model.model_name == "gemini-2.0-flash"
+
+    # Gemini uses its own defaults — no custom settings needed
+    assert model_settings is None
 
 
 def test_agent_initialization_ollama(monkeypatch):
@@ -32,7 +35,7 @@ def test_agent_initialization_ollama(monkeypatch):
     No mocks allowed.
     """
     monkeypatch.setenv("LLM_PROVIDER", "ollama")
-    monkeypatch.setenv("OLLAMA_MODEL", "llama3")
+    monkeypatch.setenv("OLLAMA_MODEL", "glm-4.7-flash:q8_0")
     monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
 
     # Reload settings to pick up new env vars
@@ -42,8 +45,14 @@ def test_agent_initialization_ollama(monkeypatch):
     monkeypatch.setattr(agent_module, "settings", test_settings)
 
     from co_cli.agent import get_agent
-    agent = get_agent()
+    agent, model_settings = get_agent()
 
     # Check internal model structure
     assert isinstance(agent.model, OpenAIChatModel)
-    assert agent.model.model_name == "llama3"
+    assert agent.model.model_name == "glm-4.7-flash:q8_0"
+
+    # GLM-4.7-Flash tuned parameters
+    assert model_settings is not None
+    assert model_settings["temperature"] == 1.0
+    assert model_settings["top_p"] == 0.95
+    assert model_settings["max_tokens"] == 16384

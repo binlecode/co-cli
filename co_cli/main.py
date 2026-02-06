@@ -116,7 +116,7 @@ def _patch_dangling_tool_calls(
 
 
 async def chat_loop():
-    agent = get_agent()
+    agent, model_settings = get_agent()
     deps = create_deps()
     session = PromptSession(history=FileHistory(str(DATA_DIR / "history.txt")))
 
@@ -145,7 +145,8 @@ async def chat_loop():
                 console.print("[dim]Co is thinking...[/dim]")
                 try:
                     result = await agent.run(
-                        user_input, deps=deps, message_history=message_history
+                        user_input, deps=deps, message_history=message_history,
+                        model_settings=model_settings,
                     )
                     message_history = result.all_messages()
                     console.print(Markdown(result.output))

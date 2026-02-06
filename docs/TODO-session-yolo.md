@@ -52,8 +52,8 @@ Replace `Confirm.ask` + `auto_confirm` check with `confirm_or_yolo` in:
 
 ## Checklist
 
-- [ ] Create `co_cli/tools/_confirm.py` with `confirm_or_yolo`
-- [ ] Update `shell.py` — use `confirm_or_yolo`
-- [ ] Update `google_gmail.py` — use `confirm_or_yolo`
-- [ ] Update `slack.py` — use `confirm_or_yolo`
+- [x] Create `co_cli/tools/_confirm.py` with `confirm_or_yolo`
+- [x] Update `shell.py` — use `confirm_or_yolo`
+- [x] Update `google_gmail.py` — use `confirm_or_yolo`
+- [x] Update `slack.py` — use `confirm_or_yolo`
 - [ ] Manual test: `uv run co chat` → shell command → press `a` → next command auto-approves
