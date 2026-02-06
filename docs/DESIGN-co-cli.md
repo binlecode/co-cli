@@ -647,9 +647,95 @@ graph TD
 
 ---
 
-## 7. Security Model
+## 7. Conversation Memory
 
-### 7.1 Defense Layers
+### 7.1 Design
+
+Each chat session maintains an in-process message history that accumulates across turns. This gives the LLM full conversational context for follow-ups like "try again", "change the subject", or "show me more".
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CLI as Chat Loop
+    participant Agent as agent.run()
+
+    Note over CLI: message_history = []
+
+    User->>CLI: "draft email to Bob"
+    CLI->>Agent: agent.run("draft email", message_history=[])
+    Agent->>CLI: result
+    Note over CLI: message_history = result.all_messages()<br/>[user: "draft email", assistant: "Here's a draft..."]
+
+    User->>CLI: "try again, more formal"
+    CLI->>Agent: agent.run("try again", message_history=[user, assistant])
+    Note over Agent: LLM sees full prior context
+    Agent->>CLI: result
+    Note over CLI: message_history = result.all_messages()<br/>[user, assistant, user: "try again", assistant: "Revised..."]
+```
+
+### 7.2 Implementation
+
+Uses pydantic-ai's built-in `message_history` parameter and `result.all_messages()` accessor:
+
+```python
+message_history = []
+while True:
+    result = await agent.run(
+        user_input, deps=deps, message_history=message_history
+    )
+    message_history = result.all_messages()
+```
+
+**What's stored in `message_history`:**
+- User prompts (`ModelRequest` with `UserPromptPart`)
+- Assistant responses (`ModelResponse` with `TextPart`)
+- Tool calls and their results (`ToolCallPart`, `ToolReturnPart`)
+- System prompt is sent separately by the agent on each call, not in history
+
+### 7.3 Scope & Limitations
+
+| Aspect | Current Design |
+|--------|---------------|
+| **Lifetime** | In-process only — resets when the session ends |
+| **Persistence** | None. History is not saved to disk or database. |
+| **Size management** | Unbounded — grows with each turn. For long sessions, the LLM's context window is the natural limit. |
+| **Cross-session** | Not supported. Each `co chat` invocation starts fresh. |
+| **Concurrency** | Sequential updates only — single-threaded loop prevents forking (see §6). |
+
+### 7.4 History Length Control
+
+Pydantic-ai provides `history_processors` — a list of callables that transform `message_history` before sending to the model. There is **no built-in max length, sliding window, or summarization**. If history exceeds the LLM's context window, the API call fails.
+
+**Available hook:**
+
+```python
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.messages import ModelMessage
+
+def trim_history(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """Keep first 2 messages (system setup) + last N messages."""
+    MAX_MESSAGES = 20
+    if len(messages) > MAX_MESSAGES:
+        return messages[:2] + messages[-(MAX_MESSAGES - 2):]
+    return messages
+
+agent = Agent(model, history_processors=[trim_history])
+```
+
+**Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine. A processor should be added when long sessions become common.
+
+### 7.5 Future Considerations
+
+- **Sliding window**: Register a `history_processor` with message count or token-based trimming
+- **Persistence**: Save history to SQLite (alongside OTel traces) to enable session resume
+- **Tool output trimming**: Large tool outputs (e.g., file contents) could be summarized in history to save context space
+
+---
+
+## 8. Security Model
+
+
+### 8.1 Defense Layers
 
 ```mermaid
 graph TB
@@ -677,7 +763,7 @@ graph TB
     end
 ```
 
-### 7.2 High-Risk Tool Confirmation
+### 8.2 High-Risk Tool Confirmation
 
 ```python
 # All tools use RunContext pattern
@@ -688,7 +774,7 @@ if not ctx.deps.auto_confirm:
 
 **Bypass for Testing:** Set `auto_confirm: true` in settings.
 
-### 7.3 Path Traversal Protection (Obsidian)
+### 8.3 Path Traversal Protection (Obsidian)
 
 ```python
 safe_path = (vault / filename).resolve()
@@ -698,9 +784,9 @@ if not safe_path.is_relative_to(vault.resolve()):
 
 ---
 
-## 8. Data Flow
+## 9. Data Flow
 
-### 8.1 XDG Directory Structure
+### 9.1 XDG Directory Structure
 
 ```
 ~/.config/co-cli/
@@ -711,7 +797,7 @@ if not safe_path.is_relative_to(vault.resolve()):
 └── history.txt            # REPL command history
 ```
 
-### 8.2 External Service Integration
+### 9.2 External Service Integration
 
 ```mermaid
 graph LR
@@ -744,7 +830,7 @@ graph LR
 
 ---
 
-## 9. Testing Policy
+## 10. Testing Policy
 
 ### Functional Testing Only
 
@@ -789,7 +875,7 @@ def test_sandbox_execution():
 
 ---
 
-## 10. Dependencies
+## 11. Dependencies
 
 ### Runtime
 
@@ -816,7 +902,7 @@ def test_sandbox_execution():
 
 ---
 
-## 11. Implementation Status
+## 12. Implementation Status
 
 ### Features
 
