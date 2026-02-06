@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-02-06
+
+### Fixed
+- **Telemetry SQLite lock contention**: `SQLiteSpanExporter` now uses WAL journal mode and `busy_timeout=5000ms` on every connection, preventing `database is locked` errors when `co tail`/Datasette read while the chat session writes spans. Export uses `executemany` (single batch write) with 3-attempt exponential backoff retry for transient lock failures.
+
+### Changed
+- **`docs/DESIGN-otel-logging.md`**: Added "Concurrent Access (WAL Mode)" section documenting WAL rationale, pragma settings, retry strategy, and batch insert design.
+
+---
+
 ## [0.2.5] - 2026-02-06
 
 ### Added

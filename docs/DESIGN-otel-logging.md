@@ -125,10 +125,18 @@ class SQLiteSpanExporter(SpanExporter):
         self.db_path = db_path
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        """Open a connection with WAL mode and busy_timeout."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        return conn
+
     def _init_db(self):
         """Create spans table with OTel-compliant schema."""
         # Schema follows OTel data model
-        conn.execute("""
+        with self._connect() as conn:
+            conn.execute("""
             CREATE TABLE IF NOT EXISTS spans (
                 id TEXT PRIMARY KEY,           -- 16-char hex span ID
                 trace_id TEXT NOT NULL,        -- 32-char hex trace ID
@@ -151,33 +159,27 @@ class SQLiteSpanExporter(SpanExporter):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_start ON spans(start_time DESC)")
 
     def export(self, spans: list[ReadableSpan]) -> SpanExportResult:
-        """Export spans to SQLite."""
+        """Pre-serialize all spans, then write in a single executemany + retry."""
+        rows = []
         for span in spans:
-            # Convert OTel span IDs to hex strings
             span_id = format(span.context.span_id, '016x')
             trace_id = format(span.context.trace_id, '032x')
             parent_id = format(span.parent.span_id, '016x') if span.parent else None
-
-            # Calculate duration
             duration_ms = (span.end_time - span.start_time) / 1_000_000
+            # ... serialize status, events, resource ...
+            rows.append((span_id, trace_id, parent_id, ...))
 
-            # Extract status
-            status_code = span.status.status_code.name if span.status else "UNSET"
-            status_description = span.status.description if span.status else None
-
-            # Serialize events with attributes
-            events = [{
-                "name": e.name,
-                "timestamp": e.timestamp,
-                "attributes": dict(e.attributes) if e.attributes else {}
-            } for e in span.events]
-
-            # Resource attributes
-            resource = dict(span.resource.attributes) if span.resource else {}
-
-            conn.execute("INSERT OR REPLACE INTO spans VALUES (...)", (...))
-
-        return SpanExportResult.SUCCESS
+        for attempt in range(3):
+            try:
+                with self._connect() as conn:
+                    conn.executemany("INSERT OR REPLACE INTO spans VALUES (...)", rows)
+                return SpanExportResult.SUCCESS
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc) and attempt < 2:
+                    time.sleep(0.1 * (2 ** attempt))  # exponential backoff
+                else:
+                    return SpanExportResult.FAILURE
+        return SpanExportResult.FAILURE
 ```
 
 **Key Design Decisions:**
@@ -185,6 +187,66 @@ class SQLiteSpanExporter(SpanExporter):
 - Pre-calculated `duration_ms` for easy querying
 - JSON serialization for attributes/events/resource
 - `INSERT OR REPLACE` handles duplicate span IDs gracefully
+
+#### Concurrent Access (WAL Mode)
+
+##### The Problem
+
+Three processes touch the same `co-cli.db` file:
+
+| Process | Role | Lifetime |
+|---------|------|----------|
+| `co chat` (BatchSpanProcessor → SQLiteSpanExporter) | Writer | Long-running — flushes batches every few seconds for the duration of the chat session |
+| `co tail` | Reader | Long-running — polls the DB in a loop to display new spans in real-time |
+| `co logs` (Datasette) | Reader | On-demand — serves HTTP queries against the DB while the user browses |
+
+SQLite's default journal mode (`delete` / rollback journal) takes an **exclusive lock** on the entire database file during writes. Any reader that queries at the same moment receives an immediate `sqlite3.OperationalError: database is locked` failure. Because the chat session writes continuously and the tail viewer polls continuously, lock collisions are frequent under normal usage.
+
+##### Design: WAL + Busy Timeout + Retry
+
+The fix applies three layers of defense, each addressing a different failure window:
+
+**Layer 1 — WAL journal mode.** Every connection sets `PRAGMA journal_mode = WAL` before any other operation. WAL (Write-Ahead Logging) separates reads from writes: the writer appends to a WAL file while readers continue to see a consistent snapshot of the main database. This eliminates the primary source of contention — readers no longer block on the writer, and the writer no longer blocks on readers. WAL mode is a persistent, database-level setting (stored in the DB header), but we set it on every connection for robustness — if the file is recreated or the header is corrupted, it gets re-applied.
+
+**Layer 2 — Busy timeout.** Every connection sets `PRAGMA busy_timeout = 5000` (5 seconds). Even under WAL, brief exclusive locks occur during automatic **WAL checkpoints** (when SQLite transfers accumulated WAL pages back into the main DB). The busy timeout tells SQLite to retry internally with small sleeps for up to 5 seconds before surfacing an error. This handles the vast majority of transient checkpoint conflicts without any application-level logic.
+
+**Layer 3 — Export-level retry with exponential backoff.** If a write still fails after the 5-second busy timeout (e.g. an unusually long checkpoint, or Datasette holding a long read transaction that blocks checkpoint), the exporter retries the entire batch up to 3 times with exponential backoff: 100 ms, 200 ms, 400 ms. Only `OperationalError` with "locked" in the message triggers a retry — all other errors (corrupt DB, schema mismatch, disk full) fail immediately. On persistent failure, the exporter returns `SpanExportResult.FAILURE` and logs the error; the BatchSpanProcessor will discard the batch. This is acceptable — telemetry is best-effort, and dropping a batch under extreme contention is preferable to blocking the chat session.
+
+##### Connection Lifecycle
+
+The exporter uses **short-lived connections** — a new connection is opened for each `export()` call and closed when the context manager exits. This is deliberate:
+
+- `BatchSpanProcessor` calls `export()` from a background thread on a timer (default ~5 s interval). Between calls, there is no reason to hold a connection open.
+- Short-lived connections avoid stale WAL readers that can prevent checkpoint progress.
+- The `_connect()` helper centralizes pragma setup so both `_init_db()` and `export()` get identical connection configuration.
+
+##### Two-Phase Export
+
+The export method separates **serialization** from **writing**:
+
+1. **Phase 1 (no DB lock):** Iterate over all `ReadableSpan` objects and serialize them into a list of tuples — hex IDs, duration calculation, JSON-encoded attributes/events/resource. This is pure CPU work that requires no database access.
+2. **Phase 2 (minimal lock window):** Open a connection, write all pre-built rows in a single `executemany` call, and commit. The write lock is held only for the actual INSERT duration, not for serialization.
+
+This minimizes the time the database file is locked, reducing the chance of collision with concurrent readers.
+
+##### Failure Semantics
+
+| Scenario | Outcome |
+|----------|---------|
+| Reader queries during writer's INSERT | WAL mode: reader succeeds (sees pre-write snapshot) |
+| Writer INSERTs during WAL checkpoint | busy_timeout: writer retries internally for up to 5 s |
+| Checkpoint blocked by long-running reader | Export retry: up to 3 attempts with backoff, then FAILURE |
+| Non-lock error (disk full, corruption) | Immediate FAILURE, logged — no retry |
+| Persistent FAILURE | BatchSpanProcessor drops the batch; subsequent batches retry independently |
+
+Span loss is tolerable — telemetry is observational. The system never blocks the chat loop or crashes on export failure.
+
+##### Alternatives Considered
+
+- **Shared-cache mode (`cache=shared`):** Would allow connection-level locking instead of file-level, but adds complexity and is unnecessary once WAL handles the read/write split.
+- **Separate DB per session, merge on read:** Eliminates write contention entirely, but complicates the reader queries (union across files) and the tail viewer (which file to poll). Overkill for our single-writer workload.
+- **`wal_autocheckpoint = 0` (manual checkpoints):** Would prevent automatic checkpoints from blocking the writer mid-export, but risks unbounded WAL growth during long chat sessions. The default auto-checkpoint (every 1000 pages) is a reasonable trade-off.
+- **Persistent connection on the exporter:** Would avoid per-export connection overhead, but a long-lived WAL reader can prevent checkpoint progress and grow the WAL file indefinitely. Short-lived connections are safer for our fire-and-forget export pattern.
 
 ### 3. Trace Viewer (`trace_viewer.py`)
 
