@@ -127,7 +127,7 @@ sequenceDiagram
         CLI->>User: Render Markdown response
     end
 
-    User->>CLI: exit/quit
+    User->>CLI: exit/quit or Ctrl+C ×2 (within 2s) or Ctrl+D
     CLI->>CLI: deps.sandbox.cleanup()
     CLI->>User: Session ended
 ```
@@ -404,7 +404,11 @@ stateDiagram-v2
         ToolExec --> Thinking: Tool result
         Thinking --> Responding: LLM done
         Responding --> Waiting: Display output
-        Waiting --> Cleanup: exit/quit
+        Thinking --> Waiting: Ctrl+C (cancel operation)
+        Waiting --> CtrlC1: Ctrl+C (1st)
+        CtrlC1 --> Cleanup: Ctrl+C within 2s (2nd)
+        CtrlC1 --> Waiting: Timeout >2s / new input
+        Waiting --> Cleanup: exit/quit/Ctrl+D
         Cleanup --> [*]: deps.sandbox.cleanup()
     }
 
@@ -434,6 +438,19 @@ stateDiagram-v2
 - History: Saved to `~/.local/share/co-cli/history.txt`
 - Spinner: "Co is thinking..." during inference
 - Output: Rendered as Rich Markdown
+
+**Exit Handling (double Ctrl+C pattern):**
+
+Follows Node.js REPL / Aider / Gemini CLI conventions:
+
+| Context | Action | Result |
+|---------|--------|--------|
+| During `agent.run()` | Ctrl+C | Cancels operation, returns to prompt. Does **not** count toward exit. |
+| At prompt | Ctrl+C (1st) | Prints "Press Ctrl+C again to exit" |
+| At prompt | Ctrl+C (2nd within 2s) | Exits session |
+| At prompt | Ctrl+C (2nd after 2s) | Treated as new 1st press (timeout reset) |
+| Any input submitted | — | Resets the interrupt timer |
+| Anywhere | Ctrl+D (EOF) | Exits immediately |
 
 ### 4.6 Telemetry (`co_cli/telemetry.py`)
 
