@@ -32,7 +32,8 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 ### Core Flow
 - **main.py**: CLI entry point (Typer app), sets up OpenTelemetry + TracerProvider, calls `Agent.instrument_all()`, runs async chat loop
 - **agent.py**: `get_agent()` factory creates a `pydantic-ai` Agent with model selection (Gemini or Ollama) and registers all tools
-- **deps.py**: `CoDeps` dataclass — runtime dependencies injected into tools via `RunContext[CoDeps]` (sandbox, auto_confirm, session_id, obsidian_vault_path)
+- **deps.py**: `CoDeps` dataclass — runtime dependencies injected into tools via `RunContext[CoDeps]` (sandbox, auto_confirm, session_id, obsidian_vault_path, google_drive, google_gmail, google_calendar, slack_client)
+- **google_auth.py**: `get_google_credentials()` + `build_google_service()` — loads authorized-user credentials (or ADC fallback) and builds Google API clients
 - **config.py**: `Settings` (Pydantic BaseModel) loaded from `~/.config/co-cli/settings.json` with env var fallback. Exported as module-level `settings` singleton
 - **sandbox.py**: Docker wrapper — creates a persistent `co-runner` container per session, mounts CWD to `/workspace`
 - **telemetry.py**: Custom `SQLiteSpanExporter` writes OTel spans to `~/.local/share/co-cli/co-cli.db`
@@ -43,11 +44,13 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 |------|-----------|---------|
 | `shell.py` | `run_shell_command` | `RunContext[CoDeps]` — uses sandbox, human-in-the-loop confirm |
 | `obsidian.py` | `search_notes`, `list_notes`, `read_note` | `RunContext[CoDeps]` — uses `ctx.deps.obsidian_vault_path` |
-| `drive.py` | `search_drive`, `read_drive_file` | `tool_plain` (migration pending to RunContext) |
-| `comm.py` | `post_slack_message`, `draft_email`, `list_calendar_events` | `tool_plain` (migration pending to RunContext) |
+| `google_drive.py` | `search_drive`, `read_drive_file` | `RunContext[CoDeps]` — uses `ctx.deps.google_drive` + `ModelRetry` |
+| `google_gmail.py` | `draft_email` | `RunContext[CoDeps]` — uses `ctx.deps.google_gmail` + human-in-the-loop confirm |
+| `google_calendar.py` | `list_calendar_events` | `RunContext[CoDeps]` — uses `ctx.deps.google_calendar` + `ModelRetry` |
+| `slack.py` | `post_slack_message` | `RunContext[CoDeps]` — uses `ctx.deps.slack_client` + human-in-the-loop confirm |
 
 ### Migration Status
-Tools in `drive.py` and `comm.py` still use `agent.tool_plain()`. New tools must use `agent.tool()` with `RunContext[CoDeps]` pattern. See `docs/TODO-pydantic-ai-best-practices.md` for the migration roadmap.
+All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining. See `docs/TODO-pydantic-ai-best-practices.md` for remaining items (Batch 5-6).
 
 ## Coding Standards
 
@@ -79,5 +82,7 @@ Tools in `drive.py` and `comm.py` still use `agent.tool_plain()`. New tools must
 - `docs/DESIGN-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
 - `docs/DESIGN-tool-shell-sandbox.md` — Docker sandbox design
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
+- `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
+- `docs/DESIGN-tool-slack.md` — Slack tool design
 - `docs/TODO-pydantic-ai-best-practices.md` — RunContext migration roadmap
 - `docs/FIX-gemini-summary-on-shell.md` — Known issue: Gemini summarizes tool output instead of showing it directly

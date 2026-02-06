@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import pytest
 
 from co_cli.tools.google_drive import search_drive, read_drive_file
-from co_cli.tools.google_gmail import list_emails, draft_email
+from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
 from co_cli.tools.slack import post_slack_message
 from co_cli.config import settings
 from co_cli.deps import CoDeps
@@ -84,6 +84,22 @@ def test_list_emails_functional():
     ctx = _make_ctx(google_gmail=gmail_service)
 
     result = list_emails(ctx, max_results=2)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_search_emails_functional():
+    """Test real Gmail search.
+    Requires google_credentials_path in settings.
+    """
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    gmail_service = build_google_service("gmail", "v1", google_creds)
+    ctx = _make_ctx(google_gmail=gmail_service)
+
+    result = search_emails(ctx, query="is:unread", max_results=2)
     assert isinstance(result, str)
     assert len(result) > 0
 

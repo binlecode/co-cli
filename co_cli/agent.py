@@ -7,7 +7,7 @@ from co_cli.deps import CoDeps
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive, read_drive_file
-from co_cli.tools.google_gmail import list_emails, draft_email
+from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
 from co_cli.tools.google_calendar import list_calendar_events
 from co_cli.tools.slack import post_slack_message
 
@@ -74,6 +74,7 @@ def get_agent() -> Agent[CoDeps, str]:
     agent.tool(search_drive)
     agent.tool(read_drive_file)
     agent.tool(list_emails)
+    agent.tool(search_emails)
     agent.tool(draft_email)
     agent.tool(list_calendar_events)
     agent.tool(post_slack_message)

@@ -61,7 +61,7 @@ uv run pytest                        # Run functional tests
   "slack_bot_token": "...",
   "docker_image": "python:3.12-slim",
   "auto_confirm": false,
-  "gcp_key_path": "..."
+  "google_credentials_path": "..."
 }
 ```
 

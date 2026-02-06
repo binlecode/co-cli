@@ -36,9 +36,11 @@ graph TB
 
     subgraph Tool Layer
         Shell[Shell Tool]
-        Notes[Notes Tool]
+        Obsidian[Obsidian Tool]
         Drive[Drive Tool]
-        Comm[Comm Tool]
+        Gmail[Gmail Tool]
+        Calendar[Calendar Tool]
+        SlackTool[Slack Tool]
     end
 
     subgraph External Services
@@ -63,16 +65,18 @@ graph TB
     LLM --> Gemini
 
     Agent --> Shell
-    Agent --> Notes
+    Agent --> Obsidian
     Agent --> Drive
-    Agent --> Comm
+    Agent --> Gmail
+    Agent --> Calendar
+    Agent --> SlackTool
 
     Shell --> Docker
-    Notes --> Obsidian
+    Obsidian --> ObsVault[Obsidian Vault]
     Drive --> GDrive
-    Comm --> Slack
-    Comm --> Gmail
-    Comm --> GCal
+    Gmail --> GmailAPI[Gmail API]
+    Calendar --> GCal
+    SlackTool --> Slack
 
     Config --> Agent
     Agent --> Telemetry
@@ -96,16 +100,18 @@ sequenceDiagram
 
     User->>CLI: co chat
     CLI->>CLI: Initialize Agent & PromptSession
+    CLI->>CLI: create_deps() → CoDeps(sandbox, auto_confirm, ...)
 
     loop Interactive REPL
         User->>CLI: Enter query
-        CLI->>CLI: Show spinner "Co is thinking..."
-        CLI->>Agent: agent.run(user_input)
+        CLI->>CLI: Show "Co is thinking..."
+        CLI->>Agent: agent.run(user_input, deps=deps)
         Agent->>LLM: Send prompt + context
         LLM->>Agent: Response with tool calls
 
         opt Tool Execution
-            Agent->>Tools: Execute tool
+            Agent->>Tools: Execute tool (ctx: RunContext[CoDeps])
+            Tools->>Tools: Access deps via ctx.deps
             Tools->>User: Confirm (if high-risk)
             User->>Tools: y/n
             Tools->>External: API call / Docker exec
@@ -120,6 +126,7 @@ sequenceDiagram
     end
 
     User->>CLI: exit/quit
+    CLI->>CLI: deps.sandbox.cleanup()
     CLI->>User: Session ended
 ```
 
@@ -160,20 +167,27 @@ sequenceDiagram
 
 ### 4.1 Agent (`co_cli/agent.py`)
 
-The Agent is the central orchestrator that connects the LLM to tools.
+The Agent is the central orchestrator that connects the LLM to tools. Uses `deps_type=CoDeps` for dependency injection into tools via `RunContext`.
 
 ```mermaid
 classDiagram
-    class Agent {
+    class Agent~CoDeps, str~ {
         +model: Model
+        +deps_type: CoDeps
         +system_prompt: str
         +tools: List[Tool]
-        +run(input: str) Result
+        +run(input: str, deps: CoDeps) Result
     }
 
-    class GeminiModel {
-        +model_name: str
-        +api_key: str
+    class CoDeps {
+        +sandbox: Sandbox
+        +auto_confirm: bool
+        +session_id: str
+        +obsidian_vault_path: Path | None
+        +google_drive: Any | None
+        +google_gmail: Any | None
+        +google_calendar: Any | None
+        +slack_client: Any | None
     }
 
     class OpenAIChatModel {
@@ -181,42 +195,52 @@ classDiagram
         +provider: OpenAIProvider
     }
 
-    Agent --> GeminiModel : uses (gemini)
+    Agent --> CoDeps : injects into tools
     Agent --> OpenAIChatModel : uses (ollama)
+    note for Agent "Gemini uses google-gla: model string"
 ```
 
 **Factory Function: `get_agent()`**
 
 ```python
-def get_agent() -> Agent:
-    # 1. Read provider from settings
+def get_agent() -> Agent[CoDeps, str]:
     provider_name = settings.llm_provider.lower()
 
-    # 2. Initialize appropriate model
     if provider_name == "gemini":
-        model = GeminiModel(model_name, api_key)
+        # Model string format — pydantic-ai resolves via GEMINI_API_KEY env var
+        os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
+        model = f"google-gla:{settings.gemini_model}"
     else:
         # Ollama via OpenAI-compatible API
-        provider = OpenAIProvider(base_url=f"{ollama_host}/v1")
+        provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
         model = OpenAIChatModel(model_name, provider)
 
-    # 3. Create agent with system prompt
-    agent = Agent(model, system_prompt="You are Co...")
+    agent: Agent[CoDeps, str] = Agent(
+        model,
+        deps_type=CoDeps,
+        system_prompt="You are Co, a CLI assistant...",
+    )
 
-    # 4. Register all tools
-    agent.tool_plain(run_shell_command)
-    agent.tool_plain(list_notes)
-    # ... more tools
+    # All tools use RunContext[CoDeps] pattern (Batch 1-4: complete)
+    agent.tool(run_shell_command)
+    agent.tool(search_notes)
+    agent.tool(list_notes)
+    agent.tool(read_note)
+    agent.tool(search_drive)
+    agent.tool(read_drive_file)
+    agent.tool(draft_email)
+    agent.tool(list_calendar_events)
+    agent.tool(post_slack_message)
 
     return agent
 ```
 
 **System Prompt:**
 ```
-You are Co, a sarcastic but hyper-competent AI assistant.
-You provide concise, useful, and occasionally opinionated help.
-You have access to a sandboxed shell tool, local Obsidian notes,
-Google Drive, Slack, and Google Workspace (Gmail, Calendar).
+You are Co, a CLI assistant running in the user's terminal.
+- Show tool output directly — don't summarize or paraphrase
+- Be terse: users want results, not explanations
+- Shell commands run in a Docker sandbox mounted at /workspace
 ```
 
 ### 4.2 Configuration (`co_cli/config.py`)
@@ -228,7 +252,7 @@ classDiagram
     class Settings {
         +obsidian_vault_path: Optional[str]
         +slack_bot_token: Optional[str]
-        +gcp_key_path: Optional[str]
+        +google_credentials_path: Optional[str]
         +auto_confirm: bool
         +docker_image: str
         +gemini_api_key: Optional[str]
@@ -265,11 +289,40 @@ classDiagram
 | `ollama_model` | `OLLAMA_MODEL` | `"llama3"` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` |
 | `slack_bot_token` | `SLACK_BOT_TOKEN` | `None` |
-| `gcp_key_path` | `GCP_KEY_PATH` | `None` |
+| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` |
 | `auto_confirm` | `CO_CLI_AUTO_CONFIRM` | `false` |
 | `docker_image` | `CO_CLI_DOCKER_IMAGE` | `"python:3.12-slim"` |
 
-### 4.3 Sandbox (`co_cli/sandbox.py`)
+### 4.3 Dependencies (`co_cli/deps.py`)
+
+Runtime dependencies injected into tools via `RunContext[CoDeps]`. Settings creates these in `main.py`, tools access them via `ctx.deps`.
+
+```python
+@dataclass
+class CoDeps:
+    sandbox: Sandbox
+    auto_confirm: bool = False
+    session_id: str = ""
+    obsidian_vault_path: Path | None = None
+    google_drive: Any | None = None
+    google_gmail: Any | None = None
+    google_calendar: Any | None = None
+    slack_client: Any | None = None
+```
+
+**Design Principle:** `CoDeps` contains runtime resources, NOT config objects. `Settings` creates resources in `main.py`, then injects here.
+
+**Dependency Flow:**
+
+```
+main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_drive, slack_client, ...)
+    ↓
+agent.run(user_input, deps=deps) →  Agent passes deps to tool calls
+    ↓
+tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_drive, etc.
+```
+
+### 4.4 Sandbox (`co_cli/sandbox.py`)
 
 Docker-based isolation for safe command execution.
 
@@ -308,16 +361,31 @@ classDiagram
 2. On subsequent calls: Reuse existing container
 3. On CLI exit: Container remains for reuse (manual cleanup via `sandbox.cleanup()`)
 
-### 4.4 CLI (`co_cli/main.py`)
+### 4.5 CLI (`co_cli/main.py`)
 
-Typer-based CLI with three main commands.
+Typer-based CLI with three main commands. Owns dependency creation and lifecycle.
+
+**Dependency Injection:**
+
+```python
+async def chat_loop():
+    agent = get_agent()
+    deps = create_deps()  # Settings → CoDeps
+    try:
+        while True:
+            result = await agent.run(user_input, deps=deps)
+            console.print(Markdown(result.output))
+    finally:
+        deps.sandbox.cleanup()  # Container teardown
+```
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
 
     state "co chat" as Chat {
-        Idle --> Waiting: Start REPL
+        Idle --> CreateDeps: Start REPL
+        CreateDeps --> Waiting: CoDeps ready
         Waiting --> Thinking: User input
         Thinking --> ToolExec: Tool needed
         ToolExec --> Confirm: High-risk tool
@@ -325,7 +393,8 @@ stateDiagram-v2
         ToolExec --> Thinking: Tool result
         Thinking --> Responding: LLM done
         Responding --> Waiting: Display output
-        Waiting --> [*]: exit/quit
+        Waiting --> Cleanup: exit/quit
+        Cleanup --> [*]: deps.sandbox.cleanup()
     }
 
     state "co status" as Status {
@@ -355,7 +424,7 @@ stateDiagram-v2
 - Spinner: "Co is thinking..." during inference
 - Output: Rendered as Rich Markdown
 
-### 4.5 Telemetry (`co_cli/telemetry.py`)
+### 4.6 Telemetry (`co_cli/telemetry.py`)
 
 OpenTelemetry traces exported to local SQLite.
 
@@ -407,15 +476,16 @@ CREATE TABLE spans (
 
 ```mermaid
 graph LR
-    subgraph Agent Tools
+    subgraph "RunContext[CoDeps] Tools (all migrated)"
         A[run_shell_command]
-        B[list_notes]
-        C[read_note]
-        D[search_drive]
-        E[read_drive_file]
-        F[post_slack_message]
-        G[draft_email]
-        H[list_calendar_events]
+        B[search_notes]
+        C[list_notes]
+        D[read_note]
+        E[search_drive]
+        F[read_drive_file]
+        G[post_slack_message]
+        H[draft_email]
+        I[list_calendar_events]
     end
 
     subgraph Risk Level
@@ -424,76 +494,96 @@ graph LR
     end
 
     A --> HR
-    F --> HR
     G --> HR
+    H --> HR
 
     B --> LR
     C --> LR
     D --> LR
     E --> LR
-    H --> LR
+    F --> LR
+    I --> LR
 ```
+
+**Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining.
 
 ### 5.2 Shell Tool (`co_cli/tools/shell.py`)
 
+Uses `RunContext[CoDeps]` pattern. See `docs/DESIGN-tool-shell-sandbox.md` for full design.
+
 ```python
-def run_shell_command(cmd: str) -> str:
-    """Execute a shell command inside a sandboxed Docker container."""
-    # 1. Confirmation check
-    if not settings.auto_confirm:
-        if not typer.confirm(f"Execute command: {cmd}?"):
+def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
+    """Execute a shell command in a sandboxed Docker container."""
+    if not ctx.deps.auto_confirm:
+        if not Confirm.ask(f"Execute command: {cmd}?"):
             return "Command cancelled by user."
-
-    # 2. Execute in sandbox
-    return sandbox.run_command(cmd)
+    return ctx.deps.sandbox.run_command(cmd)
 ```
 
-### 5.3 Notes Tool (`co_cli/tools/notes.py`)
+### 5.3 Obsidian Tools (`co_cli/tools/obsidian.py`)
+
+Uses `RunContext[CoDeps]` + `ModelRetry` for self-healing. See `docs/DESIGN-tool-obsidian.md` for full design.
 
 ```python
-def list_notes(tag: Optional[str] = None) -> List[str]:
+def search_notes(ctx: RunContext[CoDeps], query: str, limit: int = 10) -> list[dict]:
+    """Multi-keyword AND search with word boundaries."""
+    vault = ctx.deps.obsidian_vault_path
+    if not vault or not vault.exists():
+        raise ModelRetry("Obsidian vault not configured.")
+    # ... regex search with snippets ...
+
+def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> list[str]:
     """List markdown notes, optionally filtered by tag."""
-    # Glob search: vault_path/**/*.md
-    # If tag provided: filter by content containing tag
 
-def read_note(filename: str) -> str:
-    """Read note content with directory traversal protection."""
-    # Sanitize path with os.path.normpath
-    # Verify path starts with vault_path
+def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
+    """Read note content with path traversal protection."""
+    # Uses pathlib .resolve() + .is_relative_to() for safety
 ```
 
-### 5.4 Drive Tool (`co_cli/tools/drive.py`)
+### 5.4 Drive Tool (`co_cli/tools/google_drive.py`)
 
-```mermaid
-sequenceDiagram
-    participant Tool as search_drive()
-    participant Auth as get_drive_service()
-    participant API as Drive API v3
+Uses `RunContext[CoDeps]` + `ModelRetry`. Auth is handled at startup via `google_auth.py` → `create_deps()`.
 
-    Tool->>Auth: Get credentials
-
-    alt Service Account Key Exists
-        Auth->>Auth: Load from gcp_key_path
-    else Use ADC
-        Auth->>Auth: google.auth.default()
-    end
-
-    Auth->>Tool: Drive service
-    Tool->>API: files().list(q="name contains 'query'")
-    API->>Tool: List of files (id, name, mimeType, modifiedTime)
+```python
+def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict]:
+    service = ctx.deps.google_drive
+    if not service:
+        raise ModelRetry("Google Drive not configured.")
+    # API-level filter with ModelRetry on errors
 ```
 
-**Hybrid Search Strategy:**
-1. **API-Level Filter:** Use Drive API `q` parameter for keyword/metadata filtering
-2. **Result:** Returns top 10 matches (no semantic re-ranking in current impl)
+### 5.5 Gmail Tool (`co_cli/tools/google_gmail.py`)
 
-### 5.5 Communication Tools (`co_cli/tools/comm.py`)
+Uses `RunContext[CoDeps]` + `ModelRetry` + `rich.prompt.Confirm` for human-in-the-loop.
 
-| Tool | Service | Auth | Confirmation |
-|------|---------|------|--------------|
-| `post_slack_message` | Slack WebClient | Bot Token | Required |
-| `draft_email` | Gmail API | GCP Key/ADC | Required |
-| `list_calendar_events` | Calendar API | GCP Key/ADC | Not required |
+### 5.6 Calendar Tool (`co_cli/tools/google_calendar.py`)
+
+Uses `RunContext[CoDeps]` + `ModelRetry`. Read-only, no confirmation needed.
+
+### 5.7 Slack Tool (`co_cli/tools/slack.py`)
+
+Uses `RunContext[CoDeps]` + `ModelRetry` + `rich.prompt.Confirm` for human-in-the-loop.
+
+### 5.8 Google Auth (`co_cli/google_auth.py`)
+
+Infrastructure module (not a tool). Single factory function used by `create_deps()`:
+
+```python
+def get_google_credentials(credentials_path, scopes) -> Any | None:
+    # Authorized user file → ADC fallback → None
+def build_google_service(service_name, version, credentials) -> Any | None:
+    # Credentials → service client (or None)
+```
+
+**Cloud Tool Summary:**
+
+| Tool | File | Service | Confirmation |
+|------|------|---------|--------------|
+| `search_drive` | `google_drive.py` | Drive API v3 | No |
+| `read_drive_file` | `google_drive.py` | Drive API v3 | No |
+| `draft_email` | `google_gmail.py` | Gmail API v1 | Yes |
+| `list_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
+| `post_slack_message` | `slack.py` | Slack WebClient | Yes |
 
 ---
 
@@ -561,20 +651,20 @@ graph TB
 ### 7.2 High-Risk Tool Confirmation
 
 ```python
-# Pattern used in all high-risk tools
-if not settings.auto_confirm:
-    if not typer.confirm(f"Execute: {action}?", default=False):
+# All tools use RunContext pattern
+if not ctx.deps.auto_confirm:
+    if not Confirm.ask(f"Execute: {action}?", default=False, console=_console):
         return "Action cancelled by user."
 ```
 
 **Bypass for Testing:** Set `auto_confirm: true` in settings.
 
-### 7.3 Path Traversal Protection (Notes)
+### 7.3 Path Traversal Protection (Obsidian)
 
 ```python
-safe_path = os.path.normpath(os.path.join(vault_path, filename))
-if not safe_path.startswith(os.path.abspath(vault_path)):
-    return "Error: Access denied. File is outside the vault."
+safe_path = (vault / filename).resolve()
+if not safe_path.is_relative_to(vault.resolve()):
+    raise ModelRetry("Access denied: path is outside the vault.")
 ```
 
 ---
@@ -687,7 +777,6 @@ def test_sandbox_execution():
 | `slack-sdk` | ^3.39.0 | Slack API |
 | `opentelemetry-sdk` | ^1.39.1 | Tracing |
 | `datasette` | ^0.65.2 | Telemetry dashboard |
-| `platformdirs` | ^4.0.0 | XDG paths |
 
 ### Development
 
@@ -700,6 +789,8 @@ def test_sandbox_execution():
 
 ## 11. Implementation Status
 
+### Features
+
 | Phase | Component | Status |
 |-------|-----------|--------|
 | 1 | CLI Skeleton + LLM Connection | ✅ Complete |
@@ -711,3 +802,15 @@ def test_sandbox_execution():
 | 7 | Dual-Engine (Gemini) | ✅ Complete |
 | 8 | XDG Configuration | ✅ Complete |
 | 9 | Functional Testing | ✅ Complete |
+
+### Pydantic AI Best Practices Migration
+
+| Batch | Focus | Status |
+|-------|-------|--------|
+| 1 | Shell tool + CoDeps foundation (`deps.py`, `RunContext`, `create_deps()`) | ✅ Complete |
+| 2 | Obsidian tools (`ModelRetry`, `obsidian_vault_path` in deps) | ✅ Complete |
+| 3-4 | Google tools + Slack (`google_auth.py`, all tools → `RunContext`, `comm.py` deleted) | ✅ Complete |
+| 5 | Cleanup: add `TestModel` unit tests | ⬜ Pending |
+| 6 | `requires_approval=True` + `DeferredToolRequests` | ⬜ Deferred |
+
+See `docs/TODO-pydantic-ai-best-practices.md` for remaining migration details.

@@ -3,10 +3,11 @@ import json
 from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel, Field, model_validator
-from platformdirs import user_config_dir, user_data_dir
+
 APP_NAME = "co-cli"
 
-# XDG Paths - Favoring ~/.config for developer tools
+# XDG Paths - Explicit XDG resolution so ~/.config/ is used even on macOS
+# (platformdirs would resolve to ~/Library/Application Support/ on macOS)
 CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_NAME
 DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
@@ -19,7 +20,7 @@ class Settings(BaseModel):
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
     slack_bot_token: Optional[str] = Field(default=None)
-    gcp_key_path: Optional[str] = Field(default=None)
+    google_credentials_path: Optional[str] = Field(default=None)
     
     # Behavior
     auto_confirm: bool = Field(default=False)
@@ -42,7 +43,7 @@ class Settings(BaseModel):
         env_map = {
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "slack_bot_token": "SLACK_BOT_TOKEN",
-            "gcp_key_path": "GCP_KEY_PATH",
+            "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "auto_confirm": "CO_CLI_AUTO_CONFIRM",
             "docker_image": "CO_CLI_DOCKER_IMAGE",
             "gemini_api_key": "GEMINI_API_KEY",

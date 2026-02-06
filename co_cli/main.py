@@ -49,17 +49,37 @@ console = Console()
 def create_deps() -> CoDeps:
     """Create deps from settings."""
     from pathlib import Path
+    from co_cli.google_auth import ensure_google_credentials, build_google_service, ALL_GOOGLE_SCOPES
 
     # Resolve obsidian vault path
     vault_path = None
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
+    # Single auth call for all Google services (auto-runs gcloud if needed)
+    google_creds = ensure_google_credentials(
+        settings.google_credentials_path,
+        ALL_GOOGLE_SCOPES,
+    )
+    google_drive = build_google_service("drive", "v3", google_creds)
+    google_gmail = build_google_service("gmail", "v1", google_creds)
+    google_calendar = build_google_service("calendar", "v3", google_creds)
+
+    # Build Slack client
+    slack_client = None
+    if settings.slack_bot_token:
+        from slack_sdk import WebClient
+        slack_client = WebClient(token=settings.slack_bot_token)
+
     return CoDeps(
         sandbox=Sandbox(image=settings.docker_image),
         auto_confirm=settings.auto_confirm,
         session_id=uuid4().hex,
         obsidian_vault_path=vault_path,
+        google_drive=google_drive,
+        google_gmail=google_gmail,
+        google_calendar=google_calendar,
+        slack_client=slack_client,
     )
 
 
@@ -135,6 +155,22 @@ def status():
 
         table.add_row("Ollama", ollama_status, f"Host: {ollama_host}")
         table.add_row("Model", "Ready" if ollama_status == "Online" else "N/A", model_name)
+
+    # Google credentials
+    from co_cli.google_auth import GOOGLE_TOKEN_PATH, ADC_PATH
+    if settings.google_credentials_path and os.path.exists(os.path.expanduser(settings.google_credentials_path)):
+        google_status = "Configured"
+        google_detail = settings.google_credentials_path
+    elif GOOGLE_TOKEN_PATH.exists():
+        google_status = "Configured"
+        google_detail = str(GOOGLE_TOKEN_PATH)
+    elif ADC_PATH.exists():
+        google_status = "ADC Available"
+        google_detail = str(ADC_PATH)
+    else:
+        google_status = "Not Found"
+        google_detail = "Run 'co chat' to auto-setup or install gcloud"
+    table.add_row("Google", google_status, google_detail)
 
     obsidian_path = settings.obsidian_vault_path
     obsidian_status = "Configured" if obsidian_path and os.path.exists(obsidian_path) else "Not Found"

@@ -1,64 +1,75 @@
-import os
-import google.auth
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from typing import List, Dict, Any
-from co_cli.config import settings
+"""Google Drive tools using RunContext pattern."""
 
-def get_drive_service():
-    key_path = settings.gcp_key_path
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
-    
-    try:
-        if key_path and os.path.exists(key_path):
-            creds = service_account.Credentials.from_service_account_file(key_path, scopes=scopes)
-        else:
-            # Fallback to Application Default Credentials (ADC)
-            creds, _ = google.auth.default(scopes=scopes)
-        return build('drive', 'v3', credentials=creds)
-    except Exception:
-        return None
+from typing import Any
 
-def search_drive(query: str) -> List[Dict[str, Any]]:
-    """
-    Search for files in Google Drive.
-    
+from pydantic_ai import RunContext, ModelRetry
+
+from co_cli.deps import CoDeps
+
+
+def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict[str, Any]]:
+    """Search for files in Google Drive.
+
     Args:
         query: Search keywords or metadata query.
     """
-    service = get_drive_service()
+    service = ctx.deps.google_drive
     if not service:
-        return [{"error": f"Google Drive API not configured. Key missing at {settings.gcp_key_path}"}]
-    
+        raise ModelRetry(
+            "Google Drive not configured. "
+            "Set google_credentials_path in settings or run: gcloud auth application-default login"
+        )
+
     try:
-        # Step 1: API Level filtering
         q = f"name contains '{query}' or fullText contains '{query}'"
         results = service.files().list(
             q=q,
             pageSize=10,
-            fields="nextPageToken, files(id, name, mimeType, modifiedTime)"
+            fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
         ).execute()
-        items = results.get('files', [])
+        items = results.get("files", [])
+        if not items:
+            raise ModelRetry("No results. Try different keywords.")
         return items
+    except ModelRetry:
+        raise
     except Exception as e:
-        return [{"error": f"Drive search failed: {e}"}]
+        msg = str(e)
+        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
+            raise ModelRetry(
+                "Google Drive API is not enabled for your project. "
+                "Run: gcloud services enable drive.googleapis.com"
+            )
+        raise ModelRetry(f"Drive API error: {e}")
 
-def read_drive_file(file_id: str) -> str:
+
+def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
+    """Fetch the content of a text-based file from Google Drive.
+
+    Args:
+        file_id: The Google Drive file ID (from search_drive results).
     """
-    Fetch the content of a text-based file from Google Drive.
-    """
-    service = get_drive_service()
+    service = ctx.deps.google_drive
     if not service:
-        return "Error: Drive API not configured."
-    
+        raise ModelRetry(
+            "Google Drive not configured. "
+            "Set google_credentials_path in settings or run: gcloud auth application-default login"
+        )
+
     try:
         file = service.files().get(fileId=file_id, fields="name, mimeType").execute()
-        if 'application/vnd.google-apps' in file['mimeType']:
-            # Export Google Docs as text
-            content = service.files().export(fileId=file_id, mimeType='text/plain').execute()
+        if "application/vnd.google-apps" in file["mimeType"]:
+            content = service.files().export(fileId=file_id, mimeType="text/plain").execute()
         else:
             content = service.files().get_media(fileId=file_id).execute()
-        
-        return content.decode('utf-8')
+        return content.decode("utf-8")
+    except ModelRetry:
+        raise
     except Exception as e:
-        return f"Error reading drive file: {e}"
+        msg = str(e)
+        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
+            raise ModelRetry(
+                "Google Drive API is not enabled for your project. "
+                "Run: gcloud services enable drive.googleapis.com"
+            )
+        raise ModelRetry(f"Drive API error: {e}")

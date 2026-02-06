@@ -65,7 +65,7 @@ Before you begin, ensure you have the following installed:
       "gemini_model": "gemini-2.0-flash",
       "obsidian_vault_path": "/Users/yourname/Documents/ObsidianVault",
       "slack_bot_token": "xoxb-your-bot-token",
-      "gcp_key_path": "",
+      "google_credentials_path": "",
       "docker_image": "python:3.12-slim",
       "auto_confirm": false
     }
@@ -78,36 +78,21 @@ Before you begin, ensure you have the following installed:
 
     > 💡 Environment variables (e.g., `GEMINI_API_KEY`, `LLM_PROVIDER`) override settings.json for CI/automation.
 
-    > 💡 **Google Authentication**: If `gcp_key_path` is empty, Co falls back to **Application Default Credentials (ADC)**.
+    > 💡 **Google Authentication**: If `google_credentials_path` is empty, Co falls back to **Application Default Credentials (ADC)**.
 
 ## 🔌 Google Services (Drive/Gmail/Calendar)
 
-Co supports two methods for accessing Google APIs. Choose the one that fits your use case.
+Just run `uv run co chat`. On first use, Co will:
+1. Check if credentials already exist (`~/.config/co-cli/google_token.json`)
+2. If not, detect and copy existing `gcloud` ADC credentials
+3. If no ADC exists, run `gcloud auth application-default login` automatically (opens browser)
+4. Copy the result to `~/.config/co-cli/google_token.json`
 
-### Option A: Personal Use (Recommended)
-Use **Application Default Credentials (ADC)** to run Co as yourself. This is easiest for local development.
+**Prerequisite:** Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
 
-1.  **Install gcloud**: [Google Cloud CLI Install Guide](https://cloud.google.com/sdk/docs/install).
-2.  **Login with Scopes**: Run this exact command to authorize Drive, Gmail, and Calendar access:
-    ```bash
-    gcloud auth application-default login --scopes='https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar'
-    ```
-3.  **Configure**: Leave `"gcp_key_path": ""` in your `settings.json`.
+That's it. No manual file copying or `settings.json` editing needed.
 
-### Option B: Automation / Headless (Service Account)
-Use a Service Account if running on a server or if you want strict permission isolation.
-
-1.  **Create Service Account**:
-    ```bash
-    gcloud iam service-accounts create co-cli-agent --display-name="Co CLI Agent"
-    ```
-2.  **Download Key**:
-    ```bash
-    gcloud iam service-accounts keys create ~/.config/co-cli/gcp-key.json \
-        --iam-account=co-cli-agent@YOUR_PROJECT_ID.iam.gserviceaccount.com
-    ```
-3.  **Share Access**: You MUST share specific Google Drive folders/files with the service account email (e.g., `co-cli-agent@...`) for it to see them.
-4.  **Configure**: Update `settings.json` with `"gcp_key_path": "/Users/yourname/.config/co-cli/gcp-key.json"`.
+> **Advanced:** You can still set `google_credentials_path` in `settings.json` to use a custom credentials file. This takes priority over the auto-setup flow.
 
 ## 🔌 Slack Configuration (Optional)
 
@@ -327,22 +312,18 @@ curl http://localhost:11434/api/tags
 
 #### 4. Google Services (Drive/Gmail/Calendar)
 
-**Option A: Personal Use (ADC)**
 ```bash
+# Generate credentials
 gcloud auth application-default login \
-  --scopes='https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar'
-```
+  --scopes='https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar.readonly'
 
-**Option B: Service Account**
-```bash
-# Create and download key
-gcloud iam service-accounts create co-cli-agent
-gcloud iam service-accounts keys create ~/.config/co-cli/gcp-key.json \
-  --iam-account=co-cli-agent@YOUR_PROJECT.iam.gserviceaccount.com
+# Copy to co-cli config
+cp ~/.config/gcloud/application_default_credentials.json \
+   ~/.config/co-cli/google_token.json
 
 # Add to settings.json
 {
-  "gcp_key_path": "/Users/yourname/.config/co-cli/gcp-key.json"
+  "google_credentials_path": "~/.config/co-cli/google_token.json"
 }
 ```
 
@@ -397,7 +378,9 @@ uv run pytest
 | **Shell** | Safe file/script execution | `docker` |
 | **Notes** | RAG over local Markdown files | `glob`, `fs` |
 | **Drive** | Hybrid Search (Metadata + Semantic) | `google-api-python-client` |
-| **Comm** | Slack msgs, Gmail drafts, GCal events | `slack_sdk`, `google-auth` |
+| **Gmail** | Draft emails | `google-api-python-client` |
+| **Calendar** | List today's events | `google-api-python-client` |
+| **Slack** | Post messages to channels | `slack_sdk` |
 
 ---
 

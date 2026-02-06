@@ -5,7 +5,7 @@
   "ollama_host": "http://localhost:11434",
   "ollama_model": "llama3",
   "obsidian_vault_path": "/path/to/obsidian/vault",
-  "gcp_key_path": "/path/to/gcp-service-account.json",
+  "google_credentials_path": "",
   "slack_bot_token": "",
   "docker_image": "python:3.12-slim",
   "auto_confirm": false
