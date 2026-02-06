@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "co-cli"
 version = "0.2.0"
-description = "Add your description here"
+description = "Co — a production-grade personal AI assistant CLI with sandboxed shell, Google Drive/Gmail/Calendar, Slack, Obsidian, and OpenTelemetry tracing"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
