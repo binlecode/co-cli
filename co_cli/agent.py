@@ -6,8 +6,10 @@ from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli.tools.drive import search_drive, read_drive_file
-from co_cli.tools.comm import post_slack_message, draft_email, list_calendar_events
+from co_cli.tools.google_drive import search_drive, read_drive_file
+from co_cli.tools.google_gmail import list_emails, draft_email
+from co_cli.tools.google_calendar import list_calendar_events
+from co_cli.tools.slack import post_slack_message
 
 
 def get_agent() -> Agent[CoDeps, str]:
@@ -68,11 +70,12 @@ def get_agent() -> Agent[CoDeps, str]:
     agent.tool(list_notes)
     agent.tool(read_note)
 
-    # TEMPORARY: Keep old tools working during migration (Batch 3+)
-    agent.tool_plain(search_drive)
-    agent.tool_plain(read_drive_file)
-    agent.tool_plain(post_slack_message)
-    agent.tool_plain(draft_email)
-    agent.tool_plain(list_calendar_events)
+    # Batch 3-4: Google + Slack tools (migrated to RunContext)
+    agent.tool(search_drive)
+    agent.tool(read_drive_file)
+    agent.tool(list_emails)
+    agent.tool(draft_email)
+    agent.tool(list_calendar_events)
+    agent.tool(post_slack_message)
 
     return agent

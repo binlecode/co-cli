@@ -53,12 +53,12 @@ graph LR
 ## 3. Data Design
 
 ### 3.1 File Format
-*   **Format:** Apache Parquet (columnar, compressed).
+*   **Format:** Apache Parquet (columnar, compressed). See [Appendix A](#appendix-a-why-parquet) for a primer on why columnar storage matters.
 *   **Compression:** Snappy (default from `otlp2parquet`; good balance of speed and ratio).
 *   **Schema:** Strongly typed columns from the OTel data model — not a custom JSON schema.
 
 ### 3.2 Partitioning
-Hive-style partitioning on GCS, managed by `otlp2parquet`:
+Hive-style partitioning on GCS, managed by `otlp2parquet`. See [Appendix B](#appendix-b-hive-partitioning) for how partition pruning works.
 
 ```
 gs://{bucket}/traces/dt={YYYY-MM-DD}/hr={HH}/spans_{sequence}.parquet
@@ -280,3 +280,147 @@ WHERE StatusCode = 'ERROR';
 *   [CNCF: Collector vs Agent (Feb 2026)](https://www.cncf.io/blog/2026/02/02/opentelemetry-collector-vs-agent-how-to-choose-the-right-telemetry-approach/)
 *   [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 *   [Apache Iceberg for Observability](https://www.infoworld.com/article/4066477/why-observability-needs-apache-iceberg.html)
+
+---
+
+## Appendix A: Why Parquet?
+
+Parquet is a **columnar** file format — instead of storing data row by row (like CSV or JSONL), it stores data column by column.
+
+### Row vs Column Storage
+
+Given this data:
+
+```
+TraceId      | SpanName     | Duration | StatusCode
+-------------|--------------|----------|----------
+abc123       | agent run    | 5000     | OK
+def456       | tool call    | 200      | ERROR
+ghi789       | chat model   | 3000     | OK
+```
+
+**JSONL (row-oriented)** — each line is a complete record:
+```
+{"TraceId":"abc123","SpanName":"agent run","Duration":5000,"StatusCode":"OK"}
+{"TraceId":"def456","SpanName":"tool call","Duration":200,"StatusCode":"ERROR"}
+{"TraceId":"ghi789","SpanName":"chat model","Duration":3000,"StatusCode":"OK"}
+```
+
+**Parquet (column-oriented)** — values from the same column are stored together:
+```
+TraceId column:    [abc123, def456, ghi789]
+SpanName column:   [agent run, tool call, chat model]
+Duration column:   [5000, 200, 3000]
+StatusCode column: [OK, ERROR, OK]
+```
+
+### Why This Matters
+
+**1. Column pruning** — if you query `SELECT SpanName, Duration WHERE StatusCode = 'ERROR'`, Parquet reads only 3 of 4 columns. JSONL must read every field of every row.
+
+**2. Compression** — similar values are physically adjacent. A column of `[OK, OK, OK, OK, ERROR, OK]` compresses far better than those same values scattered across JSON objects. Typical result: ~90% smaller than equivalent JSONL.
+
+**3. Predicate pushdown** — Parquet files contain min/max statistics per column per chunk. If a chunk's `Duration` min=1000 and max=3000, a query for `Duration > 5000` skips the entire chunk without reading it.
+
+### File Structure
+
+```
+┌─────────────────────────────┐
+│ Row Group 1 (e.g. 10k rows) │
+│  ├── Column chunk: TraceId   │  ← compressed, with min/max stats
+│  ├── Column chunk: SpanName  │
+│  ├── Column chunk: Duration  │
+│  └── Column chunk: StatusCode│
+├─────────────────────────────┤
+│ Row Group 2 (next 10k rows)  │
+│  ├── Column chunk: TraceId   │
+│  └── ...                     │
+├─────────────────────────────┤
+│ Footer                       │  ← schema, row group offsets, stats
+└─────────────────────────────┘
+```
+
+- **Row Groups** split the file into horizontal slices (typically 128MB each).
+- Each row group contains **column chunks** — one per column, independently compressed.
+- The **footer** holds the schema and statistics, so readers can plan which chunks to read before touching any data.
+
+### Parquet vs JSONL for OTel Spans
+
+| | JSONL | Parquet |
+|:---|:---|:---|
+| 1M spans size | ~500MB | ~50MB |
+| Query `WHERE StatusCode = 'ERROR'` | Reads all bytes | Reads 1 column + stats skip |
+| Schema | Implicit (hope every line matches) | Explicit, typed, enforced |
+| Tool support | Any text editor | DuckDB, BigQuery, Spark, Polars |
+| Append pattern | Trivial (just write a line) | Needs a writer (otlp2parquet) |
+
+The tradeoff: Parquet is harder to produce (you can't just `json.dumps()` + write), but dramatically cheaper and faster to query. This is why the pipeline uses `otlp2parquet` to handle the conversion — the application never deals with Parquet directly.
+
+---
+
+## Appendix B: Hive Partitioning
+
+Hive partitioning is a directory naming convention from Apache Hive where metadata is encoded in the folder path as `key=value` pairs. Instead of storing the date *inside* each file, the date is part of the *path* the file lives in.
+
+### Flat vs Hive-Partitioned Layout
+
+**Flat (no partitioning)** — all files in one directory:
+```
+gs://bucket/traces/
+  ├── spans_0001.parquet    ← contains spans from Feb 3, 4, 5
+  ├── spans_0002.parquet    ← contains spans from Feb 4, 5
+  └── spans_0003.parquet    ← contains spans from Feb 5
+```
+
+**Hive-partitioned** — files organized by `key=value` directories:
+```
+gs://bucket/traces/
+  ├── dt=2026-02-03/
+  │   └── hr=09/
+  │       └── spans_0001.parquet
+  ├── dt=2026-02-04/
+  │   ├── hr=10/
+  │   │   └── spans_0002.parquet
+  │   └── hr=14/
+  │       └── spans_0003.parquet
+  └── dt=2026-02-05/
+      └── hr=11/
+          └── spans_0004.parquet
+```
+
+### How Partition Pruning Works
+
+When a query engine (DuckDB, BigQuery, Spark) sees a `WHERE` clause, it reads the *directory names* before opening any files:
+
+```sql
+SELECT * FROM read_parquet('gs://bucket/traces/**/*.parquet', hive_partitioning=true)
+WHERE dt = '2026-02-05';
+```
+
+```
+Query engine scans directory listing:
+  dt=2026-02-03/  →  does not match dt='2026-02-05'  →  SKIP (0 bytes read)
+  dt=2026-02-04/  →  does not match dt='2026-02-05'  →  SKIP (0 bytes read)
+  dt=2026-02-05/  →  MATCH  →  read spans_0004.parquet
+```
+
+The engine skips entire directory trees without reading a single byte of data from them. This is **partition pruning** — the directory structure acts as a free index.
+
+### Why It Matters at Scale
+
+| Scenario (1 year of data) | Without partitioning | With dt= partitioning |
+|:---|:---|:---|
+| Query for 1 day | Scans 365 days of files | Scans 1 day of files |
+| Data read | ~18GB | ~50MB |
+| DuckDB query time | ~30s | <1s |
+| BigQuery cost ($5/TB) | ~$0.09 | ~$0.00025 |
+
+### Combined with Parquet
+
+Hive partitioning and Parquet are complementary optimizations at different levels:
+
+- **Hive partitioning** prunes at the *file* level — skip files you don't need.
+- **Parquet column pruning** prunes at the *column* level — within the files you do read, skip columns you don't need.
+- **Parquet predicate pushdown** prunes at the *row group* level — within the columns you do read, skip chunks that can't match.
+
+Together they form a three-layer filter: files → columns → row groups. For typical OTel queries (a specific day, a few fields, filtered by status), this means reading <1% of the total stored data.
