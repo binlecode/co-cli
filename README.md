@@ -109,15 +109,28 @@ To enable Slack messaging:
 
 ## 💻 Usage
 
-To run `co` commands, prefix them with `uv run co` (or install the tool globally).
+### How the `co` Command Works
 
-### 1. Check System Status
+`uv sync` reads the `[project.scripts]` entry in `pyproject.toml` and generates an executable script at `.venv/bin/co`. This script simply imports and calls `co_cli.main:app` (the Typer CLI).
+
+Two ways to invoke it:
+
+| Method | Requires venv activated? | Notes |
+|--------|--------------------------|-------|
+| `uv run co <command>` | No | Always uses the project's venv (recommended) |
+| `co <command>` | Yes (`. .venv/bin/activate`) | Shorter, but only works with active venv |
+
+All examples below use `uv run co`. If you've activated the venv, drop the `uv run` prefix.
+
+### Commands
+
+#### `co status` — System Health Check
 Verify that Ollama, Docker, and your config are healthy.
 ```bash
 uv run co status
 ```
 
-### 2. Start Chatting
+#### `co chat` — Interactive Chat
 Enter the interactive loop. Co will maintain context until you exit.
 ```bash
 uv run co chat
@@ -128,10 +141,26 @@ uv run co chat
 > "Check my calendar for today and draft an email to the team if I have free time."
 > "Run `ls -la` to see what files are in this directory." (Runs in Docker!)
 
-### 3. View Telemetry Logs
-Launch a local Datasette dashboard to inspect the agent's "thought process" and tool usage.
+#### `co tail` — Real-Time Span Viewer
+Tail agent spans live from a second terminal while `co chat` is running.
+```bash
+uv run co tail              # Follow all spans
+uv run co tail -v           # Include LLM output content
+uv run co tail --tools-only # Only tool calls
+uv run co tail -n -l 10    # Print last 10 spans and exit
+```
+See `docs/DESIGN-tail-viewer.md` for the full troubleshooting guide and span attribute reference.
+
+#### `co logs` — Datasette Dashboard
+Launch a local Datasette dashboard to inspect traces with SQL.
 ```bash
 uv run co logs
+```
+
+#### `co traces` — Visual Trace Viewer
+Generate and open a static HTML page with nested, collapsible span trees.
+```bash
+uv run co traces
 ```
 
 ---

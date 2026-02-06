@@ -47,12 +47,12 @@ def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
             provider=provider
         )
 
-        # GLM-4.7-Flash tuned parameters (from HuggingFace card / official eval config).
-        # Ollama defaults (temp=0.8) compress the distribution tighter than the
-        # model was evaluated with, hurting tool-call accuracy.
+        # GLM-4.7-Flash "Terminal / SWE-Bench Verified" profile.
+        # Best match for Co CLI's tool-calling pattern (shell commands + API calls).
+        # See: https://huggingface.co/zai-org/GLM-4.7-Flash
         model_settings = ModelSettings(
-            temperature=1.0,
-            top_p=0.95,
+            temperature=0.7,
+            top_p=1.0,
             max_tokens=16384,
         )
 
@@ -79,15 +79,16 @@ def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
         model,
         deps_type=CoDeps,
         system_prompt=system_prompt,
+        retries=settings.tool_retries,
     )
 
-    # Register tools with RunContext pattern
+    # All tools inherit agent-level retries (settings.tool_retries).
+    # Side-effectful tools (shell, email, slack) are gated by confirm_or_yolo,
+    # so retries are safe — the user confirms each attempt.
     agent.tool(run_shell_command)
     agent.tool(search_notes)
     agent.tool(list_notes)
     agent.tool(read_note)
-
-    # Batch 3-4: Google + Slack tools (migrated to RunContext)
     agent.tool(search_drive)
     agent.tool(read_drive_file)
     agent.tool(list_emails)

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-02-06
+
+### Added
+- **`co tail` command**: Real-time span viewer (`co_cli/tail.py`, 260 lines) — tail agent spans live from a second terminal with `--tools-only`, `-v` verbose, and `-n`/`-l` non-follow modes.
+- **`docs/DESIGN-tail-viewer.md`**: Tail viewer design doc with span attribute reference and troubleshooting guide.
+- **`docs/TODO-tool-call-stability.md`**: Comprehensive stability doc — ModelRetry design principle, retry budget, shell error propagation, system prompt, Obsidian display migration, loop guard, sandbox hardening.
+
+### Changed
+- **Inference params**: GLM-4.7-Flash switched from general conversation profile (`temp=1.0, top_p=0.95`) to Terminal/SWE-Bench Verified profile (`temp=0.7, top_p=1.0`) for better tool-call accuracy.
+- **Agent retry budget**: `retries=settings.tool_retries` set at agent level (was default 1).
+- **`README.md`**: Expanded usage section with `co` command explanation, added `co tail`/`co traces` docs.
+- **`AGENTS.md`**: Updated commands, testing guidance, and security tips to reflect current state.
+- **`docs/TODO-approval-flow.md`**: Expanded with post-session-yolo context.
+- **`docs/TODO-streaming-tool-output.md`**: Expanded with event_stream_handler design.
+- **`docs/DESIGN-co-cli.md`**: Updated architecture with display/banner/tail modules.
+
+### Removed
+- **`docs/TODO-retry-design.md`**: Merged into `TODO-tool-call-stability.md`.
+- **`docs/TODO-session-yolo.md`**: Superseded by implemented session-yolo in v0.2.0.
+
+---
+
 ## [0.2.4] - 2026-02-06
 
 ### Added

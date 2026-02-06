@@ -368,7 +368,34 @@ classDiagram
 
 ### 4.5 CLI (`co_cli/main.py`)
 
-Typer-based CLI with three main commands. Owns dependency creation, lifecycle, and conversation memory.
+Typer-based CLI. Owns dependency creation, lifecycle, and conversation memory.
+
+#### Entry Point: How `co` Works
+
+`pyproject.toml` declares a console script entry point:
+
+```toml
+[project.scripts]
+co = "co_cli.main:app"
+```
+
+When `uv sync` runs, it generates `.venv/bin/co` — a small Python wrapper:
+
+```python
+#!/.../co-cli/.venv/bin/python3
+import sys
+from co_cli.main import app
+if __name__ == "__main__":
+    sys.exit(app())
+```
+
+This means `co` is not a compiled binary but an auto-generated script that calls the Typer `app()`. Two invocation methods:
+
+| Method | Requires venv activated? |
+|--------|--------------------------|
+| `uv run co <cmd>` | No — uv activates the venv automatically |
+| `co <cmd>` | Yes — `.venv/bin/` must be on `PATH` |
+
 
 **Dependency Injection + Conversation Memory:**
 
@@ -432,7 +459,9 @@ stateDiagram-v2
 |---------|-------------|----------------|
 | `co chat` | Interactive REPL | `asyncio.run(chat_loop())` |
 | `co status` | System health check | Displays Rich table |
+| `co tail` | Real-time span viewer | Polls SQLite, prints with Rich (`tail.py`) |
 | `co logs` | Telemetry dashboard | Launches Datasette |
+| `co traces` | Visual span tree (HTML) | Generates static HTML (`trace_viewer.py`) |
 
 **REPL Features:**
 - History: Saved to `~/.local/share/co-cli/history.txt`
