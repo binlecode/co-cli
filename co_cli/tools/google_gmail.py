@@ -2,14 +2,12 @@
 
 import base64
 from email.mime.text import MIMEText
+from typing import Any
 
-from rich.console import Console
-from rich.prompt import Confirm
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-
-_console = Console()
+from co_cli.tools._confirm import confirm_or_yolo
 
 
 def _format_messages(service, message_ids: list[dict]) -> str:
@@ -29,11 +27,14 @@ def _format_messages(service, message_ids: list[dict]) -> str:
         )
         headers = {h["name"]: h["value"] for h in detail.get("payload", {}).get("headers", [])}
         snippet = detail.get("snippet", "")
+        msg_id = msg["id"]
+        gmail_url = f"https://mail.google.com/mail/u/0/#inbox/{msg_id}"
         output += (
             f"- From: {headers.get('From', 'unknown')}\n"
             f"  Subject: {headers.get('Subject', '(no subject)')}\n"
             f"  Date: {headers.get('Date', 'unknown')}\n"
             f"  Preview: {snippet}\n"
+            f"  Link: {gmail_url}\n"
         )
     return output
 
@@ -49,8 +50,12 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     return service
 
 
-def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> str:
+def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]:
     """List recent emails from the user's Gmail inbox.
+
+    Returns a dict with:
+    - display: pre-formatted email list with clickable links — show this directly to the user
+    - count: number of emails returned
 
     Args:
         max_results: Maximum number of emails to return (default 5).
@@ -66,8 +71,9 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> str:
         )
         messages = response.get("messages", [])
         if not messages:
-            return "No emails found."
-        return "Recent Emails:\n" + _format_messages(service, messages)
+            return {"display": "No emails found.", "count": 0}
+        display = f"Recent Emails ({len(messages)}):\n" + _format_messages(service, messages)
+        return {"display": display, "count": len(messages)}
     except ModelRetry:
         raise
     except Exception as e:
@@ -80,8 +86,12 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> str:
         raise ModelRetry(f"Gmail API error: {e}")
 
 
-def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> str:
+def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
     """Search emails in Gmail using Gmail search syntax.
+
+    Returns a dict with:
+    - display: pre-formatted search results with clickable links — show this directly to the user
+    - count: number of emails returned
 
     Args:
         query: Gmail search query (e.g. "from:alice subject:invoice", "is:unread", "newer_than:2d").
@@ -98,8 +108,9 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         )
         messages = response.get("messages", [])
         if not messages:
-            return f"No emails found for query: {query}"
-        return f"Search results for '{query}':\n" + _format_messages(service, messages)
+            return {"display": f"No emails found for query: {query}", "count": 0}
+        display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(service, messages)
+        return {"display": display, "count": len(messages)}
     except ModelRetry:
         raise
     except Exception as e:
@@ -127,13 +138,8 @@ def draft_email(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> st
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
 
-    if not ctx.deps.auto_confirm:
-        if not Confirm.ask(
-            f"Draft email to [bold]{to}[/bold]?",
-            default=False,
-            console=_console,
-        ):
-            return "Email draft cancelled by user."
+    if not confirm_or_yolo(ctx, f"Draft email to [bold]{to}[/bold]?"):
+        return "Email draft cancelled by user."
 
     try:
         message = MIMEText(body)

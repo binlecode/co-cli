@@ -1,12 +1,9 @@
 """Slack tools using RunContext pattern."""
 
-from rich.console import Console
-from rich.prompt import Confirm
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-
-_console = Console()
+from co_cli.tools._confirm import confirm_or_yolo
 
 
 def post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> str:
@@ -22,13 +19,8 @@ def post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> str:
             "Slack not configured. Set slack_bot_token in settings or SLACK_BOT_TOKEN env var."
         )
 
-    if not ctx.deps.auto_confirm:
-        if not Confirm.ask(
-            f"Send Slack message to [bold]{channel}[/bold]?",
-            default=False,
-            console=_console,
-        ):
-            return "Slack post cancelled by user."
+    if not confirm_or_yolo(ctx, f"Send Slack message to [bold]{channel}[/bold]?"):
+        return "Slack post cancelled by user."
 
     try:
         response = client.chat_postMessage(channel=channel, text=text)

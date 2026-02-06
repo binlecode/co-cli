@@ -57,7 +57,9 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 - **Python 3.12+** with type hints everywhere
 - **Imports**: Always explicit — never `from X import *`
 - **`__init__.py`**: Prefer empty (docstring-only) — no re-exports unless the module is a public API facade
+- **`_prefix.py` helpers**: Internal/shared helpers in a package use leading underscore (e.g. `tools/_confirm.py`). These are private to the package — not registered as tools, not part of the public API
 - **Tool pattern**: New tools must use `RunContext[CoDeps]`, access runtime resources via `ctx.deps`
+- **Tool return type**: Tools that return data for the user to see MUST return structured output (`dict[str, Any]`) with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). This ensures the LLM shows URLs/links instead of reformatting into tables that drop them. Never return raw `list[dict]` — the LLM will reformat and lose data.
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
 - **Config precedence**: env vars > `~/.config/co-cli/settings.json` > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
@@ -85,5 +87,7 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
+- `docs/DESIGN-llm-models.md` — LLM model configuration (Ollama GLM-4.7-Flash parameters, Gemini)
 - `docs/TODO-approval-flow.md` — Migrate to pydantic-ai `requires_approval` + `DeferredToolRequests`
+- `docs/TODO-session-yolo.md` — Session-level "approve all" (y/n/a yolo mode)
 - `docs/FIX-gemini-summary-on-shell.md` — Known issue: Gemini summarizes tool output instead of showing it directly
