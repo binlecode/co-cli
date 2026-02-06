@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 - `co_cli/`: main Python package (CLI entry in `co_cli/main.py`, agent logic in `co_cli/agent.py`, sandbox/telemetry helpers).
-- `co_cli/tools/`: tool integrations (`shell.py`, `notes.py`, `drive.py`, `comm.py`).
+- `co_cli/tools/`: tool integrations (`shell.py`, `obsidian.py`, `google_drive.py`, `google_gmail.py`, `google_calendar.py`, `slack.py`).
 - `tests/`: functional test suite (real services, no mocks).
-- `docs/`: design and process docs (`docs/DESIGN-co-cli.md`, `docs/DESIGN-otel-logging.md`, `docs/TODO-pydantic-ai-best-practices.md`).
+- `docs/`: design and process docs (`docs/DESIGN-co-cli.md`, `docs/DESIGN-otel-logging.md`, `docs/TODO-approval-flow.md`).
 - Root docs: `README.md` for usage and setup.
 - Config example: `settings.example.json`.
 

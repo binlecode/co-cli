@@ -45,17 +45,18 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 | `shell.py` | `run_shell_command` | `RunContext[CoDeps]` — uses sandbox, human-in-the-loop confirm |
 | `obsidian.py` | `search_notes`, `list_notes`, `read_note` | `RunContext[CoDeps]` — uses `ctx.deps.obsidian_vault_path` |
 | `google_drive.py` | `search_drive`, `read_drive_file` | `RunContext[CoDeps]` — uses `ctx.deps.google_drive` + `ModelRetry` |
-| `google_gmail.py` | `draft_email` | `RunContext[CoDeps]` — uses `ctx.deps.google_gmail` + human-in-the-loop confirm |
-| `google_calendar.py` | `list_calendar_events` | `RunContext[CoDeps]` — uses `ctx.deps.google_calendar` + `ModelRetry` |
+| `google_gmail.py` | `list_emails`, `search_emails`, `draft_email` | `RunContext[CoDeps]` — uses `ctx.deps.google_gmail` + human-in-the-loop confirm |
+| `google_calendar.py` | `list_calendar_events`, `search_calendar_events` | `RunContext[CoDeps]` — uses `ctx.deps.google_calendar` + `ModelRetry` |
 | `slack.py` | `post_slack_message` | `RunContext[CoDeps]` — uses `ctx.deps.slack_client` + human-in-the-loop confirm |
 
 ### Migration Status
-All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining. See `docs/TODO-pydantic-ai-best-practices.md` for remaining items (Batch 5-6).
+All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migrate approval flow from `Confirm.ask` to `requires_approval=True` — see `docs/TODO-approval-flow.md`.
 
 ## Coding Standards
 
 - **Python 3.12+** with type hints everywhere
 - **Imports**: Always explicit — never `from X import *`
+- **`__init__.py`**: Prefer empty (docstring-only) — no re-exports unless the module is a public API facade
 - **Tool pattern**: New tools must use `RunContext[CoDeps]`, access runtime resources via `ctx.deps`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
 - **Config precedence**: env vars > `~/.config/co-cli/settings.json` > built-in defaults
@@ -84,5 +85,5 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
-- `docs/TODO-pydantic-ai-best-practices.md` — RunContext migration roadmap
+- `docs/TODO-approval-flow.md` — Migrate to pydantic-ai `requires_approval` + `DeferredToolRequests`
 - `docs/FIX-gemini-summary-on-shell.md` — Known issue: Gemini summarizes tool output instead of showing it directly
