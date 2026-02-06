@@ -101,12 +101,13 @@ sequenceDiagram
     User->>CLI: co chat
     CLI->>CLI: Initialize Agent & PromptSession
     CLI->>CLI: create_deps() → CoDeps(sandbox, auto_confirm, ...)
+    CLI->>CLI: message_history = []
 
     loop Interactive REPL
         User->>CLI: Enter query
         CLI->>CLI: Show "Co is thinking..."
-        CLI->>Agent: agent.run(user_input, deps=deps)
-        Agent->>LLM: Send prompt + context
+        CLI->>Agent: agent.run(user_input, deps=deps, message_history=message_history)
+        Agent->>LLM: Send prompt + prior conversation context
         LLM->>Agent: Response with tool calls
 
         opt Tool Execution
@@ -122,6 +123,7 @@ sequenceDiagram
 
         LLM->>Agent: Final response
         Agent->>CLI: result.output
+        CLI->>CLI: message_history = result.all_messages()
         CLI->>User: Render Markdown response
     end
 
@@ -228,8 +230,11 @@ def get_agent() -> Agent[CoDeps, str]:
     agent.tool(read_note)
     agent.tool(search_drive)
     agent.tool(read_drive_file)
+    agent.tool(list_emails)
+    agent.tool(search_emails)
     agent.tool(draft_email)
     agent.tool(list_calendar_events)
+    agent.tool(search_calendar_events)
     agent.tool(post_slack_message)
 
     return agent
@@ -363,21 +368,27 @@ classDiagram
 
 ### 4.5 CLI (`co_cli/main.py`)
 
-Typer-based CLI with three main commands. Owns dependency creation and lifecycle.
+Typer-based CLI with three main commands. Owns dependency creation, lifecycle, and conversation memory.
 
-**Dependency Injection:**
+**Dependency Injection + Conversation Memory:**
 
 ```python
 async def chat_loop():
     agent = get_agent()
     deps = create_deps()  # Settings → CoDeps
+    message_history = []  # Accumulates across turns
     try:
         while True:
-            result = await agent.run(user_input, deps=deps)
+            result = await agent.run(
+                user_input, deps=deps, message_history=message_history
+            )
+            message_history = result.all_messages()  # Carry full context forward
             console.print(Markdown(result.output))
     finally:
         deps.sandbox.cleanup()  # Container teardown
 ```
+
+**Conversation Memory:** Each turn's full message history (user prompts, assistant responses, tool calls/results) is accumulated via `result.all_messages()` and passed to the next `agent.run()` call. This gives the LLM full context for follow-up queries like "try again" or "change the subject line". Memory is in-process only — it resets when the session ends.
 
 ```mermaid
 stateDiagram-v2
@@ -611,6 +622,7 @@ graph TD
 - Prompt is disabled while agent is "thinking"
 - Uses `await agent.run()` inside async loop
 - Query N must complete before Query N+1 begins
+- `message_history` is updated sequentially after each turn — no risk of forking
 
 **Rationale:**
 1. Prevents conversation history forking
@@ -810,7 +822,7 @@ def test_sandbox_execution():
 | 1 | Shell tool + CoDeps foundation (`deps.py`, `RunContext`, `create_deps()`) | ✅ Complete |
 | 2 | Obsidian tools (`ModelRetry`, `obsidian_vault_path` in deps) | ✅ Complete |
 | 3-4 | Google tools + Slack (`google_auth.py`, all tools → `RunContext`, `comm.py` deleted) | ✅ Complete |
-| 5 | Cleanup: add `TestModel` unit tests | ⬜ Pending |
+| 5 | Cleanup: zero `tool_plain()`, zero global `settings` in tools, `tools/__init__.py` docstring-only | ✅ Complete |
 | 6 | `requires_approval=True` + `DeferredToolRequests` | ⬜ Deferred |
 
-See `docs/TODO-pydantic-ai-best-practices.md` for remaining migration details.
+See `docs/TODO-approval-flow.md` for remaining migration details.

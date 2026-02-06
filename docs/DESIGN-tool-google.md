@@ -5,7 +5,7 @@
 
 ## Overview
 
-The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list events). All tools use the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors. Authentication is centralized in `co_cli/google_auth.py`.
+The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list and search events). All tools use the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors. Authentication is centralized in `co_cli/google_auth.py`.
 
 **Key design decision:** API clients are built once at startup in `create_deps()` via a shared auth factory, then injected via `CoDeps` — tools never build their own clients or import `settings`.
 
@@ -592,6 +592,71 @@ list_calendar_events()
      - 2026-02-05T14:00: Design Review"
 ```
 
+### search_calendar_events (`co_cli/tools/google_calendar.py`)
+
+Search calendar events by keyword within a date range. Read-only, no confirmation required.
+
+```
+search_calendar_events(
+    ctx: RunContext[CoDeps],
+    query: str,
+    days_ahead: int = 30,
+    max_results: int = 10,
+) -> str
+
+Args:
+    query:       Text to search for in event summaries, descriptions, and locations
+    days_ahead:  How many days ahead to search (default 30)
+    max_results: Maximum number of events to return (default 10)
+
+Returns:
+    Formatted event list, or "No events found matching '...' in the next N days."
+
+Raises:
+    ModelRetry: If not configured or API error
+```
+
+**Processing Flow:**
+
+```
+search_calendar_events(query="standup", days_ahead=7)
+       │
+       ▼
+┌──────────────────────────────────────┐
+│ service = ctx.deps.google_calendar   │
+│   └── None? ──▶ ModelRetry           │
+└──────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────┐
+│ time_min = today midnight UTC        │
+│ time_max = now + days_ahead          │
+│                                      │
+│ events().list(                       │
+│     calendarId="primary",            │
+│     q=query,                         │
+│     timeMin=time_min,                │
+│     timeMax=time_max,                │
+│     maxResults=max_results,          │
+│     singleEvents=True,              │
+│     orderBy="startTime"             │
+│ ).execute()                         │
+└──────────────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────────────┐
+│ No events? ──▶ Return               │
+│   "No events found matching         │
+│    'standup' in the next 7 days."   │
+└──────────────────────────────────────┘
+       │
+       ▼
+  Return formatted list:
+    "Events matching 'standup':
+     - 2026-02-06T09:00: Daily Standup
+     - 2026-02-07T09:00: Daily Standup"
+```
+
 ---
 
 ## Error Handling with ModelRetry
@@ -649,6 +714,7 @@ Only `draft_email` requires confirmation among Google tools. Matches the pattern
 | `list_emails` | Low (read-only) | None |
 | `search_emails` | Low (read-only) | None |
 | `list_calendar_events` | Low (read-only) | None |
+| `search_calendar_events` | Low (read-only) | None |
 | `draft_email` | Medium (creates draft) | `rich.prompt.Confirm` |
 
 ### Confirmation Pattern
@@ -877,6 +943,7 @@ Tools see:
 | `list_emails` | None | Read-only (gmail.modify includes read) |
 | `search_emails` | None | Read-only (gmail.modify includes read) |
 | `list_calendar_events` | None | Read-only scope |
+| `search_calendar_events` | None | Read-only scope |
 | `draft_email` | Creates Gmail draft | User confirmation + scoped to drafts only |
 
 ### Graceful Degradation
@@ -1024,6 +1091,7 @@ All Google tests skip gracefully when GCP is unavailable:
 | `test_drive_search_functional` | No GCP key | Real Drive API search |
 | `test_list_emails_functional` | No GCP key | Real Gmail inbox listing |
 | `test_search_emails_functional` | No GCP key | Real Gmail search query |
+| `test_search_calendar_events_functional` | No GCP key | Real Calendar keyword search |
 | `test_gmail_draft_functional` | No GCP key | Real Gmail draft creation |
 
 ---
@@ -1036,7 +1104,7 @@ All Google tests skip gracefully when GCP is unavailable:
 | `co_cli/deps.py` | `CoDeps` with `google_drive`, `google_gmail`, `google_calendar` fields |
 | `co_cli/tools/google_drive.py` | `search_drive`, `read_drive_file` |
 | `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `draft_email` |
-| `co_cli/tools/google_calendar.py` | `list_calendar_events` |
+| `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tests/test_cloud.py` | Functional tests (Drive, Gmail) |
 
 ---

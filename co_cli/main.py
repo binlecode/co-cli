@@ -98,6 +98,7 @@ async def chat_loop():
     console.print(f"[bold blue]Co is active.[/bold blue] Model: [cyan]{model_info}[/cyan]")
     console.print("[dim]Type 'exit' or 'quit' to stop[/dim]")
 
+    message_history = []
     try:
         while True:
             try:
@@ -108,7 +109,10 @@ async def chat_loop():
                     continue
 
                 console.print("[dim]Co is thinking...[/dim]")
-                result = await agent.run(user_input, deps=deps)
+                result = await agent.run(
+                    user_input, deps=deps, message_history=message_history
+                )
+                message_history = result.all_messages()
                 console.print(Markdown(result.output))
 
             except (EOFError, KeyboardInterrupt):

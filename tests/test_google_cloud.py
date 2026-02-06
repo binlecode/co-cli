@@ -7,6 +7,7 @@ import pytest
 
 from co_cli.tools.google_drive import search_drive, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
+from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.slack import post_slack_message
 from co_cli.config import settings
 from co_cli.deps import CoDeps
@@ -39,6 +40,7 @@ def _make_ctx(
     auto_confirm: bool = True,
     google_drive=None,
     google_gmail=None,
+    google_calendar=None,
     slack_client=None,
 ) -> Context:
     return Context(deps=CoDeps(
@@ -47,6 +49,7 @@ def _make_ctx(
         session_id="test",
         google_drive=google_drive,
         google_gmail=google_gmail,
+        google_calendar=google_calendar,
         slack_client=slack_client,
     ))
 
@@ -100,6 +103,64 @@ def test_search_emails_functional():
     ctx = _make_ctx(google_gmail=gmail_service)
 
     result = search_emails(ctx, query="is:unread", max_results=2)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_list_calendar_events_functional():
+    """Test listing calendar events with default params (today only)."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    calendar_service = build_google_service("calendar", "v3", google_creds)
+    ctx = _make_ctx(google_calendar=calendar_service)
+
+    result = list_calendar_events(ctx)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_list_calendar_events_with_time_window():
+    """Test listing calendar events with days_back and days_ahead."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    calendar_service = build_google_service("calendar", "v3", google_creds)
+    ctx = _make_ctx(google_calendar=calendar_service)
+
+    result = list_calendar_events(ctx, days_back=7, days_ahead=7, max_results=50)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_search_calendar_events_functional():
+    """Test searching calendar events by keyword."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    calendar_service = build_google_service("calendar", "v3", google_creds)
+    ctx = _make_ctx(google_calendar=calendar_service)
+
+    result = search_calendar_events(ctx, query="meeting", days_ahead=30, max_results=2)
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_search_calendar_events_with_days_back():
+    """Test searching past calendar events with days_back."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    calendar_service = build_google_service("calendar", "v3", google_creds)
+    ctx = _make_ctx(google_calendar=calendar_service)
+
+    result = search_calendar_events(
+        ctx, query="meeting", days_back=30, days_ahead=0, max_results=5
+    )
     assert isinstance(result, str)
     assert len(result) > 0
 
