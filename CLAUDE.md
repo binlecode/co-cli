@@ -67,7 +67,8 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 ## Testing Policy
 
 - **Functional tests only** — no mocks or stubs. Tests hit real services.
-- Tests skip gracefully when services are unavailable (Docker, Ollama, GCP, Slack)
+- Tests skip gracefully when services are unavailable (Docker, Ollama, Slack)
+- **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json` — tests must NOT skip when any of these exist
 - Framework: `pytest` + `pytest-asyncio`
 - Docker must be running for shell/sandbox tests
 - Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` env var for LLM E2E tests
@@ -88,6 +89,19 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 - `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
 - `docs/DESIGN-llm-models.md` — LLM model configuration (Ollama GLM-4.7-Flash parameters, Gemini)
+- `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer, span attribute reference, troubleshooting guide
 - `docs/TODO-approval-flow.md` — Migrate to pydantic-ai `requires_approval` + `DeferredToolRequests`
-- `docs/TODO-session-yolo.md` — Session-level "approve all" (y/n/a yolo mode)
-- `docs/FIX-gemini-summary-on-shell.md` — Known issue: Gemini summarizes tool output instead of showing it directly
+- `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler` for direct tool output display
+- `docs/TODO-retry-design.md` — ModelRetry semantics: when to retry vs return empty, industry best practices
+- `docs/TODO-theming-ascii.md` — Theming (light/dark), ASCII art banner, display helpers, color semantics
+
+## Reference Implementation
+
+**BERA CLI** (`/Users/binle/workspace_bera/a-cli`) — mini-CLI with polished terminal UX. Use as reference for:
+
+- **Theming**: Dual light/dark theme with Unicode indicator variants (`cli/config.py` `THEME_INDICATORS`, `cli/display.py` `set_theme()`)
+- **ASCII art banner**: Theme-aware welcome art — block chars for dark, box-drawing for light (`cli/qa_chat.py` `_display_welcome_banner()`)
+- **Display utilities**: `display_status()`, `display_error()` with recovery hints, `display_info()`, `status_spinner()` context manager (`cli/display.py`)
+- **Color semantics**: cyan=selection/commands, yellow=status, red=errors, green=success, dim=secondary
+- **TTY detection**: Rich auto-detection with graceful degradation for piped/CI output
+- **Rich Panels**: Bordered panels for help, errors, session status with `border_style="cyan"`

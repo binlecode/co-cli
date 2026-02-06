@@ -20,7 +20,7 @@ The second element is `None` when the provider's defaults are acceptable (Gemini
 | Provider | Model String / Class | API | Settings |
 |----------|---------------------|-----|----------|
 | Gemini | `"google-gla:{model_name}"` | Google GenAI | `None` (defaults are fine) |
-| Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible (`/v1`) | `ModelSettings(temperature=1.0, top_p=0.95, max_tokens=16384)` |
+| Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible (`/v1`) | `ModelSettings(temperature=0.7, top_p=1.0, max_tokens=16384)` |
 
 ---
 
@@ -61,12 +61,21 @@ The `api_key="ollama"` is a placeholder — Ollama ignores authentication on loc
 
 ### Inference Parameters
 
-GLM-4.7-Flash was evaluated and tuned with specific generation parameters documented in the HuggingFace model card. These differ from Ollama's built-in defaults.
+The [HuggingFace model card](https://huggingface.co/zai-org/GLM-4.7-Flash) documents four parameter profiles for different workloads:
+
+| Profile | temp | top_p | max_tokens | Use Case |
+|---------|------|-------|------------|----------|
+| Default (most tasks) | 1.0 | 0.95 | 131072 | General conversation |
+| Multi-turn Agentic (τ²-Bench, Terminal Bench 2) | 1.0 | 0.95 | 131072 | Agent + Preserved Thinking mode |
+| **Terminal / SWE-Bench Verified** | **0.7** | **1.0** | **16384** | **Shell/code execution tasks** |
+| τ²-Bench standalone | 0 | — | 16384 | Greedy decoding |
+
+Co CLI uses the **Terminal / SWE-Bench Verified** profile — the closest match to our tool-calling pattern (shell commands in a Docker sandbox + Google/Slack API calls). The multi-turn agentic profile requires Preserved Thinking mode, which Co CLI does not enable.
 
 ```python
 model_settings = ModelSettings(
-    temperature=1.0,
-    top_p=0.95,
+    temperature=0.7,
+    top_p=1.0,
     max_tokens=16384,
 )
 ```
@@ -75,9 +84,9 @@ model_settings = ModelSettings(
 
 | Parameter | Value | Ollama Default | Rationale |
 |-----------|-------|----------------|-----------|
-| `temperature` | `1.0` | `0.8` | GLM-4.7-Flash was tuned/evaluated at temp=1.0. Ollama's default of 0.8 compresses the probability distribution tighter than intended, which hurts tool-call accuracy — the model under-samples valid tool schemas and over-commits to the most probable token at each position. |
-| `top_p` | `0.95` | `0.9` | From GLM's recommended config. Trims the bottom 5% of unlikely tokens while preserving the model's full intended range at temp=1.0. The combination of temp=1.0 + top_p=0.95 gives the distribution the model was calibrated for. |
-| `max_tokens` | `16384` | `2048` | From the HuggingFace agentic/tool-calling recommendation. Prevents truncated responses during multi-step tool chains where the model needs to emit several tool calls plus reasoning in a single turn. |
+| `temperature` | `0.7` | `0.8` | From the Terminal / SWE-Bench Verified profile. Lower entropy makes tool-call JSON schemas more deterministic. |
+| `top_p` | `1.0` | `0.9` | Full distribution — let temperature alone shape the sampling. Avoids double-clipping (temp + top_p both narrowing). |
+| `max_tokens` | `16384` | `2048` | From the Terminal / SWE-Bench Verified profile. Prevents truncated responses during multi-step tool chains. |
 
 #### Parameters Not Set
 
@@ -96,8 +105,8 @@ co_cli/agent.py: get_agent()
     │                        │
     │                        ▼
     │               ModelSettings(
-    │                   temperature=1.0,
-    │                   top_p=0.95,
+    │                   temperature=0.7,
+    │                   top_p=1.0,
     │                   max_tokens=16384,
     │               )
     │
@@ -116,14 +125,14 @@ co_cli/main.py: chat_loop()
             ▼
         pydantic-ai internals
             │
-            └── OpenAI API call with temperature=1.0, top_p=0.95, max_tokens=16384
+            └── OpenAI API call with temperature=0.7, top_p=1.0, max_tokens=16384
 ```
 
 ### Why Hardcoded, Not in Settings
 
 These parameters are **model-level inference tuning**, not user-facing configuration:
 
-1. **Coupled to the model** — temperature=1.0 is correct for GLM-4.7-Flash specifically. Exposing it in `settings.json` invites users to change it without understanding the model-specific calibration.
+1. **Coupled to the model** — temperature=0.7 is correct for GLM-4.7-Flash's Terminal/SWE profile specifically. Exposing it in `settings.json` invites users to change it without understanding the model-specific calibration.
 2. **Not provider-generic** — Gemini doesn't need them at all. A `settings.json` field would apply to both providers incorrectly.
 3. **Maintenance locality** — When the Ollama model changes (e.g., upgrading to a new GLM version), the parameters live right next to the model instantiation in `agent.py`, making it obvious they need updating together.
 
@@ -188,14 +197,7 @@ No custom `ModelSettings` — Gemini's API defaults are well-suited for tool-cal
 
 ## Testing
 
-### `tests/test_agent.py`
-
-| Test | What It Verifies |
-|------|-----------------|
-| `test_agent_initialization_gemini` | Returns `GoogleModel` with correct model name, `model_settings is None` |
-| `test_agent_initialization_ollama` | Returns `OpenAIChatModel` with correct model name, `model_settings` has `temperature=1.0`, `top_p=0.95`, `max_tokens=16384` |
-
-Both tests use `monkeypatch` to set env vars and reload settings — no mocks.
+Agent initialization is verified through LLM E2E tests in `tests/test_llm_e2e.py` which hit real Gemini/Ollama endpoints. No unit tests — per project policy (functional tests only).
 
 ---
 
@@ -206,7 +208,7 @@ Both tests use `monkeypatch` to set env vars and reload settings — no mocks.
 | `co_cli/agent.py` | `get_agent()` factory — model selection + `ModelSettings` |
 | `co_cli/main.py` | Unpacks `(agent, model_settings)`, passes settings to `agent.run()` |
 | `co_cli/config.py` | `Settings` with LLM provider fields |
-| `tests/test_agent.py` | Agent initialization tests for both providers |
+| `tests/test_llm_e2e.py` | LLM E2E tests for both providers |
 
 ---
 

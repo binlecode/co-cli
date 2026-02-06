@@ -12,7 +12,7 @@ from co_cli.tools.slack import post_slack_message
 from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
-from co_cli.google_auth import get_google_credentials, build_google_service
+from co_cli.google_auth import get_google_credentials, build_google_service, GOOGLE_TOKEN_PATH, ADC_PATH
 
 ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
@@ -20,10 +20,11 @@ ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
 ]
 
-# Check for Google Credentials
+# Check for Google Credentials — explicit path, default token, or ADC
 HAS_GCP = bool(
-    settings.google_credentials_path
-    and os.path.exists(settings.google_credentials_path)
+    (settings.google_credentials_path and os.path.exists(settings.google_credentials_path))
+    or GOOGLE_TOKEN_PATH.exists()
+    or ADC_PATH.exists()
 )
 
 # Check for Slack Token
@@ -65,18 +66,30 @@ def test_drive_search_functional():
     drive_service = build_google_service("drive", "v3", google_creds)
     ctx = _make_ctx(google_drive=drive_service)
 
-    # search_drive raises ModelRetry on no results, so we just check it doesn't error on auth
-    try:
-        results = search_drive(ctx, "test")
-        assert isinstance(results, dict)
-        assert "display" in results
-        assert "page" in results
-        assert "has_more" in results
-        assert "Found" in results["display"]
-    except Exception as e:
-        # ModelRetry for "No results" is acceptable
-        if "No results" not in str(e):
-            pytest.fail(f"Drive API returned error: {e}")
+    results = search_drive(ctx, "test")
+    assert isinstance(results, dict)
+    assert "display" in results
+    assert "page" in results
+    assert "has_more" in results
+    # Either found files or returned empty result — both are valid
+    assert "Found" in results["display"] or results.get("count") == 0
+
+
+@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+def test_drive_search_empty_result():
+    """search_drive returns a valid dict with count=0 on no matches (not ModelRetry)."""
+    google_creds = get_google_credentials(
+        settings.google_credentials_path, ALL_GOOGLE_SCOPES
+    )
+    drive_service = build_google_service("drive", "v3", google_creds)
+    ctx = _make_ctx(google_drive=drive_service)
+
+    result = search_drive(ctx, "zzz_nonexistent_xkcd_42_qwerty")
+    assert isinstance(result, dict)
+    assert result["count"] == 0
+    assert result["page"] == 1
+    assert result["has_more"] is False
+    assert "No files found" in result["display"]
 
 
 @pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
@@ -88,16 +101,12 @@ def test_drive_search_pagination():
     drive_service = build_google_service("drive", "v3", google_creds)
     ctx = _make_ctx(google_drive=drive_service)
 
-    try:
-        page1 = search_drive(ctx, "notes", page=1)
-    except Exception as e:
-        if "No results" in str(e):
-            pytest.skip("Not enough Drive files to test pagination")
-        raise
-
+    page1 = search_drive(ctx, "notes", page=1)
     assert isinstance(page1, dict)
     assert page1["page"] == 1
-    assert "Found" in page1["display"]
+
+    if page1.get("count") == 0:
+        pytest.skip("No Drive files matched 'notes' — cannot test pagination")
 
     if not page1["has_more"]:
         pytest.skip("First page had no more results — not enough files to paginate")

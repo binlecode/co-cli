@@ -55,8 +55,8 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
         items = results.get("files", [])
         if not items:
             if page == 1:
-                raise ModelRetry("No results. Try different keywords.")
-            return {"display": "No more results.", "page": page, "has_more": False}
+                return {"display": "No files found.", "count": 0, "page": 1, "has_more": False}
+            return {"display": "No more results.", "count": 0, "page": page, "has_more": False}
 
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")

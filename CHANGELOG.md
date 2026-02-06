@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-02-06
+
+### Fixed
+- **search_drive empty-result crash**: `search_drive` no longer raises `ModelRetry` on zero results — returns `{"count": 0}` instead. Previously, two empty searches could exhaust the retry budget and crash the agent with `UnexpectedModelBehavior`.
+- **Google test skip bug**: `HAS_GCP` now checks all three credential sources (explicit path, `google_token.json`, ADC) instead of only `settings.google_credentials_path`. Google tests no longer skip when credentials exist.
+- **Stale test assertions**: Removed `try/except ModelRetry` workarounds in Drive tests that masked the old empty-result behavior.
+
+### Added
+- **`test_drive_search_empty_result`**: Functional test hitting real Drive API with a nonsense query, asserting `count=0` dict return (no exception).
+- **`docs/TODO-retry-design.md`**: Design doc covering ModelRetry semantics (retry vs return empty), industry best practices across pydantic-ai/Anthropic/OpenAI/LangGraph, and full tool audit.
+
+### Removed
+- **`tests/test_agent.py`**: Unit tests checking model types and settings values with monkeypatch — replaced by LLM E2E tests.
+- **`tests/test_batch1_integration.py`**: Unit tests checking CoDeps construction with monkeypatch.
+
+### Changed
+- **`docs/DESIGN-llm-models.md`**: Updated Testing and Files sections to reference `test_llm_e2e.py` instead of deleted `test_agent.py`.
+- **`CLAUDE.md`**: Added credential resolution note to Testing Policy; added `TODO-retry-design.md` to Design Docs list.
+
+---
+
 ## [0.2.0] - 2026-02-05
 
 ### Added
