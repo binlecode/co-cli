@@ -25,7 +25,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict[str, Any]]:
         results = service.files().list(
             q=q,
             pageSize=10,
-            fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+            fields="nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
         ).execute()
         items = results.get("files", [])
         if not items:
