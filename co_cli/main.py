@@ -1,6 +1,7 @@
 import asyncio
 import os
 import subprocess
+import time
 from uuid import uuid4
 
 import httpx
@@ -99,24 +100,36 @@ async def chat_loop():
     console.print("[dim]Type 'exit' or 'quit' to stop[/dim]")
 
     message_history = []
+    last_interrupt_time = 0.0
     try:
         while True:
             try:
                 user_input = await session.prompt_async("Co > ")
+                last_interrupt_time = 0.0  # Reset on successful input
                 if user_input.lower() in ["exit", "quit"]:
                     break
                 if not user_input.strip():
                     continue
 
                 console.print("[dim]Co is thinking...[/dim]")
-                result = await agent.run(
-                    user_input, deps=deps, message_history=message_history
-                )
-                message_history = result.all_messages()
-                console.print(Markdown(result.output))
+                try:
+                    result = await agent.run(
+                        user_input, deps=deps, message_history=message_history
+                    )
+                    message_history = result.all_messages()
+                    console.print(Markdown(result.output))
+                except KeyboardInterrupt:
+                    # Cancel current operation, don't count toward exit
+                    console.print("\n[dim]Interrupted.[/dim]")
 
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 break
+            except KeyboardInterrupt:
+                now = time.monotonic()
+                if now - last_interrupt_time <= 2.0:
+                    break
+                last_interrupt_time = now
+                console.print("\n[dim]Press Ctrl+C again to exit[/dim]")
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
