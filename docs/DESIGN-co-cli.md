@@ -205,47 +205,60 @@ classDiagram
 **Factory Function: `get_agent()`**
 
 ```python
-def get_agent() -> Agent[CoDeps, str]:
+def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
     provider_name = settings.llm_provider.lower()
+    model_settings: ModelSettings | None = None
 
     if provider_name == "gemini":
-        # Model string format — pydantic-ai resolves via GEMINI_API_KEY env var
         os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
         model = f"google-gla:{settings.gemini_model}"
     else:
         # Ollama via OpenAI-compatible API
         provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
         model = OpenAIChatModel(model_name, provider)
+        model_settings = ModelSettings(temperature=0.7, top_p=1.0, max_tokens=16384)
 
     agent: Agent[CoDeps, str] = Agent(
         model,
         deps_type=CoDeps,
-        system_prompt="You are Co, a CLI assistant...",
+        system_prompt=system_prompt,
+        retries=settings.tool_retries,  # default 3, configurable via CO_CLI_TOOL_RETRIES
     )
 
-    # All tools use RunContext[CoDeps] pattern (Batch 1-4: complete)
+    # All tools inherit agent-level retries (settings.tool_retries).
+    # Side-effectful tools (shell, email, slack) are gated by confirm_or_yolo,
+    # so retries are safe — the user confirms each attempt.
     agent.tool(run_shell_command)
     agent.tool(search_notes)
-    agent.tool(list_notes)
-    agent.tool(read_note)
-    agent.tool(search_drive)
-    agent.tool(read_drive_file)
-    agent.tool(list_emails)
-    agent.tool(search_emails)
-    agent.tool(draft_email)
-    agent.tool(list_calendar_events)
-    agent.tool(search_calendar_events)
+    # ... all 12 tools
     agent.tool(post_slack_message)
 
-    return agent
+    return agent, model_settings
 ```
 
 **System Prompt:**
 ```
 You are Co, a CLI assistant running in the user's terminal.
-- Show tool output directly — don't summarize or paraphrase
+
+### Response Style
 - Be terse: users want results, not explanations
+- On success: show the output, then a brief note if needed
+- On error: show the error, suggest a fix
+
+### Tool Output
+- Most tools return a dict with a `display` field — show the `display` value verbatim
+- Never reformat, summarize, or drop URLs from tool output
+- If the result has `has_more=true`, tell the user more results are available
+
+### Tool Usage
+- Use tools proactively to complete tasks
+- Chain operations: read before modifying, test after changing
 - Shell commands run in a Docker sandbox mounted at /workspace
+
+### Pagination
+- When a tool result has has_more=true, more results are available
+- If the user asks for "more", "next", or "next 10", call the same tool with the same query and page incremented by 1
+- Do NOT say "no more results" unless you called the tool and has_more was false
 ```
 
 ### 4.2 Configuration (`co_cli/config.py`)
@@ -260,6 +273,9 @@ classDiagram
         +google_credentials_path: Optional[str]
         +auto_confirm: bool
         +docker_image: str
+        +theme: str
+        +tool_retries: int
+        +max_request_limit: int
         +gemini_api_key: Optional[str]
         +llm_provider: str
         +ollama_host: str
@@ -297,6 +313,9 @@ classDiagram
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` |
 | `auto_confirm` | `CO_CLI_AUTO_CONFIRM` | `false` |
 | `docker_image` | `CO_CLI_DOCKER_IMAGE` | `"python:3.12-slim"` |
+| `theme` | `CO_CLI_THEME` | `"light"` |
+| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` |
+| `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` |
 
 ### 4.3 Dependencies (`co_cli/deps.py`)
 
@@ -325,6 +344,52 @@ main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_drive, s
 agent.run(user_input, deps=deps) →  Agent passes deps to tool calls
     ↓
 tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_drive, etc.
+```
+
+#### Multi-Session State Design (pydantic-ai pattern)
+
+pydantic-ai separates state into three tiers:
+
+| Tier | Scope | Lifetime | Where | Example |
+|------|-------|----------|-------|---------|
+| **Agent config** | Process | Entire process | `Agent(...)` constructor, module constants | Model name, system prompt, tool registrations |
+| **Session deps** | Session | One REPL loop (`create_deps()` → `sandbox.cleanup()`) | `RunContext.deps` (`CoDeps`) | Sandbox handle, Google creds path, page tokens |
+| **Run state** | Single run | One `agent.run()` call | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
+
+**Critical invariant: mutable per-session state belongs in `CoDeps`, never in module globals.** Module-level variables are process-scoped — they persist across sessions and are shared by all concurrent sessions in the same process.
+
+`CoDeps` is the session boundary. `main.py:create_deps()` instantiates one `CoDeps` per chat session. Every `agent.run()` call within that session receives the same `CoDeps` instance, so tools accumulate state (like page tokens) across turns. But two sessions — whether concurrent or sequential — get separate `CoDeps` instances with independent state.
+
+```
+Process (one Python interpreter)
+├── Module globals          ← shared, immutable config only
+│   ├── Agent instance
+│   └── Tool registrations
+│
+├── Session A
+│   └── CoDeps instance A   ← mutable state lives here
+│       ├── sandbox A
+│       ├── drive_page_tokens: {"report": ["tok1", "tok2"]}
+│       └── ...
+│
+└── Session B
+    └── CoDeps instance B   ← independent, no cross-contamination
+        ├── sandbox B
+        ├── drive_page_tokens: {}    ← fresh, empty
+        └── ...
+```
+
+Mutable fields use `field(default_factory=...)` so each `CoDeps` gets its own empty collection. The dict is keyed by query string, not session ID — the `CoDeps` instance *is* the session boundary, so no session key is needed. When the session ends, the `CoDeps` instance is garbage-collected along with all its accumulated state.
+
+**Example — Drive pagination tokens:**
+
+```python
+# deps.py
+drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
+
+# google_drive.py — reads/writes via ctx.deps, never module global
+tokens = ctx.deps.drive_page_tokens.get(query, [])
+ctx.deps.drive_page_tokens[query] = []
 ```
 
 ### 4.4 Sandbox (`co_cli/sandbox.py`)
@@ -400,14 +465,18 @@ This means `co` is not a compiled binary but an auto-generated script that calls
 **Dependency Injection + Conversation Memory:**
 
 ```python
+from pydantic_ai.usage import UsageLimits
+
 async def chat_loop():
-    agent = get_agent()
+    agent, model_settings = get_agent()
     deps = create_deps()  # Settings → CoDeps
     message_history = []  # Accumulates across turns
     try:
         while True:
             result = await agent.run(
-                user_input, deps=deps, message_history=message_history
+                user_input, deps=deps, message_history=message_history,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
             )
             message_history = result.all_messages()  # Carry full context forward
             console.print(Markdown(result.output))
@@ -579,22 +648,21 @@ def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
 
 ### 5.3 Obsidian Tools (`co_cli/tools/obsidian.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry` for self-healing. See `docs/DESIGN-tool-obsidian.md` for full design.
+Uses `RunContext[CoDeps]` + `ModelRetry` for self-healing. Returns `dict[str, Any]` with `display` field (consistent with all other tools). See `docs/DESIGN-tool-obsidian.md` for full design.
 
 ```python
-def search_notes(ctx: RunContext[CoDeps], query: str, limit: int = 10) -> list[dict]:
-    """Multi-keyword AND search with word boundaries."""
-    vault = ctx.deps.obsidian_vault_path
-    if not vault or not vault.exists():
-        raise ModelRetry("Obsidian vault not configured.")
-    # ... regex search with snippets ...
+def search_notes(ctx: RunContext[CoDeps], query: str, limit: int = 10) -> dict[str, Any]:
+    """Multi-keyword AND search with word boundaries.
+    Returns {"display": "...", "count": N, "has_more": false}.
+    Empty results return count=0 (not ModelRetry)."""
 
-def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> list[str]:
-    """List markdown notes, optionally filtered by tag."""
+def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> dict[str, Any]:
+    """List markdown notes, optionally filtered by tag.
+    Returns {"display": "...", "count": N}."""
 
 def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
-    """Read note content with path traversal protection."""
-    # Uses pathlib .resolve() + .is_relative_to() for safety
+    """Read note content with path traversal protection.
+    Returns raw content string (not dict — appropriate for file reads)."""
 ```
 
 ### 5.4 Drive Tool (`co_cli/tools/google_drive.py`)

@@ -18,10 +18,11 @@ class CoDeps:
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
 
-    # Batch 3: Google API clients (Any because googleapiclient has no typed stubs)
-    google_drive: Any | None = None
-    google_gmail: Any | None = None
-    google_calendar: Any | None = None
+    # Google credentials path — tools resolve creds lazily via google_auth
+    google_credentials_path: str | None = None
+
+    # Mutable per-session state
+    drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
 
     # Batch 4: Slack client
     slack_client: Any | None = None  # slack_sdk.WebClient at runtime

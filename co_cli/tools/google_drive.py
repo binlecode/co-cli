@@ -2,13 +2,11 @@
 
 from typing import Any
 
+from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-
-# Module-level page token cache: maps query -> list of page tokens
-# Index 0 = token for page 2, index 1 = token for page 3, etc.
-_page_tokens: dict[str, list[str]] = {}
+from co_cli.google_auth import get_cached_google_creds
 
 
 def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
@@ -25,12 +23,13 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
         query: Search keywords or metadata query.
         page: Page number (1-based). Use 1 for first page, 2 for second, etc.
     """
-    service = ctx.deps.google_drive
-    if not service:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
         raise ModelRetry(
             "Google Drive not configured. "
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
+    service = build("drive", "v3", credentials=creds)
 
     try:
         q = f"name contains '{query}' or fullText contains '{query}'"
@@ -42,7 +41,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
 
         # Look up stored page token for pages > 1
         if page > 1:
-            tokens = _page_tokens.get(query, [])
+            tokens = ctx.deps.drive_page_tokens.get(query, [])
             token_index = page - 2  # page 2 -> index 0, page 3 -> index 1
             if token_index >= len(tokens):
                 raise ModelRetry(
@@ -61,9 +60,9 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")
         if next_token:
-            if query not in _page_tokens:
-                _page_tokens[query] = []
-            tokens = _page_tokens[query]
+            if query not in ctx.deps.drive_page_tokens:
+                ctx.deps.drive_page_tokens[query] = []
+            tokens = ctx.deps.drive_page_tokens[query]
             # Ensure token is stored at the right index
             target_index = page - 1  # page 1 result -> index 0 stores token for page 2
             if len(tokens) <= target_index:
@@ -101,12 +100,13 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
     Args:
         file_id: The Google Drive file ID (from search_drive results).
     """
-    service = ctx.deps.google_drive
-    if not service:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
         raise ModelRetry(
             "Google Drive not configured. "
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
+    service = build("drive", "v3", credentials=creds)
 
     try:
         file = service.files().get(fileId=file_id, fields="name, mimeType").execute()
