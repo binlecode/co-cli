@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-02-07
+
+### Added
+- **Slash commands**: 7 REPL commands (`/help`, `/clear`, `/status`, `/tools`, `/history`, `/compact`, `/yolo`) that bypass the LLM and execute instantly. New `co_cli/_commands.py` module with `CommandContext` / `SlashCommand` dataclasses, `COMMANDS` registry, and `dispatch()` function.
+- **Tab completion**: `WordCompleter` with `complete_while_typing=False` for slash command names in the REPL. Triggered by Tab press — correct UX for a natural language input loop.
+- **`/compact` command**: Summarizes conversation via LLM to reduce context window usage. Calls `agent.run()` with a summarization prompt, replaces history with compacted messages.
+- **`/yolo` command**: Toggles `deps.auto_confirm` — same effect as picking `a` in the approval prompt, but available as a standalone toggle.
+- **New tests**: `tests/test_commands.py` — 13 functional tests covering dispatch routing, all 7 handlers, yolo toggle, compact with LLM, and registry completeness.
+
+### Changed
+- **Banner hint**: Updated from `"Type 'exit' to quit"` to `"Type /help for commands, 'exit' to quit"`.
+- **`DESIGN-co-cli.md`**: Added REPL Input Flow diagram, slash command architecture section (§4.5), and `_commands.py` to module summary (§13).
+
+---
+
 ## [0.2.8] - 2026-02-06
 
 ### Added

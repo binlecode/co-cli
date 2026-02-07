@@ -11,6 +11,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -30,6 +31,7 @@ from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, PROMPT_CHAR
 from co_cli.banner import display_welcome_banner
 from co_cli.status import get_status
+from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
 
 # Setup Telemetry - must be done before Agent.instrument_all()
 from opentelemetry.sdk.resources import Resource
@@ -82,6 +84,9 @@ def create_deps() -> CoDeps:
         sandbox=Sandbox(
             image=settings.docker_image,
             container_name=f"co-runner-{session_id[:8]}",
+            network_mode=settings.sandbox_network,
+            mem_limit=settings.sandbox_mem_limit,
+            cpus=settings.sandbox_cpus,
         ),
         auto_confirm=settings.auto_confirm,
         session_id=session_id,
@@ -202,7 +207,15 @@ def _display_tool_outputs(old_len: int, messages: list) -> None:
 async def chat_loop():
     agent, model_settings = get_agent()
     deps = create_deps()
-    session = PromptSession(history=FileHistory(str(DATA_DIR / "history.txt")))
+    completer = WordCompleter(
+        [f"/{name}" for name in COMMANDS],
+        sentence=True,
+    )
+    session = PromptSession(
+        history=FileHistory(str(DATA_DIR / "history.txt")),
+        completer=completer,
+        complete_while_typing=False,
+    )
 
     info = get_status(tool_count=len(agent._function_toolset.tools))
     display_welcome_banner(info)
@@ -234,6 +247,20 @@ async def chat_loop():
                         except Exception as e:
                             console.print(f"[bold red]Error:[/bold red] {e}")
                     continue
+
+                # /command — slash commands, no LLM
+                if user_input.startswith("/"):
+                    cmd_ctx = CommandContext(
+                        message_history=message_history,
+                        deps=deps,
+                        agent=agent,
+                        tool_count=len(agent._function_toolset.tools),
+                    )
+                    handled, new_history = await dispatch_command(user_input, cmd_ctx)
+                    if handled:
+                        if new_history is not None:
+                            message_history = new_history
+                        continue
 
                 console.print("[dim]Co is thinking...[/dim]")
                 result = None

@@ -36,6 +36,6 @@ def display_welcome_banner(info: StatusInfo) -> None:
         f"    Tools: {info.tool_count}  Sandbox: {info.docker}",
         f"    Dir: {info.cwd}" + (f"  ({info.git_branch})" if info.git_branch else ""),
         "",
-        f"    [dim]Type 'exit' to quit[/dim]",
+        f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

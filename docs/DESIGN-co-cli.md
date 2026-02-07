@@ -583,6 +583,83 @@ stateDiagram-v2
 - History: Saved to `~/.local/share/co-cli/history.txt`
 - Spinner: "Co is thinking..." during inference
 - Output: Rendered as Rich Markdown
+- Tab completion: `WordCompleter` with `complete_while_typing=False` for `/command` names
+
+**REPL Input Flow:**
+
+Input is dispatched in priority order — first match wins:
+
+```
+user_input
+  ├─ "exit"/"quit"  → break (end session)
+  ├─ empty/blank    → continue (ignore)
+  ├─ "!cmd"         → sandbox.run_command(cmd) — direct shell, no LLM
+  ├─ "/command"     → dispatch_command() — slash command, no LLM
+  └─ anything else  → agent.run() — LLM inference
+```
+
+#### Slash Commands (`co_cli/_commands.py`)
+
+Local REPL commands that bypass the LLM and execute instantly. Modeled after gemini-cli, Claude Code, and GitHub Copilot CLI conventions.
+
+**Architecture:**
+
+```python
+@dataclass(frozen=True)
+class CommandContext:
+    message_history: list[Any]
+    deps: Any          # CoDeps
+    agent: Any         # Agent[CoDeps, ...]
+    tool_count: int
+
+@dataclass(frozen=True)
+class SlashCommand:
+    name: str
+    description: str
+    handler: Callable[[CommandContext, str], Awaitable[list[Any] | None]]
+
+COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry, no decorators
+
+async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any] | None]:
+    """Returns (handled, new_history). new_history is None if unchanged."""
+```
+
+**Handler return convention:**
+- `None` → display-only command, history unchanged
+- `list` → new history to rebind (e.g. `/clear` returns `[]`, `/compact` returns summarized history)
+
+**Commands:**
+
+| Command | Handler | Effect |
+|---------|---------|--------|
+| `/help` | `_cmd_help` | Print table of all commands from `COMMANDS` |
+| `/clear` | `_cmd_clear` | Returns `[]` — empties conversation history |
+| `/status` | `_cmd_status` | Calls `get_status()`, renders same table as `co status` |
+| `/tools` | `_cmd_tools` | Numbered list of registered agent tool names |
+| `/history` | `_cmd_history` | Counts `ModelRequest` messages, shows turn/message totals |
+| `/compact` | `_cmd_compact` | Calls `agent.run()` with summarization prompt, returns compacted history |
+| `/yolo` | `_cmd_yolo` | Toggles `deps.auto_confirm` — same as picking `a` in approval prompt |
+
+**Chat loop integration (`main.py`):**
+
+```python
+if user_input.startswith("/"):
+    cmd_ctx = CommandContext(
+        message_history=message_history, deps=deps,
+        agent=agent, tool_count=len(agent._function_toolset.tools),
+    )
+    handled, new_history = await dispatch_command(user_input, cmd_ctx)
+    if handled:
+        if new_history is not None:
+            message_history = new_history
+        continue
+```
+
+**Design decisions:**
+- All handlers are async (uniform interface — only `/compact` currently awaits, but avoids refactoring when adding I/O commands)
+- `CommandContext` is a frozen dataclass — clean grab-bag; adding fields doesn't break existing handlers
+- Explicit `dict` registry, no decorators — 7 commands is small enough that grep-friendly explicitness wins
+- Unknown commands print error + `/help` hint, return `(True, None)` — consumed but no side effects
 
 **Exit Handling (double Ctrl+C pattern):**
 
@@ -1228,6 +1305,7 @@ def test_sandbox_execution():
 | `display.py` | Themed Rich Console, semantic styles, display helpers |
 | `status.py` | `StatusInfo` dataclass + `get_status()` — pure-data environment/health probes |
 | `banner.py` | ASCII art welcome banner, consumes `StatusInfo` for display |
+| `_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
 | `tail.py` | Real-time span viewer (`co tail`) |
 | `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
 | `google_auth.py` | Google credential resolution + service builder |
