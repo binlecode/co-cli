@@ -107,17 +107,20 @@ def get_google_credentials(
         return None
 
 
-# Module-level cached credentials — resolved once on first Google tool call
-_cached_creds: Any | None = None
-_cached_creds_loaded: bool = False
+def get_cached_google_creds(deps: Any) -> Any | None:
+    """Return cached Google credentials, resolving on first call.
 
+    Cache is stored on the CoDeps instance (not module globals)
+    so it follows session lifecycle.
 
-def get_cached_google_creds(credentials_path: str | None) -> Any | None:
-    """Return cached Google credentials, resolving on first call."""
-    global _cached_creds, _cached_creds_loaded
-    if not _cached_creds_loaded:
-        _cached_creds = ensure_google_credentials(credentials_path, ALL_GOOGLE_SCOPES)
-        _cached_creds_loaded = True
-    return _cached_creds
+    Args:
+        deps: CoDeps instance (typed Any to avoid circular import).
+    """
+    if not deps._google_creds_resolved:
+        deps.google_creds = ensure_google_credentials(
+            deps.google_credentials_path, ALL_GOOGLE_SCOPES,
+        )
+        deps._google_creds_resolved = True
+    return deps.google_creds
 
 

@@ -467,7 +467,7 @@ Agent ──▶ "Slack is not configured. Set slack_bot_token in
 
 ## Testing
 
-### Functional Test (`tests/test_google_cloud.py`)
+### Functional Test (`tests/test_slack.py`)
 
 Test uses the same `Context` dataclass pattern as `test_obsidian.py`:
 
@@ -501,7 +501,7 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 | `co_cli/tools/slack.py` | All Slack tools: `post_slack_message`, `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` |
 | `co_cli/deps.py` | `CoDeps` with `slack_client` field |
 | `co_cli/agent.py` | Tool registration (write tools with approval, read tools without) |
-| `tests/test_google_cloud.py` | Functional tests for all Slack tools |
+| `tests/test_slack.py` | Functional tests for all Slack tools |
 
 ---
 

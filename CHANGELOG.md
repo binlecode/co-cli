@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-02-07
+
+### Added
+- **Shell safe-command whitelist**: New `co_cli/_approval.py` with `_is_safe_command()` — auto-approves read-only shell commands (e.g. `ls`, `cat`, `pwd`) that match `shell_safe_commands` prefixes without shell chaining operators. UX convenience layer on top of Docker sandbox isolation.
+- **`shell_safe_commands` in `CoDeps`**: New field carries the safe-prefix list from config into the approval flow via `RunContext`.
+- **Approval flow tests**: 10 new functional tests in `tests/test_commands.py` — approve, deny, auto-confirm (yolo), `_is_safe_command` unit tests covering prefix matching, multi-word prefixes, chaining rejection, exact match, and partial-name rejection.
+- **Shell hardening tests**: 20+ new functional tests in `tests/test_shell.py` — timeout, pipe, non-root, network isolation, capability drop, redirect, variable expansion, subshell, heredoc, stderr merge, Python script lifecycle (create/run/edit/rerun/unittest/traceback), special chars, large output, empty output, workspace mapping.
+- **`/release` skill**: `.claude/skills/release/release.md` — versioned release workflow (tests, bump, changelog, design doc sync, TODO cleanup, commit) invokable as `/release <version|feature|bugfix>`.
+- **Approval flow TODO expansion**: `docs/TODO-approval-flow.md` rewritten with industry research (Codex CLI, Claude Code, Gemini CLI, Windsurf, Aider comparison matrix), proposed chat-loop pre-filter design, and phased implementation plan.
+
+### Changed
+- **`docs/DESIGN-co-cli.md`**: Updated sandbox Mermaid diagram (async `run_command`, `cap_drop=ALL`, `user=1000:1000`), `CoDeps` class diagram (added `shell_safe_commands`, `google_credentials_path`, removed stale Google service fields), config table (added `sandbox_*` and `shell_safe_commands` settings), dependency flow text (lazy credentials).
+- **`docs/DESIGN-tool-google.md`**: Rewritten auth architecture — lazy credential resolution via `get_cached_google_creds()` replaces eager `build_google_service()`. Updated flow diagrams, auth function signatures, and credential cache section.
+- **`CLAUDE.md`**: Updated TODO entry for `TODO-approval-flow.md` (now references partial implementation), added `TODO-slack-tooling.md` and `REVIEW-co-cli-design-team-view.md` entries, fixed Google tools description ("lazy auth" instead of "auth factory").
+
+### Removed
+- **`docs/TODO-tool-call-stability.md`**: All items implemented (sandbox hardening, shell error propagation, retry budget). Remaining design rationale already in `DESIGN-tool-shell-sandbox.md`.
+
+---
+
 ## [0.2.12] - 2026-02-07
 
 ### Added

@@ -12,7 +12,7 @@ from co_cli.google_auth import get_cached_google_creds
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
     """Extract and validate Calendar service from context."""
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry(
             "Google Calendar not configured. "

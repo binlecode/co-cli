@@ -18,8 +18,13 @@ class CoDeps:
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
 
-    # Google credentials path — tools resolve creds lazily via google_auth
+    # Google credentials — resolved lazily on first Google tool call via google_auth
     google_credentials_path: str | None = None
+    google_creds: Any | None = field(default=None, repr=False)
+    _google_creds_resolved: bool = field(default=False, repr=False, init=False)
+
+    # Shell safe commands — auto-approved without prompting
+    shell_safe_commands: list[str] = field(default_factory=list)
 
     # Mutable per-session state
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)

@@ -9,11 +9,21 @@ DEFAULT_DOCKER_IMAGE = "co-cli-sandbox"
 
 
 class Sandbox:
-    def __init__(self, image: str | None = None, container_name: str = "co-runner"):
+    def __init__(
+        self,
+        image: str | None = None,
+        container_name: str = "co-runner",
+        network_mode: str = "none",
+        mem_limit: str = "1g",
+        cpus: int = 1,
+    ):
         self._client = None
         self.image = image or DEFAULT_DOCKER_IMAGE
         self.container_name = container_name
         self.workspace_dir = os.getcwd()
+        self.network_mode = network_mode
+        self.mem_limit = mem_limit
+        self.nano_cpus = cpus * 1_000_000_000
 
     @property
     def client(self):
@@ -41,9 +51,16 @@ class Sandbox:
                 name=self.container_name,
                 volumes={self.workspace_dir: {"bind": "/workspace", "mode": "rw"}},
                 working_dir="/workspace",
+                user="1000:1000",
+                network_mode=self.network_mode,
+                mem_limit=self.mem_limit,
+                nano_cpus=self.nano_cpus,
+                pids_limit=256,
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges"],
                 detach=True,
                 tty=True,
-                command="sh"
+                command="sh",
             )
         except APIError as e:
             raise RuntimeError(f"Failed to ensure Docker container: {e}")

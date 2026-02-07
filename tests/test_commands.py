@@ -1,11 +1,16 @@
-"""Functional tests for slash commands.
+"""Functional tests for slash commands and approval flow.
 
 All tests use real agent/deps — no mocks, no stubs.
 """
 
 import pytest
 
+from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai.usage import UsageLimits
+
+from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
 from co_cli._commands import dispatch, CommandContext, COMMANDS
@@ -25,6 +30,34 @@ def _make_ctx(message_history: list | None = None) -> CommandContext:
         agent=agent,
         tool_count=len(agent._function_toolset.tools),
     )
+
+
+def _make_agent_and_deps(container_name: str = "co-test-approval"):
+    """Build a real agent + deps for approval flow tests."""
+    agent, model_settings = get_agent()
+    deps = CoDeps(
+        sandbox=Sandbox(container_name=container_name),
+        auto_confirm=False,
+        session_id="test-approval",
+    )
+    return agent, model_settings, deps
+
+
+async def _trigger_shell_call(agent, deps, model_settings):
+    """Ask the LLM to run a shell command. Returns DeferredToolRequests result."""
+    result = await agent.run(
+        "Run this exact shell command: echo hello_approval_test",
+        deps=deps,
+        model_settings=model_settings,
+        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+    )
+    # The LLM should call run_shell_command which has requires_approval=True
+    assert isinstance(result.output, DeferredToolRequests), (
+        f"Expected DeferredToolRequests, got {type(result.output).__name__}. "
+        "LLM may not have called a side-effectful tool."
+    )
+    assert len(result.output.approvals) > 0
+    return result
 
 
 # --- Dispatch routing ---
@@ -168,3 +201,191 @@ def test_commands_registry_complete():
     """All 7 expected commands are registered."""
     expected = {"help", "clear", "status", "tools", "history", "compact", "yolo"}
     assert set(COMMANDS.keys()) == expected
+
+
+# --- Approval flow (programmatic, no TTY) ---
+
+
+@pytest.mark.asyncio
+async def test_approval_approve():
+    """Approving a deferred tool call executes it and returns LLM response.
+
+    Requires running LLM + Docker.
+    """
+    agent, model_settings, deps = _make_agent_and_deps("co-test-approve")
+    try:
+        result = await _trigger_shell_call(agent, deps, model_settings)
+
+        # Approve all pending calls
+        approvals = DeferredToolResults()
+        for call in result.output.approvals:
+            approvals.approvals[call.tool_call_id] = True
+
+        # Resume — agent executes the tool and returns final text
+        resumed = await agent.run(
+            None,
+            deps=deps,
+            message_history=result.all_messages(),
+            deferred_tool_results=approvals,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+        )
+
+        # May trigger further deferred calls; keep approving
+        while isinstance(resumed.output, DeferredToolRequests):
+            more_approvals = DeferredToolResults()
+            for call in resumed.output.approvals:
+                more_approvals.approvals[call.tool_call_id] = True
+            resumed = await agent.run(
+                None,
+                deps=deps,
+                message_history=resumed.all_messages(),
+                deferred_tool_results=more_approvals,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            )
+
+        assert isinstance(resumed.output, str)
+        assert len(resumed.all_messages()) > 0
+    finally:
+        deps.sandbox.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_approval_deny():
+    """Denying a deferred tool call sends ToolDenied; LLM still responds.
+
+    Requires running LLM + Docker.
+    """
+    agent, model_settings, deps = _make_agent_and_deps("co-test-deny")
+    try:
+        result = await _trigger_shell_call(agent, deps, model_settings)
+
+        # Deny all pending calls
+        approvals = DeferredToolResults()
+        for call in result.output.approvals:
+            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+
+        # Resume — LLM sees the denial and produces a text response
+        resumed = await agent.run(
+            None,
+            deps=deps,
+            message_history=result.all_messages(),
+            deferred_tool_results=approvals,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+        )
+
+        # LLM may retry with another tool call or just respond with text
+        while isinstance(resumed.output, DeferredToolRequests):
+            deny_approvals = DeferredToolResults()
+            for call in resumed.output.approvals:
+                deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+            resumed = await agent.run(
+                None,
+                deps=deps,
+                message_history=resumed.all_messages(),
+                deferred_tool_results=deny_approvals,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            )
+
+        assert isinstance(resumed.output, str)
+    finally:
+        deps.sandbox.cleanup()
+
+
+# --- Safe command classification ---
+
+
+_SAFE_LIST = ["ls", "cat", "grep", "git status", "git diff", "git log"]
+
+
+def test_safe_command_simple():
+    """Simple safe command is recognized."""
+    assert _is_safe_command("ls", _SAFE_LIST) is True
+    assert _is_safe_command("ls -la", _SAFE_LIST) is True
+    assert _is_safe_command("cat /etc/hosts", _SAFE_LIST) is True
+
+
+def test_safe_command_multi_word_prefix():
+    """Multi-word prefix like 'git status' matches, but 'git push' does not."""
+    assert _is_safe_command("git status", _SAFE_LIST) is True
+    assert _is_safe_command("git status --short", _SAFE_LIST) is True
+    assert _is_safe_command("git diff HEAD~1", _SAFE_LIST) is True
+    assert _is_safe_command("git push origin main", _SAFE_LIST) is False
+    assert _is_safe_command("git commit -m 'test'", _SAFE_LIST) is False
+
+
+def test_safe_command_chaining_rejected():
+    """Shell chaining operators always force approval."""
+    assert _is_safe_command("ls; rm -rf /", _SAFE_LIST) is False
+    assert _is_safe_command("cat file && rm file", _SAFE_LIST) is False
+    assert _is_safe_command("ls || echo fail", _SAFE_LIST) is False
+    assert _is_safe_command("ls | wc -l", _SAFE_LIST) is False
+    assert _is_safe_command("echo `whoami`", _SAFE_LIST) is False
+    assert _is_safe_command("echo $(whoami)", _SAFE_LIST) is False
+
+
+def test_safe_command_empty_list():
+    """Empty safe list means nothing is auto-approved."""
+    assert _is_safe_command("ls", []) is False
+    assert _is_safe_command("cat file", []) is False
+
+
+def test_safe_command_unknown():
+    """Commands not in the safe list are rejected."""
+    assert _is_safe_command("rm -rf /", _SAFE_LIST) is False
+    assert _is_safe_command("curl http://evil.com", _SAFE_LIST) is False
+    assert _is_safe_command("python script.py", _SAFE_LIST) is False
+
+
+def test_safe_command_exact_match():
+    """Bare command with no args matches exactly."""
+    assert _is_safe_command("grep", _SAFE_LIST) is True
+    assert _is_safe_command("git log", _SAFE_LIST) is True
+
+
+def test_safe_command_partial_name_no_match():
+    """A command that starts with a safe prefix but isn't followed by a space should not match."""
+    assert _is_safe_command("lsblk", _SAFE_LIST) is False
+    assert _is_safe_command("caterpillar", _SAFE_LIST) is False
+
+
+@pytest.mark.asyncio
+async def test_approval_auto_confirm():
+    """With auto_confirm=True, approval cycle can be driven programmatically.
+
+    Simulates the yolo flow: all calls get approved without prompting.
+    Requires running LLM + Docker.
+    """
+    agent, model_settings, deps = _make_agent_and_deps("co-test-autoconfirm")
+    deps.auto_confirm = True
+    try:
+        result = await agent.run(
+            "Run this exact shell command: echo yolo_test",
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+        )
+
+        # Even with auto_confirm on deps, pydantic-ai still returns
+        # DeferredToolRequests because requires_approval=True is on the tool.
+        # The auto_confirm flag is checked by _handle_approvals in the chat loop.
+        # So we approve programmatically here to simulate that.
+        while isinstance(result.output, DeferredToolRequests):
+            approvals = DeferredToolResults()
+            for call in result.output.approvals:
+                approvals.approvals[call.tool_call_id] = True
+            result = await agent.run(
+                None,
+                deps=deps,
+                message_history=result.all_messages(),
+                deferred_tool_results=approvals,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            )
+
+        assert isinstance(result.output, str)
+    finally:
+        deps.sandbox.cleanup()

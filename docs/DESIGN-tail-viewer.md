@@ -118,9 +118,9 @@ co tail [OPTIONS]
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--trace` | `-t` | None | Filter to a specific trace ID |
-| `--tools-only` | | `False` | Only show tool spans |
-| `--models-only` | | `False` | Only show model/chat spans |
+| `--trace` | `-i` | None | Filter to a specific trace ID |
+| `--tools-only` | `-T` | `False` | Only show tool spans |
+| `--models-only` | `-m` | `False` | Only show model/chat spans |
 | `--poll` | `-p` | `1.0` | Poll interval in seconds |
 | `--no-follow` | `-n` | `False` | Print recent spans and exit (no polling) |
 | `--last` | `-l` | `20` | Number of recent spans to show on startup |

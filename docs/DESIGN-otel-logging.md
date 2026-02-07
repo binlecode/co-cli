@@ -543,23 +543,23 @@ Version 3 attributes on spans:
 
 Pydantic-ai automatically emits spans following [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/):
 
-| Span Name | Kind | Key Attributes |
+| Span Name (v3) | Kind | Key Attributes |
 |-----------|------|----------------|
-| `agent run` | INTERNAL | model_name, agent_name, input/output_tokens, all_messages |
-| `chat {model}` | CLIENT | gen_ai.request.model, gen_ai.response.finish_reasons |
-| `running tools` | INTERNAL | (parent for tool batch) |
-| `running tool` | INTERNAL | gen_ai.tool.name, tool_arguments, tool_response |
+| `invoke_agent {name}` | INTERNAL | model_name, agent_name, gen_ai.usage.input/output_tokens, pydantic_ai.all_messages |
+| `chat {model}` | CLIENT | gen_ai.request.model, gen_ai.response.finish_reasons, gen_ai.input/output.messages |
+| `running tools` | INTERNAL | tools (list of tool names in batch) |
+| `execute_tool {name}` | INTERNAL | gen_ai.tool.name, gen_ai.tool.call.arguments, gen_ai.tool.call.result |
 
 ### Example Span Hierarchy
 
 ```
-agent run (114s)
+invoke_agent agent (114s)
 ├── chat glm-4.7-flash:q8_0 (4s)
 ├── running tools (5s)
-│   └── running tool: run_shell_command (5s)
+│   └── execute_tool run_shell_command (5s)
 ├── chat glm-4.7-flash:q8_0 (3s)
 ├── running tools (2s)
-│   └── running tool: list_notes (2s)
+│   └── execute_tool list_notes (2s)
 └── chat glm-4.7-flash:q8_0 (2s)
 ```
 
@@ -627,25 +627,25 @@ SELECT trace_id, name, duration_ms, status_code
 FROM spans WHERE parent_id IS NULL
 ORDER BY start_time DESC LIMIT 10;
 
--- Tool calls with responses
+-- Tool calls with responses (v3 span naming)
 SELECT
     datetime(start_time/1e9, 'unixepoch', 'localtime') as time,
     json_extract(attributes, '$.gen_ai.tool.name') as tool,
-    json_extract(attributes, '$.tool_arguments') as args,
-    json_extract(attributes, '$.tool_response') as response,
+    json_extract(attributes, '$.gen_ai.tool.call.arguments') as args,
+    json_extract(attributes, '$.gen_ai.tool.call.result') as response,
     duration_ms
 FROM spans
-WHERE name = 'running tool'
+WHERE name LIKE 'execute_tool%'
 ORDER BY start_time DESC;
 
--- Token usage by model
+-- Token usage by model (v3 span naming)
 SELECT
     json_extract(attributes, '$.model_name') as model,
     COUNT(*) as runs,
     SUM(json_extract(attributes, '$.gen_ai.usage.input_tokens')) as input_tokens,
     SUM(json_extract(attributes, '$.gen_ai.usage.output_tokens')) as output_tokens
 FROM spans
-WHERE name = 'agent run'
+WHERE name LIKE 'invoke_agent%'
 GROUP BY model;
 
 -- Slowest operations

@@ -42,7 +42,7 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 
 def _get_gmail_service(ctx: RunContext[CoDeps]):
     """Extract and validate Gmail service from context."""
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry(
             "Gmail not configured. "
@@ -132,7 +132,7 @@ def draft_email(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> st
         subject: Email subject line.
         body: Email body text.
     """
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry(
             "Gmail not configured. "

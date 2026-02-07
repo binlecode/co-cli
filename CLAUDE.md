@@ -71,17 +71,21 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/DESIGN-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
 - `docs/DESIGN-tool-shell-sandbox.md` — Docker sandbox design
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
-- `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
+- `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
 - `docs/DESIGN-llm-models.md` — LLM model configuration
 - `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer
 - `docs/DESIGN-theming-ascii.md` — Theming, ASCII art banner, display helpers
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-approval-flow.md` — Conditional `ApprovalRequired` for shell safe-prefix whitelist
+- `docs/TODO-approval-flow.md` — Shell safe-prefix whitelist (partially implemented: `_approval.py`, `shell_safe_commands`)
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
 - `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
+- `docs/TODO-slack-tooling.md` — Slack tool enhancements
+
+### Reviews
+- `docs/REVIEW-co-cli-design-team-view.md` — Combined design review (Opus + Codex) with priority action plan
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

@@ -11,7 +11,7 @@ Co is a production-grade personal assistant CLI that combines local AI inference
 
 ### Design Principles
 
-1. **Privacy-First**: Local LLM (Ollama) by default, all logs stored locally
+1. **Privacy-First**: Gemini (default) or local Ollama, all logs stored locally
 2. **Safe Execution**: Docker sandbox for shell commands
 3. **Observable**: Full OpenTelemetry tracing to local SQLite
 4. **Human-in-the-Loop**: Confirmation required for high-risk actions
@@ -184,15 +184,16 @@ sequenceDiagram
     participant Sandbox as sandbox.py
     participant Docker as Docker Container
 
-    Tool->>Sandbox: sandbox.run_command("ls -la")
+    Tool->>Sandbox: await sandbox.run_command("ls -la", timeout=120)
     Sandbox->>Sandbox: ensure_container()
 
     alt Container Not Running
-        Sandbox->>Docker: containers.run(python:3.12-slim)
+        Sandbox->>Docker: containers.run(co-cli-sandbox, cap_drop=ALL, ...)
         Docker->>Sandbox: Container started
     end
 
-    Sandbox->>Docker: container.exec_run("ls -la", workdir="/workspace")
+    Sandbox->>Docker: container.exec_run("timeout 120 sh -c 'ls -la'", workdir="/workspace")
+    Note over Sandbox,Docker: asyncio.wait_for(asyncio.to_thread(...), timeout=125)
     Docker->>Sandbox: Output bytes
     Sandbox->>Tool: Decoded output string
 ```
@@ -220,9 +221,10 @@ classDiagram
         +auto_confirm: bool
         +session_id: str
         +obsidian_vault_path: Path | None
-        +google_drive: Any | None
-        +google_gmail: Any | None
-        +google_calendar: Any | None
+        +google_credentials_path: str | None
+        +shell_safe_commands: list[str]
+        +drive_page_tokens: dict
+        +sandbox_max_timeout: int
         +slack_client: Any | None
     }
 
@@ -363,15 +365,20 @@ Project config is checked at `cwd/.co-cli/settings.json` only — no upward dire
 | `gemini_api_key` | `GEMINI_API_KEY` | `None` |
 | `gemini_model` | `GEMINI_MODEL` | `"gemini-2.0-flash"` |
 | `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` |
-| `ollama_model` | `OLLAMA_MODEL` | `"llama3"` |
+| `ollama_model` | `OLLAMA_MODEL` | `"glm-4.7-flash:q8_0"` |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` |
 | `slack_bot_token` | `SLACK_BOT_TOKEN` | `None` |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` |
 | `auto_confirm` | `CO_CLI_AUTO_CONFIRM` | `false` |
-| `docker_image` | `CO_CLI_DOCKER_IMAGE` | `"python:3.12-slim"` |
+| `docker_image` | `CO_CLI_DOCKER_IMAGE` | `"co-cli-sandbox"` |
 | `theme` | `CO_CLI_THEME` | `"light"` |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` |
+| `sandbox_max_timeout` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | `600` |
+| `sandbox_network` | `CO_CLI_SANDBOX_NETWORK` | `"none"` |
+| `sandbox_mem_limit` | `CO_CLI_SANDBOX_MEM_LIMIT` | `"1g"` |
+| `sandbox_cpus` | `CO_CLI_SANDBOX_CPUS` | `1` |
+| `shell_safe_commands` | `CO_CLI_SHELL_SAFE_COMMANDS` | _(see config.py)_ |
 
 ### 4.3 Dependencies (`co_cli/deps.py`)
 
@@ -384,10 +391,11 @@ class CoDeps:
     auto_confirm: bool = False
     session_id: str = ""
     obsidian_vault_path: Path | None = None
-    google_drive: Any | None = None
-    google_gmail: Any | None = None
-    google_calendar: Any | None = None
-    slack_client: Any | None = None
+    google_credentials_path: str | None = None  # Lazy credential resolution
+    shell_safe_commands: list[str] = field(default_factory=list)
+    drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
+    sandbox_max_timeout: int = 600
+    slack_client: Any | None = None  # slack_sdk.WebClient at runtime
 ```
 
 **Design Principle:** `CoDeps` contains runtime resources, NOT config objects. `Settings` creates resources in `main.py`, then injects here.
@@ -395,11 +403,11 @@ class CoDeps:
 **Dependency Flow:**
 
 ```
-main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_drive, slack_client, ...)
+main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_credentials_path, slack_client, ...)
     ↓
 agent.run(user_input, deps=deps) →  Agent passes deps to tool calls
     ↓
-tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_drive, etc.
+tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_credentials_path, etc.
 ```
 
 #### Multi-Session State Design (pydantic-ai pattern)
@@ -459,9 +467,12 @@ classDiagram
         +image: str
         +container_name: str
         +workspace_dir: str
+        +network_mode: str
+        +mem_limit: str
+        +nano_cpus: int
         +client: DockerClient
         +ensure_container() Container
-        +run_command(cmd: str) str
+        +async run_command(cmd: str, timeout: int = 120) str
         +cleanup()
     }
 
@@ -477,10 +488,12 @@ classDiagram
 ```
 
 **Container Configuration:**
-- **Image:** `python:3.12-slim` (configurable)
-- **Name:** `co-runner`
+- **Image:** `co-cli-sandbox` (configurable via `CO_CLI_DOCKER_IMAGE`)
+- **Name:** `co-runner-{session_id[:8]}` (unique per session)
 - **Volume:** Current working directory → `/workspace` (read-write)
 - **Command:** `sh` (keeps container alive)
+- **Security:** `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, `user=1000:1000`
+- **Resources:** Configurable `network_mode`, `mem_limit`, `nano_cpus`
 
 **Lifecycle:**
 1. On first tool call: Create container if not exists
@@ -697,7 +710,7 @@ See §8.2 for signal-handling implementation details.
 
 ### 4.6 Telemetry (`co_cli/telemetry.py`)
 
-OpenTelemetry traces exported to local SQLite.
+OpenTelemetry traces exported to local SQLite. See `docs/DESIGN-otel-logging.md` for full design including WAL concurrency, span attribute reference, and viewer architecture. See `docs/DESIGN-tail-viewer.md` for the real-time span tail viewer.
 
 ```mermaid
 classDiagram
@@ -711,14 +724,18 @@ classDiagram
     class SpansTable {
         <<SQLite>>
         id: TEXT PK
-        name: TEXT
-        context: TEXT
+        trace_id: TEXT NOT NULL
+        parent_id: TEXT
+        name: TEXT NOT NULL
         kind: TEXT
-        start_time: TEXT
-        end_time: TEXT
+        start_time: INTEGER NOT NULL
+        end_time: INTEGER
+        duration_ms: REAL
+        status_code: TEXT
+        status_description: TEXT
         attributes: TEXT (JSON)
         events: TEXT (JSON)
-        status: TEXT
+        resource: TEXT (JSON)
     }
 
     SQLiteSpanExporter --> SpansTable : writes to
@@ -728,14 +745,18 @@ classDiagram
 ```sql
 CREATE TABLE spans (
     id TEXT PRIMARY KEY,
-    name TEXT,
-    context TEXT,
+    trace_id TEXT NOT NULL,
+    parent_id TEXT,
+    name TEXT NOT NULL,
     kind TEXT,
-    start_time TEXT,
-    end_time TEXT,
-    attributes TEXT,  -- JSON
-    events TEXT,      -- JSON
-    status TEXT
+    start_time INTEGER NOT NULL,  -- nanoseconds epoch
+    end_time INTEGER,
+    duration_ms REAL,
+    status_code TEXT,
+    status_description TEXT,
+    attributes TEXT,               -- JSON
+    events TEXT,                   -- JSON array
+    resource TEXT                  -- JSON (service.name, version)
 )
 ```
 
@@ -844,10 +865,16 @@ Agent-level `retries=settings.tool_retries` (default 3, configurable via `CO_CLI
 Uses `RunContext[CoDeps]` + `requires_approval=True`. Approval is handled by the chat loop via `DeferredToolRequests`, not inside the tool. See `docs/DESIGN-tool-shell-sandbox.md` for sandbox details.
 
 ```python
-def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
-    """Execute a shell command in a sandboxed Docker container."""
+async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> str:
+    """Execute a shell command in a sandboxed Docker container.
+
+    Args:
+        cmd: The shell command to execute.
+        timeout: Max seconds to wait (default 120). Capped by sandbox_max_timeout.
+    """
+    effective = min(timeout, ctx.deps.sandbox_max_timeout)
     try:
-        return ctx.deps.sandbox.run_command(cmd)
+        return await ctx.deps.sandbox.run_command(cmd, timeout=effective)
     except Exception as e:
         raise ModelRetry(f"Command failed ({e})")
 ```
@@ -873,27 +900,28 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
 
 ### 5.4 Drive Tool (`co_cli/tools/google_drive.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Auth is handled at startup via `google_auth.py` → `create_deps()`.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Credentials are resolved lazily on first call via `get_cached_google_creds(ctx.deps.google_credentials_path)`, then the API service is built inline.
 
 ```python
-def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict]:
-    service = ctx.deps.google_drive
-    if not service:
-        raise ModelRetry("Google Drive not configured.")
+def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
+        raise ModelRetry("Google Drive not configured. ...")
+    service = build("drive", "v3", credentials=creds)
     # API-level filter with ModelRetry on errors
 ```
 
 ### 5.5 Gmail Tool (`co_cli/tools/google_gmail.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern. `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval. See `docs/DESIGN-tool-google.md` for full design.
 
 ### 5.6 Calendar Tool (`co_cli/tools/google_calendar.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Read-only, no confirmation needed.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern. Read-only, no confirmation needed. See `docs/DESIGN-tool-google.md` for full design.
 
 ### 5.7 Slack Tool (`co_cli/tools/slack.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. `post_slack_message` is registered with `requires_approval=True` — approval handled by the chat loop. The remaining four tools are read-only.
+Uses `RunContext[CoDeps]` + `ModelRetry`. `post_slack_message` is registered with `requires_approval=True` — approval handled by the chat loop. The remaining four tools are read-only. See `docs/DESIGN-tool-slack.md` for full design.
 
 ```python
 def post_slack_message(ctx, channel, text) -> dict[str, Any]:
@@ -914,14 +942,23 @@ def list_slack_users(ctx, limit=30) -> dict[str, Any]:
 
 ### 5.8 Google Auth (`co_cli/google_auth.py`)
 
-Infrastructure module (not a tool). Single factory function used by `create_deps()`:
+Infrastructure module (not a tool). Three functions for credential resolution:
 
 ```python
-def get_google_credentials(credentials_path, scopes) -> Any | None:
-    # Authorized user file → ADC fallback → None
-def build_google_service(service_name, version, credentials) -> Any | None:
-    # Credentials → service client (or None)
+def ensure_google_credentials(credentials_path, scopes) -> Credentials | None:
+    # Interactive: explicit path → token file → ADC → gcloud auth → None
+
+def get_google_credentials(credentials_path, scopes) -> Credentials | None:
+    # Non-interactive: explicit path → ADC fallback → None (for tests/CI)
+
+def get_cached_google_creds(credentials_path) -> Credentials | None:
+    # Module-level cache: resolves once on first call via ensure_google_credentials()
+    # All Google tools call this — avoids re-prompting for auth
 ```
+
+**Runtime flow:** Tools call `get_cached_google_creds(ctx.deps.google_credentials_path)` → credentials are resolved once, cached at module level → tools build API service objects inline with `build("drive", "v3", credentials=creds)`.
+
+**Note:** The module-level cache (`_cached_creds`) is a known deviation from the session-isolation invariant (see §4.3). Tracked for migration to `CoDeps`.
 
 **Cloud Tool Summary:**
 
@@ -1172,11 +1209,13 @@ Side-effectful tools are registered with `requires_approval=True`. When the LLM 
 
 **`ToolCallPart.args` type handling:** pydantic-ai's `ToolCallPart.args` is typed `str | dict[str, Any] | None`. Some model providers send args as a JSON string rather than a parsed dict. The approval prompt formatter must handle all three variants (`json.loads` for `str`, `{}` for `None`) before calling `.items()`.
 
+**Safe-command auto-approval:** Shell commands matching a configurable safe-prefix list (`shell_safe_commands` in Settings/CoDeps) are auto-approved silently, skipping the `[y/n/a]` prompt. This is a UX convenience, not a security boundary — the Docker sandbox is the security layer. The `_is_safe_command()` helper in `_approval.py` checks prefix match and rejects shell chaining operators (`;`, `&&`, `||`, `|`, `` ` ``, `$(`) to force approval on composed commands.
+
 **Approval classification:**
 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
-| `run_shell_command` | `requires_approval=True` | Arbitrary code execution in sandbox |
+| `run_shell_command` | `requires_approval=True` | Arbitrary code execution in sandbox. Safe-prefix commands auto-approved. |
 | `draft_email` | `requires_approval=True` | Creates Gmail draft on user's behalf |
 | `post_slack_message` | `requires_approval=True` | Sends message visible to others |
 | All other tools | None | Read-only operations |
@@ -1331,7 +1370,8 @@ def test_sandbox_execution():
 | `_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
 | `tail.py` | Real-time span viewer (`co tail`) |
 | `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
-| `google_auth.py` | Google credential resolution + service builder |
+| `google_auth.py` | Google credential resolution (ensure/get/cached) — tools resolve lazily |
+| `_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `tools/shell.py` | `run_shell_command` — sandbox execution, `requires_approval=True` |
 | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` — vault search |
 | `tools/google_drive.py` | `search_drive`, `read_drive_file` — Drive API |

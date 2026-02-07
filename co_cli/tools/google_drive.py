@@ -23,7 +23,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
         query: Search keywords or metadata query.
         page: Page number (1-based). Use 1 for first page, 2 for second, etc.
     """
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry(
             "Google Drive not configured. "
@@ -100,7 +100,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
     Args:
         file_id: The Google Drive file ID (from search_drive results).
     """
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry(
             "Google Drive not configured. "
