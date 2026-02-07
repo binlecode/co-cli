@@ -82,7 +82,6 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/DESIGN-theming-ascii.md` — Theming, ASCII art banner, display helpers
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-shell-safety.md` — Shell execution safety: safe-prefix whitelist (done), no-sandbox fallback (MVP scoped)
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
 - `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)

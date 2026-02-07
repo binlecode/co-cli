@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.16] - 2026-02-07
+
+### Added
+- **No-sandbox subprocess fallback**: Shell tool no longer hard-requires Docker. New `SubprocessBackend` runs commands via `asyncio.create_subprocess_exec` with sanitized environment when Docker is unavailable. Automatic fallback with `sandbox_backend=auto` (default), explicit selection via `sandbox_backend` setting or `CO_CLI_SANDBOX_BACKEND` env var.
+- **`SandboxProtocol` abstraction** (`co_cli/sandbox.py`): Runtime-checkable protocol with `isolation_level`, `run_command()`, `cleanup()`. `DockerSandbox` (full isolation) and `SubprocessBackend` (no isolation) both satisfy it. Zero caller changes — `tools/shell.py` and `agent.py` untouched.
+- **Environment sanitization** (`co_cli/_sandbox_env.py`): `restricted_env()` allowlist (10 safe vars only) blocks CVE-2025-66032 pager/editor hijacking vectors. Forces `PAGER=cat`, `GIT_PAGER=cat`. `kill_process_tree()` sends SIGTERM→200ms→SIGKILL via `os.killpg()` process group.
+- **Partial output on subprocess timeout**: After killing a timed-out subprocess, reads any buffered stdout before raising `RuntimeError` — matches Docker backend's behavior, gives the LLM context for self-correction.
+- **Safe-command guard on isolation level**: `_is_safe_command()` auto-approval disabled when `isolation_level == "none"` — approval becomes the security layer without a sandbox.
+- **19 new functional tests**: Subprocess backend execution, timeout, exit code, pipe, env sanitization, dangerous env blocking, stderr merge, workspace dir, isolation level, protocol conformance, config field, env var override, factory function, cleanup no-op, variable expansion, custom workspace dir.
+
+### Changed
+- **`co_cli/sandbox.py`**: Renamed `Sandbox` → `DockerSandbox`. All `import docker` moved inside class methods (lazy import — module loads without `docker` package). Backward-compatible `Sandbox = DockerSandbox` alias preserved.
+- **`co_cli/deps.py`**: `sandbox: Sandbox` → `sandbox: SandboxProtocol`.
+- **`co_cli/main.py`**: New `_create_sandbox()` factory with auto-detection (try Docker ping, fall back to subprocess with warning). `_handle_approvals()` checks `deps.sandbox.isolation_level != "none"` before auto-approving safe commands.
+- **`co_cli/status.py`**: `StatusInfo.docker` field → `sandbox` field. `get_status()` reports active backend: `"Docker (full isolation)"` / `"subprocess (no isolation)"` / `"unavailable"`. `render_status_table()` shows "Sandbox" row with status and backend detail.
+- **`co_cli/banner.py`**: `info.docker` → `info.sandbox`.
+- **`co_cli/config.py`**: Added `sandbox_backend: Literal["auto", "docker", "subprocess"]` with `CO_CLI_SANDBOX_BACKEND` env var.
+- **`docs/DESIGN-tool-shell.md`**: Status updated to reflect MVP complete. Future enhancements table: subprocess fallback, env sanitization, process group kill all marked Done. Integration section updated with `_create_sandbox()` factory.
+- **`docs/DESIGN-co-cli.md`**: Added `sandbox_backend` to Settings class diagram and env var mapping table. Updated `CoDeps.sandbox` type to `SandboxProtocol`.
+- **`docs/DESIGN-llm-models.md`**: "Docker sandbox" → "sandboxed environment" in profile description.
+- **`docs/DESIGN-tool-google.md`**: `Sandbox.ensure_container()` → `DockerSandbox.ensure_container()` in analogy references.
+- **`docs/DESIGN-tool-slack.md`**: `deps.py` import reference updated from `Sandbox` to `SandboxProtocol`.
+- **`docs/TODO-shell-safety.md`**: Removed — all MVP items complete, only aspirational post-MVP enhancements remained.
+
+---
+
 ## [0.2.14] - 2026-02-07
 
 ### Added
