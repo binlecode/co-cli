@@ -191,7 +191,7 @@ $(pwd)          ────▶            /workspace
 ### Command Execution
 
 ```
-run_command(cmd)
+run_command(cmd, timeout=120)
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -201,23 +201,78 @@ run_command(cmd)
        │
        ▼
 ┌──────────────────────────────────────┐
-│ container.exec_run(                   │
-│     ["sh", "-c", cmd],               │
-│     workdir="/workspace"              │
+│ Wrap: timeout {N} sh -c '{cmd}'      │
+│                                       │
+│ asyncio.wait_for(                     │
+│   asyncio.to_thread(                  │
+│     container.exec_run(wrapped,       │
+│       workdir="/workspace",           │
+│       environment=PYTHONUNBUFFERED=1) │
+│   ),                                  │
+│   timeout=N+5  # Python safety net   │
 │ )                                     │
 │   └── Returns (exit_code, output)    │
 └──────────────────────────────────────┘
        │
        ▼
 ┌──────────────────────────────────────┐
-│ exit_code != 0?                       │
-│   ├── Yes ──▶ raise RuntimeError     │
+│ exit_code?                            │
+│   ├── 124 ──▶ raise RuntimeError     │
+│   │     (timeout + partial output)   │
+│   ├── ≠0  ──▶ raise RuntimeError     │
 │   │          (exit code + output)    │
-│   └── No  ──▶ Return decoded output  │
+│   └── 0   ──▶ Return decoded output  │
 └──────────────────────────────────────┘
 ```
 
-**Why `sh -c`:** Docker `exec_run(cmd)` without a shell wrapper treats the string as a raw executable path — shell builtins (`cd`), pipes (`grep foo | wc -l`), redirects (`> file.txt`), and aliases (`ll`) all fail. Wrapping in `["sh", "-c", cmd]` runs every command through a proper shell.
+**Why `sh -c`:** Docker `exec_run(cmd)` without a shell wrapper treats the string as a raw executable path — shell builtins (`cd`), pipes (`grep foo | wc -l`), redirects (`> file.txt`), and aliases (`ll`) all fail. Wrapping in `sh -c` runs every command through a proper shell.
+
+### Timeout: LLM-Controlled, Two Layers
+
+#### Problem Solved
+
+Without a timeout, any long-running or infinite-loop command (e.g., `python bot.py` with `while True: time.sleep(3600)`) blocks `container.exec_run()` forever. Since `exec_run` is synchronous, the thread is stuck, no spans are logged, and the CLI appears frozen — permanently.
+
+A hardcoded timeout doesn't work either — `ls` needs 10s, a build might need 600s. The solution: the LLM picks the timeout per command, bounded by a settings-level ceiling.
+
+#### Three Layers
+
+| Layer | Controls | Default |
+|-------|----------|---------|
+| **Tool parameter** (`timeout`) | LLM chooses per call, visible in tool schema | 120s |
+| **Hard ceiling** (`sandbox_max_timeout`) | Settings-level cap in `CoDeps`, LLM cannot exceed | 600s (configurable) |
+| **System prompt** | Instructs LLM to set appropriate timeouts and warn about forever-running scripts | N/A |
+
+The `timeout` parameter is part of the tool schema, so the LLM reasons about it naturally:
+- `run_shell_command(cmd="ls -la", timeout=10)` — quick listing
+- `run_shell_command(cmd="python train.py", timeout=600)` — long build
+- `run_shell_command(cmd="python bot.py")` — default 120s, killed if it hangs
+
+The tool clamps the value: `effective = min(timeout, ctx.deps.sandbox_max_timeout)`.
+
+#### Two Timeout Mechanisms (Belt and Suspenders)
+
+Two mechanisms run in parallel to ensure both the container process and the Python thread are bounded:
+
+1. **In-container** — coreutils `timeout N` wraps the command inside the container. Sends SIGTERM at `N` seconds. Exit code 124 on kill. Available in all standard images (part of coreutils).
+2. **Python-side** — `asyncio.wait_for(..., timeout=N+5)` wraps the `exec_run` call (run in a thread via `asyncio.to_thread`). Keeps the event loop free and responsive. The 5s grace period lets the in-container kill fire first under normal conditions; the Python timeout is a safety net if the container is unresponsive or the coreutils timeout fails to propagate.
+
+Why both layers: `exec_run()` is a synchronous blocking call. Even with coreutils `timeout` inside the container, Python blocks waiting for `exec_run` to return. Without the `asyncio.wait_for` wrapper, the event loop would freeze for the entire timeout duration — no spans logged, no UI updates, CLI appears hung. The async wrapper ensures the event loop stays responsive and the error surfaces immediately.
+
+On timeout, `RuntimeError` includes partial output captured before the kill, so the LLM (and user) can see what happened before the process was terminated.
+
+### stdout / stderr Handling
+
+`exec_run` defaults to `stdout=True, stderr=True` and returns both streams **merged** — equivalent to `2>&1`. This is intentional:
+
+- The LLM sees all output regardless of which fd produced it
+- No information is lost; error messages and normal output are interleaved in execution order
+- Splitting (`demux=True`) would add complexity with no benefit — the LLM doesn't need to distinguish stderr from stdout
+- This matches industry practice (E2B, Devin, Claude Code all merge streams)
+
+### PYTHONUNBUFFERED
+
+`exec_run` passes `environment={"PYTHONUNBUFFERED": "1"}`. Without this, Python buffers stdout when not connected to a TTY. If a timeout kills the process, unflushed output is lost — the user sees no output even though the script printed before hanging. `PYTHONUNBUFFERED` forces Python to flush after every write, so partial output is always captured. Harmless for non-Python commands.
 
 ### Design Decisions
 
@@ -229,6 +284,11 @@ run_command(cmd)
 | `["sh", "-c", cmd]` wrapping | Enables shell builtins, pipes, redirects, variable expansion |
 | Capture CWD at init | Consistent workspace for entire session |
 | Silent cleanup errors | Session end shouldn't fail if container already gone |
+| `async run_command` | `exec_run` is synchronous — async wrapper via `to_thread` + `wait_for` keeps event loop free |
+| Dual timeout layers | In-container coreutils kill + Python-side asyncio timeout. Either alone is insufficient: coreutils alone blocks the thread; asyncio alone can't kill the in-container process |
+| LLM-visible `timeout` param | Exposed in tool schema so the LLM can reason about appropriate values per command |
+| `PYTHONUNBUFFERED=1` | Ensures partial output is captured on timeout — Python buffers stdout when not on a TTY |
+| Merged stdout/stderr | `exec_run` returns both streams merged (`2>&1`). LLM doesn't need to distinguish; splitting adds complexity with no benefit |
 
 ---
 
@@ -301,6 +361,7 @@ Scenario: LLM runs "rm -rf /"
 |---------|---------|--------------|-------------|
 | `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Container image |
 | `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip prompts |
+| `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Hard ceiling for per-command timeout (seconds) |
 
 ### Default Image: `co-cli-sandbox`
 
@@ -343,6 +404,7 @@ For specialized workflows, override the image:
 | Docker not running | `docker.from_env()` fails | `RuntimeError` with message |
 | Container create fails | `APIError` from Docker | `RuntimeError` with details |
 | Command fails | Non-zero exit code | `RuntimeError` raised with exit code + output |
+| Command timeout | Exit code 124 (coreutils) or `asyncio.TimeoutError` | `RuntimeError` with timeout message + partial output |
 | Exec fails | Exception during `exec_run` | Exception propagates to caller |
 | Stale container | Found but stopped | Auto-restart via `container.start()` |
 
@@ -389,7 +451,13 @@ chat_loop()
     ├── deps = create_deps()     # Sandbox created
     │
     ├── while True:
-    │       agent.run(deps=deps)  # Sandbox reused
+    │       │
+    │       ├── "!cmd" ──▶ Direct sandbox execution (see §Output Control)
+    │       │
+    │       └── Natural language ──▶ agent.run(deps=deps)
+    │                                  │
+    │                                  ├── Tool outputs displayed via _display_tool_outputs()
+    │                                  └── LLM summary printed after
     │
     └── finally:
             deps.sandbox.cleanup()  # Sandbox destroyed
@@ -397,14 +465,72 @@ chat_loop()
 
 ---
 
+## Output Control
+
+Shell output reaches the user through two paths: agent-mediated (LLM calls the tool) and direct (`!` prefix). Both display raw output in a Rich `Panel` — the user always sees actual command output, not just an LLM summary.
+
+### Two Execution Paths
+
+| Path | Trigger | Approval | Output Display | LLM Involved |
+|------|---------|----------|----------------|--------------|
+| **Agent-mediated** | Natural language prompt | `[y/n/a]` via `DeferredToolRequests` | `_display_tool_outputs()` shows raw output in Panel, then LLM commentary follows | Yes |
+| **Direct (`!`)** | `!cmd` prefix in REPL | None (user typed it explicitly) | Output shown immediately in Panel | No |
+
+### Agent-Mediated Output (`_display_tool_outputs`)
+
+Without explicit output display, tool return values are consumed by the LLM internally — the user only sees the LLM's summary ("Done. Results above.") with no actual output visible. `_display_tool_outputs()` fixes this by scanning new messages after each agent turn:
+
+```
+agent.run() completes
+        │
+        ▼
+_display_tool_outputs(old_len, all_msgs)
+        │
+        ├── Scan new ModelRequest messages for ToolReturnPart
+        │
+        ├── Shell tool (str content):
+        │     └── Panel(output, title="$ {cmd}")
+        │          cmd extracted from matching ToolCallPart via tool_call_id
+        │
+        └── Dict tools with "display" field:
+              └── Print display value verbatim
+        │
+        ▼
+console.print(Markdown(result.output))   # LLM commentary after
+```
+
+### Direct Execution (`!` Prefix)
+
+```
+Co ❯ !python3 greeting_bot.py -r 2 -d 0.5
+╭─ $ python3 greeting_bot.py -r 2 -d 0.5 ──────────────╮
+│ 👋 Greeting bot started! ...                           │
+│ Round 1: Good night! Hope you're having a great day.   │
+│ Round 2: Good night! Ready to tackle your tasks?       │
+│ 👋 Greeting bot stopped!                               │
+╰────────────────────────────────────────────────────────╯
+```
+
+The `!` handler in the chat loop:
+1. Strips the `!` prefix
+2. Runs the command directly via `deps.sandbox.run_command()` (same sandbox, same container)
+3. Displays output in a `Panel` titled with the command
+4. `continue` — skips the LLM entirely
+
+No approval prompt: the user explicitly typed the command, which is itself the approval. Uses `deps.sandbox_max_timeout` as the timeout ceiling, consistent with the tool path.
+
+---
+
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tools/shell.py` | Tool function — delegates to sandbox, `ModelRetry` on error |
-| `co_cli/sandbox.py` | Docker container lifecycle, `sh -c` command execution |
-| `co_cli/deps.py` | CoDeps dataclass holding sandbox instance |
+| `co_cli/tools/shell.py` | Tool function — delegates to sandbox, `ModelRetry` on error, LLM-visible `timeout` param |
+| `co_cli/sandbox.py` | Docker container lifecycle, async command execution with dual-layer timeout |
+| `co_cli/deps.py` | CoDeps dataclass — holds sandbox instance and `sandbox_max_timeout` ceiling |
+| `co_cli/config.py` | `sandbox_max_timeout` setting (env: `CO_CLI_SANDBOX_MAX_TIMEOUT`) |
 | `Dockerfile.sandbox` | Custom image build (python:3.12-slim + dev tools) |
+| `scripts/e2e_timeout.py` | E2E test — LLM edits and runs a script, exercises full timeout pipeline |
 
 ---
 
@@ -413,6 +539,8 @@ chat_loop()
 | Enhancement | Description | Status |
 |-------------|-------------|--------|
 | `requires_approval=True` | Pydantic-ai native approval flow | Done |
-| Command timeout | Kill long-running commands | Planned |
+| Command timeout | LLM-controlled per-invocation timeout, async exec, partial output | Done |
+| Tool output display | Raw tool output shown to user via `_display_tool_outputs()` | Done |
+| `!` prefix direct exec | Bypass LLM, run command directly in sandbox | Done |
 | Resource limits | Memory/CPU constraints | Planned |
 | Network isolation | `--network none` option | Planned |

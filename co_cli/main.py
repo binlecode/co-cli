@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import typer
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.table import Table
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -55,7 +56,10 @@ Agent.instrument_all(InstrumentationSettings(
     version=3,
 ))
 
-app = typer.Typer(help="Co - The Production-Grade Personal Assistant CLI")
+app = typer.Typer(
+    help="Co - The Production-Grade Personal Assistant CLI",
+    context_settings={"help_option_names": ["--help", "-h"]},
+)
 
 
 def create_deps() -> CoDeps:
@@ -82,6 +86,7 @@ def create_deps() -> CoDeps:
         session_id=session_id,
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
+        sandbox_max_timeout=settings.sandbox_max_timeout,
         slack_client=slack_client,
     )
 
@@ -159,6 +164,31 @@ async def _handle_approvals(agent, deps, result, model_settings):
     )
 
 
+def _display_tool_outputs(old_len: int, messages: list) -> None:
+    """Show tool return values so the user sees raw output, not just the LLM summary."""
+    # Map tool_call_id → shell command for nicer titles
+    cmds: dict[str, str] = {}
+    for msg in messages[old_len:]:
+        if hasattr(msg, "kind") and msg.kind == "response":
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart) and part.tool_name == "run_shell_command":
+                    args = part.args_as_dict()
+                    cmds[part.tool_call_id] = args.get("cmd", "")
+
+    for msg in messages[old_len:]:
+        if not (hasattr(msg, "kind") and msg.kind == "request"):
+            continue
+        for part in msg.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            content = part.content
+            if isinstance(content, str) and content.strip():
+                title = cmds.get(part.tool_call_id, part.tool_name)
+                console.print(Panel(content.rstrip(), title=f"$ {title}", border_style="dim"))
+            elif isinstance(content, dict) and "display" in content:
+                console.print(content["display"])
+
+
 async def chat_loop():
     agent, model_settings = get_agent()
     deps = create_deps()
@@ -179,6 +209,22 @@ async def chat_loop():
                 if not user_input.strip():
                     continue
 
+                # !command — run directly in sandbox, no LLM
+                if user_input.startswith("!"):
+                    cmd = user_input[1:].strip()
+                    if cmd:
+                        try:
+                            output = await deps.sandbox.run_command(
+                                cmd, timeout=deps.sandbox_max_timeout,
+                            )
+                            if output.strip():
+                                console.print(Panel(
+                                    output.rstrip(), title=f"$ {cmd}", border_style="dim",
+                                ))
+                        except Exception as e:
+                            console.print(f"[bold red]Error:[/bold red] {e}")
+                    continue
+
                 console.print("[dim]Co is thinking...[/dim]")
                 try:
                     result = await agent.run(
@@ -193,17 +239,21 @@ async def chat_loop():
                             agent, deps, result, model_settings,
                         )
 
-                    message_history = result.all_messages()
+                    all_msgs = result.all_messages()
+                    _display_tool_outputs(len(message_history), all_msgs)
+                    message_history = all_msgs
                     console.print(Markdown(result.output))
-                except KeyboardInterrupt:
-                    # Cancel current operation, don't count toward exit
-                    # Patch any dangling tool calls so next turn doesn't fail
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    # Cancel current operation, don't count toward exit.
+                    # asyncio.run() handles SIGINT by cancelling the main task
+                    # (CancelledError), not by raising KeyboardInterrupt directly.
+                    # Patch any dangling tool calls so next turn doesn't fail.
                     message_history = _patch_dangling_tool_calls(message_history)
                     console.print("\n[dim]Interrupted.[/dim]")
 
             except EOFError:
                 break
-            except KeyboardInterrupt:
+            except (KeyboardInterrupt, asyncio.CancelledError):
                 now = time.monotonic()
                 if now - last_interrupt_time <= 2.0:
                     break
@@ -222,7 +272,10 @@ def chat(
     """Start an interactive chat session with Co."""
     if theme:
         settings.theme = theme
-    asyncio.run(chat_loop())
+    try:
+        asyncio.run(chat_loop())
+    except KeyboardInterrupt:
+        pass  # Safety net: asyncio.run() may re-raise after task cancellation
 
 
 @app.command()
@@ -295,9 +348,9 @@ def traces():
 
 @app.command()
 def tail(
-    trace_id: str = typer.Option(None, "--trace", "-t", help="Filter to a specific trace ID"),
-    tools_only: bool = typer.Option(False, "--tools-only", help="Only show tool spans"),
-    models_only: bool = typer.Option(False, "--models-only", help="Only show model/chat spans"),
+    trace_id: str = typer.Option(None, "--trace", "-i", help="Filter to a specific trace ID"),
+    tools_only: bool = typer.Option(False, "--tools-only", "-T", help="Only show tool spans"),
+    models_only: bool = typer.Option(False, "--models-only", "-m", help="Only show model/chat spans"),
     poll: float = typer.Option(1.0, "--poll", "-p", help="Poll interval in seconds"),
     no_follow: bool = typer.Option(False, "--no-follow", "-n", help="Print recent spans and exit"),
     last: int = typer.Option(20, "--last", "-l", help="Number of recent spans to show on startup"),
