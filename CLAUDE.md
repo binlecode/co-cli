@@ -29,50 +29,29 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
          + rich console
 ```
 
-### Core Flow
-- **main.py**: CLI entry point (Typer app), sets up OpenTelemetry + TracerProvider, calls `Agent.instrument_all()`, runs async chat loop
-- **agent.py**: `get_agent()` factory creates a `pydantic-ai` Agent with model selection (Gemini or Ollama) and registers all tools
-- **deps.py**: `CoDeps` dataclass — runtime dependencies injected into tools via `RunContext[CoDeps]` (sandbox, auto_confirm, session_id, obsidian_vault_path, google_drive, google_gmail, google_calendar, slack_client)
-- **google_auth.py**: `get_google_credentials()` + `build_google_service()` — loads authorized-user credentials (or ADC fallback) and builds Google API clients
-- **config.py**: `Settings` (Pydantic BaseModel) loaded from `~/.config/co-cli/settings.json` with env var fallback. Exported as module-level `settings` singleton
-- **sandbox.py**: Docker wrapper — creates a persistent `co-runner` container per session, mounts CWD to `/workspace`
-- **telemetry.py**: Custom `SQLiteSpanExporter` writes OTel spans to `~/.local/share/co-cli/co-cli.db`
-- **display.py**: Themed Rich Console, semantic styles (`THEMES`), `set_theme()`, display helpers (`display_status`, `display_error`, `display_info`), Unicode indicators
-- **banner.py**: ASCII art welcome banner rendered as a Rich Panel
-- **trace_viewer.py**: Generates static HTML with collapsible span trees
-
-### Tools (`co_cli/tools/`)
-| File | Functions | Pattern |
-|------|-----------|---------|
-| `shell.py` | `run_shell_command` | `RunContext[CoDeps]` — uses sandbox, human-in-the-loop confirm |
-| `obsidian.py` | `search_notes`, `list_notes`, `read_note` | `RunContext[CoDeps]` — uses `ctx.deps.obsidian_vault_path` |
-| `google_drive.py` | `search_drive`, `read_drive_file` | `RunContext[CoDeps]` — uses `ctx.deps.google_drive` + `ModelRetry` |
-| `google_gmail.py` | `list_emails`, `search_emails`, `draft_email` | `RunContext[CoDeps]` — uses `ctx.deps.google_gmail` + human-in-the-loop confirm |
-| `google_calendar.py` | `list_calendar_events`, `search_calendar_events` | `RunContext[CoDeps]` — uses `ctx.deps.google_calendar` + `ModelRetry` |
-| `slack.py` | `post_slack_message` | `RunContext[CoDeps]` — uses `ctx.deps.slack_client` + human-in-the-loop confirm |
-
-### Migration Status
-All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migrate approval flow from `Confirm.ask` to `requires_approval=True` — see `docs/TODO-approval-flow.md`.
+See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and approval pattern.
 
 ## Coding Standards
 
 - **Python 3.12+** with type hints everywhere
 - **Imports**: Always explicit — never `from X import *`
 - **`__init__.py`**: Prefer empty (docstring-only) — no re-exports unless the module is a public API facade
-- **`_prefix.py` helpers**: Internal/shared helpers in a package use leading underscore (e.g. `tools/_confirm.py`). These are private to the package — not registered as tools, not part of the public API
-- **Tool pattern**: New tools must use `RunContext[CoDeps]`, access runtime resources via `ctx.deps`
-- **Tool return type**: Tools that return data for the user to see MUST return structured output (`dict[str, Any]`) with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). This ensures the LLM shows URLs/links instead of reformatting into tables that drop them. Never return raw `list[dict]` — the LLM will reformat and lose data.
+- **`_prefix.py` helpers**: Internal/shared helpers in a package use leading underscore. Private to the package — not registered as tools, not part of the public API
+- **Tool pattern**: New tools must use `agent.tool()` with `RunContext[CoDeps]`, access runtime resources via `ctx.deps`
+- **Tool approval**: Side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools
+- **Tool return type**: Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). Never return raw `list[dict]`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
 - **Config precedence**: env vars > `~/.config/co-cli/settings.json` > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
-- **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature (e.g. 0.2.3 = bugfix, 0.2.4 = feature). Bump in `pyproject.toml`, `banner.py` default, and `main.py` service.version
-- **Display**: All terminal output goes through `co_cli.display.console` (themed Rich Console). Use semantic style names (`status`, `info`, `success`, `error`, `hint`, `accent`, `yolo`) — never hardcode color names at callsites. Use `display_status()`, `display_error()`, `display_info()` helpers where applicable
+- **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
+- **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
+- **Display**: All terminal output goes through `co_cli.display.console` (themed Rich Console). Use semantic style names (`status`, `info`, `success`, `error`, `hint`, `accent`, `yolo`) — never hardcode color names at callsites
 
 ## Testing Policy
 
 - **Functional tests only** — no mocks or stubs. Tests hit real services.
-- Tests skip gracefully when services are unavailable (Docker, Ollama, Slack)
-- **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json` — tests must NOT skip when any of these exist
+- **No skips** — tests must pass or fail, never skip. If a service is required, let the test fail when unavailable.
+- **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
 - Framework: `pytest` + `pytest-asyncio`
 - Docker must be running for shell/sandbox tests
 - Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` env var for LLM E2E tests
@@ -81,31 +60,27 @@ All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Remaining: migra
 
 - Do not use `tool_plain()` for new tools — use `agent.tool()` with `RunContext`
 - Do not import `settings` directly in tool files — use `ctx.deps`
+- Do not put approval prompts inside tools — use `requires_approval=True` and handle in the chat loop
 - Do not use mocks in tests
 - Do not use `.env` files — use `settings.json` or env vars
 
-## Design Docs
+## Docs
 
-- `docs/DESIGN-co-cli.md` — Overall architecture and design decisions
+### Design (architecture and implementation details, kept in sync with code)
+- `docs/DESIGN-co-cli.md` — Overall architecture, processing flows, approval pattern, security model
 - `docs/DESIGN-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
 - `docs/DESIGN-tool-shell-sandbox.md` — Docker sandbox design
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, auth factory)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
-- `docs/DESIGN-llm-models.md` — LLM model configuration (Ollama GLM-4.7-Flash parameters, Gemini)
-- `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer, span attribute reference, troubleshooting guide
-- `docs/TODO-approval-flow.md` — Migrate to pydantic-ai `requires_approval` + `DeferredToolRequests`
-- `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler` for direct tool output display
-- `docs/TODO-tool-call-stability.md` — Tool-call stability: retry budget, ModelRetry semantics, loop guard, system prompt
-- `docs/DESIGN-theming-ascii.md` — Theming (light/dark), ASCII art banner, display helpers, color semantics
+- `docs/DESIGN-llm-models.md` — LLM model configuration
+- `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer
+- `docs/DESIGN-theming-ascii.md` — Theming, ASCII art banner, display helpers
 
-## Reference Implementation
-
-**BERA CLI** (`/Users/binle/workspace_bera/a-cli`) — mini-CLI with polished terminal UX. Use as reference for:
-
-- **Theming**: Dual light/dark theme with Unicode indicator variants (`cli/config.py` `THEME_INDICATORS`, `cli/display.py` `set_theme()`)
-- **ASCII art banner**: Theme-aware welcome art — block chars for dark, box-drawing for light (`cli/qa_chat.py` `_display_welcome_banner()`)
-- **Display utilities**: `display_status()`, `display_error()` with recovery hints, `display_info()`, `status_spinner()` context manager (`cli/display.py`)
-- **Color semantics**: cyan=selection/commands, yellow=status, red=errors, green=success, dim=secondary
-- **TTY detection**: Rich auto-detection with graceful degradation for piped/CI output
-- **Rich Panels**: Bordered panels for help, errors, session status with `border_style="cyan"`
+### TODO (remaining work items only — no design content, no status tracking)
+- `docs/TODO-approval-flow.md` — Conditional `ApprovalRequired` for shell safe-prefix whitelist
+- `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
+- `docs/TODO-tool-call-stability.md` — Retry budget, ModelRetry semantics, loop guard
+- `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
+- `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
+- `docs/TODO-structured-output.md` — Structured output migration

@@ -1,10 +1,9 @@
 import asyncio
-import os
 import subprocess
 import time
+from pathlib import Path
 from uuid import uuid4
 
-import httpx
 import typer
 from rich.markdown import Markdown
 from rich.table import Table
@@ -14,10 +13,11 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai.messages import ModelRequest, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import UsageLimits
+from rich.prompt import Prompt
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
@@ -25,15 +25,23 @@ from co_cli.sandbox import Sandbox
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, PROMPT_CHAR
-from co_cli.banner import display_welcome_banner, VERSION
+from co_cli.banner import display_welcome_banner
+from co_cli.status import get_status
 
 # Setup Telemetry - must be done before Agent.instrument_all()
 from opentelemetry.sdk.resources import Resource
 
 exporter = SQLiteSpanExporter()
+
+# get_status() is lazy; just read version directly for telemetry bootstrap
+import tomllib as _tomllib
+_VERSION = _tomllib.loads(
+    (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+)["project"]["version"]
+
 resource = Resource.create({
     "service.name": "co-cli",
-    "service.version": VERSION,
+    "service.version": _VERSION,
 })
 tracer_provider = TracerProvider(resource=resource)
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -51,7 +59,6 @@ app = typer.Typer(help="Co - The Production-Grade Personal Assistant CLI")
 
 def create_deps() -> CoDeps:
     """Create deps from settings."""
-    from pathlib import Path
     session_id = uuid4().hex
 
     # Resolve obsidian vault path
@@ -108,19 +115,52 @@ def _patch_dangling_tool_calls(
     return messages + [ModelRequest(parts=return_parts)]
 
 
+_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
+
+
+async def _handle_approvals(agent, deps, result, model_settings):
+    """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
+    approvals = DeferredToolResults()
+
+    for call in result.output.approvals:
+        args_str = ", ".join(f"{k}={v!r}" for k, v in call.args.items())
+        desc = f"{call.tool_name}({args_str})"
+
+        if deps.auto_confirm:
+            approvals.approvals[call.tool_call_id] = True
+            continue
+
+        console.print(f"Approve [bold]{desc}[/bold]?" + _CHOICES_HINT, end=" ")
+        choice = Prompt.ask(
+            "", choices=["y", "n", "a"], default="n",
+            show_choices=False, show_default=False, console=console,
+        )
+        if choice == "a":
+            deps.auto_confirm = True
+            console.print("[bold orange3]YOLO mode enabled — auto-approving for this session[/bold orange3]")
+            approvals.approvals[call.tool_call_id] = True
+        elif choice == "y":
+            approvals.approvals[call.tool_call_id] = True
+        else:
+            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+
+    return await agent.run(
+        None,
+        deps=deps,
+        message_history=result.all_messages(),
+        deferred_tool_results=approvals,
+        model_settings=model_settings,
+        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+    )
+
+
 async def chat_loop():
     agent, model_settings = get_agent()
     deps = create_deps()
     session = PromptSession(history=FileHistory(str(DATA_DIR / "history.txt")))
 
-    # Show model banner
-    provider = settings.llm_provider.lower()
-    if provider == "gemini":
-        model_info = f"Gemini ({settings.gemini_model})"
-    else:
-        model_info = f"Ollama ({settings.ollama_model})"
-
-    display_welcome_banner(model_info)
+    info = get_status(tool_count=len(agent._function_toolset.tools))
+    display_welcome_banner(info)
 
     message_history = []
     last_interrupt_time = 0.0
@@ -141,6 +181,13 @@ async def chat_loop():
                         model_settings=model_settings,
                         usage_limits=UsageLimits(request_limit=settings.max_request_limit),
                     )
+
+                    # Handle deferred tool approvals
+                    if isinstance(result.output, DeferredToolRequests):
+                        result = await _handle_approvals(
+                            agent, deps, result, model_settings,
+                        )
+
                     message_history = result.all_messages()
                     console.print(Markdown(result.output))
                 except KeyboardInterrupt:
@@ -176,58 +223,19 @@ def chat(
 @app.command()
 def status():
     """Show system health and tool availability."""
-    provider = settings.llm_provider.lower()
+    info = get_status()
 
-    table = Table(title=f"Co System Status (Provider: {provider.title()})")
+    table = Table(title=f"Co System Status (Provider: {info.llm_provider})")
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="magenta")
     table.add_column("Details", style="green")
 
-    if provider == "gemini":
-        api_key = settings.gemini_api_key
-        model_name = settings.gemini_model
-        status = "Configured" if api_key else "Missing API Key"
-        table.add_row("Gemini", status, model_name)
-    else:
-        # Check Ollama
-        ollama_host = settings.ollama_host
-        model_name = settings.ollama_model
-        try:
-            response = httpx.get(ollama_host)
-            if response.status_code == 200:
-                ollama_status = "Online"
-            else:
-                ollama_status = f"Offline ({response.status_code})"
-        except Exception:
-            ollama_status = "Offline"
-
-        table.add_row("Ollama", ollama_status, f"Host: {ollama_host}")
-        table.add_row("Model", "Ready" if ollama_status == "Online" else "N/A", model_name)
-
-    # Google credentials
-    from co_cli.google_auth import GOOGLE_TOKEN_PATH, ADC_PATH
-    if settings.google_credentials_path and os.path.exists(os.path.expanduser(settings.google_credentials_path)):
-        google_status = "Configured"
-        google_detail = settings.google_credentials_path
-    elif GOOGLE_TOKEN_PATH.exists():
-        google_status = "Configured"
-        google_detail = str(GOOGLE_TOKEN_PATH)
-    elif ADC_PATH.exists():
-        google_status = "ADC Available"
-        google_detail = str(ADC_PATH)
-    else:
-        google_status = "Not Found"
-        google_detail = "Run 'co chat' to auto-setup or install gcloud"
-    table.add_row("Google", google_status, google_detail)
-
-    obsidian_path = settings.obsidian_vault_path
-    obsidian_status = "Configured" if obsidian_path and os.path.exists(obsidian_path) else "Not Found"
-    table.add_row("Obsidian", obsidian_status, obsidian_path or "None")
-
-    # DB Size
-    db_path = DATA_DIR / "co-cli.db"
-    db_size = f"{os.path.getsize(db_path) / 1024:.1f} KB" if db_path.exists() else "0 KB"
-    table.add_row("Database", "Active", db_size)
+    table.add_row("LLM", info.llm_status.title(), info.llm_provider)
+    table.add_row("Docker", info.docker.title(), "Sandbox runtime")
+    table.add_row("Google", info.google.title(), info.google_detail)
+    table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
+    table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
+    table.add_row("Database", "Active", info.db_size)
 
     console.print(table)
 
@@ -236,7 +244,6 @@ def status():
 def logs():
     """Launch a local dashboard (Datasette) to inspect agent traces."""
     import webbrowser
-    from pathlib import Path
 
     db_path = DATA_DIR / "co-cli.db"
     if not db_path.exists():
