@@ -1,4 +1,5 @@
 import asyncio
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -123,7 +124,11 @@ async def _handle_approvals(agent, deps, result, model_settings):
     approvals = DeferredToolResults()
 
     for call in result.output.approvals:
-        args_str = ", ".join(f"{k}={v!r}" for k, v in call.args.items())
+        args = call.args
+        if isinstance(args, str):
+            args = json.loads(args)
+        args = args or {}
+        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         desc = f"{call.tool_name}({args_str})"
 
         if deps.auto_confirm:
@@ -182,8 +187,8 @@ async def chat_loop():
                         usage_limits=UsageLimits(request_limit=settings.max_request_limit),
                     )
 
-                    # Handle deferred tool approvals
-                    if isinstance(result.output, DeferredToolRequests):
+                    # Handle deferred tool approvals (loop: resumed run may trigger more)
+                    while isinstance(result.output, DeferredToolRequests):
                         result = await _handle_approvals(
                             agent, deps, result, model_settings,
                         )
