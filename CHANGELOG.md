@@ -8,20 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.14] - 2026-02-07
 
 ### Added
-- **Shell safe-command whitelist**: New `co_cli/_approval.py` with `_is_safe_command()` — auto-approves read-only shell commands (e.g. `ls`, `cat`, `pwd`) that match `shell_safe_commands` prefixes without shell chaining operators. UX convenience layer on top of Docker sandbox isolation.
-- **`shell_safe_commands` in `CoDeps`**: New field carries the safe-prefix list from config into the approval flow via `RunContext`.
-- **Approval flow tests**: 10 new functional tests in `tests/test_commands.py` — approve, deny, auto-confirm (yolo), `_is_safe_command` unit tests covering prefix matching, multi-word prefixes, chaining rejection, exact match, and partial-name rejection.
-- **Shell hardening tests**: 20+ new functional tests in `tests/test_shell.py` — timeout, pipe, non-root, network isolation, capability drop, redirect, variable expansion, subshell, heredoc, stderr merge, Python script lifecycle (create/run/edit/rerun/unittest/traceback), special chars, large output, empty output, workspace mapping.
-- **`/release` skill**: `.claude/skills/release/release.md` — versioned release workflow (tests, bump, changelog, design doc sync, TODO cleanup, commit) invokable as `/release <version|feature|bugfix>`.
-- **Approval flow TODO expansion**: `docs/TODO-approval-flow.md` rewritten with industry research (Codex CLI, Claude Code, Gemini CLI, Windsurf, Aider comparison matrix), proposed chat-loop pre-filter design, and phased implementation plan.
+- **Shell safe-command whitelist**: `co_cli/_approval.py` with `_is_safe_command()` — auto-approves read-only shell commands (e.g. `ls`, `cat`, `git status`) matching `shell_safe_commands` prefixes without shell operators (`;`, `&`, `|`, `>`, `<`, `` ` ``, `$(`). UX convenience on top of Docker sandbox isolation.
+- **`shell_safe_commands` setting**: New `config.py` field with 30 conservative defaults, `CO_CLI_SHELL_SAFE_COMMANDS` env var (comma-separated), and `CoDeps` field for injection into the approval flow.
+- **`render_status_table()`**: Extracted status table rendering from `main.py` and `_commands.py` into `status.py`. Uses semantic style names (`accent`, `info`, `success`) instead of hardcoded colors.
+- **`set_theme()`**: Runtime theme switching in `display.py` (called from `--theme` flag). Expanded theme palettes with `error`, `success`, `warning`, `hint` semantic styles.
+- **`get_agent()` returns `tool_names`**: 3-tuple return `(agent, model_settings, tool_names)` — eliminates private `_function_toolset` access throughout codebase.
+- **Approval flow tests**: 10 new tests in `tests/test_commands.py` — `_is_safe_command` unit tests covering prefix matching, multi-word prefixes, chaining/redirection/backgrounding rejection, exact match, partial-name rejection, empty safe list.
+- **Shell hardening tests**: 20+ new functional tests in `tests/test_shell.py` — timeout, pipe, non-root, network isolation, capability drop, redirect, variable expansion, subshell, heredoc, stderr merge, Python script lifecycle, special chars, large output, empty output, workspace mapping.
+- **`/release` skill**: `.claude/skills/release/release.md` — versioned release workflow invokable as `/release <version|feature|bugfix>`.
 
 ### Changed
-- **`docs/DESIGN-co-cli.md`**: Updated sandbox Mermaid diagram (async `run_command`, `cap_drop=ALL`, `user=1000:1000`), `CoDeps` class diagram (added `shell_safe_commands`, `google_credentials_path`, removed stale Google service fields), config table (added `sandbox_*` and `shell_safe_commands` settings), dependency flow text (lazy credentials).
-- **`docs/DESIGN-tool-google.md`**: Rewritten auth architecture — lazy credential resolution via `get_cached_google_creds()` replaces eager `build_google_service()`. Updated flow diagrams, auth function signatures, and credential cache section.
-- **`CLAUDE.md`**: Updated TODO entry for `TODO-approval-flow.md` (now references partial implementation), added `TODO-slack-tooling.md` and `REVIEW-co-cli-design-team-view.md` entries, fixed Google tools description ("lazy auth" instead of "auth factory").
+- **`_commands.py`**: `CommandContext.tool_count` → `tool_names: list[str]`. `/status` and `/tools` use `render_status_table()` and sorted `tool_names` respectively.
+- **`_approval.py`**: Hardened rejection list — added `&` (backgrounding), `>` / `<` (redirection), `\n` (embedded newlines) alongside original chaining operators.
+- **`main.py`**: Adapted to 3-tuple `get_agent()`, uses `set_theme()` for `--theme` flag, uses `render_status_table()` for `co status`.
+- **`docs/DESIGN-co-cli.md`**: Updated sandbox diagram, `CoDeps` class diagram, config table, dependency flow.
+- **`docs/DESIGN-tool-google.md`**: Rewritten auth architecture — lazy credential resolution via `get_cached_google_creds()`.
+- **`CLAUDE.md`**: Added design principles section, reference repos table, updated doc references.
+
+### Renamed
+- `docs/DESIGN-tool-shell-sandbox.md` → `docs/DESIGN-tool-shell.md` — broadened scope (sandbox backends, security model).
+- `docs/TODO-approval-flow.md` → `docs/TODO-shell-safety.md` — refocused on shell execution safety (safe-prefix done, no-sandbox fallback scoped).
 
 ### Removed
-- **`docs/TODO-tool-call-stability.md`**: All items implemented (sandbox hardening, shell error propagation, retry budget). Remaining design rationale already in `DESIGN-tool-shell-sandbox.md`.
+- **`docs/TODO-tool-call-stability.md`** (previous commit): All items implemented.
 
 ---
 

@@ -1,499 +1,296 @@
-# Research: CLI Agent Tools Landscape 2026
+# Research: CLI Agent Tools Landscape (Refresh)
 
-**Date:** Feb 2026
-**Purpose:** Survey the personal AI CLI agent ecosystem and identify top tool candidates for co-cli functional expansion.
-
----
-
-## 1. Current co-cli Tool Inventory
-
-| Tool | File | Category | Risk | External Service |
-|------|------|----------|------|------------------|
-| `run_shell_command` | `shell.py` | Execution | High | Docker sandbox |
-| `search_notes` | `obsidian.py` | Knowledge | Low | Local filesystem |
-| `list_notes` | `obsidian.py` | Knowledge | Low | Local filesystem |
-| `read_note` | `obsidian.py` | Knowledge | Low | Local filesystem |
-| `search_drive` | `drive.py` | Documents | Low | Google Drive API |
-| `read_drive_file` | `drive.py` | Documents | Low | Google Drive API |
-| `draft_email` | `gmail.py` | Communication | High | Gmail API |
-| `list_calendar_events` | `calendar.py` | Scheduling | Low | Google Calendar API |
-| `post_slack_message` | `slack.py` | Communication | High | Slack API |
-
-**Notable gaps vs. the 2026 field:** No web search, no web fetch, no memory/persistence, no file editing, no browser automation, no task management, no scheduling/cron, no GitHub integration.
+**Date:** 2026-02-07
+**Purpose:** Re-benchmark the CLI agent landscape using primary sources and update co-cli tool strategy.
+**Method:** Official docs/changelogs/repos only (no secondary summaries).
 
 ---
 
-## 2. Competitive Landscape — Tool Comparison Matrix
+## 1. Current co-cli Baseline (from code)
 
-### 2.1 Tool-by-Tool Comparison Across 10 Major Agents
+### 1.1 Registered tools
 
-| Capability | co-cli | Claude Code | Gemini CLI | Codex | OpenClaw | Manus | Warp | Goose | OpenCode | Copilot CLI |
-|------------|--------|-------------|------------|-------|----------|-------|------|-------|----------|-------------|
-| **Shell/Exec** | Docker sandbox | Direct | Shell | Sandboxed | Shell + sandbox | gVisor (sudo) | Full TTY | Yes | Yes | Yes |
-| **File R/W/Edit** | Obsidian only | Read/Edit/Write | ReadFile/WriteFile/Edit | Read/Write/Edit | File R/W | Filesystem | - | Yes | read/write/edit | Yes |
-| **Web Search** | **-** | WebSearch | GoogleSearch | --search flag | Browser | Browser | - | Via MCP | Via MCP | - |
-| **Web Fetch** | **-** | WebFetch | WebFetch | - | Browser | Browser | - | Via MCP | Via MCP | web_fetch |
-| **Memory** | **-** | CLAUDE.md auto | SaveMemory | Thread memory | Local MD store | Event stream | - | Via MCP | SQLite sessions | Persistent |
-| **Task/Todo** | **-** | TaskCreate/Update | WriteTodos | - | Cron/webhooks | Planner | /plan | - | - | - |
-| **Browser** | - | - | - | - | Chrome control | Playwright | - | Via MCP | - | - |
-| **Calendar** | Google Calendar | - | - | - | Via skills | - | - | Via MCP | - | - |
-| **Email** | Gmail draft | - | - | - | Gmail Pub/Sub | - | - | Via MCP | - | - |
-| **Slack** | Post message | - | - | - | Slack actions | - | Slack/Linear/GH | Via MCP | - | - |
-| **Drive/Docs** | Google Drive | - | - | - | - | - | - | Via MCP | - | - |
-| **GitHub** | **-** | Via Bash | - | - | Via skills | - | GitHub Actions | Via MCP | GitHub agent | GitHub MCP |
-| **Cron/Schedule** | - | - | - | - | First-class | - | - | - | - | - |
-| **Code Review** | - | Via subagent | - | Code review agent | - | - | Interactive | - | - | Code-review agent |
-| **MCP Support** | **-** | Yes | Yes | Yes + self-as-MCP | AgentSkills | - | - | **Native (ref impl)** | Yes | Yes |
-| **Multi-Agent** | - | Subagents | Codebase Investigator | Via Agents SDK | - | Internal multi-agent | Multi-agent parallel | - | - | 4 built-in agents |
-| **Planning** | - | Plan mode | - | - | - | Planner module | /plan | - | - | Plan agent |
-| **Git Native** | - | Via Bash | - | - | Via skills | - | Via agent | Via MCP | - | Via GitHub MCP |
+| Tool | Category | Side effects | Approval |
+|------|----------|--------------|----------|
+| `run_shell_command` | Execution | Yes | Required |
+| `search_notes` / `list_notes` / `read_note` | Local knowledge (Obsidian) | No | No |
+| `search_drive` / `read_drive_file` | Google Drive | No | No |
+| `list_emails` / `search_emails` | Gmail read | No | No |
+| `draft_email` | Gmail write (draft) | Yes | Required |
+| `list_calendar_events` / `search_calendar_events` | Calendar read | No | No |
+| `list_slack_channels` / `get_slack_channel_history` / `get_slack_thread_replies` / `list_slack_users` | Slack read | No | No |
+| `post_slack_message` | Slack write | Yes | Required |
 
-**Legend:** **Bold dash** = critical gap vs. field. Via MCP = available through MCP extension, not built-in.
+Source: `co_cli/agent.py`, `co_cli/tools/*`.
 
-### 2.2 System-by-System Deep Dive
+### 1.2 Architecture snapshot
 
-#### Claude Code (Anthropic)
-- **Tools:** Read, Edit, Write, Bash, Glob, Grep, WebSearch, WebFetch, Task (sub-agents), NotebookEdit
-- **Key pattern:** Auto-memory (`~/.claude/projects/*/memory/MEMORY.md`), sub-agent orchestration, `CLAUDE.md` project instructions
-- **Unique:** Permission modes (auto-allow vs. confirm), hooks system, MCP server integration, IDE integration
-- **Strength:** Deep codebase understanding via multi-tool orchestration
+- Shell is Docker-sandboxed with configurable network/memory/CPU limits.
+- Approval model is explicit per tool call (`requires_approval=True` for side-effect tools).
+- No built-in web search/fetch tools yet.
+- No first-class persistent memory tool yet.
+- No MCP client integration yet.
 
-#### Gemini CLI (Google)
-- **Tools:** Shell, ReadFile, WriteFile, Edit, FindFiles, SearchText, GoogleSearch, WebFetch, SaveMemory, WriteTodos, Codebase Investigator
-- **Key pattern:** `SaveMemory` persists across sessions, `WriteTodos` for task tracking, `--yolo` mode for auto-confirm
-- **Unique:** GoogleSearch as first-class tool, Codebase Investigator agent, GEMINI.md project instructions
-- **Strength:** Integrated web search + local tools in one coherent package
-
-#### OpenAI Codex
-- **Tools:** Shell, file read/write/edit, web search (opt-in via `--search`)
-- **Key pattern:** Skills system (`~/.agents/skills/`), MCP configuration (`~/.codex/config.toml`), `codex mcp` CLI
-- **Unique:** Remote skill marketplace, AGENTS.md convention, thread memory summaries
-- **Strength:** Extensible skills architecture
-
-#### OpenClaw (2026 breakout)
-- **Tools:** Browser (Chrome/Chromium), Canvas (A2UI), Nodes (camera/screen/location/notifications), Cron, Sessions, Discord/Slack actions, Shell, File R/W
-- **Key pattern:** Persistent long-term memory (local), 100+ community AgentSkills, webhooks, Gmail Pub/Sub
-- **Unique:** Goes far beyond coding — full personal automation (inbox management, calendar scheduling, browser automation, smart home, media control)
-- **Strength:** Personal life automation, not just developer tasks
-
-#### Manus (autonomous agent)
-- **Tools:** Shell (sudo), browser (Playwright), filesystem, Python/Node.js interpreters, 200+ integrated tools
-- **Key pattern:** CodeAct (executable Python as action), Planner module with step tracking, event stream memory, multi-agent orchestration
-- **Unique:** Full autonomous operation in gVisor-secured containers, planning with status tracking
-- **Context engineering:** KV-cache optimization, structured event stream, selective context loading
-- **Strength:** Complex multi-step autonomous workflows
-
-#### Warp (agentic development environment)
-- **Tools:** Full terminal use (REPLs, debuggers, full-screen apps), /plan command, interactive code review
-- **Key pattern:** Slack/Linear/GitHub integrations — tag @warp in an issue and it creates a PR
-- **Unique:** Only product with "Full Terminal Use" — agent can interact with interactive programs
-- **Strength:** Team workflow integration (Slack → agent → PR)
-
-#### Goose (Block / Linux Foundation)
-- **Tools:** All capabilities via MCP extensions — file ops, shell, code execution, debugging, multi-step workflows
-- **Key pattern:** MCP-native architecture — reference implementation for Model Context Protocol. Contributed to Linux Foundation's Agentic AI Foundation (Dec 2025) alongside Anthropic's MCP and OpenAI's AGENTS.md
-- **Unique:** 26K+ stars, 3,000+ MCP servers available, LLM-agnostic, MCP Apps (interactive experiences rendered in conversation)
-- **Strength:** Infinite extensibility via MCP — every new MCP server is a new Goose capability for free
-
-#### OpenCode (SST)
-- **Tools:** read, write, edit, search (regex), bash, glob — clean Go implementation with Bubble Tea TUI
-- **Key pattern:** 95K+ stars, 2.5M+ monthly users. Model-agnostic (OpenAI, Anthropic, Gemini, Bedrock, Groq, Azure, self-hosted)
-- **Unique:** LSP integration for language-aware editing, SQLite session persistence, GitHub agent via GitHub Actions
-- **Strength:** Developer experience — vim-like editing, session management, fast Go runtime
-
-#### GitHub Copilot CLI (Jan 2026 enhanced release)
-- **Tools:** web_fetch, shell, file R/W/edit, GitHub MCP Server (default)
-- **4 Built-in Agents:** Explore (codebase analysis), Task (runs commands), Plan (implementation planning), Code-review (quality review)
-- **Key pattern:** Persistent cross-session memory, async task delegation, parallel agent execution
-- **Strength:** Tight GitHub ecosystem — ships with GitHub MCP Server by default
-
-#### The Convergence Point
-
-The ecosystem is converging on: **local-first agent + MCP extensibility + persistent memory + human-in-the-loop controls**. This is being standardized by the Linux Foundation's Agentic AI Foundation (Dec 2025) with MCP, Goose, and AGENTS.md under neutral governance.
-
-The spectrum from code-focused to full personal assistant:
-```
-Code-Only ◄──────────────────────────────────────────────► Personal Agent
-Aider → OpenCode → Codex → Gemini CLI → Claude Code → Goose → Warp → OpenClaw
-                                                                         ▲
-                                                              co-cli sits here
-                                                    (Google suite + personal tools)
-```
+Source: `co_cli/main.py`, `co_cli/config.py`, `co_cli/agent.py`.
 
 ---
 
-## 3. Agentic Patterns Worth Adopting
+## 2. Benchmark Selection (refined)
 
-### 3.1 Context Engineering (from Manus)
+### 2.1 Selection criteria
 
-The most important architectural pattern of 2025-2026. Context engineering treats the LLM's context window as a first-class system:
+Systems are included as primary benchmarks only if they satisfy all of:
 
-1. **Structured event stream** — Instead of dumping raw chat history, construct an optimized context per turn
-2. **KV-cache hit rate** — The single most important production metric; structure prompts so prefixes are stable
-3. **Selective tool results** — Compress/summarize large tool outputs before injecting into context
-4. **Plan injection** — Maintain a "Plan" document that's always in context, showing progress
+1. Terminal-first coding workflow is a core product use case.
+2. Public documentation clearly describes tool/permission behavior.
+3. Feature set is directly comparable to co-cli decisions (tools, approvals, memory, extensibility).
 
-**co-cli relevance:** Currently we pass raw conversation history. We should consider structured context construction as we add more tools.
+### 2.2 Primary benchmark set (direct comparators)
 
-### 3.2 Persistent Memory (from Gemini CLI, OpenClaw, Claude Code)
+1. Claude Code
+2. Gemini CLI
+3. OpenAI Codex CLI
+4. GitHub Copilot CLI
+5. Aider
+6. OpenCode
+7. Goose
 
-Three tiers of memory emerging:
+### 2.3 Secondary set (adjacent references, not parity targets)
 
-| Tier | Description | Examples |
-|------|-------------|---------|
-| **Session memory** | Within one conversation | Current co-cli behavior |
-| **Project memory** | Persists per-project across sessions | `CLAUDE.md`, `GEMINI.md`, `SaveMemory` |
-| **Long-term memory** | Cross-project, learns preferences over time | OpenClaw local store, Graphiti knowledge graphs |
+1. Warp (Ambient Agents platform + CLI)
+2. OpenClaw (personal automation agent platform)
 
-**co-cli relevance:** We have zero cross-session memory. Even a simple `save_memory` / `recall_memory` tool writing to `~/.local/share/co-cli/memory.json` would be a major upgrade.
+### 2.4 Watchlist (not used for capability scoring)
 
-### 3.3 Planning & Task Tracking (from Manus, Gemini CLI, Warp)
+1. Manus (interesting architecture signal, but lower documentation transparency for apples-to-apples CLI scoring)
 
-All leading agents now include some form of task decomposition:
+### 2.5 Why this split
 
-- **Manus:** Explicit Planner module that generates numbered step lists injected into context
-- **Gemini CLI:** `WriteTodos` tool for persistent task lists
-- **Warp:** `/plan` command for spec-driven development
-- **Claude Code:** `TaskCreate`/`TaskUpdate` for structured task tracking
-
-**co-cli relevance:** Adding a `write_todos` or `manage_tasks` tool would let Co break complex requests into trackable steps.
-
-### 3.4 Human-in-the-Loop Patterns (converging across all agents)
-
-The industry has converged on a 3-tier permission model:
-
-| Level | Description | Examples |
-|-------|-------------|---------|
-| **Auto-allow** | Safe read operations | Search, read, list |
-| **Confirm** | Writes and external actions | Shell exec, send email, post message |
-| **Block** | Never auto-execute | Delete, force-push, destructive ops |
-
-**co-cli relevance:** Our current `auto_confirm` bool is binary. Moving to `requires_approval=True` per-tool (Batch 6) aligns with industry standard.
-
-### 3.5 MCP (Model Context Protocol) Extensibility
-
-All three major vendor CLIs (Claude Code, Gemini CLI, Codex) now support MCP. The ecosystem has exploded to **7,260+ servers** cataloged, **1,200+ quality-verified**:
-
-- Standard protocol for adding tools without modifying agent code
-- STDIO and streaming HTTP transports
-- Key curated lists: [punkpeye/awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers), [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers) (official), [mcp-awesome.com](https://mcp-awesome.com/)
-
-**Top MCP Servers by GitHub Stars:**
-
-| Server | Stars | Category |
-|--------|-------|----------|
-| Playwright MCP (Microsoft) | ~26K | Browser automation |
-| Filesystem MCP (official) | In official repo | Local file access |
-| GitHub MCP | ~3.2K | Code management, issues, PRs |
-| Brave Search MCP | In official repo | Web search |
-| Postgres MCP | In official repo | Database access |
-| Google Drive MCP | In official repo | Cloud storage |
-| Slack MCP | In official repo | Team communication |
-| Mem0 MCP | Growing | Persistent memory |
-| Google Sheets MCP | ~620 | Structured data |
-| Linear MCP | Growing | Task management |
-
-**Strategic insight:** Goose (Block's open-source agent, 25K+ stars) went all-in on MCP and gets access to 3,000+ community servers for free. pydantic-ai has MCP client support as of late 2025.
-
-**co-cli relevance:** MCP support would let users add arbitrary tools (GitHub, Jira, Notion, etc.) without us building each integration.
-
-### 3.6 Memory Architecture Deep-Dive
-
-Production memory systems in 2026 have matured significantly:
-
-**Mem0 (production-ready memory layer):**
-- Auto-extracts "salient facts" from each conversation turn
-- Deduplicates against existing memory before storing
-- 91% lower latency and 90% token cost savings vs. full-context approaches
-- Mem0 paper (April 2025) shows 26% improvement on MemoryBench
-
-**Graphiti (Zep AI — temporal knowledge graphs):**
-- Built on Neo4j, bi-temporal model: tracks when events occurred AND when ingested
-- Hybrid retrieval: semantic embeddings + BM25 keyword + graph traversal (no LLM at query time)
-- P95 latency of 300ms, incremental updates without batch recomputation
-- Ships with an MCP server for integration with any agent
-
-**Letta/MemGPT (OS-inspired virtual context management):**
-- Treats memory like an operating system: working memory, archival memory, recall memory
-- "Heartbeat" self-calls let the agent think between tool results
-- Memory blocks are explicit, editable data structures the agent reads/writes
-
-**co-cli phased approach:**
-1. Phase 1: SQLite `memories` table (fact, source, timestamp) — keyword search
-2. Phase 2: Auto-extract facts from conversations via LLM
-3. Phase 3: Inject relevant memories into system prompt via search
-4. Phase 4: (Optional) Graduate to Graphiti for relationship-rich knowledge
-
-### 3.7 The "Morning Briefing" Pattern
-
-The single most-requested personal AI agent feature across all community surveys. A single command that aggregates:
-
-- Today's calendar events
-- Unread high-priority emails
-- Pending tasks / due items
-- Slack unreads from important channels
-- Weather
-- (Optional) Health data (sleep score, HRV) from Whoop/Apple Health
-
-**co-cli relevance:** We already have Calendar, Gmail, and Slack tools. A `co briefing` command that calls all three and formats the output is very high ROI for very low effort. This is a differentiator — none of the coding-focused CLIs (Claude Code, Gemini CLI, Codex) have this.
-
-### 3.8 Multi-Agent Warning: The 17x Error Trap
-
-Research shows adding agents has diminishing returns — coordination overhead can make multi-agent systems **17x more error-prone** than single agents if topology is not deliberately designed. Three topologies exist:
-
-1. **Centralized (Puppeteer):** One orchestrator routes to specialists. Simple, debuggable.
-2. **Decentralized (Swarm):** Peer-to-peer handoffs. Resilient but hard to debug.
-3. **Hybrid:** Orchestrator plans, specialists execute independently.
-
-**co-cli relevance:** For a personal CLI agent, a single agent with many tools is better than multi-agent until we hit clear scaling limits. Stay single-agent, invest in better tools.
+- Core set is most comparable to co-cli as a terminal coding/ops assistant.
+- Secondary set is useful for roadmap ideas (browser, cron, orchestration), but less apples-to-apples.
+- Watchlist systems are tracked for ideas but excluded from formal matrix weighting.
 
 ---
 
-## 4. Recommended Tools for co-cli Expansion
+## 3. Capability Matrix (2026-02-07 snapshot)
 
-### Tier 1: Critical Gaps (every competitor has these)
+### 3.1 Core coding CLIs
 
-| # | Tool | Description | Effort | Deps Addition |
-|---|------|-------------|--------|---------------|
-| **T1.1** | `web_search` | Search the web via Google Custom Search API or SerpAPI | Small | `search_client: Any \| None` |
-| **T1.2** | `web_fetch` | Fetch and parse a URL, return markdown content | Small | None (uses httpx + markdownify) |
-| **T1.3** | `save_memory` | Save a key-value note to persistent local storage | Small | `memory_path: Path` |
-| **T1.4** | `recall_memory` | Retrieve previously saved memories by keyword | Small | Same as above |
+| Capability | co-cli | Claude Code | Gemini CLI | Codex CLI | Copilot CLI | Aider | OpenCode | Goose |
+|------------|--------|-------------|------------|-----------|-------------|-------|----------|-------|
+| Shell execution | Yes (Docker sandbox) | Yes (`Bash`) | Yes (`run_shell_command`) | Yes | Yes | Yes (`/run`) | Yes (`bash`) | Yes (Developer extension) |
+| File read/write/edit | Partial (Obsidian + shell) | Yes (`Read/Edit/Write/MultiEdit`) | Yes (file tools) | Yes | Yes (file ops documented) | Yes (primary workflow) | Yes (`read/edit/write/patch`) | Yes (Developer extension) |
+| Web search | No | Yes (`WebSearch`) | Yes (`google_web_search`) | Yes (default cached mode since 2026-01-28) | Not as a dedicated search tool in reviewed docs | No first-class search tool in reviewed docs | Yes (`websearch`) | Via MCP/extensions |
+| Web fetch / URL content | No | Yes (`WebFetch`) | Yes (`web_fetch`) | Via web search workflow (no separate web_fetch doc tool) | Yes (`web_fetch`) | Yes (`/web` URL scrape) | Yes (`webfetch`) | Via MCP/extensions |
+| Persistent memory | No first-class memory tool | Yes (`CLAUDE.md` memory system) | Yes (`save_memory` to `~/.gemini/GEMINI.md`) | Not documented as a dedicated memory tool in reviewed docs | Yes (Copilot Memory, public preview) | Not documented as a first-class memory layer | Not documented as a first-class memory layer | Yes (Memory extension) |
+| MCP support | No | Yes | Yes | Yes | Yes (GitHub MCP preconfigured + add more) | Not documented in reviewed docs | Yes | Yes (extension model accepts MCP servers) |
+| Planning/task decomposition | Partial (model-driven; no dedicated todo tool yet) | Yes (`Task`, `TodoWrite`, subagents) | Partial (tooling + workflows; no explicit `write_todos` doc found in this refresh) | Yes (plan mode default in recent releases) | Yes (built-in agents: Explore/Task/Plan/Code-review) | Yes (`architect` mode) | Yes (Plan agent + todo tools) | Yes (`/plan`) |
+| Granular permission model | Yes (tool approvals + sandbox limits) | Yes (allow/ask/deny + modes) | Yes (confirmations + trusted folders) | Yes (approval modes + sandbox modes) | Yes (path/url permissions + trust prompts) | Partial (strong git safety; less policy-centric) | Yes (`allow/ask/deny` per tool) | Yes (mode + per-tool permissions) |
 
-**Rationale:** Web search + fetch are the #1 gap. Every single competitor (Claude Code, Gemini CLI, Codex, OpenClaw, Manus) has web access. Without these, Co can't answer questions about current events, look up documentation, or fetch URLs the user references. Memory is the #2 gap — Co forgets everything between sessions.
+### 3.2 Secondary platforms (signal only)
 
-### Tier 2: High-Value Additions (differentiation + daily utility)
-
-| # | Tool | Description | Effort | Deps Addition |
-|---|------|-------------|--------|---------------|
-| **T2.1** | `read_file` / `write_file` | Read/write local files (outside Obsidian vault) | Small | None (uses pathlib) |
-| **T2.2** | `edit_file` | String-replace editing of local files | Small | None (uses pathlib) |
-| **T2.3** | `manage_todos` | Create/update/list persistent task items | Medium | `todos_path: Path` |
-| **T2.4** | `search_github` / `create_github_issue` | Search repos, read issues, create issues via GitHub API | Medium | `github_token: str \| None` |
-| **T2.5** | `list_gmail` / `search_gmail` | Read/search inbox (complement existing `draft_email`) | Small | Uses existing `google_gmail` |
-
-**Rationale:** File operations let Co work with any file, not just Obsidian notes. Todo management enables multi-step workflows. GitHub tools connect Co to the developer's primary collaboration platform. Gmail read completes the email story (currently write-only).
-
-### Tier 3: Advanced Capabilities (future-looking)
-
-| # | Tool | Description | Effort | Deps Addition |
-|---|------|-------------|--------|---------------|
-| **T3.1** | `create_calendar_event` | Write to Google Calendar (currently read-only) | Small | Uses existing `google_calendar` |
-| **T3.2** | `schedule_task` | Cron-like scheduling for recurring tasks | Large | New scheduler subsystem |
-| **T3.3** | `browser_action` | Headless browser automation (Playwright) | Large | `browser: Any \| None` |
-| **T3.4** | MCP client support | Load external MCP servers as tool providers | Large | New MCP subsystem |
-| **T3.5** | `summarize_url` | Fetch URL + LLM summarization in one tool | Medium | Combines web_fetch + LLM call |
+| Platform | Strong signal from docs | Relevance to co-cli |
+|----------|--------------------------|---------------------|
+| Warp | Full Terminal Use, interactive code review, MCP-capable agent platform, Slack/Linear triggers, containerized remote envs | High for remote team automation patterns, medium for local-first CLI parity |
+| OpenClaw | First-class browser/web/cron/memory tooling and multi-channel automation | High for personal assistant patterns, lower for pure coding CLI parity |
 
 ---
 
-## 5. Proposed Implementation Roadmap
+## 4. Notable System Findings (source-backed)
 
-### Batch 7: Web Intelligence (highest ROI)
+### 4.1 Claude Code
 
-```
-co_cli/tools/web.py        → web_search, web_fetch
-co_cli/deps.py             → + search_api_key: str | None
-```
+- Strong built-in coding toolset with explicit permissions (`allow` / `ask` / `deny`) and multiple modes including `plan` and `bypassPermissions`.
+- Built-in web tools (`WebSearch`, `WebFetch`) and MCP support are first-class, not bolt-ons.
+- Memory model is markdown-native (`CLAUDE.md`, recursive lookup rules).
 
-- `web_search(query: str, num_results: int = 5)` — Google Custom Search JSON API or SerpAPI
-- `web_fetch(url: str)` — httpx GET → html2text/markdownify → return markdown
-- Both are read-only, low-risk, no confirmation needed
-- Config: `search_api_key` + `search_engine_id` in settings.json
+### 4.2 Gemini CLI
 
-### Batch 8: Persistent Memory
+- Built-in shell/file/web-search/web-fetch tooling and explicit `save_memory` implementation to local markdown.
+- Trusted Folders adds an explicit workspace trust boundary.
+- MCP support is deep (stdio/SSE/HTTP, discovery, CLI management, OAuth for remote servers).
 
-```
-co_cli/tools/memory.py     → save_memory, recall_memory, list_memories
-~/.local/share/co-cli/memory.json  (or SQLite)
-```
+### 4.3 OpenAI Codex CLI
 
-- `save_memory(key: str, content: str)` — save a named memory to local JSON/SQLite
-- `recall_memory(query: str)` — keyword search across saved memories
-- `list_memories()` — show all saved memory keys
-- Memories stored in XDG data dir, persist across sessions
-- Low-risk, no confirmation needed
+- Web search behavior changed recently: since **2026-01-28**, web search is enabled by default for local tasks in cached mode.
+- Clear approval and sandbox controls; MCP and skills are first-class extension mechanisms.
+- Plan mode and review workflows are actively evolving in current releases.
 
-### Batch 9: Local File Operations
+### 4.4 GitHub Copilot CLI
 
-```
-co_cli/tools/files.py      → read_file, write_file, edit_file, list_directory
-```
+- Strong control plane: path/url permissions, trust prompts, MCP (GitHub server preconfigured), custom agents.
+- `web_fetch` is built-in with URL allow/deny controls.
+- Built-in specialized agents (Explore/Task/Plan/Code-review) are a notable UX pattern.
 
-- `read_file(path: str)` — read any local file (with path traversal protection relative to CWD)
-- `write_file(path: str, content: str)` — write/create file (confirmation required)
-- `edit_file(path: str, old: str, new: str)` — string-replace edit (confirmation required)
-- `list_directory(path: str)` — list directory contents
-- Path safety: resolve paths, reject anything outside CWD or allowed directories
+### 4.5 Aider
 
-### Batch 10: Todo/Task Management
+- Remains strong on git-native editing workflow, repo-map context strategy, and architect/code/ask modes.
+- Supports URL ingestion via `/web`; scripting/headless mode is mature.
+- In reviewed docs, MCP and persistent memory are not positioned as first-class core capabilities.
 
-```
-co_cli/tools/todos.py      → add_todo, list_todos, update_todo, delete_todo
-~/.local/share/co-cli/todos.json
-```
+### 4.6 OpenCode
 
-- Simple persistent task list with status tracking (pending/in_progress/done)
-- Enables Co to decompose complex requests into trackable steps
-- Low-risk reads, confirmation for deletes
+- Very complete built-in tool surface (`bash`, file edit stack, todo tools, `webfetch`, `websearch`).
+- Fine-grained permission model is explicit and ergonomic.
+- MCP and specialized agents/subagents are integrated into the main product model.
 
-### Batch 11: GitHub Integration
+### 4.7 Goose
 
-```
-co_cli/tools/github.py     → search_github, list_issues, create_issue, list_prs
-co_cli/deps.py             → + github_token: str | None
-```
-
-- Uses PyGithub or plain httpx + GitHub REST API
-- Read operations: no confirmation. Write operations (create issue): confirmation required.
-
-### Batch 12: Gmail Read + Calendar Write
-
-```
-co_cli/tools/gmail.py      → + list_emails, search_emails, read_email
-co_cli/tools/calendar.py   → + create_calendar_event
-```
-
-- Complete the Google suite — currently Gmail is write-only and Calendar is read-only
-- Uses existing `google_gmail` and `google_calendar` deps
-
-### Future: MCP Client Support
-
-Would require a new subsystem to:
-1. Parse MCP server configs from `~/.config/co-cli/mcp.json`
-2. Launch STDIO/HTTP MCP servers at startup
-3. Dynamically register their tools with the pydantic-ai agent
-4. This is a large architectural change but would make co-cli infinitely extensible
+- MCP-native extension strategy is the central scaling mechanism.
+- Has explicit permission modes and per-tool permission controls.
+- Includes planning (`/plan`) and memory extension patterns relevant to co-cli evolution.
 
 ---
 
-## 6. Priority Ranking (Impact vs. Effort)
+## 5. Updated Gaps for co-cli
 
-```
-              High Impact
-                  │
-    Batch 7       │     Batch 11
-    (Web)         │     (GitHub)
-                  │
-    Batch 8       │     Batch 12
-    (Memory)      │     (Gmail+Cal)
-                  │
-──────────────────┼──────────────────
-                  │     Batch 10
-    Batch 9       │     (Todos)
-    (Files)       │
-                  │     MCP Client
-                  │
-              Low Impact
-   Low Effort         High Effort
-```
+### 5.1 Critical gaps (high impact, small-to-medium effort)
 
-**Recommended order:** 7 → 8 → 9 → 12 → 10 → 11 → MCP
+1. `web_search` (current events, docs discovery)
+2. `web_fetch` (URL retrieval/parsing)
+3. Local file R/W/edit tools outside Obsidian-only scope
+4. First-class persistent memory primitives (`save_memory`, `recall_memory`)
+
+### 5.2 Strategic gaps (higher effort)
+
+1. MCP client support (tool extensibility without native integrations for each service)
+2. Built-in planning/todo primitives (explicit decomposition state)
+3. Calendar write operations and richer Slack write actions (thread reply, reactions)
+
+### 5.3 Already strong (preserve)
+
+1. Docker sandbox boundary with resource controls
+2. Per-tool approval model for side-effect actions
+3. Practical Google + Slack integration baseline
 
 ---
 
-## 7. Key Architectural Decisions
+## 6. Revised Roadmap Recommendation
 
-### 7.1 Web Search: Which API?
+### Phase A: Web intelligence baseline
 
-| Option | Pros | Cons |
-|--------|------|------|
-| Google Custom Search JSON API | Same Google ecosystem, 100 free queries/day | Requires CSE setup |
-| SerpAPI | Simple, reliable, rich results | Paid ($50/mo) |
-| DuckDuckGo (ddg library) | Free, no API key | Unreliable, scraping-based |
-| Brave Search API | 2000 free queries/mo, good quality | Another API key |
+- Add `web_search(query, limit=...)`
+- Add `web_fetch(url)`
+- Apply same approval/safety posture used today for side-effect tools where needed
 
-**Recommendation:** Google Custom Search (aligns with existing Google auth) with Brave Search as fallback.
+### Phase B: General local file toolset
 
-### 7.2 Memory: JSON vs. SQLite
+- Add `read_file`, `write_file`, `edit_file`, `list_directory`
+- Enforce strict path policies (cwd-scoped + optional allowlist)
 
-| Option | Pros | Cons |
-|--------|------|------|
-| JSON file | Simple, human-readable, easy to edit | No search indexing, scales poorly |
-| SQLite | Already used for OTel, FTS5 for search | Heavier, less human-readable |
-| Graphiti (Neo4j) | Temporal knowledge graph, industry-leading | Massive dependency, overkill for v1 |
+### Phase C: Memory v1 (simple and explicit)
 
-**Recommendation:** Start with JSON (Batch 8), migrate to SQLite with FTS5 if search performance becomes an issue. Graphiti is aspirational for a v2 knowledge layer.
+- Add `save_memory`, `recall_memory`, `list_memories`
+- Start with local JSON or SQLite in XDG data dir
 
-### 7.3 File Operations: Scope & Safety
+### Phase D: MCP pilot
 
-All competitor agents (Claude Code, Gemini CLI, Codex) allow file operations within the project directory. Key safety patterns:
+- Support project/user-scoped MCP config
+- Start with stdio transport first, then remote transports
+- Reuse existing approval model for risky MCP tool calls
 
-1. **CWD-scoped:** Only allow reads/writes within CWD (like our Obsidian vault_path pattern)
-2. **Allowlist directories:** Configure additional allowed paths in settings.json
-3. **Path resolution:** Always resolve to absolute path, reject `..` traversal
-4. **Write confirmation:** All writes require human confirmation (unless auto_confirm)
+### Phase E: Planning/task UX
+
+- Add todo/task primitives (session-local first, persistent optional)
+- Keep single-agent core; avoid premature multi-agent complexity
 
 ---
 
-## 8. Community Demand Signals — What People Actually Want
+## 7. Source Quality Notes
 
-### Top 10 Most-Wanted Features (from GitHub discussions, Reddit, HN, product surveys)
-
-| Rank | Feature | Status in co-cli |
-|------|---------|-----------------|
-| 1 | "Do this on the web for me" (browser automation) | Missing |
-| 2 | "Remember that I..." (persistent memory) | Missing |
-| 3 | "What should I do today?" (task triage + calendar) | Partial (calendar read-only) |
-| 4 | "Search the web for..." (web search) | **Missing** |
-| 5 | "Summarize this webpage/PDF" (web fetch + parse) | **Missing** |
-| 6 | "Draft a response to..." (email/Slack reply) | Have email draft + Slack post |
-| 7 | "Track my spending" (finance integration) | Missing |
-| 8 | "Schedule this meeting" (calendar write) | Missing (read-only) |
-| 9 | "Run this every morning" (cron/scheduled workflows) | Missing |
-| 10 | "What did we discuss last time?" (memory recall) | Missing |
-
-### Key Insight
-
-co-cli's Google suite (Drive, Gmail, Calendar, Slack) is a **strength** that coding-focused agents don't have. But the fundamentals that ALL agents share (web search, memory, file ops) are missing. Filling these gaps first maximizes the value of the integrations we already built.
+- This refresh intentionally removed unstable claims (stars/users/market-share counts) unless needed.
+- Claims are anchored to official product docs/changelogs as of 2026-02-07.
+- For secondary/watchlist platforms (OpenClaw, Warp, Manus), feature scope is broader than coding CLI; treat as design inspiration, not parity targets.
 
 ---
 
-## 9. Sources
+## 8. Primary Sources
 
-### Competitive Analysis
-- [Claude Code Documentation](https://docs.anthropic.com/en/docs/claude-code)
-- [Gemini CLI GitHub](https://github.com/google-gemini/gemini-cli)
-- [Gemini CLI Built-in Tools](https://medium.com/google-cloud/gemini-cli-tutorial-series-part-4-built-in-tools-c591befa59ba)
-- [OpenAI Codex CLI](https://developers.openai.com/codex/cli/)
-- [OpenAI Codex Skills](https://developers.openai.com/codex/skills/)
-- [OpenClaw GitHub](https://github.com/openclaw/openclaw)
-- [OpenClaw Tools Documentation](https://docs.openclaw.ai/tools)
-- [Manus AI Architecture Analysis](https://gist.github.com/renschni/4fbc70b31bad8dd57f3370239dccd58f)
-- [Manus Context Engineering Blog](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)
-- [Warp Agents 3.0](https://www.warp.dev/blog/agents-3-full-terminal-use-plan-code-review-integration)
-- [Goose GitHub (Block)](https://github.com/block/goose)
-- [Linux Foundation Agentic AI Foundation](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-agentic-ai-foundation)
-- [OpenCode GitHub](https://github.com/opencode-ai/opencode)
-- [OpenCode Tools Docs](https://opencode.ai/docs/tools/)
-- [GitHub Copilot CLI Enhanced (Jan 2026)](https://github.blog/changelog/2026-01-14-github-copilot-cli-enhanced-agents-context-management-and-new-ways-to-install/)
-- [Aider](https://aider.chat/)
+### co-cli codebase (local)
 
-### Patterns & Architecture
-- [Context Engineering Guide 2026](https://codeconductor.ai/blog/context-engineering/)
-- [Context Engineering for Developers (Faros AI)](https://www.faros.ai/blog/context-engineering-for-developers)
-- [Graphiti Knowledge Graph Memory](https://neo4j.com/blog/developer/graphiti-knowledge-graph-memory/)
-- [Graphiti GitHub](https://github.com/getzep/graphiti)
-- [Agentic Terminal (InfoQ)](https://www.infoq.com/articles/agentic-terminal-cli-agents/)
-- [Personal AI Infrastructure (Daniel Miessler)](https://danielmiessler.com/blog/personal-ai-infrastructure)
+- `co_cli/agent.py`
+- `co_cli/main.py`
+- `co_cli/config.py`
+- `co_cli/deps.py`
+- `co_cli/tools/*`
 
-### Memory & Knowledge
-- [Mem0 Paper (April 2025)](https://arxiv.org/abs/2504.19413)
-- [Letta/MemGPT Memory Blocks](https://www.letta.com/blog/memory-blocks)
-- [Graphiti GitHub (Zep AI)](https://github.com/getzep/graphiti)
-- [Graphiti Knowledge Graph Memory (Neo4j)](https://neo4j.com/blog/developer/graphiti-knowledge-graph-memory/)
+### Claude Code (Anthropic)
 
-### MCP Ecosystem
-- [awesome-mcp-servers (punkpeye)](https://github.com/punkpeye/awesome-mcp-servers)
-- [awesome-mcp-servers (wong2)](https://github.com/wong2/awesome-mcp-servers)
-- [Official MCP Servers](https://github.com/modelcontextprotocol/servers)
-- [mcp-awesome.com](https://mcp-awesome.com/)
-- [Top MCP Servers (Builder.io)](https://www.builder.io/blog/best-mcp-servers-2026)
+- https://docs.anthropic.com/en/docs/claude-code/settings
+- https://docs.anthropic.com/en/docs/claude-code/mcp
+- https://docs.anthropic.com/en/docs/claude-code/memory
+- https://docs.anthropic.com/en/docs/claude-code/tutorials
 
-### Market & Trends
-- [AI Personal Assistants 2026 (Kairntech)](https://kairntech.com/blog/articles/ai-personal-assistants/)
-- [AI Personal Assistants 2026 (Reclaim)](https://reclaim.ai/blog/ai-assistant-apps)
-- [AI Agent Trends 2026 (Salesmate)](https://www.salesmate.io/blog/future-of-ai-agents/)
-- [Top CLI Coding Agents 2025 (DEV)](https://dev.to/forgecode/top-10-open-source-cli-coding-agents-you-should-be-using-in-2025-with-links-244m)
-- [Goose AI Agent (Block)](https://github.com/block/goose)
-- [17x Error Trap in Multi-Agent Systems](https://towardsdatascience.com/why-your-multi-agent-system-is-failing-escaping-the-17x-error-trap-of-the-bag-of-agents/)
-- [Personal AI Infrastructure (Daniel Miessler)](https://danielmiessler.com/blog/personal-ai-infrastructure)
+### Gemini CLI (Google)
+
+- https://google-gemini.github.io/gemini-cli/
+- https://google-gemini.github.io/gemini-cli/docs/tools/
+- https://google-gemini.github.io/gemini-cli/docs/tools/web-fetch.html
+- https://google-gemini.github.io/gemini-cli/docs/tools/memory.html
+- https://google-gemini.github.io/gemini-cli/docs/tools/shell.html
+- https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html
+- https://google-gemini.github.io/gemini-cli/docs/cli/trusted-folders.html
+
+### OpenAI Codex CLI
+
+- https://developers.openai.com/codex/cli
+- https://developers.openai.com/codex/cli/features
+- https://developers.openai.com/codex/changelog
+- https://developers.openai.com/codex/config-basic
+- https://developers.openai.com/codex/mcp/
+- https://developers.openai.com/codex/skills
+
+### GitHub Copilot CLI
+
+- https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli
+- https://github.blog/changelog/2026-01-14-github-copilot-cli-enhanced-agents-context-management-and-new-ways-to-install
+- https://docs.github.com/en/copilot/how-tos/use-copilot-agents/copilot-memory
+- https://docs.github.com/en/copilot/concepts/coding-agent/mcp-and-coding-agent
+
+### Aider
+
+- https://aider.chat/docs/
+- https://aider.chat/docs/usage/commands.html
+- https://aider.chat/docs/usage/modes.html
+- https://aider.chat/docs/usage/images-urls.html
+- https://aider.chat/docs/git.html
+- https://aider.chat/docs/repomap.html
+
+### OpenCode
+
+- https://opencode.ai/docs/tools/
+- https://opencode.ai/docs/permissions
+- https://opencode.ai/docs/agents/
+- https://opencode.ai/docs/mcp-servers/
+
+### Goose
+
+- https://block.github.io/goose/docs/guides/goose-permissions/
+- https://block.github.io/goose/docs/guides/managing-tools/tool-permissions/
+- https://block.github.io/goose/docs/getting-started/using-extensions/
+- https://block.github.io/goose/docs/guides/creating-plans/
+- https://block.github.io/goose/docs/mcp/memory-mcp
+
+### Warp
+
+- https://docs.warp.dev/platform/cli
+- https://docs.warp.dev/platform/cli/integrations-and-environments
+- https://docs.warp.dev/agents/full-terminal-use
+- https://docs.warp.dev/code/code-review
+- https://docs.warp.dev/code/code-review/interactive-code-review
+- https://docs.warp.dev/ambient-agents/mcp-servers-for-agents
+
+### OpenClaw
+
+- https://docs.openclaw.ai/index
+- https://docs.openclaw.ai/tools
+- https://docs.openclaw.ai/tools/web
+- https://docs.openclaw.ai/tools/browser
+- https://docs.openclaw.ai/automation/cron-jobs
+- https://docs.openclaw.ai/concepts/memory
+
+### Manus
+
+- https://manus.im/docs/features/browser-operator
+- https://manus.im/docs/integrations/mcp-connectors
+- https://open.manus.im/docs

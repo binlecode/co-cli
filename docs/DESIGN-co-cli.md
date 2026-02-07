@@ -222,6 +222,7 @@ classDiagram
         +session_id: str
         +obsidian_vault_path: Path | None
         +google_credentials_path: str | None
+        +google_creds: Any | None
         +shell_safe_commands: list[str]
         +drive_page_tokens: dict
         +sandbox_max_timeout: int
@@ -241,7 +242,7 @@ classDiagram
 **Factory Function: `get_agent()`**
 
 ```python
-def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None]:
+def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     provider_name = settings.llm_provider.lower()
     model_settings: ModelSettings | None = None
 
@@ -273,7 +274,8 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
     # ... remaining read-only tools
     agent.tool(search_calendar_events)
 
-    return agent, model_settings
+    tool_names = [fn.__name__ for fn in [run_shell_command, ..., search_calendar_events]]
+    return agent, model_settings, tool_names
 ```
 
 **System Prompt:**
@@ -391,7 +393,9 @@ class CoDeps:
     auto_confirm: bool = False
     session_id: str = ""
     obsidian_vault_path: Path | None = None
-    google_credentials_path: str | None = None  # Lazy credential resolution
+    google_credentials_path: str | None = None
+    google_creds: Any | None = field(default=None, repr=False)  # Cached credentials
+    _google_creds_resolved: bool = field(default=False, repr=False, init=False)
     shell_safe_commands: list[str] = field(default_factory=list)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     sandbox_max_timeout: int = 600
@@ -407,7 +411,7 @@ main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_credenti
     ↓
 agent.run(user_input, deps=deps) →  Agent passes deps to tool calls
     ↓
-tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_credentials_path, etc.
+tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_creds, etc.
 ```
 
 #### Multi-Session State Design (pydantic-ai pattern)
@@ -417,7 +421,7 @@ pydantic-ai separates state into three tiers:
 | Tier | Scope | Lifetime | Where | Example |
 |------|-------|----------|-------|---------|
 | **Agent config** | Process | Entire process | `Agent(...)` constructor, module constants | Model name, system prompt, tool registrations |
-| **Session deps** | Session | One REPL loop (`create_deps()` → `sandbox.cleanup()`) | `RunContext.deps` (`CoDeps`) | Sandbox handle, Google creds path, page tokens |
+| **Session deps** | Session | One REPL loop (`create_deps()` → `sandbox.cleanup()`) | `RunContext.deps` (`CoDeps`) | Sandbox handle, Google creds (lazy-cached), page tokens |
 | **Run state** | Single run | One `agent.run()` call | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
 
 **Critical invariant: mutable per-session state belongs in `CoDeps`, never in module globals.** Module-level variables are process-scoped — they persist across sessions and are shared by all concurrent sessions in the same process.
@@ -458,36 +462,35 @@ ctx.deps.drive_page_tokens[query] = []
 
 ### 4.4 Sandbox (`co_cli/sandbox.py`)
 
-Docker-based isolation for safe command execution.
+Protocol-based execution backends. Docker provides full isolation (primary); subprocess fallback when Docker is unavailable. See `docs/DESIGN-tool-shell.md` for full backend architecture.
 
 ```mermaid
 classDiagram
-    class Sandbox {
-        -_client: DockerClient
-        +image: str
-        +container_name: str
-        +workspace_dir: str
-        +network_mode: str
-        +mem_limit: str
-        +nano_cpus: int
-        +client: DockerClient
-        +ensure_container() Container
+    class SandboxProtocol {
+        <<protocol>>
+        +isolation_level: str
         +async run_command(cmd: str, timeout: int = 120) str
         +cleanup()
     }
 
-    class DockerContainer {
-        +status: str
-        +start()
-        +stop()
-        +remove()
-        +exec_run(cmd, workdir) tuple
+    class DockerSandbox {
+        +isolation_level = "full"
+        -_client: DockerClient
+        +image: str
+        +container_name: str
+        +workspace_dir: str
     }
 
-    Sandbox --> DockerContainer : manages
+    class SubprocessBackend {
+        +isolation_level = "none"
+        +workspace_dir: str
+    }
+
+    SandboxProtocol <|.. DockerSandbox
+    SandboxProtocol <|.. SubprocessBackend
 ```
 
-**Container Configuration:**
+**Docker backend (full isolation):**
 - **Image:** `co-cli-sandbox` (configurable via `CO_CLI_DOCKER_IMAGE`)
 - **Name:** `co-runner-{session_id[:8]}` (unique per session)
 - **Volume:** Current working directory → `/workspace` (read-write)
@@ -495,10 +498,14 @@ classDiagram
 - **Security:** `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, `user=1000:1000`
 - **Resources:** Configurable `network_mode`, `mem_limit`, `nano_cpus`
 
+**Subprocess backend (no isolation):**
+- Fallback when Docker is unavailable. Uses `restricted_env()` and `kill_process_tree()`.
+- All commands require explicit approval (safe-prefix auto-approval disabled).
+
 **Lifecycle:**
-1. On first tool call: Create container if not exists
-2. On subsequent calls: Reuse existing container
-3. On CLI exit: Container remains for reuse (manual cleanup via `sandbox.cleanup()`)
+1. On first tool call: Create container (Docker) or subprocess
+2. On subsequent calls: Reuse existing container (Docker); fresh subprocess per command
+3. On CLI exit: `sandbox.cleanup()` stops/removes container
 
 ### 4.5 CLI (`co_cli/main.py`)
 
@@ -540,9 +547,9 @@ The chat loop has three responsibilities:
 
 ```
 chat_loop():
-    agent, model_settings = get_agent()
+    agent, model_settings, tool_names = get_agent()
     deps = create_deps()
-    info = get_status(tool_count=len(agent._function_toolset.tools))
+    info = get_status(tool_count=len(tool_names))
     display_welcome_banner(info)
     message_history = []
 
@@ -641,7 +648,7 @@ class CommandContext:
     message_history: list[Any]
     deps: Any          # CoDeps
     agent: Any         # Agent[CoDeps, ...]
-    tool_count: int
+    tool_names: list[str]
 
 @dataclass(frozen=True)
 class SlashCommand:
@@ -665,7 +672,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
 |---------|---------|--------|
 | `/help` | `_cmd_help` | Print table of all commands from `COMMANDS` |
 | `/clear` | `_cmd_clear` | Returns `[]` — empties conversation history |
-| `/status` | `_cmd_status` | Calls `get_status()`, renders same table as `co status` |
+| `/status` | `_cmd_status` | Calls `get_status()` + `render_status_table()` — same output as `co status` |
 | `/tools` | `_cmd_tools` | Numbered list of registered agent tool names |
 | `/history` | `_cmd_history` | Counts `ModelRequest` messages, shows turn/message totals |
 | `/compact` | `_cmd_compact` | Calls `agent.run()` with summarization prompt, returns compacted history |
@@ -677,7 +684,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
 if user_input.startswith("/"):
     cmd_ctx = CommandContext(
         message_history=message_history, deps=deps,
-        agent=agent, tool_count=len(agent._function_toolset.tools),
+        agent=agent, tool_names=tool_names,
     )
     handled, new_history = await dispatch_command(user_input, cmd_ctx)
     if handled:
@@ -862,11 +869,11 @@ Agent-level `retries=settings.tool_retries` (default 3, configurable via `CO_CLI
 
 ### 5.2 Shell Tool (`co_cli/tools/shell.py`)
 
-Uses `RunContext[CoDeps]` + `requires_approval=True`. Approval is handled by the chat loop via `DeferredToolRequests`, not inside the tool. See `docs/DESIGN-tool-shell-sandbox.md` for sandbox details.
+Uses `RunContext[CoDeps]` + `requires_approval=True`. Approval is handled by the chat loop via `DeferredToolRequests`, not inside the tool. See `docs/DESIGN-tool-shell.md` for sandbox details.
 
 ```python
 async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> str:
-    """Execute a shell command in a sandboxed Docker container.
+    """Execute a shell command in the sandbox (Docker or subprocess fallback).
 
     Args:
         cmd: The shell command to execute.
@@ -900,11 +907,11 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
 
 ### 5.4 Drive Tool (`co_cli/tools/google_drive.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Credentials are resolved lazily on first call via `get_cached_google_creds(ctx.deps.google_credentials_path)`, then the API service is built inline.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Credentials are resolved lazily on first call via `get_cached_google_creds(ctx.deps)` — cached on the `CoDeps` instance for session lifecycle. The API service is built inline.
 
 ```python
 def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
-    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry("Google Drive not configured. ...")
     service = build("drive", "v3", credentials=creds)
@@ -913,11 +920,11 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
 
 ### 5.5 Gmail Tool (`co_cli/tools/google_gmail.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern. `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval. See `docs/DESIGN-tool-google.md` for full design.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern (`get_cached_google_creds(ctx.deps)`). `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval. See `docs/DESIGN-tool-google.md` for full design.
 
 ### 5.6 Calendar Tool (`co_cli/tools/google_calendar.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern. Read-only, no confirmation needed. See `docs/DESIGN-tool-google.md` for full design.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern (`get_cached_google_creds(ctx.deps)`). Read-only, no confirmation needed. See `docs/DESIGN-tool-google.md` for full design.
 
 ### 5.7 Slack Tool (`co_cli/tools/slack.py`)
 
@@ -951,14 +958,12 @@ def ensure_google_credentials(credentials_path, scopes) -> Credentials | None:
 def get_google_credentials(credentials_path, scopes) -> Credentials | None:
     # Non-interactive: explicit path → ADC fallback → None (for tests/CI)
 
-def get_cached_google_creds(credentials_path) -> Credentials | None:
-    # Module-level cache: resolves once on first call via ensure_google_credentials()
+def get_cached_google_creds(deps: CoDeps) -> Credentials | None:
+    # Caches on deps instance: resolves once on first call via ensure_google_credentials()
     # All Google tools call this — avoids re-prompting for auth
 ```
 
-**Runtime flow:** Tools call `get_cached_google_creds(ctx.deps.google_credentials_path)` → credentials are resolved once, cached at module level → tools build API service objects inline with `build("drive", "v3", credentials=creds)`.
-
-**Note:** The module-level cache (`_cached_creds`) is a known deviation from the session-isolation invariant (see §4.3). Tracked for migration to `CoDeps`.
+**Runtime flow:** Tools call `get_cached_google_creds(ctx.deps)` → credentials are resolved once, cached on the `CoDeps` instance (`deps.google_creds` / `deps._google_creds_resolved`) → tools build API service objects inline with `build("drive", "v3", credentials=creds)`. Cache follows session lifecycle — no module-level globals.
 
 **Cloud Tool Summary:**
 
@@ -1209,7 +1214,7 @@ Side-effectful tools are registered with `requires_approval=True`. When the LLM 
 
 **`ToolCallPart.args` type handling:** pydantic-ai's `ToolCallPart.args` is typed `str | dict[str, Any] | None`. Some model providers send args as a JSON string rather than a parsed dict. The approval prompt formatter must handle all three variants (`json.loads` for `str`, `{}` for `None`) before calling `.items()`.
 
-**Safe-command auto-approval:** Shell commands matching a configurable safe-prefix list (`shell_safe_commands` in Settings/CoDeps) are auto-approved silently, skipping the `[y/n/a]` prompt. This is a UX convenience, not a security boundary — the Docker sandbox is the security layer. The `_is_safe_command()` helper in `_approval.py` checks prefix match and rejects shell chaining operators (`;`, `&&`, `||`, `|`, `` ` ``, `$(`) to force approval on composed commands.
+**Safe-command auto-approval:** Shell commands matching a configurable safe-prefix list (`shell_safe_commands` in Settings/CoDeps) are auto-approved silently, skipping the `[y/n/a]` prompt. Only active when `isolation_level != "none"` — subprocess fallback requires approval for all commands. This is a UX convenience, not a security boundary — the sandbox is the security layer. The `_is_safe_command()` helper in `_approval.py` checks prefix match and rejects shell operators (`;`, `&`, `|`, `>`, `<`, `` ` ``, `$(`, `\n`) to force approval on composed, redirected, or backgrounded commands. Single-char matching catches doubled forms (`&&`, `>>`, `<<`, `||`).
 
 **Approval classification:**
 
@@ -1359,13 +1364,13 @@ def test_sandbox_execution():
 | Module | Purpose |
 |--------|---------|
 | `main.py` | CLI entry point, chat loop, `_handle_approvals()`, OTel setup |
-| `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
+| `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt. Returns `(agent, model_settings, tool_names)` |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` (Pydantic BaseModel) from `settings.json` + env vars |
-| `sandbox.py` | Docker wrapper — persistent container, CWD mount, command execution |
+| `sandbox.py` | `SandboxProtocol` + backends (Docker, subprocess fallback) |
 | `telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
-| `display.py` | Themed Rich Console, semantic styles, display helpers |
-| `status.py` | `StatusInfo` dataclass + `get_status()` — pure-data environment/health probes |
+| `display.py` | Themed Rich Console, `set_theme()` for runtime switching, semantic styles, display helpers |
+| `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` — health probes and shared table rendering |
 | `banner.py` | ASCII art welcome banner, consumes `StatusInfo` for display |
 | `_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
 | `tail.py` | Real-time span viewer (`co tail`) |

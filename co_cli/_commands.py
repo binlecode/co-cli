@@ -20,7 +20,7 @@ class CommandContext:
     message_history: list[Any]
     deps: Any  # CoDeps — typed as Any to avoid circular import
     agent: Any  # Agent[CoDeps, ...] — same reason
-    tool_count: int
+    tool_names: list[str]
 
 
 @dataclass(frozen=True)
@@ -56,34 +56,16 @@ async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
 
 async def _cmd_status(ctx: CommandContext, args: str) -> None:
     """Show system health (same as `co status`)."""
-    from rich.table import Table
+    from co_cli.status import get_status, render_status_table
 
-    from co_cli.config import settings
-    from co_cli.status import get_status
-
-    info = get_status(tool_count=ctx.tool_count)
-
-    table = Table(title=f"Co System Status (Provider: {info.llm_provider})")
-    table.add_column("Component", style="cyan")
-    table.add_column("Status", style="magenta")
-    table.add_column("Details", style="green")
-
-    table.add_row("LLM", info.llm_status.title(), info.llm_provider)
-    table.add_row("Docker", info.docker.title(), "Sandbox runtime")
-    table.add_row("Google", info.google.title(), info.google_detail)
-    table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
-    table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
-    table.add_row("Database", "Active", info.db_size)
-    if info.project_config:
-        table.add_row("Project Config", "Active", info.project_config)
-
-    console.print(table)
+    info = get_status(tool_count=len(ctx.tool_names))
+    console.print(render_status_table(info))
     return None
 
 
 async def _cmd_tools(ctx: CommandContext, args: str) -> None:
     """List registered agent tools."""
-    tools = sorted(ctx.agent._function_toolset.tools.keys())
+    tools = sorted(ctx.tool_names)
     lines = [f"  [accent]{i + 1}.[/accent] {name}" for i, name in enumerate(tools)]
     console.print(f"[info]Registered tools ({len(tools)}):[/info]")
     console.print("\n".join(lines))

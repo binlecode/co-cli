@@ -7,7 +7,7 @@
 
 The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list and search events). All tools use the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors. Authentication is centralized in `co_cli/google_auth.py`.
 
-**Key design decision:** Credentials are resolved lazily on first Google tool call via `get_cached_google_creds()`. Each tool builds its own API service object inline from cached credentials. Tools never import `settings` — they access the credentials path via `ctx.deps.google_credentials_path`.
+**Key design decision:** Credentials are resolved lazily on first Google tool call via `get_cached_google_creds(ctx.deps)`, cached on the `CoDeps` instance for session lifecycle. Each tool builds its own API service object inline from cached credentials. Tools never import `settings` — they access credentials via `ctx.deps`.
 
 ---
 
@@ -34,8 +34,8 @@ The Google tools provide agent access to three Google Cloud services: Drive (sea
 │                                                                  │
 │  tool(ctx: RunContext[CoDeps], ...)                              │
 │    │                                                             │
-│    ├── creds = get_cached_google_creds(                          │
-│    │       ctx.deps.google_credentials_path)                     │
+│    ├── creds = get_cached_google_creds(ctx.deps)                  │
+│    │       # cached on CoDeps instance, resolved once             │
 │    ├── if not creds: raise ModelRetry("Not configured")          │
 │    ├── service = build("drive", "v3", credentials=creds)         │
 │    └── service.files().list(...).execute()                       │
@@ -57,12 +57,12 @@ The Google tools provide agent access to three Google Cloud services: Drive (sea
 
 ## Google Auth (`co_cli/google_auth.py`)
 
-Three infrastructure functions: `ensure_google_credentials()` for interactive auto-setup, `get_google_credentials()` for non-interactive use (tests/CI), and `get_cached_google_creds()` as a module-level cache that resolves once on first call. Lives at package root, not in `tools/` — it's infrastructure, not a tool.
+Three infrastructure functions: `ensure_google_credentials()` for interactive auto-setup, `get_google_credentials()` for non-interactive use (tests/CI), and `get_cached_google_creds()` which caches on the `CoDeps` instance (resolved once on first call). Lives at package root, not in `tools/` — it's infrastructure, not a tool.
 
 ```
 ensure_google_credentials(credentials_path, scopes) -> Credentials | None  # interactive
 get_google_credentials(credentials_path, scopes) -> Credentials | None     # non-interactive
-get_cached_google_creds(credentials_path) -> Credentials | None            # cached, used by all tools
+get_cached_google_creds(deps: CoDeps) -> Credentials | None               # cached on deps, used by all tools
 ```
 
 ### Constants
@@ -140,19 +140,23 @@ get_google_credentials(credentials_path, scopes)
 ### Credential Cache
 
 ```
-get_cached_google_creds(credentials_path)
+get_cached_google_creds(deps: CoDeps)
        │
        ▼
 ┌──────────────────────────────────────┐
-│ Already resolved (_cached_creds_     │
-│ loaded)?                             │
-│   ├── Yes ──▶ Return _cached_creds   │
+│ Already resolved                     │
+│ (deps._google_creds_resolved)?       │
+│   ├── Yes ──▶ Return deps.google_    │
+│   │           creds                  │
 │   └── No  ──▶ ensure_google_         │
-│                credentials(path,     │
-│                ALL_GOOGLE_SCOPES)    │
-│                Cache + return result │
+│                credentials(deps.     │
+│                google_credentials_   │
+│                path, ALL_SCOPES)     │
+│                Store on deps, return │
 └──────────────────────────────────────┘
 ```
+
+Cache is stored on the `CoDeps` instance (`deps.google_creds` / `deps._google_creds_resolved`), not module globals — follows session lifecycle per the §4.3 invariant.
 
 Tools then build API service objects inline: `service = build("drive", "v3", credentials=creds)`. This is cheap — `build()` returns a lightweight proxy, no network call.
 
@@ -165,7 +169,7 @@ gcloud auth application-default login \
   --scopes='https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar.readonly'
 ```
 
-`create_deps()` calls `ensure_google_credentials()` once with all scopes combined, then builds three services from the same credentials. The interactive flow automatically passes scopes to `gcloud auth application-default login`.
+`get_cached_google_creds(deps)` calls `ensure_google_credentials()` once with all scopes combined on first tool call, caches on the deps instance. The interactive flow automatically passes scopes to `gcloud auth application-default login`.
 
 ### Design Decisions
 
@@ -178,7 +182,7 @@ gcloud auth application-default login \
 | ADC copied to `GOOGLE_TOKEN_PATH` | Isolation — co-cli credentials won't be overwritten by other gcloud commands |
 | `ALL_GOOGLE_SCOPES` in `google_auth.py` | Single source of truth for scopes (was duplicated in `main.py`) |
 | Combined scopes in one auth call | `authorized_user` tokens are scoped at login time (all-or-nothing) |
-| Module-level credential cache | Resolved once on first tool call, avoids re-prompting |
+| Credential cache on CoDeps instance | Resolved once on first tool call, follows session lifecycle, no module globals |
 | `Any` return type | `googleapiclient` has no typed stubs |
 | Package root, not `tools/` | Auth is infrastructure shared across multiple tools |
 
@@ -204,6 +208,8 @@ gcloud auth application-default login \
 │ CoDeps dataclass                                                 │
 │                                                                  │
 │   google_credentials_path: str | None = None                     │
+│   google_creds: Any | None = field(default=None, repr=False)     │
+│   _google_creds_resolved: bool = field(default=False, init=False)│
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
             │
@@ -211,8 +217,7 @@ gcloud auth application-default login \
 ┌──────────────────────────────────────────────────────────────────┐
 │ Tool functions resolve credentials lazily                        │
 │                                                                  │
-│   creds = get_cached_google_creds(ctx.deps.google_credentials_  │
-│           path)                                                  │
+│   creds = get_cached_google_creds(ctx.deps)                      │
 │   service = build("drive", "v3", credentials=creds)              │
 │   service = build("gmail", "v1", credentials=creds)              │
 │   service = build("calendar", "v3", credentials=creds)           │
@@ -223,7 +228,7 @@ gcloud auth application-default login \
 **Why lazy resolution, not startup?**
 - Avoids blocking startup with interactive `gcloud auth` if creds are missing
 - Google tools may never be called in a given session
-- `get_cached_google_creds()` caches at module level — resolved once, reused across calls
+- `get_cached_google_creds()` caches on CoDeps instance — resolved once, follows session lifecycle
 
 ---
 

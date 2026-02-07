@@ -1,11 +1,13 @@
-# Design: Shell Tool & Docker Sandbox
+# Design: Shell Tool & Sandbox
 
-**Status:** Implemented (Batch 1)
-**Last Updated:** 2026-02-06
+**Status:** Implemented (Batch 1). No-sandbox fallback (Docker / subprocess) MVP in TODO — see `docs/TODO-shell-safety.md` §2.
+**Last Updated:** 2026-02-07
 
 ## Overview
 
-The shell tool executes user commands in a sandboxed Docker container, protecting the host system from potentially destructive operations while maintaining access to the user's working directory.
+The shell tool executes user commands in an isolated execution environment, protecting the host system from potentially destructive operations while maintaining access to the user's working directory.
+
+The sandbox uses a protocol-based backend architecture — Docker provides full isolation (MVP), with a subprocess fallback for environments without Docker. The tool and its callers are backend-agnostic: they interact through a shared protocol (`run_command` + `cleanup`). Post-MVP: macOS Seatbelt jail can be added behind the protocol with zero caller changes.
 
 ---
 
@@ -375,6 +377,59 @@ Scenario: LLM runs "rm -rf /"
 
 ---
 
+## Backend Architecture
+
+Design informed by cross-system research of Codex CLI, Gemini CLI, OpenCode, Claude Code, and Aider. See `TODO-shell-safety.md` §2 for research details and MVP implementation plan.
+
+### Best practices from top systems
+
+1. **Environment sanitization blocks CVE-2025-66032 vectors.** Variables like `MANPAGER`, `PAGER`, `GIT_EDITOR`, `LD_PRELOAD`, `BASH_ENV` enable code execution through otherwise-safe commands. Gemini CLI and Codex both sanitize these. All non-Docker backends must apply a shared env blocklist via `restricted_env()`.
+
+2. **Process group killing, not single-process killing.** OpenCode and Gemini CLI kill process trees via `os.killpg()` with SIGTERM → 200ms → SIGKILL. A `sh -c` wrapper creates children; killing only the lead process leaves orphans.
+
+3. **When no sandbox exists, the approval flow IS the security layer.** The mainstream no-sandbox systems (OpenCode, Gemini CLI) require explicit approval for all commands. Safe-prefix auto-approval is disabled without isolation.
+
+### Isolation levels
+
+| Level | Backend | Safe-prefix auto-approve | Approval prompt |
+|-------|---------|-------------------------|-----------------|
+| `"full"` | Docker | Yes | `[y/n/a]` |
+| `"none"` | Subprocess | No — all commands require approval | `[y/n/a]` |
+
+### Shared infrastructure
+
+**`restricted_env()`** — strips dangerous env vars, forces `PAGER=cat`, `GIT_PAGER=cat`. Used by subprocess backend. Docker doesn't need it (clean container env).
+
+**`kill_process_tree()`** — `os.killpg()` with SIGTERM → 200ms → SIGKILL. Used by subprocess backend on timeout. Docker handles cleanup through container exec.
+
+### Backend: Docker (full isolation)
+
+Current implementation. See Container Configuration table for hardening details.
+
+### Backend: Subprocess (no isolation)
+
+Fallback when Docker is unavailable. Simple `asyncio.create_subprocess_exec("sh", "-c", cmd)` with `restricted_env()`, `start_new_session=True`, and process group killing on timeout. No filesystem, network, or capability isolation.
+
+Security relies on the approval flow: every command requires explicit user approval. Safe-prefix auto-approval is disabled when `isolation_level == "none"`.
+
+### Auto-detection
+
+`create_deps()` resolves the backend based on `sandbox_backend` setting (`"auto"` / `"docker"` / `"subprocess"`). In `"auto"` mode: try Docker first (ping daemon), fall back to subprocess with warning. In `"docker"` mode: fail hard if unavailable.
+
+### Post-MVP backends
+
+The `SandboxProtocol` abstraction makes these zero-caller-change additions:
+
+- **macOS Seatbelt** (`isolation_level = "jail"`) — static `.sb` profile with `-D` parameter flags (Codex + Gemini pattern). Both ship this as automatic macOS fallback.
+- **Protected subpaths** — `.git` and `.co-cli` read-only Docker volume mounts (Codex pattern). Prevents git hook injection.
+- **Pattern learning approval** — `p` response to always-allow a root command prefix for the session (OpenCode + Gemini pattern, ~71 LOC).
+
+### Status banner
+
+The active backend and isolation level are reported in the welcome banner and `/status` output.
+
+---
+
 ## Configuration
 
 ### Settings
@@ -383,6 +438,7 @@ Scenario: LLM runs "rm -rf /"
 |---------|---------|--------------|-------------|
 | `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Container image |
 | `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip prompts |
+| `sandbox_backend` | `"auto"` | `CO_CLI_SANDBOX_BACKEND` | Backend selection: `"auto"` / `"docker"` / `"subprocess"` |
 | `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Hard ceiling for per-command timeout (seconds) |
 | `sandbox_network` | `"none"` | `CO_CLI_SANDBOX_NETWORK` | Container network mode (`"none"` or `"bridge"`) |
 | `sandbox_mem_limit` | `"1g"` | `CO_CLI_SANDBOX_MEM_LIMIT` | Container memory limit (Docker format) |
@@ -551,9 +607,11 @@ No approval prompt: the user explicitly typed the command, which is itself the a
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/shell.py` | Tool function — delegates to sandbox, `ModelRetry` on error, LLM-visible `timeout` param |
-| `co_cli/sandbox.py` | Docker container lifecycle, async command execution with dual-layer timeout |
+| `co_cli/sandbox.py` | Sandbox protocol + Docker backend. MVP adds subprocess backend |
+| `co_cli/_approval.py` | Safe-command classification for auto-approval |
+| `co_cli/_sandbox_env.py` | MVP: shared `restricted_env()` and `kill_process_tree()` for subprocess backend |
 | `co_cli/deps.py` | CoDeps dataclass — holds sandbox instance and `sandbox_max_timeout` ceiling |
-| `co_cli/config.py` | `sandbox_max_timeout` setting (env: `CO_CLI_SANDBOX_MAX_TIMEOUT`) |
+| `co_cli/config.py` | `sandbox_backend`, `sandbox_max_timeout`, and other sandbox settings |
 | `Dockerfile.sandbox` | Custom image build (python:3.12-slim + dev tools) |
 | `scripts/e2e_timeout.py` | E2E test — LLM edits and runs a script, exercises full timeout pipeline |
 
@@ -570,3 +628,10 @@ No approval prompt: the user explicitly typed the command, which is itself the a
 | Resource limits | `mem_limit=1g`, 1 CPU, `pids_limit=256` | Done |
 | Network isolation | `network_mode="none"` default, configurable to `"bridge"` | Done |
 | Privilege hardening | `cap_drop=ALL`, `no-new-privileges`, non-root `1000:1000` | Done |
+| Safe-prefix whitelist | Auto-approve read-only commands; chaining operator rejection | Done |
+| Subprocess fallback | Sandbox protocol + subprocess backend with auto-detection | MVP TODO |
+| Env sanitization | `restricted_env()` blocklist for CVE-2025-66032 vectors | MVP TODO |
+| Process group kill | `kill_process_tree()` via `os.killpg()` with SIGTERM→SIGKILL | MVP TODO |
+| Protected subpaths | `.git` and `.co-cli` read-only Docker volume mounts | Post-MVP |
+| macOS Seatbelt jail | `sandbox-exec` with static `.sb` profile | Post-MVP |
+| Pattern learning approval | `p` response for session-scoped command prefix learning | Post-MVP |

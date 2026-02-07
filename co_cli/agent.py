@@ -19,7 +19,7 @@ from co_cli.tools.slack import (
 )
 
 
-def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None]:
+def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
     Supports 'ollama' and 'gemini' (default) via config.
@@ -118,4 +118,14 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
     agent.tool(get_slack_thread_replies)
     agent.tool(list_slack_users)
 
-    return agent, model_settings
+    tool_names = [
+        run_shell_command.__name__, draft_email.__name__, post_slack_message.__name__,
+        search_notes.__name__, list_notes.__name__, read_note.__name__,
+        search_drive.__name__, read_drive_file.__name__,
+        list_emails.__name__, search_emails.__name__,
+        list_calendar_events.__name__, search_calendar_events.__name__,
+        list_slack_channels.__name__, get_slack_channel_history.__name__,
+        get_slack_thread_replies.__name__, list_slack_users.__name__,
+    ]
+
+    return agent, model_settings, tool_names

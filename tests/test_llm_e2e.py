@@ -13,7 +13,7 @@ async def test_agent_e2e_gemini():
     if os.getenv("LLM_PROVIDER") != "gemini":
         return  # Not targeting Gemini this run
 
-    agent, model_settings = get_agent()
+    agent, model_settings, _ = get_agent()
     try:
         result = await agent.run("Reply with exactly 'OK'.", model_settings=model_settings)
         assert "OK" in result.output
@@ -55,7 +55,7 @@ async def test_agent_e2e_ollama():
     if os.getenv("LLM_PROVIDER") != "ollama":
         return  # Not targeting Ollama this run
 
-    agent, model_settings = get_agent()
+    agent, model_settings, _ = get_agent()
     try:
         result = await agent.run("Reply with exactly 'OK'.", model_settings=model_settings)
         assert "OK" in result.output

@@ -45,7 +45,7 @@ _THEMES = {
 console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
 ```
 
-This is idiomatic Rich. Since `settings` is a module-level singleton resolved once at startup (env > settings.json > defaults), the theme is fixed for the process lifetime — no runtime theme switching needed, so binding at construction is fine. All modules that import `console` share the same themed instance.
+This is idiomatic Rich. The console is created at import time with the default theme from `settings.theme`. When `--theme` is passed at the CLI, `set_theme(name)` calls `console.push_theme(Theme(...))` to switch at runtime before the chat loop starts. All modules that import `console` share the same themed instance.
 
 ### Theme-aware ASCII art banner
 
@@ -95,8 +95,6 @@ All other `console.print()` calls in the chat loop remain as inline Rich markup 
 
 | Role | Dark | Light | Usage |
 |------|------|-------|-------|
-| Role | Dark | Light | Usage |
-|------|------|-------|-------|
 | `status` | yellow | dark_orange | Status messages, thinking indicator |
 | `info` | cyan | blue | Informational messages |
 | `accent` | bold cyan | bold blue | Banner art, panel borders, emphasis |
@@ -104,6 +102,7 @@ All other `console.print()` calls in the chat loop remain as inline Rich markup 
 | `shell` | dim | dim | Shell output panel borders |
 | `error` | bold red | bold red | Error messages (same both themes) |
 | `success` | green | green | Success confirmation (same both themes) |
+| `warning` | orange3 | orange3 | Warnings (same both themes) |
 | `hint` | dim | dim | Secondary text, exit instructions |
 
 Roles with the same value in both themes (error, success, hint, shell) could use inline Rich markup directly, but registering them in the theme keeps all style definitions in one place and allows per-theme customization later.
@@ -118,6 +117,7 @@ Central display module. Owns the shared console, color definitions, indicators, 
 
 - `_THEMES` — theme-keyed style dict, two variants (dark/light)
 - `console` — single `Console(theme=Theme(...))` instance, imported by all modules that produce terminal output
+- `set_theme(name)` — switches the console theme at runtime via `console.push_theme()` (called from `main.py` when `--theme` flag is supplied)
 - `PROMPT_CHAR`, `BULLET`, `SUCCESS`, `ERROR`, `INFO` — Unicode indicator constants
 - `display_status(message, style?)` — themed bullet + message
 - `display_error(message, hint?)` — red-bordered Panel with error icon and optional recovery hint
@@ -145,14 +145,14 @@ Settings model extended with `theme` field.
 ### `main.py`
 
 ```python
-from co_cli.display import console, PROMPT_CHAR
+from co_cli.display import console, set_theme, PROMPT_CHAR
 from co_cli.banner import display_welcome_banner
 ```
 
 - `console` replaces the old module-level `Console()`
 - `display_welcome_banner(model_info)` replaces the old two `console.print()` banner lines
 - `f"Co {PROMPT_CHAR} "` replaces `"Co > "` as the REPL prompt
-- `--theme` / `-t` flag on the `chat` command overrides `settings.theme` at runtime
+- `--theme` / `-t` flag on the `chat` command calls `set_theme(theme)` then `settings.theme = theme` before the chat loop
 - Core loop `console.print()` calls are unchanged — inline markup preserved
 
 ### `tools/_confirm.py`

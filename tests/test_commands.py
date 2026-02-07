@@ -18,7 +18,7 @@ from co_cli._commands import dispatch, CommandContext, COMMANDS
 
 def _make_ctx(message_history: list | None = None) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
-    agent, _ = get_agent()
+    agent, _, tool_names = get_agent()
     deps = CoDeps(
         sandbox=Sandbox(container_name="co-test-commands"),
         auto_confirm=False,
@@ -28,13 +28,13 @@ def _make_ctx(message_history: list | None = None) -> CommandContext:
         message_history=message_history or [],
         deps=deps,
         agent=agent,
-        tool_count=len(agent._function_toolset.tools),
+        tool_names=tool_names,
     )
 
 
 def _make_agent_and_deps(container_name: str = "co-test-approval"):
     """Build a real agent + deps for approval flow tests."""
-    agent, model_settings = get_agent()
+    agent, model_settings, _ = get_agent()
     deps = CoDeps(
         sandbox=Sandbox(container_name=container_name),
         auto_confirm=False,
@@ -124,7 +124,7 @@ async def test_cmd_status():
 async def test_cmd_tools():
     """/tools returns None, and context has tools registered."""
     ctx = _make_ctx()
-    assert ctx.tool_count > 0
+    assert len(ctx.tool_names) > 0
     handled, new_history = await dispatch("/tools", ctx)
     assert handled is True
     assert new_history is None
@@ -325,6 +325,16 @@ def test_safe_command_chaining_rejected():
     assert _is_safe_command("ls | wc -l", _SAFE_LIST) is False
     assert _is_safe_command("echo `whoami`", _SAFE_LIST) is False
     assert _is_safe_command("echo $(whoami)", _SAFE_LIST) is False
+    # Backgrounding
+    assert _is_safe_command("ls & rm -rf /", _SAFE_LIST) is False
+    # Output redirection
+    assert _is_safe_command("ls > /tmp/out", _SAFE_LIST) is False
+    assert _is_safe_command("ls >> /tmp/out", _SAFE_LIST) is False
+    # Input redirection / heredoc
+    assert _is_safe_command("sort < /etc/passwd", _SAFE_LIST) is False
+    assert _is_safe_command("cat << EOF", _SAFE_LIST) is False
+    # Embedded newline
+    assert _is_safe_command("ls\nrm -rf /", _SAFE_LIST) is False
 
 
 def test_safe_command_empty_list():

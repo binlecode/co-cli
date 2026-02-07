@@ -45,7 +45,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
 - **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
-- **Display**: All terminal output goes through `co_cli.display.console` (themed Rich Console). Use semantic style names (`status`, `info`, `success`, `error`, `hint`, `accent`, `yolo`) — never hardcode color names at callsites
+- **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites. See `docs/DESIGN-theming-ascii.md` for style inventory and theme architecture
 
 ## Testing Policy
 
@@ -55,6 +55,10 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - Framework: `pytest` + `pytest-asyncio`
 - Docker must be running for shell/sandbox tests
 - Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` env var for LLM E2E tests
+
+## Design Principles
+
+- **Best practice + MVP**: When researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design for MVP first — ship the smallest thing that solves the user problem. Use protocols/abstractions so post-MVP enhancements require zero caller changes.
 
 ## Anti-Patterns
 
@@ -69,7 +73,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 ### Design (architecture and implementation details, kept in sync with code)
 - `docs/DESIGN-co-cli.md` — Overall architecture, processing flows, approval pattern, security model
 - `docs/DESIGN-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
-- `docs/DESIGN-tool-shell-sandbox.md` — Docker sandbox design
+- `docs/DESIGN-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
 - `docs/DESIGN-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-tool-slack.md` — Slack tool design
@@ -78,7 +82,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/DESIGN-theming-ascii.md` — Theming, ASCII art banner, display helpers
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-approval-flow.md` — Shell safe-prefix whitelist (partially implemented: `_approval.py`, `shell_safe_commands`)
+- `docs/TODO-shell-safety.md` — Shell execution safety: safe-prefix whitelist (done), no-sandbox fallback (MVP scoped)
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
 - `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
@@ -89,3 +93,15 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
+
+## Reference Repos (local, for design research)
+
+Peer CLI tools cloned in `~/workspace_genai/` for studying shell safety, approval flows, sandbox designs, and UX patterns:
+
+| Repo | Language | Key files for shell safety / approval |
+|------|----------|--------------------------------------|
+| `codex` | Rust | `codex-rs/core/src/command_safety/` — deepest: tokenizes cmds, inspects flags, recursive shell wrapper parsing. Also `codex-rs/linux-sandbox/src/bwrap.rs` — vendored bubblewrap |
+| `gemini-cli` | TypeScript | `tools.allowed` prefix matching in settings, tool executor middleware |
+| `opencode` | Go | Multi-provider, flexible model switching |
+| `claude-code` | TypeScript | `packages/core/src/scheduler/policy.ts` — hook-based permission engine; `packages/cli/src/config/settings.ts` — allow/deny rules (post-CVE-2025-66032); `packages/core/src/utils/sandbox.ts` |
+| `aider` | Python | Simplest model — no sandbox, `io.confirm_ask()` for everything; proves you can ship without a sandbox if approval gate is strict |

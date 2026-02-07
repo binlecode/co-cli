@@ -9,8 +9,8 @@ from co_cli.config import settings
 # -- Theme palettes (keyed by theme name) ------------------------------------
 
 _THEMES: dict[str, dict[str, str]] = {
-    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim"},
-    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim"},
+    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim"},
+    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim"},
 }
 
 # -- Console (single instance, themed) --------------------------------------
@@ -24,6 +24,14 @@ BULLET      = "▸"
 SUCCESS     = "✦"
 ERROR       = "✖"
 INFO        = "◈"
+
+# -- Theme switching -------------------------------------------------------
+
+
+def set_theme(name: str) -> None:
+    """Switch the console theme at runtime (e.g. from --theme flag)."""
+    console.push_theme(Theme(_THEMES.get(name, _THEMES["light"])))
+
 
 # -- Display helpers -------------------------------------------------------
 

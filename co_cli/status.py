@@ -1,10 +1,12 @@
-"""Pure-data environment / health checks — no Rich, no console."""
+"""Environment / health checks and status table rendering."""
 
 import os
 import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+from rich.table import Table
 
 from co_cli.config import settings, DATA_DIR, project_config_path
 
@@ -118,3 +120,22 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         db_size=db_size,
         project_config=str(project_config_path) if project_config_path else None,
     )
+
+
+def render_status_table(info: StatusInfo) -> Table:
+    """Build a Rich Table from StatusInfo using semantic styles."""
+    table = Table(title=f"Co System Status (Provider: {info.llm_provider})")
+    table.add_column("Component", style="accent")
+    table.add_column("Status", style="info")
+    table.add_column("Details", style="success")
+
+    table.add_row("LLM", info.llm_status.title(), info.llm_provider)
+    table.add_row("Docker", info.docker.title(), "Sandbox runtime")
+    table.add_row("Google", info.google.title(), info.google_detail)
+    table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
+    table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
+    table.add_row("Database", "Active", info.db_size)
+    if info.project_config:
+        table.add_row("Project Config", "Active", info.project_config)
+
+    return table

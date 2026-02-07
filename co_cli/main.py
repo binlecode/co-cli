@@ -9,7 +9,6 @@ from uuid import uuid4
 import typer
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.table import Table
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -29,9 +28,9 @@ from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
-from co_cli.display import console, PROMPT_CHAR
+from co_cli.display import console, set_theme, PROMPT_CHAR
 from co_cli.banner import display_welcome_banner
-from co_cli.status import get_status
+from co_cli.status import get_status, render_status_table
 from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
 
 # Setup Telemetry - must be done before Agent.instrument_all()
@@ -214,7 +213,7 @@ def _display_tool_outputs(old_len: int, messages: list) -> None:
 
 
 async def chat_loop():
-    agent, model_settings = get_agent()
+    agent, model_settings, tool_names = get_agent()
     deps = create_deps()
     completer = WordCompleter(
         [f"/{name}" for name in COMMANDS],
@@ -226,7 +225,7 @@ async def chat_loop():
         complete_while_typing=False,
     )
 
-    info = get_status(tool_count=len(agent._function_toolset.tools))
+    info = get_status(tool_count=len(tool_names))
     display_welcome_banner(info)
 
     message_history = []
@@ -263,7 +262,7 @@ async def chat_loop():
                         message_history=message_history,
                         deps=deps,
                         agent=agent,
-                        tool_count=len(agent._function_toolset.tools),
+                        tool_names=tool_names,
                     )
                     handled, new_history = await dispatch_command(user_input, cmd_ctx)
                     if handled:
@@ -321,6 +320,7 @@ def chat(
     """Start an interactive chat session with Co."""
     if theme:
         settings.theme = theme
+        set_theme(theme)
     try:
         asyncio.run(chat_loop())
     except KeyboardInterrupt:
@@ -331,22 +331,7 @@ def chat(
 def status():
     """Show system health and tool availability."""
     info = get_status()
-
-    table = Table(title=f"Co System Status (Provider: {info.llm_provider})")
-    table.add_column("Component", style="cyan")
-    table.add_column("Status", style="magenta")
-    table.add_column("Details", style="green")
-
-    table.add_row("LLM", info.llm_status.title(), info.llm_provider)
-    table.add_row("Docker", info.docker.title(), "Sandbox runtime")
-    table.add_row("Google", info.google.title(), info.google_detail)
-    table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
-    table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
-    table.add_row("Database", "Active", info.db_size)
-    if info.project_config:
-        table.add_row("Project Config", "Active", info.project_config)
-
-    console.print(table)
+    console.print(render_status_table(info))
 
 
 @app.command()
