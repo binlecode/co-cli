@@ -7,6 +7,7 @@
 - `docs/`: design/research/todo notes (for example `docs/DESIGN-co-cli.md`, `docs/DESIGN-tail-viewer.md`, `docs/DESIGN-tool-google.md`, `docs/TODO-approval-flow.md`).
 - Root docs: `README.md` for usage and setup.
 - Config example: `settings.example.json`.
+- Documentation location rule: all design, TODO, implementation notes, fix plans, reviews, and other project markdown docs must live under `docs/`. Keep root markdown files only for top-level project docs like `README.md`, `AGENTS.md`, `CHANGELOG.md`, `CLAUDE.md`, and `GEMINI.md`.
 
 ## Build, Test, and Development Commands
 - `uv sync`: install runtime + dev dependencies.

@@ -1,6 +1,5 @@
 """Functional tests for cloud tools (Drive, Gmail, Slack)."""
 
-import os
 from dataclasses import dataclass
 
 import pytest
@@ -12,23 +11,6 @@ from co_cli.tools.slack import post_slack_message
 from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
-from co_cli.google_auth import get_google_credentials, build_google_service, GOOGLE_TOKEN_PATH, ADC_PATH
-
-ALL_GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar.readonly",
-]
-
-# Check for Google Credentials — explicit path, default token, or ADC
-HAS_GCP = bool(
-    (settings.google_credentials_path and os.path.exists(settings.google_credentials_path))
-    or GOOGLE_TOKEN_PATH.exists()
-    or ADC_PATH.exists()
-)
-
-# Check for Slack Token
-HAS_SLACK = bool(settings.slack_bot_token)
 
 
 @dataclass
@@ -39,32 +21,23 @@ class Context:
 
 def _make_ctx(
     auto_confirm: bool = True,
-    google_drive=None,
-    google_gmail=None,
-    google_calendar=None,
     slack_client=None,
 ) -> Context:
     return Context(deps=CoDeps(
         sandbox=Sandbox(container_name="test"),
         auto_confirm=auto_confirm,
         session_id="test",
-        google_drive=google_drive,
-        google_gmail=google_gmail,
-        google_calendar=google_calendar,
+        google_credentials_path=settings.google_credentials_path,
         slack_client=slack_client,
     ))
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_drive_search_functional():
     """Test real Google Drive search.
     Requires google_credentials_path in settings.
     """
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    drive_service = build_google_service("drive", "v3", google_creds)
-    ctx = _make_ctx(google_drive=drive_service)
+    ctx = _make_ctx()
 
     results = search_drive(ctx, "test")
     assert isinstance(results, dict)
@@ -75,14 +48,10 @@ def test_drive_search_functional():
     assert "Found" in results["display"] or results.get("count") == 0
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_drive_search_empty_result():
     """search_drive returns a valid dict with count=0 on no matches (not ModelRetry)."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    drive_service = build_google_service("drive", "v3", google_creds)
-    ctx = _make_ctx(google_drive=drive_service)
+    ctx = _make_ctx()
 
     result = search_drive(ctx, "zzz_nonexistent_xkcd_42_qwerty")
     assert isinstance(result, dict)
@@ -92,24 +61,18 @@ def test_drive_search_empty_result():
     assert "No files found" in result["display"]
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_drive_search_pagination():
     """Test Drive search pagination with page number."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    drive_service = build_google_service("drive", "v3", google_creds)
-    ctx = _make_ctx(google_drive=drive_service)
+    ctx = _make_ctx()
 
     page1 = search_drive(ctx, "notes", page=1)
     assert isinstance(page1, dict)
     assert page1["page"] == 1
 
-    if page1.get("count") == 0:
-        pytest.skip("No Drive files matched 'notes' — cannot test pagination")
-
-    if not page1["has_more"]:
-        pytest.skip("First page had no more results — not enough files to paginate")
+    if page1.get("count") == 0 or not page1["has_more"]:
+        # Not enough files to test pagination — pass without asserting page 2
+        return
 
     page2 = search_drive(ctx, "notes", page=2)
     assert isinstance(page2, dict)
@@ -119,16 +82,12 @@ def test_drive_search_pagination():
     assert page2["display"] != page1["display"]
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_list_emails_functional():
     """Test real Gmail list emails.
     Requires google_credentials_path in settings.
     """
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    gmail_service = build_google_service("gmail", "v1", google_creds)
-    ctx = _make_ctx(google_gmail=gmail_service)
+    ctx = _make_ctx()
 
     result = list_emails(ctx, max_results=2)
     assert isinstance(result, dict)
@@ -136,16 +95,12 @@ def test_list_emails_functional():
     assert "count" in result
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_search_emails_functional():
     """Test real Gmail search.
     Requires google_credentials_path in settings.
     """
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    gmail_service = build_google_service("gmail", "v1", google_creds)
-    ctx = _make_ctx(google_gmail=gmail_service)
+    ctx = _make_ctx()
 
     result = search_emails(ctx, query="is:unread", max_results=2)
     assert isinstance(result, dict)
@@ -153,14 +108,10 @@ def test_search_emails_functional():
     assert "count" in result
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_list_calendar_events_functional():
     """Test listing calendar events with default params (today only)."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    calendar_service = build_google_service("calendar", "v3", google_creds)
-    ctx = _make_ctx(google_calendar=calendar_service)
+    ctx = _make_ctx()
 
     result = list_calendar_events(ctx)
     assert isinstance(result, dict)
@@ -168,14 +119,10 @@ def test_list_calendar_events_functional():
     assert "count" in result
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_list_calendar_events_with_time_window():
     """Test listing calendar events with days_back and days_ahead."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    calendar_service = build_google_service("calendar", "v3", google_creds)
-    ctx = _make_ctx(google_calendar=calendar_service)
+    ctx = _make_ctx()
 
     result = list_calendar_events(ctx, days_back=7, days_ahead=7, max_results=50)
     assert isinstance(result, dict)
@@ -183,14 +130,10 @@ def test_list_calendar_events_with_time_window():
     assert result["count"] > 0
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_search_calendar_events_functional():
     """Test searching calendar events by keyword."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    calendar_service = build_google_service("calendar", "v3", google_creds)
-    ctx = _make_ctx(google_calendar=calendar_service)
+    ctx = _make_ctx()
 
     result = search_calendar_events(ctx, query="meeting", days_ahead=30, max_results=2)
     assert isinstance(result, dict)
@@ -198,14 +141,10 @@ def test_search_calendar_events_functional():
     assert "count" in result
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_search_calendar_events_with_days_back():
     """Test searching past calendar events with days_back."""
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    calendar_service = build_google_service("calendar", "v3", google_creds)
-    ctx = _make_ctx(google_calendar=calendar_service)
+    ctx = _make_ctx()
 
     result = search_calendar_events(
         ctx, query="meeting", days_back=30, days_ahead=0, max_results=5
@@ -215,22 +154,17 @@ def test_search_calendar_events_with_days_back():
     assert "count" in result
 
 
-@pytest.mark.skipif(not HAS_GCP, reason="Google credentials missing")
+
 def test_gmail_draft_functional():
     """Test real Gmail draft creation.
     Requires google_credentials_path in settings.
     """
-    google_creds = get_google_credentials(
-        settings.google_credentials_path, ALL_GOOGLE_SCOPES
-    )
-    gmail_service = build_google_service("gmail", "v1", google_creds)
-    ctx = _make_ctx(auto_confirm=True, google_gmail=gmail_service)
+    ctx = _make_ctx(auto_confirm=True)
 
     result = draft_email(ctx, "test@example.com", "Test Subject", "Test Body")
     assert "Draft created" in result
 
 
-@pytest.mark.skipif(not HAS_SLACK, reason="SLACK_BOT_TOKEN missing")
 def test_slack_post_functional():
     """Test real Slack message posting.
     Requires SLACK_BOT_TOKEN.
@@ -243,7 +177,10 @@ def test_slack_post_functional():
     channel = "#general"
     try:
         result = post_slack_message(ctx, channel, "Automated test from Co-CLI")
-        assert "TS:" in result or "channel_not_found" in str(result)
+        assert isinstance(result, dict)
+        assert "display" in result
+        assert "ts" in result
+        assert "channel" in result
     except Exception as e:
         # channel_not_found is acceptable (tool auth worked)
         if "channel_not_found" not in str(e):

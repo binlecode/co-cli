@@ -5,10 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-02-06
+
+### Added
+- **Deferred approval flow**: Migrated from inline `_confirm.py` prompts to pydantic-ai `DeferredToolRequests` + `requires_approval=True`. Side-effectful tools (`run_shell_command`, `draft_email`, `post_slack_message`) now go through centralized `_handle_approvals()` in the chat loop with `[y/n/a(yolo)]` prompt and `ToolDenied` on rejection.
+- **Obsidian search: folder and tag filtering**: `search_notes` accepts `folder` (restrict to subfolder) and `tag` (match YAML frontmatter or inline `#tag`). New `_extract_frontmatter_tags()` parser handles `tags: [a, b]` and list formats.
+- **Obsidian snippet improvements**: `_snippet_around()` helper breaks at word boundaries instead of fixed character offsets.
+- **Shell error propagation**: `Sandbox.run_command()` raises `RuntimeError` on non-zero exit code (was silently returning error string). `run_shell_command` tool wraps errors in `ModelRetry` so the LLM can self-correct.
+- **Config `max_request_limit`**: New setting (default 25) with `CO_CLI_MAX_REQUEST_LIMIT` env var, used as `UsageLimits(request_limit=...)` in the chat loop.
+- **Google auth lazy caching**: `get_cached_google_creds()` resolves credentials once on first call (module-level cache). Replaced eager `build_google_service()` — Google API clients are now built per-call in each tool, avoiding stale service objects.
+- **Agent unknown-provider error**: `get_agent()` raises `ValueError` for unrecognized `llm_provider` values instead of silently falling through to Ollama.
+- **New tests**: `test_search_notes_folder_filter`, `test_search_notes_tag_filter`, `test_search_notes_snippet_word_boundaries`, `test_shell_nonzero_exit_raises_model_retry`.
+- **New TODO docs**: `TODO-conversation-memory.md`, `TODO-cross-tool-rag.md`.
+
+### Fixed
+- **Banner version stale after bump**: `VERSION` now reads `pyproject.toml` directly via `tomllib` (was `importlib.metadata`, which required reinstall to reflect changes).
+
+### Changed
+- **Obsidian tool return type**: `search_notes` and `list_notes` now return `dict[str, Any]` with `display`, `count`, `has_more` fields (was `list[dict]` / `list[str]`). `search_notes` returns empty dict on no results instead of raising `ModelRetry`.
+- **Agent system prompt**: Added "Tool Output" section instructing the LLM to show `display` verbatim and respect `has_more`.
+- **Config env override logic**: Fixed `Settings.from_file()` to check `field not in data or data[field] is None` (was `not data.get(field)`, which treated `0` and `""` as missing).
+- **CoDeps**: Removed `google_drive`, `google_gmail`, `google_calendar` fields — replaced by `google_credentials_path`. Added comment clarifying `auto_confirm` purpose.
+- **Tests**: Removed all `@pytest.mark.skipif` guards (Docker, GCP, Slack) per testing policy. Simplified test context setup — no more per-test credential/service building.
+- **CLAUDE.md**: Streamlined — removed inline module/tool tables (covered by DESIGN docs), tightened coding standards.
+- **Design docs**: Updated `DESIGN-co-cli.md`, `DESIGN-tool-obsidian.md`, `DESIGN-tool-shell-sandbox.md` to reflect new approval flow, obsidian features, and shell error handling.
+- **TODO docs**: Trimmed `TODO-approval-flow.md` and `TODO-tool-call-stability.md` — removed completed items, kept only remaining work.
+
+### Removed
+- **`co_cli/tools/_confirm.py`**: Inline approval prompt — superseded by `DeferredToolRequests` in chat loop.
+- **`docs/TODO-obsidian-search.md`**: Merged into `TODO-cross-tool-rag.md`.
+- **`docs/FIX-general-issues-team-work-codex-claude-code.md`**: All tracked issues resolved or moved to standalone docs.
+
+---
+
 ## [0.2.7] - 2026-02-06
 
 ### Fixed
 - **Telemetry SQLite lock contention**: `SQLiteSpanExporter` now uses WAL journal mode and `busy_timeout=5000ms` on every connection, preventing `database is locked` errors when `co tail`/Datasette read while the chat session writes spans. Export uses `executemany` (single batch write) with 3-attempt exponential backoff retry for transient lock failures.
+- **Banner version stale**: `display_welcome_banner()` and `main.py` `service.version` now read from `importlib.metadata` instead of hardcoded strings, keeping the version in sync with `pyproject.toml` automatically.
 
 ### Changed
 - **`docs/DESIGN-otel-logging.md`**: Added "Concurrent Access (WAL Mode)" section documenting WAL rationale, pragma settings, retry strategy, and batch insert design.

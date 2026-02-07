@@ -1,11 +1,11 @@
 # Design: Slack Tool
 
-**Status:** Implemented (Batch 4)
-**Last Updated:** 2026-02-05
+**Status:** Implemented
+**Last Updated:** 2026-02-06
 
 ## Overview
 
-The Slack tool enables the agent to send messages to Slack channels on behalf of the user. Uses the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors and `rich.prompt.Confirm` for human-in-the-loop confirmation before sending.
+The Slack tool enables the agent to send messages to Slack channels on behalf of the user. Uses the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors and `requires_approval=True` for human-in-the-loop confirmation via pydantic-ai's `DeferredToolRequests` flow.
 
 **Key design decision:** The `WebClient` is created once at startup in `create_deps()` and injected via `CoDeps` — the tool never imports `settings` or creates its own client.
 
@@ -30,13 +30,38 @@ The Slack tool enables the agent to send messages to Slack channels on behalf of
             │ deps injected into agent.run()
             ▼
 ┌─────────────────────────────────────────────────────────────────┐
+│                        Tool Registration                         │
+│                                                                  │
+│  agent.tool(post_slack_message, requires_approval=True)         │
+│    └── Side-effectful: triggers DeferredToolRequests             │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+            │
+            │ LLM calls tool → pydantic-ai defers for approval
+            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Approval Flow (main.py)                      │
+│                                                                  │
+│  _handle_approvals(agent, deps, result, model_settings)         │
+│    │                                                             │
+│    ├── deps.auto_confirm? ──▶ auto-approve                      │
+│    └── Prompt: "Approve post_slack_message(...)? [y/n/a(yolo)]" │
+│         ├── y ──▶ approve                                        │
+│         ├── a ──▶ enable yolo, approve                           │
+│         └── n ──▶ ToolDenied("User denied this action")         │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+            │
+            │ approved → tool executes
+            ▼
+┌─────────────────────────────────────────────────────────────────┐
 │                        Tool Execution                            │
 │                                                                  │
 │  post_slack_message(ctx: RunContext[CoDeps], channel, text)     │
 │    │                                                             │
+│    ├── Validate channel, text (non-empty)                        │
 │    ├── client = ctx.deps.slack_client                            │
 │    ├── if not client: raise ModelRetry("Not configured")         │
-│    ├── Confirm.ask("Send to #channel?")                         │
 │    └── client.chat_postMessage(channel, text)                   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -103,26 +128,33 @@ The Slack tool enables the agent to send messages to Slack channels on behalf of
 
 ### post_slack_message (`co_cli/tools/slack.py`)
 
-Send a message to a Slack channel. Requires human-in-the-loop confirmation.
+Send a message to a Slack channel. Registered with `requires_approval=True` — approval handled by the chat loop, not the tool.
 
 ```
-post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> str
+post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict[str, Any]
 
 Args:
     channel: Slack channel name (e.g. '#general') or channel ID
     text:    Message text to send
 
 Returns:
-    Success message with timestamp, or "cancelled by user"
+    {"display": "Message sent to #general. TS: ...", "channel": "#general", "ts": "..."}
 
 Raises:
-    ModelRetry: If not configured or API error
+    ModelRetry: If not configured, invalid input, or API error
 ```
 
 ### Processing Flow
 
 ```
 post_slack_message("#general", "Hello team!")
+       │
+       ▼
+┌──────────────────────────────────────┐
+│ Input validation                     │
+│   ├── empty channel? ──▶ ModelRetry  │
+│   └── empty text?    ──▶ ModelRetry  │
+└──────────────────────────────────────┘
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -136,23 +168,6 @@ post_slack_message("#general", "Hello team!")
        │
        ▼
 ┌──────────────────────────────────────┐
-│ auto_confirm = true?                 │
-│   ├── Yes ──▶ Skip prompt            │
-│   └── No  ──▶ Confirm.ask(          │
-│        "Send Slack message to        │
-│         #general?")                  │
-│              │                       │
-│         ┌────┴────┐                  │
-│         ▼         ▼                  │
-│       "y"        "n"                 │
-│         │         │                  │
-│         │    Return "Slack post      │
-│         │     cancelled by user."    │
-│         ▼                            │
-└──────────────────────────────────────┘
-       │
-       ▼
-┌──────────────────────────────────────┐
 │ client.chat_postMessage(             │
 │     channel="#general",              │
 │     text="Hello team!"              │
@@ -162,27 +177,30 @@ post_slack_message("#general", "Hello team!")
        ▼
 ┌──────────────────────────────────────┐
 │ Success?                             │
-│   ├── Yes ──▶ Return "Message sent  │
-│   │    to #general. TS: 12345..."    │
+│   ├── Yes ──▶ Return dict with      │
+│   │    display, channel, ts          │
 │   └── No  ──▶ ModelRetry            │
-│        "Slack API error: ..."        │
+│        (actionable error hint)       │
 └──────────────────────────────────────┘
 ```
 
 ---
 
-## Error Handling with ModelRetry
+## Error Handling
 
-Uses the `ModelRetry` re-raise pattern to prevent generic `except` blocks from swallowing retry signals:
+### ModelRetry with Actionable Hints
 
-```
-try:
-    response = client.chat_postMessage(channel=channel, text=text)
-    return f"Message sent to {channel}. TS: {response['ts']}"
-except ModelRetry:
-    raise                          # <-- Re-raise, don't swallow
-except Exception as e:
-    raise ModelRetry(f"Slack API error: {e}")
+`SlackApiError` responses are mapped to actionable hint messages via `_SLACK_ERROR_HINTS`. Unknown error codes fall back to the raw error. Generic non-Slack exceptions are caught as a final fallback.
+
+```python
+_SLACK_ERROR_HINTS = {
+    "channel_not_found": "Channel not found. Check the name or use a channel ID.",
+    "not_in_channel":    "Bot is not in this channel. Invite it with /invite @bot.",
+    "invalid_auth":      "Slack token is invalid or expired. Refresh slack_bot_token.",
+    "ratelimited":       "Rate limited by Slack API. Wait a moment and retry.",
+    "no_text":           "Message text cannot be empty.",
+    "msg_too_long":      "Message exceeds Slack's length limit. Shorten the text.",
+}
 ```
 
 ### Error Scenarios
@@ -190,48 +208,49 @@ except Exception as e:
 | Scenario | ModelRetry Message | LLM Action |
 |----------|--------------------|------------|
 | No bot token configured | "Set slack_bot_token or SLACK_BOT_TOKEN" | Inform user to configure |
-| Invalid channel | "Slack API error: channel_not_found" | Ask user for correct channel |
-| Token expired/revoked | "Slack API error: invalid_auth" | Inform user to refresh token |
-| Rate limited | "Slack API error: ratelimited" | Wait and retry |
-| Bot not in channel | "Slack API error: not_in_channel" | Ask user to invite bot |
+| Empty channel/text | "Channel is required..." / "Message text cannot be empty." | Fix input and retry |
+| Invalid channel | "Channel not found. Check the name or use a channel ID." | Ask user for correct channel |
+| Token expired/revoked | "Slack token is invalid or expired. Refresh slack_bot_token." | Inform user to refresh token |
+| Rate limited | "Rate limited by Slack API. Wait a moment and retry." | Wait and retry |
+| Bot not in channel | "Bot is not in this channel. Invite it with /invite @bot." | Ask user to invite bot |
 
-**Why ModelRetry over error strings?**
+### Exception Priority
 
-```
-# Bad — LLM sees error text, has to guess what to do
-return f"Slack error: {e}"
-
-# Good — LLM gets structured retry with guidance
-raise ModelRetry(f"Slack API error: {e}")
+```python
+try:
+    response = client.chat_postMessage(...)
+except ModelRetry:
+    raise                    # Re-raise — don't swallow retry signals
+except SlackApiError as e:
+    # Map to actionable hint
+    raise ModelRetry(hint)
+except Exception as e:
+    # Final fallback for non-Slack errors
+    raise ModelRetry(f"Slack API error: {e}")
 ```
 
 ---
 
 ## Human-in-the-Loop Confirmation
 
-Sending Slack messages is a high-risk, externally-visible action. Confirmation is always required (unless `auto_confirm=true`).
+Sending Slack messages is a high-risk, externally-visible action. Approval uses pydantic-ai's native `DeferredToolRequests` flow.
 
-### Confirmation Pattern
+### How It Works
 
-```python
-if not ctx.deps.auto_confirm:
-    if not Confirm.ask(
-        f"Send Slack message to [bold]{channel}[/bold]?",
-        default=False,
-        console=_console,
-    ):
-        return "Slack post cancelled by user."
-```
+1. `post_slack_message` is registered with `requires_approval=True` in `agent.py`
+2. When the LLM calls the tool, pydantic-ai returns a `DeferredToolRequests` instead of executing
+3. The chat loop in `main.py` calls `_handle_approvals()` which prompts: `Approve post_slack_message(channel='#general', text='...')? [y/n/a(yolo)]`
+4. On `y` or `a`: tool executes normally
+5. On `n`: `ToolDenied("User denied this action")` — LLM sees denial and informs user
 
 ### Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| `rich.prompt.Confirm` not `typer.confirm` | Works correctly with async chat loop |
-| `default=False` | Safe default: user must explicitly type "y" |
-| `console=_console` | Module-level Console for consistent Rich output |
-| Returns string on cancel | LLM sees "cancelled", can inform user naturally |
-| Bold channel in prompt | User clearly sees where the message goes |
+| `requires_approval=True` on registration | Approval logic lives in the chat loop, not inside tools |
+| `DeferredToolRequests` flow | Pydantic-ai native — no custom `Confirm.ask()` needed in tools |
+| `a` (yolo) option | Sets `deps.auto_confirm = True` for the rest of the session |
+| Tool never checks `auto_confirm` | The chat loop handles it — tool code stays pure |
 
 **Bypass:** Set `auto_confirm: true` in settings or `CO_CLI_AUTO_CONFIRM=true` env var. Used by tests and CI.
 
@@ -285,7 +304,7 @@ Tool sees:
 
 | Action | Protection |
 |--------|------------|
-| Send message | User confirmation required |
+| Send message | `requires_approval=True` → user prompted via `DeferredToolRequests` |
 | Channel scope | Bot can only post to channels it's been invited to |
 | Token scope | Limited to `chat:write` (no admin, no read history) |
 
@@ -314,66 +333,9 @@ Agent ──▶ "Slack is not configured. Set slack_bot_token in
 
 ---
 
-## Migration from Legacy Pattern
-
-### Before (Batch 1-2 era, in `comm.py`)
-
-```python
-# comm.py — BAD: imports settings, builds client per-call, typer.confirm
-from co_cli.config import settings
-
-def post_slack_message(channel: str, text: str) -> str:  # tool_plain
-    token = settings.slack_bot_token                      # Global import
-    if not token:
-        return "Error: SLACK_BOT_TOKEN not found..."      # Error string
-
-    if not settings.auto_confirm:                         # settings.auto_confirm
-        if not typer.confirm(f"Send Slack message to {channel}?"):
-            return "Slack post cancelled by user."
-
-    client = WebClient(token=token)                       # Built per-call
-    response = client.chat_postMessage(...)
-    return f"Message sent to {channel}. TS: {response['ts']}"
-```
-
-### After (Batch 4, in `slack.py`)
-
-```python
-# slack.py — GOOD: no settings import, client from deps, ModelRetry
-from pydantic_ai import RunContext, ModelRetry
-from co_cli.deps import CoDeps
-
-def post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> str:
-    client = ctx.deps.slack_client                         # From deps
-    if not client:
-        raise ModelRetry("Slack not configured...")        # Self-healing
-
-    if not ctx.deps.auto_confirm:                          # From deps
-        if not Confirm.ask(f"Send to {channel}?"):
-            return "Slack post cancelled by user."
-
-    response = client.chat_postMessage(...)
-    return f"Message sent to {channel}. TS: {response['ts']}"
-```
-
-### What Changed
-
-| Aspect | Before | After |
-|--------|--------|-------|
-| File | `comm.py` (shared with Gmail, Calendar) | `slack.py` (dedicated) |
-| Registration | `agent.tool_plain()` | `agent.tool()` |
-| First param | None | `ctx: RunContext[CoDeps]` |
-| Client access | `WebClient(token=settings.slack_bot_token)` per call | `ctx.deps.slack_client` from deps |
-| Settings import | `from co_cli.config import settings` | None |
-| Error handling | Return error strings | `raise ModelRetry(...)` |
-| Confirmation | `typer.confirm()` | `rich.prompt.Confirm` |
-| auto_confirm | `settings.auto_confirm` | `ctx.deps.auto_confirm` |
-
----
-
 ## Testing
 
-### Functional Test (`tests/test_cloud.py`)
+### Functional Test (`tests/test_google_cloud.py`)
 
 Test uses the same `Context` dataclass pattern as `test_obsidian.py`:
 
@@ -390,13 +352,9 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
     ))
 ```
 
-Test skips gracefully when Slack is unavailable:
-
-| Test | Skip Condition | What It Verifies |
-|------|---------------|-----------------|
-| `test_slack_post_functional` | No `SLACK_BOT_TOKEN` | Real Slack message posting |
-
-The test accepts `channel_not_found` as a successful outcome — it proves authentication and API connectivity work even if the test channel doesn't exist.
+| Test | What It Verifies |
+|------|-----------------|
+| `test_slack_post_functional` | Real Slack message posting; accepts `channel_not_found` as proof of auth+API connectivity |
 
 ---
 
@@ -406,7 +364,8 @@ The test accepts `channel_not_found` as a successful outcome — it proves authe
 |------|---------|
 | `co_cli/tools/slack.py` | `post_slack_message` tool |
 | `co_cli/deps.py` | `CoDeps` with `slack_client` field |
-| `tests/test_cloud.py` | Functional test for Slack posting |
+| `co_cli/agent.py` | Tool registration with `requires_approval=True` |
+| `tests/test_google_cloud.py` | Functional test for Slack posting |
 
 ---
 
@@ -414,8 +373,7 @@ The test accepts `channel_not_found` as a successful outcome — it proves authe
 
 | Enhancement | Description | Status |
 |-------------|-------------|--------|
-| `requires_approval=True` | Pydantic-ai native approval flow | Batch 6 |
+| Read tools | `list_channels`, `read_channel_messages`, `search_messages` | Not started |
 | Thread replies | Reply in threads, not top-level | Not planned |
-| Channel listing | Tool to list available channels | Not planned |
 | File upload | Share files via Slack | Not planned |
 | Reaction support | Add reactions to messages | Not planned |
