@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.8] - 2026-02-06
 
 ### Added
+- **Slack read tools**: `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` — four read-only tools (no approval) with `dict[str, Any]` + `display` return convention. Shared helpers: `_get_slack_client`, `_format_message`, `_format_ts`. Refactored `post_slack_message` to use `_get_slack_client`. New scopes: `channels:read`, `channels:history`, `users:read`.
+- **Sandbox hardening**: Non-root execution (`user=1000:1000`), network isolation (`network_mode="none"` default, configurable to `"bridge"`), resource limits (`mem_limit=1g`, 1 CPU, `pids_limit=256`), privilege hardening (`cap_drop=["ALL"]`, `no-new-privileges`). Three new config settings: `sandbox_network`, `sandbox_mem_limit`, `sandbox_cpus` with env var overrides.
 - **Custom sandbox image (`co-cli-sandbox`)**: New `Dockerfile.sandbox` based on `python:3.12-slim` with dev tools pre-installed (curl, git, jq, tree, file, less, zip/unzip, nano, wget). Default `docker_image` setting changed from `python:3.12-slim` to `co-cli-sandbox`.
 - **Shell `sh -c` wrapping**: `Sandbox.run_command()` now executes via `["sh", "-c", cmd]` instead of raw `exec_run(cmd)`. Enables shell builtins (`cd`), pipes, redirects, and aliases that previously failed with "executable file not found".
 - **Status module (`co_cli/status.py`)**: Extracted environment/health checks into `StatusInfo` dataclass + `get_status()`. Banner and `co status` command consume pure data — no duplicated probe logic.
@@ -29,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ctrl-C exits process instead of returning to prompt**: `asyncio.run()` in Python 3.11+ delivers SIGINT as `asyncio.CancelledError`, not `KeyboardInterrupt`. Chat loop now catches both. Approval prompt (`Prompt.ask()`) temporarily restores the default SIGINT handler so Ctrl-C can interrupt synchronous `input()`. Safety-net `except KeyboardInterrupt` wraps `asyncio.run()` for edge cases. See `DESIGN-co-cli.md` §8.
 
 ### Changed
+- **`DESIGN-co-cli.md`**: Added complete tool return type reference table (all 16 tools) to §5.1.1 with `_display_tool_outputs()` transport-layer separation explanation. Expanded tool architecture graph, cloud tool summary, and module summary to include all Slack, Gmail, and Calendar tools.
+- **`DESIGN-tool-slack.md`**: Expanded from single-tool doc to full five-tool reference with shared helpers, setup guide, scope table, and test inventory.
+- **`DESIGN-tool-shell-sandbox.md`**: Added container hardening documentation — non-root, network isolation, resource limits, privilege dropping, and configurable settings.
+- **`TODO-tool-call-stability.md`**: Marked sandbox hardening phases 1–3 as done.
+- **`TODO-slack-tooling.md`**: Marked Phase 1 (core reads) as done.
 - **Obsidian tool return type**: `search_notes` and `list_notes` now return `dict[str, Any]` with `display`, `count`, `has_more` fields (was `list[dict]` / `list[str]`). `search_notes` returns empty dict on no results instead of raising `ModelRetry`.
 - **Agent system prompt**: Added "Tool Output" section instructing the LLM to show `display` verbatim and respect `has_more`.
 - **Config env override logic**: Fixed `Settings.from_file()` to check `field not in data or data[field] is None` (was `not data.get(field)`, which treated `0` and `""` as missing).
@@ -40,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **TODO docs**: Trimmed `TODO-approval-flow.md` and `TODO-tool-call-stability.md` — removed completed items, kept only remaining work.
 
 ### Removed
+- **`docs/TODO-structured-output.md`**: Problem already solved by `_display_tool_outputs()` transport-layer separation; proposed `CoResponse` union carried Gemini compatibility risk for no gain.
 - **`co_cli/tools/_confirm.py`**: Inline approval prompt — superseded by `DeferredToolRequests` in chat loop.
 - **`docs/TODO-obsidian-search.md`**: Merged into `TODO-cross-tool-rag.md`.
 - **`docs/FIX-general-issues-team-work-codex-claude-code.md`**: All tracked issues resolved or moved to standalone docs.
