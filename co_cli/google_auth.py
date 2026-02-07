@@ -8,8 +8,6 @@ from typing import Any
 
 import google.auth
 from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-
 from co_cli.config import CONFIG_DIR
 
 GOOGLE_TOKEN_PATH = CONFIG_DIR / "google_token.json"
@@ -109,18 +107,17 @@ def get_google_credentials(
         return None
 
 
-def build_google_service(
-    service_name: str,
-    version: str,
-    credentials: Any,
-) -> Any | None:
-    """Build a Google API service client from credentials.
+# Module-level cached credentials — resolved once on first Google tool call
+_cached_creds: Any | None = None
+_cached_creds_loaded: bool = False
 
-    Returns None if credentials are None or build fails.
-    """
-    if not credentials:
-        return None
-    try:
-        return build(service_name, version, credentials=credentials)
-    except Exception:
-        return None
+
+def get_cached_google_creds(credentials_path: str | None) -> Any | None:
+    """Return cached Google credentials, resolving on first call."""
+    global _cached_creds, _cached_creds_loaded
+    if not _cached_creds_loaded:
+        _cached_creds = ensure_google_credentials(credentials_path, ALL_GOOGLE_SCOPES)
+        _cached_creds_loaded = True
+    return _cached_creds
+
+

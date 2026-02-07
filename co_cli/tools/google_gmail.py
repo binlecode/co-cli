@@ -4,10 +4,11 @@ import base64
 from email.mime.text import MIMEText
 from typing import Any
 
+from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._confirm import confirm_or_yolo
+from co_cli.google_auth import get_cached_google_creds
 
 
 def _format_messages(service, message_ids: list[dict]) -> str:
@@ -41,13 +42,13 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 
 def _get_gmail_service(ctx: RunContext[CoDeps]):
     """Extract and validate Gmail service from context."""
-    service = ctx.deps.google_gmail
-    if not service:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
         raise ModelRetry(
             "Gmail not configured. "
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
-    return service
+    return build("gmail", "v1", credentials=creds)
 
 
 def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]:
@@ -131,15 +132,13 @@ def draft_email(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> st
         subject: Email subject line.
         body: Email body text.
     """
-    service = ctx.deps.google_gmail
-    if not service:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
         raise ModelRetry(
             "Gmail not configured. "
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
-
-    if not confirm_or_yolo(ctx, f"Draft email to [bold]{to}[/bold]?"):
-        return "Email draft cancelled by user."
+    service = build("gmail", "v1", credentials=creds)
 
     try:
         message = MIMEText(body)

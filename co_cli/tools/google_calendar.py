@@ -3,20 +3,22 @@
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
+from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.google_auth import get_cached_google_creds
 
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
     """Extract and validate Calendar service from context."""
-    service = ctx.deps.google_calendar
-    if not service:
+    creds = get_cached_google_creds(ctx.deps.google_credentials_path)
+    if not creds:
         raise ModelRetry(
             "Google Calendar not configured. "
             "Set google_credentials_path in settings or run: gcloud auth application-default login"
         )
-    return service
+    return build("calendar", "v3", credentials=creds)
 
 
 def _format_events(events: list[dict]) -> str:

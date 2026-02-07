@@ -24,10 +24,11 @@ class Settings(BaseModel):
     
     # Behavior
     auto_confirm: bool = Field(default=False)
-    docker_image: str = Field(default="python:3.12-slim")
+    docker_image: str = Field(default="co-cli-sandbox")
     theme: str = Field(default="light")
     tool_retries: int = Field(default=3)
-    
+    max_request_limit: int = Field(default=25)
+
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
@@ -50,6 +51,7 @@ class Settings(BaseModel):
             "docker_image": "CO_CLI_DOCKER_IMAGE",
             "theme": "CO_CLI_THEME",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
+            "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
@@ -58,7 +60,7 @@ class Settings(BaseModel):
         }
         
         for field, env_var in env_map.items():
-            if not data.get(field):
+            if field not in data or data[field] is None:
                 val = os.getenv(env_var)
                 if val:
                     data[field] = val

@@ -2,7 +2,7 @@ import os
 import docker
 from docker.errors import NotFound, APIError
 
-DEFAULT_DOCKER_IMAGE = "python:3.12-slim"
+DEFAULT_DOCKER_IMAGE = "co-cli-sandbox"
 
 
 class Sandbox:
@@ -46,15 +46,18 @@ class Sandbox:
             raise RuntimeError(f"Failed to ensure Docker container: {e}")
 
     def run_command(self, cmd: str) -> str:
+        """Execute a command inside the container and return output.
+
+        Raises RuntimeError on non-zero exit code or Docker errors.
         """
-        Execute a command inside the container and return output.
-        """
-        try:
-            container = self.ensure_container()
-            exit_code, output = container.exec_run(cmd, workdir="/workspace")
-            return output.decode("utf-8")
-        except Exception as e:
-            return f"Sandbox Error: {e}"
+        container = self.ensure_container()
+        exit_code, output = container.exec_run(
+            ["sh", "-c", cmd], workdir="/workspace",
+        )
+        decoded = output.decode("utf-8")
+        if exit_code != 0:
+            raise RuntimeError(f"exit code {exit_code}: {decoded.strip()}")
+        return decoded
 
     def cleanup(self):
         """

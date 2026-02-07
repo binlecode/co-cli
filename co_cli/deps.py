@@ -14,7 +14,7 @@ class CoDeps:
     """
 
     sandbox: Sandbox
-    auto_confirm: bool = False  # For human-in-the-loop (until we adopt DeferredToolRequests)
+    auto_confirm: bool = False  # Session-yolo: set True when user picks "a" in approval prompt
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
 
