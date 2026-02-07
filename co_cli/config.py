@@ -51,6 +51,11 @@ class Settings(BaseModel):
     tool_retries: int = Field(default=3)
     max_request_limit: int = Field(default=25)
 
+    # Conversation memory
+    tool_output_trim_chars: int = Field(default=2000)
+    max_history_messages: int = Field(default=40)
+    summarization_model: str = Field(default="")
+
     # Sandbox limits
     sandbox_backend: Literal["auto", "docker", "subprocess"] = Field(default="auto")
     sandbox_max_timeout: int = Field(default=600)
@@ -101,6 +106,9 @@ class Settings(BaseModel):
             "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",
             "sandbox_cpus": "CO_CLI_SANDBOX_CPUS",
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
+            "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
+            "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
+            "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",

@@ -339,6 +339,9 @@ classDiagram
         +sandbox_mem_limit: str
         +sandbox_cpus: int
         +shell_safe_commands: list[str]
+        +tool_output_trim_chars: int
+        +max_history_messages: int
+        +summarization_model: str
         +gemini_api_key: Optional[str]
         +llm_provider: str
         +ollama_host: str
@@ -398,6 +401,9 @@ Project config is checked at `cwd/.co-cli/settings.json` only — no upward dire
 | `sandbox_mem_limit` | `CO_CLI_SANDBOX_MEM_LIMIT` | `"1g"` |
 | `sandbox_cpus` | `CO_CLI_SANDBOX_CPUS` | `1` |
 | `shell_safe_commands` | `CO_CLI_SHELL_SAFE_COMMANDS` | _(see config.py)_ |
+| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` |
+| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` |
+| `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` |
 
 ### 4.3 Dependencies (`co_cli/deps.py`)
 
@@ -978,6 +984,8 @@ def get_cached_google_creds(deps: CoDeps) -> Credentials | None:
 
 ## 7. Conversation Memory
 
+See `docs/DESIGN-conversation-memory.md` for full design: peer landscape, processor architecture, summarisation, and session persistence roadmap.
+
 ### 7.1 Design
 
 Each chat session maintains an in-process message history that accumulates across turns. This gives the LLM full conversational context for follow-ups like "try again", "change the subject", or "show me more".
@@ -1033,25 +1041,44 @@ while True:
 
 ### 7.4 History Length Control
 
-Pydantic-ai provides `history_processors` — a list of callables that transform `message_history` before sending to the model. There is **no built-in max length, sliding window, or summarization**. If history exceeds the LLM's context window, the API call fails.
-
-**Available hook:**
+Two `history_processors` are registered on the agent (see `co_cli/_history.py`):
 
 ```python
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.messages import ModelMessage
-
-def trim_history(messages: list[ModelMessage]) -> list[ModelMessage]:
-    """Keep first 2 messages (system setup) + last N messages."""
-    MAX_MESSAGES = 20
-    if len(messages) > MAX_MESSAGES:
-        return messages[:2] + messages[-(MAX_MESSAGES - 2):]
-    return messages
-
-agent = Agent(model, history_processors=[trim_history])
+agent = Agent(
+    model,
+    history_processors=[trim_old_tool_output, sliding_window],
+)
 ```
 
-**Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine.
+**Processor 1 — `trim_old_tool_output` (sync, no I/O):**
+
+Walks older messages (all except the last 2 — the current turn) and truncates `ToolReturnPart.content` exceeding `tool_output_trim_chars` (default 2000). Handles both `str` and `dict` content (JSON-serialises dicts before measuring). Preserves tool name and call ID so the model can still reference the tool call.
+
+**Processor 2 — `sliding_window` (async, LLM call):**
+
+When `len(messages)` exceeds `max_history_messages` (default 40):
+1. **Keep head** — first run's messages (up to first `ModelResponse` with `TextPart`)
+2. **Keep tail** — last `max_history_messages // 2` messages (minimum 4)
+3. **Drop middle** — replaced by an LLM summary via `summarize_messages()`
+4. **Fallback** — on LLM failure, inserts a static marker instead
+
+The summary is injected as a valid `ModelRequest` with `UserPromptPart` at the splice point.
+
+**Shared summarisation — `summarize_messages()`:**
+
+Creates a disposable `Agent(model, output_type=str)` with no tools to prevent tool execution during summarisation. Used by both `sliding_window` and the `/compact` command.
+
+**`/compact` refactored:**
+
+Calls `summarize_messages()` with the primary model and builds a minimal 2-message history (summary request + ack response). No longer uses `agent.run()` which could trigger tools.
+
+**Configuration:**
+
+| Setting | Env Var | Default | Purpose |
+|---------|---------|---------|---------|
+| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per ToolReturnPart in older messages |
+| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Sliding window threshold |
+| `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` (primary) | Cheap model for auto-summarisation |
 
 ---
 
@@ -1286,6 +1313,7 @@ def test_sandbox_execution():
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` — health probes and shared table rendering |
 | `banner.py` | ASCII art welcome banner, consumes `StatusInfo` for display |
 | `_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
+| `_history.py` | History processors (`trim_old_tool_output`, `sliding_window`) and `summarize_messages()` |
 | `tail.py` | Real-time span viewer (`co tail`) |
 | `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
 | `google_auth.py` | Google credential resolution (ensure/get/cached) — tools resolve lazily |

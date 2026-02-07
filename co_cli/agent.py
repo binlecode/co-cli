@@ -5,6 +5,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import settings
 from co_cli.deps import CoDeps
+from co_cli._history import trim_old_tool_output, sliding_window
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive, read_drive_file
@@ -96,6 +97,7 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
         system_prompt=system_prompt,
         retries=settings.tool_retries,
         output_type=[str, DeferredToolRequests],
+        history_processors=[trim_old_tool_output, sliding_window],
     )
 
     # Side-effectful tools — require human approval via DeferredToolRequests

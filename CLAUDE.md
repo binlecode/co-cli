@@ -80,10 +80,15 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/DESIGN-llm-models.md` — LLM model configuration
 - `docs/DESIGN-tail-viewer.md` — Real-time span tail viewer
 - `docs/DESIGN-theming-ascii.md` — Theming, ASCII art banner, display helpers
+- `docs/DESIGN-conversation-memory.md` — Context governance (history processors, sliding window, summarisation) and session persistence
 
 ### TODO (remaining work items only — no design content, no status tracking)
+- `docs/TODO-approval-flow-extraction.md` — Extract approval loop from main.py into orchestration module
+- `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning
+- `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
+- `docs/TODO-modelretry-normalization.md` — Cross-tool ModelRetry message consistency pass
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
-- `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
+- `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
 

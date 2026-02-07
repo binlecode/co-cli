@@ -15,6 +15,10 @@
   "tool_retries": 3,
   "max_request_limit": 25,
 
+  "tool_output_trim_chars": 2000,
+  "max_history_messages": 40,
+  "summarization_model": "",
+
   "sandbox_backend": "auto",
   "sandbox_max_timeout": 600,
   "sandbox_network": "none",

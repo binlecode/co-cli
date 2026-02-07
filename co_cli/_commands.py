@@ -84,20 +84,29 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
     """Summarize conversation via LLM to reduce context."""
+    from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
+
+    from co_cli._history import summarize_messages
+
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
     try:
-        result = await ctx.agent.run(
-            "Summarize the conversation so far in a concise form that preserves "
-            "key context, decisions, and any file paths or tool results referenced. "
-            "This summary will replace the conversation history to reduce context size.",
-            deps=ctx.deps,
-            message_history=ctx.message_history,
-        )
-        new_history = result.all_messages()
+        # Use the agent's model for /compact (user-initiated, quality matters)
+        model = ctx.agent.model
+        summary = await summarize_messages(ctx.message_history, model)
+
+        # Build a minimal 2-message history: summary request + ack response
+        new_history: list[Any] = [
+            ModelRequest(parts=[
+                UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
+            ]),
+            ModelResponse(parts=[
+                _TextPart(content="Understood. I have the conversation context."),
+            ]),
+        ]
         old_len = len(ctx.message_history)
         console.print(
             f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"

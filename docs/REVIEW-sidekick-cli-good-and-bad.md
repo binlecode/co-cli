@@ -1,460 +1,169 @@
-# Review: sidekick-cli Patterns Analysis
+# Review: sidekick-cli Patterns Analysis (Updated for Current co-cli)
 
-**Source:** `/Users/binle/workspace_genai/sidekick-cli`
-**Purpose:** Analyze patterns for co-cli learning journey
-**Reviewed:** 2026-02-04
+**sidekick source:** `/Users/binle/workspace_genai/sidekick-cli` (`82c6958`)
+**co-cli source:** `/Users/binle/workspace_genai/co-cli` (`7a4b753`)
+**Updated:** 2026-02-07
 
 ---
 
 ## Executive Summary
 
-sidekick-cli is a well-structured pydantic-ai CLI that demonstrates several best practices alongside some anti-patterns. This review identifies what to adopt and what to avoid as we build co-cli.
+The original sidekick findings were directionally correct, but co-cli has already implemented many of the recommended patterns. The main remaining gaps are streaming-first run orchestration (`iter`/`run_stream`) and MCP integration.
 
-| Category | Good Patterns | Anti-Patterns |
-|----------|--------------|---------------|
-| **Architecture** | 5 | 3 |
-| **Tool Design** | 4 | 2 |
-| **Error Handling** | 3 | 1 |
-| **Testing** | 2 | 1 |
-
----
-
-## Good Patterns to Adopt
-
-### 1. Proper Dependency Injection via `ToolDeps`
-
-**File:** `src/sidekick/deps.py:1-11`
-
-```python
-@dataclass
-class ToolDeps:
-    """Dependencies passed to tools via RunContext."""
-    confirm_action: Optional[Callable[[str, str, Optional[str]], Awaitable[bool]]] = None
-    display_tool_status: Optional[Callable[[str, Any], Awaitable[None]]] = None
-```
-
-**Why it's good:**
-- Follows the pydantic-ai `deps_type` pattern from `bank_support.py`
-- Injects callbacks rather than hardcoding UI dependencies
-- Tools remain testable - you can inject mock callbacks
-- Clean separation between tool logic and presentation
-
-**How to adopt in co-cli:**
-```python
-# co_cli/deps.py
-@dataclass
-class CoDeps:
-    confirm_action: Optional[Callable[[str, str], Awaitable[bool]]] = None
-    sandbox: Optional[DockerSandbox] = None  # Our unique addition
-    settings: Settings = None
-```
+| Category | Adopted in co-cli | Partial | Pending |
+|---|---|---|---|
+| Architecture | 5 | 2 | 1 |
+| Tool Design | 4 | 1 | 1 |
+| Error/Recovery | 4 | 0 | 0 |
+| Security Model | 3 | 1 | 0 |
 
 ---
 
-### 2. Agent Iteration Pattern with Node Processing
+## Pattern-by-Pattern Status
 
-**File:** `src/sidekick/agent.py:157-167`
+### 1. Dependency injection via deps object
 
-```python
-async with agent.iter(message, deps=deps, message_history=mh) as agent_run:
-    async for node in agent_run:
-        await _process_node(node, message_history)
+**sidekick pattern:** `ToolDeps` callbacks in `src/sidekick/deps.py`.
 
-    usage = agent_run.usage()
-    result = agent_run.result.output
-```
+**co-cli status:** **Implemented**.
 
-**Why it's good:**
-- Uses `agent.iter()` for fine-grained control over execution
-- Enables streaming UI updates (spinner, thinking panels)
-- Captures usage metrics per-request
-- Allows processing of intermediate nodes (tool calls, retries)
+- `CoDeps` is the runtime dependency container.
+- Agent is typed with `deps_type=CoDeps`.
 
-**pydantic-ai source reference:** `pydantic_ai_slim/pydantic_ai/agent/__init__.py`
+Refs: `co_cli/deps.py`, `co_cli/agent.py:93`.
 
----
+### 2. Fine-grained run orchestration (`agent.iter`)
 
-### 3. Tool Factory with Consistent Retry Configuration
+**sidekick pattern:** node-by-node processing with `agent.iter()`.
 
-**File:** `src/sidekick/tools/wrapper.py:14-27`
+**co-cli status:** **Pending**.
 
-```python
-TOOL_RETRY_LIMIT = 10
+- co-cli currently uses `agent.run(...)` with deferred approvals.
+- It does not yet process graph nodes via `iter()`.
 
-def create_tools():
-    """Create Tool instances for all tools."""
-    tools = [read_file, write_file, update_file, run_command, ...]
-    return [Tool(tool, max_retries=TOOL_RETRY_LIMIT) for tool in tools]
-```
+Refs: `co_cli/main.py:297`, `co_cli/main.py:304`.
 
-**Why it's good:**
-- Centralizes retry configuration
-- Consistent behavior across all tools
-- Easy to adjust globally
-- Uses `Tool()` wrapper for explicit configuration
+### 3. Recoverable tool failures with `ModelRetry`
 
----
+**sidekick pattern:** actionable retries in tools.
 
-### 4. ModelRetry for Recoverable Tool Errors
+**co-cli status:** **Implemented**.
 
-**File:** `src/sidekick/tools/update_file.py:18-38`
+- Tool modules consistently raise `ModelRetry` for user-correctable issues.
 
-```python
-if old_content == new_content:
-    raise ModelRetry(
-        "The old_content and new_content are identical. "
-        "Please provide different content for the replacement."
-    )
+Refs: `co_cli/tools/shell.py`, `co_cli/tools/google_gmail.py`, `co_cli/tools/slack.py`.
 
-if old_content not in content:
-    raise ModelRetry(
-        f"Content to replace not found in {filepath}. "
-        "Please re-read the file and ensure the exact content matches."
-    )
-```
+### 4. Message-history patching after interrupts/errors
 
-**Why it's good:**
-- Gives the LLM actionable feedback to self-correct
-- Doesn't crash the agent - allows retry
-- Clear, specific error messages guide the model
-- Follows pydantic-ai's `ModelRetry` exception pattern
+**sidekick pattern:** synthesize missing tool-return messages.
 
-**pydantic-ai source reference:** `pydantic_ai_slim/pydantic_ai/exceptions.py`
+**co-cli status:** **Implemented**.
 
----
+- `_patch_dangling_tool_calls()` repairs history after interruption.
 
-### 5. Message History Management with Error Patching
+Refs: `co_cli/main.py:118`, `co_cli/main.py:320`.
 
-**File:** `src/sidekick/messages.py:44-81`
+### 5. Signal handling and cancellation hygiene
 
-```python
-def patch_on_error(self, error_message: str) -> None:
-    """Patch the message history with a ToolReturnPart on error.
+**sidekick pattern:** explicit SIGINT strategy around async tasks.
 
-    LLM models expect to see both a tool call and its corresponding
-    response in the history. Without this patch, the next request
-    would fail because the model would see an unanswered tool call.
-    """
-    # ... finds last tool call and adds synthetic response
-```
+**co-cli status:** **Implemented**.
 
-**Why it's good:**
-- Maintains valid conversation state after interrupts
-- Prevents "dangling tool call" errors
-- Documents the *why* clearly
-- Enables graceful recovery from Ctrl+C
+- co-cli handles interrupt cancellation and double-ctrl-c exit behavior.
+- Approval prompt temporarily restores default SIGINT handler.
+
+Refs: `co_cli/main.py:155`, `co_cli/main.py:313`, `co_cli/main.py:325`.
+
+### 6. Explicit tool registration and approval boundaries
+
+**sidekick pattern discussed:** avoid implicit import-time registration.
+
+**co-cli status:** **Implemented**.
+
+- Tools are explicitly registered with `agent.tool(...)`.
+- Side-effect tools use `requires_approval=True`.
+
+Refs: `co_cli/agent.py:102`, `co_cli/agent.py:107`.
+
+### 7. MCP integration pathway
+
+**sidekick pattern:** custom MCP server integration callbacks.
+
+**co-cli status:** **Pending**.
+
+- No MCP subsystem in current co-cli runtime.
+
+Refs: `co_cli/agent.py`, `co_cli/main.py`.
 
 ---
 
-### 6. MCP Server Integration with Custom Callbacks
+## Anti-Patterns Re-check
 
-**File:** `src/sidekick/mcp/servers.py:25-54`
+### 1. Global mutable runtime singletons
 
-```python
-async def mcp_tool_confirmation_callback(
-    ctx: RunContext[Any],
-    original_call_tool,
-    tool_name: str,
-    arguments: Dict[str, Any],
-) -> Any:
-    """Process tool callback for MCP tool calls."""
-    if hasattr(ctx.deps, "confirm_action") and ctx.deps.confirm_action:
-        confirmed = await ctx.deps.confirm_action(f"MCP({tool_name})", args_display)
-        if not confirmed:
-            raise asyncio.CancelledError("MCP tool execution cancelled")
-    return await original_call_tool(tool_name, arguments)
-```
+**sidekick issue:** global `session` and `usage_tracker`.
 
-**Why it's good:**
-- Extends MCP servers with custom confirmation flow
-- Uses `process_tool_call` callback pattern
-- Integrates cleanly with deps-based confirmation
+**co-cli status:** **Mostly avoided**.
 
----
+- Runtime state is carried through `CoDeps` and local loop variables.
+- `settings` is global config, but not a mutable per-request session singleton.
 
-### 7. Comprehensive Error Context with Cleanup
+Refs: `co_cli/deps.py`, `co_cli/main.py`, `co_cli/config.py`.
 
-**File:** `src/sidekick/utils/error.py:133-161`
+### 2. Unsandboxed host command execution
 
-```python
-class ErrorContext:
-    """Context for error handling with cleanup callbacks."""
+**sidekick issue:** direct host `subprocess.run(shell=True)`.
 
-    def add_cleanup(self, callback: Callable) -> None:
-        self.cleanup_callbacks.append(callback)
+**co-cli status:** **Partial improvement**.
 
-    async def handle(self, error: Exception) -> Optional[Any]:
-        for callback in self.cleanup_callbacks:
-            callback(error)  # e.g., patch message history
-```
+- Docker isolation exists and is preferred.
+- In `sandbox_backend=auto`, fallback can run in `SubprocessBackend` (`isolation_level="none"`).
+- co-cli compensates by forcing approval for shell commands in no-isolation mode.
 
-**Why it's good:**
-- Cleanup callbacks ensure consistent state
-- Separates error handling from business logic
-- Supports both sync and async cleanup
-- Reusable across different operations
+Refs: `co_cli/sandbox.py`, `co_cli/main.py:68`, `co_cli/main.py:174`.
+
+### 3. Manual config validation
+
+**sidekick issue:** manual JSON validation functions.
+
+**co-cli status:** **Implemented better approach**.
+
+- Pydantic model with validators and env overlay.
+
+Refs: `co_cli/config.py:41`, `co_cli/config.py:85`.
+
+### 4. Agent/UI concern mixing
+
+**sidekick issue:** confirmation/UI callbacks inside agent module.
+
+**co-cli status:** **Partial**.
+
+- Tool logic is mostly decoupled.
+- `main.py` still carries orchestration + approval UI + output rendering in one module.
+
+Refs: `co_cli/main.py`.
 
 ---
 
-### 8. REPL with Proper Signal Handling
+## Updated Structural Comparison
 
-**File:** `src/sidekick/repl.py:75-87`
-
-```python
-def _setup_signal_handler(self):
-    def signal_handler(signum, frame):
-        if self.current_task and not self.current_task.done():
-            ui.stop_spinner()
-            self._kill_child_processes()
-            self.loop.call_soon_threadsafe(self.current_task.cancel)
-        else:
-            raise KeyboardInterrupt()
-    signal.signal(signal.SIGINT, signal_handler)
-```
-
-**Why it's good:**
-- Clean Ctrl+C handling during async operations
-- Kills child processes (important for shell commands)
-- Uses `call_soon_threadsafe` for async cancellation
-- Falls back to normal KeyboardInterrupt when idle
+| Aspect | sidekick-cli | co-cli (current) |
+|---|---|---|
+| Config | Manual structure checks | Pydantic settings + env + project override |
+| Runtime state | Global session/usage singletons | `CoDeps` injection + local session flow |
+| Shell isolation | Host subprocess (`shell=True`) | Docker sandbox + subprocess fallback mode |
+| Approval flow | Callback-driven | Deferred tool approvals + safe-prefix shortcut |
+| Tool registration | Wrapped import list | Explicit `agent.tool(...)` registrations |
+| Interrupt recovery | Message patching | Message patching + prompt-safe SIGINT handling |
+| Telemetry | In-memory usage tracker | OpenTelemetry -> SQLite exporter |
+| MCP | Implemented custom wrapper | Not yet integrated |
 
 ---
 
-## Anti-Patterns to Avoid
+## Priority Next Steps (from this review)
 
-### 1. Global Mutable Session Singleton
+1. Implement `run_stream` or `agent.iter` orchestration for better streaming/tool-event control.
+2. Decide policy for `sandbox_backend=subprocess` in production-like use (keep, tighten, or disable by default).
+3. Split `co_cli/main.py` into smaller orchestration modules (approval UI, run loop, rendering).
+4. Add MCP support only after web + memory + file-tool MVPs stabilize.
 
-**File:** `src/sidekick/session.py:22-23`
-
-```python
-# Create global session instance
-session = Session()
-```
-
-**Why it's bad:**
-- Global state makes testing difficult
-- Hidden dependency - not explicit in function signatures
-- Race conditions possible with concurrent access
-- Violates dependency injection principles
-
-**Used throughout:** `agent.py`, `repl.py`, `main.py`, `run_command.py`
-
-**Better approach for co-cli:**
-```python
-# Pass session as part of deps
-@dataclass
-class CoDeps:
-    session: SessionState
-    confirm_action: ...
-
-# Or use RunContext directly
-@agent.tool
-async def my_tool(ctx: RunContext[CoDeps]) -> str:
-    model = ctx.deps.session.current_model  # Explicit dependency
-```
-
----
-
-### 2. Shell Commands Without Sandbox
-
-**File:** `src/sidekick/tools/run_command.py:32-40`
-
-```python
-result = subprocess.run(
-    command,
-    shell=True,      # Dangerous: allows shell injection
-    capture_output=True,
-    text=True,
-    timeout=30,
-)
-```
-
-**Why it's bad:**
-- `shell=True` with user/LLM input is a security risk
-- Commands run directly on host system
-- No isolation from sensitive files/data
-- No resource limits (CPU, memory, disk)
-
-**co-cli does this better:**
-```python
-# co_cli/sandbox.py uses Docker
-docker run --rm -v "$PWD:/workspace" python:3.12-slim sh -c "command"
-```
-
----
-
-### 3. Global Usage Tracker Singleton
-
-**File:** `src/sidekick/usage.py:102-103`
-
-```python
-# Global usage tracker instance
-usage_tracker = UsageTracker()
-```
-
-**Why it's bad:**
-- Same issues as session singleton
-- Can't easily track usage per-conversation
-- Testing requires resetting global state
-
-**Better approach:**
-```python
-# Include in deps or return from agent run
-@dataclass
-class CoDeps:
-    usage_tracker: UsageTracker
-```
-
----
-
-### 4. Tool Registration via Imports (Implicit)
-
-**File:** `src/sidekick/tools/__init__.py`
-
-```python
-from .wrapper import create_tools
-TOOLS = create_tools()
-```
-
-**Why it's suboptimal:**
-- Tools are bare functions, wrapped later
-- No decorator-based registration pattern
-- Less cohesive than `@agent.tool` approach
-
-**pydantic-ai best practice:**
-```python
-@agent.tool
-async def read_file(ctx: RunContext[CoDeps], filepath: str) -> str:
-    """Read file contents."""
-    ...
-```
-
----
-
-### 5. Mixing Concerns in Agent Module
-
-**File:** `src/sidekick/agent.py:75-109`
-
-The confirmation callback is defined inline in `agent.py`:
-
-```python
-def _create_confirmation_callback():
-    async def confirm(title, preview, footer=None):
-        if not session.confirmation_enabled:  # Uses global session
-            return True
-        ui.stop_spinner()  # UI logic in agent module
-        ...
-```
-
-**Why it's suboptimal:**
-- Agent module handles UI concerns
-- Depends on global `session`
-- Callback logic should be injected, not defined here
-
-**Better separation:**
-```python
-# ui/confirmations.py - define the callback
-# deps.py - type the callback interface
-# main.py - wire them together at startup
-```
-
----
-
-### 6. Config Validation Without Pydantic
-
-**File:** `src/sidekick/config.py:57-79`
-
-```python
-def validate_config_structure(config: Dict[str, Any]) -> None:
-    if not isinstance(config, dict):
-        raise ConfigValidationError("Config must be a JSON object")
-    if "default_model" not in config:
-        raise ConfigValidationError("Config missing required field")
-    ...
-```
-
-**Why it's suboptimal:**
-- Manual validation when Pydantic exists
-- No type coercion or defaults
-- Error messages less informative
-
-**Better approach (used in co-cli):**
-```python
-from pydantic import BaseModel, Field
-
-class Settings(BaseModel):
-    llm_provider: str = "gemini"
-    gemini_api_key: str | None = Field(default=None, env="GEMINI_API_KEY")
-    # Automatic validation, env var support, type coercion
-```
-
----
-
-## Structural Comparison
-
-| Aspect | sidekick-cli | co-cli (Target) |
-|--------|--------------|-----------------|
-| **Config** | Manual JSON validation | Pydantic `BaseModel` |
-| **Session** | Global singleton | Via deps injection |
-| **Shell** | Direct `subprocess.run` | Docker sandbox |
-| **Tools** | Wrapped bare functions | `@agent.tool` decorator |
-| **Confirmation** | Callback in deps | Callback in deps |
-| **MCP** | Custom `SilentMCPServerStdio` | Standard + config |
-| **Telemetry** | In-memory usage tracker | OpenTelemetry + SQLite |
-
----
-
-## Recommendations for co-cli
-
-### Adopt These Patterns:
-1. `ToolDeps` dataclass with callback injection
-2. `agent.iter()` for streaming/node processing
-3. `ModelRetry` for recoverable errors
-4. `ErrorContext` with cleanup callbacks
-5. Message history patching for interrupts
-6. Signal handler for graceful Ctrl+C
-
-### Avoid/Improve:
-1. No global singletons - pass everything via deps
-2. Keep Docker sandbox for shell commands
-3. Use Pydantic for config validation (already doing this)
-4. Use `@agent.tool` decorator pattern
-5. Separate UI concerns from agent module
-
-### Unique co-cli Advantages to Preserve:
-1. Docker sandbox isolation
-2. OpenTelemetry + SQLite telemetry
-3. Pydantic-based settings with env var fallbacks
-4. XDG-compliant paths
-
----
-
-## File-by-File Reference
-
-### Worth Studying
-| File | Pattern | Notes |
-|------|---------|-------|
-| `deps.py` | Dependency injection | Clean, minimal |
-| `agent.py:139-177` | Agent iteration | `iter()` pattern |
-| `messages.py` | History management | Error patching |
-| `tools/update_file.py` | ModelRetry usage | Self-correction |
-| `utils/error.py` | Error context | Cleanup callbacks |
-| `mcp/servers.py` | MCP integration | Custom callbacks |
-
-### Cautionary Examples
-| File | Anti-Pattern | Issue |
-|------|--------------|-------|
-| `session.py:23` | Global singleton | Hidden dependency |
-| `usage.py:103` | Global singleton | Testing issues |
-| `tools/run_command.py:32` | No sandbox | Security risk |
-| `config.py` | Manual validation | Should use Pydantic |
-
----
-
-## Next Steps
-
-1. **Phase 1:** Refactor `co_cli/agent.py` to use `deps_type=CoDeps`
-2. **Phase 2:** Add `agent.iter()` loop for streaming
-3. **Phase 3:** Implement `ModelRetry` in tools
-4. **Phase 4:** Add message history with error patching
-5. **Phase 5:** Integrate MCP server support
