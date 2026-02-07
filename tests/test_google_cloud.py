@@ -1,13 +1,13 @@
-"""Functional tests for cloud tools (Drive, Gmail, Slack)."""
+"""Functional tests for Google tools (Drive, Gmail, Calendar)."""
 
 from dataclasses import dataclass
 
 import pytest
+from pydantic_ai import ModelRetry
 
 from co_cli.tools.google_drive import search_drive, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
-from co_cli.tools.slack import post_slack_message
 from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
@@ -19,18 +19,13 @@ class Context:
     deps: CoDeps
 
 
-def _make_ctx(
-    auto_confirm: bool = True,
-    slack_client=None,
-) -> Context:
+def _make_ctx(auto_confirm: bool = True) -> Context:
     return Context(deps=CoDeps(
         sandbox=Sandbox(container_name="test"),
         auto_confirm=auto_confirm,
         session_id="test",
         google_credentials_path=settings.google_credentials_path,
-        slack_client=slack_client,
     ))
-
 
 
 def test_drive_search_functional():
@@ -48,7 +43,6 @@ def test_drive_search_functional():
     assert "Found" in results["display"] or results.get("count") == 0
 
 
-
 def test_drive_search_empty_result():
     """search_drive returns a valid dict with count=0 on no matches (not ModelRetry)."""
     ctx = _make_ctx()
@@ -59,7 +53,6 @@ def test_drive_search_empty_result():
     assert result["page"] == 1
     assert result["has_more"] is False
     assert "No files found" in result["display"]
-
 
 
 def test_drive_search_pagination():
@@ -82,7 +75,6 @@ def test_drive_search_pagination():
     assert page2["display"] != page1["display"]
 
 
-
 def test_list_emails_functional():
     """Test real Gmail list emails.
     Requires google_credentials_path in settings.
@@ -93,7 +85,6 @@ def test_list_emails_functional():
     assert isinstance(result, dict)
     assert "display" in result
     assert "count" in result
-
 
 
 def test_search_emails_functional():
@@ -108,7 +99,6 @@ def test_search_emails_functional():
     assert "count" in result
 
 
-
 def test_list_calendar_events_functional():
     """Test listing calendar events with default params (today only)."""
     ctx = _make_ctx()
@@ -117,7 +107,6 @@ def test_list_calendar_events_functional():
     assert isinstance(result, dict)
     assert "display" in result
     assert "count" in result
-
 
 
 def test_list_calendar_events_with_time_window():
@@ -130,7 +119,6 @@ def test_list_calendar_events_with_time_window():
     assert result["count"] > 0
 
 
-
 def test_search_calendar_events_functional():
     """Test searching calendar events by keyword."""
     ctx = _make_ctx()
@@ -139,7 +127,6 @@ def test_search_calendar_events_functional():
     assert isinstance(result, dict)
     assert "display" in result
     assert "count" in result
-
 
 
 def test_search_calendar_events_with_days_back():
@@ -154,7 +141,6 @@ def test_search_calendar_events_with_days_back():
     assert "count" in result
 
 
-
 def test_gmail_draft_functional():
     """Test real Gmail draft creation.
     Requires google_credentials_path in settings.
@@ -163,25 +149,3 @@ def test_gmail_draft_functional():
 
     result = draft_email(ctx, "test@example.com", "Test Subject", "Test Body")
     assert "Draft created" in result
-
-
-def test_slack_post_functional():
-    """Test real Slack message posting.
-    Requires SLACK_BOT_TOKEN.
-    """
-    from slack_sdk import WebClient
-
-    client = WebClient(token=settings.slack_bot_token)
-    ctx = _make_ctx(auto_confirm=True, slack_client=client)
-
-    channel = "#general"
-    try:
-        result = post_slack_message(ctx, channel, "Automated test from Co-CLI")
-        assert isinstance(result, dict)
-        assert "display" in result
-        assert "ts" in result
-        assert "channel" in result
-    except Exception as e:
-        # channel_not_found is acceptable (tool auth worked)
-        if "channel_not_found" not in str(e):
-            pytest.fail(f"Slack error: {e}")
