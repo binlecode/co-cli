@@ -93,7 +93,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
 
 ### Reviews
-- `docs/REVIEW-co-cli-design-team-view.md` — Combined design review (Opus + Codex) with priority action plan
+- `docs/REVIEW-sidekick-cli-good-and-bad.md` — sidekick-cli patterns analysis (adopted vs pending vs anti-patterns)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
