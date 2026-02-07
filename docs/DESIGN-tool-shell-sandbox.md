@@ -26,9 +26,8 @@ The shell tool executes user commands in a sandboxed Docker container, protectin
 │           ▼                                                      │
 │  ┌─────────────────────────────────────────────────────────┐    │
 │  │              run_shell_command()                         │    │
-│  │  1. Check auto_confirm flag                              │    │
-│  │  2. Prompt user (if needed)                              │    │
-│  │  3. Delegate to sandbox                                  │    │
+│  │  1. Deferred approval (chat loop, not tool)             │    │
+│  │  2. Delegate to sandbox                                  │    │
 │  └────────┬────────────────────────────────────────────────┘    │
 └───────────┼──────────────────────────────────────────────────────┘
             │
@@ -171,7 +170,7 @@ LLM calls run_shell_command(cmd)
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
 | `name` | `"co-runner-{session_id[:8]}"` | Session-scoped name to avoid cross-session collisions |
-| `image` | `python:3.12-slim` | Lightweight, has Python |
+| `image` | `co-cli-sandbox` | Custom image with dev tools (see below) |
 | `detach` | `True` | Run in background |
 | `tty` | `True` | Keep container alive |
 | `command` | `"sh"` | Idle process to prevent exit |
@@ -203,7 +202,7 @@ run_command(cmd)
        ▼
 ┌──────────────────────────────────────┐
 │ container.exec_run(                   │
-│     cmd,                              │
+│     ["sh", "-c", cmd],               │
 │     workdir="/workspace"              │
 │ )                                     │
 │   └── Returns (exit_code, output)    │
@@ -218,6 +217,8 @@ run_command(cmd)
 └──────────────────────────────────────┘
 ```
 
+**Why `sh -c`:** Docker `exec_run(cmd)` without a shell wrapper treats the string as a raw executable path — shell builtins (`cd`), pipes (`grep foo | wc -l`), redirects (`> file.txt`), and aliases (`ll`) all fail. Wrapping in `["sh", "-c", cmd]` runs every command through a proper shell.
+
 ### Design Decisions
 
 | Decision | Rationale |
@@ -225,6 +226,7 @@ run_command(cmd)
 | Lazy `_client` | Don't connect to Docker until needed |
 | Session-scoped named container | Enables reuse detection while isolating concurrent sessions |
 | `tty=True` + `command="sh"` | Keeps container alive between exec calls |
+| `["sh", "-c", cmd]` wrapping | Enables shell builtins, pipes, redirects, variable expansion |
 | Capture CWD at init | Consistent workspace for entire session |
 | Silent cleanup errors | Session end shouldn't fail if container already gone |
 
@@ -297,20 +299,40 @@ Scenario: LLM runs "rm -rf /"
 
 | Setting | Default | Env Override | Description |
 |---------|---------|--------------|-------------|
-| `docker_image` | `python:3.12-slim` | `CO_CLI_DOCKER_IMAGE` | Container image |
+| `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Container image |
 | `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip prompts |
+
+### Default Image: `co-cli-sandbox`
+
+Built from `Dockerfile.sandbox` (based on `python:3.12-slim`). Adds the shell utilities an LLM naturally reaches for:
+
+```
+docker build -t co-cli-sandbox -f Dockerfile.sandbox .
+```
+
+| Package | Category | Why |
+|---------|----------|-----|
+| `curl` | Network | HTTP requests, API testing |
+| `wget` | Network | File downloads |
+| `git` | VCS | Version control — the #1 dev tool |
+| `jq` | Data | JSON processing (LLMs love JSON) |
+| `tree` | Files | Directory overview |
+| `file` | Files | Identify file types |
+| `less` | Paging | Browse long output |
+| `zip`/`unzip` | Archive | Compress/decompress |
+| `nano` | Editor | Quick non-interactive edits |
+
+**Design rationale:** `python:3.12-slim` has coreutils (`grep`, `sed`, `awk`, `find`, `sort`, `shuf`) but lacks network and dev tools. LLMs frequently reach for `curl`, `git`, and `jq` — without them, every such attempt burns a `ModelRetry` round-trip. Interactive tools (`vim`, `htop`) are excluded because `exec_run` has no TTY interaction.
 
 ### Custom Images
 
-For specialized workflows, configure a different image:
+For specialized workflows, override the image:
 
 ```json
 {
   "docker_image": "node:20-slim"
 }
 ```
-
-Or build a custom image with pre-installed tools for faster execution.
 
 ---
 
@@ -379,9 +401,10 @@ chat_loop()
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tools/shell.py` | Tool function with confirmation logic |
-| `co_cli/sandbox.py` | Docker container lifecycle management |
+| `co_cli/tools/shell.py` | Tool function — delegates to sandbox, `ModelRetry` on error |
+| `co_cli/sandbox.py` | Docker container lifecycle, `sh -c` command execution |
 | `co_cli/deps.py` | CoDeps dataclass holding sandbox instance |
+| `Dockerfile.sandbox` | Custom image build (python:3.12-slim + dev tools) |
 
 ---
 

@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.8] - 2026-02-06
 
 ### Added
+- **Custom sandbox image (`co-cli-sandbox`)**: New `Dockerfile.sandbox` based on `python:3.12-slim` with dev tools pre-installed (curl, git, jq, tree, file, less, zip/unzip, nano, wget). Default `docker_image` setting changed from `python:3.12-slim` to `co-cli-sandbox`.
+- **Shell `sh -c` wrapping**: `Sandbox.run_command()` now executes via `["sh", "-c", cmd]` instead of raw `exec_run(cmd)`. Enables shell builtins (`cd`), pipes, redirects, and aliases that previously failed with "executable file not found".
+- **Status module (`co_cli/status.py`)**: Extracted environment/health checks into `StatusInfo` dataclass + `get_status()`. Banner and `co status` command consume pure data — no duplicated probe logic.
+- **Chained approval loop**: `_handle_approvals()` now loops (`while`, not `if`) so resumed agent runs that trigger additional deferred tool calls get their own approval round.
+- **`ToolCallPart.args` type handling**: Approval prompt formatter handles `str | dict | None` args (was crashing on JSON-string args from some model providers).
 - **Deferred approval flow**: Migrated from inline `_confirm.py` prompts to pydantic-ai `DeferredToolRequests` + `requires_approval=True`. Side-effectful tools (`run_shell_command`, `draft_email`, `post_slack_message`) now go through centralized `_handle_approvals()` in the chat loop with `[y/n/a(yolo)]` prompt and `ToolDenied` on rejection.
 - **Obsidian search: folder and tag filtering**: `search_notes` accepts `folder` (restrict to subfolder) and `tag` (match YAML frontmatter or inline `#tag`). New `_extract_frontmatter_tags()` parser handles `tags: [a, b]` and list formats.
 - **Obsidian snippet improvements**: `_snippet_around()` helper breaks at word boundaries instead of fixed character offsets.

@@ -1,7 +1,7 @@
 # Design: Obsidian Vault Tools
 
-**Status:** Implemented (Batch 2)
-**Last Updated:** 2026-02-04
+**Status:** Implemented (Batch 2, display-field update 2026-02-06)
+**Last Updated:** 2026-02-06
 
 ## Overview
 
@@ -55,7 +55,7 @@ The Obsidian tools provide read-only access to a local Obsidian vault, enabling 
 Primary tool for knowledge retrieval. Multi-keyword search with word boundaries.
 
 ```
-search_notes(query: str, limit: int = 10) -> list[dict]
+search_notes(query: str, limit: int = 10) -> dict[str, Any]
 
 Args:
     query: Space-separated keywords (AND logic, whole words, case-insensitive)
@@ -63,10 +63,11 @@ Args:
     limit: Maximum results (default 10, per RAG best practice)
 
 Returns:
-    [{"file": "path/note.md", "snippet": "...context..."}]
+    {"display": "**file.md**\n  snippet...", "count": N, "has_more": false}
+    Empty results: {"display": "No notes found matching: ...", "count": 0, "has_more": false}
 
 Raises:
-    ModelRetry: If vault not configured or no matches found
+    ModelRetry: If vault not configured or empty query
 ```
 
 **Search Behavior:**
@@ -111,14 +112,22 @@ search_notes("project team")
        │
        ▼
 ┌──────────────────────────────┐
-│ No results? ──▶ ModelRetry   │
-│   "Try fewer keywords"       │
+│ No results?                  │
+│   └── Return {"count": 0}   │
+│       (not ModelRetry)       │
 └──────────────────────────────┘
        │
        ▼
 ┌──────────────────────────────┐
-│ Return results[:limit]       │
-│   (default 10)               │
+│ Build display string         │
+│   **file.md**                │
+│     snippet text...          │
+└──────────────────────────────┘
+       │
+       ▼
+┌──────────────────────────────┐
+│ Return {"display": "...",    │
+│   "count": N, "has_more": F}│
 └──────────────────────────────┘
 ```
 
@@ -127,13 +136,14 @@ search_notes("project team")
 Browse vault structure, optionally filter by tag.
 
 ```
-list_notes(tag: str | None = None) -> list[str]
+list_notes(tag: str | None = None) -> dict[str, Any]
 
 Args:
     tag: Optional tag to filter (e.g. "#project")
 
 Returns:
-    List of relative file paths
+    {"display": "- file1.md\n- file2.md", "count": N}
+    Empty results: {"display": "No notes found.", "count": 0}
 ```
 
 **Use Cases:**
@@ -193,27 +203,30 @@ Tools access vault path via `RunContext[CoDeps]`:
 
 ---
 
-## Error Handling with ModelRetry
+## Error Handling: ModelRetry vs Empty Result
 
-Tools use `ModelRetry` for self-healing:
+Following the project-wide design principle (see `docs/TODO-tool-call-stability.md`):
 
-| Scenario | ModelRetry Message | LLM Action |
-|----------|-------------------|------------|
-| Vault not configured | "Ask user to set obsidian_vault_path" | Inform user |
-| No search results | "Try different keywords or use list_notes" | Retry with broader terms |
-| Note not found | "Available notes: [...]. Use exact path" | Retry with correct path |
+- **`ModelRetry`** = "you called this wrong, fix your parameters"
+- **Empty result** = "query was fine, nothing matched"
 
-**Why ModelRetry over error strings?**
+| Scenario | Response | LLM Action |
+|----------|----------|------------|
+| Vault not configured | `ModelRetry("Ask user to set obsidian_vault_path")` | Inform user |
+| Empty query | `ModelRetry("Provide keywords to search")` | Fix parameters |
+| No search results | `{"display": "No notes found matching: ...", "count": 0}` | Report to user |
+| No notes in vault | `{"display": "No notes found.", "count": 0}` | Report to user |
+| Note not found | `ModelRetry("Available notes: [...]. Use exact path")` | Retry with correct path |
+| Path traversal | `ModelRetry("Access denied: path is outside the vault")` | Stop |
 
-```
-# Bad - LLM sees error, gives up
-return "Error: file not found"
+**Why empty result for no search matches?**
 
-# Good - LLM retries with guidance
-raise ModelRetry(
-    f"Note '{filename}' not found. "
-    f"Available: {available}. Use exact path."
-)
+```python
+# Correct — query was valid, nothing matched (consistent with search_drive)
+return {"display": "No notes found matching: project", "count": 0, "has_more": False}
+
+# Correct — LLM made a fixable error
+raise ModelRetry(f"Note '{filename}' not found. Available: {available}.")
 ```
 
 ---
