@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`docs/DESIGN-tool-google.md`**: `Sandbox.ensure_container()` → `DockerSandbox.ensure_container()` in analogy references.
 - **`docs/DESIGN-tool-slack.md`**: `deps.py` import reference updated from `Sandbox` to `SandboxProtocol`.
 - **`docs/TODO-shell-safety.md`**: Removed — all MVP items complete, only aspirational post-MVP enhancements remained.
-- **`settings.example.json`** → **`settings.defaults.json`**: Renamed to reflect its role as the authoritative schema reference with default values. Updated to include all current settings (`sandbox_backend`, `theme`, `shell_safe_commands`).
+- **`settings.example.json`** → **`settings.reference.json`**: Renamed to reflect its role as a user-facing schema reference with default values. Not loaded by code — copy to `~/.config/co-cli/settings.json` and customize.
 
 ---
 

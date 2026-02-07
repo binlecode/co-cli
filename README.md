@@ -53,7 +53,7 @@ Before you begin, ensure you have the following installed:
 
     ```bash
     mkdir -p ~/.config/co-cli
-    cp settings.defaults.json ~/.config/co-cli/settings.json
+    cp settings.reference.json ~/.config/co-cli/settings.json
     # Edit with your values
     ```
 
