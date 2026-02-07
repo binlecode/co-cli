@@ -1,5 +1,6 @@
 import asyncio
 import json
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -128,31 +129,40 @@ async def _handle_approvals(agent, deps, result, model_settings):
     """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
     approvals = DeferredToolResults()
 
-    for call in result.output.approvals:
-        args = call.args
-        if isinstance(args, str):
-            args = json.loads(args)
-        args = args or {}
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-        desc = f"{call.tool_name}({args_str})"
+    # Temporarily restore the default SIGINT handler during the synchronous
+    # Prompt.ask() calls.  asyncio.run() replaces SIGINT with a handler that
+    # cancels the main task, which cannot interrupt a blocking input() call.
+    # Restoring default_int_handler lets Ctrl-C raise KeyboardInterrupt.
+    prev_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        for call in result.output.approvals:
+            args = call.args
+            if isinstance(args, str):
+                args = json.loads(args)
+            args = args or {}
+            args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+            desc = f"{call.tool_name}({args_str})"
 
-        if deps.auto_confirm:
-            approvals.approvals[call.tool_call_id] = True
-            continue
+            if deps.auto_confirm:
+                approvals.approvals[call.tool_call_id] = True
+                continue
 
-        console.print(f"Approve [bold]{desc}[/bold]?" + _CHOICES_HINT, end=" ")
-        choice = Prompt.ask(
-            "", choices=["y", "n", "a"], default="n",
-            show_choices=False, show_default=False, console=console,
-        )
-        if choice == "a":
-            deps.auto_confirm = True
-            console.print("[bold orange3]YOLO mode enabled — auto-approving for this session[/bold orange3]")
-            approvals.approvals[call.tool_call_id] = True
-        elif choice == "y":
-            approvals.approvals[call.tool_call_id] = True
-        else:
-            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+            console.print(f"Approve [bold]{desc}[/bold]?" + _CHOICES_HINT, end=" ")
+            choice = Prompt.ask(
+                "", choices=["y", "n", "a"], default="n",
+                show_choices=False, show_default=False, console=console,
+            )
+            if choice == "a":
+                deps.auto_confirm = True
+                console.print("[bold orange3]YOLO mode enabled — auto-approving for this session[/bold orange3]")
+                approvals.approvals[call.tool_call_id] = True
+            elif choice == "y":
+                approvals.approvals[call.tool_call_id] = True
+            else:
+                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+    finally:
+        signal.signal(signal.SIGINT, prev_handler)
 
     return await agent.run(
         None,
@@ -184,7 +194,7 @@ def _display_tool_outputs(old_len: int, messages: list) -> None:
             content = part.content
             if isinstance(content, str) and content.strip():
                 title = cmds.get(part.tool_call_id, part.tool_name)
-                console.print(Panel(content.rstrip(), title=f"$ {title}", border_style="dim"))
+                console.print(Panel(content.rstrip(), title=f"$ {title}", border_style="shell"))
             elif isinstance(content, dict) and "display" in content:
                 console.print(content["display"])
 
@@ -219,13 +229,14 @@ async def chat_loop():
                             )
                             if output.strip():
                                 console.print(Panel(
-                                    output.rstrip(), title=f"$ {cmd}", border_style="dim",
+                                    output.rstrip(), title=f"$ {cmd}", border_style="shell",
                                 ))
                         except Exception as e:
                             console.print(f"[bold red]Error:[/bold red] {e}")
                     continue
 
                 console.print("[dim]Co is thinking...[/dim]")
+                result = None
                 try:
                     result = await agent.run(
                         user_input, deps=deps, message_history=message_history,
@@ -247,8 +258,10 @@ async def chat_loop():
                     # Cancel current operation, don't count toward exit.
                     # asyncio.run() handles SIGINT by cancelling the main task
                     # (CancelledError), not by raising KeyboardInterrupt directly.
-                    # Patch any dangling tool calls so next turn doesn't fail.
-                    message_history = _patch_dangling_tool_calls(message_history)
+                    # Use result.all_messages() when available so dangling tool
+                    # calls from the current turn are patched correctly.
+                    msgs = result.all_messages() if result else message_history
+                    message_history = _patch_dangling_tool_calls(msgs)
                     console.print("\n[dim]Interrupted.[/dim]")
 
             except EOFError:

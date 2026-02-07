@@ -1,4 +1,7 @@
+import asyncio
 import os
+import shlex
+
 import docker
 from docker.errors import NotFound, APIError
 
@@ -45,16 +48,37 @@ class Sandbox:
         except APIError as e:
             raise RuntimeError(f"Failed to ensure Docker container: {e}")
 
-    def run_command(self, cmd: str) -> str:
+    async def run_command(self, cmd: str, timeout: int = 120) -> str:
         """Execute a command inside the container and return output.
 
-        Raises RuntimeError on non-zero exit code or Docker errors.
+        Uses two timeout layers:
+        1. coreutils ``timeout`` inside the container (kills the process).
+        2. ``asyncio.wait_for`` on the Python side (keeps the event loop free).
+
+        The Python-level deadline is timeout + 5s grace so the in-container
+        kill fires first under normal conditions.
+
+        Raises RuntimeError on non-zero exit code, timeout, or Docker errors.
         """
         container = self.ensure_container()
-        exit_code, output = container.exec_run(
-            ["sh", "-c", cmd], workdir="/workspace",
-        )
+        wrapped = f"timeout {timeout} sh -c {shlex.quote(cmd)}"
+        try:
+            exit_code, output = await asyncio.wait_for(
+                asyncio.to_thread(
+                    container.exec_run, wrapped,
+                    workdir="/workspace",
+                    environment={"PYTHONUNBUFFERED": "1"},
+                ),
+                timeout=timeout + 5,
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"Command timed out after {timeout}s: {cmd}")
         decoded = output.decode("utf-8")
+        if exit_code == 124:
+            raise RuntimeError(
+                f"Command timed out after {timeout}s: {cmd}\n"
+                f"Partial output:\n{decoded.strip()}"
+            )
         if exit_code != 0:
             raise RuntimeError(f"exit code {exit_code}: {decoded.strip()}")
         return decoded

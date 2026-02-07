@@ -3,7 +3,8 @@ import pytest
 from co_cli.sandbox import Sandbox
 
 
-def test_sandbox_real_execution():
+@pytest.mark.asyncio
+async def test_sandbox_real_execution():
     """
     Test that the Sandbox can actually start a container and run a command.
     Mandate: No mocks, only real tests.
@@ -15,7 +16,7 @@ def test_sandbox_real_execution():
 
     try:
         # Test command execution
-        output = sandbox.run_command("echo 'functional test'")
+        output = await sandbox.run_command("echo 'functional test'")
         assert "functional test" in output
 
         # Test persistence/mounting
@@ -24,7 +25,7 @@ def test_sandbox_real_execution():
         with open(test_file, "w") as f:
             f.write("mount works")
 
-        output = sandbox.run_command(f"cat {test_file}")
+        output = await sandbox.run_command(f"cat {test_file}")
         assert "mount works" in output
 
         os.remove(test_file)

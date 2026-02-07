@@ -13,9 +13,9 @@ settings.theme ("light" | "dark")
 ┌─────────────────────────────────┐
 │  display.py                     │
 │                                 │
-│  _COLORS ─── _c(role) ──────── │ ──▶ banner.py  (accent, art selection)
-│                                 │
-│  console = Console()            │ ──▶ main.py    (shared output)
+│  _THEMES ──▶ Theme() ──▶ Console(theme=...)
+│                                 │ ──▶ banner.py  (accent, art selection)
+│                                 │ ──▶ main.py    (shared output)
 │                                 │ ──▶ _confirm.py (shared output)
 │                                 │
 │  Indicators: ❯ ▸ ✦ ✖ ◈         │
@@ -26,29 +26,26 @@ settings.theme ("light" | "dark")
 └─────────────────────────────────┘
 ```
 
-Theme selection flows from `settings.theme` (config/env) through `_c()` at call time. No Console replacement, no global mutation, no import-order dependencies.
+Theme selection flows from `settings.theme` (config/env) into a Rich `Theme` object at Console construction time. Semantic style names (e.g. `"accent"`, `"shell"`) are resolved natively by Rich — no wrapper function needed.
 
 ---
 
 ## Design Decisions
 
-### Plain `Console()` with call-time color resolution
+### Rich `Theme` with semantic style names
 
-The console is a single `Console()` instance created once at module level. Theme colors are resolved at call time via `_c(role)`, which looks up `settings.theme` against the `_COLORS` dict. This avoids the stale-reference problem that arises when replacing a module-level `Console` object — other modules that imported the original reference would keep using the old one.
+The console is a single `Console(theme=Theme(...))` instance created at module level. The theme dict is selected from `_THEMES` based on `settings.theme` at import time. Semantic style names (`"status"`, `"accent"`, `"shell"`, etc.) are registered with Rich and resolved natively — both in `style=` parameters and `[markup]` tags.
 
 ```python
-_COLORS = {
+_THEMES = {
     "dark":  {"status": "yellow",      "accent": "bold cyan",  ...},
     "light": {"status": "dark_orange", "accent": "bold blue",  ...},
 }
 
-console = Console()  # single instance, never replaced
-
-def _c(role: str) -> str:
-    return _COLORS.get(settings.theme, _COLORS["light"]).get(role, "")
+console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
 ```
 
-**Why not `rich.theme.Theme`:** `Theme` objects are bound to a `Console` at construction. Switching themes means creating a new `Console`, which breaks any module that imported the original via `from display import console`. The a-cli pattern of a plain dict + call-time lookup is simpler and has no import-order hazards.
+This is idiomatic Rich. Since `settings` is a module-level singleton resolved once at startup (env > settings.json > defaults), the theme is fixed for the process lifetime — no runtime theme switching needed, so binding at construction is fine. All modules that import `console` share the same themed instance.
 
 ### Theme-aware ASCII art banner
 
@@ -98,15 +95,18 @@ All other `console.print()` calls in the chat loop remain as inline Rich markup 
 
 | Role | Dark | Light | Usage |
 |------|------|-------|-------|
+| Role | Dark | Light | Usage |
+|------|------|-------|-------|
 | `status` | yellow | dark_orange | Status messages, thinking indicator |
 | `info` | cyan | blue | Informational messages |
 | `accent` | bold cyan | bold blue | Banner art, panel borders, emphasis |
 | `yolo` | bold orange3 | bold orange3 | Auto-confirm mode indicator |
+| `shell` | dim | dim | Shell output panel borders |
 | `error` | bold red | bold red | Error messages (same both themes) |
 | `success` | green | green | Success confirmation (same both themes) |
 | `hint` | dim | dim | Secondary text, exit instructions |
 
-Colors that are the same in both themes (error, success, hint) use inline Rich markup directly rather than going through `_c()`.
+Roles with the same value in both themes (error, success, hint, shell) could use inline Rich markup directly, but registering them in the theme keeps all style definitions in one place and allows per-theme customization later.
 
 ---
 
@@ -116,9 +116,8 @@ Colors that are the same in both themes (error, success, hint) use inline Rich m
 
 Central display module. Owns the shared console, color definitions, indicators, and helper functions.
 
-- `_COLORS` — theme-keyed color dict, two variants (dark/light)
-- `_c(role)` — resolves a semantic color name for the active theme at call time
-- `console` — single `Console()` instance, imported by all modules that produce terminal output
+- `_THEMES` — theme-keyed style dict, two variants (dark/light)
+- `console` — single `Console(theme=Theme(...))` instance, imported by all modules that produce terminal output
 - `PROMPT_CHAR`, `BULLET`, `SUCCESS`, `ERROR`, `INFO` — Unicode indicator constants
 - `display_status(message, style?)` — themed bullet + message
 - `display_error(message, hint?)` — red-bordered Panel with error icon and optional recovery hint

@@ -24,5 +24,8 @@ class CoDeps:
     # Mutable per-session state
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
 
+    # Sandbox limits
+    sandbox_max_timeout: int = 600  # Hard ceiling for per-command timeout (seconds)
+
     # Batch 4: Slack client
     slack_client: Any | None = None  # slack_sdk.WebClient at runtime

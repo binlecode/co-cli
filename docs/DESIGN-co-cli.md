@@ -590,12 +590,15 @@ Follows Node.js REPL / Aider / Gemini CLI conventions:
 
 | Context | Action | Result |
 |---------|--------|--------|
-| During `agent.run()` | Ctrl+C | Cancels operation, patches dangling tool calls (§7.6), returns to prompt. Does **not** count toward exit. |
+| During `agent.run()` | Ctrl+C | Cancels operation, patches dangling tool calls (§8.1), returns to prompt. Does **not** count toward exit. |
+| During approval prompt | Ctrl+C | Cancels approval, patches dangling tool calls (§8.1), returns to prompt. Does **not** count toward exit. |
 | At prompt | Ctrl+C (1st) | Prints "Press Ctrl+C again to exit" |
 | At prompt | Ctrl+C (2nd within 2s) | Exits session |
 | At prompt | Ctrl+C (2nd after 2s) | Treated as new 1st press (timeout reset) |
 | Any input submitted | — | Resets the interrupt timer |
 | Anywhere | Ctrl+D (EOF) | Exits immediately |
+
+See §8.2 for signal-handling implementation details.
 
 ### 4.6 Telemetry (`co_cli/telemetry.py`)
 
@@ -679,6 +682,32 @@ graph LR
 ```
 
 **Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining.
+
+### 5.1.1 Tool Return Convention
+
+Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim.
+
+### 5.1.2 ModelRetry Convention
+
+Cross-cutting principle for all tools:
+
+- **`ModelRetry`** = "you called this wrong, fix your parameters" (LLM can self-correct)
+- **Empty result** = "query was fine, nothing matched" (return `{"count": 0}`)
+
+| Raise `ModelRetry` | Return empty result |
+|---------------------|---------------------|
+| Vault/service not configured | Search matched zero files |
+| Malformed parameters | Time range had no events |
+| Note/file not found (with available list) | List is genuinely empty |
+| Shell command failed (with error output) | |
+
+### 5.1.3 Tool Retry Budget
+
+Agent-level `retries=settings.tool_retries` (default 3, configurable via `CO_CLI_TOOL_RETRIES`). All tools inherit the same budget. Safe for side-effectful tools because `requires_approval=True` gates each attempt.
+
+### 5.1.4 Request Limit (Loop Guard)
+
+`UsageLimits(request_limit=settings.max_request_limit)` (default 25, configurable via `CO_CLI_MAX_REQUEST_LIMIT`) caps LLM round-trips per user turn. Prevents infinite tool-call loops. `UsageLimitExceeded` is caught by the chat loop's `except Exception` block.
 
 ### 5.2 Shell Tool (`co_cli/tools/shell.py`)
 
@@ -868,7 +897,11 @@ agent = Agent(model, history_processors=[trim_history])
 
 **Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine.
 
-### 7.5 Interrupt Recovery (Dangling Tool Call Patching)
+---
+
+## 8. Interrupt Handling
+
+### 8.1 Interrupt Recovery (Dangling Tool Call Patching)
 
 When the user presses Ctrl+C during `agent.run()`, the LLM may have been mid-tool-call. If `message_history` contains a `ModelResponse` with a `ToolCallPart` but no matching `ToolReturnPart`, the next `agent.run()` call would fail because the LLM sees an unanswered tool call.
 
@@ -893,12 +926,57 @@ def _patch_dangling_tool_calls(messages, error_message="Interrupted by user."):
 
 **Current behavior note:** `agent.run()` copies the input list (`list(message_history)`), so on `KeyboardInterrupt` the original `message_history` is unchanged from the previous successful turn — no dangling calls exist. The patch is defensive: it protects against future adoption of `agent.iter()` or streaming where partial state may leak into the caller's list.
 
+### 8.2 Signal Handling (asyncio SIGINT)
+
+Python 3.11+ `asyncio.run()` installs a custom SIGINT handler that **cancels the main task** instead of raising `KeyboardInterrupt` directly. This has two consequences for the chat loop:
+
+**Problem 1 — Async code (`agent.run()`):** SIGINT delivers `asyncio.CancelledError`, not `KeyboardInterrupt`. If only `KeyboardInterrupt` is caught, the `CancelledError` propagates uncaught, the process exits, and `asyncio.run()` re-raises `KeyboardInterrupt` at the top level.
+
+**Solution:** Catch both exceptions everywhere an interrupt can land:
+
+```python
+except (KeyboardInterrupt, asyncio.CancelledError):
+    msgs = result.all_messages() if result else message_history
+    message_history = _patch_dangling_tool_calls(msgs)  # §8.1
+    console.print("\n[dim]Interrupted.[/dim]")
+```
+
+A safety-net `except KeyboardInterrupt: pass` wraps `asyncio.run()` itself, in case cancellation propagates past the chat loop.
+
+**Problem 2 — Synchronous code (`Prompt.ask()` in approval flow):** The approval prompt uses Rich's synchronous `Prompt.ask()` → `input()`. asyncio's SIGINT handler calls `task.cancel()`, but `CancelledError` cannot be injected into synchronous C-level `input()` — the process hangs.
+
+**Solution:** Temporarily restore Python's default SIGINT handler during the synchronous approval prompt, then restore asyncio's handler before resuming async work:
+
+```python
+async def _handle_approvals(agent, deps, result, model_settings):
+    prev_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        for call in result.output.approvals:
+            ...  # Prompt.ask() — Ctrl-C raises KeyboardInterrupt normally
+    finally:
+        signal.signal(signal.SIGINT, prev_handler)
+
+    return await agent.run(...)  # async — uses asyncio's handler
+```
+
+**Interrupt points and exception types:**
+
+| Phase | Code style | SIGINT delivers | Caught by |
+|-------|-----------|-----------------|-----------|
+| `agent.run()` | async | `CancelledError` | Inner `except (KeyboardInterrupt, CancelledError)` |
+| Approval `Prompt.ask()` | sync (handler swapped) | `KeyboardInterrupt` | Same inner except block |
+| `session.prompt_async()` | async (prompt_toolkit) | `CancelledError` | Outer except (double-tap logic) |
+| After task cancellation | `asyncio.run()` top-level | `KeyboardInterrupt` | Safety-net in `chat()` |
+
+**E2E validation:** `scripts/e2e_ctrl_c.py` spawns `co chat` in a PTY, delivers SIGINT at both the approval prompt and during `agent.run()`, and asserts the process survives and returns to the `Co ❯` prompt.
+
 ---
 
-## 8. Security Model
+## 9. Security Model
 
 
-### 8.1 Defense Layers
+### 9.1 Defense Layers
 
 ```mermaid
 graph TB
@@ -926,7 +1004,7 @@ graph TB
     end
 ```
 
-### 8.2 High-Risk Tool Confirmation (Deferred Approval)
+### 9.2 High-Risk Tool Confirmation (Deferred Approval)
 
 Side-effectful tools are registered with `requires_approval=True`. When the LLM calls one, `agent.run()` returns a `DeferredToolRequests` object instead of executing the tool. The chat loop's `_handle_approvals()` prompts the user with `[y/n/a(yolo)]` for each pending call, then resumes the agent with `DeferredToolResults`.
 
@@ -950,7 +1028,7 @@ Side-effectful tools are registered with `requires_approval=True`. When the LLM 
 
 **Bypass for Testing:** Set `auto_confirm: true` in settings.
 
-### 8.3 Path Traversal Protection (Obsidian)
+### 9.3 Path Traversal Protection (Obsidian)
 
 ```python
 safe_path = (vault / filename).resolve()
@@ -960,9 +1038,9 @@ if not safe_path.is_relative_to(vault.resolve()):
 
 ---
 
-## 9. Data Flow
+## 10. Data Flow
 
-### 9.1 XDG Directory Structure
+### 10.1 XDG Directory Structure
 
 ```
 ~/.config/co-cli/
@@ -973,7 +1051,7 @@ if not safe_path.is_relative_to(vault.resolve()):
 └── history.txt            # REPL command history
 ```
 
-### 9.2 External Service Integration
+### 10.2 External Service Integration
 
 ```mermaid
 graph LR
@@ -1006,7 +1084,7 @@ graph LR
 
 ---
 
-## 10. Testing Policy
+## 11. Testing Policy
 
 ### Functional Testing Only
 
@@ -1051,7 +1129,7 @@ def test_sandbox_execution():
 
 ---
 
-## 11. Dependencies
+## 12. Dependencies
 
 ### Runtime
 
@@ -1078,7 +1156,7 @@ def test_sandbox_execution():
 
 ---
 
-## 12. Module Summary
+## 13. Module Summary
 
 | Module | Purpose |
 |--------|---------|

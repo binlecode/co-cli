@@ -2,19 +2,20 @@
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.theme import Theme
 
 from co_cli.config import settings
 
-# -- Theme colors (keyed by theme name) ------------------------------------
+# -- Theme palettes (keyed by theme name) ------------------------------------
 
-_COLORS: dict[str, dict[str, str]] = {
-    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3"},
-    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3"},
+_THEMES: dict[str, dict[str, str]] = {
+    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim"},
+    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim"},
 }
 
-# -- Console (single instance, no swapping) --------------------------------
+# -- Console (single instance, themed) --------------------------------------
 
-console = Console()
+console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
 
 # -- Indicators ------------------------------------------------------------
 
@@ -27,14 +28,9 @@ INFO        = "◈"
 # -- Display helpers -------------------------------------------------------
 
 
-def _c(role: str) -> str:
-    """Resolve a semantic color for the active theme."""
-    return _COLORS.get(settings.theme, _COLORS["light"]).get(role, "")
-
-
 def display_status(message: str, style: str | None = None) -> None:
     """Themed bullet + message."""
-    s = style or _c("status")
+    s = style or "status"
     console.print(f"[{s}]{BULLET} {message}[/{s}]")
 
 
@@ -48,5 +44,4 @@ def display_error(message: str, hint: str | None = None) -> None:
 
 def display_info(message: str) -> None:
     """Themed info message."""
-    s = _c("info")
-    console.print(f"[{s}]{INFO} {message}[/{s}]")
+    console.print(f"[info]{INFO} {message}[/info]")

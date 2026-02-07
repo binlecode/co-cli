@@ -3,7 +3,7 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 
 
-def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
+async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> str:
     """Execute a shell command in a sandboxed Docker container.
 
     Use this tool for: listing files (ls), reading files (cat), running scripts,
@@ -11,8 +11,11 @@ def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
 
     Args:
         cmd: The shell command to execute (e.g., 'ls -la', 'cat file.txt', 'pwd').
+        timeout: Max seconds to wait (default 120). Use higher values for
+                 builds or long-running scripts. Capped by sandbox_max_timeout.
     """
+    effective = min(timeout, ctx.deps.sandbox_max_timeout)
     try:
-        return ctx.deps.sandbox.run_command(cmd)
+        return await ctx.deps.sandbox.run_command(cmd, timeout=effective)
     except Exception as e:
         raise ModelRetry(f"Command failed ({e})")

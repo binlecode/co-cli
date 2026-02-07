@@ -21,10 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Google auth lazy caching**: `get_cached_google_creds()` resolves credentials once on first call (module-level cache). Replaced eager `build_google_service()` — Google API clients are now built per-call in each tool, avoiding stale service objects.
 - **Agent unknown-provider error**: `get_agent()` raises `ValueError` for unrecognized `llm_provider` values instead of silently falling through to Ollama.
 - **New tests**: `test_search_notes_folder_filter`, `test_search_notes_tag_filter`, `test_search_notes_snippet_word_boundaries`, `test_shell_nonzero_exit_raises_model_retry`.
+- **New E2E script**: `scripts/e2e_ctrl_c.py` — PTY-based test that sends SIGINT during approval prompt and during `agent.run()`, asserts process survives and returns to `Co ❯` prompt.
 - **New TODO docs**: `TODO-conversation-memory.md`, `TODO-cross-tool-rag.md`.
 
 ### Fixed
 - **Banner version stale after bump**: `VERSION` now reads `pyproject.toml` directly via `tomllib` (was `importlib.metadata`, which required reinstall to reflect changes).
+- **Ctrl-C exits process instead of returning to prompt**: `asyncio.run()` in Python 3.11+ delivers SIGINT as `asyncio.CancelledError`, not `KeyboardInterrupt`. Chat loop now catches both. Approval prompt (`Prompt.ask()`) temporarily restores the default SIGINT handler so Ctrl-C can interrupt synchronous `input()`. Safety-net `except KeyboardInterrupt` wraps `asyncio.run()` for edge cases. See `DESIGN-co-cli.md` §8.
 
 ### Changed
 - **Obsidian tool return type**: `search_notes` and `list_notes` now return `dict[str, Any]` with `display`, `count`, `has_more` fields (was `list[dict]` / `list[str]`). `search_notes` returns empty dict on no results instead of raising `ModelRetry`.
@@ -33,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CoDeps**: Removed `google_drive`, `google_gmail`, `google_calendar` fields — replaced by `google_credentials_path`. Added comment clarifying `auto_confirm` purpose.
 - **Tests**: Removed all `@pytest.mark.skipif` guards (Docker, GCP, Slack) per testing policy. Simplified test context setup — no more per-test credential/service building.
 - **CLAUDE.md**: Streamlined — removed inline module/tool tables (covered by DESIGN docs), tightened coding standards.
-- **Design docs**: Updated `DESIGN-co-cli.md`, `DESIGN-tool-obsidian.md`, `DESIGN-tool-shell-sandbox.md` to reflect new approval flow, obsidian features, and shell error handling.
+- **Theming: Rich `Theme` migration**: Replaced manual `_c(role)` color resolver with idiomatic `Console(theme=Theme(...))`. Semantic style names (`"status"`, `"accent"`, `"shell"`, etc.) are now resolved natively by Rich. Added `"shell"` semantic style for shell output panel borders.
+- **Design docs**: Updated `DESIGN-co-cli.md`, `DESIGN-tool-obsidian.md`, `DESIGN-tool-shell-sandbox.md` to reflect new approval flow, obsidian features, and shell error handling. Restructured `DESIGN-co-cli.md`: promoted §7.5+§7.6 (interrupt recovery + signal handling) into new **§8 Interrupt Handling**, renumbered §8–§12 → §9–§13.
 - **TODO docs**: Trimmed `TODO-approval-flow.md` and `TODO-tool-call-stability.md` — removed completed items, kept only remaining work.
 
 ### Removed

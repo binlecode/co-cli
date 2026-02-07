@@ -205,7 +205,7 @@ Tools access vault path via `RunContext[CoDeps]`:
 
 ## Error Handling: ModelRetry vs Empty Result
 
-Following the project-wide design principle (see `docs/TODO-tool-call-stability.md`):
+Following the project-wide design principle (see `docs/DESIGN-co-cli.md` §5.1.2):
 
 - **`ModelRetry`** = "you called this wrong, fix your parameters"
 - **Empty result** = "query was fine, nothing matched"

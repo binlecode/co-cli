@@ -467,7 +467,7 @@ chat_loop()
 
 ## Output Control
 
-Shell output reaches the user through two paths: agent-mediated (LLM calls the tool) and direct (`!` prefix). Both display raw output in a Rich `Panel` — the user always sees actual command output, not just an LLM summary.
+Shell output reaches the user through two paths: agent-mediated (LLM calls the tool) and direct (`!` prefix). Both display raw output in a Rich `Panel` with `border_style="shell"` (a semantic style resolved by the Rich Theme — see `DESIGN-theming-ascii.md`) — the user always sees actual command output, not just an LLM summary.
 
 ### Two Execution Paths
 
@@ -489,7 +489,7 @@ _display_tool_outputs(old_len, all_msgs)
         ├── Scan new ModelRequest messages for ToolReturnPart
         │
         ├── Shell tool (str content):
-        │     └── Panel(output, title="$ {cmd}")
+        │     └── Panel(output, title="$ {cmd}", border_style="shell")
         │          cmd extracted from matching ToolCallPart via tool_call_id
         │
         └── Dict tools with "display" field:

@@ -29,6 +29,9 @@ class Settings(BaseModel):
     tool_retries: int = Field(default=3)
     max_request_limit: int = Field(default=25)
 
+    # Sandbox limits
+    sandbox_max_timeout: int = Field(default=600)
+
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
@@ -52,6 +55,7 @@ class Settings(BaseModel):
             "theme": "CO_CLI_THEME",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
+            "sandbox_max_timeout": "CO_CLI_SANDBOX_MAX_TIMEOUT",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",

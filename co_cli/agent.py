@@ -10,7 +10,13 @@ from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
-from co_cli.tools.slack import post_slack_message
+from co_cli.tools.slack import (
+    post_slack_message,
+    list_slack_channels,
+    get_slack_channel_history,
+    get_slack_thread_replies,
+    list_slack_users,
+)
 
 
 def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None]:
@@ -75,6 +81,8 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
 - Use tools proactively to complete tasks
 - Chain operations: read before modifying, test after changing
 - Shell commands run in a Docker sandbox mounted at /workspace
+- Shell commands have a timeout (default 120s). For long tasks, set a higher timeout.
+  For scripts that run forever (servers, bots), warn the user instead of running them.
 
 ### Pagination
 - When a tool result has has_more=true, more results are available
@@ -105,5 +113,9 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
     agent.tool(search_emails)
     agent.tool(list_calendar_events)
     agent.tool(search_calendar_events)
+    agent.tool(list_slack_channels)
+    agent.tool(get_slack_channel_history)
+    agent.tool(get_slack_thread_replies)
+    agent.tool(list_slack_users)
 
     return agent, model_settings
