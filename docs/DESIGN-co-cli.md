@@ -702,7 +702,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
 | `/status` | `_cmd_status` | Calls `get_status()` + `render_status_table()` — same output as `co status` |
 | `/tools` | `_cmd_tools` | Numbered list of registered agent tool names |
 | `/history` | `_cmd_history` | Counts `ModelRequest` messages, shows turn/message totals |
-| `/compact` | `_cmd_compact` | Calls `agent.run()` with summarization prompt, returns compacted history |
+| `/compact` | `_cmd_compact` | Calls `summarize_messages()` with primary model, returns 2-message compacted history |
 | `/yolo` | `_cmd_yolo` | Toggles `deps.auto_confirm` — same as picking `a` in approval prompt |
 
 **Chat loop integration (`main.py`):**

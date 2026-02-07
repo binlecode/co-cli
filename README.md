@@ -1,40 +1,39 @@
 # Co - The Production-Grade Personal Assistant CLI
 
-**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and a Docker-based "Body" for safe execution.
+**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and a sandboxed "Body" for safe execution.
 
 Designed for developers who want a personal assistant that:
-1.  **Respects Privacy**: Runs on local models (Ollama).
-2.  **Is Safe**: Executes commands inside a transient Docker sandbox.
+1.  **Respects Privacy**: Runs on local models (Ollama) or cloud (Gemini).
+2.  **Is Safe**: Executes commands inside a Docker sandbox (with subprocess fallback).
 3.  **Is Observable**: Traces every thought and tool call via OpenTelemetry.
 4.  **Is Useful**: Connects to your actual work context (Notes, Drive, Calendar).
 
 ---
 
-## 🚀 Prerequisites
+## Prerequisites
 
 Before you begin, ensure you have the following installed:
 
-1.  **Python 3.12**: We use version 3.12 for its proven stability and widespread support in 2026, ensuring a reliable production environment.
-    *   The repo includes a `.python-version` file to help `pyenv` users auto-select the correct interpreter. It’s optional and does not affect runtime/distribution.
+1.  **Python 3.12+**
+    *   The repo includes a `.python-version` file for `pyenv` users.
 
-2.  **[Ollama](https://ollama.com/)**: To serve the local LLM.
+2.  **[Ollama](https://ollama.com/)** (optional): To serve a local LLM.
     ```bash
-    # Install Ollama and pull the model
     ollama run llama3
     ```
-    *Note: You can use other models (Mistral, Llama 3.1) by updating `~/.config/co-cli/settings.json`.*
+    *You can use other models by updating `~/.config/co-cli/settings.json`.*
 
-3.  **[Docker Desktop](https://www.docker.com/products/docker-desktop/)**: For the sandboxed execution environment.
-    *   Ensure Docker is running (`docker ps`).
+3.  **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** (recommended): For the sandboxed execution environment.
+    *   If Docker is unavailable, Co falls back to a subprocess backend with environment sanitization and mandatory approval for all commands.
 
-4.  **[uv](https://github.com/astral-sh/uv)**: An extremely fast Python package manager.
+4.  **[uv](https://github.com/astral-sh/uv)**: Python package manager.
     ```bash
     curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
 
 ---
 
-## 🛠️ Installation & Setup
+## Installation & Setup
 
 1.  **Clone the repository**:
     ```bash
@@ -57,30 +56,29 @@ Before you begin, ensure you have the following installed:
     # Edit with your values
     ```
 
-    **`~/.config/co-cli/settings.json`** (primary config):
+    **`~/.config/co-cli/settings.json`** (user config):
     ```json
     {
       "llm_provider": "gemini",
       "gemini_api_key": "AIza...",
       "gemini_model": "gemini-2.0-flash",
-      "obsidian_vault_path": "/Users/yourname/Documents/ObsidianVault",
+      "obsidian_vault_path": "/path/to/vault",
       "slack_bot_token": "xoxb-your-bot-token",
-      "google_credentials_path": "",
-      "docker_image": "python:3.12-slim",
-      "auto_confirm": false
+      "docker_image": "co-cli-sandbox"
     }
     ```
 
     **Configuration precedence** (highest to lowest):
     1. Environment variables (for CI/automation)
-    2. `~/.config/co-cli/settings.json` (primary)
-    3. Built-in defaults
+    2. Project config (`.co-cli/settings.json` in cwd)
+    3. User config (`~/.config/co-cli/settings.json`)
+    4. Built-in defaults
 
-    > 💡 Environment variables (e.g., `GEMINI_API_KEY`, `LLM_PROVIDER`) override settings.json for CI/automation.
+    > Environment variables (e.g., `GEMINI_API_KEY`, `LLM_PROVIDER`) override all file-based settings.
 
-    > 💡 **Google Authentication**: If `google_credentials_path` is empty, Co falls back to **Application Default Credentials (ADC)**.
+    > **Google Authentication**: If `google_credentials_path` is empty, Co falls back to Application Default Credentials (ADC).
 
-## 🔌 Google Services (Drive/Gmail/Calendar)
+## Google Services (Drive/Gmail/Calendar)
 
 Just run `uv run co chat`. On first use, Co will:
 1. Check if credentials already exist (`~/.config/co-cli/google_token.json`)
@@ -90,56 +88,48 @@ Just run `uv run co chat`. On first use, Co will:
 
 **Prerequisite:** Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
 
-That's it. No manual file copying or `settings.json` editing needed.
+> **Advanced:** Set `google_credentials_path` in `settings.json` to use a custom credentials file. This takes priority over the auto-setup flow.
 
-> **Advanced:** You can still set `google_credentials_path` in `settings.json` to use a custom credentials file. This takes priority over the auto-setup flow.
-
-## 🔌 Slack Configuration (Optional)
+## Slack Configuration (Optional)
 
 To enable Slack messaging:
 1.  Create a Slack App at [api.slack.com/apps](https://api.slack.com/apps).
-2.  Navigate to **OAuth & Permissions** and add the following **Bot Token Scopes**:
-    *   `chat:write` (to send messages)
-    *   `channels:read` (to list channels)
-    *   `users:read` (to find users)
-3.  **Install to Workspace** and copy the **Bot User OAuth Token** (starts with `xoxb-`).
+2.  Navigate to **OAuth & Permissions** and add Bot Token Scopes:
+    *   `chat:write`, `channels:read`, `channels:history`, `users:read`
+3.  **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`).
 4.  Add the token to your `settings.json`.
 
 ---
 
-## 💻 Usage
+## Usage
 
 ### How the `co` Command Works
 
-`uv sync` reads the `[project.scripts]` entry in `pyproject.toml` and generates an executable script at `.venv/bin/co`. This script simply imports and calls `co_cli.main:app` (the Typer CLI).
-
-Two ways to invoke it:
+`uv sync` reads the `[project.scripts]` entry in `pyproject.toml` and generates `.venv/bin/co`. Two ways to invoke:
 
 | Method | Requires venv activated? | Notes |
 |--------|--------------------------|-------|
 | `uv run co <command>` | No | Always uses the project's venv (recommended) |
 | `co <command>` | Yes (`. .venv/bin/activate`) | Shorter, but only works with active venv |
 
-All examples below use `uv run co`. If you've activated the venv, drop the `uv run` prefix.
-
-### Commands
-
-#### `co status` — System Health Check
-Verify that Ollama, Docker, and your config are healthy.
-```bash
-uv run co status
-```
+### CLI Commands
 
 #### `co chat` — Interactive Chat
-Enter the interactive loop. Co will maintain context until you exit.
+Enter the interactive loop. Co maintains context across turns with automatic context governance.
 ```bash
 uv run co chat
 ```
 **Example Prompts:**
-> "Co, what's in my 'Projects' note?"
+> "What's in my 'Projects' note?"
 > "Search Google Drive for the 'Q1 Proposal' and summarize it."
-> "Check my calendar for today and draft an email to the team if I have free time."
-> "Run `ls -la` to see what files are in this directory." (Runs in Docker!)
+> "Check my calendar for today and draft an email to the team."
+> "Run `ls -la` to see what files are in this directory."
+
+#### `co status` — System Health Check
+Verify LLM provider, sandbox, and config health.
+```bash
+uv run co status
+```
 
 #### `co tail` — Real-Time Span Viewer
 Tail agent spans live from a second terminal while `co chat` is running.
@@ -149,7 +139,6 @@ uv run co tail -v           # Include LLM output content
 uv run co tail --tools-only # Only tool calls
 uv run co tail -n -l 10    # Print last 10 spans and exit
 ```
-See `docs/DESIGN-tail-viewer.md` for the full troubleshooting guide and span attribute reference.
 
 #### `co logs` — Datasette Dashboard
 Launch a local Datasette dashboard to inspect traces with SQL.
@@ -163,32 +152,59 @@ Generate and open a static HTML page with nested, collapsible span trees.
 uv run co traces
 ```
 
+### REPL Slash Commands
+
+Inside `co chat`, type `/` followed by a command name. Tab completion is available.
+
+| Command | Effect |
+|---------|--------|
+| `/help` | List all slash commands |
+| `/clear` | Clear conversation history |
+| `/status` | Show system health (same as `co status`) |
+| `/tools` | List registered agent tools |
+| `/history` | Show conversation turn count and total messages |
+| `/compact` | Summarize conversation via LLM to reduce context (2-message compacted history) |
+| `/yolo` | Toggle auto-approve mode for tool calls |
+
+**Context governance** runs automatically — you don't need to use `/compact` manually unless you want an immediate full compaction. The agent's `history_processors` trim old tool output and summarize dropped messages via LLM when history exceeds the configured threshold (default 40 messages). See `docs/DESIGN-conversation-memory.md`.
+
 ---
 
-## 🛡️ Security & Architecture
+## Security & Architecture
 
-### The "Safety Net" (Docker Sandbox)
-Co **never** runs shell commands directly on your host machine.
-*   When you ask to "run a script" or "list files", Co spins up a transient `python:3.12-slim` container.
-*   Your current working directory is mounted to `/workspace` inside the container.
-*   If the agent tries to `rm -rf /`, it only destroys the container, not your laptop.
+### Sandbox (Docker + Subprocess Fallback)
+
+Co runs shell commands inside a sandboxed environment:
+
+*   **Docker (default)**: `co-cli-sandbox` image with `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, non-root user (`1000:1000`), configurable network isolation and resource limits.
+*   **Subprocess fallback**: When Docker is unavailable (`sandbox_backend=auto`), falls back to `SubprocessBackend` with allowlist-based environment sanitization. All commands require explicit approval in this mode.
+
+Your current working directory is mounted to `/workspace` inside the container.
 
 ### Human-in-the-Loop
-For high-stakes actions, Co is configured to **ask for permission**:
-*   sending emails
-*   posting to Slack
-*   executing shell commands
+
+Side-effectful tools require explicit approval:
+*   Shell commands (auto-approved for read-only commands when Docker sandbox has full isolation)
+*   Sending emails
+*   Posting to Slack
+
+A whitelist of 29 safe commands (`ls`, `cat`, `git status`, etc.) is auto-approved when running inside Docker. Use `/yolo` to toggle auto-approve for all tools.
+
+### Automatic Context Governance
+
+Two `history_processors` prevent context overflow:
+
+1. **Tool output trimming** — truncates large `ToolReturnPart.content` in older messages (threshold: 2000 chars)
+2. **Sliding window** — when history exceeds 40 messages, drops middle messages and replaces with an LLM summary. Preserves the first exchange (session context) and recent messages (working context)
 
 ### Privacy
-*   **LLM**: 100% Local (Ollama) by default.
+*   **LLM**: Local (Ollama) or cloud (Gemini) — your choice.
 *   **Logs**: Stored locally in SQLite (`~/.local/share/co-cli/co-cli.db`).
 *   **API Keys**: Managed via `settings.json` and never logged.
 
 ---
 
-## 🐳 Docker Sandbox Configuration
-
-The shell tool executes commands inside a Docker container for safety. Here's how it works:
+## Sandbox Configuration
 
 ### Container Lifecycle
 
@@ -198,222 +214,88 @@ The shell tool executes commands inside a Docker container for safety. Here's ho
 | **Subsequent commands** | Reuses existing container via `docker exec` |
 | **Session end** | Stops and removes the container |
 
-The container stays alive throughout your chat session, so there's no startup overhead per command.
+### Configuration
 
-### Configuration Options
-
-Add these to your `settings.json`:
-
-```json
-{
-  "docker_image": "python:3.12-slim",
-  "auto_confirm": false
-}
-```
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `docker_image` | `python:3.12-slim` | Docker image for the sandbox |
-| `auto_confirm` | `false` | Skip confirmation prompts (use with caution) |
-
-Environment variable overrides:
-- `CO_CLI_DOCKER_IMAGE` → `docker_image`
-- `CO_CLI_AUTO_CONFIRM` → `auto_confirm`
-
-### Volume Mounts
-
-The sandbox mounts your **current working directory** to `/workspace` inside the container:
-
-```
-Host: $(pwd)  →  Container: /workspace (read-write)
-```
-
-Commands execute with `/workspace` as the working directory, so relative paths work as expected.
+| Setting | Default | Env Var | Description |
+|---------|---------|---------|-------------|
+| `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Docker image for the sandbox |
+| `sandbox_backend` | `auto` | `CO_CLI_SANDBOX_BACKEND` | `auto`, `docker`, or `subprocess` |
+| `sandbox_network` | `none` | `CO_CLI_SANDBOX_NETWORK` | `none` (isolated) or `bridge` (host network) |
+| `sandbox_mem_limit` | `1g` | `CO_CLI_SANDBOX_MEM_LIMIT` | Docker memory limit |
+| `sandbox_cpus` | `1` | `CO_CLI_SANDBOX_CPUS` | CPU limit (1–4) |
+| `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Max command timeout in seconds |
+| `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip confirmation prompts |
 
 ### Custom Docker Images
 
-For specialized workflows, use a custom image:
-
-```json
-{
-  "docker_image": "node:20-slim"
-}
-```
-
-Or build your own with pre-installed tools:
+Build a custom image with pre-installed tools:
 
 ```dockerfile
-# Dockerfile.co-sandbox
+# Dockerfile.sandbox
 FROM python:3.12-slim
+RUN apt-get update && apt-get install -y curl git jq tree
 RUN pip install pandas numpy requests
 ```
 
 ```bash
-docker build -t co-sandbox -f Dockerfile.co-sandbox .
-```
-
-```json
-{
-  "docker_image": "co-sandbox"
-}
+docker build -t co-cli-sandbox -f Dockerfile.sandbox .
 ```
 
 ### Troubleshooting
 
-**"Docker is not available"**
-- Ensure Docker Desktop is running: `docker ps`
-- Check Docker socket permissions
+**"Docker is not available"** — Co will fall back to subprocess mode with a warning. To use Docker: ensure Docker Desktop is running (`docker ps`).
 
-**Container conflicts**
-- If a stale `co-runner` container exists: `docker rm -f co-runner`
-
-**Permission denied on mounted files**
-- The container runs as root by default
-- Files created inside `/workspace` will be owned by root on the host
+**Container conflicts** — If a stale `co-runner` container exists: `docker rm -f co-runner`
 
 ---
 
-## 🧪 Testing
+## Testing
 
-Co uses **functional tests only** - no mocks or stubs. Tests interact with real services.
-
-### Quick Start
+Co uses **functional tests only** — no mocks or stubs. Tests hit real services and fail (not skip) when a service is unavailable.
 
 ```bash
-# Run all tests (some will skip if services unavailable)
-uv run pytest
-
-# Run with verbose output
-uv run pytest -v
-
-# Run specific test file
-uv run pytest tests/test_tools.py
+uv run pytest              # Run all tests
+uv run pytest -v           # Verbose output
+uv run pytest tests/test_history.py  # Single test file
 ```
 
-### Test Requirements by Category
+### Test Requirements
 
-| Test Category | Required Setup | Skip Reason if Missing |
-|---------------|----------------|------------------------|
-| **Shell/Sandbox** | Docker running | "Docker not available" |
-| **Notes** | None (uses temp files) | - |
-| **Drive/Gmail/Calendar** | GCP credentials | "GCP Credentials missing" |
-| **Slack** | Slack bot token | "SLACK_BOT_TOKEN missing" |
-| **LLM E2E (Gemini)** | Gemini API key + provider | "Provider not set to gemini" |
-| **LLM E2E (Ollama)** | Ollama running + provider | "Provider not set to ollama" |
+| Test Category | Required Setup |
+|---------------|----------------|
+| **Shell/Sandbox** | Docker running |
+| **Notes** | None (uses temp files) |
+| **Drive/Gmail/Calendar** | GCP credentials |
+| **Slack** | Slack bot token |
+| **History/Memory** | LLM provider (Gemini or Ollama) |
+| **LLM E2E** | `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` |
 
-### Setting Up All Services
-
-#### 1. Docker (for Shell tests)
-
-```bash
-# Install Docker Desktop: https://www.docker.com/products/docker-desktop/
-
-# Verify Docker is running
-docker ps
-
-# Pull the sandbox image (optional, auto-pulled on first use)
-docker pull python:3.12-slim
-```
-
-#### 2. Ollama (for local LLM tests)
-
-```bash
-# Install Ollama: https://ollama.com/
-
-# Pull a model
-ollama pull llama3
-
-# Verify Ollama is running
-curl http://localhost:11434/api/tags
-```
-
-#### 3. Gemini API (for cloud LLM tests)
-
-1. Get an API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
-2. Add to your settings:
-   ```bash
-   # In ~/.config/co-cli/settings.json
-   {
-     "gemini_api_key": "AIza...",
-     "llm_provider": "gemini"
-   }
-   ```
-
-#### 4. Google Services (Drive/Gmail/Calendar)
-
-```bash
-# Generate credentials
-gcloud auth application-default login \
-  --scopes='https://www.googleapis.com/auth/drive.readonly,https://www.googleapis.com/auth/gmail.modify,https://www.googleapis.com/auth/calendar.readonly'
-
-# Copy to co-cli config
-cp ~/.config/gcloud/application_default_credentials.json \
-   ~/.config/co-cli/google_token.json
-
-# Add to settings.json
-{
-  "google_credentials_path": "~/.config/co-cli/google_token.json"
-}
-```
-
-#### 5. Slack (for messaging tests)
-
-1. Create app at [api.slack.com/apps](https://api.slack.com/apps)
-2. Add Bot Token Scopes: `chat:write`, `channels:read`, `users:read`
-3. Install to workspace, copy Bot Token (`xoxb-...`)
-4. Add to settings:
-   ```json
-   {
-     "slack_bot_token": "xoxb-your-token"
-   }
-   ```
-
-### Running Full Test Suite
-
-Once all services are configured:
-
-```bash
-# Set provider for E2E tests
-export LLM_PROVIDER=gemini  # or 'ollama'
-
-# Run all tests - should show 0 skipped
-uv run pytest -v
-
-# Expected output:
-# ==================== 18 passed in X.XXs ====================
-```
-
-### Test Configuration for CI/CD
-
-For automated testing, use environment variables:
+### CI/CD
 
 ```bash
 export GEMINI_API_KEY="your-key"
 export LLM_PROVIDER="gemini"
 export CO_CLI_AUTO_CONFIRM="true"
 export SLACK_BOT_TOKEN="xoxb-..."
-# GCP uses ADC or GOOGLE_APPLICATION_CREDENTIALS
-
-uv run pytest
+uv run pytest -v
 ```
 
 ---
 
-## 🧩 Modules
+## Modules
 
-| Module | Description | Tooling |
+| Module | Description | Tools |
 | :--- | :--- | :--- |
-| **Brain** | Decision making & Conversation | `pydantic-ai`, `ollama` |
-| **Shell** | Safe file/script execution | `docker` |
-| **Notes** | RAG over local Markdown files | `glob`, `fs` |
-| **Drive** | Hybrid Search (Metadata + Semantic) | `google-api-python-client` |
-| **Gmail** | Draft emails | `google-api-python-client` |
-| **Calendar** | List today's events | `google-api-python-client` |
-| **Slack** | Post messages to channels | `slack_sdk` |
+| **Shell** | Sandboxed command execution | `run_shell_command` |
+| **Notes** | RAG over local Obsidian vault | `search_notes`, `list_notes`, `read_note` |
+| **Drive** | Google Drive search and reading | `search_drive`, `read_drive_file` |
+| **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `draft_email` |
+| **Calendar** | List and search events | `list_calendar_events`, `search_calendar_events` |
+| **Slack** | Channels, threads, users, posting | `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users`, `post_slack_message` |
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1.  Run `uv sync` to install dev dependencies.
 2.  Follow the style in `docs/DESIGN-co-cli.md`.
