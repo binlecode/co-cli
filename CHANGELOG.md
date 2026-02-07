@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-02-07
+
+### Added
+- **Project-level configuration**: `.co-cli/settings.json` in cwd overrides user config (`~/.config/co-cli/settings.json`). Shallow per-key merge via dict `|=`. `find_project_config()` checks cwd only — no upward directory walk. `project_config_path` module-level variable exposed for status display.
+- **Project config in `co status`**: New `project_config` field in `StatusInfo`. Status table shows "Project Config: Active" row when `.co-cli/settings.json` is detected.
+- **New tests**: `tests/test_config.py` — 6 functional tests covering project-overrides-user, env-overrides-project, missing config no-op, path detection, and malformed file handling.
+
+### Fixed
+- **Env var precedence**: `fill_from_env` model validator now always overrides file values. Previously env vars only filled missing fields, contradicting the documented precedence (`env vars > settings.json > defaults`).
+
+### Changed
+- **`DESIGN-co-cli.md`**: Updated §4.2 class diagram (added `sandbox_*` fields, `shell_safe_commands`, `Functions` class), §9.1 security diagram (env vars override, project config layer), §10.1 XDG directory structure (project config path).
+- **`CLAUDE.md`**: Config precedence updated to 4-layer model.
+
+---
+
 ## [0.2.10] - 2026-02-07
 
 ### Added

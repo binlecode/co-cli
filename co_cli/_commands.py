@@ -74,6 +74,8 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
     table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
     table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
     table.add_row("Database", "Active", info.db_size)
+    if info.project_config:
+        table.add_row("Project Config", "Active", info.project_config)
 
     console.print(table)
     return None

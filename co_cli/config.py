@@ -1,10 +1,32 @@
 import os
+import re
 import json
 from pathlib import Path
-from typing import Optional
-from pydantic import BaseModel, Field, model_validator
+from typing import Literal, Optional
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
+
+# Conservative default safe commands for auto-approval in the sandbox.
+# UX convenience only — the Docker sandbox is the security boundary.
+_DEFAULT_SAFE_COMMANDS: list[str] = [
+    # Filesystem listing
+    "ls", "tree", "find", "fd",
+    # File reading
+    "cat", "head", "tail",
+    # Search
+    "grep", "rg", "ag",
+    # Text processing (read-only)
+    "wc", "sort", "uniq", "cut", "jq",
+    # Output
+    "echo", "printf",
+    # System info
+    "pwd", "whoami", "hostname", "uname", "date",
+    "env", "which", "file", "id", "du", "df",
+    # Git read-only (prefix match: "git status", "git diff", etc.)
+    "git status", "git diff", "git log", "git show",
+    "git branch", "git tag", "git blame",
+]
 
 # XDG Paths - Explicit XDG resolution so ~/.config/ is used even on macOS
 # (platformdirs would resolve to ~/Library/Application Support/ on macOS)
@@ -31,9 +53,26 @@ class Settings(BaseModel):
 
     # Sandbox limits
     sandbox_max_timeout: int = Field(default=600)
-    sandbox_network: str = Field(default="none")
+    sandbox_network: Literal["none", "bridge"] = Field(default="none")
     sandbox_mem_limit: str = Field(default="1g")
-    sandbox_cpus: int = Field(default=1)
+    sandbox_cpus: int = Field(default=1, ge=1, le=4)
+
+    # Shell safe commands (auto-approved without prompting)
+    shell_safe_commands: list[str] = Field(default=_DEFAULT_SAFE_COMMANDS)
+
+    @field_validator("shell_safe_commands", mode="before")
+    @classmethod
+    def _parse_safe_commands(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
+
+    @field_validator("sandbox_mem_limit")
+    @classmethod
+    def _validate_mem_limit(cls, v: str) -> str:
+        if not re.fullmatch(r"\d+[kmgKMG]", v):
+            raise ValueError(f"sandbox_mem_limit must be Docker memory format (e.g. '512m', '1g'), got '{v}'")
+        return v
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
@@ -45,10 +84,7 @@ class Settings(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def fill_from_env(cls, data: dict) -> dict:
-        """
-        For each field, if it's not in 'data' or is empty/None, 
-        try to get it from the environment.
-        """
+        """Env vars override all file-based values (highest precedence layer)."""
         env_map = {
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "slack_bot_token": "SLACK_BOT_TOKEN",
@@ -62,6 +98,7 @@ class Settings(BaseModel):
             "sandbox_network": "CO_CLI_SANDBOX_NETWORK",
             "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",
             "sandbox_cpus": "CO_CLI_SANDBOX_CPUS",
+            "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
@@ -70,10 +107,9 @@ class Settings(BaseModel):
         }
         
         for field, env_var in env_map.items():
-            if field not in data or data[field] is None:
-                val = os.getenv(env_var)
-                if val:
-                    data[field] = val
+            val = os.getenv(env_var)
+            if val:
+                data[field] = val
         return data
 
     def save(self):
@@ -81,17 +117,38 @@ class Settings(BaseModel):
         with open(SETTINGS_FILE, "w") as f:
             f.write(self.model_dump_json(indent=2, exclude_none=True))
 
+def find_project_config() -> Path | None:
+    """Return .co-cli/settings.json in cwd if it exists, else None."""
+    candidate = Path.cwd() / ".co-cli" / "settings.json"
+    return candidate if candidate.is_file() else None
+
+
 def load_config() -> Settings:
-    data = {}
+    data: dict = {}
+
+    # Layer 1: User config (~/.config/co-cli/settings.json)
     if SETTINGS_FILE.exists():
         with open(SETTINGS_FILE, "r") as f:
             try:
                 data = json.load(f)
             except Exception as e:
-                print(f"Error loading settings.json: {e}. Using environment variables.")
-    
-    # Pydantic will run the validator and fill in missing fields from env
+                print(f"Error loading settings.json: {e}. Using defaults.")
+
+    # Layer 2: Project config (<cwd>/.co-cli/settings.json) — shallow merge
+    project_config = find_project_config()
+    if project_config is not None:
+        with open(project_config, "r") as f:
+            try:
+                data |= json.load(f)
+            except Exception as e:
+                print(f"Error loading project config {project_config}: {e}. Skipping.")
+
+    # Layer 3: Env vars (handled by fill_from_env model_validator)
     return Settings.model_validate(data)
+
+
+# Resolved project config path (None when no .co-cli/settings.json in cwd)
+project_config_path: Path | None = find_project_config()
 
 # Global config instance
 settings = load_config()

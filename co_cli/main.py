@@ -23,6 +23,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import UsageLimits
 from rich.prompt import Prompt
 
+from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
@@ -93,6 +94,7 @@ def create_deps() -> CoDeps:
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
         sandbox_max_timeout=settings.sandbox_max_timeout,
+        shell_safe_commands=settings.shell_safe_commands,
         slack_client=slack_client,
     )
 
@@ -152,6 +154,13 @@ async def _handle_approvals(agent, deps, result, model_settings):
             if deps.auto_confirm:
                 approvals.approvals[call.tool_call_id] = True
                 continue
+
+            # Auto-approve safe shell commands silently
+            if call.tool_name == "run_shell_command":
+                cmd = args.get("cmd", "")
+                if _is_safe_command(cmd, deps.shell_safe_commands):
+                    approvals.approvals[call.tool_call_id] = True
+                    continue
 
             console.print(f"Approve [bold]{desc}[/bold]?" + _CHOICES_HINT, end=" ")
             choice = Prompt.ask(
@@ -334,6 +343,8 @@ def status():
     table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
     table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
     table.add_row("Database", "Active", info.db_size)
+    if info.project_config:
+        table.add_row("Project Config", "Active", info.project_config)
 
     console.print(table)
 

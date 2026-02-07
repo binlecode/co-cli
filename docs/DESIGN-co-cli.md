@@ -301,7 +301,7 @@ You are Co, a CLI assistant running in the user's terminal.
 
 ### 4.2 Configuration (`co_cli/config.py`)
 
-XDG-compliant configuration management with environment variable fallback.
+XDG-compliant configuration management with project-level overrides and environment variable fallback.
 
 ```mermaid
 classDiagram
@@ -314,13 +314,18 @@ classDiagram
         +theme: str
         +tool_retries: int
         +max_request_limit: int
+        +sandbox_max_timeout: int
+        +sandbox_network: Literal[none, bridge]
+        +sandbox_mem_limit: str
+        +sandbox_cpus: int
+        +shell_safe_commands: list[str]
         +gemini_api_key: Optional[str]
         +llm_provider: str
         +ollama_host: str
         +ollama_model: str
         +gemini_model: str
         +save()
-        +fill_from_env() validator
+        +fill_from_env() model_validator
     }
 
     class Paths {
@@ -330,13 +335,26 @@ classDiagram
         SETTINGS_FILE: settings.json
     }
 
-    Settings --> Paths : uses
+    class Functions {
+        <<module-level>>
+        find_project_config() Path | None
+        load_config() Settings
+        project_config_path: Path | None
+        settings: Settings
+    }
+
+    Settings --> Paths : user config
+    Functions --> Settings : creates
+    Functions ..> Paths : reads user + project
 ```
 
-**Configuration Resolution Order:**
-1. `~/.config/co-cli/settings.json` (primary)
-2. Environment variables (fallback)
-3. Default values (hardcoded)
+**Configuration Resolution Order (highest wins):**
+1. Environment variables (`fill_from_env` model validator — always overrides file values)
+2. `.co-cli/settings.json` in cwd (project — shallow `|=` merge over user config)
+3. `~/.config/co-cli/settings.json` (user)
+4. Default values (hardcoded in Pydantic `Field(default=...)`)
+
+Project config is checked at `cwd/.co-cli/settings.json` only — no upward directory walk. `find_project_config()` returns the path if the file exists, else `None`. Merge is shallow per-key (dict `|=`): a project key replaces the same user key entirely, matching Git/npm/Claude Code conventions. `save()` always writes to the user-level file.
 
 **Environment Variable Mapping:**
 | Setting | Env Var | Default |
@@ -1117,9 +1135,10 @@ async def _handle_approvals(agent, deps, result, model_settings):
 ```mermaid
 graph TB
     subgraph Layer 1: Configuration
-        S1[Secrets in settings.json]
+        S1[Secrets in settings.json or env vars]
         S2[No hardcoded keys]
-        S3[Env var fallback]
+        S3[Env vars override file values]
+        S4[Project config overrides user config]
     end
 
     subgraph Layer 2: Confirmation
@@ -1185,6 +1204,10 @@ if not safe_path.is_relative_to(vault.resolve()):
 ~/.local/share/co-cli/
 ├── co-cli.db              # OpenTelemetry traces (SQLite)
 └── history.txt            # REPL command history
+
+<project-root>/
+└── .co-cli/
+    └── settings.json      # Project configuration (overrides user)
 ```
 
 ### 10.2 External Service Integration

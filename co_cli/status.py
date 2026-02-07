@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from co_cli.config import settings, DATA_DIR
+from co_cli.config import settings, DATA_DIR, project_config_path
 
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -26,6 +26,7 @@ class StatusInfo:
     slack: str  # "configured" | "not configured"
     tool_count: int
     db_size: str  # "1.2 KB" | "0 KB"
+    project_config: str | None  # path to .co-cli/settings.json or None
 
 
 def get_status(tool_count: int = 0) -> StatusInfo:
@@ -115,4 +116,5 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         slack=slack,
         tool_count=tool_count,
         db_size=db_size,
+        project_config=str(project_config_path) if project_config_path else None,
     )

@@ -41,7 +41,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - **Tool approval**: Side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools
 - **Tool return type**: Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). Never return raw `list[dict]`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
-- **Config precedence**: env vars > `~/.config/co-cli/settings.json` > built-in defaults
+- **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
 - **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
@@ -80,6 +80,5 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-approval-flow.md` — Conditional `ApprovalRequired` for shell safe-prefix whitelist
 - `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
-- `docs/TODO-tool-call-stability.md` — Retry budget, ModelRetry semantics, loop guard
 - `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
