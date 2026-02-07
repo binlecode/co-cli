@@ -1,6 +1,6 @@
 # Design: Shell Tool & Sandbox
 
-**Status:** Implemented (Batch 1). No-sandbox fallback (Docker / subprocess) MVP in TODO — see `docs/TODO-shell-safety.md` §2.
+**Status:** Implemented. Safe-prefix auto-approval, no-sandbox fallback MVP complete. Post-MVP enhancements in `docs/TODO-shell-safety.md`.
 **Last Updated:** 2026-02-07
 
 ## Overview
@@ -93,6 +93,89 @@ LLM calls run_shell_command(cmd)
 | `requires_approval=True` | Approval lives in chat loop, not in tool — separation of concerns |
 | `ModelRetry` on errors | LLM sees the error message and can self-correct (e.g., fix a typo). Consistent with Google/Obsidian tools |
 | Detailed docstring | Helps LLM understand when to use this tool |
+
+---
+
+## Safe-Prefix Auto-Approval
+
+### Problem
+
+Every shell command — even harmless read-only ones — requires the user to type `y`. `ls`, `cat`, `pwd`, `whoami` can't damage anything, yet they get the same approval gate as `rm -rf /workspace`.
+
+The sandbox already provides isolation (non-root, no network, capped resources, `cap_drop=ALL`). The approval prompt is a second layer — useful for destructive commands, but pure friction for read-only ones.
+
+### Industry Research (Feb 2026)
+
+| Tool | Built-in safe list | User allowlist | User denylist | Parsing depth | Decision layer |
+|------|-------------------|----------------|---------------|---------------|----------------|
+| **Codex CLI** | Yes — hardcoded, flag-aware | Prefix rules in TOML | `requirements.toml` | Deep (tokenize, inspect flags, shell wrappers) | Dedicated middleware (`exec_policy.rs`) |
+| **Claude Code** | Removed post-CVE-2025-66032 | `settings.json` allow rules | `settings.json` deny rules | User hooks (arbitrary) | Hook middleware (`PreToolUse` event) |
+| **Gemini CLI** | No | `tools.allowed` in settings | No | Prefix string match | Tool executor middleware |
+| **Windsurf** | No | `cascadeCommandsAllowList` | `cascadeCommandsDenyList` | Prefix match | Cascade orchestrator |
+| **Aider** | N/A | No | No | None | Chat loop (`io.confirm_ask()`) |
+
+**Key findings:**
+
+1. **Approval lives in middleware, not inside tools.** Every mature system (Codex, Claude Code, Gemini, Windsurf) places the decision between the agent loop and tool execution. Tools stay as pure executors. Aider is the exception (simplest model — all commands require explicit `y`).
+
+2. **Codex CLI has the deepest command parsing.** Its `is_safe_command.rs` tokenizes commands, inspects individual flags, and handles shell wrappers (`bash -lc`). Examples: `find` safe unless `-exec`/`-delete` present; `git status` safe but `git push` requires approval; `bash -lc "ls && cat foo"` parses inner commands recursively.
+
+3. **Hardcoded safe lists are controversial.** Claude Code had one and removed it after CVE-2025-66032 showed even "read-only" commands can be exploited: `sort --compress-program=bash`, `man` with custom `MANPAGER`, `sed -i`, `history -a`. Post-CVE trend: sandbox is the security boundary, auto-approval is a UX convenience the user configures.
+
+4. **Deny lists take precedence over allow lists.** Both Windsurf and Claude Code implement this pattern.
+
+5. **Three preset modes are common.** Codex CLI: `read-only` / `auto` / `full-access`. Gemini CLI: `default` / `auto_edit` / `yolo`. Co CLI has a simpler version (`auto_confirm` / yolo `a`).
+
+### Implementation
+
+**Design: Chat-loop pre-filter.** `requires_approval=True` stays on the tool registration. `_handle_approvals` in `main.py` pre-filters before prompting:
+
+```
+DeferredToolRequests arrives
+  -> for each pending run_shell_command call:
+      -> if deps.auto_confirm: auto-approve (existing behavior)
+      -> if cmd matches safe prefix AND no shell chaining: auto-approve silently
+      -> otherwise: prompt user [y/n/a] (existing behavior)
+```
+
+**Safety checker** (`co_cli/_approval.py`):
+
+```python
+def _is_safe_command(cmd: str, safe_commands: list[str]) -> bool:
+    # Reject shell chaining, redirection, and backgrounding.
+    # Single-char ops also catch doubled forms (& catches &&, > catches >>, etc.)
+    if any(op in cmd for op in [";", "&", "|", ">", "<", "`", "$(", "\n"]):
+        return False
+    # Match first token (or multi-word prefix like "git status")
+    for prefix in sorted(safe_commands, key=len, reverse=True):
+        if cmd == prefix or cmd.startswith(prefix + " "):
+            return True
+    return False
+```
+
+**Rejected operators:** `;`, `&` (catches `&&`), `|` (catches `||`), `>` (catches `>>`), `<` (catches `<<`), backtick, `$(`, `\n`.
+
+**Config:** `shell_safe_commands` in `settings.json`, overridable via `CO_CLI_SHELL_SAFE_COMMANDS` (comma-separated). `[]` disables auto-approval entirely.
+
+### Risk: Prefix Matching
+
+The safe list is a **UX convenience, not a security boundary**. The Docker sandbox is the real security layer.
+
+Known bypass patterns (from CVE-2025-66032 research):
+- `sort --compress-program=bash` — executes arbitrary program
+- `man` with custom pager — arbitrary code via `MANPAGER`
+- `sed -i` — in-place file modification (not read-only)
+- `history -a` — writes to arbitrary files
+
+Mitigations:
+1. Reject chaining/redirection/backgrounding operators
+2. Longest-prefix-first matching for multi-word commands
+3. Conservative default list — users expand via settings
+4. Document clearly that this is not a security boundary
+
+### Future: Token-Level Classification
+
+Current prefix matching operates on the raw command string. `shlex.split()` would allow token-level classification (e.g., rejecting `find -exec` while allowing `find -name`). Low priority — the sandbox is the real boundary, and Codex CLI is the only tool that goes this deep.
 
 ---
 
@@ -379,7 +462,7 @@ Scenario: LLM runs "rm -rf /"
 
 ## Backend Architecture
 
-Design informed by cross-system research of Codex CLI, Gemini CLI, OpenCode, Claude Code, and Aider. See `TODO-shell-safety.md` §2 for research details and MVP implementation plan.
+Design informed by cross-system research of Codex CLI, Gemini CLI, OpenCode, Claude Code, and Aider. See Appendix for full research data; see `TODO-shell-safety.md` for post-MVP enhancements.
 
 ### Best practices from top systems
 
@@ -438,6 +521,7 @@ The active backend and isolation level are reported in the welcome banner and `/
 |---------|---------|--------------|-------------|
 | `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Container image |
 | `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip prompts |
+| `shell_safe_commands` | `["ls", "cat", ...]` | `CO_CLI_SHELL_SAFE_COMMANDS` | Command prefixes auto-approved when sandboxed (comma-separated env) |
 | `sandbox_backend` | `"auto"` | `CO_CLI_SANDBOX_BACKEND` | Backend selection: `"auto"` / `"docker"` / `"subprocess"` |
 | `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Hard ceiling for per-command timeout (seconds) |
 | `sandbox_network` | `"none"` | `CO_CLI_SANDBOX_NETWORK` | Container network mode (`"none"` or `"bridge"`) |
@@ -507,10 +591,10 @@ docker rm -f <container-name>
 main.py: create_deps()
     │
     ├── session_id = uuid4().hex
-    ├── sandbox = Sandbox(
-    │      image=settings.docker_image,
-    │      container_name=f"co-runner-{session_id[:8]}",
-    │  )
+    ├── sandbox = _create_sandbox(session_id)
+    │      # auto: try Docker, fall back to subprocess
+    │      # docker: fail hard if unavailable
+    │      # subprocess: always use subprocess
     ├── auto_confirm = settings.auto_confirm
     └── session_id = session_id
     │
@@ -629,9 +713,61 @@ No approval prompt: the user explicitly typed the command, which is itself the a
 | Network isolation | `network_mode="none"` default, configurable to `"bridge"` | Done |
 | Privilege hardening | `cap_drop=ALL`, `no-new-privileges`, non-root `1000:1000` | Done |
 | Safe-prefix whitelist | Auto-approve read-only commands; chaining operator rejection | Done |
-| Subprocess fallback | Sandbox protocol + subprocess backend with auto-detection | MVP TODO |
-| Env sanitization | `restricted_env()` blocklist for CVE-2025-66032 vectors | MVP TODO |
-| Process group kill | `kill_process_tree()` via `os.killpg()` with SIGTERM→SIGKILL | MVP TODO |
+| Subprocess fallback | Sandbox protocol + subprocess backend with auto-detection | Done |
+| Env sanitization | `restricted_env()` allowlist for CVE-2025-66032 vectors | Done |
+| Process group kill | `kill_process_tree()` via `os.killpg()` with SIGTERM→SIGKILL | Done |
 | Protected subpaths | `.git` and `.co-cli` read-only Docker volume mounts | Post-MVP |
 | macOS Seatbelt jail | `sandbox-exec` with static `.sb` profile | Post-MVP |
 | Pattern learning approval | `p` response for session-scoped command prefix learning | Post-MVP |
+
+---
+
+## Appendix: Cross-System Research (Feb 2026)
+
+<details>
+<summary>Sandbox isolation comparison (Codex, Gemini CLI, Co CLI)</summary>
+
+| System | Sandbox | FS isolation | Protected paths | Network | Env sanitization | Process cleanup |
+|--------|---------|-------------|-----------------|---------|-----------------|-----------------|
+| **Codex CLI** | bwrap (Linux), Seatbelt (macOS), restricted tokens (Windows) | Read-only root + writable workspace | `.git`, `.codex` auto-read-only; symlink attack detection | Seccomp denies socket/connect/bind; `--unshare-net` | Clean sandbox env | `--die-with-parent` |
+| **Gemini CLI** | Docker/Podman (optional), Seatbelt (macOS) | Container with RW workspace | Docker volume access control | Container network isolation | `sanitizeEnvironment()` strips dangerous vars | `killProcessGroup(-pid)` SIGTERM→200ms→SIGKILL |
+| **Co CLI** | Docker only | RW workspace bind | None | `network_mode="none"` | Clean container env | `container.exec_run` |
+
+</details>
+
+<details>
+<summary>No-sandbox / permission-only comparison (OpenCode, Gemini CLI, Aider, Claude Code)</summary>
+
+| System | Command analysis | Approval UX | Pattern learning | Redirection detection |
+|--------|-----------------|-------------|-----------------|----------------------|
+| **OpenCode** | Tree-sitter bash AST | `once` / `always` / `always+save` / `reject` | Arity-based: 137 command prefixes | AST-based; `external_directory` gate |
+| **Gemini CLI** | Tree-sitter bash AST | `ProceedOnce` / `ProceedAlways` / `ProceedAlwaysAndSave` | Root command prefix saved to policy | `shouldDowngradeForRedirection()` |
+| **Aider** | None | None — immediate execution | None | None |
+| **Claude Code** | Hook-based (`PreToolUse`) | Hook middleware | User-configured rules | User hooks |
+| **Co CLI** | Prefix match + chaining rejection | `y` / `n` / `a(yolo)` | None | Catches `>`, `<` in operators |
+
+</details>
+
+<details>
+<summary>Actual implementation sizes from source code</summary>
+
+| System | Sandbox LOC | Permission/safety LOC | Contributors | Notes |
+|--------|------------|----------------------|-------------|-------|
+| **Codex CLI** | 1,877 (seatbelt 623, bwrap 252, windows 166, shared 331, helpers 505) | 2,355 (safe 592, dangerous 382, windows 1,378) | 349 | Rust, deepest command parsing |
+| **Gemini CLI** | 1,117 (Docker 859, utils 150, config 108) + 381 (6 .sb profiles) | 1,406 (policy 518, shell-utils 888) + 196 (env sanitization) | ~500 | TypeScript, tree-sitter |
+| **OpenCode** | 0 (no container isolation) | 922 (bash tool 269, permission 490, arity 163) | 713 | TypeScript, permission-only model |
+| **Claude Code** | Docker (size unknown, closed) | 1,080 (hooks 140, rule engine 313, config 297, security 280) | 1 (automated) | Python hooks |
+| **Aider** | 0 | 0 (132 lines bare `shell=True`) | 1 | No safety model |
+
+</details>
+
+---
+
+## References
+
+- [CVE-2025-66032 — Claude Code sandbox escape via "safe" commands](https://flatt.tech/research/posts/pwning-claude-code-in-8-different-ways/)
+- Codex CLI — `codex-rs/core/src/seatbelt.rs`, `codex-rs/linux-sandbox/src/bwrap.rs`, `codex-rs/core/src/command_safety/`
+- Gemini CLI — `packages/cli/src/utils/sandbox.ts`, `packages/core/src/services/environmentSanitization.ts`, `packages/core/src/utils/shell-utils.ts`
+- OpenCode — `packages/opencode/src/tool/bash.ts`, `packages/opencode/src/permission/next.ts`, `packages/opencode/src/permission/arity.ts`
+- Claude Code — hook system (`pretooluse.py`, `rule_engine.py`)
+- Aider — `aider/run_cmd.py`

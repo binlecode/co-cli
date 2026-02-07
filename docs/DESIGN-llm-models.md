@@ -70,7 +70,7 @@ The [HuggingFace model card](https://huggingface.co/zai-org/GLM-4.7-Flash) docum
 | **Terminal / SWE-Bench Verified** | **0.7** | **1.0** | **16384** | **Shell/code execution tasks** |
 | τ²-Bench standalone | 0 | — | 16384 | Greedy decoding |
 
-Co CLI uses the **Terminal / SWE-Bench Verified** profile — the closest match to our tool-calling pattern (shell commands in a Docker sandbox + Google/Slack API calls). The multi-turn agentic profile requires Preserved Thinking mode, which Co CLI does not enable.
+Co CLI uses the **Terminal / SWE-Bench Verified** profile — the closest match to our tool-calling pattern (shell commands in a sandboxed environment + Google/Slack API calls). The multi-turn agentic profile requires Preserved Thinking mode, which Co CLI does not enable.
 
 ```python
 model_settings = ModelSettings(

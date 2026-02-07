@@ -52,6 +52,7 @@ class Settings(BaseModel):
     max_request_limit: int = Field(default=25)
 
     # Sandbox limits
+    sandbox_backend: Literal["auto", "docker", "subprocess"] = Field(default="auto")
     sandbox_max_timeout: int = Field(default=600)
     sandbox_network: Literal["none", "bridge"] = Field(default="none")
     sandbox_mem_limit: str = Field(default="1g")
@@ -94,6 +95,7 @@ class Settings(BaseModel):
             "theme": "CO_CLI_THEME",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
+            "sandbox_backend": "CO_CLI_SANDBOX_BACKEND",
             "sandbox_max_timeout": "CO_CLI_SANDBOX_MAX_TIMEOUT",
             "sandbox_network": "CO_CLI_SANDBOX_NETWORK",
             "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",

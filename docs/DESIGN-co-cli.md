@@ -318,6 +318,7 @@ classDiagram
         +theme: str
         +tool_retries: int
         +max_request_limit: int
+        +sandbox_backend: Literal[auto, docker, subprocess]
         +sandbox_max_timeout: int
         +sandbox_network: Literal[none, bridge]
         +sandbox_mem_limit: str
@@ -376,6 +377,7 @@ Project config is checked at `cwd/.co-cli/settings.json` only — no upward dire
 | `theme` | `CO_CLI_THEME` | `"light"` |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` |
+| `sandbox_backend` | `CO_CLI_SANDBOX_BACKEND` | `"auto"` |
 | `sandbox_max_timeout` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | `600` |
 | `sandbox_network` | `CO_CLI_SANDBOX_NETWORK` | `"none"` |
 | `sandbox_mem_limit` | `CO_CLI_SANDBOX_MEM_LIMIT` | `"1g"` |
@@ -389,7 +391,7 @@ Runtime dependencies injected into tools via `RunContext[CoDeps]`. Settings crea
 ```python
 @dataclass
 class CoDeps:
-    sandbox: Sandbox
+    sandbox: SandboxProtocol
     auto_confirm: bool = False
     session_id: str = ""
     obsidian_vault_path: Path | None = None

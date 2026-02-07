@@ -176,7 +176,7 @@ gcloud auth application-default login \
 | Decision | Rationale |
 |----------|-----------|
 | Three functions (ensure + get + cached) | `ensure` for interactive auth, `get` for tests/CI, `cached` for tool-call-time resolution |
-| `ensure_google_credentials()` auto-runs gcloud | Zero-config UX — like `Sandbox.ensure_container()` lazily creates Docker |
+| `ensure_google_credentials()` auto-runs gcloud | Zero-config UX — like `DockerSandbox.ensure_container()` lazily creates the container |
 | `get_google_credentials()` kept for non-interactive use | Tests and CI should not prompt for browser auth |
 | Returns `None` on failure | Callers raise `ModelRetry` with context-specific messages |
 | ADC copied to `GOOGLE_TOKEN_PATH` | Isolation — co-cli credentials won't be overwritten by other gcloud commands |
@@ -1231,5 +1231,5 @@ All Google tests skip gracefully when GCP is unavailable:
 | Drive file upload | Write files to Drive | Not planned |
 | Calendar event creation | Create/modify events | Not planned |
 | OAuth2 user flow | User-delegated auth via gcloud | Done (authorized_user credentials) |
-| Auto-setup (`ensure_google_credentials`) | Auto-run gcloud auth on first use, like `Sandbox.ensure_container()` | Done |
+| Auto-setup (`ensure_google_credentials`) | Auto-run gcloud auth on first use, like `DockerSandbox.ensure_container()` | Done |
 | Semantic Drive search | Re-rank results with embeddings | Not planned |

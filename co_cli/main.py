@@ -25,7 +25,7 @@ from rich.prompt import Prompt
 from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
-from co_cli.sandbox import Sandbox
+from co_cli.sandbox import SandboxProtocol, DockerSandbox, SubprocessBackend
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, set_theme, PROMPT_CHAR
@@ -65,6 +65,29 @@ app = typer.Typer(
 )
 
 
+def _create_sandbox(session_id: str) -> SandboxProtocol:
+    """Create sandbox backend based on settings with auto-detection fallback."""
+    backend = settings.sandbox_backend
+
+    if backend in ("docker", "auto"):
+        try:
+            import docker
+            docker.from_env().ping()
+            return DockerSandbox(
+                image=settings.docker_image,
+                container_name=f"co-runner-{session_id[:8]}",
+                network_mode=settings.sandbox_network,
+                mem_limit=settings.sandbox_mem_limit,
+                cpus=settings.sandbox_cpus,
+            )
+        except Exception:
+            if backend == "docker":
+                raise  # explicit docker — don't hide the error
+
+    console.print("[yellow]Docker unavailable — running without sandbox[/yellow]")
+    return SubprocessBackend()
+
+
 def create_deps() -> CoDeps:
     """Create deps from settings."""
     session_id = uuid4().hex
@@ -81,13 +104,7 @@ def create_deps() -> CoDeps:
         slack_client = WebClient(token=settings.slack_bot_token)
 
     return CoDeps(
-        sandbox=Sandbox(
-            image=settings.docker_image,
-            container_name=f"co-runner-{session_id[:8]}",
-            network_mode=settings.sandbox_network,
-            mem_limit=settings.sandbox_mem_limit,
-            cpus=settings.sandbox_cpus,
-        ),
+        sandbox=_create_sandbox(session_id),
         auto_confirm=settings.auto_confirm,
         session_id=session_id,
         obsidian_vault_path=vault_path,
@@ -154,10 +171,14 @@ async def _handle_approvals(agent, deps, result, model_settings):
                 approvals.approvals[call.tool_call_id] = True
                 continue
 
-            # Auto-approve safe shell commands silently
+            # Auto-approve safe shell commands only when sandbox provides isolation.
+            # Without a sandbox, approval is the security layer — all commands prompt.
             if call.tool_name == "run_shell_command":
                 cmd = args.get("cmd", "")
-                if _is_safe_command(cmd, deps.shell_safe_commands):
+                if (
+                    deps.sandbox.isolation_level != "none"
+                    and _is_safe_command(cmd, deps.shell_safe_commands)
+                ):
                     approvals.approvals[call.tool_call_id] = True
                     continue
 

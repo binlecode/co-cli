@@ -1,14 +1,16 @@
 """Functional tests for shell tool.
 
-All tests hit real Docker — no mocks, no stubs.
+All tests hit real services — no mocks, no stubs.
+Docker tests require Docker running. Subprocess tests run on any system.
 """
 
+import os
 import pytest
 
 from pydantic_ai import ModelRetry
 
 from co_cli.tools.shell import run_shell_command
-from co_cli.sandbox import Sandbox
+from co_cli.sandbox import DockerSandbox, SubprocessBackend, SandboxProtocol
 from co_cli.deps import CoDeps
 
 
@@ -21,7 +23,7 @@ class Context:
     deps: CoDeps
 
 
-def _make_ctx(sandbox: Sandbox, **overrides) -> Context:
+def _make_ctx(sandbox: SandboxProtocol, **overrides) -> Context:
     return Context(deps=CoDeps(
         sandbox=sandbox,
         auto_confirm=True,
@@ -36,7 +38,7 @@ def _make_ctx(sandbox: Sandbox, **overrides) -> Context:
 @pytest.mark.asyncio
 async def test_shell_executes_in_docker():
     """Tool runs command in Docker sandbox and returns output."""
-    sandbox = Sandbox(container_name="co-test-shell")
+    sandbox = DockerSandbox(container_name="co-test-shell")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -49,7 +51,7 @@ async def test_shell_executes_in_docker():
 @pytest.mark.asyncio
 async def test_shell_nonzero_exit_raises_model_retry():
     """Non-zero exit code raises ModelRetry so the LLM can self-correct."""
-    sandbox = Sandbox(container_name="co-test-shell-fail")
+    sandbox = DockerSandbox(container_name="co-test-shell-fail")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -65,7 +67,7 @@ async def test_shell_nonzero_exit_raises_model_retry():
 @pytest.mark.asyncio
 async def test_shell_timeout_raises_model_retry():
     """Command exceeding timeout raises ModelRetry with timeout message."""
-    sandbox = Sandbox(container_name="co-test-shell-timeout")
+    sandbox = DockerSandbox(container_name="co-test-shell-timeout")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -78,7 +80,7 @@ async def test_shell_timeout_raises_model_retry():
 @pytest.mark.asyncio
 async def test_shell_timeout_clamped_to_ceiling():
     """Tool clamps timeout to sandbox_max_timeout ceiling."""
-    sandbox = Sandbox(container_name="co-test-shell-clamp")
+    sandbox = DockerSandbox(container_name="co-test-shell-clamp")
     ctx = _make_ctx(sandbox, sandbox_max_timeout=3)
 
     try:
@@ -95,7 +97,7 @@ async def test_shell_timeout_clamped_to_ceiling():
 @pytest.mark.asyncio
 async def test_shell_pipe():
     """Pipes work via sh -c wrapping."""
-    sandbox = Sandbox(container_name="co-test-shell-pipe")
+    sandbox = DockerSandbox(container_name="co-test-shell-pipe")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -111,7 +113,7 @@ async def test_shell_pipe():
 @pytest.mark.asyncio
 async def test_shell_runs_as_non_root():
     """Container runs as non-root user (uid 1000)."""
-    sandbox = Sandbox(container_name="co-test-shell-user")
+    sandbox = DockerSandbox(container_name="co-test-shell-user")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -124,7 +126,7 @@ async def test_shell_runs_as_non_root():
 @pytest.mark.asyncio
 async def test_shell_network_disabled():
     """Network is disabled by default (network_mode=none)."""
-    sandbox = Sandbox(container_name="co-test-shell-net")
+    sandbox = DockerSandbox(container_name="co-test-shell-net")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -138,7 +140,7 @@ async def test_shell_network_disabled():
 @pytest.mark.asyncio
 async def test_shell_capabilities_dropped():
     """cap_drop=ALL results in zero effective capabilities."""
-    sandbox = Sandbox(container_name="co-test-shell-cap")
+    sandbox = DockerSandbox(container_name="co-test-shell-cap")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -156,7 +158,7 @@ async def test_shell_capabilities_dropped():
 @pytest.mark.asyncio
 async def test_shell_redirect_write_and_read():
     """Redirect > creates a file, cat reads it back."""
-    sandbox = Sandbox(container_name="co-test-shell-redir")
+    sandbox = DockerSandbox(container_name="co-test-shell-redir")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -171,7 +173,7 @@ async def test_shell_redirect_write_and_read():
 @pytest.mark.asyncio
 async def test_shell_variable_expansion():
     """Shell variable expansion works inside sh -c."""
-    sandbox = Sandbox(container_name="co-test-shell-var")
+    sandbox = DockerSandbox(container_name="co-test-shell-var")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -184,7 +186,7 @@ async def test_shell_variable_expansion():
 @pytest.mark.asyncio
 async def test_shell_subshell():
     """Subshell $() works."""
-    sandbox = Sandbox(container_name="co-test-shell-sub")
+    sandbox = DockerSandbox(container_name="co-test-shell-sub")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -198,7 +200,7 @@ async def test_shell_subshell():
 @pytest.mark.asyncio
 async def test_shell_heredoc():
     """Here-document via cat <<EOF."""
-    sandbox = Sandbox(container_name="co-test-shell-heredoc")
+    sandbox = DockerSandbox(container_name="co-test-shell-heredoc")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -214,7 +216,7 @@ async def test_shell_heredoc():
 @pytest.mark.asyncio
 async def test_shell_stderr_merged():
     """stderr is merged into stdout — LLM sees all output."""
-    sandbox = Sandbox(container_name="co-test-shell-stderr")
+    sandbox = DockerSandbox(container_name="co-test-shell-stderr")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -232,7 +234,7 @@ async def test_shell_stderr_merged():
 @pytest.mark.asyncio
 async def test_shell_python_script_create_and_run():
     """Write a Python script via redirect, execute it."""
-    sandbox = Sandbox(container_name="co-test-shell-pyscript")
+    sandbox = DockerSandbox(container_name="co-test-shell-pyscript")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -253,7 +255,7 @@ async def test_shell_python_script_create_and_run():
 @pytest.mark.asyncio
 async def test_shell_jq_json_processing():
     """jq is available and processes JSON."""
-    sandbox = Sandbox(container_name="co-test-shell-jq")
+    sandbox = DockerSandbox(container_name="co-test-shell-jq")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -268,7 +270,7 @@ async def test_shell_jq_json_processing():
 @pytest.mark.asyncio
 async def test_shell_git_available():
     """git is installed and runnable."""
-    sandbox = Sandbox(container_name="co-test-shell-git")
+    sandbox = DockerSandbox(container_name="co-test-shell-git")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -281,7 +283,7 @@ async def test_shell_git_available():
 @pytest.mark.asyncio
 async def test_shell_tree_output():
     """tree produces directory listing."""
-    sandbox = Sandbox(container_name="co-test-shell-tree")
+    sandbox = DockerSandbox(container_name="co-test-shell-tree")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -300,7 +302,7 @@ async def test_shell_tree_output():
 @pytest.mark.asyncio
 async def test_python_traceback_surfaces():
     """Python tracebacks are visible in output so the LLM can self-correct."""
-    sandbox = Sandbox(container_name="co-test-py-traceback")
+    sandbox = DockerSandbox(container_name="co-test-py-traceback")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -317,7 +319,7 @@ async def test_python_traceback_surfaces():
 @pytest.mark.asyncio
 async def test_python_file_io_round_trip():
     """Python writes a file, reads it back — full I/O cycle."""
-    sandbox = Sandbox(container_name="co-test-py-fileio")
+    sandbox = DockerSandbox(container_name="co-test-py-fileio")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -339,7 +341,7 @@ async def test_python_file_io_round_trip():
 @pytest.mark.asyncio
 async def test_python_multifile_project():
     """LLM creates a module + script, imports across files."""
-    sandbox = Sandbox(container_name="co-test-py-multifile")
+    sandbox = DockerSandbox(container_name="co-test-py-multifile")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -370,7 +372,7 @@ async def test_python_multifile_project():
 @pytest.mark.asyncio
 async def test_python_unittest_run():
     """unittest (stdlib) can run a test file the LLM wrote."""
-    sandbox = Sandbox(container_name="co-test-py-unittest")
+    sandbox = DockerSandbox(container_name="co-test-py-unittest")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -399,7 +401,7 @@ async def test_python_unittest_run():
 @pytest.mark.asyncio
 async def test_python_unittest_failure_output():
     """unittest failure output (assertion details) surfaces for LLM self-correction."""
-    sandbox = Sandbox(container_name="co-test-py-unittest-fail")
+    sandbox = DockerSandbox(container_name="co-test-py-unittest-fail")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -427,7 +429,7 @@ async def test_python_unittest_failure_output():
 @pytest.mark.asyncio
 async def test_python_edit_and_rerun():
     """Simulate LLM fix cycle: write buggy code, see error, fix, rerun."""
-    sandbox = Sandbox(container_name="co-test-py-editloop")
+    sandbox = DockerSandbox(container_name="co-test-py-editloop")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -465,7 +467,7 @@ async def test_python_edit_and_rerun():
 @pytest.mark.asyncio
 async def test_python_partial_output_on_timeout():
     """PYTHONUNBUFFERED ensures partial output is captured before timeout kill."""
-    sandbox = Sandbox(container_name="co-test-py-partial")
+    sandbox = DockerSandbox(container_name="co-test-py-partial")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -494,7 +496,7 @@ async def test_python_partial_output_on_timeout():
 @pytest.mark.asyncio
 async def test_shell_special_chars_in_command():
     """Quotes, dollars, backticks survive shlex.quote wrapping."""
-    sandbox = Sandbox(container_name="co-test-shell-special")
+    sandbox = DockerSandbox(container_name="co-test-shell-special")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -508,7 +510,7 @@ async def test_shell_special_chars_in_command():
 @pytest.mark.asyncio
 async def test_shell_large_output():
     """Large output (>64KB) is returned without truncation."""
-    sandbox = Sandbox(container_name="co-test-shell-large")
+    sandbox = DockerSandbox(container_name="co-test-shell-large")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -525,7 +527,7 @@ async def test_shell_large_output():
 @pytest.mark.asyncio
 async def test_shell_empty_output():
     """Command that produces no stdout returns empty string."""
-    sandbox = Sandbox(container_name="co-test-shell-empty")
+    sandbox = DockerSandbox(container_name="co-test-shell-empty")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -538,7 +540,7 @@ async def test_shell_empty_output():
 @pytest.mark.asyncio
 async def test_shell_workspace_is_host_cwd():
     """Files in host CWD are visible at /workspace."""
-    sandbox = Sandbox(container_name="co-test-shell-mount")
+    sandbox = DockerSandbox(container_name="co-test-shell-mount")
     ctx = _make_ctx(sandbox)
 
     try:
@@ -547,3 +549,226 @@ async def test_shell_workspace_is_host_cwd():
         assert "exists" in result
     finally:
         sandbox.cleanup()
+
+
+# =============================================================================
+# Subprocess backend tests (no Docker required)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_subprocess_basic_exec():
+    """SubprocessBackend runs a command and returns output."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "echo hello")
+    assert "hello" in result
+
+
+@pytest.mark.asyncio
+async def test_subprocess_nonzero_exit():
+    """Non-zero exit code raises ModelRetry."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    with pytest.raises(ModelRetry, match="Command failed"):
+        await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
+
+
+@pytest.mark.asyncio
+async def test_subprocess_timeout():
+    """Command exceeding timeout raises ModelRetry with timeout message."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    with pytest.raises(ModelRetry, match="Command failed.*timed out"):
+        await run_shell_command(ctx, "sleep 30", timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_timeout_clamped():
+    """Tool clamps timeout to sandbox_max_timeout ceiling."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend, sandbox_max_timeout=2)
+
+    with pytest.raises(ModelRetry, match="Command failed"):
+        await run_shell_command(ctx, "sleep 30", timeout=300)
+
+
+@pytest.mark.asyncio
+async def test_subprocess_pipe():
+    """Pipes work in subprocess backend."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "echo hello world | wc -w")
+    assert result.strip() == "2"
+
+
+@pytest.mark.asyncio
+async def test_subprocess_env_sanitized():
+    """Subprocess backend sanitizes environment — dangerous vars are stripped."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    # PAGER should be forced to 'cat', not whatever the host has
+    result = await run_shell_command(ctx, "echo $PAGER")
+    assert result.strip() == "cat"
+
+    # GIT_PAGER should also be forced to 'cat'
+    result = await run_shell_command(ctx, "echo $GIT_PAGER")
+    assert result.strip() == "cat"
+
+    # PYTHONUNBUFFERED should be set
+    result = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
+    assert result.strip() == "1"
+
+
+@pytest.mark.asyncio
+async def test_subprocess_dangerous_env_blocked():
+    """Dangerous env vars from host do NOT propagate to subprocess."""
+    # Temporarily set a dangerous var in our process
+    old = os.environ.get("LD_PRELOAD")
+    os.environ["LD_PRELOAD"] = "/tmp/evil.so"
+    try:
+        backend = SubprocessBackend()
+        ctx = _make_ctx(backend)
+
+        result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
+        assert result.strip() == "unset"
+    finally:
+        if old is None:
+            os.environ.pop("LD_PRELOAD", None)
+        else:
+            os.environ["LD_PRELOAD"] = old
+
+
+@pytest.mark.asyncio
+async def test_subprocess_stderr_merged():
+    """stderr is merged into stdout in subprocess backend."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
+    assert "err msg" in result
+    assert "ok" in result
+
+
+@pytest.mark.asyncio
+async def test_subprocess_cwd_is_host_cwd():
+    """SubprocessBackend runs in the host working directory."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
+    assert "exists" in result
+
+
+@pytest.mark.asyncio
+async def test_subprocess_isolation_level():
+    """SubprocessBackend reports isolation_level='none'."""
+    backend = SubprocessBackend()
+    assert backend.isolation_level == "none"
+
+
+@pytest.mark.asyncio
+async def test_docker_isolation_level():
+    """DockerSandbox reports isolation_level='full'."""
+    sandbox = DockerSandbox(container_name="co-test-isolation")
+    assert sandbox.isolation_level == "full"
+
+
+# =============================================================================
+# Sandbox protocol conformance
+# =============================================================================
+
+
+def test_docker_sandbox_satisfies_protocol():
+    """DockerSandbox is a runtime instance of SandboxProtocol."""
+    sandbox = DockerSandbox(container_name="co-test-proto")
+    assert isinstance(sandbox, SandboxProtocol)
+
+
+def test_subprocess_backend_satisfies_protocol():
+    """SubprocessBackend is a runtime instance of SandboxProtocol."""
+    backend = SubprocessBackend()
+    assert isinstance(backend, SandboxProtocol)
+
+
+# =============================================================================
+# Auto-detection and config tests
+# =============================================================================
+
+
+def test_sandbox_backend_config_field():
+    """sandbox_backend config field exists and defaults to 'auto'."""
+    from co_cli.config import Settings
+    s = Settings.model_validate({})
+    assert s.sandbox_backend == "auto"
+
+
+def test_sandbox_backend_env_override():
+    """CO_CLI_SANDBOX_BACKEND env var overrides the config default."""
+    old = os.environ.get("CO_CLI_SANDBOX_BACKEND")
+    os.environ["CO_CLI_SANDBOX_BACKEND"] = "subprocess"
+    try:
+        from co_cli.config import Settings
+        s = Settings.model_validate({})
+        assert s.sandbox_backend == "subprocess"
+    finally:
+        if old is None:
+            os.environ.pop("CO_CLI_SANDBOX_BACKEND", None)
+        else:
+            os.environ["CO_CLI_SANDBOX_BACKEND"] = old
+
+
+def test_create_sandbox_subprocess_explicit():
+    """_create_sandbox with backend=subprocess always returns SubprocessBackend."""
+    from co_cli.config import settings
+    original = settings.sandbox_backend
+    settings.sandbox_backend = "subprocess"
+    try:
+        from co_cli.main import _create_sandbox
+        sandbox = _create_sandbox("test-session")
+        assert isinstance(sandbox, SubprocessBackend)
+        assert sandbox.isolation_level == "none"
+    finally:
+        settings.sandbox_backend = original
+
+
+def test_subprocess_cleanup_is_noop():
+    """SubprocessBackend.cleanup() is a no-op and doesn't raise."""
+    backend = SubprocessBackend()
+    backend.cleanup()  # should not raise
+
+
+@pytest.mark.asyncio
+async def test_subprocess_empty_output():
+    """Command with no output returns empty string."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "true")
+    assert result.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_subprocess_variable_expansion():
+    """Shell variable expansion works in subprocess backend."""
+    backend = SubprocessBackend()
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "X=42 && echo val=$X")
+    assert "val=42" in result
+
+
+@pytest.mark.asyncio
+async def test_subprocess_workspace_dir_param():
+    """SubprocessBackend respects custom workspace_dir."""
+    backend = SubprocessBackend(workspace_dir="/tmp")
+    ctx = _make_ctx(backend)
+
+    result = await run_shell_command(ctx, "pwd")
+    # /tmp may resolve to /private/tmp on macOS
+    assert "tmp" in result

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from co_cli.sandbox import Sandbox
+from co_cli.sandbox import SandboxProtocol
 
 
 @dataclass
@@ -13,7 +13,7 @@ class CoDeps:
     Settings creates these in main.py, then injects here.
     """
 
-    sandbox: Sandbox
+    sandbox: SandboxProtocol
     auto_confirm: bool = False  # Session-yolo: set True when user picks "a" in approval prompt
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault

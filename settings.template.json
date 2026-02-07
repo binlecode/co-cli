@@ -1,0 +1,35 @@
+{
+  "llm_provider": "gemini",
+  "gemini_api_key": "",
+  "gemini_model": "gemini-2.0-flash",
+  "ollama_host": "http://localhost:11434",
+  "ollama_model": "glm-4.7-flash:q8_0",
+
+  "obsidian_vault_path": "",
+  "google_credentials_path": "",
+  "slack_bot_token": "",
+
+  "auto_confirm": false,
+  "docker_image": "co-cli-sandbox",
+  "theme": "light",
+  "tool_retries": 3,
+  "max_request_limit": 25,
+
+  "sandbox_backend": "auto",
+  "sandbox_max_timeout": 600,
+  "sandbox_network": "none",
+  "sandbox_mem_limit": "1g",
+  "sandbox_cpus": 1,
+
+  "shell_safe_commands": [
+    "ls", "tree", "find", "fd",
+    "cat", "head", "tail",
+    "grep", "rg", "ag",
+    "wc", "sort", "uniq", "cut", "jq",
+    "echo", "printf",
+    "pwd", "whoami", "hostname", "uname", "date",
+    "env", "which", "file", "id", "du", "df",
+    "git status", "git diff", "git log", "git show",
+    "git branch", "git tag", "git blame"
+  ]
+}

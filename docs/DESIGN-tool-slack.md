@@ -119,7 +119,7 @@ The Slack tools enable the agent to read channels/users/threads and send message
 
 **Why `Any` type instead of `WebClient`?**
 - Avoids making `slack_sdk` a hard import for `deps.py`
-- `deps.py` stays lightweight — only imports `Sandbox`
+- `deps.py` stays lightweight — only imports `SandboxProtocol`
 - Type is `slack_sdk.WebClient` at runtime, but typed as `Any` to avoid coupling
 
 **Why build client at startup, not per-request?**

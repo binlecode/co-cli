@@ -60,15 +60,10 @@ Systems are included as primary benchmarks only if they satisfy all of:
 1. Warp (Ambient Agents platform + CLI)
 2. OpenClaw (personal automation agent platform)
 
-### 2.4 Watchlist (not used for capability scoring)
-
-1. Manus (interesting architecture signal, but lower documentation transparency for apples-to-apples CLI scoring)
-
-### 2.5 Why this split
+### 2.4 Why this split
 
 - Core set is most comparable to co-cli as a terminal coding/ops assistant.
 - Secondary set is useful for roadmap ideas (browser, cron, orchestration), but less apples-to-apples.
-- Watchlist systems are tracked for ideas but excluded from formal matrix weighting.
 
 ---
 
@@ -200,7 +195,7 @@ Systems are included as primary benchmarks only if they satisfy all of:
 
 - This refresh intentionally removed unstable claims (stars/users/market-share counts) unless needed.
 - Claims are anchored to official product docs/changelogs as of 2026-02-07.
-- For secondary/watchlist platforms (OpenClaw, Warp, Manus), feature scope is broader than coding CLI; treat as design inspiration, not parity targets.
+- For secondary platforms (OpenClaw, Warp), feature scope is broader than coding CLI; treat as design inspiration, not parity targets.
 
 ---
 
@@ -288,9 +283,3 @@ Systems are included as primary benchmarks only if they satisfy all of:
 - https://docs.openclaw.ai/tools/browser
 - https://docs.openclaw.ai/automation/cron-jobs
 - https://docs.openclaw.ai/concepts/memory
-
-### Manus
-
-- https://manus.im/docs/features/browser-operator
-- https://manus.im/docs/integrations/mcp-connectors
-- https://open.manus.im/docs
