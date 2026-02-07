@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-07
+
+### Added
+- **Automatic context governance**: Two `history_processors` registered on the agent (`co_cli/_history.py`): `trim_old_tool_output` (sync, truncates large `ToolReturnPart.content` in older messages) and `sliding_window` (async, drops middle messages and replaces with LLM summary). Prevents silent context overflow without manual intervention.
+- **`summarize_messages()` shared utility**: Disposable `Agent(model, output_type=str)` with zero tools — used by both `sliding_window` (automatic) and `/compact` (user-initiated). Configurable summarisation model via `summarization_model` setting.
+- **3 new config fields**: `tool_output_trim_chars` (default 2000), `max_history_messages` (default 40), `summarization_model` (default `""` = primary model). Env vars: `CO_CLI_TOOL_OUTPUT_TRIM_CHARS`, `CO_CLI_MAX_HISTORY_MESSAGES`, `CO_CLI_SUMMARIZATION_MODEL`.
+- **`docs/DESIGN-conversation-memory.md`**: Full design doc — peer landscape (Aider, Codex, Claude Code, Gemini CLI), gap analysis table, processor architecture, summarisation agent details (prompts, callsites, error handling), configuration reference with model resolution and disable semantics, session persistence roadmap.
+- **18 functional tests** (`tests/test_history.py`): 13 pure tests (trim processor edge cases, static marker, find_first_run_end) + 5 LLM tests (summarise, sliding window compaction, structural validity, /compact end-to-end). No mocks — real `RunContext`, real `SubprocessBackend`, real LLM calls.
+
+### Changed
+- **`/compact` refactored**: Now calls `summarize_messages()` with primary model and builds a minimal 2-message history (summary `ModelRequest` + ack `ModelResponse`). Previously used `agent.run()` which could trigger tools and returned full history with summary appended.
+- **`docs/DESIGN-co-cli.md`**: Updated §7.4 (history processors architecture), Settings class diagram, env var table, and module summary with `_history.py`.
+- **`CLAUDE.md`**: Reorganised docs inventory — `DESIGN-conversation-memory.md` in Design section, new TODO entries, removed completed review.
+- **`docs/REVIEW-sidekick-cli-good-and-bad.md`**: Rewritten to reflect current co-cli state — pattern-by-pattern adopted/partial/pending status instead of aspirational recommendations.
+
+### Removed
+- **`docs/TODO-conversation-memory.md`**: Replaced by `docs/DESIGN-conversation-memory.md`.
+- **`docs/PYDANTIC-AI-CLI-BEST-PRACTICES.md`**: Content consolidated elsewhere.
+- **`docs/REVIEW-co-cli-design-team-view.md`**: All P0/P1/P2 findings resolved; remaining items tracked in dedicated docs.
+
+---
+
 ## [0.2.16] - 2026-02-07
 
 ### Added
