@@ -171,6 +171,13 @@ LLM calls run_shell_command(cmd)
 |-----------|-------|---------|
 | `name` | `"co-runner-{session_id[:8]}"` | Session-scoped name to avoid cross-session collisions |
 | `image` | `co-cli-sandbox` | Custom image with dev tools (see below) |
+| `user` | `"1000:1000"` | Non-root execution — matches typical host UID |
+| `network_mode` | `"none"` (configurable) | No network by default; `"bridge"` opt-in via settings |
+| `mem_limit` | `"1g"` (configurable) | OOM-kill at 1 GB — industry norm for agentic sandboxes |
+| `nano_cpus` | `1_000_000_000` (configurable) | 1 CPU core |
+| `pids_limit` | `256` | Fork bomb prevention |
+| `cap_drop` | `["ALL"]` | Drop all Linux capabilities |
+| `security_opt` | `["no-new-privileges"]` | Prevent setuid/setgid escalation |
 | `detach` | `True` | Run in background |
 | `tty` | `True` | Keep container alive |
 | `command` | `"sh"` | Idle process to prevent exit |
@@ -289,6 +296,13 @@ On timeout, `RuntimeError` includes partial output captured before the kill, so 
 | LLM-visible `timeout` param | Exposed in tool schema so the LLM can reason about appropriate values per command |
 | `PYTHONUNBUFFERED=1` | Ensures partial output is captured on timeout — Python buffers stdout when not on a TTY |
 | Merged stdout/stderr | `exec_run` returns both streams merged (`2>&1`). LLM doesn't need to distinguish; splitting adds complexity with no benefit |
+| Non-root `1000:1000` | Matches typical host UID on Linux/macOS. Prevents container processes from running as root. Configurable if CWD ownership differs |
+| `network_mode="none"` | No network by default — agentic sandbox norm (E2B, Claude Code reference). Configurable to `"bridge"` for workflows needing network (e.g., `pip install`) |
+| `mem_limit="1g"` | 1 GB hard limit. Industry range 512 MiB–2 GB; 1 GB balances dev tool headroom vs runaway protection. Configurable for heavy workloads |
+| `nano_cpus=1_000_000_000` | 1 CPU core. Prevents runaway builds from starving the host. Configurable |
+| `pids_limit=256` | Prevents fork bombs. Industry range 100–512; 256 is safe for normal dev workflows |
+| `cap_drop=["ALL"]` | Drops all Linux capabilities — zero-cost hardening, standard in Anthropic reference sandbox and E2B |
+| `no-new-privileges` | Prevents privilege escalation via setuid/setgid binaries. Zero overhead, blocks a common container escape vector |
 
 ---
 
@@ -319,12 +333,20 @@ On timeout, `RuntimeError` includes partial output captured before the kill, so 
 │                                                                  │
 │  /workspace/  ◀── Only this is accessible                       │
 │                                                                  │
+│  Hardening:                                                     │
+│  ├── Non-root (user 1000:1000)                                  │
+│  ├── No network (network_mode=none)                             │
+│  ├── mem_limit=1g, 1 CPU, pids_limit=256                       │
+│  ├── cap_drop=ALL, no-new-privileges                            │
+│  │                                                               │
 │  CAN do:                          CANNOT do:                    │
 │  ├── List/read/write files        ├── Access ~/.ssh             │
 │  ├── Run scripts                  ├── Access ~/.config          │
 │  ├── Install packages (in         ├── Modify host /etc          │
 │  │   container only)              ├── Access other dirs         │
-│  └── Git operations               └── Spawn host processes      │
+│  └── Git operations               ├── Spawn host processes      │
+│                                    ├── Escalate privileges       │
+│                                    └── Access network (default)  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -362,6 +384,9 @@ Scenario: LLM runs "rm -rf /"
 | `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Container image |
 | `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip prompts |
 | `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Hard ceiling for per-command timeout (seconds) |
+| `sandbox_network` | `"none"` | `CO_CLI_SANDBOX_NETWORK` | Container network mode (`"none"` or `"bridge"`) |
+| `sandbox_mem_limit` | `"1g"` | `CO_CLI_SANDBOX_MEM_LIMIT` | Container memory limit (Docker format) |
+| `sandbox_cpus` | `1` | `CO_CLI_SANDBOX_CPUS` | Container CPU cores |
 
 ### Default Image: `co-cli-sandbox`
 
@@ -542,5 +567,6 @@ No approval prompt: the user explicitly typed the command, which is itself the a
 | Command timeout | LLM-controlled per-invocation timeout, async exec, partial output | Done |
 | Tool output display | Raw tool output shown to user via `_display_tool_outputs()` | Done |
 | `!` prefix direct exec | Bypass LLM, run command directly in sandbox | Done |
-| Resource limits | Memory/CPU constraints | Planned |
-| Network isolation | `--network none` option | Planned |
+| Resource limits | `mem_limit=1g`, 1 CPU, `pids_limit=256` | Done |
+| Network isolation | `network_mode="none"` default, configurable to `"bridge"` | Done |
+| Privilege hardening | `cap_drop=ALL`, `no-new-privileges`, non-root `1000:1000` | Done |

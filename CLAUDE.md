@@ -83,4 +83,3 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/TODO-tool-call-stability.md` — Retry budget, ModelRetry semantics, loop guard
 - `docs/TODO-conversation-memory.md` — Sliding window, persistence, tool output trimming
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
-- `docs/TODO-structured-output.md` — Structured output migration

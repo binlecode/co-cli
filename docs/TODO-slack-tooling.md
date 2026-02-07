@@ -34,125 +34,19 @@ Surveyed 10+ agentic systems: Anthropic MCP server, Slack's own MCP server (beta
 
 ---
 
-## Phase 1 — Core Reads (bot token)
+## Phase 1 — Core Reads (bot token) ✅ DONE
 
-Extract `_get_slack_client` helper, add four read tools. No new token type needed — all work with the existing bot token (`xoxb-`).
+Implemented in `co_cli/tools/slack.py`. Registered as read-only tools (no approval) in `agent.py`. Functional tests in `tests/test_google_cloud.py`.
 
-**New scopes:** `channels:read`, `channels:history`, `groups:read`, `groups:history`, `users:read`
+- `_get_slack_client` helper — extracts/validates client from `ctx.deps`
+- `_format_message` / `_format_ts` — shared display helpers
+- `list_slack_channels(ctx, limit=20, types="public_channel")`
+- `get_slack_channel_history(ctx, channel, limit=15)` — capped at 50
+- `get_slack_thread_replies(ctx, channel, thread_ts, limit=20)`
+- `list_slack_users(ctx, limit=30)` — filters deleted/bot users
+- Refactored `post_slack_message` to use `_get_slack_client`
 
-### 1a. `_get_slack_client` helper
-
-Gmail uses `_get_gmail_service`, Calendar uses `_get_calendar_service`. With 5+ tools, inline client extraction becomes a DRY violation.
-
-```python
-def _get_slack_client(ctx: RunContext[CoDeps]):
-    client = ctx.deps.slack_client
-    if not client:
-        raise ModelRetry(
-            "Slack not configured. Set slack_bot_token in settings or SLACK_BOT_TOKEN env var."
-        )
-    return client
-```
-
-Refactor `post_slack_message` to use it too.
-
-### 1b. `list_slack_channels`
-
-List channels the bot can see. Essential — agent needs to know what channels exist before posting.
-
-```
-list_slack_channels(ctx, limit=20, types="public_channel") -> dict[str, Any]
-
-Args:
-    limit:  Max channels to return (default 20)
-    types:  Comma-separated channel types: public_channel, private_channel, mpim, im
-
-Returns:
-    {"display": "#general (C01ABC) - Company-wide...\n#eng (C02DEF) - ...",
-     "count": 20, "has_more": true}
-
-Raises:
-    ModelRetry: If not configured or API error
-```
-
-- Scope: `channels:read`, `groups:read`
-- Registration: `agent.tool(list_slack_channels)` — read-only, no approval
-- Pagination: Use Slack cursor. Return `has_more` flag. Agent can request more via `cursor` param.
-- Display format: `#name (ID) - purpose` per line — keeps output compact, gives agent both name and ID
-
-### 1c. `get_slack_channel_history`
-
-Read recent messages from a channel. Core context-gathering tool — lets the agent understand what's been discussed before responding.
-
-```
-get_slack_channel_history(ctx, channel, limit=15) -> dict[str, Any]
-
-Args:
-    channel:  Channel name or ID
-    limit:    Max messages to return (default 15, max 50)
-
-Returns:
-    {"display": "2026-02-06 14:30 @alice: Hey team, the deploy...\n...",
-     "count": 15, "has_more": true}
-
-Raises:
-    ModelRetry: If not configured, channel not found, or API error
-```
-
-- Scope: `channels:history`, `groups:history`
-- Registration: `agent.tool(get_slack_channel_history)` — read-only, no approval
-- Default limit 15 — conservative to avoid blowing up context window. Anthropic MCP defaults to 10, korotovsky to 20
-- Display format: `timestamp @user: message` per line. Truncate long messages to ~200 chars
-- Thread indicator: Append `[thread: N replies]` for messages that have threads
-
-### 1d. `get_slack_thread_replies`
-
-Read replies in a specific thread. Needed for thread context before `reply_slack_thread` (Phase 2).
-
-```
-get_slack_thread_replies(ctx, channel, thread_ts, limit=20) -> dict[str, Any]
-
-Args:
-    channel:    Channel name or ID
-    thread_ts:  Timestamp of the parent message (from channel history)
-    limit:      Max replies to return (default 20)
-
-Returns:
-    {"display": "2026-02-06 14:30 @alice: Original message...\n  14:32 @bob: Reply...",
-     "count": 5, "has_more": false}
-
-Raises:
-    ModelRetry: If not configured, channel/thread not found, or API error
-```
-
-- Scope: `channels:history`, `groups:history`
-- Registration: `agent.tool(get_slack_thread_replies)` — read-only, no approval
-- Parent message included as first entry (Slack API returns it by default)
-- `thread_ts` comes from channel history output — agent chains: read history → pick thread → read replies
-
-### 1e. `list_slack_users`
-
-List workspace users. Needed to resolve "send DM to Alice" → user ID, and to understand who's in a channel.
-
-```
-list_slack_users(ctx, limit=30) -> dict[str, Any]
-
-Args:
-    limit:  Max users to return (default 30)
-
-Returns:
-    {"display": "@alice (U01ABC) - Alice Smith, Engineering\n@bob (U02DEF) - ...",
-     "count": 30, "has_more": true}
-
-Raises:
-    ModelRetry: If not configured or API error
-```
-
-- Scope: `users:read`
-- Registration: `agent.tool(list_slack_users)` — read-only, no approval
-- Display format: `@display_name (ID) - real_name, title` per line
-- Filter out deleted/bot users by default
-- Pagination: Slack cursor, return `has_more`
+**Scopes added:** `channels:read`, `channels:history`, `users:read`
 
 ---
 

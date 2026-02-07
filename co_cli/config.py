@@ -31,6 +31,9 @@ class Settings(BaseModel):
 
     # Sandbox limits
     sandbox_max_timeout: int = Field(default=600)
+    sandbox_network: str = Field(default="none")
+    sandbox_mem_limit: str = Field(default="1g")
+    sandbox_cpus: int = Field(default=1)
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
@@ -56,6 +59,9 @@ class Settings(BaseModel):
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
             "sandbox_max_timeout": "CO_CLI_SANDBOX_MAX_TIMEOUT",
+            "sandbox_network": "CO_CLI_SANDBOX_NETWORK",
+            "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",
+            "sandbox_cpus": "CO_CLI_SANDBOX_CPUS",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",

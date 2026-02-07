@@ -53,8 +53,13 @@ self.client.containers.run(
     name=self.container_name,
     volumes={self.workspace_dir: {"bind": "/workspace", "mode": "rw"}},
     working_dir="/workspace",
-    user="1000:1000",         # non-root
-    network_mode="none",      # no network by default
+    user="1000:1000",                   # non-root
+    network_mode="none",                # no network by default
+    mem_limit="1g",                     # OOM-kill at 1 GB
+    nano_cpus=1_000_000_000,            # 1 CPU core
+    pids_limit=256,                     # prevent fork bombs
+    cap_drop=["ALL"],                   # drop all Linux capabilities
+    security_opt=["no-new-privileges"], # prevent setuid escalation
     detach=True,
     tty=True,
     command="sh"
@@ -72,21 +77,24 @@ self.client.containers.run(
 ```python
 self.client.containers.run(
     ...
-    mem_limit="512m",         # OOM-kill at 512 MB
-    cpu_quota=50000,          # 50% of one CPU core
-    pids_limit=256,           # prevent fork bombs
+    mem_limit="1g",                     # OOM-kill at 1 GB (industry norm: 1-2 GB)
+    nano_cpus=1_000_000_000,            # 1 CPU core
+    pids_limit=256,                     # prevent fork bombs
+    cap_drop=["ALL"],                   # drop all Linux capabilities
+    security_opt=["no-new-privileges"], # prevent setuid escalation
 )
 ```
 
 **Considerations:**
 - Values should be configurable via `config.py` for users with large builds.
 - `mem_limit` may need to be higher for heavy workloads (e.g., compiling).
+- `cap_drop=["ALL"]` + `no-new-privileges` are zero-cost hardening aligned with Anthropic's reference sandbox and E2B norms.
 
 ### Implementation Order
 
 1. ~~**Phase 3** — LLM-controlled command timeout~~ **Done** — see `DESIGN-tool-shell-sandbox.md` §Timeout
-2. **Phase 1** — non-root + network isolation (one PR, low risk)
-3. **Phase 2** — resource limits (one PR, configurable)
+2. ~~**Phase 1** — non-root + network isolation~~ **Done** — merged into `DESIGN-tool-shell-sandbox.md` §Container Configuration
+3. ~~**Phase 2** — resource limits + privilege hardening~~ **Done** — merged into `DESIGN-tool-shell-sandbox.md` §Container Configuration
 
 ---
 
@@ -95,7 +103,6 @@ self.client.containers.run(
 | Topic | Doc |
 |-------|-----|
 | Conditional shell approval (safe-prefix whitelist) | `docs/TODO-approval-flow.md` |
-| Structured output migration | `docs/TODO-structured-output.md` |
 | Streaming tool output | `docs/TODO-streaming-tool-output.md` |
 
 ---
@@ -105,5 +112,5 @@ self.client.containers.run(
 | # | Item | File(s) | Priority |
 |---|------|---------|----------|
 | ~~1~~ | ~~Command timeout — LLM-controlled per-invocation~~ | ~~`shell.py`, `sandbox.py`, `deps.py`, `config.py`, `agent.py`~~ | ~~**High**~~ Done |
-| 2 | Non-root user + network isolation | `sandbox.py`, `config.py` | Medium |
-| 3 | Resource limits (mem, CPU, pids) | `sandbox.py`, `config.py` | Medium |
+| ~~2~~ | ~~Non-root user + network isolation~~ | ~~`sandbox.py`, `config.py`~~ | ~~Medium~~ Done |
+| ~~3~~ | ~~Resource limits + privilege hardening (mem, CPU, pids, cap_drop, no-new-privileges)~~ | ~~`sandbox.py`, `config.py`~~ | ~~Medium~~ Done |

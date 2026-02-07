@@ -5,7 +5,7 @@
 
 ## Overview
 
-The Slack tool enables the agent to send messages to Slack channels on behalf of the user. Uses the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors and `requires_approval=True` for human-in-the-loop confirmation via pydantic-ai's `DeferredToolRequests` flow.
+The Slack tools enable the agent to read channels/users/threads and send messages to Slack channels. Uses the `RunContext[CoDeps]` pattern with `ModelRetry` for self-healing errors. Write tools use `requires_approval=True` for human-in-the-loop confirmation; read tools execute without approval.
 
 **Key design decision:** The `WebClient` is created once at startup in `create_deps()` and injected via `CoDeps` — the tool never imports `settings` or creates its own client.
 
@@ -34,6 +34,11 @@ The Slack tool enables the agent to send messages to Slack channels on behalf of
 │                                                                  │
 │  agent.tool(post_slack_message, requires_approval=True)         │
 │    └── Side-effectful: triggers DeferredToolRequests             │
+│                                                                  │
+│  agent.tool(list_slack_channels)       # read-only, no approval  │
+│  agent.tool(get_slack_channel_history) # read-only, no approval  │
+│  agent.tool(get_slack_thread_replies)  # read-only, no approval  │
+│  agent.tool(list_slack_users)          # read-only, no approval  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
             │
@@ -124,9 +129,29 @@ The Slack tool enables the agent to send messages to Slack channels on behalf of
 
 ---
 
-## Tool
+## Shared Helpers
 
-### post_slack_message (`co_cli/tools/slack.py`)
+### `_get_slack_client(ctx)`
+
+Extracts and validates the Slack `WebClient` from context. Matches `_get_gmail_service` / `_get_calendar_service` pattern.
+
+```python
+def _get_slack_client(ctx: RunContext[CoDeps]):
+    client = ctx.deps.slack_client
+    if not client:
+        raise ModelRetry("Slack not configured. Set slack_bot_token in settings or SLACK_BOT_TOKEN env var.")
+    return client
+```
+
+### `_format_message(msg)`
+
+Formats a single Slack message for display: `YYYY-MM-DD HH:MM <@USER_ID>: text [thread: N replies]`. Truncates long messages to 200 chars. User IDs shown in Slack mention format (`<@U01ABC>`) — no N+1 `users.info` calls.
+
+---
+
+## Tools
+
+### post_slack_message (write, requires approval)
 
 Send a message to a Slack channel. Registered with `requires_approval=True` — approval handled by the chat loop, not the tool.
 
@@ -144,7 +169,7 @@ Raises:
     ModelRetry: If not configured, invalid input, or API error
 ```
 
-### Processing Flow
+#### Processing Flow
 
 ```
 post_slack_message("#general", "Hello team!")
@@ -158,12 +183,8 @@ post_slack_message("#general", "Hello team!")
        │
        ▼
 ┌──────────────────────────────────────┐
-│ client = ctx.deps.slack_client       │
+│ _get_slack_client(ctx)               │
 │   └── None? ──▶ ModelRetry           │
-│        "Slack not configured.        │
-│         Set slack_bot_token in       │
-│         settings or SLACK_BOT_TOKEN  │
-│         env var."                    │
 └──────────────────────────────────────┘
        │
        ▼
@@ -184,6 +205,96 @@ post_slack_message("#general", "Hello team!")
 └──────────────────────────────────────┘
 ```
 
+### list_slack_channels (read-only, no approval)
+
+List Slack channels the bot can see.
+
+```
+list_slack_channels(ctx: RunContext[CoDeps], limit: int = 20, types: str = "public_channel") -> dict[str, Any]
+
+Args:
+    limit: Maximum channels to return (default 20)
+    types: Comma-separated channel types (default 'public_channel')
+
+Returns:
+    {"display": "Channels (N):\n#name (ID) - purpose\n...", "count": N, "has_more": bool}
+
+Raises:
+    ModelRetry: If not configured or API error
+
+Slack API: conversations.list(types=types, limit=limit, exclude_archived=True)
+Scope: channels:read
+```
+
+### get_slack_channel_history (read-only, no approval)
+
+Get recent messages from a Slack channel.
+
+```
+get_slack_channel_history(ctx: RunContext[CoDeps], channel: str, limit: int = 15) -> dict[str, Any]
+
+Args:
+    channel: Channel ID (e.g. 'C01ABC123'). Use list_slack_channels to find IDs
+    limit:   Maximum messages to return (default 15, capped at 50)
+
+Returns:
+    {"display": "Messages in C01ABC (N):\nYYYY-MM-DD HH:MM <@U01>: text\n...", "count": N, "has_more": bool}
+
+Raises:
+    ModelRetry: If channel empty, not configured, or API error
+
+Slack API: conversations.history(channel=channel, limit=min(limit, 50))
+Scope: channels:history
+```
+
+**Limit cap:** Hard-capped at 50 to protect the LLM context window from large message dumps.
+
+### get_slack_thread_replies (read-only, no approval)
+
+Get replies in a Slack thread.
+
+```
+get_slack_thread_replies(ctx: RunContext[CoDeps], channel: str, thread_ts: str, limit: int = 20) -> dict[str, Any]
+
+Args:
+    channel:   Channel ID where the thread lives
+    thread_ts: Timestamp of the parent message (e.g. '1234567890.123456')
+    limit:     Maximum replies to return (default 20)
+
+Returns:
+    {"display": "Thread replies (N):\nYYYY-MM-DD HH:MM <@U01>: text\n...", "count": N, "has_more": bool}
+
+Raises:
+    ModelRetry: If channel/thread_ts empty, not configured, or API error
+
+Slack API: conversations.replies(channel=channel, ts=thread_ts, limit=limit)
+Scope: channels:history
+```
+
+**Note:** Parent message is always the first entry (Slack API default behavior).
+
+### list_slack_users (read-only, no approval)
+
+List active (non-bot, non-deleted) users in the Slack workspace.
+
+```
+list_slack_users(ctx: RunContext[CoDeps], limit: int = 30) -> dict[str, Any]
+
+Args:
+    limit: Maximum users to return (default 30)
+
+Returns:
+    {"display": "Users (N):\n@display_name (ID) - real_name, title\n...", "count": N, "has_more": bool}
+
+Raises:
+    ModelRetry: If not configured or API error
+
+Slack API: users.list(limit=limit)
+Scope: users:read
+```
+
+**Filtering:** Deleted users and bots are excluded from results.
+
 ---
 
 ## Error Handling
@@ -200,6 +311,7 @@ _SLACK_ERROR_HINTS = {
     "ratelimited":       "Rate limited by Slack API. Wait a moment and retry.",
     "no_text":           "Message text cannot be empty.",
     "msg_too_long":      "Message exceeds Slack's length limit. Shorten the text.",
+    "thread_not_found":  "Thread not found. Check the thread_ts value.",
 }
 ```
 
@@ -273,13 +385,32 @@ Sending Slack messages is a high-risk, externally-visible action. Approval uses 
 }
 ```
 
+### Setup Guide
+
+1. **Create a Slack App** at https://api.slack.com/apps → "Create New App" → "From scratch"
+2. **Add Bot Scopes** — Go to "OAuth & Permissions" → "Scopes" → "Bot Token Scopes", add:
+   - `chat:write` — send messages
+   - `channels:read` — list channels
+   - `channels:history` — read channel messages and threads
+   - `users:read` — list workspace users
+3. **Install to Workspace** — "OAuth & Permissions" → "Install to Workspace" → Authorize
+4. **Copy Bot Token** — Copy the `xoxb-...` token from "Bot User OAuth Token"
+5. **Configure co-cli** — either:
+   - `~/.config/co-cli/settings.json`: `{"slack_bot_token": "xoxb-..."}`
+   - Environment variable: `export SLACK_BOT_TOKEN=xoxb-...`
+6. **Invite bot to channels** — In Slack, type `/invite @your-bot-name` in each channel the bot should access
+7. **Verify** — `uv run co status` should show Slack as connected
+
 ### Required Slack Bot Scopes
 
-| Scope | Purpose |
-|-------|---------|
-| `chat:write` | Post messages to channels the bot is in |
+| Scope | Purpose | Tools |
+|-------|---------|-------|
+| `chat:write` | Post messages to channels the bot is in | `post_slack_message` |
+| `channels:read` | List public channels | `list_slack_channels` |
+| `channels:history` | Read messages in channels the bot is in | `get_slack_channel_history`, `get_slack_thread_replies` |
+| `users:read` | List workspace users | `list_slack_users` |
 
-The bot must be invited to a channel before it can post there.
+The bot must be invited to a channel before it can read history or post there.
 
 ---
 
@@ -300,13 +431,14 @@ Tool sees:
     ctx.deps.slack_client ──▶ Opaque WebClient object (or None)
 ```
 
-### Write Protection
+### Read/Write Protection
 
 | Action | Protection |
 |--------|------------|
 | Send message | `requires_approval=True` → user prompted via `DeferredToolRequests` |
-| Channel scope | Bot can only post to channels it's been invited to |
-| Token scope | Limited to `chat:write` (no admin, no read history) |
+| Read channels/history/users | No approval needed — read-only |
+| Channel scope | Bot can only read/post to channels it's been invited to |
+| Token scope | Limited to `chat:write`, `channels:read`, `channels:history`, `users:read` (no admin) |
 
 ### Graceful Degradation
 
@@ -355,6 +487,10 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 | Test | What It Verifies |
 |------|-----------------|
 | `test_slack_post_functional` | Real Slack message posting; accepts `channel_not_found` as proof of auth+API connectivity |
+| `test_list_slack_channels` | Lists channels; asserts dict with `display`, `count`, `has_more` |
+| `test_get_slack_channel_history` | Gets channel messages; accepts `channel_not_found` |
+| `test_get_slack_thread_replies` | Gets thread replies; accepts `channel_not_found`/`thread_not_found` |
+| `test_list_slack_users` | Lists users; asserts dict with `display`, `count`, `has_more` |
 
 ---
 
@@ -362,10 +498,10 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tools/slack.py` | `post_slack_message` tool |
+| `co_cli/tools/slack.py` | All Slack tools: `post_slack_message`, `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` |
 | `co_cli/deps.py` | `CoDeps` with `slack_client` field |
-| `co_cli/agent.py` | Tool registration with `requires_approval=True` |
-| `tests/test_google_cloud.py` | Functional test for Slack posting |
+| `co_cli/agent.py` | Tool registration (write tools with approval, read tools without) |
+| `tests/test_google_cloud.py` | Functional tests for all Slack tools |
 
 ---
 
@@ -373,7 +509,9 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 
 | Enhancement | Description | Status |
 |-------------|-------------|--------|
-| Read tools | `list_channels`, `read_channel_messages`, `search_messages` | Not started |
-| Thread replies | Reply in threads, not top-level | Not planned |
+| Cursor pagination | Add cursor params for large workspaces | Not planned |
+| User name cache | Cache user ID → display name to resolve mentions in history | Not planned |
+| Thread replies (write) | Reply in threads, not top-level | Not planned |
 | File upload | Share files via Slack | Not planned |
 | Reaction support | Add reactions to messages | Not planned |
+| Search messages | `search_messages` using Slack search API | Not planned |

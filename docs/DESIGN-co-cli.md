@@ -660,8 +660,15 @@ graph LR
         E[search_drive]
         F[read_drive_file]
         G[post_slack_message]
+        G2[list_slack_channels]
+        G3[get_slack_channel_history]
+        G4[get_slack_thread_replies]
+        G5[list_slack_users]
         H[draft_email]
+        H2[list_emails]
+        H3[search_emails]
         I[list_calendar_events]
+        I2[search_calendar_events]
     end
 
     subgraph Risk Level
@@ -678,14 +685,42 @@ graph LR
     D --> LR
     E --> LR
     F --> LR
+    G2 --> LR
+    G3 --> LR
+    G4 --> LR
+    G5 --> LR
+    H2 --> LR
+    H3 --> LR
     I --> LR
+    I2 --> LR
 ```
 
 **Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining.
 
 ### 5.1.1 Tool Return Convention
 
-Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim.
+Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_display_tool_outputs()` in `main.py` renders tool returns **before** the LLM summary — `dict` with `display` is printed verbatim, `str` content is shown in a Rich Panel. This transport-layer separation ensures URLs, pagination hints, and formatting reach the user intact regardless of LLM reformatting.
+
+**Tool Return Type Reference:**
+
+| Tool | Return type | Has `display`? | Metadata fields |
+|------|------------|----------------|-----------------|
+| `search_drive` | `dict[str, Any]` | Yes — files with URLs, pagination | `page`, `has_more` |
+| `read_drive_file` | `str` | No — raw file content | — |
+| `list_emails` | `dict[str, Any]` | Yes — emails with Gmail links | `count` |
+| `search_emails` | `dict[str, Any]` | Yes — emails with Gmail links | `count` |
+| `draft_email` | `str` | No — confirmation message | — |
+| `list_calendar_events` | `dict[str, Any]` | Yes — events with Meet/event links | `count` |
+| `search_calendar_events` | `dict[str, Any]` | Yes — events with Meet/event links | `count` |
+| `search_notes` | `dict[str, Any]` | Yes — files with snippets | `count`, `has_more` |
+| `list_notes` | `dict[str, Any]` | Yes — file paths | `count` |
+| `read_note` | `str` | No — raw note content | — |
+| `run_shell_command` | `str` | No — command output | — |
+| `post_slack_message` | `dict[str, Any]` | Yes — confirmation with TS | `channel`, `ts` |
+| `list_slack_channels` | `dict[str, Any]` | Yes — channel list | `count`, `has_more` |
+| `get_slack_channel_history` | `dict[str, Any]` | Yes — message history | `count`, `has_more` |
+| `get_slack_thread_replies` | `dict[str, Any]` | Yes — thread replies | `count`, `has_more` |
+| `list_slack_users` | `dict[str, Any]` | Yes — user list | `count`, `has_more` |
 
 ### 5.1.2 ModelRetry Convention
 
@@ -763,7 +798,24 @@ Uses `RunContext[CoDeps]` + `ModelRetry`. Read-only, no confirmation needed.
 
 ### 5.7 Slack Tool (`co_cli/tools/slack.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry` + `requires_approval=True`. Approval handled by the chat loop.
+Uses `RunContext[CoDeps]` + `ModelRetry`. `post_slack_message` is registered with `requires_approval=True` — approval handled by the chat loop. The remaining four tools are read-only.
+
+```python
+def post_slack_message(ctx, channel, text) -> dict[str, Any]:
+    """Send a message. Returns {"display": ..., "channel": ..., "ts": ...}."""
+
+def list_slack_channels(ctx, limit=20, types="public_channel") -> dict[str, Any]:
+    """List channels. Returns {"display": ..., "count": N, "has_more": bool}."""
+
+def get_slack_channel_history(ctx, channel, limit=15) -> dict[str, Any]:
+    """Recent messages. Returns {"display": ..., "count": N, "has_more": bool}."""
+
+def get_slack_thread_replies(ctx, channel, thread_ts, limit=20) -> dict[str, Any]:
+    """Thread replies. Returns {"display": ..., "count": N, "has_more": bool}."""
+
+def list_slack_users(ctx, limit=30) -> dict[str, Any]:
+    """Active users. Returns {"display": ..., "count": N, "has_more": bool}."""
+```
 
 ### 5.8 Google Auth (`co_cli/google_auth.py`)
 
@@ -782,9 +834,16 @@ def build_google_service(service_name, version, credentials) -> Any | None:
 |------|------|---------|----------|
 | `search_drive` | `google_drive.py` | Drive API v3 | No |
 | `read_drive_file` | `google_drive.py` | Drive API v3 | No |
+| `list_emails` | `google_gmail.py` | Gmail API v1 | No |
+| `search_emails` | `google_gmail.py` | Gmail API v1 | No |
 | `draft_email` | `google_gmail.py` | Gmail API v1 | `requires_approval=True` |
 | `list_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
+| `search_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
 | `post_slack_message` | `slack.py` | Slack WebClient | `requires_approval=True` |
+| `list_slack_channels` | `slack.py` | Slack WebClient | No |
+| `get_slack_channel_history` | `slack.py` | Slack WebClient | No |
+| `get_slack_thread_replies` | `slack.py` | Slack WebClient | No |
+| `list_slack_users` | `slack.py` | Slack WebClient | No |
 
 ---
 
@@ -1177,4 +1236,4 @@ def test_sandbox_execution():
 | `tools/google_drive.py` | `search_drive`, `read_drive_file` — Drive API |
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `draft_email` — Gmail API |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` — Calendar API |
-| `tools/slack.py` | `post_slack_message` — Slack WebClient, `requires_approval=True` |
+| `tools/slack.py` | `post_slack_message`, `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` — Slack WebClient |
