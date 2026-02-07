@@ -35,20 +35,20 @@ graph TB
     end
 
     subgraph Tool Layer
-        Shell[Shell Tool]
-        Obsidian[Obsidian Tool]
-        Drive[Drive Tool]
-        Gmail[Gmail Tool]
-        Calendar[Calendar Tool]
-        SlackTool[Slack Tool]
+        ToolShell[Shell Tool]
+        ToolObsidian[Obsidian Tool]
+        ToolDrive[Drive Tool]
+        ToolGmail[Gmail Tool]
+        ToolCalendar[Calendar Tool]
+        ToolSlack[Slack Tool]
     end
 
     subgraph External Services
         Docker[Docker Container]
-        Obsidian[Obsidian Vault]
+        ObsVault[Obsidian Vault]
         GDrive[Google Drive API]
-        Slack[Slack API]
-        Gmail[Gmail API]
+        SlackAPI[Slack API]
+        GmailAPI[Gmail API]
         GCal[Calendar API]
     end
 
@@ -64,19 +64,19 @@ graph TB
     LLM --> Ollama
     LLM --> Gemini
 
-    Agent --> Shell
-    Agent --> Obsidian
-    Agent --> Drive
-    Agent --> Gmail
-    Agent --> Calendar
-    Agent --> SlackTool
+    Agent --> ToolShell
+    Agent --> ToolObsidian
+    Agent --> ToolDrive
+    Agent --> ToolGmail
+    Agent --> ToolCalendar
+    Agent --> ToolSlack
 
-    Shell --> Docker
-    Obsidian --> ObsVault[Obsidian Vault]
-    Drive --> GDrive
-    Gmail --> GmailAPI[Gmail API]
-    Calendar --> GCal
-    SlackTool --> Slack
+    ToolShell --> Docker
+    ToolObsidian --> ObsVault
+    ToolDrive --> GDrive
+    ToolGmail --> GmailAPI
+    ToolCalendar --> GCal
+    ToolSlack --> SlackAPI
 
     Config --> Agent
     Agent --> Telemetry
@@ -151,6 +151,7 @@ sequenceDiagram
     participant CLI as Chat Loop
     participant Agent as agent.run()
     participant Tool as shell.py
+    participant Sandbox as sandbox.py
     participant Docker as Docker Container
 
     User->>CLI: "list files"
@@ -165,25 +166,6 @@ sequenceDiagram
 
     CLI->>Agent: agent.run(None, deferred_tool_results=approvals)
     Agent->>Tool: run_shell_command("ls -la")
-    Tool->>Docker: sandbox.run_command("ls -la")
-    Docker->>Tool: Output bytes
-    Tool->>Agent: Command result
-    Agent->>CLI: result.output = "..."
-    CLI->>User: Render Markdown
-```
-
-**Denial flow:** When the user picks `n`, the chat loop sends `ToolDenied("User denied this action")`. The LLM sees the structured denial and can reason about it (e.g. suggest an alternative command).
-
-**Session yolo flow:** When the user picks `a`, `deps.auto_confirm` is set to `True`. All subsequent approvals in the session are auto-approved without prompting.
-
-### 3.3 Tool Execution Flow (Sandbox Detail)
-
-```mermaid
-sequenceDiagram
-    participant Tool as shell.py
-    participant Sandbox as sandbox.py
-    participant Docker as Docker Container
-
     Tool->>Sandbox: await sandbox.run_command("ls -la", timeout=120)
     Sandbox->>Sandbox: ensure_container()
 
@@ -196,7 +178,14 @@ sequenceDiagram
     Note over Sandbox,Docker: asyncio.wait_for(asyncio.to_thread(...), timeout=125)
     Docker->>Sandbox: Output bytes
     Sandbox->>Tool: Decoded output string
+    Tool->>Agent: Command result
+    Agent->>CLI: result.output = "..."
+    CLI->>User: Render Markdown
 ```
+
+**Denial flow:** When the user picks `n`, the chat loop sends `ToolDenied("User denied this action")`. The LLM sees the structured denial and can reason about it (e.g. suggest an alternative command).
+
+**Session yolo flow:** When the user picks `a`, `deps.auto_confirm` is set to `True`. All subsequent approvals in the session are auto-approved without prompting.
 
 ---
 
@@ -234,8 +223,34 @@ classDiagram
         +provider: OpenAIProvider
     }
 
+    class SideEffectful {
+        <<requires_approval>>
+        run_shell_command
+        draft_email
+        post_slack_message
+    }
+
+    class ReadOnly {
+        <<auto-execute>>
+        search_notes
+        list_notes
+        read_note
+        search_drive
+        read_drive_file
+        list_emails
+        search_emails
+        list_calendar_events
+        search_calendar_events
+        list_slack_channels
+        get_slack_channel_history
+        get_slack_thread_replies
+        list_slack_users
+    }
+
     Agent --> CoDeps : injects into tools
     Agent --> OpenAIChatModel : uses (ollama)
+    Agent --> SideEffectful : registers
+    Agent --> ReadOnly : registers
     note for Agent "Gemini uses google-gla: model string"
 ```
 
@@ -481,6 +496,9 @@ classDiagram
         +image: str
         +container_name: str
         +workspace_dir: str
+        +network_mode: str
+        +mem_limit: str
+        +nano_cpus: int
     }
 
     class SubprocessBackend {
@@ -490,6 +508,7 @@ classDiagram
 
     SandboxProtocol <|.. DockerSandbox
     SandboxProtocol <|.. SubprocessBackend
+    note for SubprocessBackend "restricted_env() sanitizes environment.\nAll commands require explicit approval\n(safe-prefix auto-approval disabled)."
 ```
 
 **Docker backend (full isolation):**
@@ -579,7 +598,19 @@ stateDiagram-v2
     state "co chat" as Chat {
         Idle --> CreateDeps: Start REPL
         CreateDeps --> Waiting: CoDeps ready
-        Waiting --> Thinking: User input
+
+        state Dispatch <<choice>>
+        Waiting --> Dispatch: User input
+
+        Dispatch --> Cleanup: exit / quit
+        Dispatch --> Waiting: empty / blank
+        Dispatch --> BangExec: !cmd (bang escape)
+        Dispatch --> SlashExec: /command (slash)
+        Dispatch --> Thinking: anything else → agent.run()
+
+        BangExec --> Waiting: sandbox.run_command() → display
+        SlashExec --> Waiting: dispatch_command() → display
+
         Thinking --> ToolExec: Tool needed
         ToolExec --> Thinking: Tool result (read-only)
         Thinking --> Approval: DeferredToolRequests
@@ -588,24 +619,12 @@ stateDiagram-v2
         Thinking --> Responding: LLM done
         Responding --> Waiting: Display output
         Thinking --> Waiting: Ctrl+C (cancel operation)
+
         Waiting --> CtrlC1: Ctrl+C (1st)
         CtrlC1 --> Cleanup: Ctrl+C within 2s (2nd)
         CtrlC1 --> Waiting: Timeout >2s / new input
-        Waiting --> Cleanup: exit/quit/Ctrl+D
+        Waiting --> Cleanup: Ctrl+D (EOF)
         Cleanup --> [*]: deps.sandbox.cleanup()
-    }
-
-    state "co status" as Status {
-        [*] --> CheckLLM
-        CheckLLM --> CheckObsidian
-        CheckObsidian --> CheckDB
-        CheckDB --> DisplayTable
-        DisplayTable --> [*]
-    }
-
-    state "co logs" as Logs {
-        [*] --> LaunchDatasette
-        LaunchDatasette --> [*]: Ctrl+C
     }
 ```
 
@@ -775,52 +794,7 @@ CREATE TABLE spans (
 
 ### 5.1 Tool Architecture
 
-```mermaid
-graph LR
-    subgraph "RunContext[CoDeps] Tools (all migrated)"
-        A[run_shell_command]
-        B[search_notes]
-        C[list_notes]
-        D[read_note]
-        E[search_drive]
-        F[read_drive_file]
-        G[post_slack_message]
-        G2[list_slack_channels]
-        G3[get_slack_channel_history]
-        G4[get_slack_thread_replies]
-        G5[list_slack_users]
-        H[draft_email]
-        H2[list_emails]
-        H3[search_emails]
-        I[list_calendar_events]
-        I2[search_calendar_events]
-    end
-
-    subgraph Risk Level
-        HR[High Risk<br/>Requires Confirmation]
-        LR[Low Risk<br/>Auto-execute]
-    end
-
-    A --> HR
-    G --> HR
-    H --> HR
-
-    B --> LR
-    C --> LR
-    D --> LR
-    E --> LR
-    F --> LR
-    G2 --> LR
-    G3 --> LR
-    G4 --> LR
-    G5 --> LR
-    H2 --> LR
-    H3 --> LR
-    I --> LR
-    I2 --> LR
-```
-
-**Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining.
+**Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining. See the Agent + Tools class diagram in §4.1 for the full tool inventory and approval classification.
 
 ### 5.1.1 Tool Return Convention
 
@@ -987,22 +961,6 @@ def get_cached_google_creds(deps: CoDeps) -> Credentials | None:
 ---
 
 ## 6. Concurrency Model
-
-```mermaid
-graph TD
-    subgraph Blocking REPL
-        A[User Input] --> B[Agent Processing]
-        B --> C[Tool Execution]
-        C --> D[LLM Continuation]
-        D --> E[Response Output]
-        E --> A
-    end
-
-    subgraph Rationale
-        R1[Context Consistency<br/>Prevents forking history]
-        R2[Resource Safety<br/>Ollama single-threaded]
-    end
-```
 
 **Design:** Single-threaded, synchronous execution loop.
 
@@ -1258,60 +1216,13 @@ if not safe_path.is_relative_to(vault.resolve()):
 
 ### 10.2 External Service Integration
 
-```mermaid
-graph LR
-    subgraph Local Services
-        Ollama[Ollama API<br/>localhost:11434]
-        Docker[Docker Engine<br/>docker.sock]
-        FS[File System<br/>Obsidian Vault]
-    end
-
-    subgraph Google Cloud
-        Gemini[Gemini API]
-        Drive[Drive API v3]
-        Gmail[Gmail API v1]
-        Calendar[Calendar API v3]
-    end
-
-    subgraph Other Cloud
-        Slack[Slack Web API]
-    end
-
-    Co[Co CLI] --> Ollama
-    Co --> Docker
-    Co --> FS
-    Co --> Gemini
-    Co --> Drive
-    Co --> Gmail
-    Co --> Calendar
-    Co --> Slack
-```
+See the architecture diagram in §2 for service connections.
 
 ---
 
 ## 11. Testing Policy
 
 ### Functional Testing Only
-
-```mermaid
-graph LR
-    subgraph Allowed
-        A1[Real Ollama]
-        A2[Real Docker]
-        A3[Real File System]
-        A4[Real APIs]
-    end
-
-    subgraph Prohibited
-        P1[unittest.mock]
-        P2[Fakes/Stubs]
-        P3[MagicMock]
-    end
-
-    style P1 fill:#f66
-    style P2 fill:#f66
-    style P3 fill:#f66
-```
 
 **Rules:**
 1. All tests MUST be functional/integration tests
