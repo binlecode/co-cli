@@ -110,11 +110,20 @@ sequenceDiagram
         Agent->>LLM: Send prompt + prior conversation context
         LLM->>Agent: Response with tool calls
 
-        opt Tool Execution
+        opt Read-Only Tool
             Agent->>Tools: Execute tool (ctx: RunContext[CoDeps])
-            Tools->>Tools: Access deps via ctx.deps
-            Tools->>User: Confirm (if high-risk)
-            User->>Tools: y/n
+            Tools->>External: API call
+            External->>Tools: Result
+            Tools->>Agent: Tool output
+            Agent->>LLM: Continue with tool result
+        end
+
+        opt Side-Effectful Tool (requires_approval=True)
+            Agent->>CLI: DeferredToolRequests
+            CLI->>User: Approve? [y/n/a(yolo)]
+            User->>CLI: y / a
+            CLI->>Agent: agent.run(deferred_tool_results=approvals)
+            Agent->>Tools: Execute approved tool
             Tools->>External: API call / Docker exec
             External->>Tools: Result
             Tools->>Agent: Tool output
@@ -132,24 +141,50 @@ sequenceDiagram
     CLI->>User: Session ended
 ```
 
-### 3.2 Tool Execution Flow (Shell Example)
+### 3.2 Tool Execution Flow (Deferred Approval Pattern)
+
+Side-effectful tools (`run_shell_command`, `draft_email`, `post_slack_message`) use pydantic-ai's `requires_approval=True` + `DeferredToolRequests` pattern. Approval lives in the chat loop, not inside tools.
 
 ```mermaid
 sequenceDiagram
-    participant Agent
-    participant ShellTool as shell.py
+    participant User
+    participant CLI as Chat Loop
+    participant Agent as agent.run()
+    participant Tool as shell.py
+    participant Docker as Docker Container
+
+    User->>CLI: "list files"
+    CLI->>Agent: agent.run(user_input)
+    Agent->>Agent: LLM calls run_shell_command("ls -la")
+    Note over Agent: requires_approval=True → defer
+    Agent->>CLI: result.output = DeferredToolRequests(approvals=[...])
+
+    CLI->>CLI: _handle_approvals()
+    CLI->>User: "Approve run_shell_command(cmd='ls -la')? [y/n/a(yolo)]"
+    User->>CLI: y
+
+    CLI->>Agent: agent.run(None, deferred_tool_results=approvals)
+    Agent->>Tool: run_shell_command("ls -la")
+    Tool->>Docker: sandbox.run_command("ls -la")
+    Docker->>Tool: Output bytes
+    Tool->>Agent: Command result
+    Agent->>CLI: result.output = "..."
+    CLI->>User: Render Markdown
+```
+
+**Denial flow:** When the user picks `n`, the chat loop sends `ToolDenied("User denied this action")`. The LLM sees the structured denial and can reason about it (e.g. suggest an alternative command).
+
+**Session yolo flow:** When the user picks `a`, `deps.auto_confirm` is set to `True`. All subsequent approvals in the session are auto-approved without prompting.
+
+### 3.3 Tool Execution Flow (Sandbox Detail)
+
+```mermaid
+sequenceDiagram
+    participant Tool as shell.py
     participant Sandbox as sandbox.py
     participant Docker as Docker Container
 
-    Agent->>ShellTool: run_shell_command("ls -la")
-    ShellTool->>ShellTool: Check auto_confirm setting
-
-    alt Confirmation Required
-        ShellTool->>User: "Execute command: ls -la? [y/N]"
-        User->>ShellTool: y
-    end
-
-    ShellTool->>Sandbox: sandbox.run_command("ls -la")
+    Tool->>Sandbox: sandbox.run_command("ls -la")
     Sandbox->>Sandbox: ensure_container()
 
     alt Container Not Running
@@ -159,8 +194,7 @@ sequenceDiagram
 
     Sandbox->>Docker: container.exec_run("ls -la", workdir="/workspace")
     Docker->>Sandbox: Output bytes
-    Sandbox->>ShellTool: Decoded output string
-    ShellTool->>Agent: Command result
+    Sandbox->>Tool: Decoded output string
 ```
 
 ---
@@ -173,7 +207,7 @@ The Agent is the central orchestrator that connects the LLM to tools. Uses `deps
 
 ```mermaid
 classDiagram
-    class Agent~CoDeps, str~ {
+    class Agent~CoDeps, str | DeferredToolRequests~ {
         +model: Model
         +deps_type: CoDeps
         +system_prompt: str
@@ -205,7 +239,7 @@ classDiagram
 **Factory Function: `get_agent()`**
 
 ```python
-def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
+def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None]:
     provider_name = settings.llm_provider.lower()
     model_settings: ModelSettings | None = None
 
@@ -218,20 +252,24 @@ def get_agent() -> tuple[Agent[CoDeps, str], ModelSettings | None]:
         model = OpenAIChatModel(model_name, provider)
         model_settings = ModelSettings(temperature=0.7, top_p=1.0, max_tokens=16384)
 
-    agent: Agent[CoDeps, str] = Agent(
+    agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model,
         deps_type=CoDeps,
         system_prompt=system_prompt,
-        retries=settings.tool_retries,  # default 3, configurable via CO_CLI_TOOL_RETRIES
+        retries=settings.tool_retries,
+        output_type=[str, DeferredToolRequests],
     )
 
-    # All tools inherit agent-level retries (settings.tool_retries).
-    # Side-effectful tools (shell, email, slack) are gated by confirm_or_yolo,
-    # so retries are safe — the user confirms each attempt.
-    agent.tool(run_shell_command)
+    # Side-effectful tools — require human approval via DeferredToolRequests
+    agent.tool(run_shell_command, requires_approval=True)
+    agent.tool(draft_email, requires_approval=True)
+    agent.tool(post_slack_message, requires_approval=True)
+
+    # Read-only tools — no approval needed
     agent.tool(search_notes)
-    # ... all 12 tools
-    agent.tool(post_slack_message)
+    agent.tool(list_notes)
+    # ... remaining read-only tools
+    agent.tool(search_calendar_events)
 
     return agent, model_settings
 ```
@@ -462,27 +500,35 @@ This means `co` is not a compiled binary but an auto-generated script that calls
 | `co <cmd>` | Yes — `.venv/bin/` must be on `PATH` |
 
 
-**Dependency Injection + Conversation Memory:**
+**Dependency Injection + Conversation Memory + Deferred Approvals:**
 
-```python
-from pydantic_ai.usage import UsageLimits
+The chat loop has three responsibilities:
+1. **Conversation memory** — accumulates `message_history` across turns via `result.all_messages()`
+2. **Deferred approval** — when `result.output` is `DeferredToolRequests`, calls `_handle_approvals()` to prompt the user, then resumes the agent with `DeferredToolResults`
+3. **Lifecycle** — creates `CoDeps` at session start, calls `sandbox.cleanup()` at session end
 
-async def chat_loop():
-    agent, model_settings = get_agent()
-    deps = create_deps()  # Settings → CoDeps
-    message_history = []  # Accumulates across turns
-    try:
-        while True:
-            result = await agent.run(
-                user_input, deps=deps, message_history=message_history,
-                model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
-            )
-            message_history = result.all_messages()  # Carry full context forward
-            console.print(Markdown(result.output))
-    finally:
-        deps.sandbox.cleanup()  # Container teardown
 ```
+chat_loop():
+    agent, model_settings = get_agent()
+    deps = create_deps()
+    info = get_status(tool_count=len(agent._function_toolset.tools))
+    display_welcome_banner(info)
+    message_history = []
+
+    loop:
+        result = agent.run(user_input, deps, message_history)
+
+        while result.output is DeferredToolRequests:   # loop — resumed run may trigger more
+            result = _handle_approvals(agent, deps, result)  # [y/n/a] prompt
+
+        message_history = result.all_messages()
+        display(result.output)
+
+    finally:
+        deps.sandbox.cleanup()
+```
+
+**Why `while`, not `if`:** A resumed `agent.run()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
 
 **Conversation Memory:** Each turn's full message history (user prompts, assistant responses, tool calls/results) is accumulated via `result.all_messages()` and passed to the next `agent.run()` call. This gives the LLM full context for follow-up queries like "try again" or "change the subject line". Memory is in-process only — it resets when the session ends.
 
@@ -495,9 +541,10 @@ stateDiagram-v2
         CreateDeps --> Waiting: CoDeps ready
         Waiting --> Thinking: User input
         Thinking --> ToolExec: Tool needed
-        ToolExec --> Confirm: High-risk tool
-        Confirm --> ToolExec: Confirmed
-        ToolExec --> Thinking: Tool result
+        ToolExec --> Thinking: Tool result (read-only)
+        Thinking --> Approval: DeferredToolRequests
+        Approval --> Thinking: Approved (agent.run with DeferredToolResults)
+        Approval --> Responding: Denied (ToolDenied)
         Thinking --> Responding: LLM done
         Responding --> Waiting: Display output
         Thinking --> Waiting: Ctrl+C (cancel operation)
@@ -635,15 +682,15 @@ graph LR
 
 ### 5.2 Shell Tool (`co_cli/tools/shell.py`)
 
-Uses `RunContext[CoDeps]` pattern. See `docs/DESIGN-tool-shell-sandbox.md` for full design.
+Uses `RunContext[CoDeps]` + `requires_approval=True`. Approval is handled by the chat loop via `DeferredToolRequests`, not inside the tool. See `docs/DESIGN-tool-shell-sandbox.md` for sandbox details.
 
 ```python
 def run_shell_command(ctx: RunContext[CoDeps], cmd: str) -> str:
     """Execute a shell command in a sandboxed Docker container."""
-    if not ctx.deps.auto_confirm:
-        if not Confirm.ask(f"Execute command: {cmd}?"):
-            return "Command cancelled by user."
-    return ctx.deps.sandbox.run_command(cmd)
+    try:
+        return ctx.deps.sandbox.run_command(cmd)
+    except Exception as e:
+        raise ModelRetry(f"Command failed ({e})")
 ```
 
 ### 5.3 Obsidian Tools (`co_cli/tools/obsidian.py`)
@@ -679,7 +726,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str) -> list[dict]:
 
 ### 5.5 Gmail Tool (`co_cli/tools/google_gmail.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry` + `rich.prompt.Confirm` for human-in-the-loop.
+Uses `RunContext[CoDeps]` + `ModelRetry`. `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval.
 
 ### 5.6 Calendar Tool (`co_cli/tools/google_calendar.py`)
 
@@ -687,7 +734,7 @@ Uses `RunContext[CoDeps]` + `ModelRetry`. Read-only, no confirmation needed.
 
 ### 5.7 Slack Tool (`co_cli/tools/slack.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry` + `rich.prompt.Confirm` for human-in-the-loop.
+Uses `RunContext[CoDeps]` + `ModelRetry` + `requires_approval=True`. Approval handled by the chat loop.
 
 ### 5.8 Google Auth (`co_cli/google_auth.py`)
 
@@ -702,13 +749,13 @@ def build_google_service(service_name, version, credentials) -> Any | None:
 
 **Cloud Tool Summary:**
 
-| Tool | File | Service | Confirmation |
-|------|------|---------|--------------|
+| Tool | File | Service | Approval |
+|------|------|---------|----------|
 | `search_drive` | `google_drive.py` | Drive API v3 | No |
 | `read_drive_file` | `google_drive.py` | Drive API v3 | No |
-| `draft_email` | `google_gmail.py` | Gmail API v1 | Yes |
+| `draft_email` | `google_gmail.py` | Gmail API v1 | `requires_approval=True` |
 | `list_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
-| `post_slack_message` | `slack.py` | Slack WebClient | Yes |
+| `post_slack_message` | `slack.py` | Slack WebClient | `requires_approval=True` |
 
 ---
 
@@ -819,7 +866,7 @@ def trim_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 agent = Agent(model, history_processors=[trim_history])
 ```
 
-**Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine. A processor should be added when long sessions become common.
+**Current co-cli status:** No `history_processors` configured — history is unbounded. For typical interactive sessions (< 50 turns) this is fine.
 
 ### 7.5 Interrupt Recovery (Dangling Tool Call Patching)
 
@@ -845,12 +892,6 @@ def _patch_dangling_tool_calls(messages, error_message="Interrupted by user."):
 **Why this works:** Wrapping `ToolReturnPart`s in a `ModelRequest` is the same pattern pydantic-ai uses internally in `_agent_graph.py:_handle_final_result()`, which explicitly comments: *"To allow this message history to be used in a future run without dangling tool calls, append a new ModelRequest using the tool returns and retries."*
 
 **Current behavior note:** `agent.run()` copies the input list (`list(message_history)`), so on `KeyboardInterrupt` the original `message_history` is unchanged from the previous successful turn — no dangling calls exist. The patch is defensive: it protects against future adoption of `agent.iter()` or streaming where partial state may leak into the caller's list.
-
-### 7.6 Future Considerations
-
-- **Sliding window**: Register a `history_processor` with message count or token-based trimming
-- **Persistence**: Save history to SQLite (alongside OTel traces) to enable session resume
-- **Tool output trimming**: Large tool outputs (e.g., file contents) could be summarized in history to save context space
 
 ---
 
@@ -885,14 +926,27 @@ graph TB
     end
 ```
 
-### 8.2 High-Risk Tool Confirmation
+### 8.2 High-Risk Tool Confirmation (Deferred Approval)
 
-```python
-# All tools use RunContext pattern
-if not ctx.deps.auto_confirm:
-    if not Confirm.ask(f"Execute: {action}?", default=False, console=_console):
-        return "Action cancelled by user."
-```
+Side-effectful tools are registered with `requires_approval=True`. When the LLM calls one, `agent.run()` returns a `DeferredToolRequests` object instead of executing the tool. The chat loop's `_handle_approvals()` prompts the user with `[y/n/a(yolo)]` for each pending call, then resumes the agent with `DeferredToolResults`.
+
+**Key design properties:**
+- **Separation of concerns:** Tools contain only business logic — no UI imports, no prompt calls
+- **LLM-visible denials:** Denied calls return `ToolDenied(message)`, giving the LLM a structured signal to reason about (vs opaque `"cancelled by user"` strings)
+- **Session yolo:** Picking `a` sets `deps.auto_confirm = True`, auto-approving all subsequent calls in the session
+- **Testability:** Tests can pass `DeferredToolResults` programmatically without a TTY
+- **Chained approvals:** The approval loop uses `while`, not `if` — a resumed run can itself produce more `DeferredToolRequests` when the LLM chains multiple side-effectful calls
+
+**`ToolCallPart.args` type handling:** pydantic-ai's `ToolCallPart.args` is typed `str | dict[str, Any] | None`. Some model providers send args as a JSON string rather than a parsed dict. The approval prompt formatter must handle all three variants (`json.loads` for `str`, `{}` for `None`) before calling `.items()`.
+
+**Approval classification:**
+
+| Tool | Approval | Rationale |
+|------|----------|-----------|
+| `run_shell_command` | `requires_approval=True` | Arbitrary code execution in sandbox |
+| `draft_email` | `requires_approval=True` | Creates Gmail draft on user's behalf |
+| `post_slack_message` | `requires_approval=True` | Sends message visible to others |
+| All other tools | None | Read-only operations |
 
 **Bypass for Testing:** Set `auto_confirm: true` in settings.
 
@@ -1024,30 +1078,25 @@ def test_sandbox_execution():
 
 ---
 
-## 12. Implementation Status
+## 12. Module Summary
 
-### Features
-
-| Phase | Component | Status |
-|-------|-----------|--------|
-| 1 | CLI Skeleton + LLM Connection | ✅ Complete |
-| 2 | Docker Sandbox | ✅ Complete |
-| 3 | Obsidian Notes Tool | ✅ Complete |
-| 4 | Google Drive Tool | ✅ Complete |
-| 5 | Slack/Gmail/Calendar Tools | ✅ Complete |
-| 6 | Telemetry + Datasette | ✅ Complete |
-| 7 | Dual-Engine (Gemini) | ✅ Complete |
-| 8 | XDG Configuration | ✅ Complete |
-| 9 | Functional Testing | ✅ Complete |
-
-### Pydantic AI Best Practices Migration
-
-| Batch | Focus | Status |
-|-------|-------|--------|
-| 1 | Shell tool + CoDeps foundation (`deps.py`, `RunContext`, `create_deps()`) | ✅ Complete |
-| 2 | Obsidian tools (`ModelRetry`, `obsidian_vault_path` in deps) | ✅ Complete |
-| 3-4 | Google tools + Slack (`google_auth.py`, all tools → `RunContext`, `comm.py` deleted) | ✅ Complete |
-| 5 | Cleanup: zero `tool_plain()`, zero global `settings` in tools, `tools/__init__.py` docstring-only | ✅ Complete |
-| 6 | `requires_approval=True` + `DeferredToolRequests` | ⬜ Deferred |
-
-See `docs/TODO-approval-flow.md` for remaining migration details.
+| Module | Purpose |
+|--------|---------|
+| `main.py` | CLI entry point, chat loop, `_handle_approvals()`, OTel setup |
+| `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
+| `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
+| `config.py` | `Settings` (Pydantic BaseModel) from `settings.json` + env vars |
+| `sandbox.py` | Docker wrapper — persistent container, CWD mount, command execution |
+| `telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
+| `display.py` | Themed Rich Console, semantic styles, display helpers |
+| `status.py` | `StatusInfo` dataclass + `get_status()` — pure-data environment/health probes |
+| `banner.py` | ASCII art welcome banner, consumes `StatusInfo` for display |
+| `tail.py` | Real-time span viewer (`co tail`) |
+| `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
+| `google_auth.py` | Google credential resolution + service builder |
+| `tools/shell.py` | `run_shell_command` — sandbox execution, `requires_approval=True` |
+| `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` — vault search |
+| `tools/google_drive.py` | `search_drive`, `read_drive_file` — Drive API |
+| `tools/google_gmail.py` | `list_emails`, `search_emails`, `draft_email` — Gmail API |
+| `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` — Calendar API |
+| `tools/slack.py` | `post_slack_message` — Slack WebClient, `requires_approval=True` |

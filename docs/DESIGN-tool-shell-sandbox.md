@@ -1,7 +1,7 @@
 # Design: Shell Tool & Docker Sandbox
 
 **Status:** Implemented (Batch 1)
-**Last Updated:** 2026-02-04
+**Last Updated:** 2026-02-06
 
 ## Overview
 
@@ -49,9 +49,10 @@ The shell tool executes user commands in a sandboxed Docker container, protectin
 
 | Responsibility | Description |
 |----------------|-------------|
-| **Confirmation gate** | Prompts user before executing any command |
 | **Delegation** | Passes command to sandbox, returns output |
-| **Error wrapping** | Catches exceptions, returns error strings to LLM |
+| **Error → ModelRetry** | Catches exceptions, raises `ModelRetry` so LLM can self-correct |
+
+**Note:** Confirmation is NOT a tool responsibility. The tool is registered with `requires_approval=True` — the chat loop handles the `[y/n/a(yolo)]` prompt via `DeferredToolRequests`. See `DESIGN-co-cli.md` §8.2.
 
 ### Processing Flow
 
@@ -60,27 +61,27 @@ LLM calls run_shell_command(cmd)
               │
               ▼
 ┌─────────────────────────────────┐
-│ auto_confirm = true?            │
-│   ├── Yes ──▶ Skip prompt       │
-│   └── No  ──▶ Show prompt       │
-│                  │              │
-│              ┌───┴───┐          │
-│              ▼       ▼          │
-│            "y"      "n"         │
-│              │       │          │
-│              │       └──▶ Return "Command cancelled"
-│              ▼                  │
+│ requires_approval=True          │
+│   → Agent defers (not tool)     │
+│   → Chat loop prompts [y/n/a]  │
+│   → Approved: agent resumes    │
+│   → Denied: ToolDenied to LLM  │
 └─────────────────────────────────┘
-              │
+              │ (approved)
               ▼
 ┌─────────────────────────────────┐
 │ sandbox.run_command(cmd)        │
 │   ├── Success ──▶ Return output │
-│   └── Error   ──▶ Return error  │
+│   └── Error   ──▶ RuntimeError  │
 └─────────────────────────────────┘
               │
               ▼
-        Output to LLM
+┌─────────────────────────────────┐
+│ Exception?                      │
+│   ├── No  ──▶ Return to LLM    │
+│   └── Yes ──▶ raise ModelRetry  │
+│        (LLM can self-correct)   │
+└─────────────────────────────────┘
 ```
 
 ### Design Decisions
@@ -88,8 +89,8 @@ LLM calls run_shell_command(cmd)
 | Decision | Rationale |
 |----------|-----------|
 | Access sandbox via `ctx.deps` | No global state, testable, follows pydantic-ai pattern |
-| Use `rich.prompt.Confirm` | Non-blocking (works with async), unlike `typer.confirm` |
-| Return error strings | Let LLM handle errors gracefully instead of crashing |
+| `requires_approval=True` | Approval lives in chat loop, not in tool — separation of concerns |
+| `ModelRetry` on errors | LLM sees the error message and can self-correct (e.g., fix a typo). Consistent with Google/Obsidian tools |
 | Detailed docstring | Helps LLM understand when to use this tool |
 
 ---
@@ -140,7 +141,7 @@ LLM calls run_shell_command(cmd)
                            ▼
               ┌────────────────────────┐
               │    Container Ready     │
-              │    (name: co-runner)   │
+              │ (name: co-runner-<id>) │
               └────────────────────────┘
                            │
          ┌─────────────────┼─────────────────┐
@@ -169,7 +170,7 @@ LLM calls run_shell_command(cmd)
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| `name` | `"co-runner"` | Fixed name for reuse detection |
+| `name` | `"co-runner-{session_id[:8]}"` | Session-scoped name to avoid cross-session collisions |
 | `image` | `python:3.12-slim` | Lightweight, has Python |
 | `detach` | `True` | Run in background |
 | `tty` | `True` | Keep container alive |
@@ -210,8 +211,10 @@ run_command(cmd)
        │
        ▼
 ┌──────────────────────────────────────┐
-│ output.decode("utf-8")               │
-│   └── Return string to caller        │
+│ exit_code != 0?                       │
+│   ├── Yes ──▶ raise RuntimeError     │
+│   │          (exit code + output)    │
+│   └── No  ──▶ Return decoded output  │
 └──────────────────────────────────────┘
 ```
 
@@ -220,7 +223,7 @@ run_command(cmd)
 | Decision | Rationale |
 |----------|-----------|
 | Lazy `_client` | Don't connect to Docker until needed |
-| Named container | Enables reuse detection via `containers.get()` |
+| Session-scoped named container | Enables reuse detection while isolating concurrent sessions |
 | `tty=True` + `command="sh"` | Keeps container alive between exec calls |
 | Capture CWD at init | Consistent workspace for entire session |
 | Silent cleanup errors | Session end shouldn't fail if container already gone |
@@ -317,15 +320,16 @@ Or build a custom image with pre-installed tools for faster execution.
 |----------|-----------|----------|
 | Docker not running | `docker.from_env()` fails | `RuntimeError` with message |
 | Container create fails | `APIError` from Docker | `RuntimeError` with details |
-| Command fails | Non-zero exit code | Output returned (includes error) |
-| Exec fails | Exception during `exec_run` | `"Sandbox Error: ..."` string |
+| Command fails | Non-zero exit code | `RuntimeError` raised with exit code + output |
+| Exec fails | Exception during `exec_run` | Exception propagates to caller |
 | Stale container | Found but stopped | Auto-restart via `container.start()` |
 
 ### Manual Recovery
 
-If container gets stuck:
+If a session container gets stuck:
 ```bash
-docker rm -f co-runner
+docker ps -a --filter "name=co-runner-" --format "{{.Names}}"
+docker rm -f <container-name>
 ```
 
 ---
@@ -337,9 +341,13 @@ docker rm -f co-runner
 ```
 main.py: create_deps()
     │
-    ├── sandbox = Sandbox(image=settings.docker_image)
+    ├── session_id = uuid4().hex
+    ├── sandbox = Sandbox(
+    │      image=settings.docker_image,
+    │      container_name=f"co-runner-{session_id[:8]}",
+    │  )
     ├── auto_confirm = settings.auto_confirm
-    └── session_id = uuid4().hex
+    └── session_id = session_id
     │
     ▼
 CoDeps(sandbox, auto_confirm, session_id)
@@ -381,7 +389,7 @@ chat_loop()
 
 | Enhancement | Description | Status |
 |-------------|-------------|--------|
-| `requires_approval=True` | Pydantic-ai native approval flow | Batch 6 |
+| `requires_approval=True` | Pydantic-ai native approval flow | Done |
 | Command timeout | Kill long-running commands | Planned |
 | Resource limits | Memory/CPU constraints | Planned |
 | Network isolation | `--network none` option | Planned |
