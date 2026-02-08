@@ -5,8 +5,8 @@ from dataclasses import dataclass
 import pytest
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.google_drive import search_drive, read_drive_file
-from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
+from co_cli.tools.google_drive import search_drive_files, read_drive_file
+from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.config import settings
 from co_cli.deps import CoDeps
@@ -34,7 +34,7 @@ def test_drive_search_functional():
     """
     ctx = _make_ctx()
 
-    results = search_drive(ctx, "test")
+    results = search_drive_files(ctx, "test")
     assert isinstance(results, dict)
     assert "display" in results
     assert "page" in results
@@ -44,10 +44,10 @@ def test_drive_search_functional():
 
 
 def test_drive_search_empty_result():
-    """search_drive returns a valid dict with count=0 on no matches (not ModelRetry)."""
+    """search_drive_files returns a valid dict with count=0 on no matches (not ModelRetry)."""
     ctx = _make_ctx()
 
-    result = search_drive(ctx, "zzz_nonexistent_xkcd_42_qwerty")
+    result = search_drive_files(ctx, "zzz_nonexistent_xkcd_42_qwerty")
     assert isinstance(result, dict)
     assert result["count"] == 0
     assert result["page"] == 1
@@ -59,7 +59,7 @@ def test_drive_search_pagination():
     """Test Drive search pagination with page number."""
     ctx = _make_ctx()
 
-    page1 = search_drive(ctx, "notes", page=1)
+    page1 = search_drive_files(ctx, "notes", page=1)
     assert isinstance(page1, dict)
     assert page1["page"] == 1
 
@@ -67,7 +67,7 @@ def test_drive_search_pagination():
         # Not enough files to test pagination — pass without asserting page 2
         return
 
-    page2 = search_drive(ctx, "notes", page=2)
+    page2 = search_drive_files(ctx, "notes", page=2)
     assert isinstance(page2, dict)
     assert page2["page"] == 2
     assert "Found" in page2["display"]
@@ -147,5 +147,5 @@ def test_gmail_draft_functional():
     """
     ctx = _make_ctx(auto_confirm=True)
 
-    result = draft_email(ctx, "test@example.com", "Test Subject", "Test Body")
+    result = create_email_draft(ctx, "test@example.com", "Test Subject", "Test Body")
     assert "Draft created" in result

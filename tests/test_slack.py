@@ -6,10 +6,10 @@ import pytest
 from pydantic_ai import ModelRetry
 
 from co_cli.tools.slack import (
-    post_slack_message,
+    send_slack_message,
     list_slack_channels,
-    get_slack_channel_history,
-    get_slack_thread_replies,
+    list_slack_messages,
+    list_slack_replies,
     list_slack_users,
 )
 from co_cli.config import settings
@@ -59,7 +59,7 @@ def test_slack_post_functional():
 
     channel = "#general"
     try:
-        result = post_slack_message(ctx, channel, "Automated test from Co-CLI")
+        result = send_slack_message(ctx, channel, "Automated test from Co-CLI")
         assert isinstance(result, dict)
         assert "display" in result
         assert "ts" in result
@@ -89,7 +89,7 @@ def test_list_slack_channels():
             pytest.fail(f"Slack error: {e}")
 
 
-def test_get_slack_channel_history():
+def test_list_slack_messages():
     """Test getting Slack channel history.
     Requires SLACK_BOT_TOKEN.
     """
@@ -99,7 +99,7 @@ def test_get_slack_channel_history():
     ctx = _make_ctx(slack_client=client)
 
     try:
-        result = get_slack_channel_history(ctx, "C01ABC123", limit=5)
+        result = list_slack_messages(ctx, "C01ABC123", limit=5)
         assert isinstance(result, dict)
         assert "display" in result
         assert "count" in result
@@ -109,7 +109,7 @@ def test_get_slack_channel_history():
             pytest.fail(f"Slack error: {e}")
 
 
-def test_get_slack_thread_replies():
+def test_list_slack_replies():
     """Test getting Slack thread replies.
     Requires SLACK_BOT_TOKEN.
     """
@@ -119,7 +119,7 @@ def test_get_slack_thread_replies():
     ctx = _make_ctx(slack_client=client)
 
     try:
-        result = get_slack_thread_replies(ctx, "C01ABC123", "1234567890.123456")
+        result = list_slack_replies(ctx, "C01ABC123", "1234567890.123456")
         assert isinstance(result, dict)
         assert "display" in result
         assert "count" in result
@@ -153,10 +153,10 @@ def test_list_slack_users():
 
 
 def test_slack_no_client_post():
-    """post_slack_message raises ModelRetry when slack_client is None."""
+    """send_slack_message raises ModelRetry when slack_client is None."""
     ctx = _make_ctx(slack_client=None)
     with pytest.raises(ModelRetry, match="Slack not configured"):
-        post_slack_message(ctx, "#general", "hello")
+        send_slack_message(ctx, "#general", "hello")
 
 
 def test_slack_no_client_list_channels():
@@ -167,17 +167,17 @@ def test_slack_no_client_list_channels():
 
 
 def test_slack_no_client_channel_history():
-    """get_slack_channel_history raises ModelRetry when slack_client is None."""
+    """list_slack_messages raises ModelRetry when slack_client is None."""
     ctx = _make_ctx(slack_client=None)
     with pytest.raises(ModelRetry, match="Slack not configured"):
-        get_slack_channel_history(ctx, "C01ABC")
+        list_slack_messages(ctx, "C01ABC")
 
 
 def test_slack_no_client_thread_replies():
-    """get_slack_thread_replies raises ModelRetry when slack_client is None."""
+    """list_slack_replies raises ModelRetry when slack_client is None."""
     ctx = _make_ctx(slack_client=None)
     with pytest.raises(ModelRetry, match="Slack not configured"):
-        get_slack_thread_replies(ctx, "C01ABC", "1234567890.123456")
+        list_slack_replies(ctx, "C01ABC", "1234567890.123456")
 
 
 def test_slack_no_client_list_users():
@@ -191,45 +191,45 @@ def test_slack_no_client_list_users():
 
 
 def test_slack_post_empty_channel():
-    """post_slack_message raises ModelRetry on empty channel."""
+    """send_slack_message raises ModelRetry on empty channel."""
     from slack_sdk import WebClient
     client = WebClient(token=settings.slack_bot_token)
     ctx = _make_ctx(slack_client=client)
     with pytest.raises(ModelRetry, match="Channel is required"):
-        post_slack_message(ctx, "", "hello")
+        send_slack_message(ctx, "", "hello")
 
 
 def test_slack_post_empty_text():
-    """post_slack_message raises ModelRetry on empty text."""
+    """send_slack_message raises ModelRetry on empty text."""
     from slack_sdk import WebClient
     client = WebClient(token=settings.slack_bot_token)
     ctx = _make_ctx(slack_client=client)
     with pytest.raises(ModelRetry, match="Message text cannot be empty"):
-        post_slack_message(ctx, "#general", "")
+        send_slack_message(ctx, "#general", "")
 
 
 def test_slack_history_empty_channel():
-    """get_slack_channel_history raises ModelRetry on empty channel."""
+    """list_slack_messages raises ModelRetry on empty channel."""
     from slack_sdk import WebClient
     client = WebClient(token=settings.slack_bot_token)
     ctx = _make_ctx(slack_client=client)
     with pytest.raises(ModelRetry, match="Channel ID is required"):
-        get_slack_channel_history(ctx, "")
+        list_slack_messages(ctx, "")
 
 
 def test_slack_thread_empty_channel():
-    """get_slack_thread_replies raises ModelRetry on empty channel."""
+    """list_slack_replies raises ModelRetry on empty channel."""
     from slack_sdk import WebClient
     client = WebClient(token=settings.slack_bot_token)
     ctx = _make_ctx(slack_client=client)
     with pytest.raises(ModelRetry, match="Channel ID is required"):
-        get_slack_thread_replies(ctx, "", "1234567890.123456")
+        list_slack_replies(ctx, "", "1234567890.123456")
 
 
 def test_slack_thread_empty_thread_ts():
-    """get_slack_thread_replies raises ModelRetry on empty thread_ts."""
+    """list_slack_replies raises ModelRetry on empty thread_ts."""
     from slack_sdk import WebClient
     client = WebClient(token=settings.slack_bot_token)
     ctx = _make_ctx(slack_client=client)
     with pytest.raises(ModelRetry, match="thread_ts is required"):
-        get_slack_thread_replies(ctx, "C01ABC", "")
+        list_slack_replies(ctx, "C01ABC", "")

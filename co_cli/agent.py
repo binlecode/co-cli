@@ -8,14 +8,14 @@ from co_cli.deps import CoDeps
 from co_cli._history import trim_old_tool_output, sliding_window
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli.tools.google_drive import search_drive, read_drive_file
-from co_cli.tools.google_gmail import list_emails, search_emails, draft_email
+from co_cli.tools.google_drive import search_drive_files, read_drive_file
+from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.slack import (
-    post_slack_message,
+    send_slack_message,
     list_slack_channels,
-    get_slack_channel_history,
-    get_slack_thread_replies,
+    list_slack_messages,
+    list_slack_replies,
     list_slack_users,
 )
 
@@ -102,32 +102,32 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
 
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)
-    agent.tool(draft_email, requires_approval=True)
-    agent.tool(post_slack_message, requires_approval=True)
+    agent.tool(create_email_draft, requires_approval=True)
+    agent.tool(send_slack_message, requires_approval=True)
 
     # Read-only tools — no approval needed
     agent.tool(search_notes)
     agent.tool(list_notes)
     agent.tool(read_note)
-    agent.tool(search_drive)
+    agent.tool(search_drive_files)
     agent.tool(read_drive_file)
     agent.tool(list_emails)
     agent.tool(search_emails)
     agent.tool(list_calendar_events)
     agent.tool(search_calendar_events)
     agent.tool(list_slack_channels)
-    agent.tool(get_slack_channel_history)
-    agent.tool(get_slack_thread_replies)
+    agent.tool(list_slack_messages)
+    agent.tool(list_slack_replies)
     agent.tool(list_slack_users)
 
     tool_names = [
-        run_shell_command.__name__, draft_email.__name__, post_slack_message.__name__,
+        run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,
         search_notes.__name__, list_notes.__name__, read_note.__name__,
-        search_drive.__name__, read_drive_file.__name__,
+        search_drive_files.__name__, read_drive_file.__name__,
         list_emails.__name__, search_emails.__name__,
         list_calendar_events.__name__, search_calendar_events.__name__,
-        list_slack_channels.__name__, get_slack_channel_history.__name__,
-        get_slack_thread_replies.__name__, list_slack_users.__name__,
+        list_slack_channels.__name__, list_slack_messages.__name__,
+        list_slack_replies.__name__, list_slack_users.__name__,
     ]
 
     return agent, model_settings, tool_names

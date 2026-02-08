@@ -124,8 +124,8 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         raise ModelRetry(f"Gmail API error: {e}")
 
 
-def draft_email(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str:
-    """Draft an email in Gmail.
+def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str:
+    """Create a draft email in Gmail.
 
     Args:
         to: Recipient email address.

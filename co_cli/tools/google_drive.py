@@ -9,7 +9,7 @@ from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
 
 
-def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
+def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
     """Search for files in Google Drive. Returns 10 results per page.
 
     Returns a dict with:
@@ -17,7 +17,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
     - page: current page number
     - has_more: whether more results are available
 
-    When the user asks for "more" or "next", call search_drive with the same query and page + 1.
+    When the user asks for "more" or "next", call search_drive_files with the same query and page + 1.
 
     Args:
         query: Search keywords or metadata query.
@@ -98,7 +98,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
     """Fetch the content of a text-based file from Google Drive.
 
     Args:
-        file_id: The Google Drive file ID (from search_drive results).
+        file_id: The Google Drive file ID (from search_drive_files results).
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:

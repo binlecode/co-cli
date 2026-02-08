@@ -163,7 +163,7 @@ def test_trim_dict_content_truncated(monkeypatch):
     big_dict = {"display": "x" * 200, "count": 5}
     msgs: list[ModelMessage] = [
         _user("q"),
-        _tool_return("search_drive", big_dict),
+        _tool_return("search_drive_files", big_dict),
         _assistant("ok"),
         _user("more"),
         _assistant("done"),
@@ -211,7 +211,7 @@ def test_trim_multiple_tool_returns_across_messages(monkeypatch):
         _tool_return("shell", "x" * 100, call_id="c1"),
         _assistant("ok1"),
         _user("q2"),
-        _tool_return("search_drive", "y" * 150, call_id="c2"),
+        _tool_return("search_drive_files", "y" * 150, call_id="c2"),
         _assistant("ok2"),
         _user("q3"),                # last 2 — protected
         _assistant("final"),

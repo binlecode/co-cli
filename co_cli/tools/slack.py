@@ -61,7 +61,7 @@ def _format_message(msg: dict[str, Any]) -> str:
     return line
 
 
-def post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict[str, Any]:
+def send_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict[str, Any]:
     """Send a message to a Slack channel.
 
     Returns a dict with:
@@ -143,10 +143,10 @@ def list_slack_channels(
         raise ModelRetry(f"Slack API error: {e}")
 
 
-def get_slack_channel_history(
+def list_slack_messages(
     ctx: RunContext[CoDeps], channel: str, limit: int = 15
 ) -> dict[str, Any]:
-    """Get recent messages from a Slack channel.
+    """List recent messages from a Slack channel.
 
     Returns a dict with:
     - display: formatted message history — show this directly to the user
@@ -182,10 +182,10 @@ def get_slack_channel_history(
         raise ModelRetry(f"Slack API error: {e}")
 
 
-def get_slack_thread_replies(
+def list_slack_replies(
     ctx: RunContext[CoDeps], channel: str, thread_ts: str, limit: int = 20
 ) -> dict[str, Any]:
-    """Get replies in a Slack thread.
+    """List replies in a Slack thread.
 
     Returns a dict with:
     - display: formatted thread replies — show this directly to the user

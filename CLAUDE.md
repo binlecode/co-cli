@@ -87,10 +87,11 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
 - `docs/TODO-modelretry-normalization.md` — Cross-tool ModelRetry message consistency pass
-- `docs/TODO-streaming-tool-output.md` — Migrate chat loop to `run_stream` + `event_stream_handler`
+- `docs/TODO-streaming-output.md` — Streaming implementation (`run_stream_events()`), remaining: Markdown rendering during streaming
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
+- `docs/TODO-tool-naming.md` — Standardise tool function names to converged verb_noun pattern
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

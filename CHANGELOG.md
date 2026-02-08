@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-02-07
+
+### Added
+- **Streaming output**: Replaced `agent.run()` + post-hoc `_display_tool_outputs()` with `agent.run_stream_events()` in new `_stream_agent_run()` helper. Tool calls/results display in real time, text streams token-by-token with `rich.Live` + `rich.Markdown` at 20 FPS throttle. Both the main chat loop and `_handle_approvals` resume path use the same streaming codepath.
+- **E2E streaming tests**: `scripts/e2e_streaming.py` — two tests (plain text streaming, Markdown rendering via Live) that exercise the full streaming pipeline against a real LLM.
+- **`docs/TODO-streaming-output.md`**: Comprehensive streaming design doc — pydantic-ai API comparison (4 APIs evaluated), decision rationale for `run_stream_events()`, peer CLI analysis (Aider, Codex, Gemini CLI, OpenCode), Markdown rendering approach, known issues.
+- **`docs/TODO-tool-naming.md`**: Tool naming standardisation TODO.
+
+### Fixed
+- **`usage_limits` hardcoded in `_stream_agent_run`**: Was reading `settings.max_request_limit` directly. Now accepts `usage_limits` as a parameter; `_handle_approvals` also threads it through. The `settings` read happens only in `chat_loop`.
+
+### Changed
+- **Tool naming standardised**: `search_drive` → `search_drive_files`, `draft_email` → `create_email_draft`, `post_slack_message` → `send_slack_message`, `get_slack_channel_history` → `list_slack_messages`, `get_slack_thread_replies` → `list_slack_replies`. Converged on `verb_noun` pattern. Updated agent registration, tests, and docstrings.
+- **`_display_tool_outputs` removed**: Superseded by inline display in `_stream_agent_run` — tool output now appears in real time during streaming instead of post-hoc.
+- **`_handle_approvals` resumes via streaming**: Was calling `agent.run()` (non-streaming). Now calls `_stream_agent_run()` so post-approval tool results and LLM follow-up also stream.
+- **`docs/TODO-approval-flow-extraction.md`**: Updated line references, coupling table, and added Issues section reflecting streaming design tensions (`DisplayCallback` protocol needed for extraction).
+- **`docs/DESIGN-co-cli.md`**: Updated for streaming architecture and tool renames.
+- **`CLAUDE.md`**: Updated TODO inventory — replaced `TODO-streaming-tool-output.md` with `TODO-streaming-output.md`, added `TODO-tool-naming.md`.
+
+### Removed
+- **`docs/TODO-streaming-tool-output.md`**: Replaced by `docs/TODO-streaming-output.md` (broader scope — covers full streaming architecture, not just tool output).
+
+---
+
 ## [0.3.0] - 2026-02-07
 
 ### Added
