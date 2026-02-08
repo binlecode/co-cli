@@ -8,17 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.4] - 2026-02-08
 
 ### Added
-- **Web tools**: `web_search` (Tavily API) and `web_fetch` with URL safety checks (private IP/SSRF blocking, domain allowlist/blocklist). New `co_cli/tools/web.py` module. Tavily API key configurable via `TAVILY_API_KEY` env var.
+- **Web tools**: `web_search` (Brave Search API) and `web_fetch` (HTML→markdown via `html2text`). New `co_cli/tools/web.py` module. Read-only, no approval. Brave API key configurable via `BRAVE_SEARCH_API_KEY` env var or `brave_search_api_key` setting. Known limitation: no private IP/SSRF protection in MVP.
 - **Eval framework for tool-calling quality**: Statistical eval suite measuring tool-calling accuracy across all enabled tools. 26 golden JSONL cases across 4 dimensions (`tool_selection`, `arg_extraction`, `refusal`, `error_recovery`). Dual-agent architecture — deferred agent (all tools return `DeferredToolRequests`) for selection/args/refusal, normal agent for error recovery. Majority-vote scoring, absolute/relative gates, model comparison reports with per-dimension delta table.
 - **`all_approval` parameter on `get_agent()`**: When `True`, all tools (including read-only) register with `requires_approval=True` — returns `DeferredToolRequests` without executing. Used by eval to avoid ModelRetry loops from missing credentials.
 - **Eval baselines**: `evals/baseline-gemini.json` and `evals/baseline-ollama.json` — both models at 100% (26/26) on current golden set.
 - **`docs/TODO-eval-tool-calling.md`**: Eval framework design doc — 12 sections covering JSONL format, scoring, CLI interface, golden cases, and key patterns.
-- **Web tool tests** (`tests/test_web.py`): URL safety validation, SSRF blocking, domain filtering, search/fetch integration.
+- **Web tool tests** (`tests/test_web.py`): Validation (empty query, invalid URL scheme), missing API key, functional search/fetch integration.
+- **`docs/DESIGN-12-tool-web-search.md`**: Web tools design doc — architecture, tool contracts, constants, error handling, security (SSRF limitation), config, file index.
 - **LLM E2E web tests** (`tests/test_llm_e2e.py`): Web search tool selection and arg extraction tests.
 
 ### Changed
 - **`co_cli/agent.py`**: `get_agent()` accepts `all_approval: bool = False`. Read-only tools registered with `requires_approval=all_approval`.
-- **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory.
+- **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory. Added `DESIGN-12-tool-web-search.md` to design docs index. Removed `TODO-tool-web-search.md` from TODO list (feature complete). Amended testing policy to document skip exception for API-dependent tests (Brave, Slack).
+
+### Removed
+- **`docs/TODO-tool-web-search.md`**: Replaced by `docs/DESIGN-12-tool-web-search.md` — feature fully implemented.
 
 ---
 

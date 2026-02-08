@@ -8,16 +8,14 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
+from co_cli.tools._errors import GOOGLE_NOT_CONFIGURED, GOOGLE_API_NOT_ENABLED, google_api_error
 
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
     """Extract and validate Calendar service from context."""
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(
-            "Google Calendar not configured. "
-            "Set google_credentials_path in settings or run: gcloud auth application-default login"
-        )
+        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Calendar"))
     return build("calendar", "v3", credentials=creds)
 
 
@@ -66,10 +64,9 @@ def _handle_calendar_error(e: Exception):
     msg = str(e)
     if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
         raise ModelRetry(
-            "Google Calendar API is not enabled for your project. "
-            "Run: gcloud services enable calendar-json.googleapis.com"
+            GOOGLE_API_NOT_ENABLED.format(service="Calendar", api_id="calendar-json.googleapis.com")
         )
-    raise ModelRetry(f"Calendar API error: {e}")
+    raise ModelRetry(google_api_error("Calendar", e))
 
 
 def _fetch_events(service, **kwargs) -> list[dict]:

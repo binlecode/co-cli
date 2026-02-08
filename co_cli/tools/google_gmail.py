@@ -9,6 +9,7 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
+from co_cli.tools._errors import GOOGLE_NOT_CONFIGURED, GOOGLE_API_NOT_ENABLED, google_api_error
 
 
 def _format_messages(service, message_ids: list[dict]) -> str:
@@ -44,10 +45,7 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     """Extract and validate Gmail service from context."""
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(
-            "Gmail not configured. "
-            "Set google_credentials_path in settings or run: gcloud auth application-default login"
-        )
+        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Gmail"))
     return build("gmail", "v1", credentials=creds)
 
 
@@ -81,10 +79,9 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
         msg = str(e)
         if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
             raise ModelRetry(
-                "Gmail API is not enabled for your project. "
-                "Run: gcloud services enable gmail.googleapis.com"
+                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
             )
-        raise ModelRetry(f"Gmail API error: {e}")
+        raise ModelRetry(google_api_error("Gmail", e))
 
 
 def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
@@ -118,10 +115,9 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         msg = str(e)
         if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
             raise ModelRetry(
-                "Gmail API is not enabled for your project. "
-                "Run: gcloud services enable gmail.googleapis.com"
+                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
             )
-        raise ModelRetry(f"Gmail API error: {e}")
+        raise ModelRetry(google_api_error("Gmail", e))
 
 
 def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str:
@@ -132,13 +128,7 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         subject: Email subject line.
         body: Email body text.
     """
-    creds = get_cached_google_creds(ctx.deps)
-    if not creds:
-        raise ModelRetry(
-            "Gmail not configured. "
-            "Set google_credentials_path in settings or run: gcloud auth application-default login"
-        )
-    service = build("gmail", "v1", credentials=creds)
+    service = _get_gmail_service(ctx)
 
     try:
         message = MIMEText(body)
@@ -154,7 +144,6 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         msg = str(e)
         if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
             raise ModelRetry(
-                "Gmail API is not enabled for your project. "
-                "Run: gcloud services enable gmail.googleapis.com"
+                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
             )
-        raise ModelRetry(f"Gmail API error: {e}")
+        raise ModelRetry(google_api_error("Gmail", e))

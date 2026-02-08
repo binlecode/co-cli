@@ -50,7 +50,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 ## Testing Policy
 
 - **Functional tests only** — no mocks or stubs. Tests hit real services.
-- **No skips** — tests must pass or fail, never skip. If a service is required, let the test fail when unavailable.
+- **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search, Slack) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
 - Framework: `pytest` + `pytest-asyncio`
 - Docker must be running for shell/sandbox tests
@@ -96,15 +96,14 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-09-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-10-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-11-tool-slack.md` — Slack tool design
+- `docs/DESIGN-12-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
-- `docs/TODO-modelretry-normalization.md` — Cross-tool ModelRetry message consistency pass
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/TODO-eval-tool-calling.md` — Eval framework for tool-calling quality (statistical golden set, JSONL + script)
 - *(low priority)* `docs/TODO-approval-flow-extraction.md` — Extract approval/streaming orchestration from main.py (refactor, not a bug fix)
 

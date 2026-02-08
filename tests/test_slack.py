@@ -231,14 +231,14 @@ def test_slack_post_empty_text():
 def test_slack_history_empty_channel():
     """list_slack_messages raises ModelRetry on empty channel."""
     ctx = _make_ctx(slack_client=None)
-    with pytest.raises(ModelRetry, match="Channel ID is required"):
+    with pytest.raises(ModelRetry, match="Slack: channel ID is required"):
         list_slack_messages(ctx, "")
 
 
 def test_slack_thread_empty_channel():
     """list_slack_replies raises ModelRetry on empty channel."""
     ctx = _make_ctx(slack_client=None)
-    with pytest.raises(ModelRetry, match="Channel ID is required"):
+    with pytest.raises(ModelRetry, match="Slack: channel ID is required"):
         list_slack_replies(ctx, "", "1234567890.123456")
 
 

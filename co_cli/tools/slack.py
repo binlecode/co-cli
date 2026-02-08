@@ -158,7 +158,7 @@ def list_slack_messages(
         limit: Maximum number of messages to return (default 15, max 50).
     """
     if not channel or not channel.strip():
-        raise ModelRetry("Channel ID is required. Use list_slack_channels to find channel IDs.")
+        raise ModelRetry("Slack: channel ID is required. Use list_slack_channels to find channel IDs.")
 
     client = _get_slack_client(ctx)
     capped_limit = min(limit, 50)
@@ -198,7 +198,7 @@ def list_slack_replies(
         limit: Maximum number of replies to return (default 20).
     """
     if not channel or not channel.strip():
-        raise ModelRetry("Channel ID is required.")
+        raise ModelRetry("Slack: channel ID is required. Use list_slack_channels to find channel IDs.")
     if not thread_ts or not thread_ts.strip():
         raise ModelRetry("thread_ts is required (timestamp of the parent message).")
 

@@ -75,14 +75,14 @@ def search_notes(
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian vault not configured or not found. "
-            "Ask user to set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. "
+            "Set obsidian_vault_path in settings."
         )
 
     # Parse keywords (split on whitespace, filter empty)
     keywords = [k.strip() for k in query.split() if k.strip()]
     if not keywords:
-        raise ModelRetry("Empty query. Provide keywords to search.")
+        raise ModelRetry("Obsidian: empty query. Provide keywords to search.")
 
     # Build word-boundary patterns for each keyword
     patterns = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
@@ -159,8 +159,8 @@ def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> dict[str, Any
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian vault not configured or not found. "
-            "Ask user to set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. "
+            "Set obsidian_vault_path in settings."
         )
 
     notes = list(vault.rglob("*.md"))
@@ -200,14 +200,14 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian vault not configured or not found. "
-            "Ask user to set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. "
+            "Set obsidian_vault_path in settings."
         )
 
     # Sanitize path to prevent directory traversal
     safe_path = (vault / filename).resolve()
     if not safe_path.is_relative_to(vault.resolve()):
-        raise ModelRetry("Access denied: path is outside the vault.")
+        raise ModelRetry("Obsidian: access denied — path is outside the vault.")
 
     if not safe_path.exists():
         # Provide helpful context for retry
@@ -220,4 +220,4 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
     try:
         return safe_path.read_text(encoding="utf-8")
     except Exception as e:
-        raise ModelRetry(f"Error reading note: {e}")
+        raise ModelRetry(f"Obsidian: error reading note ({e}).")

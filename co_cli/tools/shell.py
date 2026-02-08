@@ -18,4 +18,4 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     try:
         return await ctx.deps.sandbox.run_command(cmd, timeout=effective)
     except Exception as e:
-        raise ModelRetry(f"Command failed ({e})")
+        raise ModelRetry(f"Shell: command failed ({e}). Check command syntax or try a different approach.")

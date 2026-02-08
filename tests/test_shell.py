@@ -55,7 +55,7 @@ async def test_shell_nonzero_exit_raises_model_retry():
     ctx = _make_ctx(sandbox)
 
     try:
-        with pytest.raises(ModelRetry, match="Command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command failed"):
             await run_shell_command(ctx, "ls /nonexistent_path_xyz")
     finally:
         sandbox.cleanup()
@@ -71,7 +71,7 @@ async def test_shell_timeout_raises_model_retry():
     ctx = _make_ctx(sandbox)
 
     try:
-        with pytest.raises(ModelRetry, match="Command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command failed"):
             await run_shell_command(ctx, "sleep 30", timeout=2)
     finally:
         sandbox.cleanup()
@@ -85,7 +85,7 @@ async def test_shell_timeout_clamped_to_ceiling():
 
     try:
         # Request 300s but ceiling is 3s — sleep 10 should be killed
-        with pytest.raises(ModelRetry, match="Command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command failed"):
             await run_shell_command(ctx, "sleep 10", timeout=300)
     finally:
         sandbox.cleanup()
@@ -131,7 +131,7 @@ async def test_shell_network_disabled():
 
     try:
         # ping/curl should fail with no network
-        with pytest.raises(ModelRetry, match="Command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command failed"):
             await run_shell_command(ctx, "ping -c1 -W1 127.0.0.1", timeout=5)
     finally:
         sandbox.cleanup()
@@ -306,7 +306,7 @@ async def test_python_traceback_surfaces():
     ctx = _make_ctx(sandbox)
 
     try:
-        with pytest.raises(ModelRetry, match="Command failed") as exc_info:
+        with pytest.raises(ModelRetry, match="Shell: command failed") as exc_info:
             await run_shell_command(
                 ctx, "python3 -c \"raise ValueError('bad input')\""
             )
@@ -414,7 +414,7 @@ async def test_python_unittest_failure_output():
             "        self.assertEqual(1, 2, 'math is broken')\n"
             "PY",
         )
-        with pytest.raises(ModelRetry, match="Command failed") as exc_info:
+        with pytest.raises(ModelRetry, match="Shell: command failed") as exc_info:
             await run_shell_command(
                 ctx, "python3 -m unittest /workspace/_test_fail.py -v"
             )
@@ -443,7 +443,7 @@ async def test_python_edit_and_rerun():
             "PY",
         )
         # Step 2: Run fails — LLM sees NameError
-        with pytest.raises(ModelRetry, match="Command failed") as exc_info:
+        with pytest.raises(ModelRetry, match="Shell: command failed") as exc_info:
             await run_shell_command(ctx, "python3 /workspace/_buggy.py")
         assert "NameError" in str(exc_info.value)
 
@@ -480,7 +480,7 @@ async def test_python_partial_output_on_timeout():
             "print('never')\n"
             "PY",
         )
-        with pytest.raises(ModelRetry, match="Command failed") as exc_info:
+        with pytest.raises(ModelRetry, match="Shell: command failed") as exc_info:
             await run_shell_command(ctx, "python3 /workspace/_slow.py", timeout=3)
         # 'started' was flushed before kill thanks to PYTHONUNBUFFERED
         assert "started" in str(exc_info.value)
@@ -572,7 +572,7 @@ async def test_subprocess_nonzero_exit():
     backend = SubprocessBackend()
     ctx = _make_ctx(backend)
 
-    with pytest.raises(ModelRetry, match="Command failed"):
+    with pytest.raises(ModelRetry, match="Shell: command failed"):
         await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
 
 
@@ -582,7 +582,7 @@ async def test_subprocess_timeout():
     backend = SubprocessBackend()
     ctx = _make_ctx(backend)
 
-    with pytest.raises(ModelRetry, match="Command failed.*timed out"):
+    with pytest.raises(ModelRetry, match="Shell: command failed.*timed out"):
         await run_shell_command(ctx, "sleep 30", timeout=2)
 
 
@@ -592,7 +592,7 @@ async def test_subprocess_timeout_clamped():
     backend = SubprocessBackend()
     ctx = _make_ctx(backend, sandbox_max_timeout=2)
 
-    with pytest.raises(ModelRetry, match="Command failed"):
+    with pytest.raises(ModelRetry, match="Shell: command failed"):
         await run_shell_command(ctx, "sleep 30", timeout=300)
 
 
