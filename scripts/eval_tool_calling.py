@@ -284,10 +284,10 @@ async def run_single_recovery(
       1. Model picked the right tool on first attempt (ToolCallPart)
       2. After ModelRetry, model recovered gracefully (returned text, didn't loop)
 
-    Uses normal agent (no all_approval) with request_limit=3:
-      - Request 1: model picks tool → tool executes → ModelRetry
+    Uses normal agent (no all_approval) with request_limit=5:
+      - Request 1: model picks tool → tool executes → returns error dict or ModelRetry
       - Request 2: model sees error → should return text to user
-      - Request 3: budget for one more retry if needed
+      - Requests 3-5: budget for recovery if model tries alternative tools
     """
     if model_settings:
         base = dict(model_settings) if isinstance(model_settings, dict) else {
@@ -305,7 +305,7 @@ async def run_single_recovery(
             case.prompt,
             deps=deps,
             model_settings=eval_settings,
-            usage_limits=UsageLimits(request_limit=3),
+            usage_limits=UsageLimits(request_limit=5),
         )
 
         # Extract the FIRST tool call from message history (before retries)

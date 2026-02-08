@@ -118,7 +118,7 @@ Project config is checked at `cwd/.co-cli/settings.json` only — no upward dire
 
 All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` remaining.
 
-**Return convention:** Tools returning data for the user return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_agent_run()` renders tool returns inline as events arrive.
+**Return convention:** Tools returning data for the user return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_events()` renders tool returns inline as events arrive via `frontend.on_tool_result()`.
 
 | Tool | Return type | Has `display`? | Metadata |
 |------|------------|----------------|----------|
@@ -139,11 +139,13 @@ All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` rema
 
 **Naming convention:** `verb_noun` with converged verb set: `read`, `list`, `search`, `create`, `send`, `run`. `web_search` and `web_fetch` use `web_` prefix to namespace web tools.
 
-**ModelRetry convention:** `ModelRetry` = "you called this wrong, fix your parameters" (LLM can self-correct). Empty result = "query was fine, nothing matched" (return `{"count": 0}`).
+**Error classification:** Tool errors are classified into `ToolErrorKind` (TERMINAL, TRANSIENT, MISUSE) via `classify_google_error()` / `_classify_slack_error()` and dispatched through `handle_tool_error()`. TERMINAL returns `{"display": ..., "error": True}` (model picks alternative). TRANSIENT/MISUSE raise `ModelRetry` (model self-corrects). See `tools/_errors.py`.
+
+**ModelRetry convention:** `ModelRetry` = "you called this wrong, fix your parameters" (LLM can self-correct). Empty result = "query was fine, nothing matched" (return `{"count": 0}`). **Terminal config errors** (missing credentials, API not enabled) use `terminal_error()` which returns `{"display": "...", "error": True}` instead of `ModelRetry` — this stops the retry loop and lets the model route to an alternative tool.
 
 **Retry budget:** Agent-level `retries=settings.tool_retries` (default 3). All tools inherit the same budget.
 
-**HTTP 400 reflection:** When a model produces malformed tool-call JSON (HTTP 400), the chat loop injects the error back into conversation history and re-runs the agent — reflection, not blind retry. Capped at `settings.model_http_retries` (default 2). See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md).
+**Provider error handling:** `run_turn()` classifies provider errors via `classify_provider_error()`: HTTP 400 → reflection (inject error, re-run), 429/5xx/network → exponential backoff retry, 401/403/404 → abort. All retries capped at `settings.model_http_retries` (default 2). See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md).
 
 **Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 25) caps LLM round-trips per user turn.
 
@@ -194,13 +196,15 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 
 | Module | Purpose |
 |--------|---------|
-| `main.py` | CLI entry point, chat loop, `_stream_agent_run()`, `_handle_approvals()`, OTel setup |
+| `main.py` | CLI entry point, chat loop, OTel setup |
+| `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
+| `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
 | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` (Pydantic BaseModel) from `settings.json` + env vars |
 | `sandbox.py` | `SandboxProtocol` + backends (Docker, subprocess fallback) |
 | `telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
-| `display.py` | Themed Rich Console, semantic styles, display helpers |
+| `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` |
 | `banner.py` | ASCII art welcome banner |
 | `_commands.py` | Slash command registry, handlers, `dispatch()` |
@@ -209,6 +213,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `tail.py` | Real-time span viewer (`co tail`) |
 | `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
 | `google_auth.py` | Google credential resolution (ensure/get/cached) |
+| `tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `tools/shell.py` | `run_shell_command` — sandbox execution |
 | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
 | `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |

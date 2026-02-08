@@ -8,7 +8,7 @@ nav_order: 2
 
 ## 1. What & How
 
-The chat loop in `main.py` is the REPL orchestrator: it streams agent responses, handles deferred tool approval, dispatches slash commands, manages conversation memory, and handles interrupts. It uses `agent.run_stream_events()` for real-time output rendering via Rich `Live` + `Markdown`.
+The chat loop in `main.py` is the REPL orchestrator: it dispatches slash commands, manages conversation memory, and handles interrupts. The LLM turn — streaming, approval chaining, and provider error handling — is delegated to `run_turn()` in `_orchestrate.py`, which communicates with the terminal through the `FrontendProtocol` abstraction. `TerminalFrontend` in `display.py` implements that protocol using Rich `Live` + `Markdown`.
 
 ```mermaid
 stateDiagram-v2
@@ -25,7 +25,7 @@ stateDiagram-v2
         Dispatch --> Waiting: empty / blank
         Dispatch --> BangExec: !cmd (bang escape)
         Dispatch --> SlashExec: /command (slash)
-        Dispatch --> Thinking: anything else → _stream_agent_run()
+        Dispatch --> Thinking: anything else → run_turn()
 
         BangExec --> Waiting: sandbox.run_command() → display
         SlashExec --> Waiting: dispatch_command() → display
@@ -33,7 +33,7 @@ stateDiagram-v2
         Thinking --> ToolExec: Tool needed
         ToolExec --> Thinking: Tool result (read-only, displayed inline)
         Thinking --> Approval: DeferredToolRequests
-        Approval --> Thinking: Approved (_stream_agent_run with DeferredToolResults)
+        Approval --> Thinking: Approved (_stream_events with DeferredToolResults)
         Approval --> Responding: Denied (ToolDenied)
         Thinking --> Responding: LLM done (text already streamed via Live)
         Responding --> Waiting: Update message_history
@@ -68,8 +68,8 @@ sequenceDiagram
     loop Interactive REPL
         User->>CLI: Enter query
         CLI->>CLI: Show "Co is thinking..."
-        CLI->>Agent: _stream_agent_run(agent, user_input, deps, message_history)
-        Note over CLI,Agent: Uses agent.run_stream_events() internally
+        CLI->>Agent: run_turn(agent, user_input, deps, message_history, frontend)
+        Note over CLI,Agent: run_turn() uses _stream_events() internally
         Agent->>LLM: Send prompt + prior conversation context
 
         loop Streaming event loop
@@ -107,32 +107,23 @@ sequenceDiagram
 chat_loop():
     agent, model_settings, tool_names = get_agent()
     deps = create_deps()
-    info = get_status(tool_count=len(tool_names))
-    display_welcome_banner(info)
+    frontend = TerminalFrontend()
     message_history = []
 
     loop:
-        turn_limits = UsageLimits(request_limit=settings.max_request_limit)  # once per turn
-        turn_usage = None
-
-        result, streamed_text = _stream_agent_run(agent, user_input, deps, message_history,
-                                                   usage_limits=turn_limits, usage=turn_usage)
-        turn_usage = result.usage()
-
-        while result.output is DeferredToolRequests:   # loop — resumed run may trigger more
-            result, streamed_text = _handle_approvals(agent, deps, result,
-                                                       usage_limits=turn_limits, usage=turn_usage)
-            turn_usage = result.usage()
-
-        message_history = result.all_messages()
-        if not streamed_text:         # fallback — only when streaming produced no text
-            display(Markdown(result.output))
+        frontend.on_status("Co is thinking...")
+        turn_result = run_turn(agent, user_input, deps, message_history,
+                               model_settings, frontend=frontend,
+                               max_request_limit, http_retries, verbose)
+        message_history = turn_result.messages
 
     finally:
         deps.sandbox.cleanup()
 ```
 
-**Why `while`, not `if`:** A resumed `_stream_agent_run()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
+The full orchestration state machine (streaming, approval chaining, provider error handling, interrupt patching) lives in `run_turn()`. See the Orchestration section below.
+
+**Why `while`, not `if` (inside run_turn):** A resumed `_stream_events()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
 
 ### Per-Turn Budget Accounting
 
@@ -146,13 +137,13 @@ Side-effectful tools (`run_shell_command`, `create_email_draft`, `send_slack_mes
 sequenceDiagram
     participant User
     participant CLI as Chat Loop
-    participant Agent as _stream_agent_run()
+    participant Agent as _stream_events()
     participant Tool as shell.py
     participant Sandbox as sandbox.py
     participant Docker as Docker Container
 
     User->>CLI: "list files"
-    CLI->>Agent: _stream_agent_run(agent, user_input)
+    CLI->>Agent: _stream_events(agent, user_input)
     Agent->>Agent: LLM calls run_shell_command("ls -la")
     Note over Agent: requires_approval=True → defer
     Agent->>CLI: result.output = DeferredToolRequests(approvals=[...])
@@ -161,7 +152,7 @@ sequenceDiagram
     CLI->>User: "Approve run_shell_command(cmd='ls -la')? [y/n/a(yolo)]"
     User->>CLI: y
 
-    CLI->>Agent: _stream_agent_run(agent, deferred_tool_results=approvals)
+    CLI->>Agent: _stream_events(agent, deferred_tool_results=approvals)
     Agent->>Tool: run_shell_command("ls -la")
     Tool->>Sandbox: await sandbox.run_command("ls -la", timeout=120)
     Sandbox->>Docker: container.exec_run(...)
@@ -176,20 +167,44 @@ sequenceDiagram
 
 **Session yolo flow:** When the user picks `a`, `deps.auto_confirm` is set to `True`. All subsequent approvals in the session are auto-approved without prompting.
 
-### Streaming Architecture (`_stream_agent_run`)
+### Orchestration (`_orchestrate.py`)
 
-`_stream_agent_run()` wraps `agent.run_stream_events()` and dispatches four event types inline:
+The orchestration state machine is extracted from `main.py` into `_orchestrate.py` for testability. It contains:
 
-- **Text deltas** — accumulated into a buffer, rendered as `rich.Markdown` inside `rich.Live` with 20 FPS throttle (`_RENDER_INTERVAL = 0.05`). Uses `auto_refresh=False` with manual `refresh()` for precise throttle control.
-- **Text commit** — before any tool event, `Live` is flushed (update + refresh + stop) to prevent interleaving Markdown with tool output. Buffer and render state are reset.
-- **Tool calls** — dim annotation showing tool name and arguments (shell commands show the `cmd` value).
-- **Tool results** — `Panel` for shell output (string content), verbatim for structured tools (dict with `display` field).
+- **`FrontendProtocol`** — `@runtime_checkable` protocol defining display + interaction callbacks. Implementations: `TerminalFrontend` (Rich/prompt-toolkit, in `display.py`), `RecordingFrontend` (tests).
+- **`TurnResult`** — dataclass returned by `run_turn()`: `messages`, `output`, `usage`, `interrupted`, `streamed_text`.
+- **`run_turn()`** — async orchestration entry point. Contains the inner retry loop (HTTP 400 reflection, 429/5xx backoff), approval chaining, and interrupt patching. Delegates all display to the frontend.
+- **`_stream_events()`** — wraps `agent.run_stream_events()`, dispatches events to frontend callbacks.
+- **`_handle_approvals()`** — iterates `DeferredToolRequests`, applies auto-confirm + safe-command logic, delegates interactive prompts to `frontend.prompt_approval()`.
+- **`_patch_dangling_tool_calls()`** — moved verbatim from `main.py`.
+
+### FrontendProtocol
+
+| Method | Purpose |
+|--------|---------|
+| `on_text_delta(accumulated)` | Incremental Markdown render |
+| `on_text_commit(final)` | Final render + tear down Live |
+| `on_thinking_delta(accumulated)` | Thinking panel (verbose) |
+| `on_thinking_commit(final)` | Final thinking panel |
+| `on_tool_call(name, args_display)` | Dim annotation |
+| `on_tool_result(title, content)` | Panel for result |
+| `on_status(message)` | Status messages |
+| `on_final_output(text)` | Fallback Markdown render |
+| `prompt_approval(description) → str` | y/n/a prompt |
+| `cleanup()` | Exception teardown |
+
+### Streaming Architecture (`_stream_events`)
+
+`_stream_events()` wraps `agent.run_stream_events()` and dispatches event types to frontend callbacks:
+
+- **Text deltas** — accumulated into a buffer, `frontend.on_text_delta()` called at 20 FPS throttle (`_RENDER_INTERVAL = 0.05`).
+- **Text commit** — before any tool event, `frontend.on_text_commit()` flushes the buffer to prevent interleaving Markdown with tool output.
+- **Tool calls** — `frontend.on_tool_call()` with tool name and arguments (shell commands show the `cmd` value).
+- **Tool results** — `frontend.on_tool_result()` with title and content.
 - **Result** — captured from `AgentRunResultEvent` as the final return value.
-- **Cancellation cleanup** — `finally` block calls `Live.stop()` on interrupt to restore terminal state.
+- **Cancellation cleanup** — `finally` block calls `frontend.cleanup()` on interrupt.
 
-**Signature:** `_stream_agent_run(agent, *, user_input, deps, message_history, model_settings, usage_limits, usage, deferred_tool_results)` — `usage_limits` and `usage` are parameters (not read from `settings`). The `settings.max_request_limit` read happens only in `chat_loop`.
-
-**Returns:** `(result, streamed_text)` — the caller uses `streamed_text` to skip `Markdown(result.output)` when text was already rendered during streaming.
+**Returns:** `(result, streamed_text)` — `run_turn()` uses `streamed_text` to call `frontend.on_final_output()` when streaming produced no text.
 
 #### Streaming API Decision
 
@@ -249,7 +264,7 @@ user_input
   ├─ empty/blank    → continue (ignore)
   ├─ "!cmd"         → sandbox.run_command(cmd) — direct shell, no LLM
   ├─ "/command"     → dispatch_command() — slash command, no LLM
-  └─ anything else  → _stream_agent_run() — LLM inference with streaming
+  └─ anything else  → run_turn() — LLM inference with streaming
 ```
 
 ### Slash Commands (`_commands.py`)
@@ -285,24 +300,38 @@ COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry
 | `/compact` | LLM-summarise history (see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md)) |
 | `/yolo` | Toggle `deps.auto_confirm` |
 
-### HTTP 400 Error Reflection
+### Provider Error Handling
 
-Small quantized models (e.g. glm-4.7-flash:q8_0 via Ollama) sometimes produce malformed tool-call JSON that the provider rejects with HTTP 400. pydantic-ai raises `ModelHTTPError` which is not covered by the agent's `retries` budget (that only governs `ModelRetry` inside tools).
+Provider errors are classified in `_provider_errors.py` via `classify_provider_error()` and dispatched by `run_turn()`:
 
-The chat loop catches `ModelHTTPError` with `status_code == 400` and uses **reflection** rather than blind retry — aligned with the converged pattern from Codex, Aider, Gemini-CLI, and OpenCode (all classify 400 as non-retryable; recovery uses error feedback to the model):
+| Status | Action | Behavior |
+|--------|--------|----------|
+| 400 | `REFLECT` | Inject error body into history, re-run so model self-corrects |
+| 401, 403 | `ABORT` | Print error, end turn |
+| 404 | `ABORT` | Model not found, end turn |
+| 429 | `BACKOFF_RETRY` | Parse `Retry-After` (default 3s), exponential backoff, retry |
+| 5xx | `BACKOFF_RETRY` | Wait 2s base, exponential backoff, retry |
+| Network/timeout | `BACKOFF_RETRY` | Wait 2s base, exponential backoff, retry |
 
-1. Catch `ModelHTTPError` where `status_code == 400`
-2. Inject a `ModelRequest` with `UserPromptPart` containing the error body into conversation history
-3. Re-run `_stream_agent_run()` with `user_input=None` so the model sees the error and self-corrects
-4. Cap at `settings.model_http_retries` attempts (default 2), then re-raise to the outer handler
+All retries are capped at `settings.model_http_retries` (default 2). Backoff delay is capped at 30s. The HTTP 400 **reflection** pattern (inject error, re-run) is aligned with the converged approach from Codex, Aider, Gemini-CLI, and OpenCode.
 
-Non-400 HTTP errors (429, 5xx) are not caught here — they propagate to the generic `except Exception` handler.
+### Tool Error Classification
+
+Tool errors are classified in `tools/_errors.py` via `classify_google_error()` and `handle_tool_error()`:
+
+| Kind | Behavior | Example |
+|------|----------|---------|
+| `TERMINAL` | Return `{"display": ..., "error": True}` — model sees error, picks alternative | Auth failure, API not enabled |
+| `TRANSIENT` | Raise `ModelRetry` — model retries the call | Rate limit (429), server error (5xx) |
+| `MISUSE` | Raise `ModelRetry` with hint — model corrects parameters | Bad resource ID (404) |
+
+Google, Slack, and Shell tools all dispatch through this shared classification. Slack has a local `_classify_slack_error()` that maps Slack-specific error codes to `ToolErrorKind`.
 
 ### Interrupt Handling
 
 #### Dangling Tool Call Patching
 
-When Ctrl+C fires during `_stream_agent_run()`, the LLM may have been mid-tool-call. `_patch_dangling_tool_calls()` scans the last message in history — if it's a `ModelResponse` with `ToolCallPart`s but no matching `ToolReturnPart`, the function appends a synthetic `ModelRequest` with `ToolReturnPart`(s) carrying an "Interrupted by user." error message.
+When Ctrl+C fires during `_stream_events()`, the LLM may have been mid-tool-call. `_patch_dangling_tool_calls()` (in `_orchestrate.py`) scans the last message in history — if it's a `ModelResponse` with `ToolCallPart`s but no matching `ToolReturnPart`, the function appends a synthetic `ModelRequest` with `ToolReturnPart`(s) carrying an "Interrupted by user." error message.
 
 ```python
 def _patch_dangling_tool_calls(messages, error_message="Interrupted by user."):
@@ -327,25 +356,14 @@ Python 3.11+ `asyncio.run()` delivers `asyncio.CancelledError` instead of `Keybo
 **Solution:** Catch both: `except (KeyboardInterrupt, asyncio.CancelledError)`
 
 **Problem 2 — Synchronous approval prompt:** `Prompt.ask()` → `input()` is synchronous; `CancelledError` cannot be injected into C-level `input()`.
-**Solution:** Temporarily restore Python's default SIGINT handler during approval, then restore asyncio's handler:
-
-```python
-async def _handle_approvals(agent, deps, result, model_settings):
-    prev_handler = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    try:
-        for call in result.output.approvals:
-            ...  # Prompt.ask() — Ctrl-C raises KeyboardInterrupt normally
-    finally:
-        signal.signal(signal.SIGINT, prev_handler)
-```
+**Solution:** `TerminalFrontend.prompt_approval()` temporarily restores Python's default SIGINT handler during the synchronous `Prompt.ask()` call, then restores asyncio's handler in `finally`.
 
 **Interrupt points:**
 
 | Phase | Code style | SIGINT delivers | Caught by |
 |-------|-----------|-----------------|-----------|
-| `_stream_agent_run()` | async | `CancelledError` | Inner `except (KeyboardInterrupt, CancelledError)` |
-| Approval `Prompt.ask()` | sync (handler swapped) | `KeyboardInterrupt` | Same inner except block |
+| `_stream_events()` | async | `CancelledError` | `run_turn()` except block |
+| Approval `prompt_approval()` | sync (handler swapped) | `KeyboardInterrupt` | `run_turn()` except block |
 | `session.prompt_async()` | async (prompt_toolkit) | `CancelledError` | Outer except (double-tap logic) |
 | After task cancellation | `asyncio.run()` top-level | `KeyboardInterrupt` | Safety-net in `chat()` |
 
@@ -353,7 +371,7 @@ async def _handle_approvals(agent, deps, result, model_settings):
 
 | Context | Action | Result |
 |---------|--------|--------|
-| During `_stream_agent_run()` | Ctrl+C | Cancels operation, patches dangling tool calls, returns to prompt |
+| During `run_turn()` | Ctrl+C | Cancels operation, patches dangling tool calls, returns to prompt |
 | During approval prompt | Ctrl+C | Cancels approval, returns to prompt |
 | At prompt | Ctrl+C (1st) | Prints "Press Ctrl+C again to exit" |
 | At prompt | Ctrl+C (2nd within 2s) | Exits session |
@@ -362,7 +380,7 @@ async def _handle_approvals(agent, deps, result, model_settings):
 
 ### Conversation Memory Integration
 
-Each turn's full message history is accumulated via `result.all_messages()` and passed to the next `_stream_agent_run()` call. Two history processors run automatically before each model request — see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md) for details.
+Each turn's full message history is accumulated via `turn_result.messages` and passed to the next `run_turn()` call. Two history processors run automatically before each model request — see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md) for details.
 
 ### REPL Features
 
@@ -389,13 +407,17 @@ Each turn's full message history is accumulated via `result.all_messages()` and 
 | Setting | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` | Caps LLM round-trips per user turn (loop guard) |
-| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max reflection attempts when model produces malformed tool-call JSON (HTTP 400) |
+| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn (400 reflection, 429/5xx backoff, network) |
 
 ## 4. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/main.py` | CLI entry point, chat loop, `_stream_agent_run()`, `_handle_approvals()`, OTel setup |
+| `co_cli/main.py` | CLI entry point, chat loop, OTel setup |
+| `co_cli/_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()`, `_patch_dangling_tool_calls()` |
+| `co_cli/_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()`, `_parse_retry_after()` |
+| `co_cli/display.py` | Themed Rich Console, semantic styles, `TerminalFrontend` |
+| `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `co_cli/_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
 | `co_cli/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 

@@ -1,14 +1,10 @@
 import asyncio
-import json
-import signal
 import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
 
 import typer
-from rich.live import Live
-from rich.markdown import Markdown
 from rich.panel import Panel
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -17,24 +13,16 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.exceptions import ModelHTTPError
-from pydantic_ai.messages import (
-    FunctionToolCallEvent, FunctionToolResultEvent,
-    ModelRequest, PartDeltaEvent, TextPartDelta, ThinkingPartDelta,
-    ToolCallPart, ToolReturnPart, UserPromptPart,
-)
+from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
-from pydantic_ai.usage import UsageLimits
-from rich.prompt import Prompt
 
-from co_cli._approval import _is_safe_command
+from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.sandbox import SandboxProtocol, DockerSandbox, SubprocessBackend
 from co_cli.telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
-from co_cli.display import console, set_theme, PROMPT_CHAR
+from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli.banner import display_welcome_banner
 from co_cli.status import get_status, render_status_table
 from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
@@ -125,240 +113,12 @@ def create_deps() -> CoDeps:
     )
 
 
-def _patch_dangling_tool_calls(
-    messages: list, error_message: str = "Interrupted by user."
-) -> list:
-    """Patch message history if last response has unanswered tool calls.
-
-    LLM models expect both a tool call and its corresponding return in
-    history. Without this patch, the next agent.run() would fail.
-    """
-    if not messages:
-        return messages
-
-    last_msg = messages[-1]
-    if not (hasattr(last_msg, "kind") and last_msg.kind == "response"):
-        return messages
-
-    tool_calls = [p for p in last_msg.parts if isinstance(p, ToolCallPart)]
-    if not tool_calls:
-        return messages
-
-    return_parts = [
-        ToolReturnPart(
-            tool_name=tc.tool_name,
-            tool_call_id=tc.tool_call_id,
-            content=error_message,
-        )
-        for tc in tool_calls
-    ]
-    return messages + [ModelRequest(parts=return_parts)]
-
-
-_RENDER_INTERVAL = 0.05  # 20 FPS — matches aider's baseline
-
-
-async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
-                            model_settings, usage_limits, usage=None,
-                            deferred_tool_results=None, verbose=False):
-    """Run agent with streaming — display tool events and Markdown text inline."""
-    pending_cmds: dict[str, str] = {}
-    result = None
-    streamed_text = False
-    text_buffer = ""
-    live: Live | None = None
-    last_render = 0.0
-    # Thinking state (verbose mode only)
-    thinking_buffer = ""
-    thinking_live: Live | None = None
-    thinking_last_render = 0.0
-
-    def _flush_thinking():
-        """Stop thinking Live and print final panel."""
-        nonlocal thinking_live, thinking_buffer, thinking_last_render
-        if thinking_live:
-            thinking_live.stop()
-            thinking_live = None
-        if thinking_buffer:
-            console.print(Panel(
-                thinking_buffer.rstrip(),
-                title="thinking", border_style="thinking",
-            ))
-            thinking_buffer = ""
-            thinking_last_render = 0.0
-
-    try:
-        async for event in agent.run_stream_events(
-            user_input, deps=deps, message_history=message_history,
-            model_settings=model_settings,
-            usage_limits=usage_limits,
-            usage=usage,
-            deferred_tool_results=deferred_tool_results,
-        ):
-            # -- Thinking deltas (verbose only) --------------------------------
-            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, ThinkingPartDelta):
-                if not verbose or not event.delta.content_delta:
-                    continue
-                thinking_buffer += event.delta.content_delta
-                now = time.monotonic()
-                if now - thinking_last_render >= _RENDER_INTERVAL:
-                    renderable = Panel(
-                        thinking_buffer.rstrip() or "...",
-                        title="thinking", border_style="thinking",
-                    )
-                    if thinking_live is None:
-                        thinking_live = Live(
-                            renderable, console=console, auto_refresh=False,
-                        )
-                        thinking_live.start()
-                    else:
-                        thinking_live.update(renderable)
-                        thinking_live.refresh()
-                    thinking_last_render = now
-                continue
-
-            # -- Text deltas ---------------------------------------------------
-            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                # Flush thinking panel before first text token
-                if thinking_live or thinking_buffer:
-                    _flush_thinking()
-                text_buffer += event.delta.content_delta
-                streamed_text = True
-                now = time.monotonic()
-                if now - last_render >= _RENDER_INTERVAL:
-                    if live is None:
-                        live = Live(
-                            Markdown(text_buffer), console=console,
-                            auto_refresh=False,
-                        )
-                        live.start()
-                    else:
-                        live.update(Markdown(text_buffer))
-                        live.refresh()
-                    last_render = now
-                continue
-
-            # Commit accumulated state before tool/result output
-            if thinking_live or thinking_buffer:
-                _flush_thinking()
-            if live:
-                live.update(Markdown(text_buffer))
-                live.refresh()
-                live.stop()
-                live = None
-                text_buffer = ""
-                last_render = 0.0
-
-            if isinstance(event, FunctionToolCallEvent):
-                tool = event.part.tool_name
-                if tool == "run_shell_command":
-                    cmd = event.part.args_as_dict().get("cmd", "")
-                    pending_cmds[event.tool_call_id] = cmd
-                    console.print(f"[dim]  {tool}({cmd})[/dim]")
-                else:
-                    console.print(f"[dim]  {tool}()[/dim]")
-
-            elif isinstance(event, FunctionToolResultEvent):
-                if not isinstance(event.result, ToolReturnPart):
-                    continue
-                content = event.result.content
-                if isinstance(content, str) and content.strip():
-                    title = pending_cmds.get(event.tool_call_id, event.result.tool_name)
-                    console.print(Panel(
-                        content.rstrip(), title=f"$ {title}", border_style="shell",
-                    ))
-                elif isinstance(content, dict) and "display" in content:
-                    console.print(content["display"])
-
-            elif isinstance(event, AgentRunResultEvent):
-                result = event.result
-
-        # Normal completion — final render
-        if thinking_live or thinking_buffer:
-            _flush_thinking()
-        if live:
-            live.update(Markdown(text_buffer))
-            live.refresh()
-            live.stop()
-            live = None
-    finally:
-        # Cancellation cleanup — just stop Live instances to restore terminal
-        for lv in (thinking_live, live):
-            if lv:
-                try:
-                    lv.stop()
-                except Exception:
-                    pass
-
-    return result, streamed_text
-
-
-_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
-
-
-async def _handle_approvals(agent, deps, result, model_settings, usage_limits,
-                            usage=None, verbose=False):
-    """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
-    approvals = DeferredToolResults()
-
-    # Temporarily restore the default SIGINT handler during the synchronous
-    # Prompt.ask() calls.  asyncio.run() replaces SIGINT with a handler that
-    # cancels the main task, which cannot interrupt a blocking input() call.
-    # Restoring default_int_handler lets Ctrl-C raise KeyboardInterrupt.
-    prev_handler = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    try:
-        for call in result.output.approvals:
-            args = call.args
-            if isinstance(args, str):
-                args = json.loads(args)
-            args = args or {}
-            args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-            desc = f"{call.tool_name}({args_str})"
-
-            if deps.auto_confirm:
-                approvals.approvals[call.tool_call_id] = True
-                continue
-
-            # Auto-approve safe shell commands only when sandbox provides isolation.
-            # Without a sandbox, approval is the security layer — all commands prompt.
-            if call.tool_name == "run_shell_command":
-                cmd = args.get("cmd", "")
-                if (
-                    deps.sandbox.isolation_level != "none"
-                    and _is_safe_command(cmd, deps.shell_safe_commands)
-                ):
-                    approvals.approvals[call.tool_call_id] = True
-                    continue
-
-            console.print(f"Approve [bold]{desc}[/bold]?" + _CHOICES_HINT, end=" ")
-            choice = Prompt.ask(
-                "", choices=["y", "n", "a"], default="n",
-                show_choices=False, show_default=False, console=console,
-            )
-            if choice == "a":
-                deps.auto_confirm = True
-                console.print("[bold orange3]YOLO mode enabled — auto-approving for this session[/bold orange3]")
-                approvals.approvals[call.tool_call_id] = True
-            elif choice == "y":
-                approvals.approvals[call.tool_call_id] = True
-            else:
-                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-    finally:
-        signal.signal(signal.SIGINT, prev_handler)
-
-    return await _stream_agent_run(
-        agent, deps=deps, message_history=result.all_messages(),
-        model_settings=model_settings, usage_limits=usage_limits,
-        usage=usage, deferred_tool_results=approvals, verbose=verbose,
-    )
-
-
 async def chat_loop(verbose: bool = False):
     agent, model_settings, tool_names = get_agent(
         web_permission_mode=settings.web_permission_mode,
     )
     deps = create_deps()
+    frontend = TerminalFrontend()
     completer = WordCompleter(
         [f"/{name}" for name in COMMANDS],
         sentence=True,
@@ -414,67 +174,20 @@ async def chat_loop(verbose: bool = False):
                             message_history = new_history
                         continue
 
-                console.print("[dim]Co is thinking...[/dim]")
-                result = None
-                streamed_text = False
-                http_retries_left = settings.model_http_retries
-                current_input = user_input
-                turn_limits = UsageLimits(request_limit=settings.max_request_limit)
-                turn_usage = None  # cumulative RunUsage across all hops
-                while True:
-                    try:
-                        result, streamed_text = await _stream_agent_run(
-                            agent, user_input=current_input, deps=deps,
-                            message_history=message_history, model_settings=model_settings,
-                            usage_limits=turn_limits, usage=turn_usage,
-                            verbose=verbose,
-                        )
-                        turn_usage = result.usage()
-
-                        # Handle deferred tool approvals (loop: resumed run may trigger more)
-                        while isinstance(result.output, DeferredToolRequests):
-                            result, streamed_text = await _handle_approvals(
-                                agent, deps, result, model_settings,
-                                turn_limits, usage=turn_usage,
-                                verbose=verbose,
-                            )
-                            turn_usage = result.usage()
-
-                        message_history = result.all_messages()
-                        if not streamed_text and isinstance(result.output, str):
-                            console.print(Markdown(result.output))
-                        break
-                    except ModelHTTPError as e:
-                        if e.status_code == 400 and http_retries_left > 0:
-                            http_retries_left -= 1
-                            attempt = settings.model_http_retries - http_retries_left
-                            console.print(
-                                f"[dim]Tool call rejected (HTTP 400), "
-                                f"reflecting to model… "
-                                f"({attempt}/{settings.model_http_retries})[/dim]"
-                            )
-                            await asyncio.sleep(0.5)
-                            reflection = ModelRequest(parts=[UserPromptPart(
-                                content=(
-                                    "Your previous tool call was rejected by the "
-                                    f"model provider: {e.body}. Please reformulate "
-                                    "your tool call with valid JSON arguments."
-                                ),
-                            )])
-                            message_history = message_history + [reflection]
-                            current_input = None
-                            continue
-                        raise
-                    except (KeyboardInterrupt, asyncio.CancelledError):
-                        # Cancel current operation, don't count toward exit.
-                        # asyncio.run() handles SIGINT by cancelling the main task
-                        # (CancelledError), not by raising KeyboardInterrupt directly.
-                        # Use result.all_messages() when available so dangling tool
-                        # calls from the current turn are patched correctly.
-                        msgs = result.all_messages() if result else message_history
-                        message_history = _patch_dangling_tool_calls(msgs)
-                        console.print("\n[dim]Interrupted.[/dim]")
-                        break
+                # LLM turn — delegated to _orchestrate.run_turn()
+                frontend.on_status("Co is thinking...")
+                turn_result = await run_turn(
+                    agent=agent,
+                    user_input=user_input,
+                    deps=deps,
+                    message_history=message_history,
+                    model_settings=model_settings,
+                    max_request_limit=settings.max_request_limit,
+                    http_retries=settings.model_http_retries,
+                    verbose=verbose,
+                    frontend=frontend,
+                )
+                message_history = turn_result.messages
 
             except EOFError:
                 break

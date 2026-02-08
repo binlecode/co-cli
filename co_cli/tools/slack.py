@@ -7,6 +7,7 @@ from slack_sdk.errors import SlackApiError
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._errors import ToolErrorKind, handle_tool_error
 
 _SLACK_ERROR_HINTS: dict[str, str] = {
     "channel_not_found": "Channel not found. Check the name or use a channel ID.",
@@ -29,10 +30,19 @@ def _get_slack_client(ctx: RunContext[CoDeps]):
     return client
 
 
-def _slack_error_handler(e: SlackApiError) -> str:
-    """Map SlackApiError to an actionable hint message."""
+def _classify_slack_error(e: SlackApiError) -> tuple[ToolErrorKind, str]:
+    """Classify a SlackApiError into (kind, message)."""
     code = e.response.get("error", "") if e.response else ""
-    return _SLACK_ERROR_HINTS.get(code, f"Slack API error: {e}")
+    hint = _SLACK_ERROR_HINTS.get(code, f"Slack API error: {e}")
+
+    if code in ("invalid_auth", "token_revoked", "not_authed", "account_inactive"):
+        return ToolErrorKind.TERMINAL, hint
+    if code == "ratelimited":
+        return ToolErrorKind.TRANSIENT, hint
+    if code in ("channel_not_found", "thread_not_found", "no_text", "msg_too_long"):
+        return ToolErrorKind.MISUSE, hint
+    # Default to transient for unknown codes
+    return ToolErrorKind.TRANSIENT, hint
 
 
 def _format_ts(ts: str) -> str:
@@ -91,7 +101,8 @@ def send_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict
     except ModelRetry:
         raise
     except SlackApiError as e:
-        raise ModelRetry(_slack_error_handler(e))
+        kind, message = _classify_slack_error(e)
+        handle_tool_error(kind, message)
     except Exception as e:
         raise ModelRetry(f"Slack API error: {e}")
 
@@ -138,7 +149,8 @@ def list_slack_channels(
     except ModelRetry:
         raise
     except SlackApiError as e:
-        raise ModelRetry(_slack_error_handler(e))
+        kind, message = _classify_slack_error(e)
+        handle_tool_error(kind, message)
     except Exception as e:
         raise ModelRetry(f"Slack API error: {e}")
 
@@ -177,7 +189,8 @@ def list_slack_messages(
     except ModelRetry:
         raise
     except SlackApiError as e:
-        raise ModelRetry(_slack_error_handler(e))
+        kind, message = _classify_slack_error(e)
+        handle_tool_error(kind, message)
     except Exception as e:
         raise ModelRetry(f"Slack API error: {e}")
 
@@ -220,7 +233,8 @@ def list_slack_replies(
     except ModelRetry:
         raise
     except SlackApiError as e:
-        raise ModelRetry(_slack_error_handler(e))
+        kind, message = _classify_slack_error(e)
+        handle_tool_error(kind, message)
     except Exception as e:
         raise ModelRetry(f"Slack API error: {e}")
 
@@ -275,6 +289,7 @@ def list_slack_users(ctx: RunContext[CoDeps], limit: int = 30) -> dict[str, Any]
     except ModelRetry:
         raise
     except SlackApiError as e:
-        raise ModelRetry(_slack_error_handler(e))
+        kind, message = _classify_slack_error(e)
+        handle_tool_error(kind, message)
     except Exception as e:
         raise ModelRetry(f"Slack API error: {e}")

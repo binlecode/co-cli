@@ -9,7 +9,10 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
-from co_cli.tools._errors import GOOGLE_NOT_CONFIGURED, GOOGLE_API_NOT_ENABLED, google_api_error
+from co_cli.tools._errors import (
+    GOOGLE_NOT_CONFIGURED, terminal_error,
+    classify_google_error, handle_tool_error,
+)
 
 
 def _format_messages(service, message_ids: list[dict]) -> str:
@@ -42,11 +45,14 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 
 
 def _get_gmail_service(ctx: RunContext[CoDeps]):
-    """Extract and validate Gmail service from context."""
+    """Extract and validate Gmail service from context.
+
+    Returns (service, None) on success, or (None, error_dict) for terminal config errors.
+    """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Gmail"))
-    return build("gmail", "v1", credentials=creds)
+        return None, terminal_error(GOOGLE_NOT_CONFIGURED.format(service="Gmail"))
+    return build("gmail", "v1", credentials=creds), None
 
 
 def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]:
@@ -59,7 +65,9 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
     Args:
         max_results: Maximum number of emails to return (default 5).
     """
-    service = _get_gmail_service(ctx)
+    service, err = _get_gmail_service(ctx)
+    if err:
+        return err
 
     try:
         response = (
@@ -76,12 +84,8 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
     except ModelRetry:
         raise
     except Exception as e:
-        msg = str(e)
-        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-            raise ModelRetry(
-                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
-            )
-        raise ModelRetry(google_api_error("Gmail", e))
+        kind, message = classify_google_error(e)
+        return handle_tool_error(kind, message)
 
 
 def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
@@ -95,7 +99,9 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         query: Gmail search query (e.g. "from:alice subject:invoice", "is:unread", "newer_than:2d").
         max_results: Maximum number of emails to return (default 5).
     """
-    service = _get_gmail_service(ctx)
+    service, err = _get_gmail_service(ctx)
+    if err:
+        return err
 
     try:
         response = (
@@ -112,12 +118,8 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
     except ModelRetry:
         raise
     except Exception as e:
-        msg = str(e)
-        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-            raise ModelRetry(
-                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
-            )
-        raise ModelRetry(google_api_error("Gmail", e))
+        kind, message = classify_google_error(e)
+        return handle_tool_error(kind, message)
 
 
 def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str:
@@ -128,7 +130,9 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         subject: Email subject line.
         body: Email body text.
     """
-    service = _get_gmail_service(ctx)
+    service, err = _get_gmail_service(ctx)
+    if err:
+        return err
 
     try:
         message = MIMEText(body)
@@ -141,9 +145,5 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
     except ModelRetry:
         raise
     except Exception as e:
-        msg = str(e)
-        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-            raise ModelRetry(
-                GOOGLE_API_NOT_ENABLED.format(service="Gmail", api_id="gmail.googleapis.com")
-            )
-        raise ModelRetry(google_api_error("Gmail", e))
+        kind, message = classify_google_error(e)
+        return handle_tool_error(kind, message)

@@ -52,6 +52,28 @@ Peer convergence (2+ top systems agree):
 
 ---
 
+## Phase 1 bugfix: Transient thinking Live
+
+**Symptoms:**
+1. Two identical thinking panels rendered (duplicate)
+2. First few characters of text output truncated (e.g. "AGENTS.md" → "ENTS.md")
+
+**Root cause:** `thinking_live` used `transient=False` (Rich default). `_flush_thinking()` called `stop()` which left the stale Live render on screen, then `console.print(Panel(...))` added a second copy. The extra panel content threw off Rich's cursor-up line math for the subsequent text `Live`, overwriting first characters.
+
+**Fix:** `transient=True` on `thinking_live` only. Transient Live clears on stop, so only `_flush_thinking()`'s static `console.print(Panel(...))` remains. The text `Live` stays non-transient — its cursor math is correct once the duplicate thinking panel is gone, and non-transient avoids a visible flash on stop.
+
+### Items
+
+- [x] Add `transient=True` to `thinking_live` creation
+
+### File changes
+
+| File | Change |
+|---|---|
+| `co_cli/main.py` | `transient=True` on `thinking_live` |
+
+---
+
 ## Phase 2: Terminal ModelRetry for config/auth errors
 
 **Context:** The thinking display makes wrong-tool-choice *visible* but doesn't fix it. The deeper issue is that `ModelRetry` for config/auth errors causes blind retries (same tool called 4 times) instead of reflecting the error back so the model can pick a different tool.

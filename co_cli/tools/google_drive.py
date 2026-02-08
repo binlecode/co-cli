@@ -7,7 +7,10 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
-from co_cli.tools._errors import GOOGLE_NOT_CONFIGURED, GOOGLE_API_NOT_ENABLED, google_api_error
+from co_cli.tools._errors import (
+    GOOGLE_NOT_CONFIGURED, terminal_error,
+    classify_google_error, handle_tool_error,
+)
 
 
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
@@ -26,7 +29,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Drive"))
+        return terminal_error(GOOGLE_NOT_CONFIGURED.format(service="Drive"))
     service = build("drive", "v3", credentials=creds)
 
     try:
@@ -83,15 +86,11 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
     except ModelRetry:
         raise
     except Exception as e:
-        msg = str(e)
-        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-            raise ModelRetry(
-                GOOGLE_API_NOT_ENABLED.format(service="Drive", api_id="drive.googleapis.com")
-            )
-        raise ModelRetry(google_api_error("Drive", e))
+        kind, message = classify_google_error(e)
+        return handle_tool_error(kind, message)
 
 
-def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
+def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, Any]:
     """Fetch the content of a text-based file from Google Drive.
 
     Args:
@@ -99,7 +98,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Drive"))
+        return terminal_error(GOOGLE_NOT_CONFIGURED.format(service="Drive"))
     service = build("drive", "v3", credentials=creds)
 
     try:
@@ -112,9 +111,5 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str:
     except ModelRetry:
         raise
     except Exception as e:
-        msg = str(e)
-        if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-            raise ModelRetry(
-                GOOGLE_API_NOT_ENABLED.format(service="Drive", api_id="drive.googleapis.com")
-            )
-        raise ModelRetry(google_api_error("Drive", e))
+        kind, message = classify_google_error(e)
+        return handle_tool_error(kind, message)

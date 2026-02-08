@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-02-08
+
+### Added
+- **Orchestration extraction** (`co_cli/_orchestrate.py`): Extracted the ~170-line streaming + approval state machine from `main.py` into a standalone module. `FrontendProtocol` (`@runtime_checkable`) decouples display from orchestration — `TerminalFrontend` (Rich) for the CLI, `RecordingFrontend` for tests. `TurnResult` dataclass returned by `run_turn()`. `_stream_events()`, `_handle_approvals()`, and `_patch_dangling_tool_calls()` moved here.
+- **Provider error classification** (`co_cli/_provider_errors.py`): `ProviderErrorAction` enum (REFLECT/BACKOFF_RETRY/ABORT) and `classify_provider_error()` for `ModelHTTPError`/`ModelAPIError`. HTTP 429 parses `Retry-After` header. Exponential backoff capped at 30s. All retries bounded by `settings.model_http_retries`.
+- **Tool error classification** (`co_cli/tools/_errors.py`): `ToolErrorKind` enum (TERMINAL/TRANSIENT/MISUSE), `classify_google_error()` inspects HttpError status codes and string patterns, `handle_tool_error()` dispatches to `terminal_error()` or `ModelRetry`.
+- **`TerminalFrontend`** in `display.py`: Implements `FrontendProtocol` with Rich `Live`, `Panel`, `Markdown`, `Prompt`. SIGINT handler swap for synchronous approval prompts.
+- **`RecordingFrontend`** in `tests/test_orchestrate.py`: Records `(event_type, payload)` tuples for assertions. Configurable `approval_policy`.
+- **`tests/test_errors.py`**: 25 functional tests — `classify_google_error` (9 cases), `handle_tool_error` (3), `classify_provider_error` (8), `_parse_retry_after` (5).
+- **`tests/test_orchestrate.py`**: 10 functional tests — protocol compliance, event recording, approval policies, `_stream_events` regression coverage, `_patch_dangling_tool_calls` from new location.
+- **Eval improvement**: `er-drive-01` error recovery case now passes 3/3 (was 0/3) after `terminal_error()` fix — model no longer loops on unconfigured Drive API.
+
+### Changed
+- **`co_cli/main.py`**: LLM turn block collapsed from ~60 lines to a single `run_turn()` call. Removed `_stream_agent_run`, `_handle_approvals`, `_patch_dangling_tool_calls`, `_CHOICES_HINT`, `_RENDER_INTERVAL`.
+- **`co_cli/tools/google_drive.py`, `google_gmail.py`, `google_calendar.py`**: Replaced ad-hoc `except Exception` blocks with `classify_google_error()` + `handle_tool_error()`.
+- **`co_cli/tools/shell.py`**: Split single `except Exception` into `RuntimeError` (timeout/permission) vs generic, with specific hints.
+- **`co_cli/tools/slack.py`**: Added `_classify_slack_error()` mapping Slack error codes to `ToolErrorKind`. All `except SlackApiError` blocks use `handle_tool_error()`.
+- **`tests/test_approval.py`**: Import updated from `co_cli.main` to `co_cli._orchestrate`.
+- **`docs/DESIGN-02-chat-loop.md`**: Rewritten for `FrontendProtocol`, `run_turn()`, provider error table, tool error classification, updated all function/diagram references.
+- **`docs/DESIGN-co-cli.md`**: Added `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` to module table. Updated error handling and tool convention docs.
+- **`docs/DESIGN-10-tool-google.md`**: Updated error handling section for `terminal_error()` vs `ModelRetry` strategy.
+- **`docs/todo-roi.md`**: Moved agent tool-call hardening to Done section.
+- **`evals/eval_tool_calling-data.json`, `eval_tool_calling-result.md`**: Updated results — overall accuracy 100% (26/26).
+- **`scripts/eval_tool_calling.py`**: Error recovery request_limit bumped to 5.
+
+### Removed
+- **`docs/TODO-agent-toolcall-recursive-flow.md`**: All Phase C+D items implemented.
+- **`docs/TODO-approval-interrupt-tests.md`**: All items implemented in `tests/test_approval.py`.
+
+---
+
 ## [0.3.6] - 2026-02-08
 
 ### Added

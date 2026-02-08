@@ -8,15 +8,21 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
-from co_cli.tools._errors import GOOGLE_NOT_CONFIGURED, GOOGLE_API_NOT_ENABLED, google_api_error
+from co_cli.tools._errors import (
+    GOOGLE_NOT_CONFIGURED, terminal_error,
+    classify_google_error, handle_tool_error,
+)
 
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
-    """Extract and validate Calendar service from context."""
+    """Extract and validate Calendar service from context.
+
+    Returns (service, None) on success, or (None, error_dict) for terminal config errors.
+    """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        raise ModelRetry(GOOGLE_NOT_CONFIGURED.format(service="Calendar"))
-    return build("calendar", "v3", credentials=creds)
+        return None, terminal_error(GOOGLE_NOT_CONFIGURED.format(service="Calendar"))
+    return build("calendar", "v3", credentials=creds), None
 
 
 def _format_events(events: list[dict]) -> str:
@@ -60,13 +66,9 @@ def _format_events(events: list[dict]) -> str:
 
 
 def _handle_calendar_error(e: Exception):
-    """Raise ModelRetry with actionable message for calendar errors."""
-    msg = str(e)
-    if "has not been enabled" in msg or "accessNotConfigured" in msg.lower():
-        raise ModelRetry(
-            GOOGLE_API_NOT_ENABLED.format(service="Calendar", api_id="calendar-json.googleapis.com")
-        )
-    raise ModelRetry(google_api_error("Calendar", e))
+    """Classify and dispatch calendar errors via shared error helpers."""
+    kind, message = classify_google_error(e)
+    return handle_tool_error(kind, message)
 
 
 def _fetch_events(service, **kwargs) -> list[dict]:
@@ -111,7 +113,9 @@ def list_calendar_events(
         days_ahead: How many days ahead to include (default 1 = today only).
         max_results: Maximum number of events to return (default 25).
     """
-    service = _get_calendar_service(ctx)
+    service, err = _get_calendar_service(ctx)
+    if err:
+        return err
 
     try:
         now = datetime.now(timezone.utc)
@@ -142,7 +146,9 @@ def list_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        _handle_calendar_error(e)
+        result = _handle_calendar_error(e)
+        if result:
+            return result
 
 
 def search_calendar_events(
@@ -164,7 +170,9 @@ def search_calendar_events(
         days_ahead: How many days ahead to search (default 30).
         max_results: Maximum number of events to return (default 25).
     """
-    service = _get_calendar_service(ctx)
+    service, err = _get_calendar_service(ctx)
+    if err:
+        return err
 
     try:
         now = datetime.now(timezone.utc)
@@ -192,4 +200,6 @@ def search_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        _handle_calendar_error(e)
+        result = _handle_calendar_error(e)
+        if result:
+            return result

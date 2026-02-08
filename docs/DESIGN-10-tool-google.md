@@ -8,7 +8,7 @@ nav_order: 3
 
 ## 1. What & How
 
-The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list and search events). All tools use `RunContext[CoDeps]` with `ModelRetry` for self-healing errors. Credentials are resolved lazily on first Google tool call via `get_cached_google_creds(ctx.deps)`, cached on the `CoDeps` instance for session lifecycle.
+The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list and search events). All tools use `RunContext[CoDeps]` with two error strategies: `terminal_error()` for non-retryable config failures and `ModelRetry` for transient API errors. Credentials are resolved lazily on first Google tool call via `get_cached_google_creds(ctx.deps)`, cached on the `CoDeps` instance for session lifecycle.
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -17,7 +17,7 @@ The Google tools provide agent access to three Google Cloud services: Drive (sea
 │  tool(ctx: RunContext[CoDeps], ...)                   │
 │    ├── creds = get_cached_google_creds(ctx.deps)      │
 │    │       # cached on CoDeps, resolved once           │
-│    ├── if not creds: raise ModelRetry("Not configured")│
+│    ├── if not creds: return terminal_error("Not configured")│
 │    ├── service = build("drive", "v3", credentials=creds)│
 │    └── service.files().list(...).execute()             │
 └──────────────────────────────────────────────────────┘
@@ -85,14 +85,20 @@ All Google tools return `dict[str, Any]` with a `display` field (pre-formatted s
 
 ### Error Handling
 
-All tools use the `ModelRetry` re-raise pattern to prevent generic `except` blocks from swallowing retry signals. API-not-enabled errors return actionable `ModelRetry` messages with the exact `gcloud services enable` command.
+Errors are classified as **terminal** (config/auth — retrying won't help) or **transient** (network/quota — retry is appropriate):
 
-| Scenario | ModelRetry Message |
-|----------|-------------------|
-| No credentials | "Not configured. Set google_credentials_path..." |
-| API not enabled | "Run: gcloud services enable drive.googleapis.com" |
-| Empty results | "No results. Try different keywords." |
-| Auth expired | "API error: ..." |
+| Scenario | Strategy | What the model sees |
+|----------|----------|-------------------|
+| No credentials | `terminal_error()` → return error dict | Tool result with `error: true` — model can pick a different tool |
+| API not enabled | `terminal_error()` → return error dict | Same — stops retry loop immediately |
+| Network/quota error | `ModelRetry(...)` → pydantic-ai retries | Error fed back for self-correction |
+| Empty results | Normal return | `{"count": 0}` — not an error |
+
+**Why not `ModelRetry` for config errors?** `ModelRetry` means "you called this wrong, fix your parameters" — pydantic-ai retries the same tool. But missing credentials are a terminal condition: no parameter change will fix it. The model loops 3x on the same tool and never produces a text response. Returning an error dict stops the loop immediately — the model sees the error as a tool result and can tell the user or route to an alternative tool.
+
+Shared helpers in `_errors.py`:
+- `terminal_error(message)` → `{"display": message, "error": True}` (non-retryable)
+- `google_api_error(service, error)` → formatted string for `ModelRetry` (retryable)
 
 ### Human-in-the-Loop
 
@@ -110,7 +116,7 @@ Tools never import `settings` — they access credentials via `ctx.deps`. Write 
 | Registration | `agent.tool_plain()` | `agent.tool()` |
 | Client access | `get_drive_service()` per call | `ctx.deps` via lazy `get_cached_google_creds()` |
 | Settings import | `from co_cli.config import settings` | None in tools |
-| Error handling | Return error strings | `raise ModelRetry(...)` |
+| Error handling | Return error strings | `terminal_error()` for config, `ModelRetry` for transient |
 | File layout | `drive.py` + `comm.py` (junk drawer) | `google_drive.py` + `google_gmail.py` + `google_calendar.py` |
 
 </details>
@@ -156,5 +162,6 @@ Tools never import `settings` — they access credentials via `ctx.deps`. Write 
 | `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
 | `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
+| `co_cli/tools/_errors.py` | Shared error helpers: `terminal_error()`, `GOOGLE_NOT_CONFIGURED`, `GOOGLE_API_NOT_ENABLED` |
 | `co_cli/deps.py` | CoDeps with `google_credentials_path`, `google_creds` fields |
 | `tests/test_google_cloud.py` | Functional tests |
