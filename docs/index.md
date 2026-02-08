@@ -22,8 +22,9 @@ Start with the [System Design](DESIGN-co-cli.md) overview, then explore componen
 - [06 — Conversation Memory](DESIGN-06-conversation-memory.md) — History processors, summarisation
 - [07 — Theming & ASCII Art](DESIGN-07-theming-ascii.md) — Light/dark themes, semantic styles
 
-### Tools (08–11)
+### Tools (08–12)
 - [08 — Shell Tool & Sandbox](DESIGN-08-tool-shell.md) — Docker sandbox, subprocess fallback
 - [09 — Obsidian Vault Tools](DESIGN-09-tool-obsidian.md) — Vault search, path traversal protection
 - [10 — Google Tools](DESIGN-10-tool-google.md) — Drive, Gmail, Calendar
 - [11 — Slack Tool](DESIGN-11-tool-slack.md) — Channel/message/user tools
+- [12 — Web Tools](DESIGN-12-tool-web-search.md) — Brave Search + URL fetch
