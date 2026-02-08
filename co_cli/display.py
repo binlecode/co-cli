@@ -8,6 +8,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.prompt import Prompt
+from rich.text import Text
 from rich.theme import Theme
 
 from co_cli.config import settings
@@ -168,10 +169,7 @@ class TerminalFrontend:
             self._live = None
 
     def on_thinking_delta(self, accumulated: str) -> None:
-        renderable = Panel(
-            accumulated or "...",
-            title="thinking", border_style="thinking",
-        )
+        renderable = Text(accumulated or "...", style="thinking")
         if self._thinking_live is None:
             self._thinking_live = Live(
                 renderable, console=console, auto_refresh=False, transient=True,
@@ -186,9 +184,7 @@ class TerminalFrontend:
             self._thinking_live.stop()
             self._thinking_live = None
         if final:
-            console.print(Panel(
-                final, title="thinking", border_style="thinking",
-            ))
+            console.print(Text(final, style="thinking"))
 
     def on_tool_call(self, name: str, args_display: str) -> None:
         if args_display:

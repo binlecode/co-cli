@@ -18,13 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Eval improvement**: `er-drive-01` error recovery case now passes 3/3 (was 0/3) after `terminal_error()` fix — model no longer loops on unconfigured Drive API.
 
 ### Changed
+- **Thinking display**: Replaced bordered `Panel` with plain dim italic `Text` in `on_thinking_delta()` and `on_thinking_commit()` — lighter weight, codex-style.
 - **`co_cli/main.py`**: LLM turn block collapsed from ~60 lines to a single `run_turn()` call. Removed `_stream_agent_run`, `_handle_approvals`, `_patch_dangling_tool_calls`, `_CHOICES_HINT`, `_RENDER_INTERVAL`.
 - **`co_cli/tools/google_drive.py`, `google_gmail.py`, `google_calendar.py`**: Replaced ad-hoc `except Exception` blocks with `classify_google_error()` + `handle_tool_error()`.
 - **`co_cli/tools/shell.py`**: Split single `except Exception` into `RuntimeError` (timeout/permission) vs generic, with specific hints.
 - **`co_cli/tools/slack.py`**: Added `_classify_slack_error()` mapping Slack error codes to `ToolErrorKind`. All `except SlackApiError` blocks use `handle_tool_error()`.
 - **`tests/test_approval.py`**: Import updated from `co_cli.main` to `co_cli._orchestrate`.
 - **`docs/DESIGN-02-chat-loop.md`**: Rewritten for `FrontendProtocol`, `run_turn()`, provider error table, tool error classification, updated all function/diagram references.
-- **`docs/DESIGN-co-cli.md`**: Added `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` to module table. Updated error handling and tool convention docs.
+- **`docs/DESIGN-00-co-cli.md`**: Added `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` to module table. Updated error handling and tool convention docs.
 - **`docs/DESIGN-10-tool-google.md`**: Updated error handling section for `terminal_error()` vs `ModelRetry` strategy.
 - **`docs/todo-roi.md`**: Moved agent tool-call hardening to Done section.
 - **`evals/eval_tool_calling-data.json`, `eval_tool_calling-result.md`**: Updated results — overall accuracy 100% (26/26).
@@ -45,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`docs/DESIGN-02-chat-loop.md`**: New "HTTP 400 Error Reflection" section documenting the reflection loop. `model_http_retries` added to config table.
 - **`docs/DESIGN-01-agent.md`**: `model_http_retries` added to config table with cross-reference.
-- **`docs/DESIGN-co-cli.md`**: "HTTP 400 reflection" note added to cross-cutting Tools section.
+- **`docs/DESIGN-00-co-cli.md`**: "HTTP 400 reflection" note added to cross-cutting Tools section.
 
 ---
 
@@ -98,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`_handle_approvals` resumes via streaming**: Was calling `agent.run()` (non-streaming). Now calls `_stream_agent_run()` so post-approval tool results and LLM follow-up also stream.
 - **`README.md`**: Rewritten for v0.3.0+ — REPL slash commands table, Docker+subprocess sandbox with hardening details, automatic context governance, 4-layer config precedence, accurate module/tools inventory.
 - **`docs/TODO-approval-flow-extraction.md`**: Updated line references, coupling table, and added Issues section reflecting streaming design tensions (`DisplayCallback` protocol needed for extraction).
-- **`docs/DESIGN-co-cli.md`**: Updated for streaming architecture and tool renames.
+- **`docs/DESIGN-00-co-cli.md`**: Updated for streaming architecture and tool renames.
 - **`CLAUDE.md`**: Updated docs inventory — `TODO-streaming-tool-output.md` → `DESIGN-streaming-output.md`, added `TODO-tool-naming.md`.
 
 ### Removed
@@ -118,7 +119,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **`/compact` refactored**: Now calls `summarize_messages()` with primary model and builds a minimal 2-message history (summary `ModelRequest` + ack `ModelResponse`). Previously used `agent.run()` which could trigger tools and returned full history with summary appended.
-- **`docs/DESIGN-co-cli.md`**: Updated §7.4 (history processors architecture), Settings class diagram, env var table, and module summary with `_history.py`.
+- **`docs/DESIGN-00-co-cli.md`**: Updated §7.4 (history processors architecture), Settings class diagram, env var table, and module summary with `_history.py`.
 - **`CLAUDE.md`**: Reorganised docs inventory — `DESIGN-conversation-memory.md` in Design section, new TODO entries, removed completed review.
 - **`docs/REVIEW-sidekick-cli-good-and-bad.md`**: Rewritten to reflect current co-cli state — pattern-by-pattern adopted/partial/pending status instead of aspirational recommendations.
 
@@ -147,7 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`co_cli/banner.py`**: `info.docker` → `info.sandbox`.
 - **`co_cli/config.py`**: Added `sandbox_backend: Literal["auto", "docker", "subprocess"]` with `CO_CLI_SANDBOX_BACKEND` env var.
 - **`docs/DESIGN-tool-shell.md`**: Status updated to reflect MVP complete. Future enhancements table: subprocess fallback, env sanitization, process group kill all marked Done. Integration section updated with `_create_sandbox()` factory.
-- **`docs/DESIGN-co-cli.md`**: Added `sandbox_backend` to Settings class diagram and env var mapping table. Updated `CoDeps.sandbox` type to `SandboxProtocol`.
+- **`docs/DESIGN-00-co-cli.md`**: Added `sandbox_backend` to Settings class diagram and env var mapping table. Updated `CoDeps.sandbox` type to `SandboxProtocol`.
 - **`docs/DESIGN-llm-models.md`**: "Docker sandbox" → "sandboxed environment" in profile description.
 - **`docs/DESIGN-tool-google.md`**: `Sandbox.ensure_container()` → `DockerSandbox.ensure_container()` in analogy references.
 - **`docs/DESIGN-tool-slack.md`**: `deps.py` import reference updated from `Sandbox` to `SandboxProtocol`.
@@ -172,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`_commands.py`**: `CommandContext.tool_count` → `tool_names: list[str]`. `/status` and `/tools` use `render_status_table()` and sorted `tool_names` respectively.
 - **`_approval.py`**: Hardened rejection list — added `&` (backgrounding), `>` / `<` (redirection), `\n` (embedded newlines) alongside original chaining operators.
 - **`main.py`**: Adapted to 3-tuple `get_agent()`, uses `set_theme()` for `--theme` flag, uses `render_status_table()` for `co status`.
-- **`docs/DESIGN-co-cli.md`**: Updated sandbox diagram, `CoDeps` class diagram, config table, dependency flow.
+- **`docs/DESIGN-00-co-cli.md`**: Updated sandbox diagram, `CoDeps` class diagram, config table, dependency flow.
 - **`docs/DESIGN-tool-google.md`**: Rewritten auth architecture — lazy credential resolution via `get_cached_google_creds()`.
 - **`CLAUDE.md`**: Added design principles section, reference repos table, updated doc references.
 
@@ -196,7 +197,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Env var precedence**: `fill_from_env` model validator now always overrides file values. Previously env vars only filled missing fields, contradicting the documented precedence (`env vars > settings.json > defaults`).
 
 ### Changed
-- **`DESIGN-co-cli.md`**: Updated §4.2 class diagram (added `sandbox_*` fields, `shell_safe_commands`, `Functions` class), §9.1 security diagram (env vars override, project config layer), §10.1 XDG directory structure (project config path).
+- **`DESIGN-00-co-cli.md`**: Updated §4.2 class diagram (added `sandbox_*` fields, `shell_safe_commands`, `Functions` class), §9.1 security diagram (env vars override, project config layer), §10.1 XDG directory structure (project config path).
 - **`CLAUDE.md`**: Config precedence updated to 4-layer model.
 
 ---
@@ -212,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Banner hint**: Updated from `"Type 'exit' to quit"` to `"Type /help for commands, 'exit' to quit"`.
-- **`DESIGN-co-cli.md`**: Added REPL Input Flow diagram, slash command architecture section (§4.5), and `_commands.py` to module summary (§13).
+- **`DESIGN-00-co-cli.md`**: Added REPL Input Flow diagram, slash command architecture section (§4.5), and `_commands.py` to module summary (§13).
 
 ---
 
@@ -239,10 +240,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Banner version stale after bump**: `VERSION` now reads `pyproject.toml` directly via `tomllib` (was `importlib.metadata`, which required reinstall to reflect changes).
-- **Ctrl-C exits process instead of returning to prompt**: `asyncio.run()` in Python 3.11+ delivers SIGINT as `asyncio.CancelledError`, not `KeyboardInterrupt`. Chat loop now catches both. Approval prompt (`Prompt.ask()`) temporarily restores the default SIGINT handler so Ctrl-C can interrupt synchronous `input()`. Safety-net `except KeyboardInterrupt` wraps `asyncio.run()` for edge cases. See `DESIGN-co-cli.md` §8.
+- **Ctrl-C exits process instead of returning to prompt**: `asyncio.run()` in Python 3.11+ delivers SIGINT as `asyncio.CancelledError`, not `KeyboardInterrupt`. Chat loop now catches both. Approval prompt (`Prompt.ask()`) temporarily restores the default SIGINT handler so Ctrl-C can interrupt synchronous `input()`. Safety-net `except KeyboardInterrupt` wraps `asyncio.run()` for edge cases. See `DESIGN-00-co-cli.md` §8.
 
 ### Changed
-- **`DESIGN-co-cli.md`**: Added complete tool return type reference table (all 16 tools) to §5.1.1 with `_display_tool_outputs()` transport-layer separation explanation. Expanded tool architecture graph, cloud tool summary, and module summary to include all Slack, Gmail, and Calendar tools.
+- **`DESIGN-00-co-cli.md`**: Added complete tool return type reference table (all 16 tools) to §5.1.1 with `_display_tool_outputs()` transport-layer separation explanation. Expanded tool architecture graph, cloud tool summary, and module summary to include all Slack, Gmail, and Calendar tools.
 - **`DESIGN-tool-slack.md`**: Expanded from single-tool doc to full five-tool reference with shared helpers, setup guide, scope table, and test inventory.
 - **`DESIGN-tool-shell-sandbox.md`**: Added container hardening documentation — non-root, network isolation, resource limits, privilege dropping, and configurable settings.
 - **`TODO-tool-call-stability.md`**: Marked sandbox hardening phases 1–3 as done.
@@ -254,7 +255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tests**: Removed all `@pytest.mark.skipif` guards (Docker, GCP, Slack) per testing policy. Simplified test context setup — no more per-test credential/service building.
 - **CLAUDE.md**: Streamlined — removed inline module/tool tables (covered by DESIGN docs), tightened coding standards.
 - **Theming: Rich `Theme` migration**: Replaced manual `_c(role)` color resolver with idiomatic `Console(theme=Theme(...))`. Semantic style names (`"status"`, `"accent"`, `"shell"`, etc.) are now resolved natively by Rich. Added `"shell"` semantic style for shell output panel borders.
-- **Design docs**: Updated `DESIGN-co-cli.md`, `DESIGN-tool-obsidian.md`, `DESIGN-tool-shell-sandbox.md` to reflect new approval flow, obsidian features, and shell error handling. Restructured `DESIGN-co-cli.md`: promoted §7.5+§7.6 (interrupt recovery + signal handling) into new **§8 Interrupt Handling**, renumbered §8–§12 → §9–§13.
+- **Design docs**: Updated `DESIGN-00-co-cli.md`, `DESIGN-tool-obsidian.md`, `DESIGN-tool-shell-sandbox.md` to reflect new approval flow, obsidian features, and shell error handling. Restructured `DESIGN-00-co-cli.md`: promoted §7.5+§7.6 (interrupt recovery + signal handling) into new **§8 Interrupt Handling**, renumbered §8–§12 → §9–§13.
 - **TODO docs**: Trimmed `TODO-approval-flow.md` and `TODO-tool-call-stability.md` — removed completed items, kept only remaining work.
 
 ### Removed
@@ -290,7 +291,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`AGENTS.md`**: Updated commands, testing guidance, and security tips to reflect current state.
 - **`docs/TODO-approval-flow.md`**: Expanded with post-session-yolo context.
 - **`docs/TODO-streaming-tool-output.md`**: Expanded with event_stream_handler design.
-- **`docs/DESIGN-co-cli.md`**: Updated architecture with display/banner/tail modules.
+- **`docs/DESIGN-00-co-cli.md`**: Updated architecture with display/banner/tail modules.
 
 ### Removed
 - **`docs/TODO-retry-design.md`**: Merged into `TODO-tool-call-stability.md`.
