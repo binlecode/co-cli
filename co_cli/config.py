@@ -50,6 +50,7 @@ class Settings(BaseModel):
     docker_image: str = Field(default="co-cli-sandbox")
     theme: str = Field(default="light")
     tool_retries: int = Field(default=3)
+    model_http_retries: int = Field(default=2)
     max_request_limit: int = Field(default=25)
 
     # Conversation memory
@@ -101,6 +102,7 @@ class Settings(BaseModel):
             "docker_image": "CO_CLI_DOCKER_IMAGE",
             "theme": "CO_CLI_THEME",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
+            "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
             "sandbox_backend": "CO_CLI_SANDBOX_BACKEND",
             "sandbox_max_timeout": "CO_CLI_SANDBOX_MAX_TIMEOUT",

@@ -253,6 +253,19 @@ COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry
 | `/compact` | LLM-summarise history (see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md)) |
 | `/yolo` | Toggle `deps.auto_confirm` |
 
+### HTTP 400 Error Reflection
+
+Small quantized models (e.g. glm-4.7-flash:q8_0 via Ollama) sometimes produce malformed tool-call JSON that the provider rejects with HTTP 400. pydantic-ai raises `ModelHTTPError` which is not covered by the agent's `retries` budget (that only governs `ModelRetry` inside tools).
+
+The chat loop catches `ModelHTTPError` with `status_code == 400` and uses **reflection** rather than blind retry — aligned with the converged pattern from Codex, Aider, Gemini-CLI, and OpenCode (all classify 400 as non-retryable; recovery uses error feedback to the model):
+
+1. Catch `ModelHTTPError` where `status_code == 400`
+2. Inject a `ModelRequest` with `UserPromptPart` containing the error body into conversation history
+3. Re-run `_stream_agent_run()` with `user_input=None` so the model sees the error and self-corrects
+4. Cap at `settings.model_http_retries` attempts (default 2), then re-raise to the outer handler
+
+Non-400 HTTP errors (429, 5xx) are not caught here — they propagate to the generic `except Exception` handler.
+
 ### Interrupt Handling
 
 #### Dangling Tool Call Patching
@@ -344,6 +357,7 @@ Each turn's full message history is accumulated via `result.all_messages()` and 
 | Setting | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` | Caps LLM round-trips per user turn (loop guard) |
+| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max reflection attempts when model produces malformed tool-call JSON (HTTP 400) |
 
 ## 4. Files
 

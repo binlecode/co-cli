@@ -231,6 +231,7 @@ LLM provider settings are managed in `get_agent()` and documented in [DESIGN-03-
 |---------|---------|---------|---------|
 | `llm_provider` | `LLM_PROVIDER` | `"gemini"` | Provider selection (`gemini` or `ollama`) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
+| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Chat-loop reflection attempts on HTTP 400 (malformed tool-call JSON). See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) |
 
 ## 4. Files
 

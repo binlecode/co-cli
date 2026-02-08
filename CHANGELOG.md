@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-02-08
+
+### Added
+- **Ollama tool-call resilience (Phase 1)**: Chat loop catches `ModelHTTPError` with status 400 (malformed tool-call JSON from small models) and reflects the error back to the model as a `UserPromptPart` for self-correction — reflection, not blind retry. Aligned with converged pattern from Codex, Aider, Gemini-CLI, and OpenCode. New config: `model_http_retries` (default 2, env `CO_CLI_MODEL_HTTP_RETRIES`).
+- **`docs/TODO-ollama-tool-call-resilience.md`**: RCA for small-model tool-call failures, peer-system research (4 repos), two-phase solution spec.
+
+### Changed
+- **`docs/DESIGN-02-chat-loop.md`**: New "HTTP 400 Error Reflection" section documenting the reflection loop. `model_http_retries` added to config table.
+- **`docs/DESIGN-01-agent.md`**: `model_http_retries` added to config table with cross-reference.
+- **`docs/DESIGN-co-cli.md`**: "HTTP 400 reflection" note added to cross-cutting Tools section.
+
+---
+
 ## [0.3.4] - 2026-02-08
 
 ### Added

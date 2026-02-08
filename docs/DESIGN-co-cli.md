@@ -143,6 +143,8 @@ All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` rema
 
 **Retry budget:** Agent-level `retries=settings.tool_retries` (default 3). All tools inherit the same budget.
 
+**HTTP 400 reflection:** When a model produces malformed tool-call JSON (HTTP 400), the chat loop injects the error back into conversation history and re-runs the agent — reflection, not blind retry. Capped at `settings.model_http_retries` (default 2). See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md).
+
 **Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 25) caps LLM round-trips per user turn.
 
 ### Approval Flow

@@ -18,9 +18,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
     ModelRequest, PartDeltaEvent, TextPartDelta, ToolCallPart, ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import UsageLimits
@@ -359,32 +361,58 @@ async def chat_loop():
                 console.print("[dim]Co is thinking...[/dim]")
                 result = None
                 streamed_text = False
-                try:
-                    result, streamed_text = await _stream_agent_run(
-                        agent, user_input=user_input, deps=deps,
-                        message_history=message_history, model_settings=model_settings,
-                        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
-                    )
-
-                    # Handle deferred tool approvals (loop: resumed run may trigger more)
-                    while isinstance(result.output, DeferredToolRequests):
-                        result, streamed_text = await _handle_approvals(
-                            agent, deps, result, model_settings,
-                            UsageLimits(request_limit=settings.max_request_limit),
+                http_retries_left = settings.model_http_retries
+                current_input = user_input
+                while True:
+                    try:
+                        result, streamed_text = await _stream_agent_run(
+                            agent, user_input=current_input, deps=deps,
+                            message_history=message_history, model_settings=model_settings,
+                            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
                         )
 
-                    message_history = result.all_messages()
-                    if not streamed_text and isinstance(result.output, str):
-                        console.print(Markdown(result.output))
-                except (KeyboardInterrupt, asyncio.CancelledError):
-                    # Cancel current operation, don't count toward exit.
-                    # asyncio.run() handles SIGINT by cancelling the main task
-                    # (CancelledError), not by raising KeyboardInterrupt directly.
-                    # Use result.all_messages() when available so dangling tool
-                    # calls from the current turn are patched correctly.
-                    msgs = result.all_messages() if result else message_history
-                    message_history = _patch_dangling_tool_calls(msgs)
-                    console.print("\n[dim]Interrupted.[/dim]")
+                        # Handle deferred tool approvals (loop: resumed run may trigger more)
+                        while isinstance(result.output, DeferredToolRequests):
+                            result, streamed_text = await _handle_approvals(
+                                agent, deps, result, model_settings,
+                                UsageLimits(request_limit=settings.max_request_limit),
+                            )
+
+                        message_history = result.all_messages()
+                        if not streamed_text and isinstance(result.output, str):
+                            console.print(Markdown(result.output))
+                        break
+                    except ModelHTTPError as e:
+                        if e.status_code == 400 and http_retries_left > 0:
+                            http_retries_left -= 1
+                            attempt = settings.model_http_retries - http_retries_left
+                            console.print(
+                                f"[dim]Tool call rejected (HTTP 400), "
+                                f"reflecting to model… "
+                                f"({attempt}/{settings.model_http_retries})[/dim]"
+                            )
+                            await asyncio.sleep(0.5)
+                            reflection = ModelRequest(parts=[UserPromptPart(
+                                content=(
+                                    "Your previous tool call was rejected by the "
+                                    f"model provider: {e.body}. Please reformulate "
+                                    "your tool call with valid JSON arguments."
+                                ),
+                            )])
+                            message_history = message_history + [reflection]
+                            current_input = None
+                            continue
+                        raise
+                    except (KeyboardInterrupt, asyncio.CancelledError):
+                        # Cancel current operation, don't count toward exit.
+                        # asyncio.run() handles SIGINT by cancelling the main task
+                        # (CancelledError), not by raising KeyboardInterrupt directly.
+                        # Use result.all_messages() when available so dangling tool
+                        # calls from the current turn are patched correctly.
+                        msgs = result.all_messages() if result else message_history
+                        message_history = _patch_dangling_tool_calls(msgs)
+                        console.print("\n[dim]Interrupted.[/dim]")
+                        break
 
             except EOFError:
                 break
