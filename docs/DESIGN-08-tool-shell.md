@@ -6,7 +6,7 @@ nav_order: 1
 
 # Design: Shell Tool & Sandbox
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 
 ## 1. What & How
 

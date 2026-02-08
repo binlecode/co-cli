@@ -6,7 +6,7 @@ nav_order: 2
 
 # Design: Obsidian Vault Tools
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 
 ## 1. What & How
 

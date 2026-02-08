@@ -6,7 +6,7 @@ nav_order: 1
 
 # Design: Agent & Dependencies
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 
 ## 1. What & How
 
@@ -33,6 +33,7 @@ classDiagram
         +drive_page_tokens: dict
         +sandbox_max_timeout: int
         +slack_client: Any | None
+        +brave_search_api_key: str | None
     }
 
     class OpenAIChatModel {
@@ -62,6 +63,8 @@ classDiagram
         list_slack_messages
         list_slack_replies
         list_slack_users
+        web_search
+        web_fetch
     }
 
     Agent --> CoDeps : injects into tools
@@ -78,12 +81,15 @@ classDiagram
 Returns `(agent, model_settings, tool_names)`. Selects the LLM model based on `settings.llm_provider`, registers all tools, and returns provider-specific `ModelSettings` (see [DESIGN-03-llm-models.md](DESIGN-03-llm-models.md) for model details).
 
 ```python
-def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
+def get_agent(
+    *,
+    all_approval: bool = False,
+) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     provider_name = settings.llm_provider.lower()
     model_settings: ModelSettings | None = None
 
     if provider_name == "gemini":
-        os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
+        os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
         model = f"google-gla:{settings.gemini_model}"
     else:
         # Ollama via OpenAI-compatible API
@@ -105,13 +111,14 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(send_slack_message, requires_approval=True)
 
-    # Read-only tools — no approval needed
-    agent.tool(search_notes)
-    agent.tool(list_notes)
+    # Read-only tools — no approval needed (unless all_approval for eval)
+    agent.tool(search_notes, requires_approval=all_approval)
+    agent.tool(list_notes, requires_approval=all_approval)
     # ... remaining read-only tools
-    agent.tool(search_calendar_events)
+    agent.tool(web_search, requires_approval=all_approval)
+    agent.tool(web_fetch, requires_approval=all_approval)
 
-    tool_names = [fn.__name__ for fn in [run_shell_command, ..., search_calendar_events]]
+    tool_names = [fn.__name__ for fn in [run_shell_command, ..., web_fetch]]
     return agent, model_settings, tool_names
 ```
 
@@ -122,7 +129,9 @@ Tools are classified as side-effectful (requires user approval) or read-only (au
 | Category | Registration | Approval |
 |----------|-------------|----------|
 | Side-effectful | `agent.tool(fn, requires_approval=True)` | Chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests` |
-| Read-only | `agent.tool(fn)` | None — executes immediately |
+| Read-only | `agent.tool(fn, requires_approval=all_approval)` | None normally; `all_approval=True` forces deferred (for eval) |
+
+**`all_approval` parameter:** When `get_agent(all_approval=True)` is called, all tools (including read-only) are registered with `requires_approval=True`. Every tool call returns `DeferredToolRequests` without executing. Used by the eval framework to extract tool name and args without triggering `ModelRetry` loops from missing credentials.
 
 ### System Prompt
 
@@ -166,6 +175,7 @@ class CoDeps:
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     sandbox_max_timeout: int = 600
     slack_client: Any | None = None  # slack_sdk.WebClient at runtime
+    brave_search_api_key: str | None = None  # Brave Search API key for web tools
 ```
 
 **Design principle:** `CoDeps` contains runtime resources, NOT config objects. `Settings` creates resources in `main.py`, then injects here.

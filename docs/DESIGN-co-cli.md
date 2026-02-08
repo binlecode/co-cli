@@ -5,7 +5,7 @@ nav_order: 1
 
 # Co CLI — System Design
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 **Stack:** Python 3.12+, Pydantic AI, Ollama/Gemini, Docker, UV
 
 Co is a personal AI assistant CLI — local-first (Ollama) or cloud (Gemini), sandboxed shell execution, OTel tracing to SQLite, human-in-the-loop approval for side effects.
@@ -33,6 +33,7 @@ graph TB
         ToolGmail[Gmail Tool]
         ToolCalendar[Calendar Tool]
         ToolSlack[Slack Tool]
+        ToolWeb[Web Tools]
     end
 
     subgraph External Services
@@ -42,6 +43,8 @@ graph TB
         SlackAPI[Slack API]
         GmailAPI[Gmail API]
         GCal[Calendar API]
+        BraveAPI[Brave Search API]
+        HTTP[HTTP / Web]
     end
 
     subgraph Infrastructure
@@ -62,6 +65,7 @@ graph TB
     Agent --> ToolGmail
     Agent --> ToolCalendar
     Agent --> ToolSlack
+    Agent --> ToolWeb
 
     ToolShell --> Docker
     ToolObsidian --> ObsVault
@@ -69,6 +73,8 @@ graph TB
     ToolGmail --> GmailAPI
     ToolCalendar --> GCal
     ToolSlack --> SlackAPI
+    ToolWeb --> BraveAPI
+    ToolWeb --> HTTP
 
     Config --> Agent
     Agent --> Telemetry
@@ -90,6 +96,7 @@ graph TB
 | Obsidian Tool | [DESIGN-09-tool-obsidian.md](DESIGN-09-tool-obsidian.md) | Vault search, path traversal protection |
 | Google Tools | [DESIGN-10-tool-google.md](DESIGN-10-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
 | Slack Tool | [DESIGN-11-tool-slack.md](DESIGN-11-tool-slack.md) | Channel/message/user tools, send with approval |
+| Web Tools | [DESIGN-12-tool-web-search.md](DESIGN-12-tool-web-search.md) | Brave Search + URL fetch, read-only |
 
 ## Cross-Cutting Concerns
 
@@ -124,8 +131,10 @@ All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` rema
 | `send_slack_message` | `dict` | Yes | `channel`, `ts` |
 | `list_slack_channels` / `list_slack_messages` | `dict` | Yes | `count`, `has_more` |
 | `list_slack_replies` / `list_slack_users` | `dict` | Yes | `count`, `has_more` |
+| `web_search` | `dict` | Yes | `results`, `count` |
+| `web_fetch` | `dict` | Yes | `url`, `content_type`, `truncated` |
 
-**Naming convention:** `verb_noun` with converged verb set: `read`, `list`, `search`, `create`, `send`, `run`.
+**Naming convention:** `verb_noun` with converged verb set: `read`, `list`, `search`, `create`, `send`, `run`. `web_search` and `web_fetch` use `web_` prefix to namespace web tools.
 
 **ModelRetry convention:** `ModelRetry` = "you called this wrong, fix your parameters" (LLM can self-correct). Empty result = "query was fine, nothing matched" (return `{"count": 0}`).
 
@@ -201,6 +210,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tools/slack.py` | `send_slack_message`, `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users` |
+| `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
 
 ## Dependencies
 
@@ -218,6 +228,8 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `google-auth-oauthlib` | ^1.2.4 | OAuth2 |
 | `slack-sdk` | ^3.39.0 | Slack API |
 | `opentelemetry-sdk` | ^1.39.1 | Tracing |
+| `httpx` | ^0.28.1 | HTTP client (web tools) |
+| `html2text` | ^2024.2.26 | HTML→markdown conversion (web_fetch) |
 | `datasette` | ^0.65.2 | Telemetry dashboard |
 
 ### Development

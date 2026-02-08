@@ -6,7 +6,7 @@ nav_order: 4
 
 # Design: Theming & ASCII Art
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 
 ## 1. What & How
 

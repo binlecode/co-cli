@@ -6,7 +6,7 @@ nav_order: 3
 
 # Design: LLM Models
 
-**Synced:** v0.3.3
+**Synced:** v0.3.4
 
 ## 1. What & How
 
