@@ -127,6 +127,51 @@ async def _cmd_yolo(ctx: CommandContext, args: str) -> None:
     return None
 
 
+async def _cmd_model(ctx: CommandContext, args: str) -> None:
+    """Switch Ollama model or show current model."""
+    from co_cli.config import settings
+
+    if settings.llm_provider.lower() != "ollama":
+        console.print(f"[info]Provider: {settings.llm_provider} — model: {settings.gemini_model}[/info]")
+        console.print("[dim]Model switching is only supported for Ollama.[/dim]")
+        return None
+
+    # No args — show current model and list available
+    if not args.strip():
+        current = getattr(ctx.agent.model, 'model_name', str(ctx.agent.model))
+        console.print(f"[info]Current model: [accent]{current}[/accent][/info]")
+        try:
+            import httpx
+            resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5)
+            resp.raise_for_status()
+            models = [m["name"] for m in resp.json().get("models", [])]
+            if models:
+                console.print("[info]Available models:[/info]")
+                for name in sorted(models):
+                    marker = " [accent]*[/accent]" if name == current else ""
+                    console.print(f"  {name}{marker}")
+        except Exception as e:
+            console.print(f"[dim]Could not list models: {e}[/dim]")
+        return None
+
+    # Switch model
+    new_model_name = args.strip()
+    try:
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        provider = OpenAIProvider(
+            base_url=f"{settings.ollama_host}/v1", api_key="ollama",
+        )
+        ctx.agent.model = OpenAIChatModel(
+            model_name=new_model_name, provider=provider,
+        )
+        console.print(f"[success]Switched to model: [accent]{new_model_name}[/accent][/success]")
+    except Exception as e:
+        console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
+    return None
+
+
 # -- Registry --------------------------------------------------------------
 
 COMMANDS: dict[str, SlashCommand] = {
@@ -137,6 +182,7 @@ COMMANDS: dict[str, SlashCommand] = {
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "yolo": SlashCommand("yolo", "Toggle auto-approve mode", _cmd_yolo),
+    "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
 }
 
 

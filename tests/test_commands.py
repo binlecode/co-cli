@@ -198,8 +198,8 @@ async def test_cmd_compact():
 
 
 def test_commands_registry_complete():
-    """All 7 expected commands are registered."""
-    expected = {"help", "clear", "status", "tools", "history", "compact", "yolo"}
+    """All expected commands are registered."""
+    expected = {"help", "clear", "status", "tools", "history", "compact", "yolo", "model"}
     assert set(COMMANDS.keys()) == expected
 
 
