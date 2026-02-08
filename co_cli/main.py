@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import typer
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from prompt_toolkit import PromptSession
@@ -16,8 +17,11 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.messages import ModelRequest, ToolCallPart, ToolReturnPart
+from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai.messages import (
+    FunctionToolCallEvent, FunctionToolResultEvent,
+    ModelRequest, PartDeltaEvent, TextPartDelta, ToolCallPart, ToolReturnPart,
+)
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import UsageLimits
 from rich.prompt import Prompt
@@ -145,10 +149,98 @@ def _patch_dangling_tool_calls(
     return messages + [ModelRequest(parts=return_parts)]
 
 
+_RENDER_INTERVAL = 0.05  # 20 FPS — matches aider's baseline
+
+
+async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
+                            model_settings, usage_limits,
+                            deferred_tool_results=None):
+    """Run agent with streaming — display tool events and Markdown text inline."""
+    pending_cmds: dict[str, str] = {}
+    result = None
+    streamed_text = False
+    text_buffer = ""
+    live: Live | None = None
+    last_render = 0.0
+
+    try:
+        async for event in agent.run_stream_events(
+            user_input, deps=deps, message_history=message_history,
+            model_settings=model_settings,
+            usage_limits=usage_limits,
+            deferred_tool_results=deferred_tool_results,
+        ):
+            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                text_buffer += event.delta.content_delta
+                streamed_text = True
+                now = time.monotonic()
+                if now - last_render >= _RENDER_INTERVAL:
+                    if live is None:
+                        live = Live(
+                            Markdown(text_buffer), console=console,
+                            auto_refresh=False,
+                        )
+                        live.start()
+                    else:
+                        live.update(Markdown(text_buffer))
+                        live.refresh()
+                    last_render = now
+                continue
+
+            # Commit accumulated Markdown before tool/result output
+            if live:
+                live.update(Markdown(text_buffer))
+                live.refresh()
+                live.stop()
+                live = None
+                text_buffer = ""
+                last_render = 0.0
+
+            if isinstance(event, FunctionToolCallEvent):
+                tool = event.part.tool_name
+                if tool == "run_shell_command":
+                    cmd = event.part.args_as_dict().get("cmd", "")
+                    pending_cmds[event.tool_call_id] = cmd
+                    console.print(f"[dim]  {tool}({cmd})[/dim]")
+                else:
+                    console.print(f"[dim]  {tool}()[/dim]")
+
+            elif isinstance(event, FunctionToolResultEvent):
+                if not isinstance(event.result, ToolReturnPart):
+                    continue
+                content = event.result.content
+                if isinstance(content, str) and content.strip():
+                    title = pending_cmds.get(event.tool_call_id, event.result.tool_name)
+                    console.print(Panel(
+                        content.rstrip(), title=f"$ {title}", border_style="shell",
+                    ))
+                elif isinstance(content, dict) and "display" in content:
+                    console.print(content["display"])
+
+            elif isinstance(event, AgentRunResultEvent):
+                result = event.result
+
+        # Normal completion — final render
+        if live:
+            live.update(Markdown(text_buffer))
+            live.refresh()
+            live.stop()
+            live = None
+    finally:
+        # Cancellation cleanup — just stop Live to restore terminal
+        if live:
+            try:
+                live.stop()
+            except Exception:
+                pass
+
+    return result, streamed_text
+
+
 _CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
 
 
-async def _handle_approvals(agent, deps, result, model_settings):
+async def _handle_approvals(agent, deps, result, model_settings, usage_limits):
     """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
     approvals = DeferredToolResults()
 
@@ -198,39 +290,11 @@ async def _handle_approvals(agent, deps, result, model_settings):
     finally:
         signal.signal(signal.SIGINT, prev_handler)
 
-    return await agent.run(
-        None,
-        deps=deps,
-        message_history=result.all_messages(),
+    return await _stream_agent_run(
+        agent, deps=deps, message_history=result.all_messages(),
+        model_settings=model_settings, usage_limits=usage_limits,
         deferred_tool_results=approvals,
-        model_settings=model_settings,
-        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
     )
-
-
-def _display_tool_outputs(old_len: int, messages: list) -> None:
-    """Show tool return values so the user sees raw output, not just the LLM summary."""
-    # Map tool_call_id → shell command for nicer titles
-    cmds: dict[str, str] = {}
-    for msg in messages[old_len:]:
-        if hasattr(msg, "kind") and msg.kind == "response":
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart) and part.tool_name == "run_shell_command":
-                    args = part.args_as_dict()
-                    cmds[part.tool_call_id] = args.get("cmd", "")
-
-    for msg in messages[old_len:]:
-        if not (hasattr(msg, "kind") and msg.kind == "request"):
-            continue
-        for part in msg.parts:
-            if not isinstance(part, ToolReturnPart):
-                continue
-            content = part.content
-            if isinstance(content, str) and content.strip():
-                title = cmds.get(part.tool_call_id, part.tool_name)
-                console.print(Panel(content.rstrip(), title=f"$ {title}", border_style="shell"))
-            elif isinstance(content, dict) and "display" in content:
-                console.print(content["display"])
 
 
 async def chat_loop():
@@ -293,23 +357,24 @@ async def chat_loop():
 
                 console.print("[dim]Co is thinking...[/dim]")
                 result = None
+                streamed_text = False
                 try:
-                    result = await agent.run(
-                        user_input, deps=deps, message_history=message_history,
-                        model_settings=model_settings,
+                    result, streamed_text = await _stream_agent_run(
+                        agent, user_input=user_input, deps=deps,
+                        message_history=message_history, model_settings=model_settings,
                         usage_limits=UsageLimits(request_limit=settings.max_request_limit),
                     )
 
                     # Handle deferred tool approvals (loop: resumed run may trigger more)
                     while isinstance(result.output, DeferredToolRequests):
-                        result = await _handle_approvals(
+                        result, streamed_text = await _handle_approvals(
                             agent, deps, result, model_settings,
+                            UsageLimits(request_limit=settings.max_request_limit),
                         )
 
-                    all_msgs = result.all_messages()
-                    _display_tool_outputs(len(message_history), all_msgs)
-                    message_history = all_msgs
-                    console.print(Markdown(result.output))
+                    message_history = result.all_messages()
+                    if not streamed_text and isinstance(result.output, str):
+                        console.print(Markdown(result.output))
                 except (KeyboardInterrupt, asyncio.CancelledError):
                     # Cancel current operation, don't count toward exit.
                     # asyncio.run() handles SIGINT by cancelling the main task

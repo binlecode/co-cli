@@ -106,34 +106,32 @@ sequenceDiagram
     loop Interactive REPL
         User->>CLI: Enter query
         CLI->>CLI: Show "Co is thinking..."
-        CLI->>Agent: agent.run(user_input, deps=deps, message_history=message_history)
+        CLI->>Agent: _stream_agent_run(agent, user_input, deps, message_history)
+        Note over CLI,Agent: Uses agent.run_stream_events() internally
         Agent->>LLM: Send prompt + prior conversation context
-        LLM->>Agent: Response with tool calls
 
-        opt Read-Only Tool
-            Agent->>Tools: Execute tool (ctx: RunContext[CoDeps])
-            Tools->>External: API call
-            External->>Tools: Result
-            Tools->>Agent: Tool output
-            Agent->>LLM: Continue with tool result
+        loop Streaming event loop
+            LLM->>Agent: Text delta / tool call / tool result / final result
+            Agent->>CLI: Stream event
+
+            alt PartDeltaEvent (text)
+                CLI->>User: Live Markdown render (throttled at 20 FPS)
+            else FunctionToolCallEvent
+                CLI->>User: Show tool name + args (dimmed)
+            else FunctionToolResultEvent (read-only tool)
+                CLI->>User: Display tool output (Panel for str, verbatim for dict.display)
+            else FunctionToolResultEvent (side-effectful tool)
+                Agent->>CLI: DeferredToolRequests
+                CLI->>User: Approve? [y/n/a(yolo)]
+                User->>CLI: y / a
+                CLI->>Agent: _stream_agent_run(deferred_tool_results=approvals)
+            else AgentRunResultEvent
+                Note over CLI: Capture final result
+            end
         end
 
-        opt Side-Effectful Tool (requires_approval=True)
-            Agent->>CLI: DeferredToolRequests
-            CLI->>User: Approve? [y/n/a(yolo)]
-            User->>CLI: y / a
-            CLI->>Agent: agent.run(deferred_tool_results=approvals)
-            Agent->>Tools: Execute approved tool
-            Tools->>External: API call / Docker exec
-            External->>Tools: Result
-            Tools->>Agent: Tool output
-            Agent->>LLM: Continue with tool result
-        end
-
-        LLM->>Agent: Final response
-        Agent->>CLI: result.output
         CLI->>CLI: message_history = result.all_messages()
-        CLI->>User: Render Markdown response
+        CLI->>User: (text already streamed inline via Live)
     end
 
     User->>CLI: exit/quit or Ctrl+C ×2 (within 2s) or Ctrl+D
@@ -149,13 +147,13 @@ Side-effectful tools (`run_shell_command`, `draft_email`, `post_slack_message`) 
 sequenceDiagram
     participant User
     participant CLI as Chat Loop
-    participant Agent as agent.run()
+    participant Agent as _stream_agent_run()
     participant Tool as shell.py
     participant Sandbox as sandbox.py
     participant Docker as Docker Container
 
     User->>CLI: "list files"
-    CLI->>Agent: agent.run(user_input)
+    CLI->>Agent: _stream_agent_run(agent, user_input)
     Agent->>Agent: LLM calls run_shell_command("ls -la")
     Note over Agent: requires_approval=True → defer
     Agent->>CLI: result.output = DeferredToolRequests(approvals=[...])
@@ -164,7 +162,7 @@ sequenceDiagram
     CLI->>User: "Approve run_shell_command(cmd='ls -la')? [y/n/a(yolo)]"
     User->>CLI: y
 
-    CLI->>Agent: agent.run(None, deferred_tool_results=approvals)
+    CLI->>Agent: _stream_agent_run(agent, deferred_tool_results=approvals)
     Agent->>Tool: run_shell_command("ls -la")
     Tool->>Sandbox: await sandbox.run_command("ls -la", timeout=120)
     Sandbox->>Sandbox: ensure_container()
@@ -180,7 +178,7 @@ sequenceDiagram
     Sandbox->>Tool: Decoded output string
     Tool->>Agent: Command result
     Agent->>CLI: result.output = "..."
-    CLI->>User: Render Markdown
+    CLI->>User: (text already streamed inline via Live)
 ```
 
 **Denial flow:** When the user picks `n`, the chat loop sends `ToolDenied("User denied this action")`. The LLM sees the structured denial and can reason about it (e.g. suggest an alternative command).
@@ -432,7 +430,7 @@ class CoDeps:
 ```
 main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_credentials_path, slack_client, ...)
     ↓
-agent.run(user_input, deps=deps) →  Agent passes deps to tool calls
+_stream_agent_run(agent, user_input, deps=deps) →  Agent passes deps to tool calls
     ↓
 tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_creds, etc.
 ```
@@ -445,11 +443,11 @@ pydantic-ai separates state into three tiers:
 |------|-------|----------|-------|---------|
 | **Agent config** | Process | Entire process | `Agent(...)` constructor, module constants | Model name, system prompt, tool registrations |
 | **Session deps** | Session | One REPL loop (`create_deps()` → `sandbox.cleanup()`) | `RunContext.deps` (`CoDeps`) | Sandbox handle, Google creds (lazy-cached), page tokens |
-| **Run state** | Single run | One `agent.run()` call | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
+| **Run state** | Single run | One `_stream_agent_run()` call (`agent.run_stream_events()` internally) | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
 
 **Critical invariant: mutable per-session state belongs in `CoDeps`, never in module globals.** Module-level variables are process-scoped — they persist across sessions and are shared by all concurrent sessions in the same process.
 
-`CoDeps` is the session boundary. `main.py:create_deps()` instantiates one `CoDeps` per chat session. Every `agent.run()` call within that session receives the same `CoDeps` instance, so tools accumulate state (like page tokens) across turns. But two sessions — whether concurrent or sequential — get separate `CoDeps` instances with independent state.
+`CoDeps` is the session boundary. `main.py:create_deps()` instantiates one `CoDeps` per chat session. Every `_stream_agent_run()` call within that session receives the same `CoDeps` instance, so tools accumulate state (like page tokens) across turns. But two sessions — whether concurrent or sequential — get separate `CoDeps` instances with independent state.
 
 ```
 Process (one Python interpreter)
@@ -567,10 +565,11 @@ This means `co` is not a compiled binary but an auto-generated script that calls
 
 **Dependency Injection + Conversation Memory + Deferred Approvals:**
 
-The chat loop has three responsibilities:
-1. **Conversation memory** — accumulates `message_history` across turns via `result.all_messages()`
-2. **Deferred approval** — when `result.output` is `DeferredToolRequests`, calls `_handle_approvals()` to prompt the user, then resumes the agent with `DeferredToolResults`
-3. **Lifecycle** — creates `CoDeps` at session start, calls `sandbox.cleanup()` at session end
+The chat loop has four responsibilities:
+1. **Streaming execution** — runs the agent via `_stream_agent_run()` which uses `agent.run_stream_events()` to display tool events and Markdown text inline as they arrive
+2. **Conversation memory** — accumulates `message_history` across turns via `result.all_messages()`
+3. **Deferred approval** — when `result.output` is `DeferredToolRequests`, calls `_handle_approvals()` to prompt the user, then resumes the agent with `DeferredToolResults`
+4. **Lifecycle** — creates `CoDeps` at session start, calls `sandbox.cleanup()` at session end
 
 ```
 chat_loop():
@@ -581,21 +580,24 @@ chat_loop():
     message_history = []
 
     loop:
-        result = agent.run(user_input, deps, message_history)
+        result, streamed_text = _stream_agent_run(agent, user_input, deps, message_history)
 
         while result.output is DeferredToolRequests:   # loop — resumed run may trigger more
-            result = _handle_approvals(agent, deps, result)  # [y/n/a] prompt
+            result, streamed_text = _handle_approvals(agent, deps, result)  # [y/n/a] prompt
 
         message_history = result.all_messages()
-        display(result.output)
+        if not streamed_text:         # fallback — only when streaming produced no text
+            display(Markdown(result.output))
 
     finally:
         deps.sandbox.cleanup()
 ```
 
-**Why `while`, not `if`:** A resumed `agent.run()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
+**Streaming architecture (`_stream_agent_run`):** Uses `agent.run_stream_events()` to iterate over events as they arrive. Text deltas are rendered incrementally via Rich `Live` + `Markdown` with throttled refresh (~20 FPS). Tool call/result events are displayed inline between text segments. The `Live` context is committed (stopped) before tool output to prevent interleaving. A `finally` block ensures `Live` is stopped on cancellation to restore terminal state.
 
-**Conversation Memory:** Each turn's full message history (user prompts, assistant responses, tool calls/results) is accumulated via `result.all_messages()` and passed to the next `agent.run()` call. This gives the LLM full context for follow-up queries like "try again" or "change the subject line". Memory is in-process only — it resets when the session ends.
+**Why `while`, not `if`:** A resumed `_stream_agent_run()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
+
+**Conversation Memory:** Each turn's full message history (user prompts, assistant responses, tool calls/results) is accumulated via `result.all_messages()` and passed to the next `_stream_agent_run()` call. This gives the LLM full context for follow-up queries like "try again" or "change the subject line". Memory is in-process only — it resets when the session ends.
 
 ```mermaid
 stateDiagram-v2
@@ -612,18 +614,18 @@ stateDiagram-v2
         Dispatch --> Waiting: empty / blank
         Dispatch --> BangExec: !cmd (bang escape)
         Dispatch --> SlashExec: /command (slash)
-        Dispatch --> Thinking: anything else → agent.run()
+        Dispatch --> Thinking: anything else → _stream_agent_run()
 
         BangExec --> Waiting: sandbox.run_command() → display
         SlashExec --> Waiting: dispatch_command() → display
 
         Thinking --> ToolExec: Tool needed
-        ToolExec --> Thinking: Tool result (read-only)
+        ToolExec --> Thinking: Tool result (read-only, displayed inline)
         Thinking --> Approval: DeferredToolRequests
-        Approval --> Thinking: Approved (agent.run with DeferredToolResults)
+        Approval --> Thinking: Approved (_stream_agent_run with DeferredToolResults)
         Approval --> Responding: Denied (ToolDenied)
-        Thinking --> Responding: LLM done
-        Responding --> Waiting: Display output
+        Thinking --> Responding: LLM done (text already streamed via Live)
+        Responding --> Waiting: Update message_history
         Thinking --> Waiting: Ctrl+C (cancel operation)
 
         Waiting --> CtrlC1: Ctrl+C (1st)
@@ -646,8 +648,9 @@ stateDiagram-v2
 
 **REPL Features:**
 - History: Saved to `~/.local/share/co-cli/history.txt`
-- Spinner: "Co is thinking..." during inference
-- Output: Rendered as Rich Markdown
+- Spinner: "Co is thinking..." shown before streaming starts
+- Streaming: Text rendered incrementally via Rich `Live` + `Markdown` (~20 FPS throttle). Tool call/result events displayed inline between text segments
+- Fallback: If streaming produced no text (e.g. tool-only turn), final `result.output` rendered as Rich `Markdown`
 - Tab completion: `WordCompleter` with `complete_while_typing=False` for `/command` names
 
 **REPL Input Flow:**
@@ -660,7 +663,7 @@ user_input
   ├─ empty/blank    → continue (ignore)
   ├─ "!cmd"         → sandbox.run_command(cmd) — direct shell, no LLM
   ├─ "/command"     → dispatch_command() — slash command, no LLM
-  └─ anything else  → agent.run() — LLM inference
+  └─ anything else  → _stream_agent_run() — LLM inference with streaming
 ```
 
 #### Slash Commands (`co_cli/_commands.py`)
@@ -732,7 +735,7 @@ Follows Node.js REPL / Aider / Gemini CLI conventions:
 
 | Context | Action | Result |
 |---------|--------|--------|
-| During `agent.run()` | Ctrl+C | Cancels operation, patches dangling tool calls (§8.1), returns to prompt. Does **not** count toward exit. |
+| During `_stream_agent_run()` | Ctrl+C | Cancels operation, patches dangling tool calls (§8.1), returns to prompt. Does **not** count toward exit. |
 | During approval prompt | Ctrl+C | Cancels approval, patches dangling tool calls (§8.1), returns to prompt. Does **not** count toward exit. |
 | At prompt | Ctrl+C (1st) | Prints "Press Ctrl+C again to exit" |
 | At prompt | Ctrl+C (2nd within 2s) | Exits session |
@@ -804,7 +807,7 @@ CREATE TABLE spans (
 
 ### 5.1.1 Tool Return Convention
 
-Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_display_tool_outputs()` in `main.py` renders tool returns **before** the LLM summary — `dict` with `display` is printed verbatim, `str` content is shown in a Rich Panel. This transport-layer separation ensures URLs, pagination hints, and formatting reach the user intact regardless of LLM reformatting.
+Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_agent_run()` renders tool returns inline as `FunctionToolResultEvent`s arrive during streaming — `dict` with `display` is printed verbatim, `str` content is shown in a Rich Panel. This transport-layer separation ensures URLs, pagination hints, and formatting reach the user intact regardless of LLM reformatting.
 
 **Tool Return Type Reference:**
 
@@ -972,7 +975,7 @@ def get_cached_google_creds(deps: CoDeps) -> Credentials | None:
 
 **Mechanism:**
 - Prompt is disabled while agent is "thinking"
-- Uses `await agent.run()` inside async loop
+- Uses `await _stream_agent_run()` (wraps `agent.run_stream_events()`) inside async loop
 - Query N must complete before Query N+1 begins
 - `message_history` is updated sequentially after each turn — no risk of forking
 
@@ -994,19 +997,19 @@ Each chat session maintains an in-process message history that accumulates acros
 sequenceDiagram
     participant User
     participant CLI as Chat Loop
-    participant Agent as agent.run()
+    participant Agent as _stream_agent_run()
 
     Note over CLI: message_history = []
 
     User->>CLI: "draft email to Bob"
-    CLI->>Agent: agent.run("draft email", message_history=[])
-    Agent->>CLI: result
+    CLI->>Agent: _stream_agent_run(agent, "draft email", message_history=[])
+    Agent->>CLI: result (text streamed inline via Live)
     Note over CLI: message_history = result.all_messages()<br/>[user: "draft email", assistant: "Here's a draft..."]
 
     User->>CLI: "try again, more formal"
-    CLI->>Agent: agent.run("try again", message_history=[user, assistant])
+    CLI->>Agent: _stream_agent_run(agent, "try again", message_history=[user, assistant])
     Note over Agent: LLM sees full prior context
-    Agent->>CLI: result
+    Agent->>CLI: result (text streamed inline via Live)
     Note over CLI: message_history = result.all_messages()<br/>[user, assistant, user: "try again", assistant: "Revised..."]
 ```
 
@@ -1017,8 +1020,9 @@ Uses pydantic-ai's built-in `message_history` parameter and `result.all_messages
 ```python
 message_history = []
 while True:
-    result = await agent.run(
-        user_input, deps=deps, message_history=message_history
+    result, streamed_text = await _stream_agent_run(
+        agent, user_input=user_input, deps=deps, message_history=message_history,
+        model_settings=model_settings,
     )
     message_history = result.all_messages()
 ```
@@ -1086,7 +1090,7 @@ Calls `summarize_messages()` with the primary model and builds a minimal 2-messa
 
 ### 8.1 Interrupt Recovery (Dangling Tool Call Patching)
 
-When the user presses Ctrl+C during `agent.run()`, the LLM may have been mid-tool-call. If `message_history` contains a `ModelResponse` with a `ToolCallPart` but no matching `ToolReturnPart`, the next `agent.run()` call would fail because the LLM sees an unanswered tool call.
+When the user presses Ctrl+C during `_stream_agent_run()`, the LLM may have been mid-tool-call. If `message_history` contains a `ModelResponse` with a `ToolCallPart` but no matching `ToolReturnPart`, the next call would fail because the LLM sees an unanswered tool call.
 
 **Mitigation:** `_patch_dangling_tool_calls()` scans the last message in history after a `KeyboardInterrupt`. If it's a `ModelResponse` containing `ToolCallPart`s, the function appends a synthetic `ModelRequest` with `ToolReturnPart`(s) carrying an "Interrupted by user." error message.
 
@@ -1107,13 +1111,13 @@ def _patch_dangling_tool_calls(messages, error_message="Interrupted by user."):
 
 **Why this works:** Wrapping `ToolReturnPart`s in a `ModelRequest` is the same pattern pydantic-ai uses internally in `_agent_graph.py:_handle_final_result()`, which explicitly comments: *"To allow this message history to be used in a future run without dangling tool calls, append a new ModelRequest using the tool returns and retries."*
 
-**Current behavior note:** `agent.run()` copies the input list (`list(message_history)`), so on `KeyboardInterrupt` the original `message_history` is unchanged from the previous successful turn — no dangling calls exist. The patch is defensive: it protects against future adoption of `agent.iter()` or streaming where partial state may leak into the caller's list.
+**Current behavior note:** `agent.run_stream_events()` (used by `_stream_agent_run`) copies the input list, so on interrupt the original `message_history` is unchanged from the previous successful turn — no dangling calls exist. The patch is defensive: it protects against edge cases where partial state may leak into the caller's list. In the interrupt handler, `result.all_messages()` is preferred when `result` is available, as it captures the most recent state including any tool calls from the current turn.
 
 ### 8.2 Signal Handling (asyncio SIGINT)
 
 Python 3.11+ `asyncio.run()` installs a custom SIGINT handler that **cancels the main task** instead of raising `KeyboardInterrupt` directly. This has two consequences for the chat loop:
 
-**Problem 1 — Async code (`agent.run()`):** SIGINT delivers `asyncio.CancelledError`, not `KeyboardInterrupt`. If only `KeyboardInterrupt` is caught, the `CancelledError` propagates uncaught, the process exits, and `asyncio.run()` re-raises `KeyboardInterrupt` at the top level.
+**Problem 1 — Async code (`_stream_agent_run()`):** SIGINT delivers `asyncio.CancelledError`, not `KeyboardInterrupt`. If only `KeyboardInterrupt` is caught, the `CancelledError` propagates uncaught, the process exits, and `asyncio.run()` re-raises `KeyboardInterrupt` at the top level.
 
 **Solution:** Catch both exceptions everywhere an interrupt can land:
 
@@ -1140,19 +1144,19 @@ async def _handle_approvals(agent, deps, result, model_settings):
     finally:
         signal.signal(signal.SIGINT, prev_handler)
 
-    return await agent.run(...)  # async — uses asyncio's handler
+    return await _stream_agent_run(...)  # async — uses asyncio's handler
 ```
 
 **Interrupt points and exception types:**
 
 | Phase | Code style | SIGINT delivers | Caught by |
 |-------|-----------|-----------------|-----------|
-| `agent.run()` | async | `CancelledError` | Inner `except (KeyboardInterrupt, CancelledError)` |
+| `_stream_agent_run()` | async | `CancelledError` | Inner `except (KeyboardInterrupt, CancelledError)` |
 | Approval `Prompt.ask()` | sync (handler swapped) | `KeyboardInterrupt` | Same inner except block |
 | `session.prompt_async()` | async (prompt_toolkit) | `CancelledError` | Outer except (double-tap logic) |
 | After task cancellation | `asyncio.run()` top-level | `KeyboardInterrupt` | Safety-net in `chat()` |
 
-**E2E validation:** `scripts/e2e_ctrl_c.py` spawns `co chat` in a PTY, delivers SIGINT at both the approval prompt and during `agent.run()`, and asserts the process survives and returns to the `Co ❯` prompt.
+**E2E validation:** `scripts/e2e_ctrl_c.py` spawns `co chat` in a PTY, delivers SIGINT at both the approval prompt and during `_stream_agent_run()`, and asserts the process survives and returns to the `Co ❯` prompt.
 
 ---
 
@@ -1190,7 +1194,7 @@ graph TB
 
 ### 9.2 High-Risk Tool Confirmation (Deferred Approval)
 
-Side-effectful tools are registered with `requires_approval=True`. When the LLM calls one, `agent.run()` returns a `DeferredToolRequests` object instead of executing the tool. The chat loop's `_handle_approvals()` prompts the user with `[y/n/a(yolo)]` for each pending call, then resumes the agent with `DeferredToolResults`.
+Side-effectful tools are registered with `requires_approval=True`. When the LLM calls one, `_stream_agent_run()` returns a `DeferredToolRequests` as `result.output` instead of executing the tool. The chat loop's `_handle_approvals()` prompts the user with `[y/n/a(yolo)]` for each pending call, then resumes the agent via `_stream_agent_run()` with `DeferredToolResults`.
 
 **Key design properties:**
 - **Separation of concerns:** Tools contain only business logic — no UI imports, no prompt calls

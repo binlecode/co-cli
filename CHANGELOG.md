@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Streaming output**: Replaced `agent.run()` + post-hoc `_display_tool_outputs()` with `agent.run_stream_events()` in new `_stream_agent_run()` helper. Tool calls/results display in real time, text streams token-by-token with `rich.Live` + `rich.Markdown` at 20 FPS throttle. Both the main chat loop and `_handle_approvals` resume path use the same streaming codepath.
 - **E2E streaming tests**: `scripts/e2e_streaming.py` — two tests (plain text streaming, Markdown rendering via Live) that exercise the full streaming pipeline against a real LLM.
-- **`docs/TODO-streaming-output.md`**: Comprehensive streaming design doc — pydantic-ai API comparison (4 APIs evaluated), decision rationale for `run_stream_events()`, peer CLI analysis (Aider, Codex, Gemini CLI, OpenCode), Markdown rendering approach, known issues.
+- **`docs/DESIGN-streaming-output.md`**: Streaming design doc — pydantic-ai API comparison (4 APIs evaluated), decision rationale for `run_stream_events()`, peer CLI analysis (Aider, Codex, Gemini CLI, OpenCode), Markdown rendering approach.
 - **`docs/TODO-tool-naming.md`**: Tool naming standardisation TODO.
 
 ### Fixed
@@ -22,10 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`_handle_approvals` resumes via streaming**: Was calling `agent.run()` (non-streaming). Now calls `_stream_agent_run()` so post-approval tool results and LLM follow-up also stream.
 - **`docs/TODO-approval-flow-extraction.md`**: Updated line references, coupling table, and added Issues section reflecting streaming design tensions (`DisplayCallback` protocol needed for extraction).
 - **`docs/DESIGN-co-cli.md`**: Updated for streaming architecture and tool renames.
-- **`CLAUDE.md`**: Updated TODO inventory — replaced `TODO-streaming-tool-output.md` with `TODO-streaming-output.md`, added `TODO-tool-naming.md`.
+- **`CLAUDE.md`**: Updated docs inventory — `TODO-streaming-tool-output.md` → `DESIGN-streaming-output.md`, added `TODO-tool-naming.md`.
 
 ### Removed
-- **`docs/TODO-streaming-tool-output.md`**: Replaced by `docs/TODO-streaming-output.md` (broader scope — covers full streaming architecture, not just tool output).
+- **`docs/TODO-streaming-tool-output.md`**: Replaced by `docs/DESIGN-streaming-output.md` (broader scope — covers full streaming architecture, not just tool output).
 
 ---
 
