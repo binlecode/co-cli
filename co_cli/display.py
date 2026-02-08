@@ -53,3 +53,52 @@ def display_error(message: str, hint: str | None = None) -> None:
 def display_info(message: str) -> None:
     """Themed info message."""
     console.print(f"[info]{INFO} {message}[/info]")
+
+
+def prompt_selection(
+    items: list[str],
+    *,
+    title: str = "Select",
+    current: str | None = None,
+) -> str | None:
+    """Display a numbered list and prompt with arrow-key completion.
+
+    User can arrow up/down through completions or type to filter.
+    Returns the selected item string, or None if the user cancels (empty input).
+    """
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import WordCompleter
+
+    for i, name in enumerate(items, 1):
+        marker = " [accent]*[/accent]" if name == current else ""
+        console.print(f"  [accent]{i}.[/accent] {name}{marker}")
+
+    completer = WordCompleter(items, sentence=True)
+    session: PromptSession[str] = PromptSession(completer=completer)
+    try:
+        choice = session.prompt(
+            f"{title} (Tab to complete, Enter to cancel): ",
+            default=current or "",
+            complete_while_typing=True,
+        )
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+    choice = choice.strip()
+    if not choice:
+        return None
+
+    # Exact match
+    if choice in items:
+        return choice
+
+    # Number match
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(items):
+            return items[idx]
+    except ValueError:
+        pass
+
+    console.print(f"[bold red]Invalid selection:[/bold red] {choice}")
+    return None

@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic_ai.messages import ModelRequest
 
-from co_cli.display import console
+from co_cli.display import console, prompt_selection
 
 
 # -- Types -----------------------------------------------------------------
@@ -138,8 +138,6 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
 
 async def _cmd_model(ctx: CommandContext, args: str) -> None:
     """Switch Ollama model or show current model."""
-    from rich.prompt import Prompt
-
     from co_cli.config import settings
 
     if settings.llm_provider.lower() != "ollama":
@@ -173,27 +171,9 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
         console.print("[dim]No models available.[/dim]")
         return None
 
-    for i, name in enumerate(models, 1):
-        marker = " [accent]*[/accent]" if name == current else ""
-        console.print(f"  [accent]{i}.[/accent] {name}{marker}")
-
-    choice = Prompt.ask(
-        "\nSelect model number (or Enter to cancel)",
-        default="", console=console,
-    )
-    if not choice.strip():
+    selected = prompt_selection(models, title="Select model", current=current)
+    if not selected:
         return None
-
-    try:
-        idx = int(choice) - 1
-        if not (0 <= idx < len(models)):
-            console.print("[bold red]Invalid selection.[/bold red]")
-            return None
-    except ValueError:
-        console.print("[bold red]Invalid selection.[/bold red]")
-        return None
-
-    selected = models[idx]
     if selected == current:
         console.print(f"[dim]Already using {current}.[/dim]")
         return None
