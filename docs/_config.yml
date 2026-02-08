@@ -20,4 +20,5 @@ exclude:
   - "todo-*.md"
   - "BACKLOG-*.md"
   - "RESEARCH-*.md"
+  - "REVIEW-*.md"
   - "DESIGN-co-evolution.md"
