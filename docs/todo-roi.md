@@ -11,7 +11,7 @@ Sources:
 | Web Safety Hardening (`web_fetch` SSRF/private-network guards + redirect revalidation) | Small-Medium | High (security + trust) | None | **Best** |
 | Web Permission Policy (`allow/ask/deny`, URL/domain allowlist/denylist) | Medium | High (control + safety) | None | **High** |
 | MCP Client (Phase 1) | Medium | High | None | **High** |
-| Web Retrieval Controls (`cached/live/disabled`, domains/recency, pagination metadata) | Medium | Medium-High | Prefer after safety/policy baseline | Medium-High |
+| Web Retrieval Controls (`domains`/`recency` filters, pagination metadata) | Medium | Medium-High | Prefer after safety/policy baseline | Medium-High |
 | Slack Phase 2 | Small | Medium | None | Medium-High |
 | Subprocess Fallback | Small | Low (niche) | None | Medium |
 | Approval/Interrupt Tests | Medium | Low-Medium (reliability) | Can start now; fuller coverage after extraction | Medium-Low |
