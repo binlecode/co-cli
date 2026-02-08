@@ -6,8 +6,6 @@ nav_order: 2
 
 # Design: Chat Loop
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The chat loop in `main.py` is the REPL orchestrator: it streams agent responses, handles deferred tool approval, dispatches slash commands, manages conversation memory, and handles interrupts. It uses `agent.run_stream_events()` for real-time output rendering via Rich `Live` + `Markdown`.

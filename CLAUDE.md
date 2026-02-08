@@ -72,7 +72,7 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 
 ### Doc conventions
 
-Every DESIGN doc has `**Synced:** v{version}` matching the `pyproject.toml` version it was last verified against. Update this when syncing docs during a release.
+DESIGN docs always stay in sync with the latest code — no version stamps needed.
 
 Every component DESIGN doc follows a 4-section template:
 
@@ -80,6 +80,8 @@ Every component DESIGN doc follows a 4-section template:
 2. **Core Logic** — Processing flows, key functions, design decisions, error handling, security
 3. **Config** — Settings table (`Setting | Env Var | Default | Description`). Skip if no configuration
 4. **Files** — File table (`File | Purpose`)
+
+**No code paste in DESIGN docs** — never copy-paste source code into design documents. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
 `DESIGN-co-cli.md` is the skeleton: architecture overview, component index, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
 

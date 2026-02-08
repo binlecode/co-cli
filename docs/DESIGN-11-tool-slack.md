@@ -6,8 +6,6 @@ nav_order: 4
 
 # Design: Slack Tool
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The Slack tools enable the agent to read channels/users/threads and send messages to Slack channels. Uses `RunContext[CoDeps]` with `ModelRetry` for self-healing errors. `send_slack_message` uses `requires_approval=True` for human-in-the-loop confirmation; read tools execute without approval. The `WebClient` is created once at startup in `create_deps()` and injected via `CoDeps`.

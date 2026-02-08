@@ -6,8 +6,6 @@ nav_order: 4
 
 # Design: Theming & ASCII Art
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 Themed terminal UX for co-cli — light/dark color palettes, theme-aware ASCII art welcome banner, shared console instance, and display helpers. Theme selection flows from `settings.theme` into a Rich `Theme` object at Console construction time. Semantic style names (e.g. `"accent"`, `"shell"`) are resolved natively by Rich.

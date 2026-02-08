@@ -6,8 +6,6 @@ nav_order: 2
 
 # Design: `co tail` — Real-Time Span Tail Viewer
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 `co tail` is a real-time terminal viewer that polls the OTel SQLite database and prints completed spans as they arrive — like `tail -f` for agent traces. Run `co chat` in one terminal, `co tail` in another, and watch the agent→model→tool flow live.

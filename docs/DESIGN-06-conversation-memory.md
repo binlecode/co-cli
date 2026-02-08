@@ -6,8 +6,6 @@ nav_order: 3
 
 # Design: Conversation Memory
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 Context governance and session persistence for co-cli's conversation history. Two `history_processors` are registered on the agent to prevent silent context overflow: tool output trimming and sliding-window summarisation.

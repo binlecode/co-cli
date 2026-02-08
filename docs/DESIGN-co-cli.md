@@ -5,7 +5,6 @@ nav_order: 1
 
 # Co CLI — System Design
 
-**Synced:** v0.3.4
 **Stack:** Python 3.12+, Pydantic AI, Ollama/Gemini, Docker, UV
 
 Co is a personal AI assistant CLI — local-first (Ollama) or cloud (Gemini), sandboxed shell execution, OTel tracing to SQLite, human-in-the-loop approval for side effects.
@@ -99,6 +98,10 @@ graph TB
 | Web Tools | [DESIGN-12-tool-web-search.md](DESIGN-12-tool-web-search.md) | Brave Search + URL fetch, read-only |
 
 ## Cross-Cutting Concerns
+
+### Documentation Standards
+
+All DESIGN docs use pseudocode to explain processing logic — never paste source code. This keeps docs readable, prevents staleness when code changes, and forces focus on intent over syntax. Each component doc follows the 4-section template: What & How, Core Logic, Config, Files.
 
 ### Configuration
 

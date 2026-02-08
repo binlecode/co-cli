@@ -6,8 +6,6 @@ nav_order: 2
 
 # Design: Obsidian Vault Tools
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The Obsidian tools provide read-only access to a local Obsidian vault, enabling the agent to search, list, and read markdown notes for knowledge retrieval (RAG). All tools use `RunContext[CoDeps]` with `ModelRetry` for self-healing errors.

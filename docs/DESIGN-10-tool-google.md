@@ -6,8 +6,6 @@ nav_order: 3
 
 # Design: Google Tools (Drive, Gmail, Calendar)
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The Google tools provide agent access to three Google Cloud services: Drive (search and read files), Gmail (list, search, and draft emails), and Calendar (list and search events). All tools use `RunContext[CoDeps]` with `ModelRetry` for self-healing errors. Credentials are resolved lazily on first Google tool call via `get_cached_google_creds(ctx.deps)`, cached on the `CoDeps` instance for session lifecycle.

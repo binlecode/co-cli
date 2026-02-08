@@ -6,8 +6,6 @@ nav_order: 1
 
 # Design: OpenTelemetry Logging
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 Co CLI uses OpenTelemetry (OTel) to trace agent operations. All data stays local in SQLite. Three viewers available: Datasette (table), nested HTML (like Logfire), and real-time tail (see [DESIGN-05-tail-viewer.md](DESIGN-05-tail-viewer.md)).

@@ -6,8 +6,6 @@ nav_order: 1
 
 # Design: Shell Tool & Sandbox
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The shell tool executes user commands in an isolated execution environment, protecting the host system while maintaining access to the user's working directory. Uses a protocol-based backend architecture — Docker provides full isolation (primary), with a subprocess fallback for environments without Docker. The tool and its callers are backend-agnostic via `SandboxProtocol`.

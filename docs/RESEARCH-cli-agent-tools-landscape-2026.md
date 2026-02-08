@@ -1,6 +1,6 @@
 # Research: CLI Agent Tools Landscape (Refresh)
 
-**Date:** 2026-02-07
+**Date:** 2026-02-08
 **Purpose:** Re-benchmark the CLI agent landscape using primary sources and update co-cli tool strategy.
 **Method:** Official docs/changelogs/repos only (no secondary summaries).
 
@@ -14,12 +14,13 @@
 |------|----------|--------------|----------|
 | `run_shell_command` | Execution | Yes | Required |
 | `search_notes` / `list_notes` / `read_note` | Local knowledge (Obsidian) | No | No |
-| `search_drive` / `read_drive_file` | Google Drive | No | No |
+| `search_drive_files` / `read_drive_file` | Google Drive | No | No |
 | `list_emails` / `search_emails` | Gmail read | No | No |
-| `draft_email` | Gmail write (draft) | Yes | Required |
+| `create_email_draft` | Gmail write (draft) | Yes | Required |
 | `list_calendar_events` / `search_calendar_events` | Calendar read | No | No |
-| `list_slack_channels` / `get_slack_channel_history` / `get_slack_thread_replies` / `list_slack_users` | Slack read | No | No |
-| `post_slack_message` | Slack write | Yes | Required |
+| `list_slack_channels` / `list_slack_messages` / `list_slack_replies` / `list_slack_users` | Slack read | No | No |
+| `send_slack_message` | Slack write | Yes | Required |
+| `web_search` / `web_fetch` | Web intelligence | No | No |
 
 Source: `co_cli/agent.py`, `co_cli/tools/*`.
 
@@ -27,7 +28,8 @@ Source: `co_cli/agent.py`, `co_cli/tools/*`.
 
 - Shell is Docker-sandboxed with configurable network/memory/CPU limits.
 - Approval model is explicit per tool call (`requires_approval=True` for side-effect tools).
-- No built-in web search/fetch tools yet.
+- Built-in web search/fetch tools are shipped (`web_search` via Brave API, `web_fetch` via HTTP fetch + HTML->markdown).
+- Known limitation: `web_fetch` currently has no private-network/SSRF guard.
 - No first-class persistent memory tool yet.
 - No MCP client integration yet.
 
@@ -67,7 +69,7 @@ Systems are included as primary benchmarks only if they satisfy all of:
 
 ---
 
-## 3. Capability Matrix (2026-02-07 snapshot)
+## 3. Capability Matrix (2026-02-08 snapshot)
 
 ### 3.1 Core coding CLIs
 
@@ -75,12 +77,12 @@ Systems are included as primary benchmarks only if they satisfy all of:
 |------------|--------|-------------|------------|-----------|-------------|-------|----------|-------|
 | Shell execution | Yes (Docker sandbox) | Yes (`Bash`) | Yes (`run_shell_command`) | Yes | Yes | Yes (`/run`) | Yes (`bash`) | Yes (Developer extension) |
 | File read/write/edit | Partial (Obsidian + shell) | Yes (`Read/Edit/Write/MultiEdit`) | Yes (file tools) | Yes | Yes (file ops documented) | Yes (primary workflow) | Yes (`read/edit/write/patch`) | Yes (Developer extension) |
-| Web search | No | Yes (`WebSearch`) | Yes (`google_web_search`) | Yes (default cached mode since 2026-01-28) | Not as a dedicated search tool in reviewed docs | No first-class search tool in reviewed docs | Yes (`websearch`) | Via MCP/extensions |
-| Web fetch / URL content | No | Yes (`WebFetch`) | Yes (`web_fetch`) | Via web search workflow (no separate web_fetch doc tool) | Yes (`web_fetch`) | Yes (`/web` URL scrape) | Yes (`webfetch`) | Via MCP/extensions |
+| Web search | Yes (`web_search`, Brave API) | Yes (`WebSearch`) | Yes (`google_web_search`) | Yes (default cached mode since 2026-01-28) | Not as a dedicated search tool in reviewed docs | No first-class search tool in reviewed docs | Yes (`websearch`) | Via MCP/extensions |
+| Web fetch / URL content | Yes (`web_fetch`) | Yes (`WebFetch`) | Yes (`web_fetch`) | Via web search workflow (no separate web_fetch doc tool) | Yes (`web_fetch`) | Yes (`/web` URL scrape) | Yes (`webfetch`) | Via MCP/extensions |
 | Persistent memory | No first-class memory tool | Yes (`CLAUDE.md` memory system) | Yes (`save_memory` to `~/.gemini/GEMINI.md`) | Not documented as a dedicated memory tool in reviewed docs | Yes (Copilot Memory, public preview) | Not documented as a first-class memory layer | Not documented as a first-class memory layer | Yes (Memory extension) |
 | MCP support | No | Yes | Yes | Yes | Yes (GitHub MCP preconfigured + add more) | Not documented in reviewed docs | Yes | Yes (extension model accepts MCP servers) |
 | Planning/task decomposition | Partial (model-driven; no dedicated todo tool yet) | Yes (`Task`, `TodoWrite`, subagents) | Partial (tooling + workflows; no explicit `write_todos` doc found in this refresh) | Yes (plan mode default in recent releases) | Yes (built-in agents: Explore/Task/Plan/Code-review) | Yes (`architect` mode) | Yes (Plan agent + todo tools) | Yes (`/plan`) |
-| Granular permission model | Yes (tool approvals + sandbox limits) | Yes (allow/ask/deny + modes) | Yes (confirmations + trusted folders) | Yes (approval modes + sandbox modes) | Yes (path/url permissions + trust prompts) | Partial (strong git safety; less policy-centric) | Yes (`allow/ask/deny` per tool) | Yes (mode + per-tool permissions) |
+| Granular permission model | Yes (tool approvals + sandbox limits; web tools currently ungated as read-only) | Yes (allow/ask/deny + modes) | Yes (confirmations + trusted folders) | Yes (approval modes + sandbox modes) | Yes (path/url permissions + trust prompts) | Partial (strong git safety; less policy-centric) | Yes (`allow/ask/deny` per tool) | Yes (mode + per-tool permissions) |
 
 ### 3.2 Secondary platforms (signal only)
 
@@ -141,8 +143,8 @@ Systems are included as primary benchmarks only if they satisfy all of:
 
 ### 5.1 Critical gaps (high impact, small-to-medium effort)
 
-1. `web_search` (current events, docs discovery)
-2. `web_fetch` (URL retrieval/parsing)
+1. Web safety hardening for `web_fetch` (SSRF/private-network blocking + redirect revalidation)
+2. URL/domain permission policy for web tools (allow/ask/deny + allowlist/denylist)
 3. Local file R/W/edit tools outside Obsidian-only scope
 4. First-class persistent memory primitives (`save_memory`, `recall_memory`)
 
@@ -151,22 +153,24 @@ Systems are included as primary benchmarks only if they satisfy all of:
 1. MCP client support (tool extensibility without native integrations for each service)
 2. Built-in planning/todo primitives (explicit decomposition state)
 3. Calendar write operations and richer Slack write actions (thread reply, reactions)
+4. Richer web retrieval controls (`domains`, `recency`, pagination, cached/live mode)
 
 ### 5.3 Already strong (preserve)
 
 1. Docker sandbox boundary with resource controls
 2. Per-tool approval model for side-effect actions
 3. Practical Google + Slack integration baseline
+4. Built-in web search + web fetch baseline
 
 ---
 
 ## 6. Revised Roadmap Recommendation
 
-### Phase A: Web intelligence baseline
+### Phase A: Web intelligence hardening
 
-- Add `web_search(query, limit=...)`
-- Add `web_fetch(url)`
-- Apply same approval/safety posture used today for side-effect tools where needed
+- Add private-network/SSRF protections for `web_fetch` (including redirect target checks)
+- Add explicit web permission policy (`allow|ask|deny`) and URL/domain allow/deny rules
+- Add safer retrieval controls (`cached|live|disabled` search mode, domains/recency filters)
 
 ### Phase B: General local file toolset
 
@@ -194,7 +198,7 @@ Systems are included as primary benchmarks only if they satisfy all of:
 ## 7. Source Quality Notes
 
 - This refresh intentionally removed unstable claims (stars/users/market-share counts) unless needed.
-- Claims are anchored to official product docs/changelogs as of 2026-02-07.
+- Claims are anchored to official product docs/changelogs as of 2026-02-08.
 - For secondary platforms (OpenClaw, Warp), feature scope is broader than coding CLI; treat as design inspiration, not parity targets.
 
 ---

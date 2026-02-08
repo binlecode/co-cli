@@ -6,8 +6,6 @@ nav_order: 5
 
 # Design: Web Intelligence Tools
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The web tools give the agent external perception — `web_search` queries the Brave Search API for structured results, and `web_fetch` retrieves a URL and converts it to markdown. Both are read-only (no approval required). The Brave API key is injected via `CoDeps`; `web_fetch` needs no API key.

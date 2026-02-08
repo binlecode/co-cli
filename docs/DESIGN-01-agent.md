@@ -6,8 +6,6 @@ nav_order: 1
 
 # Design: Agent & Dependencies
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 The agent factory (`get_agent()`) creates the pydantic-ai Agent with LLM model selection, tool registration, and system prompt. `CoDeps` is the runtime dependency dataclass injected into every tool via `RunContext[CoDeps]`. Together they form the core orchestration layer between the chat loop and tool execution.

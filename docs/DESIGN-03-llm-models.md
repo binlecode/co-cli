@@ -6,8 +6,6 @@ nav_order: 3
 
 # Design: LLM Models
 
-**Synced:** v0.3.4
-
 ## 1. What & How
 
 Co CLI supports multiple LLM backends through pydantic-ai's model abstraction. The `get_agent()` factory in `co_cli/agent.py` selects the model based on `settings.llm_provider` and returns the agent with provider-specific `ModelSettings`.
