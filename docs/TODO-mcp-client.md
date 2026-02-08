@@ -2,6 +2,16 @@
 
 Allow co-cli to integrate with external MCP (Model Context Protocol) tool servers without custom tool code. See `docs/DESIGN-co-cli.md` §4 for tool architecture.
 
+## Sequencing (MVP-first)
+
+Per current roadmap and web review, execute in this order:
+
+1. Ship web safety baseline first (`web_fetch` network-target guards + tests).
+2. Ship web permission policy baseline (`web_permission_mode`).
+3. Then implement MCP Phase 1 (this doc).
+
+Reason: MCP is high ROI, but web safety/policy gaps are the immediate trust and security priority for an agent product.
+
 ## Peer Landscape (Claude Code, Gemini CLI, Codex, Goose)
 
 All four systems that ship MCP client support converge on:

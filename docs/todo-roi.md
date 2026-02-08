@@ -1,27 +1,27 @@
 # TODO ROI Ranking
 
-Last updated after web-search benchmark refresh and review (2026-02-08).
+Last updated against current TODO set (2026-02-08).
 
 Sources:
 - `docs/REVIEW-web-search-vs-top-systems.md`
 - `docs/RESEARCH-cli-agent-tools-landscape-2026.md`
+- `docs/TODO-web-tool-hardening.md`
 
-| TODO | Effort | User Impact | Dependencies | ROI |
+| TODO (Doc) | Effort | User Impact | Dependencies | ROI |
 | --- | --- | --- | --- | --- |
-| Web Safety Hardening (`web_fetch` SSRF/private-network guards + redirect revalidation) | Small-Medium | High (security + trust) | None | **Best** |
-| Web Permission Policy (`allow/ask/deny`, URL/domain allowlist/denylist) | Medium | High (control + safety) | None | **High** |
-| MCP Client (Phase 1) | Medium | High | None | **High** |
-| Web Retrieval Controls (`domains`/`recency` filters, pagination metadata) | Medium | Medium-High | Prefer after safety/policy baseline | Medium-High |
-| Slack Phase 2 | Small | Medium | None | Medium-High |
-| Subprocess Fallback | Small | Low (niche) | None | Medium |
-| Approval/Interrupt Tests | Medium | Low-Medium (reliability) | Can start now; fuller coverage after extraction | Medium-Low |
-| Cross-Tool RAG | Large | High (at scale) | sqlite-vec, Ollama | Low |
-| Approval Flow Extraction | Medium | Low (enabler/refactor) | None | Low |
+| Web Tool Hardening (`docs/TODO-web-tool-hardening.md`) | Medium | High (security + trust) | None | **Best** |
+| MCP Client Phase 1 (`docs/TODO-mcp-client.md`) | Medium | High | Sequence after Web Hardening Phase 1-2 | **High** |
+| Slack Phase 2 (`docs/TODO-slack-tooling.md`) | Small | Medium | None | Medium-High |
+| Subprocess Fallback Policy (`docs/TODO-subprocess-fallback-policy.md`) | Small | Low (niche) | None | Medium |
+| Approval & Interrupt Tests (`docs/TODO-approval-interrupt-tests.md`) | Medium | Low-Medium (reliability) | Better after extraction, but partial value now | Medium-Low |
+| Eval Tool-Calling Expansion (`docs/TODO-eval-tool-calling.md`) | Medium | Low-Medium (quality gate) | None | Medium-Low |
+| Approval Flow Extraction (`docs/TODO-approval-flow-extraction.md`) | Medium | Low (enabler/refactor) | None | Low |
+| Cross-Tool RAG (`docs/TODO-cross-tool-rag.md`) | Large | High (at scale) | sqlite-vec, Ollama | Low |
 
 ## Recommendations
 
-- **Do first:** Web safety hardening + web permission policy. These are the largest risk reducers and close the most visible gap vs top systems.
-- **Then:** MCP Client (Phase 1) for extensibility and ecosystem parity.
+- **Do first:** `TODO-web-tool-hardening.md` Phase 1 and Phase 2 (SSRF/network guardrails + permission policy).
+- **Then:** `TODO-mcp-client.md` Phase 1 for extensibility and ecosystem parity.
 - **Parallel quick win:** Slack Phase 2 (thread reply + reactions).
 
 ## Skip for Now
