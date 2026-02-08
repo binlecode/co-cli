@@ -303,5 +303,5 @@ Design docs are published as a GitHub Pages book: **https://binlecode.github.io/
 ## Contributing
 
 1.  Run `uv sync` to install dev dependencies.
-2.  Follow the style in `docs/DESIGN-co-cli.md`.
+2.  Follow the style in `docs/DESIGN-00-co-cli.md`.
 3.  Ensure type hints are used everywhere.

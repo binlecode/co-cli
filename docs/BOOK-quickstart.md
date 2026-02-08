@@ -9,7 +9,7 @@ These docs cover the system design of **Co CLI** — a personal AI assistant CLI
 
 ## How to read
 
-Start with [System Design](DESIGN-co-cli.md) for the architecture overview, then dive into component docs grouped by layer:
+Start with [System Design](DESIGN-00-co-cli.md) for the architecture overview, then dive into component docs grouped by layer:
 
 - **Core** — Agent factory, chat loop, LLM model selection. The runtime skeleton.
 - **Infrastructure** — Telemetry, tail viewer, conversation memory, theming. Supporting subsystems that the core depends on.

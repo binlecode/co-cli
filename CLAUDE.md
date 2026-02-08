@@ -29,7 +29,7 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
          + rich console
 ```
 
-See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and approval pattern.
+See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and approval pattern.
 
 ## Coding Standards
 
@@ -83,10 +83,10 @@ Every component DESIGN doc follows a 4-section template:
 
 **No code paste in DESIGN docs** — never copy-paste source code into design documents. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-`DESIGN-co-cli.md` is the skeleton: architecture overview, component index, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
+`DESIGN-00-co-cli.md` is the skeleton: architecture overview, component index, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
 
 ### Design (architecture and implementation details, kept in sync with code)
-- `docs/DESIGN-co-cli.md` — Architecture overview, component index, cross-cutting concerns (config, tools, approval, security, concurrency)
+- `docs/DESIGN-00-co-cli.md` — Architecture overview, component index, cross-cutting concerns (config, tools, approval, security, concurrency)
 - `docs/DESIGN-01-agent.md` — Agent factory (`get_agent()`), `CoDeps` dataclass, tool registration, multi-session state
 - `docs/DESIGN-02-chat-loop.md` — Chat loop: streaming, deferred approval, slash commands, input dispatch, interrupt handling
 - `docs/DESIGN-03-llm-models.md` — LLM model configuration (Gemini, Ollama)
@@ -99,6 +99,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-10-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-11-tool-slack.md` — Slack tool design
 - `docs/DESIGN-12-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
+- `docs/DESIGN-13-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning

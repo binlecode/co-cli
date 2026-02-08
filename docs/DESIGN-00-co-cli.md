@@ -96,6 +96,7 @@ graph TB
 | Google Tools | [DESIGN-10-tool-google.md](DESIGN-10-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
 | Slack Tool | [DESIGN-11-tool-slack.md](DESIGN-11-tool-slack.md) | Channel/message/user tools, send with approval |
 | Web Tools | [DESIGN-12-tool-web-search.md](DESIGN-12-tool-web-search.md) | Brave Search + URL fetch, read-only |
+| Streaming Event Ordering | [DESIGN-13-streaming-event-ordering.md](DESIGN-13-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
 
 ## Cross-Cutting Concerns
 

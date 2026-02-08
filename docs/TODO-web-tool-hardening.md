@@ -36,7 +36,7 @@ Integration in `web_fetch`:
 
 ### Content-type allowlist
 
-- Before reading the response body, check `Content-Type` header against allowlist: `text/*`, `application/json`, `application/xml`, `application/xhtml+xml`
+- Before reading the response body, check `Content-Type` header against allowlist: `text/*`, `application/json`, `application/xml`, `application/xhtml+xml`, `application/x-yaml`, `application/yaml`
 - Reject non-matching types (binary, images, PDFs, etc.) with `ModelRetry` explaining the restriction
 - Enforce byte-level body limit (e.g. 1 MB) before full decode — truncate and note truncation in response
 
@@ -54,7 +54,9 @@ Integration in `web_fetch`:
 - [x] Add post-redirect `is_url_safe()` re-check to `web_fetch`
 - [x] Add content-type allowlist check before body read in `web_fetch`
 - [x] Add byte-level body limit before full decode in `web_fetch`
-- [x] Add functional tests: private IP blocking, redirect-to-private, content-type rejection, truncation
+- [x] Add functional tests: private IP blocking, content-type rejection
+- [ ] Add functional test: redirect-to-private (URL that 302s to private IP)
+- [ ] Add functional test: truncation edge cases (response at/over byte limit)
 - [x] Update `docs/DESIGN-12-tool-web-search.md` security section
 
 ### File changes

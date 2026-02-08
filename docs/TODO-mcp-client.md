@@ -1,6 +1,6 @@
 # TODO: MCP Client Support
 
-Allow co-cli to integrate with external MCP (Model Context Protocol) tool servers without custom tool code. See `docs/DESIGN-co-cli.md` §4 for tool architecture.
+Allow co-cli to integrate with external MCP (Model Context Protocol) tool servers without custom tool code. See `docs/DESIGN-00-co-cli.md` §4 for tool architecture.
 
 ## Sequencing (MVP-first)
 
@@ -146,7 +146,7 @@ Add MCP server connectivity check to `co_cli/status.py`:
 - [ ] Add `/tools` command enhancement: show MCP tools alongside native tools
 - [ ] Add functional test: configure stdio server, verify tools appear in agent
 - [ ] Add functional test: MCP tool call flows through approval loop
-- [ ] Update `docs/DESIGN-co-cli.md` §4 to document MCP toolset integration
+- [ ] Update `docs/DESIGN-00-co-cli.md` §4 to document MCP toolset integration
 
 ---
 

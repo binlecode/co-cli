@@ -15,6 +15,7 @@ from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
     ModelRequest, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
+    PartEndEvent, FinalResultEvent,
     ThinkingPart, ThinkingPartDelta,
     ToolCallPart, ToolReturnPart, UserPromptPart,
 )
@@ -100,6 +101,113 @@ _RENDER_INTERVAL = 0.05  # 20 FPS
 
 
 # ---------------------------------------------------------------------------
+# _StreamState — explicit transient streaming state
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _StreamState:
+    text_buffer: str = ""
+    last_text_render_at: float = 0.0
+    thinking_buffer: str = ""
+    last_thinking_render_at: float = 0.0
+    thinking_active: bool = False
+    streamed_text: bool = False
+
+
+def _flush_thinking(state: _StreamState, frontend: FrontendProtocol) -> None:
+    if state.thinking_buffer:
+        frontend.on_thinking_commit(state.thinking_buffer.rstrip())
+        state.thinking_buffer = ""
+        state.last_thinking_render_at = 0.0
+        state.thinking_active = False
+
+
+def _append_thinking(
+    state: _StreamState,
+    frontend: FrontendProtocol,
+    content: str,
+) -> None:
+    if not content:
+        return
+    state.thinking_buffer += content
+    now = time.monotonic()
+    if now - state.last_thinking_render_at >= _RENDER_INTERVAL:
+        state.thinking_active = True
+        frontend.on_thinking_delta(state.thinking_buffer.rstrip() or "...")
+        state.last_thinking_render_at = now
+
+
+def _append_text(
+    state: _StreamState,
+    frontend: FrontendProtocol,
+    content: str,
+) -> None:
+    if not content:
+        return
+    if state.thinking_active or state.thinking_buffer:
+        _flush_thinking(state, frontend)
+    state.text_buffer += content
+    state.streamed_text = True
+    now = time.monotonic()
+    if now - state.last_text_render_at >= _RENDER_INTERVAL:
+        frontend.on_text_delta(state.text_buffer)
+        state.last_text_render_at = now
+
+
+def _commit_text(state: _StreamState, frontend: FrontendProtocol) -> None:
+    if state.text_buffer:
+        frontend.on_text_commit(state.text_buffer)
+        state.text_buffer = ""
+        state.last_text_render_at = 0.0
+
+
+def _flush_for_tool_output(state: _StreamState, frontend: FrontendProtocol) -> None:
+    """Flush thinking/text before inline tool annotations and output panels."""
+    if state.thinking_active or state.thinking_buffer:
+        _flush_thinking(state, frontend)
+    _commit_text(state, frontend)
+
+
+def _handle_part_start_event(
+    event: PartStartEvent,
+    state: _StreamState,
+    frontend: FrontendProtocol,
+    *,
+    verbose: bool,
+) -> bool:
+    """Handle part start event. Returns True if consumed."""
+    if isinstance(event.part, ThinkingPart):
+        if not verbose:
+            return True
+        _append_thinking(state, frontend, event.part.content)
+        return True
+    if isinstance(event.part, TextPart):
+        _append_text(state, frontend, event.part.content)
+        return True
+    return False
+
+
+def _handle_part_delta_event(
+    event: PartDeltaEvent,
+    state: _StreamState,
+    frontend: FrontendProtocol,
+    *,
+    verbose: bool,
+) -> bool:
+    """Handle part delta event. Returns True if consumed."""
+    if isinstance(event.delta, ThinkingPartDelta):
+        if not verbose:
+            return True
+        _append_thinking(state, frontend, event.delta.content_delta or "")
+        return True
+    if isinstance(event.delta, TextPartDelta):
+        _append_text(state, frontend, event.delta.content_delta)
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # _patch_dangling_tool_calls — moved verbatim from main.py
 # ---------------------------------------------------------------------------
 
@@ -150,44 +258,7 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
     """
     pending_cmds: dict[str, str] = {}
     result = None
-    streamed_text = False
-    text_buffer = ""
-    last_render = 0.0
-    thinking_buffer = ""
-    thinking_last_render = 0.0
-    thinking_active = False
-
-    def _flush_thinking():
-        nonlocal thinking_buffer, thinking_last_render, thinking_active
-        if thinking_buffer:
-            frontend.on_thinking_commit(thinking_buffer.rstrip())
-            thinking_buffer = ""
-            thinking_last_render = 0.0
-            thinking_active = False
-
-    def _append_thinking(content: str) -> None:
-        nonlocal thinking_buffer, thinking_last_render, thinking_active
-        if not content:
-            return
-        thinking_buffer += content
-        now = time.monotonic()
-        if now - thinking_last_render >= _RENDER_INTERVAL:
-            thinking_active = True
-            frontend.on_thinking_delta(thinking_buffer.rstrip() or "...")
-            thinking_last_render = now
-
-    def _append_text(content: str) -> None:
-        nonlocal text_buffer, streamed_text, last_render
-        if not content:
-            return
-        if thinking_active or thinking_buffer:
-            _flush_thinking()
-        text_buffer += content
-        streamed_text = True
-        now = time.monotonic()
-        if now - last_render >= _RENDER_INTERVAL:
-            frontend.on_text_delta(text_buffer)
-            last_render = now
+    state = _StreamState()
 
     try:
         async for event in agent.run_stream_events(
@@ -197,38 +268,31 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
             usage=usage,
             deferred_tool_results=deferred_tool_results,
         ):
-            # -- Part start events (carry initial content) --------------------
             if isinstance(event, PartStartEvent):
-                if isinstance(event.part, ThinkingPart):
-                    if not verbose:
-                        continue
-                    _append_thinking(event.part.content)
-                    continue
-                if isinstance(event.part, TextPart):
-                    _append_text(event.part.content)
+                if _handle_part_start_event(
+                    event,
+                    state,
+                    frontend,
+                    verbose=verbose,
+                ):
                     continue
 
-            # -- Thinking deltas (verbose only) --------------------------------
-            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, ThinkingPartDelta):
-                if not verbose:
+            if isinstance(event, PartDeltaEvent):
+                if _handle_part_delta_event(
+                    event,
+                    state,
+                    frontend,
+                    verbose=verbose,
+                ):
                     continue
-                _append_thinking(event.delta.content_delta or "")
+
+            # Readiness/meta events are intentionally side-effect free for
+            # rendering; text may continue after FinalResultEvent.
+            if isinstance(event, (FinalResultEvent, PartEndEvent)):
                 continue
-
-            # -- Text deltas ---------------------------------------------------
-            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                _append_text(event.delta.content_delta)
-                continue
-
-            # Commit accumulated state before tool/result output
-            if thinking_active or thinking_buffer:
-                _flush_thinking()
-            if text_buffer:
-                frontend.on_text_commit(text_buffer)
-                text_buffer = ""
-                last_render = 0.0
 
             if isinstance(event, FunctionToolCallEvent):
+                _flush_for_tool_output(state, frontend)
                 tool = event.part.tool_name
                 if tool == "run_shell_command":
                     cmd = event.part.args_as_dict().get("cmd", "")
@@ -236,8 +300,10 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
                     frontend.on_tool_call(tool, cmd)
                 else:
                     frontend.on_tool_call(tool, "")
+                continue
 
-            elif isinstance(event, FunctionToolResultEvent):
+            if isinstance(event, FunctionToolResultEvent):
+                _flush_for_tool_output(state, frontend)
                 if not isinstance(event.result, ToolReturnPart):
                     continue
                 content = event.result.content
@@ -246,20 +312,20 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
                     frontend.on_tool_result(title, content)
                 elif isinstance(content, dict) and "display" in content:
                     frontend.on_tool_result(event.result.tool_name, content)
+                continue
 
-            elif isinstance(event, AgentRunResultEvent):
+            if isinstance(event, AgentRunResultEvent):
                 result = event.result
+                continue
 
         # Normal completion — final render
-        if thinking_active or thinking_buffer:
-            _flush_thinking()
-        if text_buffer:
-            frontend.on_text_commit(text_buffer)
-            text_buffer = ""
+        if state.thinking_active or state.thinking_buffer:
+            _flush_thinking(state, frontend)
+        _commit_text(state, frontend)
     finally:
         frontend.cleanup()
 
-    return result, streamed_text
+    return result, state.streamed_text
 
 
 # ---------------------------------------------------------------------------

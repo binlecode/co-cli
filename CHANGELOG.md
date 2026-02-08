@@ -9,12 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Orchestration extraction** (`co_cli/_orchestrate.py`): Extracted the ~170-line streaming + approval state machine from `main.py` into a standalone module. `FrontendProtocol` (`@runtime_checkable`) decouples display from orchestration — `TerminalFrontend` (Rich) for the CLI, `RecordingFrontend` for tests. `TurnResult` dataclass returned by `run_turn()`. `_stream_events()`, `_handle_approvals()`, and `_patch_dangling_tool_calls()` moved here.
+- **`_StreamState` dataclass** and extracted stream helpers in `_orchestrate.py`: `_flush_thinking()`, `_append_thinking()`, `_append_text()`, `_commit_text()`, `_flush_for_tool_output()`, `_handle_part_start_event()`, `_handle_part_delta_event()` — explicit state management replacing closure-based approach. `FinalResultEvent` and `PartEndEvent` are explicit no-ops for rendering, preventing premature text commits mid-stream.
 - **Provider error classification** (`co_cli/_provider_errors.py`): `ProviderErrorAction` enum (REFLECT/BACKOFF_RETRY/ABORT) and `classify_provider_error()` for `ModelHTTPError`/`ModelAPIError`. HTTP 429 parses `Retry-After` header. Exponential backoff capped at 30s. All retries bounded by `settings.model_http_retries`.
 - **Tool error classification** (`co_cli/tools/_errors.py`): `ToolErrorKind` enum (TERMINAL/TRANSIENT/MISUSE), `classify_google_error()` inspects HttpError status codes and string patterns, `handle_tool_error()` dispatches to `terminal_error()` or `ModelRetry`.
 - **`TerminalFrontend`** in `display.py`: Implements `FrontendProtocol` with Rich `Live`, `Panel`, `Markdown`, `Prompt`. SIGINT handler swap for synchronous approval prompts.
 - **`RecordingFrontend`** in `tests/test_orchestrate.py`: Records `(event_type, payload)` tuples for assertions. Configurable `approval_policy`.
+- **`docs/DESIGN-13-streaming-event-ordering.md`**: First-principles RCA of streaming event ordering, boundary-safe rendering design, and regression coverage.
 - **`tests/test_errors.py`**: 25 functional tests — `classify_google_error` (9 cases), `handle_tool_error` (3), `classify_provider_error` (8), `_parse_retry_after` (5).
-- **`tests/test_orchestrate.py`**: 10 functional tests — protocol compliance, event recording, approval policies, `_stream_events` regression coverage, `_patch_dangling_tool_calls` from new location.
+- **`tests/test_orchestrate.py`**: 11 functional tests — protocol compliance, event recording, approval policies, `_stream_events` regression coverage, `_patch_dangling_tool_calls`, `FinalResultEvent` mid-stream no-op.
+- **`tests/test_display.py`**: Display helper tests.
 - **Eval improvement**: `er-drive-01` error recovery case now passes 3/3 (was 0/3) after `terminal_error()` fix — model no longer loops on unconfigured Drive API.
 
 ### Changed
@@ -24,9 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`co_cli/tools/shell.py`**: Split single `except Exception` into `RuntimeError` (timeout/permission) vs generic, with specific hints.
 - **`co_cli/tools/slack.py`**: Added `_classify_slack_error()` mapping Slack error codes to `ToolErrorKind`. All `except SlackApiError` blocks use `handle_tool_error()`.
 - **`tests/test_approval.py`**: Import updated from `co_cli.main` to `co_cli._orchestrate`.
+- **DESIGN doc rename**: `DESIGN-co-cli.md` → `DESIGN-00-co-cli.md` — all references updated across CLAUDE.md, README.md, index.md, TODO docs.
+- **GitHub Pages book**: Replaced `core.md`, `infrastructure.md`, `quickstart.md`, `tools.md` with `BOOK-` prefixed helper pages; updated `_config.yml` excludes.
 - **`docs/DESIGN-02-chat-loop.md`**: Rewritten for `FrontendProtocol`, `run_turn()`, provider error table, tool error classification, updated all function/diagram references.
 - **`docs/DESIGN-00-co-cli.md`**: Added `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` to module table. Updated error handling and tool convention docs.
 - **`docs/DESIGN-10-tool-google.md`**: Updated error handling section for `terminal_error()` vs `ModelRetry` strategy.
+- **`docs/TODO-web-tool-hardening.md`**: Split out unfinished test items (redirect-to-private, truncation edge cases); added `application/x-yaml` and `application/yaml` to content-type allowlist.
 - **`docs/todo-roi.md`**: Moved agent tool-call hardening to Done section.
 - **`evals/eval_tool_calling-data.json`, `eval_tool_calling-result.md`**: Updated results — overall accuracy 100% (26/26).
 - **`scripts/eval_tool_calling.py`**: Error recovery request_limit bumped to 5.
@@ -34,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **`docs/TODO-agent-toolcall-recursive-flow.md`**: All Phase C+D items implemented.
 - **`docs/TODO-approval-interrupt-tests.md`**: All items implemented in `tests/test_approval.py`.
+- **`docs/FIX-streaming-leading-token-drop.md`**: Superseded by `DESIGN-13-streaming-event-ordering.md`.
+- **`docs/DESIGN-co-cli.md`**: Renamed to `DESIGN-00-co-cli.md`.
 
 ---
 

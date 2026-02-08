@@ -7,6 +7,7 @@ that records all events for assertions.
 from typing import Any
 
 import pytest
+from pydantic_ai import FinalResultEvent
 
 from co_cli._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events
 from co_cli.deps import CoDeps
@@ -247,3 +248,33 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
 
     assert streamed_text is False
     assert ("thinking_commit", "Sure, thing") in frontend.events
+
+
+@pytest.mark.asyncio
+async def test_stream_events_does_not_commit_text_on_final_result_event():
+    """FinalResultEvent between text chunks must not split committed output."""
+    frontend = RecordingFrontend()
+    agent = StaticEventAgent([
+        PartStartEvent(index=0, part=TextPart(content="The")),
+        FinalResultEvent(tool_name=None, tool_call_id=None),
+        PartDeltaEvent(index=0, delta=TextPartDelta(content_delta=" sky")),
+    ])
+
+    deps = CoDeps(sandbox=SubprocessBackend())
+
+    _, streamed_text = await _stream_events(
+        agent,
+        user_input="why",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        usage_limits=UsageLimits(request_limit=5),
+        usage=None,
+        deferred_tool_results=None,
+        verbose=False,
+        frontend=frontend,
+    )
+
+    assert streamed_text is True
+    commits = [payload for kind, payload in frontend.events if kind == "text_commit"]
+    assert commits == ["The sky"]

@@ -14,7 +14,7 @@ gh_edit_view_mode: "edit"
 mermaid:
   version: "11.4.1"
 
-# Only DESIGN docs and index are in the book
+# Only DESIGN docs plus index + BOOK helper pages are in the book
 exclude:
   - "TODO-*.md"
   - "todo-*.md"
