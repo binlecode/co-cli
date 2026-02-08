@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-02-08
+
+### Added
+- **Web tools**: `web_search` (Tavily API) and `web_fetch` with URL safety checks (private IP/SSRF blocking, domain allowlist/blocklist). New `co_cli/tools/web.py` module. Tavily API key configurable via `TAVILY_API_KEY` env var.
+- **Eval framework for tool-calling quality**: Statistical eval suite measuring tool-calling accuracy across all enabled tools. 26 golden JSONL cases across 4 dimensions (`tool_selection`, `arg_extraction`, `refusal`, `error_recovery`). Dual-agent architecture — deferred agent (all tools return `DeferredToolRequests`) for selection/args/refusal, normal agent for error recovery. Majority-vote scoring, absolute/relative gates, model comparison reports with per-dimension delta table.
+- **`all_approval` parameter on `get_agent()`**: When `True`, all tools (including read-only) register with `requires_approval=True` — returns `DeferredToolRequests` without executing. Used by eval to avoid ModelRetry loops from missing credentials.
+- **Eval baselines**: `evals/baseline-gemini.json` and `evals/baseline-ollama.json` — both models at 100% (26/26) on current golden set.
+- **`docs/TODO-eval-tool-calling.md`**: Eval framework design doc — 12 sections covering JSONL format, scoring, CLI interface, golden cases, and key patterns.
+- **Web tool tests** (`tests/test_web.py`): URL safety validation, SSRF blocking, domain filtering, search/fetch integration.
+- **LLM E2E web tests** (`tests/test_llm_e2e.py`): Web search tool selection and arg extraction tests.
+
+### Changed
+- **`co_cli/agent.py`**: `get_agent()` accepts `all_approval: bool = False`. Read-only tools registered with `requires_approval=all_approval`.
+- **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory.
+
+---
+
 ## [0.3.3] - 2026-02-07
 
 ### Fixed
