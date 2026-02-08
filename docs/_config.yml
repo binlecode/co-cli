@@ -1,0 +1,23 @@
+title: Co CLI
+description: System design documentation
+remote_theme: just-the-docs/just-the-docs
+
+# "Edit on GitHub" link on every page
+gh_edit_link: true
+gh_edit_link_text: "Edit on GitHub"
+gh_edit_repository: "https://github.com/binlecode/co-cli"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "edit"
+
+# Mermaid diagram support
+mermaid:
+  version: "11.4.1"
+
+# Only DESIGN docs and index are in the book
+exclude:
+  - "TODO-*.md"
+  - "todo-*.md"
+  - "BACKLOG-*.md"
+  - "RESEARCH-*.md"
+  - "DESIGN-co-evolution.md"

@@ -71,4 +71,4 @@ uv run pytest                        # Run functional tests
 2. **Safe Execution**: Shell commands run in a transient Docker sandbox.
 3. **Human-in-the-Loop**: Confirmations required for high-risk tools (shell, Slack, email).
 4. **Functional Testing**: No mocks. Tests must verify real side effects.
-5. **Stability**: Python 3.12 is used for production-grade reliability in 2026.
+5. **Stability**: Python 3.12+ — mature stdlib, type hints, performance.

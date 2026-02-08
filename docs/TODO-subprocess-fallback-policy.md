@@ -137,7 +137,7 @@ if info.sandbox_fallback_active:
   - `sandbox_fallback=error` + no Docker → `RuntimeError`
   - `sandbox_fallback=warn` + no Docker → `SubprocessBackend` (existing behavior)
   - `sandbox_backend=subprocess` ignores `sandbox_fallback`
-- [ ] Update `docs/DESIGN-tool-shell.md` to document fallback policy
+- [ ] Update `docs/DESIGN-08-tool-shell.md` to document fallback policy
 
 ### File changes
 
@@ -149,4 +149,4 @@ if info.sandbox_fallback_active:
 | `co_cli/banner.py` | Show persistent warning when fallback active |
 | `settings.defaults.json` | Add `sandbox_fallback` default |
 | `tests/test_shell.py` | Add fallback policy tests |
-| `docs/DESIGN-tool-shell.md` | Document fallback policy matrix |
+| `docs/DESIGN-08-tool-shell.md` | Document fallback policy matrix |

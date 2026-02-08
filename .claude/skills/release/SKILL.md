@@ -49,6 +49,7 @@ Check `docs/DESIGN-*.md` files **that are affected by changes in this release**:
 - Mermaid diagrams reflect actual classes, fields, and relationships
 - Text descriptions match current behavior
 - Module summary table in `DESIGN-co-cli.md` lists all current modules
+- Update `**Synced:** v{version}` in each affected doc to the new version
 
 Only update what's stale. Do not audit unrelated design docs.
 

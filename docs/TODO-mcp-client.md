@@ -185,7 +185,7 @@ elif cfg.transport == "http":
 
 ## Phase 3 — OAuth & Tool Prefixing (post-MVP)
 
-Goal: production-grade remote server auth and multi-server name collision handling.
+Goal: remote server OAuth and multi-server name collision handling.
 
 ### OAuth
 
