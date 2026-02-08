@@ -127,8 +127,19 @@ async def _cmd_yolo(ctx: CommandContext, args: str) -> None:
     return None
 
 
+def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
+    """Build a new OpenAIChatModel and assign it to the agent."""
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
+    agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
+
+
 async def _cmd_model(ctx: CommandContext, args: str) -> None:
     """Switch Ollama model or show current model."""
+    from rich.prompt import Prompt
+
     from co_cli.config import settings
 
     if settings.llm_provider.lower() != "ollama":
@@ -136,37 +147,60 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Model switching is only supported for Ollama.[/dim]")
         return None
 
-    # No args — show current model and list available
-    if not args.strip():
-        current = getattr(ctx.agent.model, 'model_name', str(ctx.agent.model))
-        console.print(f"[info]Current model: [accent]{current}[/accent][/info]")
+    current = getattr(ctx.agent.model, 'model_name', str(ctx.agent.model))
+
+    # Explicit name given — switch directly
+    if args.strip():
         try:
-            import httpx
-            resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5)
-            resp.raise_for_status()
-            models = [m["name"] for m in resp.json().get("models", [])]
-            if models:
-                console.print("[info]Available models:[/info]")
-                for name in sorted(models):
-                    marker = " [accent]*[/accent]" if name == current else ""
-                    console.print(f"  {name}{marker}")
+            _switch_ollama_model(ctx.agent, args.strip(), settings.ollama_host)
+            console.print(f"[success]Switched to model: [accent]{args.strip()}[/accent][/success]")
         except Exception as e:
-            console.print(f"[dim]Could not list models: {e}[/dim]")
+            console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
         return None
 
-    # Switch model
-    new_model_name = args.strip()
+    # No args — interactive selection
+    console.print(f"[info]Current model: [accent]{current}[/accent][/info]")
     try:
-        from pydantic_ai.models.openai import OpenAIChatModel
-        from pydantic_ai.providers.openai import OpenAIProvider
+        import httpx
+        resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5)
+        resp.raise_for_status()
+        models = sorted(m["name"] for m in resp.json().get("models", []))
+    except Exception as e:
+        console.print(f"[dim]Could not list models: {e}[/dim]")
+        return None
 
-        provider = OpenAIProvider(
-            base_url=f"{settings.ollama_host}/v1", api_key="ollama",
-        )
-        ctx.agent.model = OpenAIChatModel(
-            model_name=new_model_name, provider=provider,
-        )
-        console.print(f"[success]Switched to model: [accent]{new_model_name}[/accent][/success]")
+    if not models:
+        console.print("[dim]No models available.[/dim]")
+        return None
+
+    for i, name in enumerate(models, 1):
+        marker = " [accent]*[/accent]" if name == current else ""
+        console.print(f"  [accent]{i}.[/accent] {name}{marker}")
+
+    choice = Prompt.ask(
+        "\nSelect model number (or Enter to cancel)",
+        default="", console=console,
+    )
+    if not choice.strip():
+        return None
+
+    try:
+        idx = int(choice) - 1
+        if not (0 <= idx < len(models)):
+            console.print("[bold red]Invalid selection.[/bold red]")
+            return None
+    except ValueError:
+        console.print("[bold red]Invalid selection.[/bold red]")
+        return None
+
+    selected = models[idx]
+    if selected == current:
+        console.print(f"[dim]Already using {current}.[/dim]")
+        return None
+
+    try:
+        _switch_ollama_model(ctx.agent, selected, settings.ollama_host)
+        console.print(f"[success]Switched to model: [accent]{selected}[/accent][/success]")
     except Exception as e:
         console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
     return None

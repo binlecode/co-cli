@@ -6,7 +6,7 @@ All tests use real agent/deps — no mocks, no stubs.
 import pytest
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
@@ -213,6 +213,7 @@ async def test_approval_approve():
     Requires running LLM + Docker.
     """
     agent, model_settings, deps = _make_agent_and_deps("co-test-approve")
+    turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
         result = await _trigger_shell_call(agent, deps, model_settings)
 
@@ -228,7 +229,8 @@ async def test_approval_approve():
             message_history=result.all_messages(),
             deferred_tool_results=approvals,
             model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            usage_limits=turn_limits,
+            usage=result.usage(),
         )
 
         # May trigger further deferred calls; keep approving
@@ -242,7 +244,8 @@ async def test_approval_approve():
                 message_history=resumed.all_messages(),
                 deferred_tool_results=more_approvals,
                 model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+                usage_limits=turn_limits,
+                usage=resumed.usage(),
             )
 
         assert isinstance(resumed.output, str)
@@ -258,6 +261,7 @@ async def test_approval_deny():
     Requires running LLM + Docker.
     """
     agent, model_settings, deps = _make_agent_and_deps("co-test-deny")
+    turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
         result = await _trigger_shell_call(agent, deps, model_settings)
 
@@ -273,7 +277,8 @@ async def test_approval_deny():
             message_history=result.all_messages(),
             deferred_tool_results=approvals,
             model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            usage_limits=turn_limits,
+            usage=result.usage(),
         )
 
         # LLM may retry with another tool call or just respond with text
@@ -287,7 +292,8 @@ async def test_approval_deny():
                 message_history=resumed.all_messages(),
                 deferred_tool_results=deny_approvals,
                 model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+                usage_limits=turn_limits,
+                usage=resumed.usage(),
             )
 
         assert isinstance(resumed.output, str)
@@ -371,12 +377,13 @@ async def test_approval_auto_confirm():
     """
     agent, model_settings, deps = _make_agent_and_deps("co-test-autoconfirm")
     deps.auto_confirm = True
+    turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
         result = await agent.run(
             "Run this exact shell command: echo yolo_test",
             deps=deps,
             model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            usage_limits=turn_limits,
         )
 
         # Even with auto_confirm on deps, pydantic-ai still returns
@@ -393,9 +400,54 @@ async def test_approval_auto_confirm():
                 message_history=result.all_messages(),
                 deferred_tool_results=approvals,
                 model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+                usage_limits=turn_limits,
+                usage=result.usage(),
             )
 
+        assert isinstance(result.output, str)
+    finally:
+        deps.sandbox.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_approval_budget_cumulative():
+    """Multi-hop approval cannot exceed a single per-turn request budget.
+
+    Uses a tight budget shared across the initial run and all resume hops.
+    The cumulative usage from result.usage() must stay within turn_limits.
+    Requires running LLM + Docker.
+    """
+    agent, model_settings, deps = _make_agent_and_deps("co-test-budget")
+    budget = settings.max_request_limit
+    turn_limits = UsageLimits(request_limit=budget)
+    try:
+        result = await agent.run(
+            "Run this exact shell command: echo budget_test",
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=turn_limits,
+        )
+
+        # Approve and resume with cumulative usage threading
+        while isinstance(result.output, DeferredToolRequests):
+            approvals = DeferredToolResults()
+            for call in result.output.approvals:
+                approvals.approvals[call.tool_call_id] = True
+            result = await agent.run(
+                None,
+                deps=deps,
+                message_history=result.all_messages(),
+                deferred_tool_results=approvals,
+                model_settings=model_settings,
+                usage_limits=turn_limits,
+                usage=result.usage(),
+            )
+
+        # The cumulative request count must not exceed the budget
+        assert result.usage().requests <= budget, (
+            f"Cumulative requests ({result.usage().requests}) exceeded "
+            f"turn budget ({budget})"
+        )
         assert isinstance(result.output, str)
     finally:
         deps.sandbox.cleanup()
