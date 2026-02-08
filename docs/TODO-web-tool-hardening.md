@@ -49,13 +49,13 @@ Integration in `web_fetch`:
 
 ### Items
 
-- [ ] Create `co_cli/tools/_url_safety.py` with `is_url_safe(url)` function
-- [ ] Add pre-request `is_url_safe()` check to `web_fetch` in `co_cli/tools/web.py`
-- [ ] Add post-redirect `is_url_safe()` re-check to `web_fetch`
-- [ ] Add content-type allowlist check before body read in `web_fetch`
-- [ ] Add byte-level body limit before full decode in `web_fetch`
-- [ ] Add functional tests: private IP blocking, redirect-to-private, content-type rejection, truncation
-- [ ] Update `docs/DESIGN-12-tool-web-search.md` security section
+- [x] Create `co_cli/tools/_url_safety.py` with `is_url_safe(url)` function
+- [x] Add pre-request `is_url_safe()` check to `web_fetch` in `co_cli/tools/web.py`
+- [x] Add post-redirect `is_url_safe()` re-check to `web_fetch`
+- [x] Add content-type allowlist check before body read in `web_fetch`
+- [x] Add byte-level body limit before full decode in `web_fetch`
+- [x] Add functional tests: private IP blocking, redirect-to-private, content-type rejection, truncation
+- [x] Update `docs/DESIGN-12-tool-web-search.md` security section
 
 ### File changes
 

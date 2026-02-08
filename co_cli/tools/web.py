@@ -8,12 +8,34 @@ import httpx
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._url_safety import is_url_safe
 
 _MAX_RESULTS = 8
 _SEARCH_TIMEOUT = 12
 _FETCH_TIMEOUT = 15
 _MAX_FETCH_CHARS = 100_000
+_MAX_FETCH_BYTES = 1_048_576  # 1 MB pre-decode limit
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+
+_ALLOWED_CONTENT_TYPES = (
+    "text/",
+    "application/json",
+    "application/xml",
+    "application/xhtml+xml",
+    "application/x-yaml",
+    "application/yaml",
+)
+
+
+def _is_content_type_allowed(content_type: str) -> bool:
+    """Check whether a Content-Type header value is in the text allowlist.
+
+    Empty Content-Type is allowed (servers often omit it for text).
+    """
+    if not content_type:
+        return True
+    mime = content_type.split(";")[0].strip().lower()
+    return any(mime.startswith(prefix) for prefix in _ALLOWED_CONTENT_TYPES)
 
 
 def _get_api_key(ctx: RunContext[CoDeps]) -> str:
@@ -110,6 +132,9 @@ async def web_fetch(
 
     url = url.strip()
 
+    if not is_url_safe(url):
+        raise ModelRetry("web_fetch blocked: URL resolves to a private or internal address.")
+
     try:
         async with httpx.AsyncClient(
             timeout=_FETCH_TIMEOUT,
@@ -125,22 +150,33 @@ async def web_fetch(
     except httpx.HTTPError as e:
         raise ModelRetry(f"web_fetch error: {e}")
 
+    final_url = str(resp.url)
+    if final_url != url and not is_url_safe(final_url):
+        raise ModelRetry("web_fetch blocked: redirect target resolves to a private or internal address.")
+
     content_type = resp.headers.get("content-type", "")
 
+    if not _is_content_type_allowed(content_type):
+        raise ModelRetry(
+            f"web_fetch blocked: unsupported content type '{content_type}'. "
+            "Only text and structured data formats are supported."
+        )
+
+    raw_bytes = resp.content[:_MAX_FETCH_BYTES]
+    text = raw_bytes.decode(resp.encoding or "utf-8", errors="replace")
+
     if "html" in content_type:
-        text = _html_to_markdown(resp.text)
-    else:
-        text = resp.text
+        text = _html_to_markdown(text)
 
     truncated = len(text) > _MAX_FETCH_CHARS
     if truncated:
         text = text[:_MAX_FETCH_CHARS]
 
-    display = f"Content from {url}:\n\n{text}"
+    display = f"Content from {final_url}:\n\n{text}"
 
     return {
         "display": display,
-        "url": url,
+        "url": final_url,
         "content_type": content_type,
         "truncated": truncated,
     }

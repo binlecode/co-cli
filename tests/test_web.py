@@ -12,7 +12,8 @@ from dataclasses import dataclass
 import pytest
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.web import web_search, web_fetch
+from co_cli.tools.web import web_search, web_fetch, _is_content_type_allowed
+from co_cli.tools._url_safety import is_url_safe
 from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
@@ -148,3 +149,114 @@ async def test_web_fetch_plain_text():
     assert isinstance(result, dict)
     assert "display" in result
     assert result["truncated"] is False
+
+
+# --- URL safety (is_url_safe) ---
+
+
+def test_url_safe_blocks_loopback_ipv4():
+    assert is_url_safe("http://127.0.0.1/secret") is False
+
+
+def test_url_safe_blocks_loopback_ipv6():
+    assert is_url_safe("http://[::1]/secret") is False
+
+
+def test_url_safe_blocks_rfc1918_10():
+    assert is_url_safe("http://10.0.0.1/admin") is False
+
+
+def test_url_safe_blocks_rfc1918_172():
+    assert is_url_safe("http://172.16.0.1/admin") is False
+
+
+def test_url_safe_blocks_rfc1918_192():
+    assert is_url_safe("http://192.168.1.1/admin") is False
+
+
+def test_url_safe_blocks_link_local_metadata():
+    assert is_url_safe("http://169.254.169.254/latest/meta-data/") is False
+
+
+def test_url_safe_blocks_metadata_hostname():
+    """metadata.google.internal is in the blocked hostnames list."""
+    assert is_url_safe("http://metadata.google.internal/computeMetadata/v1/") is False
+
+
+def test_url_safe_allows_public_ip():
+    assert is_url_safe("http://1.1.1.1/") is True
+    assert is_url_safe("http://8.8.8.8/") is True
+
+
+def test_url_safe_allows_public_hostname():
+    assert is_url_safe("https://example.com/") is True
+
+
+def test_url_safe_blocks_no_hostname():
+    assert is_url_safe("http:///path") is False
+
+
+def test_url_safe_blocks_invalid_url():
+    assert is_url_safe("not-a-url") is False
+
+
+# --- SSRF integration (web_fetch raises ModelRetry) ---
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_loopback():
+    """web_fetch raises ModelRetry for loopback addresses."""
+    ctx = _make_ctx()
+    with pytest.raises(ModelRetry, match="private or internal address"):
+        await web_fetch(ctx, "http://127.0.0.1/secret")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_metadata():
+    """web_fetch raises ModelRetry for cloud metadata endpoint."""
+    ctx = _make_ctx()
+    with pytest.raises(ModelRetry, match="private or internal address"):
+        await web_fetch(ctx, "http://169.254.169.254/latest/meta-data/")
+
+
+# --- Content-type guard ---
+
+
+def test_content_type_allows_text_html():
+    assert _is_content_type_allowed("text/html; charset=utf-8") is True
+
+
+def test_content_type_allows_text_plain():
+    assert _is_content_type_allowed("text/plain") is True
+
+
+def test_content_type_allows_json():
+    assert _is_content_type_allowed("application/json") is True
+
+
+def test_content_type_rejects_image():
+    assert _is_content_type_allowed("image/png") is False
+
+
+def test_content_type_rejects_pdf():
+    assert _is_content_type_allowed("application/pdf") is False
+
+
+def test_content_type_allows_empty():
+    assert _is_content_type_allowed("") is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_binary_content():
+    """web_fetch raises ModelRetry for binary content types."""
+    ctx = _make_ctx()
+    with pytest.raises(ModelRetry, match="unsupported content type"):
+        await web_fetch(ctx, "https://httpbin.org/image/png")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_allows_json():
+    """web_fetch succeeds for JSON content."""
+    ctx = _make_ctx()
+    result = await web_fetch(ctx, "https://httpbin.org/json")
+    assert "json" in result["content_type"]
