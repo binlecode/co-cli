@@ -30,7 +30,7 @@ Surveyed 10+ agentic systems: Anthropic MCP server, Slack's own MCP server (beta
 
 ### co-cli Current State
 
-**1 tool:** `post_slack_message` (write, `chat:write` scope). Write-only — every other co-cli integration has read+write.
+**1 tool:** `send_slack_message` (write, `chat:write` scope). Write-only — every other co-cli integration has read+write.
 
 ---
 
@@ -41,10 +41,10 @@ Implemented in `co_cli/tools/slack.py`. Registered as read-only tools (no approv
 - `_get_slack_client` helper — extracts/validates client from `ctx.deps`
 - `_format_message` / `_format_ts` — shared display helpers
 - `list_slack_channels(ctx, limit=20, types="public_channel")`
-- `get_slack_channel_history(ctx, channel, limit=15)` — capped at 50
-- `get_slack_thread_replies(ctx, channel, thread_ts, limit=20)`
+- `list_slack_messages(ctx, channel, limit=15)` — capped at 50
+- `list_slack_replies(ctx, channel, thread_ts, limit=20)`
 - `list_slack_users(ctx, limit=30)` — filters deleted/bot users
-- Refactored `post_slack_message` to use `_get_slack_client`
+- Refactored `send_slack_message` to use `_get_slack_client`
 
 **Scopes added:** `channels:read`, `channels:history`, `users:read`
 
@@ -56,7 +56,7 @@ Add thread replies and reactions. Both require approval.
 
 ### 2a. `reply_slack_thread`
 
-Reply to a specific thread. The #1 requested write tool after `post_slack_message` across all surveyed systems.
+Reply to a specific thread. The #1 requested write tool after `send_slack_message` across all surveyed systems.
 
 ```
 reply_slack_thread(ctx, channel, thread_ts, text) -> dict[str, Any]
@@ -73,7 +73,7 @@ Returns:
 - Scope: `chat:write` (already have it)
 - Registration: `agent.tool(reply_slack_thread, requires_approval=True)`
 - Implementation: `chat.postMessage(channel=channel, thread_ts=thread_ts, text=text)`
-- Input validation: same pattern as `post_slack_message`
+- Input validation: same pattern as `send_slack_message`
 
 ### 2b. `add_slack_reaction`
 

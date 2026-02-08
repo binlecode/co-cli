@@ -222,7 +222,7 @@ Following the project-wide design principle (see `docs/DESIGN-co-cli.md` §5.1.2
 **Why empty result for no search matches?**
 
 ```python
-# Correct — query was valid, nothing matched (consistent with search_drive)
+# Correct — query was valid, nothing matched (consistent with search_drive_files)
 return {"display": "No notes found matching: project", "count": 0, "has_more": False}
 
 # Correct — LLM made a fixable error

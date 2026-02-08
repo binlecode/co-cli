@@ -109,9 +109,9 @@ def google_api_error(service: str, error: Exception) -> str:
 | `slack.py` | 27 | (fine) | No change |
 | `slack.py` | 201 | `"Channel ID is required."` | `"Slack: channel ID is required. Use list_slack_channels to find channel IDs."` |
 
-### `draft_email` deduplication
+### `create_email_draft` deduplication
 
-`draft_email` (google_gmail.py:127) manually builds credentials and error handling instead of using `_get_gmail_service()`. Refactor to use the shared helper, which eliminates the duplicated "not configured" message at line 137.
+`create_email_draft` (google_gmail.py:127) manually builds credentials and error handling instead of using `_get_gmail_service()`. Refactor to use the shared helper, which eliminates the duplicated "not configured" message at line 137.
 
 ---
 
@@ -121,7 +121,7 @@ def google_api_error(service: str, error: Exception) -> str:
 
 - [ ] Create `co_cli/tools/_errors.py` with `GOOGLE_NOT_CONFIGURED`, `GOOGLE_API_NOT_ENABLED` constants
 - [ ] Update `google_drive.py` — use shared constants for "not configured" and "API not enabled" messages
-- [ ] Update `google_gmail.py` — use shared constants; refactor `draft_email` to use `_get_gmail_service()`
+- [ ] Update `google_gmail.py` — use shared constants; refactor `create_email_draft` to use `_get_gmail_service()`
 - [ ] Update `google_calendar.py` — use shared constants
 - [ ] Update `shell.py` — add tool prefix and action hint to error message
 - [ ] Update `obsidian.py` — add tool prefix, fix "Ask user" phrasing
@@ -138,7 +138,7 @@ def google_api_error(service: str, error: Exception) -> str:
 | `co_cli/tools/shell.py` | Update ModelRetry message |
 | `co_cli/tools/obsidian.py` | Update 4 ModelRetry messages |
 | `co_cli/tools/google_drive.py` | Use shared constants (2 sites) |
-| `co_cli/tools/google_gmail.py` | Use shared constants (3 sites) + refactor `draft_email` |
+| `co_cli/tools/google_gmail.py` | Use shared constants (3 sites) + refactor `create_email_draft` |
 | `co_cli/tools/google_calendar.py` | Use shared constants (2 sites) |
 | `co_cli/tools/slack.py` | Update 1 ModelRetry message |
 | `tests/test_shell.py` | Update `match=` strings in `pytest.raises(ModelRetry, ...)` |

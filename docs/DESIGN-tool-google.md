@@ -242,12 +242,12 @@ All Google tools return `dict[str, Any]` with a `display` field (pre-formatted s
 
 ```python
 # BAD — LLM reformats, drops URLs
-def search_drive(...) -> list[dict[str, Any]]:
+def search_drive_files(...) -> list[dict[str, Any]]:
     return [{"name": "doc", "webViewLink": "https://..."}]
     # LLM output: "Found 1 file: doc" (URL gone)
 
 # GOOD — URLs baked into display, metadata separate
-def search_drive(...) -> dict[str, Any]:
+def search_drive_files(...) -> dict[str, Any]:
     return {
         "display": "- 2026-01-20  Meeting Notes\n  https://docs.google.com/...",
         "page": 1,
@@ -275,12 +275,12 @@ def search_drive(...) -> dict[str, Any]:
 
 ## Tools
 
-### search_drive (`co_cli/tools/google_drive.py`)
+### search_drive_files (`co_cli/tools/google_drive.py`)
 
 Search for files in Google Drive by keywords with server-managed pagination.
 
 ```
-search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]
+search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]
 
 Args:
     query: Search keywords or metadata query
@@ -309,14 +309,14 @@ _page_tokens: dict[str, list[str]]   # module-level cache
     │  value = [token_for_page_2, token_for_page_3, ...]
     │
     ▼
-search_drive(query="notes", page=1)
+search_drive_files(query="notes", page=1)
     │
     ├── page==1: no pageToken needed
     ├── API returns nextPageToken
     └── store token at _page_tokens["notes"][0]
          │
          ▼
-search_drive(query="notes", page=2)
+search_drive_files(query="notes", page=2)
     │
     ├── page==2: look up _page_tokens["notes"][0]
     ├── pass as pageToken to API
@@ -324,7 +324,7 @@ search_drive(query="notes", page=2)
     └── store token at _page_tokens["notes"][1]
          │
          ▼
-search_drive(query="notes", page=3)  ...and so on
+search_drive_files(query="notes", page=3)  ...and so on
 ```
 
 **Why this approach (vs alternatives):**
@@ -341,7 +341,7 @@ search_drive(query="notes", page=3)  ...and so on
 **Processing Flow:**
 
 ```
-search_drive("meeting notes", page=1)
+search_drive_files("meeting notes", page=1)
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -405,7 +405,7 @@ Fetch the content of a text-based file from Google Drive.
 read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str
 
 Args:
-    file_id: Google Drive file ID (from search_drive results)
+    file_id: Google Drive file ID (from search_drive_files results)
 
 Returns:
     File content as UTF-8 string
@@ -583,12 +583,12 @@ search_emails(query="from:alice", max_results=5)
        Date: ..."
 ```
 
-### draft_email (`co_cli/tools/google_gmail.py`)
+### create_email_draft (`co_cli/tools/google_gmail.py`)
 
 Draft an email in Gmail. Requires human-in-the-loop confirmation.
 
 ```
-draft_email(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str
+create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str
 
 Args:
     to:      Recipient email address
@@ -605,7 +605,7 @@ Raises:
 **Processing Flow:**
 
 ```
-draft_email("user@example.com", "Subject", "Body")
+create_email_draft("user@example.com", "Subject", "Body")
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -819,17 +819,17 @@ raise ModelRetry(
 
 ## Human-in-the-Loop Confirmation
 
-Only `draft_email` requires confirmation among Google tools. Matches the pattern from `shell.py`.
+Only `create_email_draft` requires confirmation among Google tools. Matches the pattern from `shell.py`.
 
 | Tool | Risk | Confirmation |
 |------|------|-------------|
-| `search_drive` | Low (read-only) | None |
+| `search_drive_files` | Low (read-only) | None |
 | `read_drive_file` | Low (read-only) | None |
 | `list_emails` | Low (read-only) | None |
 | `search_emails` | Low (read-only) | None |
 | `list_calendar_events` | Low (read-only) | None |
 | `search_calendar_events` | Low (read-only) | None |
-| `draft_email` | Medium (creates draft) | `rich.prompt.Confirm` |
+| `create_email_draft` | Medium (creates draft) | `rich.prompt.Confirm` |
 
 ### Confirmation Pattern
 
@@ -861,7 +861,7 @@ if not ctx.deps.auto_confirm:
 | Setting | Env Var | Default | Used By |
 |---------|---------|---------|---------|
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Drive, Gmail, Calendar |
-| `auto_confirm` | `CO_CLI_AUTO_CONFIRM` | `false` | Gmail (draft_email) |
+| `auto_confirm` | `CO_CLI_AUTO_CONFIRM` | `false` | Gmail (create_email_draft) |
 
 ### OAuth Scopes
 
@@ -1052,13 +1052,13 @@ Tools see:
 
 | Tool | Writes | Protection |
 |------|--------|------------|
-| `search_drive` | None | Read-only scope |
+| `search_drive_files` | None | Read-only scope |
 | `read_drive_file` | None | Read-only scope |
 | `list_emails` | None | Read-only (gmail.modify includes read) |
 | `search_emails` | None | Read-only (gmail.modify includes read) |
 | `list_calendar_events` | None | Read-only scope |
 | `search_calendar_events` | None | Read-only scope |
-| `draft_email` | Creates Gmail draft | User confirmation + scoped to drafts only |
+| `create_email_draft` | Creates Gmail draft | User confirmation + scoped to drafts only |
 
 ### Graceful Degradation
 
@@ -1076,7 +1076,7 @@ create_deps():
   google_drive = build_google_service(..., None) ──▶ returns None
        │
        ▼
-search_drive():
+search_drive_files():
   ctx.deps.google_drive is None
   └── raise ModelRetry("Google Drive not configured. Set google_credentials_path...")
        │
@@ -1099,7 +1099,7 @@ create_deps():
   google_drive = build_google_service("drive", "v3", creds) ──▶ returns service
        │
        ▼
-search_drive():
+search_drive_files():
   ctx.deps.google_drive is present ──▶ normal execution
 ```
 
@@ -1118,7 +1118,7 @@ def get_drive_service():
     creds = ...
     return build('drive', 'v3', credentials=creds)
 
-def search_drive(query: str) -> list:          # tool_plain, no ctx
+def search_drive_files(query: str) -> list:          # tool_plain, no ctx
     service = get_drive_service()              # Built per-call
     if not service:
         return [{"error": "Not configured"}]   # Error string, not ModelRetry
@@ -1126,7 +1126,7 @@ def search_drive(query: str) -> list:          # tool_plain, no ctx
 # comm.py — BAD: junk drawer mixing Gmail + Calendar + Slack
 def get_google_service(name, version):         # Shared auth with overly broad scopes
     ...
-def draft_email(to, subject, body) -> str:     # tool_plain
+def create_email_draft(to, subject, body) -> str:     # tool_plain
     service = get_google_service('gmail', 'v1')
     ...
 def list_calendar_events() -> str:             # tool_plain
@@ -1146,13 +1146,13 @@ def build_google_service(service_name, version, credentials) -> Any | None:
     ...
 
 # google_drive.py — RunContext, client from deps, ModelRetry, structured output
-def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict:
+def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict:
     service = ctx.deps.google_drive
     if not service:
         raise ModelRetry("Not configured...")
 
 # google_gmail.py — Extracted from comm.py, own file
-def draft_email(ctx: RunContext[CoDeps], to, subject, body) -> str:
+def create_email_draft(ctx: RunContext[CoDeps], to, subject, body) -> str:
     service = ctx.deps.google_gmail
     ...
 
@@ -1216,8 +1216,8 @@ All Google tests skip gracefully when GCP is unavailable:
 |------|---------|
 | `co_cli/google_auth.py` | `ensure_google_credentials()` + `get_google_credentials()` + `build_google_service()` — auto-setup, auth, service builder |
 | `co_cli/deps.py` | `CoDeps` with `google_drive`, `google_gmail`, `google_calendar` fields |
-| `co_cli/tools/google_drive.py` | `search_drive`, `read_drive_file` |
-| `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `draft_email` |
+| `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
+| `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tests/test_google_cloud.py` | Functional tests (Drive, Gmail) |
 

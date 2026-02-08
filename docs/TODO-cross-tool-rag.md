@@ -68,7 +68,7 @@ Key choices validated by the ecosystem:
 ### Search Flow
 
 ```
-Tool (search_notes / search_drive / search_knowledge)
+Tool (search_notes / search_drive_files / search_knowledge)
   │
   ▼
 SearchDB.search(query, source?, limit)
@@ -284,7 +284,7 @@ class Connector(Protocol):
 - Connectors registered in `CoDeps` setup, not hardcoded in `SearchDB`
 - Each connector owns its sync schedule (push/pull, TTL, incremental)
 - `SearchDB.search(source=None)` searches all sources; `source="obsidian"` filters
-- Source-specific tools (`search_notes`, `search_drive`) remain as thin wrappers
+- Source-specific tools (`search_notes`, `search_drive_files`) remain as thin wrappers
 - A future `search_knowledge(query)` tool provides unified cross-source search
 
 ---
@@ -296,7 +296,7 @@ After Phase 1, the tool layer becomes:
 | Tool | Backed by | Notes |
 |------|-----------|-------|
 | `search_notes(query, folder?, tag?)` | `search_db.search(query, source="obsidian")` + folder/tag post-filter | Existing tool, updated |
-| `search_drive(query)` | `search_db.search(query, source="drive")` | Existing tool, updated when Drive connector lands |
+| `search_drive_files(query)` | `search_db.search(query, source="drive")` | Existing tool, updated when Drive connector lands |
 | `search_knowledge(query)` | `search_db.search(query)` | New tool — cross-source, Phase 1+ |
 
 ---

@@ -84,14 +84,14 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/DESIGN-streaming-output.md` — Streaming architecture: API evaluation, `run_stream_events()` decision, Markdown rendering, peer analysis
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-approval-flow-extraction.md` — Extract approval loop from main.py into orchestration module
 - `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
 - `docs/TODO-modelretry-normalization.md` — Cross-tool ModelRetry message consistency pass
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-tool-naming.md` — Standardise tool function names to converged verb_noun pattern
+- `docs/TODO-tool-web-search.md` — Web search tool
+- *(low priority)* `docs/TODO-approval-flow-extraction.md` — Extract approval/streaming orchestration from main.py (refactor, not a bug fix)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

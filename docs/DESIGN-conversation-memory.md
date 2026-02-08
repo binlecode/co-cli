@@ -12,7 +12,7 @@ Parent: `docs/DESIGN-co-cli.md` §7 (Conversation Memory).
 
 `message_history` accumulates every user prompt, assistant response, tool call, and tool return across the session. Two scaling problems emerge:
 
-1. **Tool output bloat** — file contents, search results, and command output dominate token usage. A single `search_drive` or `run_shell_command` return can be 10k+ chars.
+1. **Tool output bloat** — file contents, search results, and command output dominate token usage. A single `search_drive_files` or `run_shell_command` return can be 10k+ chars.
 2. **Unbounded growth** — without governance, history eventually exceeds the model's context window and the API call fails silently or returns degraded output.
 
 ---

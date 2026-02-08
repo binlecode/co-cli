@@ -32,12 +32,12 @@ The Slack tools enable the agent to read channels/users/threads and send message
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Tool Registration                         │
 │                                                                  │
-│  agent.tool(post_slack_message, requires_approval=True)         │
+│  agent.tool(send_slack_message, requires_approval=True)         │
 │    └── Side-effectful: triggers DeferredToolRequests             │
 │                                                                  │
 │  agent.tool(list_slack_channels)       # read-only, no approval  │
-│  agent.tool(get_slack_channel_history) # read-only, no approval  │
-│  agent.tool(get_slack_thread_replies)  # read-only, no approval  │
+│  agent.tool(list_slack_messages) # read-only, no approval  │
+│  agent.tool(list_slack_replies)  # read-only, no approval  │
 │  agent.tool(list_slack_users)          # read-only, no approval  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -50,7 +50,7 @@ The Slack tools enable the agent to read channels/users/threads and send message
 │  _handle_approvals(agent, deps, result, model_settings)         │
 │    │                                                             │
 │    ├── deps.auto_confirm? ──▶ auto-approve                      │
-│    └── Prompt: "Approve post_slack_message(...)? [y/n/a(yolo)]" │
+│    └── Prompt: "Approve send_slack_message(...)? [y/n/a(yolo)]" │
 │         ├── y ──▶ approve                                        │
 │         ├── a ──▶ enable yolo, approve                           │
 │         └── n ──▶ ToolDenied("User denied this action")         │
@@ -62,7 +62,7 @@ The Slack tools enable the agent to read channels/users/threads and send message
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Tool Execution                            │
 │                                                                  │
-│  post_slack_message(ctx: RunContext[CoDeps], channel, text)     │
+│  send_slack_message(ctx: RunContext[CoDeps], channel, text)     │
 │    │                                                             │
 │    ├── Validate channel, text (non-empty)                        │
 │    ├── client = ctx.deps.slack_client                            │
@@ -151,12 +151,12 @@ Formats a single Slack message for display: `YYYY-MM-DD HH:MM <@USER_ID>: text [
 
 ## Tools
 
-### post_slack_message (write, requires approval)
+### send_slack_message (write, requires approval)
 
 Send a message to a Slack channel. Registered with `requires_approval=True` — approval handled by the chat loop, not the tool.
 
 ```
-post_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict[str, Any]
+send_slack_message(ctx: RunContext[CoDeps], channel: str, text: str) -> dict[str, Any]
 
 Args:
     channel: Slack channel name (e.g. '#general') or channel ID
@@ -172,7 +172,7 @@ Raises:
 #### Processing Flow
 
 ```
-post_slack_message("#general", "Hello team!")
+send_slack_message("#general", "Hello team!")
        │
        ▼
 ┌──────────────────────────────────────┐
@@ -226,12 +226,12 @@ Slack API: conversations.list(types=types, limit=limit, exclude_archived=True)
 Scope: channels:read
 ```
 
-### get_slack_channel_history (read-only, no approval)
+### list_slack_messages (read-only, no approval)
 
 Get recent messages from a Slack channel.
 
 ```
-get_slack_channel_history(ctx: RunContext[CoDeps], channel: str, limit: int = 15) -> dict[str, Any]
+list_slack_messages(ctx: RunContext[CoDeps], channel: str, limit: int = 15) -> dict[str, Any]
 
 Args:
     channel: Channel ID (e.g. 'C01ABC123'). Use list_slack_channels to find IDs
@@ -249,12 +249,12 @@ Scope: channels:history
 
 **Limit cap:** Hard-capped at 50 to protect the LLM context window from large message dumps.
 
-### get_slack_thread_replies (read-only, no approval)
+### list_slack_replies (read-only, no approval)
 
 Get replies in a Slack thread.
 
 ```
-get_slack_thread_replies(ctx: RunContext[CoDeps], channel: str, thread_ts: str, limit: int = 20) -> dict[str, Any]
+list_slack_replies(ctx: RunContext[CoDeps], channel: str, thread_ts: str, limit: int = 20) -> dict[str, Any]
 
 Args:
     channel:   Channel ID where the thread lives
@@ -349,9 +349,9 @@ Sending Slack messages is a high-risk, externally-visible action. Approval uses 
 
 ### How It Works
 
-1. `post_slack_message` is registered with `requires_approval=True` in `agent.py`
+1. `send_slack_message` is registered with `requires_approval=True` in `agent.py`
 2. When the LLM calls the tool, pydantic-ai returns a `DeferredToolRequests` instead of executing
-3. The chat loop in `main.py` calls `_handle_approvals()` which prompts: `Approve post_slack_message(channel='#general', text='...')? [y/n/a(yolo)]`
+3. The chat loop in `main.py` calls `_handle_approvals()` which prompts: `Approve send_slack_message(channel='#general', text='...')? [y/n/a(yolo)]`
 4. On `y` or `a`: tool executes normally
 5. On `n`: `ToolDenied("User denied this action")` — LLM sees denial and informs user
 
@@ -405,9 +405,9 @@ Sending Slack messages is a high-risk, externally-visible action. Approval uses 
 
 | Scope | Purpose | Tools |
 |-------|---------|-------|
-| `chat:write` | Post messages to channels the bot is in | `post_slack_message` |
+| `chat:write` | Post messages to channels the bot is in | `send_slack_message` |
 | `channels:read` | List public channels | `list_slack_channels` |
-| `channels:history` | Read messages in channels the bot is in | `get_slack_channel_history`, `get_slack_thread_replies` |
+| `channels:history` | Read messages in channels the bot is in | `list_slack_messages`, `list_slack_replies` |
 | `users:read` | List workspace users | `list_slack_users` |
 
 The bot must be invited to a channel before it can read history or post there.
@@ -454,7 +454,7 @@ create_deps():
   slack_client = None  (no token)
        │
        ▼
-post_slack_message():
+send_slack_message():
   ctx.deps.slack_client is None
   └── raise ModelRetry("Slack not configured. Set slack_bot_token...")
        │
@@ -488,8 +488,8 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 |------|-----------------|
 | `test_slack_post_functional` | Real Slack message posting; accepts `channel_not_found` as proof of auth+API connectivity |
 | `test_list_slack_channels` | Lists channels; asserts dict with `display`, `count`, `has_more` |
-| `test_get_slack_channel_history` | Gets channel messages; accepts `channel_not_found` |
-| `test_get_slack_thread_replies` | Gets thread replies; accepts `channel_not_found`/`thread_not_found` |
+| `test_list_slack_messages` | Gets channel messages; accepts `channel_not_found` |
+| `test_list_slack_replies` | Gets thread replies; accepts `channel_not_found`/`thread_not_found` |
 | `test_list_slack_users` | Lists users; asserts dict with `display`, `count`, `has_more` |
 
 ---
@@ -498,7 +498,7 @@ def _make_ctx(auto_confirm=True, slack_client=None) -> Context:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tools/slack.py` | All Slack tools: `post_slack_message`, `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` |
+| `co_cli/tools/slack.py` | All Slack tools: `send_slack_message`, `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users` |
 | `co_cli/deps.py` | `CoDeps` with `slack_client` field |
 | `co_cli/agent.py` | Tool registration (write tools with approval, read tools without) |
 | `tests/test_slack.py` | Functional tests for all Slack tools |

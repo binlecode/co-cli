@@ -141,7 +141,7 @@ sequenceDiagram
 
 ### 3.2 Tool Execution Flow (Deferred Approval Pattern)
 
-Side-effectful tools (`run_shell_command`, `draft_email`, `post_slack_message`) use pydantic-ai's `requires_approval=True` + `DeferredToolRequests` pattern. Approval lives in the chat loop, not inside tools.
+Side-effectful tools (`run_shell_command`, `create_email_draft`, `send_slack_message`) use pydantic-ai's `requires_approval=True` + `DeferredToolRequests` pattern. Approval lives in the chat loop, not inside tools.
 
 ```mermaid
 sequenceDiagram
@@ -224,8 +224,8 @@ classDiagram
     class SideEffectful {
         <<requires_approval>>
         run_shell_command
-        draft_email
-        post_slack_message
+        create_email_draft
+        send_slack_message
     }
 
     class ReadOnly {
@@ -233,15 +233,15 @@ classDiagram
         search_notes
         list_notes
         read_note
-        search_drive
+        search_drive_files
         read_drive_file
         list_emails
         search_emails
         list_calendar_events
         search_calendar_events
         list_slack_channels
-        get_slack_channel_history
-        get_slack_thread_replies
+        list_slack_messages
+        list_slack_replies
         list_slack_users
     }
 
@@ -278,8 +278,8 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
 
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)
-    agent.tool(draft_email, requires_approval=True)
-    agent.tool(post_slack_message, requires_approval=True)
+    agent.tool(create_email_draft, requires_approval=True)
+    agent.tool(send_slack_message, requires_approval=True)
 
     # Read-only tools — no approval needed
     agent.tool(search_notes)
@@ -805,6 +805,8 @@ CREATE TABLE spans (
 
 **Tool Registration:** All tools use `agent.tool()` with `RunContext[CoDeps]` pattern. Zero `tool_plain()` remaining. See the Agent + Tools class diagram in §4.1 for the full tool inventory and approval classification.
 
+**Naming Convention:** All tool functions use `verb_noun` pattern with a converged verb set: `read` (fetch single item), `list` (enumerate collection), `search` (filtered query), `create` (write-side new object), `send` (deliver message), `run` (execute command). Derived from cross-system analysis (Codex, Gemini CLI, OpenCode).
+
 ### 5.1.1 Tool Return Convention
 
 Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_agent_run()` renders tool returns inline as `FunctionToolResultEvent`s arrive during streaming — `dict` with `display` is printed verbatim, `str` content is shown in a Rich Panel. This transport-layer separation ensures URLs, pagination hints, and formatting reach the user intact regardless of LLM reformatting.
@@ -813,21 +815,21 @@ Tools returning data for the user MUST return `dict[str, Any]` with a `display` 
 
 | Tool | Return type | Has `display`? | Metadata fields |
 |------|------------|----------------|-----------------|
-| `search_drive` | `dict[str, Any]` | Yes — files with URLs, pagination | `page`, `has_more` |
+| `search_drive_files` | `dict[str, Any]` | Yes — files with URLs, pagination | `page`, `has_more` |
 | `read_drive_file` | `str` | No — raw file content | — |
 | `list_emails` | `dict[str, Any]` | Yes — emails with Gmail links | `count` |
 | `search_emails` | `dict[str, Any]` | Yes — emails with Gmail links | `count` |
-| `draft_email` | `str` | No — confirmation message | — |
+| `create_email_draft` | `str` | No — confirmation message | — |
 | `list_calendar_events` | `dict[str, Any]` | Yes — events with Meet/event links | `count` |
 | `search_calendar_events` | `dict[str, Any]` | Yes — events with Meet/event links | `count` |
 | `search_notes` | `dict[str, Any]` | Yes — files with snippets | `count`, `has_more` |
 | `list_notes` | `dict[str, Any]` | Yes — file paths | `count` |
 | `read_note` | `str` | No — raw note content | — |
 | `run_shell_command` | `str` | No — command output | — |
-| `post_slack_message` | `dict[str, Any]` | Yes — confirmation with TS | `channel`, `ts` |
+| `send_slack_message` | `dict[str, Any]` | Yes — confirmation with TS | `channel`, `ts` |
 | `list_slack_channels` | `dict[str, Any]` | Yes — channel list | `count`, `has_more` |
-| `get_slack_channel_history` | `dict[str, Any]` | Yes — message history | `count`, `has_more` |
-| `get_slack_thread_replies` | `dict[str, Any]` | Yes — thread replies | `count`, `has_more` |
+| `list_slack_messages` | `dict[str, Any]` | Yes — message history | `count`, `has_more` |
+| `list_slack_replies` | `dict[str, Any]` | Yes — thread replies | `count`, `has_more` |
 | `list_slack_users` | `dict[str, Any]` | Yes — user list | `count`, `has_more` |
 
 ### 5.1.2 ModelRetry Convention
@@ -895,7 +897,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
 Uses `RunContext[CoDeps]` + `ModelRetry`. Credentials are resolved lazily on first call via `get_cached_google_creds(ctx.deps)` — cached on the `CoDeps` instance for session lifecycle. The API service is built inline.
 
 ```python
-def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
+def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
         raise ModelRetry("Google Drive not configured. ...")
@@ -905,7 +907,7 @@ def search_drive(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str
 
 ### 5.5 Gmail Tool (`co_cli/tools/google_gmail.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern (`get_cached_google_creds(ctx.deps)`). `draft_email` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval. See `docs/DESIGN-tool-google.md` for full design.
+Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern (`get_cached_google_creds(ctx.deps)`). `create_email_draft` is registered with `requires_approval=True` — approval handled by the chat loop. Read-only tools (`list_emails`, `search_emails`) execute without approval. See `docs/DESIGN-tool-google.md` for full design.
 
 ### 5.6 Calendar Tool (`co_cli/tools/google_calendar.py`)
 
@@ -913,19 +915,19 @@ Uses `RunContext[CoDeps]` + `ModelRetry`. Same lazy credential pattern (`get_cac
 
 ### 5.7 Slack Tool (`co_cli/tools/slack.py`)
 
-Uses `RunContext[CoDeps]` + `ModelRetry`. `post_slack_message` is registered with `requires_approval=True` — approval handled by the chat loop. The remaining four tools are read-only. See `docs/DESIGN-tool-slack.md` for full design.
+Uses `RunContext[CoDeps]` + `ModelRetry`. `send_slack_message` is registered with `requires_approval=True` — approval handled by the chat loop. The remaining four tools are read-only. See `docs/DESIGN-tool-slack.md` for full design.
 
 ```python
-def post_slack_message(ctx, channel, text) -> dict[str, Any]:
+def send_slack_message(ctx, channel, text) -> dict[str, Any]:
     """Send a message. Returns {"display": ..., "channel": ..., "ts": ...}."""
 
 def list_slack_channels(ctx, limit=20, types="public_channel") -> dict[str, Any]:
     """List channels. Returns {"display": ..., "count": N, "has_more": bool}."""
 
-def get_slack_channel_history(ctx, channel, limit=15) -> dict[str, Any]:
+def list_slack_messages(ctx, channel, limit=15) -> dict[str, Any]:
     """Recent messages. Returns {"display": ..., "count": N, "has_more": bool}."""
 
-def get_slack_thread_replies(ctx, channel, thread_ts, limit=20) -> dict[str, Any]:
+def list_slack_replies(ctx, channel, thread_ts, limit=20) -> dict[str, Any]:
     """Thread replies. Returns {"display": ..., "count": N, "has_more": bool}."""
 
 def list_slack_users(ctx, limit=30) -> dict[str, Any]:
@@ -954,17 +956,17 @@ def get_cached_google_creds(deps: CoDeps) -> Credentials | None:
 
 | Tool | File | Service | Approval |
 |------|------|---------|----------|
-| `search_drive` | `google_drive.py` | Drive API v3 | No |
+| `search_drive_files` | `google_drive.py` | Drive API v3 | No |
 | `read_drive_file` | `google_drive.py` | Drive API v3 | No |
 | `list_emails` | `google_gmail.py` | Gmail API v1 | No |
 | `search_emails` | `google_gmail.py` | Gmail API v1 | No |
-| `draft_email` | `google_gmail.py` | Gmail API v1 | `requires_approval=True` |
+| `create_email_draft` | `google_gmail.py` | Gmail API v1 | `requires_approval=True` |
 | `list_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
 | `search_calendar_events` | `google_calendar.py` | Calendar API v3 | No |
-| `post_slack_message` | `slack.py` | Slack WebClient | `requires_approval=True` |
+| `send_slack_message` | `slack.py` | Slack WebClient | `requires_approval=True` |
 | `list_slack_channels` | `slack.py` | Slack WebClient | No |
-| `get_slack_channel_history` | `slack.py` | Slack WebClient | No |
-| `get_slack_thread_replies` | `slack.py` | Slack WebClient | No |
+| `list_slack_messages` | `slack.py` | Slack WebClient | No |
+| `list_slack_replies` | `slack.py` | Slack WebClient | No |
 | `list_slack_users` | `slack.py` | Slack WebClient | No |
 
 ---
@@ -1212,8 +1214,8 @@ Side-effectful tools are registered with `requires_approval=True`. When the LLM 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
 | `run_shell_command` | `requires_approval=True` | Arbitrary code execution in sandbox. Safe-prefix commands auto-approved. |
-| `draft_email` | `requires_approval=True` | Creates Gmail draft on user's behalf |
-| `post_slack_message` | `requires_approval=True` | Sends message visible to others |
+| `create_email_draft` | `requires_approval=True` | Creates Gmail draft on user's behalf |
+| `send_slack_message` | `requires_approval=True` | Sends message visible to others |
 | All other tools | None | Read-only operations |
 
 **Bypass for Testing:** Set `auto_confirm: true` in settings.
@@ -1307,7 +1309,7 @@ def test_sandbox_execution():
 
 | Module | Purpose |
 |--------|---------|
-| `main.py` | CLI entry point, chat loop, `_handle_approvals()`, OTel setup |
+| `main.py` | CLI entry point, chat loop, `_stream_agent_run()`, `_handle_approvals()`, OTel setup |
 | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt. Returns `(agent, model_settings, tool_names)` |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` (Pydantic BaseModel) from `settings.json` + env vars |
@@ -1324,7 +1326,7 @@ def test_sandbox_execution():
 | `_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `tools/shell.py` | `run_shell_command` — sandbox execution, `requires_approval=True` |
 | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` — vault search |
-| `tools/google_drive.py` | `search_drive`, `read_drive_file` — Drive API |
-| `tools/google_gmail.py` | `list_emails`, `search_emails`, `draft_email` — Gmail API |
+| `tools/google_drive.py` | `search_drive_files`, `read_drive_file` — Drive API |
+| `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` — Gmail API |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` — Calendar API |
-| `tools/slack.py` | `post_slack_message`, `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users` — Slack WebClient |
+| `tools/slack.py` | `send_slack_message`, `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users` — Slack WebClient |

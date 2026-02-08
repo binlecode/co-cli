@@ -20,12 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool naming standardised**: `search_drive` → `search_drive_files`, `draft_email` → `create_email_draft`, `post_slack_message` → `send_slack_message`, `get_slack_channel_history` → `list_slack_messages`, `get_slack_thread_replies` → `list_slack_replies`. Converged on `verb_noun` pattern. Updated agent registration, tests, and docstrings.
 - **`_display_tool_outputs` removed**: Superseded by inline display in `_stream_agent_run` — tool output now appears in real time during streaming instead of post-hoc.
 - **`_handle_approvals` resumes via streaming**: Was calling `agent.run()` (non-streaming). Now calls `_stream_agent_run()` so post-approval tool results and LLM follow-up also stream.
+- **`README.md`**: Rewritten for v0.3.0+ — REPL slash commands table, Docker+subprocess sandbox with hardening details, automatic context governance, 4-layer config precedence, accurate module/tools inventory.
 - **`docs/TODO-approval-flow-extraction.md`**: Updated line references, coupling table, and added Issues section reflecting streaming design tensions (`DisplayCallback` protocol needed for extraction).
 - **`docs/DESIGN-co-cli.md`**: Updated for streaming architecture and tool renames.
 - **`CLAUDE.md`**: Updated docs inventory — `TODO-streaming-tool-output.md` → `DESIGN-streaming-output.md`, added `TODO-tool-naming.md`.
 
 ### Removed
 - **`docs/TODO-streaming-tool-output.md`**: Replaced by `docs/DESIGN-streaming-output.md` (broader scope — covers full streaming architecture, not just tool output).
+- **`docs/REVIEW-sidekick-cli-good-and-bad.md`**: Patterns fully absorbed into codebase — review no longer relevant.
 
 ---
 
