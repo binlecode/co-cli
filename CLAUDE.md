@@ -92,9 +92,6 @@ See `docs/DESIGN-co-cli.md` for module descriptions, processing flows, and appro
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
 
-### Reviews
-- `docs/REVIEW-sidekick-cli-good-and-bad.md` — sidekick-cli patterns analysis (adopted vs pending vs anti-patterns)
-
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
 
