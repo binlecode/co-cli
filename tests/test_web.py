@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import pytest
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.web import web_search, web_fetch, _is_content_type_allowed
+from co_cli.tools.web import web_search, web_fetch, _is_content_type_allowed, _is_domain_allowed
 from co_cli.tools._url_safety import is_url_safe
 from co_cli.config import settings
 from co_cli.deps import CoDeps
@@ -260,3 +260,123 @@ async def test_web_fetch_allows_json():
     ctx = _make_ctx()
     result = await web_fetch(ctx, "https://httpbin.org/json")
     assert "json" in result["content_type"]
+
+
+# --- Domain policy (_is_domain_allowed) ---
+
+
+def _make_policy_ctx(
+    *,
+    brave_search_api_key: str | None = None,
+    allowed_domains: list[str] | None = None,
+    blocked_domains: list[str] | None = None,
+    web_permission_mode: str = "allow",
+) -> Context:
+    return Context(deps=CoDeps(
+        sandbox=Sandbox(container_name="test"),
+        auto_confirm=True,
+        session_id="test",
+        brave_search_api_key=brave_search_api_key,
+        web_fetch_allowed_domains=allowed_domains or [],
+        web_fetch_blocked_domains=blocked_domains or [],
+        web_permission_mode=web_permission_mode,
+    ))
+
+
+def test_domain_allowed_exact_match():
+    """Allowlist exact match passes."""
+    assert _is_domain_allowed("example.com", ["example.com"], []) is True
+
+
+def test_domain_allowed_subdomain():
+    """Subdomain of an allowed domain passes."""
+    assert _is_domain_allowed("sub.example.com", ["example.com"], []) is True
+
+
+def test_domain_allowed_rejects_unlisted():
+    """Domain not in allowlist is blocked when allowlist is non-empty."""
+    assert _is_domain_allowed("other.com", ["example.com"], []) is False
+
+
+def test_domain_blocked_exact():
+    """Exact match in blocklist is blocked."""
+    assert _is_domain_allowed("evil.com", [], ["evil.com"]) is False
+
+
+def test_domain_blocked_subdomain():
+    """Subdomain of a blocked domain is blocked."""
+    assert _is_domain_allowed("sub.evil.com", [], ["evil.com"]) is False
+
+
+def test_domain_blocked_allows_other():
+    """Unblocked domain passes when only blocklist is set."""
+    assert _is_domain_allowed("good.com", [], ["evil.com"]) is True
+
+
+def test_domain_blocked_overrides_allowed():
+    """Blocklist takes precedence: domain in both lists is blocked."""
+    assert _is_domain_allowed("evil.com", ["evil.com"], ["evil.com"]) is False
+
+
+def test_domain_both_empty_allows_all():
+    """Empty allowlist + empty blocklist → all domains allowed."""
+    assert _is_domain_allowed("anything.com", [], []) is True
+
+
+# --- Permission mode deny ---
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_deny_mode():
+    """web_fetch raises ModelRetry when web_permission_mode is 'deny'."""
+    ctx = _make_policy_ctx(web_permission_mode="deny")
+    with pytest.raises(ModelRetry, match="disabled by policy"):
+        await web_fetch(ctx, "https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_web_search_deny_mode():
+    """web_search raises ModelRetry when web_permission_mode is 'deny'."""
+    ctx = _make_policy_ctx(brave_search_api_key="fake-key", web_permission_mode="deny")
+    with pytest.raises(ModelRetry, match="disabled by policy"):
+        await web_search(ctx, "test query")
+
+
+# --- Domain integration (web_fetch) ---
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocked_domain():
+    """web_fetch raises ModelRetry when domain is in blocked list."""
+    ctx = _make_policy_ctx(blocked_domains=["httpbin.org"])
+    with pytest.raises(ModelRetry, match="not allowed by policy"):
+        await web_fetch(ctx, "https://httpbin.org/html")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_not_in_allowlist():
+    """web_fetch raises ModelRetry when domain is not in allowlist."""
+    ctx = _make_policy_ctx(allowed_domains=["example.com"])
+    with pytest.raises(ModelRetry, match="not allowed by policy"):
+        await web_fetch(ctx, "https://httpbin.org/html")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_in_allowlist():
+    """web_fetch succeeds when domain is in allowlist."""
+    ctx = _make_policy_ctx(allowed_domains=["httpbin.org"])
+    result = await web_fetch(ctx, "https://httpbin.org/html")
+    assert "Herman Melville" in result["display"]
+
+
+# --- Search domains parameter (require BRAVE_SEARCH_API_KEY) ---
+
+
+@_skip_no_key
+@pytest.mark.asyncio
+async def test_web_search_domains_parameter():
+    """web_search with domains parameter scopes results to specified sites."""
+    ctx = _make_policy_ctx(brave_search_api_key=settings.brave_search_api_key)
+    result = await web_search(ctx, "test", domains=["example.com"])
+    assert isinstance(result, dict)
+    assert "results" in result

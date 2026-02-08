@@ -3,28 +3,30 @@
 Last updated against current TODO set (2026-02-08).
 
 Sources:
-- `docs/REVIEW-web-search-vs-top-systems.md`
 - `docs/RESEARCH-cli-agent-tools-landscape-2026.md`
+- `docs/TODO-agent-toolcall-recursive-flow.md`
 - `docs/TODO-web-tool-hardening.md`
+- `co_cli/main.py`
+- `co_cli/tools/web.py`
 
 | TODO (Doc) | Effort | User Impact | Dependencies | ROI |
 | --- | --- | --- | --- | --- |
-| Web Tool Hardening (`docs/TODO-web-tool-hardening.md`) | Medium | High (security + trust) | None | **Best** |
-| MCP Client Phase 1 (`docs/TODO-mcp-client.md`) | Medium | High | Sequence after Web Hardening Phase 1-2 | **High** |
-| Slack Phase 2 (`docs/TODO-slack-tooling.md`) | Small | Medium | None | Medium-High |
-| Subprocess Fallback Policy (`docs/TODO-subprocess-fallback-policy.md`) | Small | Low (niche) | None | Medium |
-| Approval & Interrupt Tests (`docs/TODO-approval-interrupt-tests.md`) | Medium | Low-Medium (reliability) | Better after extraction, but partial value now | Medium-Low |
-| Eval Tool-Calling Expansion (`docs/TODO-eval-tool-calling.md`) | Medium | Low-Medium (quality gate) | None | Medium-Low |
-| Approval Flow Extraction (`docs/TODO-approval-flow-extraction.md`) | Medium | Low (enabler/refactor) | None | Low |
-| Cross-Tool RAG (`docs/TODO-cross-tool-rag.md`) | Large | High (at scale) | sqlite-vec, Ollama | Low |
+| Agent Tool-Call + Recursive Flow Hardening (`docs/TODO-agent-toolcall-recursive-flow.md`) | Medium | High (loop safety, approval correctness, reliability) | None | **Best** |
+| Web Tool Hardening — Remaining Phase 2/3 (`docs/TODO-web-tool-hardening.md`) | Small-Medium | High (security + trust + policy parity) | Phase 1 done | **Best** |
+| MCP Client Support — Phase 1 (`docs/TODO-mcp-client.md`) | Medium | High (extensibility + ecosystem parity) | Sequence after web policy hardening | **High** |
+| Streaming Thinking Display (`docs/TODO-thinking-display.md`) | Small-Medium | Medium (debuggability, tool-routing visibility) | None | Medium-High |
+| Slack Tooling — Phase 2/3 (`docs/TODO-slack-tooling.md`) | Small-Medium | Medium | None | Medium-High |
+| Subprocess Fallback Policy (`docs/TODO-subprocess-fallback-policy.md`) | Small | Medium (safety clarity) | None | Medium |
+| Approval & Interrupt Regression Tests (`docs/TODO-approval-interrupt-tests.md`) | Medium | Medium (reliability regression shield) | Higher value after orchestration extraction | Medium |
+| Cross-Tool RAG (`docs/TODO-cross-tool-rag.md`) | Large | High (at scale) | sqlite-vec, embedding/reranker stack | Low |
 
 ## Recommendations
 
-- **Do first:** `TODO-web-tool-hardening.md` Phase 1 and Phase 2 (SSRF/network guardrails + permission policy).
-- **Then:** `TODO-mcp-client.md` Phase 1 for extensibility and ecosystem parity.
-- **Parallel quick win:** Slack Phase 2 (thread reply + reactions).
+- **Do first:** `TODO-agent-toolcall-recursive-flow.md` Phase A (per-turn recursion budget carry-over) and `TODO-web-tool-hardening.md` Phase 2 (domain/permission policy).
+- **Then:** `TODO-mcp-client.md` Phase 1 for extensibility and benchmark parity.
+- **Parallel quick wins:** `TODO-thinking-display.md` Phase 1 and `TODO-subprocess-fallback-policy.md` (both small/contained).
 
 ## Skip for Now
 
-- **Cross-Tool RAG**: highest effort. Value mostly materializes at scale (100+ notes).
-- **Approval Flow Extraction**: still not implemented and remains a refactor. Do it when a second consumer needs orchestration without Rich, or when approval-test depth becomes blocked.
+- **Cross-Tool RAG**: highest effort; value mainly materializes with larger corpora and multi-source retrieval pressure.
+- **Deep orchestration extraction work** (inside `TODO-agent-toolcall-recursive-flow.md` Phase D): keep behind concrete need (second consumer/headless runtime).

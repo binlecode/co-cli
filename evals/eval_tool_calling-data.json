@@ -1,13 +1,13 @@
 {
-  "model": "ollama-q4",
-  "timestamp": "2026-02-08T15:01:42",
+  "model": "ollama-glm-4.7-flash:q8_0",
+  "timestamp": "2026-02-08T15:08:33",
   "config": {
     "runs": 3,
     "threshold": 0.8,
     "dim_filter": null,
     "case_id_filter": null
   },
-  "overall_accuracy": 1.0,
+  "overall_accuracy": 0.9615384615384616,
   "dim_stats": {
     "arg_extraction": {
       "cases": 6,
@@ -19,8 +19,8 @@
     "error_recovery": {
       "cases": 3,
       "scorable": 3,
-      "passed": 3,
-      "accuracy": 1.0,
+      "passed": 2,
+      "accuracy": 0.6666666666666666,
       "errors": 0
     },
     "refusal": {
@@ -94,7 +94,7 @@
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
-            "cmd": "python --version"
+            "cmd": "python3 --version"
           },
           "error_msg": null,
           "recovered": null
@@ -104,7 +104,7 @@
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
-            "cmd": "python --version"
+            "cmd": "python3 --version"
           },
           "error_msg": null,
           "recovered": null
@@ -114,7 +114,7 @@
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
-            "cmd": "python --version"
+            "cmd": "python3 --version"
           },
           "error_msg": null,
           "recovered": null
@@ -422,8 +422,7 @@
           "error": false,
           "tool_name": "search_emails",
           "tool_args": {
-            "query": "from:dave invoice",
-            "max_results": 10
+            "query": "from:dave invoice"
           },
           "error_msg": null,
           "recovered": null
@@ -433,8 +432,7 @@
           "error": false,
           "tool_name": "search_emails",
           "tool_args": {
-            "query": "from:dave invoice",
-            "max_results": 10
+            "query": "from:dave invoice"
           },
           "error_msg": null,
           "recovered": null
@@ -444,8 +442,7 @@
           "error": false,
           "tool_name": "search_emails",
           "tool_args": {
-            "query": "from:dave invoice",
-            "max_results": 10
+            "query": "from:dave invoice"
           },
           "error_msg": null,
           "recovered": null
@@ -467,6 +464,17 @@
           "tool_name": "list_calendar_events",
           "tool_args": {
             "days_back": 0,
+            "days_ahead": 6
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_calendar_events",
+          "tool_args": {
+            "days_back": 0,
             "days_ahead": 7
           },
           "error_msg": null,
@@ -477,18 +485,7 @@
           "error": false,
           "tool_name": "list_calendar_events",
           "tool_args": {
-            "days_back": 7,
-            "days_ahead": 7
-          },
-          "error_msg": null,
-          "recovered": null
-        },
-        {
-          "passed": true,
-          "error": false,
-          "tool_name": "list_calendar_events",
-          "tool_args": {
-            "days_back": 7,
+            "days_back": 0,
             "days_ahead": 7
           },
           "error_msg": null,
@@ -1012,40 +1009,34 @@
       "id": "er-drive-01",
       "dim": "error_recovery",
       "expect_tool": "search_drive_files",
-      "status": "PASS",
-      "pass_count": 3,
+      "status": "FAIL",
+      "pass_count": 0,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "search_drive_files",
-          "tool_args": {
-            "query": "Q3 revenue report"
-          },
-          "error_msg": null,
-          "recovered": true
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": "model looped: The next request would exceed the request_limit of 3",
+          "recovered": false
         },
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "search_drive_files",
-          "tool_args": {
-            "query": "Q3 revenue report"
-          },
-          "error_msg": null,
-          "recovered": true
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": "model looped: The next request would exceed the request_limit of 3",
+          "recovered": false
         },
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "search_drive_files",
-          "tool_args": {
-            "query": "Q3 revenue report"
-          },
-          "error_msg": null,
-          "recovered": true
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": "model looped: The next request would exceed the request_limit of 3",
+          "recovered": false
         }
       ]
     },

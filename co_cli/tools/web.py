@@ -1,6 +1,7 @@
 """Web intelligence tools: search (Brave) and fetch (direct HTTP)."""
 
 import re
+from urllib.parse import urlparse
 from typing import Any
 
 import html2text
@@ -38,6 +39,27 @@ def _is_content_type_allowed(content_type: str) -> bool:
     return any(mime.startswith(prefix) for prefix in _ALLOWED_CONTENT_TYPES)
 
 
+def _is_domain_allowed(
+    hostname: str, allowed: list[str], blocked: list[str],
+) -> bool:
+    """Check whether a hostname passes domain policy.
+
+    - If hostname matches any entry in *blocked* (exact or subdomain) → False
+    - If *allowed* is non-empty and hostname doesn't match any entry → False
+    - Otherwise → True
+    """
+    hostname = hostname.lower()
+    for domain in blocked:
+        if hostname == domain or hostname.endswith("." + domain):
+            return False
+    if allowed:
+        for domain in allowed:
+            if hostname == domain or hostname.endswith("." + domain):
+                return True
+        return False
+    return True
+
+
 def _get_api_key(ctx: RunContext[CoDeps]) -> str:
     """Extract and validate Brave Search API key from context."""
     key = ctx.deps.brave_search_api_key
@@ -61,24 +83,34 @@ async def web_search(
     ctx: RunContext[CoDeps],
     query: str,
     max_results: int = 5,
+    domains: list[str] | None = None,
 ) -> dict[str, Any]:
     """Search the web via Brave Search. Returns results with title, URL, and snippet.
 
     Args:
         query: Search query string.
         max_results: Number of results to return (default 5, max 8).
+        domains: Optional list of domains to scope the search to (adds site: operators).
     """
+    if ctx.deps.web_permission_mode == "deny":
+        raise ModelRetry("web_search: web access disabled by policy.")
+
     if not query or not query.strip():
         raise ModelRetry("Query is required for web_search.")
 
     api_key = _get_api_key(ctx)
     capped = min(max_results, _MAX_RESULTS)
 
+    effective_query = query.strip()
+    if domains:
+        site_prefix = " OR ".join(f"site:{d}" for d in domains)
+        effective_query = f"{site_prefix} {effective_query}"
+
     try:
         async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
             resp = await client.get(
                 _BRAVE_SEARCH_URL,
-                params={"q": query.strip(), "count": capped},
+                params={"q": effective_query, "count": capped},
                 headers={
                     "Accept": "application/json",
                     "Accept-Encoding": "gzip",
@@ -127,10 +159,21 @@ async def web_fetch(
     Args:
         url: The URL to fetch (must be http:// or https://).
     """
+    if ctx.deps.web_permission_mode == "deny":
+        raise ModelRetry("web_fetch: web access disabled by policy.")
+
     if not url or not re.match(r"https?://", url.strip()):
         raise ModelRetry("web_fetch requires an http:// or https:// URL.")
 
     url = url.strip()
+
+    hostname = urlparse(url).hostname
+    if hostname and not _is_domain_allowed(
+        hostname,
+        ctx.deps.web_fetch_allowed_domains,
+        ctx.deps.web_fetch_blocked_domains,
+    ):
+        raise ModelRetry(f"web_fetch blocked: domain '{hostname}' not allowed by policy.")
 
     if not is_url_safe(url):
         raise ModelRetry("web_fetch blocked: URL resolves to a private or internal address.")

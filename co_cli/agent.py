@@ -24,6 +24,7 @@ from co_cli.tools.web import web_search, web_fetch
 def get_agent(
     *,
     all_approval: bool = False,
+    web_permission_mode: str = "allow",
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
@@ -33,6 +34,9 @@ def get_agent(
         all_approval: When True, register ALL tools with requires_approval=True.
             Used by the eval framework so every tool call returns
             DeferredToolRequests without executing (no ModelRetry loops).
+        web_permission_mode: "allow" (default), "ask" (approval required), or
+            "deny" (tools raise ModelRetry). "deny" is enforced inside the tools;
+            "ask" is wired here via requires_approval.
     """
     provider_name = settings.llm_provider.lower()
 
@@ -128,8 +132,9 @@ def get_agent(
     agent.tool(list_slack_messages, requires_approval=all_approval)
     agent.tool(list_slack_replies, requires_approval=all_approval)
     agent.tool(list_slack_users, requires_approval=all_approval)
-    agent.tool(web_search, requires_approval=all_approval)
-    agent.tool(web_fetch, requires_approval=all_approval)
+    web_approval = all_approval or (web_permission_mode == "ask")
+    agent.tool(web_search, requires_approval=web_approval)
+    agent.tool(web_fetch, requires_approval=web_approval)
 
     tool_names = [
         run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,

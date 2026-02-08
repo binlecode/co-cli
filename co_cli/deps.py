@@ -37,3 +37,6 @@ class CoDeps:
 
     # Batch 5: Web intelligence
     brave_search_api_key: str | None = None
+    web_fetch_allowed_domains: list[str] = field(default_factory=list)
+    web_fetch_blocked_domains: list[str] = field(default_factory=list)
+    web_permission_mode: str = "allow"

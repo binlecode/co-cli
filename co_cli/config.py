@@ -68,12 +68,24 @@ class Settings(BaseModel):
     # Shell safe commands (auto-approved without prompting)
     shell_safe_commands: list[str] = Field(default=_DEFAULT_SAFE_COMMANDS)
 
+    # Web domain policy
+    web_fetch_allowed_domains: list[str] = Field(default=[])
+    web_fetch_blocked_domains: list[str] = Field(default=[])
+    web_permission_mode: Literal["allow", "ask", "deny"] = Field(default="allow")
+
     @field_validator("shell_safe_commands", mode="before")
     @classmethod
     def _parse_safe_commands(cls, v: str | list[str]) -> list[str]:
         if isinstance(v, str):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
+
+    @field_validator("web_fetch_allowed_domains", "web_fetch_blocked_domains", mode="before")
+    @classmethod
+    def _parse_web_domains(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip().lower() for s in v.split(",") if s.strip()]
+        return [s.lower() for s in v]
 
     @field_validator("sandbox_mem_limit")
     @classmethod
@@ -110,6 +122,9 @@ class Settings(BaseModel):
             "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",
             "sandbox_cpus": "CO_CLI_SANDBOX_CPUS",
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
+            "web_fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",
+            "web_fetch_blocked_domains": "CO_CLI_WEB_FETCH_BLOCKED_DOMAINS",
+            "web_permission_mode": "CO_CLI_WEB_PERMISSION_MODE",
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
             "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",

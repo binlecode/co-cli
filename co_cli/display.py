@@ -9,8 +9,8 @@ from co_cli.config import settings
 # -- Theme palettes (keyed by theme name) ------------------------------------
 
 _THEMES: dict[str, dict[str, str]] = {
-    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim"},
-    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim"},
+    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
+    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
 }
 
 # -- Console (single instance, themed) --------------------------------------

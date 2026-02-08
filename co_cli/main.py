@@ -21,8 +21,8 @@ from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, Deferr
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
-    ModelRequest, PartDeltaEvent, TextPartDelta, ToolCallPart, ToolReturnPart,
-    UserPromptPart,
+    ModelRequest, PartDeltaEvent, TextPartDelta, ThinkingPartDelta,
+    ToolCallPart, ToolReturnPart, UserPromptPart,
 )
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.usage import UsageLimits
@@ -119,6 +119,9 @@ def create_deps() -> CoDeps:
         shell_safe_commands=settings.shell_safe_commands,
         slack_client=slack_client,
         brave_search_api_key=settings.brave_search_api_key,
+        web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
+        web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
+        web_permission_mode=settings.web_permission_mode,
     )
 
 
@@ -157,7 +160,7 @@ _RENDER_INTERVAL = 0.05  # 20 FPS — matches aider's baseline
 
 async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
                             model_settings, usage_limits,
-                            deferred_tool_results=None):
+                            deferred_tool_results=None, verbose=False):
     """Run agent with streaming — display tool events and Markdown text inline."""
     pending_cmds: dict[str, str] = {}
     result = None
@@ -165,6 +168,24 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
     text_buffer = ""
     live: Live | None = None
     last_render = 0.0
+    # Thinking state (verbose mode only)
+    thinking_buffer = ""
+    thinking_live: Live | None = None
+    thinking_last_render = 0.0
+
+    def _flush_thinking():
+        """Stop thinking Live and print final panel."""
+        nonlocal thinking_live, thinking_buffer, thinking_last_render
+        if thinking_live:
+            thinking_live.stop()
+            thinking_live = None
+        if thinking_buffer:
+            console.print(Panel(
+                thinking_buffer.rstrip(),
+                title="thinking", border_style="thinking",
+            ))
+            thinking_buffer = ""
+            thinking_last_render = 0.0
 
     try:
         async for event in agent.run_stream_events(
@@ -173,7 +194,33 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
             usage_limits=usage_limits,
             deferred_tool_results=deferred_tool_results,
         ):
+            # -- Thinking deltas (verbose only) --------------------------------
+            if isinstance(event, PartDeltaEvent) and isinstance(event.delta, ThinkingPartDelta):
+                if not verbose or not event.delta.content_delta:
+                    continue
+                thinking_buffer += event.delta.content_delta
+                now = time.monotonic()
+                if now - thinking_last_render >= _RENDER_INTERVAL:
+                    renderable = Panel(
+                        thinking_buffer.rstrip() or "...",
+                        title="thinking", border_style="thinking",
+                    )
+                    if thinking_live is None:
+                        thinking_live = Live(
+                            renderable, console=console, auto_refresh=False,
+                        )
+                        thinking_live.start()
+                    else:
+                        thinking_live.update(renderable)
+                        thinking_live.refresh()
+                    thinking_last_render = now
+                continue
+
+            # -- Text deltas ---------------------------------------------------
             if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+                # Flush thinking panel before first text token
+                if thinking_live or thinking_buffer:
+                    _flush_thinking()
                 text_buffer += event.delta.content_delta
                 streamed_text = True
                 now = time.monotonic()
@@ -190,7 +237,9 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
                     last_render = now
                 continue
 
-            # Commit accumulated Markdown before tool/result output
+            # Commit accumulated state before tool/result output
+            if thinking_live or thinking_buffer:
+                _flush_thinking()
             if live:
                 live.update(Markdown(text_buffer))
                 live.refresh()
@@ -224,18 +273,21 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
                 result = event.result
 
         # Normal completion — final render
+        if thinking_live or thinking_buffer:
+            _flush_thinking()
         if live:
             live.update(Markdown(text_buffer))
             live.refresh()
             live.stop()
             live = None
     finally:
-        # Cancellation cleanup — just stop Live to restore terminal
-        if live:
-            try:
-                live.stop()
-            except Exception:
-                pass
+        # Cancellation cleanup — just stop Live instances to restore terminal
+        for lv in (thinking_live, live):
+            if lv:
+                try:
+                    lv.stop()
+                except Exception:
+                    pass
 
     return result, streamed_text
 
@@ -243,7 +295,7 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
 _CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
 
 
-async def _handle_approvals(agent, deps, result, model_settings, usage_limits):
+async def _handle_approvals(agent, deps, result, model_settings, usage_limits, verbose=False):
     """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
     approvals = DeferredToolResults()
 
@@ -296,12 +348,14 @@ async def _handle_approvals(agent, deps, result, model_settings, usage_limits):
     return await _stream_agent_run(
         agent, deps=deps, message_history=result.all_messages(),
         model_settings=model_settings, usage_limits=usage_limits,
-        deferred_tool_results=approvals,
+        deferred_tool_results=approvals, verbose=verbose,
     )
 
 
-async def chat_loop():
-    agent, model_settings, tool_names = get_agent()
+async def chat_loop(verbose: bool = False):
+    agent, model_settings, tool_names = get_agent(
+        web_permission_mode=settings.web_permission_mode,
+    )
     deps = create_deps()
     completer = WordCompleter(
         [f"/{name}" for name in COMMANDS],
@@ -369,6 +423,7 @@ async def chat_loop():
                             agent, user_input=current_input, deps=deps,
                             message_history=message_history, model_settings=model_settings,
                             usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+                            verbose=verbose,
                         )
 
                         # Handle deferred tool approvals (loop: resumed run may trigger more)
@@ -376,6 +431,7 @@ async def chat_loop():
                             result, streamed_text = await _handle_approvals(
                                 agent, deps, result, model_settings,
                                 UsageLimits(request_limit=settings.max_request_limit),
+                                verbose=verbose,
                             )
 
                         message_history = result.all_messages()
@@ -431,13 +487,14 @@ async def chat_loop():
 @app.command()
 def chat(
     theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Stream LLM thinking/reasoning tokens"),
 ):
     """Start an interactive chat session with Co."""
     if theme:
         settings.theme = theme
         set_theme(theme)
     try:
-        asyncio.run(chat_loop())
+        asyncio.run(chat_loop(verbose=verbose))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
 

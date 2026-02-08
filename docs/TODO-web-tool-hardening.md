@@ -97,13 +97,13 @@ Integration: check `web_permission_mode` at the top of `web_search` and `web_fet
 
 ### Items
 
-- [ ] Add `web_fetch_allowed_domains` and `web_fetch_blocked_domains` settings to `co_cli/config.py`
-- [ ] Implement domain check in `web_fetch` (before request, after URL parse)
-- [ ] Add optional `domains` parameter to `web_search` (Brave `site:` prefix)
-- [ ] Add `web_permission_mode` setting to `co_cli/config.py`
-- [ ] Implement permission mode check in `web_search` and `web_fetch`
-- [ ] Add functional tests: domain allowlist/blocklist, permission mode deny/ask
-- [ ] Update `docs/DESIGN-12-tool-web-search.md` config table with new settings
+- [x] Add `web_fetch_allowed_domains` and `web_fetch_blocked_domains` settings to `co_cli/config.py`
+- [x] Implement domain check in `web_fetch` (before request, after URL parse)
+- [x] Add optional `domains` parameter to `web_search` (Brave `site:` prefix)
+- [x] Add `web_permission_mode` setting to `co_cli/config.py`
+- [x] Implement permission mode check in `web_search` and `web_fetch`
+- [x] Add functional tests: domain allowlist/blocklist, permission mode deny/ask
+- [x] Update `docs/DESIGN-12-tool-web-search.md` config table with new settings
 
 ### File changes
 
