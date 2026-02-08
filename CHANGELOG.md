@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-02-07
+
+### Fixed
+- **History processor naming**: Renamed `trim_old_tool_output` → `truncate_tool_returns` and `sliding_window` → `truncate_history_window` — consistent `truncate_<target>` verb+noun pattern for chained processors sharing the same `list[ModelMessage]` signature. Updated across code, tests, and all design docs.
+
+### Added
+- **Agent factory tests** (`tests/test_agent.py`): 3 functional tests — tool registration completeness, approval flag verification, history processor attachment.
+- **Slack test resilience** (`tests/test_slack.py`): Skip Slack API tests when `SLACK_BOT_TOKEN` is not set instead of failing. Non-API tests (validation, error paths) always run.
+
+---
+
 ## [0.3.2] - 2026-02-07
 
 ### Added
