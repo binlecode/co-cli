@@ -1,6 +1,6 @@
 # TODO: Agent Tool-Call + Recursive Flow Hardening
 
-**Date:** 2026-02-08  
+**Date:** 2026-02-08
 **Origin:** Review of current agent design with focus on tool-calling, deferred approvals, and recursive loop behavior.
 
 ---
@@ -17,28 +17,10 @@ Code loci:
 - `co_cli/agent.py`
 - `co_cli/main.py`
 
-### F2 — Recursive budget is not clearly per-turn cumulative (high risk)
+### F4 — Provider-level malformed tool-call failures are not fully normalized (medium risk)
 
-- `UsageLimits(request_limit=...)` is re-created on each deferred resume call.
-- Without carrying `RunUsage`, request budgeting can reset per hop instead of enforcing one budget across the whole user turn.
-- This can increase loop/exhaustion risk in long tool chains, especially in YOLO mode.
-
-Code loci:
-- `co_cli/main.py` (`_stream_agent_run`, `_handle_approvals`, `chat_loop`)
-
-### F3 — Web tools are behind peer-converged permission/safety baseline (high risk)
-
-- `web_fetch` has no SSRF/private-network guard, no redirect revalidation, no domain policy controls, and no web permission mode (`allow|ask|deny`).
-- Current architecture treats web tools as read-only and ungated by default; top systems converge on explicit URL/network policy controls.
-
-Code loci:
-- `co_cli/tools/web.py`
-- `co_cli/agent.py`
-
-### F4 — Provider-level malformed tool-call failures are not normalized/retried (medium risk)
-
-- Provider HTTP/tool-call argument failures can escape as generic turn-ending errors.
-- Existing retry strategy primarily handles `ModelRetry` from tool code, not all model/provider structured-output failures.
+- HTTP 400 reflection-retry is implemented, but error messages from other provider failures are not yet normalized for model self-healing.
+- No integration test coverage for malformed tool-call recovery behavior.
 
 Code loci:
 - `co_cli/main.py`
@@ -78,33 +60,21 @@ Implication: evaluating only tool-call routing is insufficient; loop safety must
 - Per-tool approval model for side effects.
 - Human-in-the-loop deny/approve semantics with structured feedback.
 - Sandbox-first execution for shell commands.
+- Per-turn cumulative recursion budget across deferred resumes.
+- Web safety: SSRF guard, content-type allowlist, domain policy, permission mode.
+- HTTP 400 reflection-retry for recoverable provider failures.
 
 ### Not yet aligned
 
-- Web safety and policy envelope (network/domain/permission mode).
-- Unified per-turn recursion budget accounting across deferred resumes.
+- Normalized error messages for all provider/tool-call failures (beyond HTTP 400).
 - Decoupled orchestration layer for reliable testing and multiple frontends.
 
 ---
 
 ## 4. Implementation Plan
 
-### Phase A — Per-turn recursion budget hardening
+### Phase C — Provider/tool-call resilience (remaining)
 
-- [ ] Carry `RunUsage` across initial run and every deferred resume.
-- [ ] Enforce a single `UsageLimits` budget across the whole user turn.
-- [ ] Add regression test: multi-hop deferred approvals cannot exceed turn budget.
-
-### Phase B — Web policy convergence (security)
-
-- [ ] Implement SSRF/private-network guard + redirect target re-check.
-- [ ] Add content-type allowlist + byte-limit guardrails.
-- [ ] Add `web_permission_mode: allow|ask|deny`.
-- [ ] Add domain allow/block policy settings.
-
-### Phase C — Provider/tool-call resilience
-
-- [ ] Add targeted retry strategy for recoverable provider/tool-call HTTP failures.
 - [ ] Normalize error messages for model self-healing while preventing silent loops.
 - [ ] Add integration cases for malformed tool-call recovery behavior.
 
@@ -118,9 +88,6 @@ Implication: evaluating only tool-call routing is insufficient; loop safety must
 
 ## 5. Acceptance Criteria
 
-- No deferred approval chain can exceed configured per-turn request budget.
-- Web fetch rejects private/loopback/link-local/metadata targets and unsafe redirects.
-- `allow|ask|deny` web permission behavior is enforced and tested.
 - Recoverable provider tool-call failures retry predictably and do not terminate turns unnecessarily.
 - Orchestrator behavior is testable without terminal I/O.
 

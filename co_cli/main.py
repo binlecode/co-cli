@@ -159,7 +159,7 @@ _RENDER_INTERVAL = 0.05  # 20 FPS — matches aider's baseline
 
 
 async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
-                            model_settings, usage_limits,
+                            model_settings, usage_limits, usage=None,
                             deferred_tool_results=None, verbose=False):
     """Run agent with streaming — display tool events and Markdown text inline."""
     pending_cmds: dict[str, str] = {}
@@ -192,6 +192,7 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
             user_input, deps=deps, message_history=message_history,
             model_settings=model_settings,
             usage_limits=usage_limits,
+            usage=usage,
             deferred_tool_results=deferred_tool_results,
         ):
             # -- Thinking deltas (verbose only) --------------------------------
@@ -295,7 +296,8 @@ async def _stream_agent_run(agent, *, user_input=None, deps, message_history,
 _CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
 
 
-async def _handle_approvals(agent, deps, result, model_settings, usage_limits, verbose=False):
+async def _handle_approvals(agent, deps, result, model_settings, usage_limits,
+                            usage=None, verbose=False):
     """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
     approvals = DeferredToolResults()
 
@@ -348,7 +350,7 @@ async def _handle_approvals(agent, deps, result, model_settings, usage_limits, v
     return await _stream_agent_run(
         agent, deps=deps, message_history=result.all_messages(),
         model_settings=model_settings, usage_limits=usage_limits,
-        deferred_tool_results=approvals, verbose=verbose,
+        usage=usage, deferred_tool_results=approvals, verbose=verbose,
     )
 
 
@@ -417,22 +419,26 @@ async def chat_loop(verbose: bool = False):
                 streamed_text = False
                 http_retries_left = settings.model_http_retries
                 current_input = user_input
+                turn_limits = UsageLimits(request_limit=settings.max_request_limit)
+                turn_usage = None  # cumulative RunUsage across all hops
                 while True:
                     try:
                         result, streamed_text = await _stream_agent_run(
                             agent, user_input=current_input, deps=deps,
                             message_history=message_history, model_settings=model_settings,
-                            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+                            usage_limits=turn_limits, usage=turn_usage,
                             verbose=verbose,
                         )
+                        turn_usage = result.usage()
 
                         # Handle deferred tool approvals (loop: resumed run may trigger more)
                         while isinstance(result.output, DeferredToolRequests):
                             result, streamed_text = await _handle_approvals(
                                 agent, deps, result, model_settings,
-                                UsageLimits(request_limit=settings.max_request_limit),
+                                turn_limits, usage=turn_usage,
                                 verbose=verbose,
                             )
+                            turn_usage = result.usage()
 
                         message_history = result.all_messages()
                         if not streamed_text and isinstance(result.output, str):

@@ -112,10 +112,17 @@ chat_loop():
     message_history = []
 
     loop:
-        result, streamed_text = _stream_agent_run(agent, user_input, deps, message_history)
+        turn_limits = UsageLimits(request_limit=settings.max_request_limit)  # once per turn
+        turn_usage = None
+
+        result, streamed_text = _stream_agent_run(agent, user_input, deps, message_history,
+                                                   usage_limits=turn_limits, usage=turn_usage)
+        turn_usage = result.usage()
 
         while result.output is DeferredToolRequests:   # loop — resumed run may trigger more
-            result, streamed_text = _handle_approvals(agent, deps, result)  # [y/n/a] prompt
+            result, streamed_text = _handle_approvals(agent, deps, result,
+                                                       usage_limits=turn_limits, usage=turn_usage)
+            turn_usage = result.usage()
 
         message_history = result.all_messages()
         if not streamed_text:         # fallback — only when streaming produced no text
@@ -126,6 +133,10 @@ chat_loop():
 ```
 
 **Why `while`, not `if`:** A resumed `_stream_agent_run()` with approved tool results may itself produce another `DeferredToolRequests` — for example, when the LLM chains two side-effectful calls (e.g. user says "cd to /workspace and ls"). Each round needs its own approval cycle.
+
+### Per-Turn Budget Accounting
+
+A single `UsageLimits(request_limit=settings.max_request_limit)` is created **once** before the retry/reflection loop and shared across the initial `_stream_agent_run()`, every deferred-approval resume, and HTTP 400 reflection retries. After each hop, `result.usage()` is passed as the `usage` parameter to the next call — pydantic-ai accumulates internally and checks the cumulative total against the same `UsageLimits`. This prevents a turn with N approval hops from getting N × budget instead of one shared budget.
 
 ### Deferred Approval Pattern
 
@@ -176,7 +187,7 @@ sequenceDiagram
 - **Result** — captured from `AgentRunResultEvent` as the final return value.
 - **Cancellation cleanup** — `finally` block calls `Live.stop()` on interrupt to restore terminal state.
 
-**Signature:** `_stream_agent_run(agent, *, user_input, deps, message_history, model_settings, usage_limits, deferred_tool_results)` — `usage_limits` is a parameter (not read from `settings`). The `settings.max_request_limit` read happens only in `chat_loop`.
+**Signature:** `_stream_agent_run(agent, *, user_input, deps, message_history, model_settings, usage_limits, usage, deferred_tool_results)` — `usage_limits` and `usage` are parameters (not read from `settings`). The `settings.max_request_limit` read happens only in `chat_loop`.
 
 **Returns:** `(result, streamed_text)` — the caller uses `streamed_text` to skip `Markdown(result.output)` when text was already rendered during streaming.
 
