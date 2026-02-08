@@ -95,7 +95,7 @@ agent = Agent(
     system_prompt=system_prompt,
     retries=settings.tool_retries,
     output_type=[str, DeferredToolRequests],
-    history_processors=[trim_old_tool_output, sliding_window],
+    history_processors=[truncate_tool_returns, truncate_history_window],
 )
 ```
 
@@ -103,7 +103,7 @@ All processor logic lives in `co_cli/_history.py` (internal helper, underscore-p
 
 ### 4.2 Processor 1 — Tool Output Trimming
 
-**Function:** `trim_old_tool_output(messages) -> list[ModelMessage]` (sync, no I/O)
+**Function:** `truncate_tool_returns(messages) -> list[ModelMessage]` (sync, no I/O)
 
 Walks older messages (all except the last 2 — the current turn) and truncates `ToolReturnPart.content` exceeding `tool_output_trim_chars` (default 2000 chars).
 
@@ -121,7 +121,7 @@ messages[boundary..]     →  protected (last 2 = current turn)
 
 ### 4.3 Processor 2 — Sliding Window with LLM Summarisation
 
-**Function:** `sliding_window(ctx: RunContext[CoDeps], messages) -> list[ModelMessage]` (async, LLM call)
+**Function:** `truncate_history_window(ctx: RunContext[CoDeps], messages) -> list[ModelMessage]` (async, LLM call)
 
 Triggers when `len(messages)` exceeds `max_history_messages` (default 40). Splits history into three zones:
 
@@ -206,11 +206,11 @@ The prompt is a parameter so callers can override it — `/compact` could use a 
 
 | Callsite | Model | Rationale |
 |----------|-------|-----------|
-| `sliding_window` processor | `settings.summarization_model` if set, else `ctx.model` (primary) | Automatic — cheaper/faster model preferred to minimise latency on every turn |
+| `truncate_history_window` processor | `settings.summarization_model` if set, else `ctx.model` (primary) | Automatic — cheaper/faster model preferred to minimise latency on every turn |
 | `/compact` command | `ctx.agent.model` (always primary) | User-initiated — quality matters more than speed |
 
 **Error handling:** `summarize_messages` raises on failure (network error, rate limit, model error). Callers handle fallback:
-- `sliding_window` catches all exceptions and falls back to `_static_marker(dropped_count)`
+- `truncate_history_window` catches all exceptions and falls back to `_static_marker(dropped_count)`
 - `/compact` catches all exceptions and prints the error, returns `None` (history unchanged)
 
 ### 4.5 `/compact` Command Integration
@@ -239,7 +239,7 @@ All fields live in `co_cli/config.py:Settings` and `settings.reference.json`. St
 |---------|---------|---------|---------|
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per `ToolReturnPart` in older messages. Set to `0` to disable trimming entirely |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Sliding window threshold (message count). Set to `0` to disable automatic compaction |
-| `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` | Model for auto-summarisation in `sliding_window`. Empty string falls back to primary model (`ctx.model`) |
+| `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` | Model for auto-summarisation in `truncate_history_window`. Empty string falls back to primary model (`ctx.model`) |
 
 ### 5.2 Model Resolution
 
@@ -247,7 +247,7 @@ The `summarization_model` setting accepts a pydantic-ai model string (e.g. `"goo
 
 | Callsite | Model used | Rationale |
 |----------|-----------|-----------|
-| `sliding_window` processor | `settings.summarization_model` if set, else `ctx.model` (primary) | Automatic — cheaper/faster model preferred to minimise latency on every turn |
+| `truncate_history_window` processor | `settings.summarization_model` if set, else `ctx.model` (primary) | Automatic — cheaper/faster model preferred to minimise latency on every turn |
 | `/compact` command | `ctx.agent.model` (always primary) | User-initiated — quality matters more than speed |
 
 The primary model is resolved from `llm_provider` + `gemini_model` / `ollama_model` in `co_cli/agent.py:get_agent()`. The `summarization_model` bypasses that chain entirely — it's a direct pydantic-ai model string passed to `Agent(model)`.
@@ -258,16 +258,16 @@ These values are hardcoded in `co_cli/_history.py` and not user-configurable:
 
 | Constant | Value | Location | Purpose |
 |----------|-------|----------|---------|
-| `safe_tail` | `2` | `trim_old_tool_output` | Number of trailing messages protected from trimming (current turn) |
-| `tail_count` | `max(4, max_history_messages // 2)` | `sliding_window` | Messages preserved at the end of the window. At least 4 for usable context, otherwise half the budget |
+| `safe_tail` | `2` | `truncate_tool_returns` | Number of trailing messages protected from trimming (current turn) |
+| `tail_count` | `max(4, max_history_messages // 2)` | `truncate_history_window` | Messages preserved at the end of the window. At least 4 for usable context, otherwise half the budget |
 | Summariser system prompt | `"You are a conversation summariser. Return only the summary."` | `summarize_messages` | Deliberately minimal — prevents preamble, caveats, or follow-up questions |
 
 ### 5.4 Disable Semantics
 
 | Setting | Disable value | Effect |
 |---------|--------------|--------|
-| `tool_output_trim_chars` | `0` | `trim_old_tool_output` returns messages unchanged — no truncation |
-| `max_history_messages` | `0` | `sliding_window` returns messages unchanged — no compaction, no LLM call |
+| `tool_output_trim_chars` | `0` | `truncate_tool_returns` returns messages unchanged — no truncation |
+| `max_history_messages` | `0` | `truncate_history_window` returns messages unchanged — no compaction, no LLM call |
 | `summarization_model` | `""` (default) | Not disabled — falls back to primary model. There is no way to disable summarisation independently of `max_history_messages` |
 
 ---
@@ -278,8 +278,8 @@ These values are hardcoded in `co_cli/_history.py` and not user-configurable:
 sequenceDiagram
     participant Loop as Chat Loop
     participant Agt as agent.run()
-    participant P1 as trim_old_tool_output
-    participant P2 as sliding_window
+    participant P1 as truncate_tool_returns
+    participant P2 as truncate_history_window
     participant LLM as LLM Provider
 
     Loop->>Agt: agent.run(user_input, message_history)
@@ -371,8 +371,8 @@ Tests live in `tests/test_history.py`.
 **Pure tests (no LLM required):**
 - `_find_first_run_end` — simple, with tool calls, no text response
 - `_static_marker` — valid `ModelRequest` structure
-- `trim_old_tool_output` — short content unchanged, long string truncated, dict content truncated, last-exchange protection, threshold-0 disables
+- `truncate_tool_returns` — short content unchanged, long string truncated, dict content truncated, last-exchange protection, threshold-0 disables
 
 **LLM tests (require running provider):**
 - `summarize_messages` — returns non-empty summary string
-- `sliding_window` with threshold exceeded — compacts history, preserves head and tail, inserts summary marker
+- `truncate_history_window` with threshold exceeded — compacts history, preserves head and tail, inserts summary marker

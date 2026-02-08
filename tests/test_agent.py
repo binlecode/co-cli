@@ -58,5 +58,5 @@ def test_history_processors_attached():
     """Agent has both history processors (trim + sliding window)."""
     agent, _model_settings, _tool_names = get_agent()
     processor_names = [p.__name__ for p in agent.history_processors]
-    assert "trim_old_tool_output" in processor_names
-    assert "sliding_window" in processor_names
+    assert "truncate_tool_returns" in processor_names
+    assert "truncate_history_window" in processor_names

@@ -23,8 +23,8 @@ from co_cli._history import (
     _find_first_run_end,
     _static_marker,
     summarize_messages,
-    trim_old_tool_output,
-    sliding_window,
+    truncate_tool_returns,
+    truncate_history_window,
 )
 
 
@@ -54,7 +54,7 @@ def _tool_call_response(name: str, call_id: str = "c1") -> ModelResponse:
 
 
 def _real_run_context(model):
-    """Build a real RunContext for sliding_window tests."""
+    """Build a real RunContext for truncate_history_window tests."""
     from pydantic_ai._run_context import RunContext
     from co_cli.deps import CoDeps
     from co_cli.sandbox import SubprocessBackend
@@ -118,7 +118,7 @@ def test_static_marker_is_valid_request():
 
 
 # ---------------------------------------------------------------------------
-# trim_old_tool_output
+# truncate_tool_returns
 # ---------------------------------------------------------------------------
 
 
@@ -133,7 +133,7 @@ def test_trim_short_content_unchanged(monkeypatch):
         _user("follow-up"),
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert part.content == short
 
@@ -149,7 +149,7 @@ def test_trim_long_string_truncated(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert isinstance(part.content, str)
     assert len(part.content) < 200
@@ -168,7 +168,7 @@ def test_trim_dict_content_truncated(monkeypatch):
         _user("more"),
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert isinstance(part.content, str)
     assert "truncated" in part.content
@@ -182,7 +182,7 @@ def test_trim_last_exchange_protected(monkeypatch):
         _user("q"),
         _tool_return("shell", long_content),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert part.content == long_content  # unchanged
 
@@ -198,7 +198,7 @@ def test_trim_threshold_zero_disables(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert part.content == long_content
 
@@ -216,7 +216,7 @@ def test_trim_multiple_tool_returns_across_messages(monkeypatch):
         _user("q3"),                # last 2 — protected
         _assistant("final"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     # Both old tool returns should be truncated
     part1 = result[1].parts[0]
     assert "truncated" in part1.content
@@ -240,7 +240,7 @@ def test_trim_mixed_parts_in_request(monkeypatch):
         _user("next"),        # last 2 — protected
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     # UserPromptPart untouched
     assert result[0].parts[0].content == "some user text that should stay"
     # ToolReturnPart truncated
@@ -264,7 +264,7 @@ def test_trim_preserves_tool_name_and_call_id(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = trim_old_tool_output(msgs)
+    result = truncate_tool_returns(msgs)
     part = result[1].parts[0]
     assert part.tool_name == "run_shell_command"
     assert part.tool_call_id == "call_abc123"
@@ -329,12 +329,12 @@ async def test_summarize_messages_preserves_file_paths():
 
 
 # ---------------------------------------------------------------------------
-# sliding_window — requires running LLM provider
+# truncate_history_window — requires running LLM provider
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_sliding_window_under_threshold(monkeypatch):
+async def test_truncate_history_window_under_threshold(monkeypatch):
     """When messages are under the threshold, history is returned unchanged."""
     monkeypatch.setattr("co_cli.config.settings.max_history_messages", 100)
 
@@ -349,12 +349,12 @@ async def test_sliding_window_under_threshold(monkeypatch):
     ]
 
     ctx = _real_run_context(agent.model)
-    result = await sliding_window(ctx, msgs)
+    result = await truncate_history_window(ctx, msgs)
     assert result is msgs  # identity — no copy, no change
 
 
 @pytest.mark.asyncio
-async def test_sliding_window_triggers_compaction(monkeypatch):
+async def test_truncate_history_window_triggers_compaction(monkeypatch):
     """When messages exceed threshold, the middle is replaced with a summary.
 
     Requires a running LLM provider.
@@ -381,7 +381,7 @@ async def test_sliding_window_triggers_compaction(monkeypatch):
     assert len(msgs) == 10
 
     ctx = _real_run_context(agent.model)
-    result = await sliding_window(ctx, msgs)
+    result = await truncate_history_window(ctx, msgs)
 
     # Result must be shorter
     assert len(result) < len(msgs)
@@ -403,7 +403,7 @@ async def test_sliding_window_triggers_compaction(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sliding_window_output_is_valid_history(monkeypatch):
+async def test_truncate_history_window_output_is_valid_history(monkeypatch):
     """Compacted history is structurally valid — alternating request/response pattern.
 
     Requires a running LLM provider.
@@ -428,7 +428,7 @@ async def test_sliding_window_output_is_valid_history(monkeypatch):
     ]
 
     ctx = _real_run_context(agent.model)
-    result = await sliding_window(ctx, msgs)
+    result = await truncate_history_window(ctx, msgs)
 
     # Every message is a real ModelRequest or ModelResponse
     for msg in result:

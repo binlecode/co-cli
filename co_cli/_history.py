@@ -4,10 +4,10 @@ Processors are chained via ``Agent(history_processors=[...])``.  They run
 before every model request and transform the message list in-place.
 
 Public API (registered on the agent):
-    trim_old_tool_output  — sync, truncates large ToolReturnPart.content
-    sliding_window        — async, drops middle messages + LLM summary
+    truncate_tool_returns  — sync, truncates large ToolReturnPart.content
+    truncate_history_window — async, drops middle messages + LLM summary
 
-Shared utility (used by sliding_window and /compact):
+Shared utility (used by truncate_history_window and /compact):
     summarize_messages    — async, bare Agent summariser
 """
 
@@ -80,7 +80,7 @@ def _content_length(content: Any) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
-def trim_old_tool_output(
+def truncate_tool_returns(
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Truncate large ``ToolReturnPart.content`` in older messages.
@@ -158,7 +158,7 @@ async def summarize_messages(
 # ---------------------------------------------------------------------------
 
 
-async def sliding_window(
+async def truncate_history_window(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:

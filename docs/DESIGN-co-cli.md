@@ -1052,15 +1052,15 @@ Two `history_processors` are registered on the agent (see `co_cli/_history.py`):
 ```python
 agent = Agent(
     model,
-    history_processors=[trim_old_tool_output, sliding_window],
+    history_processors=[truncate_tool_returns, truncate_history_window],
 )
 ```
 
-**Processor 1 — `trim_old_tool_output` (sync, no I/O):**
+**Processor 1 — `truncate_tool_returns` (sync, no I/O):**
 
 Walks older messages (all except the last 2 — the current turn) and truncates `ToolReturnPart.content` exceeding `tool_output_trim_chars` (default 2000). Handles both `str` and `dict` content (JSON-serialises dicts before measuring). Preserves tool name and call ID so the model can still reference the tool call.
 
-**Processor 2 — `sliding_window` (async, LLM call):**
+**Processor 2 — `truncate_history_window` (async, LLM call):**
 
 When `len(messages)` exceeds `max_history_messages` (default 40):
 1. **Keep head** — first run's messages (up to first `ModelResponse` with `TextPart`)
@@ -1072,7 +1072,7 @@ The summary is injected as a valid `ModelRequest` with `UserPromptPart` at the s
 
 **Shared summarisation — `summarize_messages()`:**
 
-Creates a disposable `Agent(model, output_type=str)` with no tools to prevent tool execution during summarisation. Used by both `sliding_window` and the `/compact` command.
+Creates a disposable `Agent(model, output_type=str)` with no tools to prevent tool execution during summarisation. Used by both `truncate_history_window` and the `/compact` command.
 
 **`/compact` refactored:**
 
@@ -1319,7 +1319,7 @@ def test_sandbox_execution():
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` — health probes and shared table rendering |
 | `banner.py` | ASCII art welcome banner, consumes `StatusInfo` for display |
 | `_commands.py` | Slash command registry, handlers, and `dispatch()` for the REPL |
-| `_history.py` | History processors (`trim_old_tool_output`, `sliding_window`) and `summarize_messages()` |
+| `_history.py` | History processors (`truncate_tool_returns`, `truncate_history_window`) and `summarize_messages()` |
 | `tail.py` | Real-time span viewer (`co tail`) |
 | `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
 | `google_auth.py` | Google credential resolution (ensure/get/cached) — tools resolve lazily |
