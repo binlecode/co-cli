@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-02-08T11:22:10",
+  "config": {
+    "runs": 1,
+    "threshold": 0.8,
+    "dim_filter": "error_recovery",
+    "case_id_filter": null
+  },
+  "overall_accuracy": 1.0,
+  "dim_stats": {
+    "error_recovery": {
+      "cases": 3,
+      "scorable": 3,
+      "passed": 3,
+      "accuracy": 1.0,
+      "errors": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "er-notes-01",
+      "dim": "error_recovery",
+      "expect_tool": "search_notes",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_notes",
+          "tool_args": {
+            "query": "deployment checklist"
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    },
+    {
+      "id": "er-drive-01",
+      "dim": "error_recovery",
+      "expect_tool": "search_drive_files",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_drive_files",
+          "tool_args": {
+            "query": "Q3 revenue report"
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    },
+    {
+      "id": "er-email-01",
+      "dim": "error_recovery",
+      "expect_tool": "list_emails",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_emails",
+          "tool_args": {
+            "max_results": 5
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    }
+  ]
+}

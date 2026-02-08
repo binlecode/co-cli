@@ -34,3 +34,6 @@ class CoDeps:
 
     # Batch 4: Slack client
     slack_client: Any | None = None  # slack_sdk.WebClient at runtime
+
+    # Batch 5: Web intelligence
+    brave_search_api_key: str | None = None

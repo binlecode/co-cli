@@ -1,69 +1,53 @@
-# TODO: Web Search Tool (MVP)
+# TODO: Web Intelligence Tools (MVP)
 
-**Status:** Proposed
-**Date:** 2026-02-07
-**Goal:** Add a minimal, reliable `web_search` tool to co-cli using patterns validated in top CLI systems' source code.
+**Goal:** Add `web_search` and `web_fetch` as baseline perception tools — co-cli's "eyes" for external context. See `DESIGN-co-evolution.md` Phase 1.
 
 ---
 
-## 1. Synthesis from Top CLI Source Code
+## Converged Patterns
 
-### 1.1 Observed implementation patterns
+Two reference systems implement explicit search + fetch tools:
 
-| System | Source signal | Pattern to adopt |
-|---|---|---|
-| Gemini CLI | `packages/core/src/tools/web-search.ts` validates non-empty query, returns structured tool output, and appends sources/citations | Validate inputs aggressively and return structured results with sources |
-| Gemini CLI | `packages/core/src/tools/web-search.test.ts` covers empty query, no-result, error typing, and citation formatting | Add focused behavior tests for empty query, no-result, error, and source formatting |
-| OpenCode | `packages/opencode/src/tool/websearch.ts` enforces timeout + cancellation + permission metadata | Enforce timeout/cancellation and include metadata for observability |
-| Codex | `codex-rs/core/src/config/mod.rs` + `core/tests/suite/web_search.rs` model `web_search_mode` (`disabled`/`cached`/`live`) and policy-aware resolution | Keep a small mode switch in config, default to conservative mode |
-| Aider | `aider/commands.py` + `aider/scrape.py` keeps `/web` as a simple, explicit command path | Keep MVP simple: one tool, one provider, clear UX/errors |
+| System | Search | Fetch | Key patterns |
+|---|---|---|---|
+| Gemini CLI | `google_web_search` — structured results with citations | `web_fetch` — HTML-to-text fallback, 100KB limit, private IP detection | Separate tools, validate inputs, return structured output with source URLs |
+| OpenCode | `websearch` — Exa AI via MCP, 25s timeout | `webfetch` — direct HTTP, TurndownService HTML→markdown, 5MB limit | Separate tools, format param, size limits, permission gate |
 
-### 1.2 Cross-system best practices (synthesized)
+Codex delegates to Claude API's built-in search (not a separate tool — not applicable to co-cli's tool architecture). Aider has no agent-callable web tools.
 
-1. Strong parameter validation (`query` required, bounded length).
-2. Deterministic timeout and cancellation path.
-3. Structured output with source URLs and a display-ready summary.
-4. Actionable, typed errors (`ModelRetry` in co-cli).
-5. Explicit config switch to disable web search in restricted setups.
-6. Start with one provider; defer provider abstraction until needed.
+**Synthesized best practices:**
+
+1. Search and fetch are separate tools (both systems converge).
+2. Strong parameter validation (query required, bounded length).
+3. Hardcoded timeout and size limits (no per-tool config knobs).
+4. Structured output with source URLs and display-ready summary.
+5. HTML-to-markdown conversion for fetched pages.
+6. One provider, no abstraction until a second is needed.
+7. Actionable error messages (`ModelRetry` in co-cli).
 
 ---
 
-## 2. MVP Scope
+## MVP Scope
 
 ### In scope
 
-1. New read-only tool: `web_search(query: str, max_results: int = 5) -> dict[str, Any]`.
-2. Single provider integration (Brave Search API).
-3. Result normalization to:
-   - `title`
-   - `url`
-   - `snippet`
-4. Return object with:
-   - `display` (formatted text for user)
-   - `results` (normalized list)
-   - `count`
-   - `has_more`
-   - `provider`
-5. Config flags and limits:
-   - enable/disable
-   - API key
-   - timeout seconds
-   - default/max result count
+1. `web_search` — query Brave Search API, return structured results.
+2. `web_fetch` — fetch a URL, convert HTML to markdown, return text.
+3. Both read-only (no approval needed).
 
 ### Out of scope (post-MVP)
 
 1. Multi-provider routing/fallback.
-2. Fetching page contents (`web_fetch`) and summarization pipeline.
+2. LLM-powered summarization of fetched content.
 3. Caching/indexing.
-4. Advanced filtering (domain include/exclude, recency windows, locale tuning).
-5. MCP-based search provider integration.
+4. Domain filtering, recency windows, locale tuning.
+5. Private IP / SSRF protection (known limitation — document in security section).
 
 ---
 
-## 3. Proposed co-cli API + Config (MVP)
+## Tool Contracts
 
-### 3.1 Tool contract
+### `web_search`
 
 ```python
 async def web_search(
@@ -71,115 +55,136 @@ async def web_search(
     query: str,
     max_results: int = 5,
 ) -> dict[str, Any]:
-    ...
+    """Search the web. Returns results with title, URL, and snippet."""
 ```
 
 Rules:
+1. Reject empty/whitespace query → `ModelRetry`.
+2. Cap `max_results` to `_MAX_RESULTS = 8`.
+3. Timeout: `_SEARCH_TIMEOUT = 12` seconds.
+4. `ModelRetry` on missing key, timeout, HTTP errors.
 
-1. Reject empty/whitespace query.
-2. Cap `max_results` to config max.
-3. Timeout per request (config-bound).
-4. Raise `ModelRetry` with actionable messages on configuration/network/API errors.
+Return shape:
+```python
+{
+    "display": "1. **Title** — snippet\n   https://...\n\n2. ...",
+    "results": [{"title": str, "url": str, "snippet": str}, ...],
+    "count": int,
+}
+```
 
-### 3.2 Config additions (`co_cli/config.py`)
+### `web_fetch`
 
-1. `web_search_enabled: bool = False`
-2. `web_search_provider: Literal["brave"] = "brave"`
-3. `brave_search_api_key: Optional[str] = None`
-4. `web_search_timeout_sec: int = 12`
-5. `web_search_max_results: int = 8`
+```python
+async def web_fetch(
+    ctx: RunContext[CoDeps],
+    url: str,
+) -> dict[str, Any]:
+    """Fetch a web page and return its content as markdown."""
+```
 
-Env mapping:
+Rules:
+1. Reject non-http/https URLs → `ModelRetry`.
+2. Fetch with httpx, timeout: `_FETCH_TIMEOUT = 15` seconds.
+3. Convert HTML to markdown via `html2text`.
+4. Truncate to `_MAX_FETCH_CHARS = 100_000` (matches gemini-cli).
+5. `ModelRetry` on missing key (if needed for proxy), timeout, HTTP errors.
 
-1. `CO_CLI_WEB_SEARCH_ENABLED`
-2. `BRAVE_SEARCH_API_KEY`
-3. `CO_CLI_WEB_SEARCH_TIMEOUT_SEC`
-4. `CO_CLI_WEB_SEARCH_MAX_RESULTS`
+Return shape:
+```python
+{
+    "display": "Content from https://...:\n\n<converted markdown, truncated>",
+    "url": str,
+    "content_type": str,
+    "truncated": bool,
+}
+```
 
-### 3.3 Deps additions (`co_cli/deps.py`)
-
-1. `web_search_enabled: bool = False`
-2. `web_search_provider: str = "brave"`
-3. `brave_search_api_key: str | None = None`
-4. `web_search_timeout_sec: int = 12`
-5. `web_search_max_results: int = 8`
-
-Wire from `create_deps()` in `co_cli/main.py`.
-
----
-
-## 4. Implementation Plan (MVP)
-
-1. Add `co_cli/tools/web.py`.
-2. Implement `web_search` with `httpx.AsyncClient` and timeout.
-3. Normalize Brave response into canonical result records.
-4. Build compact `display` output (top N with title + URL + snippet).
-5. Register tool in `co_cli/agent.py` as read-only (`agent.tool(web_search)`).
-6. Add settings + env support and wire deps.
-7. Add tests for:
-   - query validation
-   - missing API key
-   - result normalization
-   - no-results behavior
-   - timeout/error mapping
+Note: `web_fetch` does not need the Brave API key. It uses direct HTTP. It's included in MVP because the agent needs to follow URLs from search results — search without fetch is half the "eyes" capability.
 
 ---
 
-## 5. Error Handling Contract
+## Config
 
-Use `ModelRetry` messages that instruct the model/user what to do next.
+One field, following the Slack/Google pattern (key presence = enabled):
 
-Examples:
+**`co_cli/config.py`:**
+```python
+brave_search_api_key: Optional[str] = Field(default=None)
+```
 
-1. Missing config: `Web search not configured. Set BRAVE_SEARCH_API_KEY and enable web_search_enabled.`
-2. Empty query: `Query is required for web_search.`
-3. Timeout: `Web search timed out. Retry with a shorter query.`
-4. Provider failure: `Web search provider error (HTTP 429). Retry later.`
+**Env mapping:**
+```python
+"brave_search_api_key": "BRAVE_SEARCH_API_KEY",
+```
+
+**`co_cli/deps.py`:**
+```python
+brave_search_api_key: str | None = None
+```
+
+No `web_search_enabled` flag — if key is absent, `web_search` raises `ModelRetry` (same as Slack without token). `web_fetch` works without any API key.
 
 ---
 
-## 6. Security + Safety (MVP)
+## Error Handling
 
-1. Treat as read-only tool (no approval prompt required).
-2. Do not execute any URLs/content in browser during search.
-3. Keep strict request timeout and result count cap.
-4. Redact API key from logs/spans.
-5. Add explicit disable switch (`web_search_enabled=false`) for locked-down environments.
+`ModelRetry` messages that tell the model what to do:
+
+| Condition | Message |
+|---|---|
+| Missing API key | `Web search not configured. Set BRAVE_SEARCH_API_KEY in settings or env.` |
+| Empty query | `Query is required for web_search.` |
+| Invalid URL | `web_fetch requires an http:// or https:// URL.` |
+| Timeout | `Web search timed out. Retry with a shorter query.` |
+| HTTP error | `Web search error (HTTP {status}). Retry later.` |
+| Fetch too large | Content truncated (not an error — `truncated: true` in return) |
 
 ---
 
-## 7. Acceptance Criteria
+## Security
 
-1. `web_search` is callable by the agent and returns stable structured output.
-2. Missing/misconfigured API key yields actionable `ModelRetry`.
-3. Tool honors timeout and max result cap.
-4. Tool output includes URLs for attribution.
-5. No changes to approval flow needed for this read-only tool.
+1. Both tools are read-only — no approval prompt.
+2. Hardcoded timeout + size limits prevent resource exhaustion.
+3. API key redacted from OTel spans/logs.
+4. Key absence = disabled (no separate "enabled" flag).
+5. Known limitation: no private IP / SSRF protection in MVP. `web_fetch` will follow any http/https URL. Acceptable because co-cli runs locally, not as a public service.
+
+---
+
+## Implementation Plan
+
+1. Add `httpx` and `html2text` to `pyproject.toml`.
+2. Create `co_cli/tools/web.py` — both `web_search` and `web_fetch`.
+3. Add `brave_search_api_key` to `config.py` (Settings + env mapping).
+4. Add `brave_search_api_key` to `deps.py` (CoDeps).
+5. Wire in `create_deps()` in `main.py`.
+6. Register both tools in `agent.py` as read-only.
+7. Add web tools status row to `status.py`.
+8. Add tests.
+
+---
+
+## Acceptance Criteria
+
+1. `web_search` returns structured results with URLs for attribution.
+2. `web_fetch` returns HTML converted to markdown, truncated at limit.
+3. Missing API key → actionable `ModelRetry`.
+4. Both tools honor timeout and size limits.
+5. No approval flow changes needed.
 6. `uv run pytest` passes.
 
 ---
 
-## 8. File Checklist
+## File Checklist
 
-1. `co_cli/tools/web.py` (new)
-2. `co_cli/agent.py` (register tool)
-3. `co_cli/config.py` (settings + env mapping)
-4. `co_cli/deps.py` (runtime fields)
-5. `co_cli/main.py` (`create_deps` wiring)
-6. `tests/test_web_search.py` (new)
-
----
-
-## 9. Source Code References Consulted
-
-1. `/Users/binle/workspace_genai/gemini-cli/packages/core/src/tools/web-search.ts`
-2. `/Users/binle/workspace_genai/gemini-cli/packages/core/src/tools/web-search.test.ts`
-3. `/Users/binle/workspace_genai/gemini-cli/packages/core/src/tools/web-fetch.ts`
-4. `/Users/binle/workspace_genai/opencode/packages/opencode/src/tool/websearch.ts`
-5. `/Users/binle/workspace_genai/opencode/packages/opencode/src/tool/registry.ts`
-6. `/Users/binle/workspace_genai/codex/codex-rs/core/src/config/mod.rs`
-7. `/Users/binle/workspace_genai/codex/codex-rs/core/tests/suite/web_search.rs`
-8. `/Users/binle/workspace_genai/codex/codex-rs/core/src/client_common.rs`
-9. `/Users/binle/workspace_genai/aider/aider/commands.py`
-10. `/Users/binle/workspace_genai/aider/aider/scrape.py`
-
+| File | Change |
+|---|---|
+| `pyproject.toml` | Add `httpx`, `html2text` |
+| `co_cli/tools/web.py` | New — `web_search`, `web_fetch` |
+| `co_cli/config.py` | Add `brave_search_api_key` + env mapping |
+| `co_cli/deps.py` | Add `brave_search_api_key` field |
+| `co_cli/main.py` | Wire `brave_search_api_key` in `create_deps()` |
+| `co_cli/agent.py` | Register both tools (read-only) |
+| `co_cli/status.py` | Add web tools status row |
+| `tests/test_web.py` | New — query validation, missing key, result normalization, fetch truncation |

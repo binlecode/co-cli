@@ -104,7 +104,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-tool-web-search.md` — Web search tool
+- `docs/TODO-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/TODO-eval-tool-calling.md` — Eval framework for tool-calling quality (statistical golden set, JSONL + script)
 - *(low priority)* `docs/TODO-approval-flow-extraction.md` — Extract approval/streaming orchestration from main.py (refactor, not a bug fix)
 

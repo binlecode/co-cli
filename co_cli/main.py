@@ -116,6 +116,7 @@ def create_deps() -> CoDeps:
         sandbox_max_timeout=settings.sandbox_max_timeout,
         shell_safe_commands=settings.shell_safe_commands,
         slack_client=slack_client,
+        brave_search_api_key=settings.brave_search_api_key,
     )
 
 

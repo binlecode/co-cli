@@ -1,0 +1,582 @@
+{
+  "timestamp": "2026-02-08T11:42:39",
+  "config": {
+    "runs": 1,
+    "threshold": 0.8,
+    "dim_filter": null,
+    "case_id_filter": null
+  },
+  "overall_accuracy": 1.0,
+  "dim_stats": {
+    "arg_extraction": {
+      "cases": 6,
+      "scorable": 6,
+      "passed": 6,
+      "accuracy": 1.0,
+      "errors": 0
+    },
+    "error_recovery": {
+      "cases": 3,
+      "scorable": 3,
+      "passed": 3,
+      "accuracy": 1.0,
+      "errors": 0
+    },
+    "refusal": {
+      "cases": 5,
+      "scorable": 5,
+      "passed": 5,
+      "accuracy": 1.0,
+      "errors": 0
+    },
+    "tool_selection": {
+      "cases": 12,
+      "scorable": 12,
+      "passed": 12,
+      "accuracy": 1.0,
+      "errors": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "ts-shell-01",
+      "dim": "tool_selection",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "ls -la /tmp"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-shell-02",
+      "dim": "tool_selection",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "python3 --version"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-notes-01",
+      "dim": "tool_selection",
+      "expect_tool": "search_notes",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_notes",
+          "tool_args": {
+            "query": "project X"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-notes-02",
+      "dim": "tool_selection",
+      "expect_tool": "read_note",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "read_note",
+          "tool_args": {
+            "filename": "meeting-2024.md"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-notes-03",
+      "dim": "tool_selection",
+      "expect_tool": "list_notes",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_notes",
+          "tool_args": {},
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-drive-01",
+      "dim": "tool_selection",
+      "expect_tool": "search_drive_files",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_drive_files",
+          "tool_args": {
+            "query": "Q4 budget"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-drive-02",
+      "dim": "tool_selection",
+      "expect_tool": "read_drive_file",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "read_drive_file",
+          "tool_args": {
+            "file_id": "abc123"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-email-01",
+      "dim": "tool_selection",
+      "expect_tool": "list_emails",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_emails",
+          "tool_args": {
+            "max_results": 5
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-email-02",
+      "dim": "tool_selection",
+      "expect_tool": "create_email_draft",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "create_email_draft",
+          "tool_args": {
+            "to": "alice@example.com",
+            "subject": "Meeting Follow-up",
+            "body": "Thanks for attending"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-email-03",
+      "dim": "tool_selection",
+      "expect_tool": "search_emails",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_emails",
+          "tool_args": {
+            "query": "from:dave invoice",
+            "max_results": 10
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-cal-01",
+      "dim": "tool_selection",
+      "expect_tool": "list_calendar_events",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_calendar_events",
+          "tool_args": {
+            "days_ahead": 7
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ts-cal-02",
+      "dim": "tool_selection",
+      "expect_tool": "search_calendar_events",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_calendar_events",
+          "tool_args": {
+            "query": "dentist",
+            "days_ahead": 30
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-shell-01",
+      "dim": "arg_extraction",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "echo hello world"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-shell-02",
+      "dim": "arg_extraction",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "wc -l /etc/hosts"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-email-01",
+      "dim": "arg_extraction",
+      "expect_tool": "create_email_draft",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "create_email_draft",
+          "tool_args": {
+            "to": "bob@co.dev",
+            "subject": "Update",
+            "body": "See attached report"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-drive-01",
+      "dim": "arg_extraction",
+      "expect_tool": "search_drive_files",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_drive_files",
+          "tool_args": {
+            "query": "quarterly report"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-notes-01",
+      "dim": "arg_extraction",
+      "expect_tool": "search_notes",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_notes",
+          "tool_args": {
+            "query": "architecture decisions"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "ae-cal-01",
+      "dim": "arg_extraction",
+      "expect_tool": "search_calendar_events",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_calendar_events",
+          "tool_args": {
+            "query": "dentist"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "rf-social-01",
+      "dim": "refusal",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "rf-summary-01",
+      "dim": "refusal",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "rf-rephrase-01",
+      "dim": "refusal",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "rf-greeting-01",
+      "dim": "refusal",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "rf-preference-01",
+      "dim": "refusal",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "er-notes-01",
+      "dim": "error_recovery",
+      "expect_tool": "search_notes",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_notes",
+          "tool_args": {
+            "query": "deployment checklist"
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    },
+    {
+      "id": "er-drive-01",
+      "dim": "error_recovery",
+      "expect_tool": "search_drive_files",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "search_drive_files",
+          "tool_args": {
+            "query": "Q3 revenue report"
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    },
+    {
+      "id": "er-email-01",
+      "dim": "error_recovery",
+      "expect_tool": "list_emails",
+      "status": "PASS",
+      "pass_count": 1,
+      "total_runs": 1,
+      "valid_runs": 1,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "list_emails",
+          "tool_args": {
+            "max_results": 5
+          },
+          "error_msg": null,
+          "recovered": true
+        }
+      ]
+    }
+  ]
+}

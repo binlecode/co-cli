@@ -23,6 +23,8 @@ EXPECTED_TOOLS = {
     "list_slack_messages",
     "list_slack_replies",
     "list_slack_users",
+    "web_search",
+    "web_fetch",
 }
 
 EXPECTED_APPROVAL_TOOLS = {

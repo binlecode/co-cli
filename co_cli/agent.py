@@ -18,12 +18,21 @@ from co_cli.tools.slack import (
     list_slack_replies,
     list_slack_users,
 )
+from co_cli.tools.web import web_search, web_fetch
 
 
-def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
+def get_agent(
+    *,
+    all_approval: bool = False,
+) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
     Supports 'ollama' and 'gemini' (default) via config.
+
+    Args:
+        all_approval: When True, register ALL tools with requires_approval=True.
+            Used by the eval framework so every tool call returns
+            DeferredToolRequests without executing (no ModelRetry loops).
     """
     provider_name = settings.llm_provider.lower()
 
@@ -105,20 +114,22 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(send_slack_message, requires_approval=True)
 
-    # Read-only tools — no approval needed
-    agent.tool(search_notes)
-    agent.tool(list_notes)
-    agent.tool(read_note)
-    agent.tool(search_drive_files)
-    agent.tool(read_drive_file)
-    agent.tool(list_emails)
-    agent.tool(search_emails)
-    agent.tool(list_calendar_events)
-    agent.tool(search_calendar_events)
-    agent.tool(list_slack_channels)
-    agent.tool(list_slack_messages)
-    agent.tool(list_slack_replies)
-    agent.tool(list_slack_users)
+    # Read-only tools — no approval needed (unless all_approval for eval)
+    agent.tool(search_notes, requires_approval=all_approval)
+    agent.tool(list_notes, requires_approval=all_approval)
+    agent.tool(read_note, requires_approval=all_approval)
+    agent.tool(search_drive_files, requires_approval=all_approval)
+    agent.tool(read_drive_file, requires_approval=all_approval)
+    agent.tool(list_emails, requires_approval=all_approval)
+    agent.tool(search_emails, requires_approval=all_approval)
+    agent.tool(list_calendar_events, requires_approval=all_approval)
+    agent.tool(search_calendar_events, requires_approval=all_approval)
+    agent.tool(list_slack_channels, requires_approval=all_approval)
+    agent.tool(list_slack_messages, requires_approval=all_approval)
+    agent.tool(list_slack_replies, requires_approval=all_approval)
+    agent.tool(list_slack_users, requires_approval=all_approval)
+    agent.tool(web_search, requires_approval=all_approval)
+    agent.tool(web_fetch, requires_approval=all_approval)
 
     tool_names = [
         run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,
@@ -128,6 +139,7 @@ def get_agent() -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSetting
         list_calendar_events.__name__, search_calendar_events.__name__,
         list_slack_channels.__name__, list_slack_messages.__name__,
         list_slack_replies.__name__, list_slack_users.__name__,
+        web_search.__name__, web_fetch.__name__,
     ]
 
     return agent, model_settings, tool_names

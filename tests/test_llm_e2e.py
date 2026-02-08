@@ -1,8 +1,11 @@
 import os
 
 import pytest
+from pydantic_ai import DeferredToolRequests
 
 from co_cli.agent import get_agent
+from co_cli.deps import CoDeps
+from co_cli.sandbox import Sandbox
 
 
 @pytest.mark.asyncio
@@ -61,3 +64,39 @@ async def test_agent_e2e_ollama():
         assert "OK" in result.output
     except Exception as e:
         pytest.fail(f"Ollama E2E failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_ollama_tool_calling():
+    """Ollama model selects the correct tool and emits valid args.
+
+    Validates that quantized models can produce structured tool-call JSON.
+    This is the gate test for switching between quant levels (e.g. q8_0 → q4_k_m).
+    Requires LLM_PROVIDER=ollama and Ollama server running.
+    """
+    if os.getenv("LLM_PROVIDER") != "ollama":
+        return  # Not targeting Ollama this run
+
+    agent, model_settings, _ = get_agent()
+    deps = CoDeps(
+        sandbox=Sandbox(container_name="test"),
+        auto_confirm=False,
+        session_id="test",
+    )
+
+    result = await agent.run(
+        "Run this shell command: echo hello",
+        deps=deps,
+        model_settings=model_settings,
+    )
+
+    # run_shell_command requires approval → must return DeferredToolRequests
+    assert isinstance(result.output, DeferredToolRequests), (
+        f"Expected tool call, got text: {result.output!r}"
+    )
+
+    calls = list(result.output.approvals)
+    assert len(calls) >= 1, "No tool calls in DeferredToolRequests"
+    assert calls[0].tool_name == "run_shell_command", (
+        f"Wrong tool selected: {calls[0].tool_name}"
+    )

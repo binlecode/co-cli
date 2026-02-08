@@ -42,6 +42,7 @@ class Settings(BaseModel):
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
     slack_bot_token: Optional[str] = Field(default=None)
+    brave_search_api_key: Optional[str] = Field(default=None)
     google_credentials_path: Optional[str] = Field(default=None)
     
     # Behavior
@@ -84,7 +85,7 @@ class Settings(BaseModel):
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
     ollama_host: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="glm-4.7-flash:q8_0")
+    ollama_model: str = Field(default="glm-4.7-flash:q4_k_m")
     gemini_model: str = Field(default="gemini-2.0-flash")
 
     @model_validator(mode='before')
@@ -94,6 +95,7 @@ class Settings(BaseModel):
         env_map = {
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "slack_bot_token": "SLACK_BOT_TOKEN",
+            "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "auto_confirm": "CO_CLI_AUTO_CONFIRM",
             "docker_image": "CO_CLI_DOCKER_IMAGE",
