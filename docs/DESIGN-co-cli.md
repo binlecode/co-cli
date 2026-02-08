@@ -216,6 +216,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tools/slack.py` | `send_slack_message`, `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users` |
 | `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
+| `scripts/eval_tool_calling.py` | Eval framework — golden case scoring, model tagging, multi-baseline comparison |
 
 ## Dependencies
 

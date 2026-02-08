@@ -106,10 +106,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-eval-tool-calling.md` — Eval framework for tool-calling quality (statistical golden set, JSONL + script)
 - `docs/TODO-web-tool-hardening.md` — Web tool safety: SSRF protection, content-type guard, domain policy, permission mode
-- `docs/TODO-ollama-tool-call-resilience.md` — Reflect ModelHTTPError 400 back to model (not blind retry), enrich system prompt for small-model tool calling
-- *(low priority)* `docs/TODO-approval-flow-extraction.md` — Extract approval/streaming orchestration from main.py (refactor, not a bug fix)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

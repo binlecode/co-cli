@@ -223,6 +223,29 @@ Process (one Python interpreter)
 
 Mutable fields use `field(default_factory=...)` so each `CoDeps` gets its own empty collection. When the session ends, the `CoDeps` instance is garbage-collected along with all its accumulated state.
 
+### Eval Framework
+
+The eval suite (`scripts/eval_tool_calling.py`) measures tool-calling quality across all 18 tools. It uses `get_agent(all_approval=True)` so every tool call returns `DeferredToolRequests` without executing — the eval inspects tool name and args without needing real credentials.
+
+**Scoring dimensions:** `tool_selection` (correct tool picked), `arg_extraction` (correct args extracted), `refusal` (no tool call for out-of-scope prompts), `error_recovery` (graceful recovery after tool failure).
+
+**Golden cases:** `evals/tool_calling.jsonl` (~26 JSONL lines). Each case specifies `expect_tool`, `expect_args`, and `arg_match` mode (`exact` or `subset`).
+
+**Model tagging:** Every saved results JSON includes a `model` field, auto-detected from `settings.llm_provider` + model name (e.g. `gemini-2.0-flash`, `ollama-glm-4.7-flash:q8_0`). Override with `--model-tag`.
+
+**Baseline comparison:** The runner auto-discovers `evals/baseline-*.json` and shows a model comparison matrix. Relative gate checks per-dimension accuracy against each baseline — degradation beyond `--max-degradation` (default 10pp) fails the run.
+
+**Typical workflow:**
+
+```
+# Save baseline per model variant
+LLM_PROVIDER=gemini uv run python scripts/eval_tool_calling.py --save evals/baseline-gemini.json
+LLM_PROVIDER=ollama uv run python scripts/eval_tool_calling.py --save evals/baseline-ollama.json
+
+# Run eval — auto-discovers baselines, shows comparison matrix
+uv run python scripts/eval_tool_calling.py
+```
+
 ## 3. Config
 
 LLM provider settings are managed in `get_agent()` and documented in [DESIGN-03-llm-models.md](DESIGN-03-llm-models.md).
@@ -239,3 +262,6 @@ LLM provider settings are managed in `get_agent()` and documented in [DESIGN-03-
 |------|---------|
 | `co_cli/agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
 | `co_cli/deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
+| `scripts/eval_tool_calling.py` | Eval runner — golden case scoring, model tagging, baseline comparison |
+| `evals/tool_calling.jsonl` | Golden eval cases (JSONL) |
+| `evals/baseline-*.json` | Saved eval baselines per model variant |

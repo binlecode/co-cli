@@ -1,4 +1,5 @@
 {
+  "model": "ollama-glm-4.7-flash:q8_0",
   "timestamp": "2026-02-08T11:42:39",
   "config": {
     "runs": 1,

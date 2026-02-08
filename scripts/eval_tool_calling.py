@@ -2,7 +2,7 @@
 
 Runs golden JSONL cases through the real agent, extracts tool calls,
 and scores them against expected values. Supports majority-vote scoring,
-absolute/relative gates, and baseline comparison.
+absolute/relative gates, model tagging, and multi-baseline comparison.
 
 Prerequisites:
   - LLM provider configured (gemini_api_key or ollama running)
@@ -11,8 +11,8 @@ Prerequisites:
 Usage:
     uv run python scripts/eval_tool_calling.py
     uv run python scripts/eval_tool_calling.py --runs 5 --threshold 0.90
-    uv run python scripts/eval_tool_calling.py --dim tool_selection --save baseline.json
-    uv run python scripts/eval_tool_calling.py --compare baseline.json --max-degradation 0.05
+    uv run python scripts/eval_tool_calling.py --model-tag ollama-q4 --save evals/baseline-q4.json
+    uv run python scripts/eval_tool_calling.py --compare evals/baseline-gemini.json evals/baseline-q8.json
 """
 
 import argparse
@@ -30,8 +30,23 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.sandbox import SubprocessBackend
+
+
+# ---------------------------------------------------------------------------
+# Model tag detection
+# ---------------------------------------------------------------------------
+
+def detect_model_tag() -> str:
+    """Auto-detect a model tag from the current LLM config."""
+    provider = settings.llm_provider.lower()
+    if provider == "gemini":
+        return f"gemini-{settings.gemini_model}"
+    if provider == "ollama":
+        return f"ollama-{settings.ollama_model}"
+    return provider
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +402,7 @@ def print_dim_summary(stats: dict[str, dict[str, Any]]) -> None:
 def check_gates(
     stats: dict[str, dict[str, Any]],
     threshold: float,
-    baseline_path: str | None,
+    baselines: list[dict[str, Any]] | None,
     max_degradation: float,
 ) -> int:
     """Check absolute and relative gates. Returns exit code."""
@@ -404,23 +419,23 @@ def check_gates(
     if not abs_pass:
         return 1
 
-    # Relative gate (only if baseline provided)
-    if baseline_path:
-        with open(baseline_path) as f:
-            baseline = json.load(f)
-        baseline_stats = baseline.get("dim_stats", {})
-
+    # Relative gate — check against every baseline
+    if baselines:
         rel_pass = True
-        for dim, current in stats.items():
-            prev = baseline_stats.get(dim, {})
-            prev_acc = prev.get("accuracy", 0.0)
-            drop = prev_acc - current["accuracy"]
-            if drop > max_degradation:
-                print(
-                    f"Relative gate:  FAIL ({dim} dropped {drop:.1%} > "
-                    f"{max_degradation:.1%} max)"
-                )
-                rel_pass = False
+        for baseline in baselines:
+            bl_model = baseline.get("model", "baseline")
+            baseline_stats = baseline.get("dim_stats", {})
+
+            for dim, current in stats.items():
+                prev = baseline_stats.get(dim, {})
+                prev_acc = prev.get("accuracy", 0.0)
+                drop = prev_acc - current["accuracy"]
+                if drop > max_degradation:
+                    print(
+                        f"Relative gate:  FAIL ({dim} dropped {drop:.1%} > "
+                        f"{max_degradation:.1%} max vs {bl_model})"
+                    )
+                    rel_pass = False
 
         if not rel_pass:
             return 2
@@ -437,6 +452,7 @@ def _build_result_data(
     results: list[CaseResult],
     stats: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    model_tag: str,
 ) -> dict[str, Any]:
     """Build the structured result data used by both JSON and MD outputs."""
     total_scorable = sum(s["scorable"] for s in stats.values())
@@ -444,6 +460,7 @@ def _build_result_data(
     overall_acc = total_passed / total_scorable if total_scorable > 0 else 0.0
 
     return {
+        "model": model_tag,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "config": {
             "runs": args.runs,
@@ -487,11 +504,12 @@ def save_data_json(
     results: list[CaseResult],
     stats: dict[str, dict[str, Any]],
     args: argparse.Namespace,
+    model_tag: str,
     path: Path | None = None,
 ) -> Path:
     """Save detailed results JSON for --compare and re-review."""
     path = path or _OUTPUT_DIR / "eval_tool_calling-data.json"
-    data = _build_result_data(results, stats, args)
+    data = _build_result_data(results, stats, args, model_tag)
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
     return path
@@ -503,7 +521,8 @@ def save_result_md(
     args: argparse.Namespace,
     exit_code: int,
     elapsed: float,
-    baseline_data: dict[str, Any] | None = None,
+    model_tag: str,
+    baselines: list[dict[str, Any]] | None = None,
     path: Path | None = None,
 ) -> Path:
     """Save a human-readable markdown report."""
@@ -519,6 +538,7 @@ def save_result_md(
 
     w(f"# Eval: tool-calling — {gate_status}")
     w("")
+    w(f"**Model**: {model_tag}  ")
     w(f"**Date**: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     w(f"**Runs per case**: {args.runs}  ")
     w(f"**Threshold**: {args.threshold:.0%}  ")
@@ -569,53 +589,9 @@ def save_result_md(
             w(f"- **Relative gate**: PASS (no dimension dropped > {args.max_degradation:.1%})")
     w("")
 
-    # Model comparison (when --compare is provided)
-    if baseline_data:
-        bl_stats = baseline_data.get("dim_stats", {})
-        bl_overall = baseline_data.get("overall_accuracy", 0.0)
-        bl_ts = baseline_data.get("timestamp", "unknown")
-
-        w("## Model Comparison vs Baseline")
-        w("")
-        w(f"Baseline saved: {bl_ts}  ")
-        w(f"Baseline file: `{args.compare}`")
-        w("")
-        w("| Dimension | Baseline | Current | Delta |")
-        w("|-----------|----------|---------|-------|")
-        for dim, s in stats.items():
-            bl_dim = bl_stats.get(dim, {})
-            bl_acc = bl_dim.get("accuracy", 0.0)
-            cur_acc = s["accuracy"]
-            delta = cur_acc - bl_acc
-            sign = "+" if delta > 0 else ""
-            w(f"| {dim} | {bl_acc:.1%} | {cur_acc:.1%} | {sign}{delta:.1%} |")
-        delta_overall = overall_acc - bl_overall
-        sign = "+" if delta_overall > 0 else ""
-        w(f"| **OVERALL** | **{bl_overall:.1%}** | **{overall_acc:.1%}** | **{sign}{delta_overall:.1%}** |")
-        w("")
-
-        # Per-case diff: cases that flipped status vs baseline
-        bl_cases = {c["id"]: c for c in baseline_data.get("cases", [])}
-        regressions = []
-        improvements = []
-        for cr in results:
-            bl_case = bl_cases.get(cr.case.id)
-            if not bl_case:
-                continue
-            bl_status = bl_case.get("status", "PASS")
-            if cr.status != bl_status:
-                if cr.status == "FAIL" and bl_status == "PASS":
-                    regressions.append(cr.case.id)
-                elif cr.status == "PASS" and bl_status == "FAIL":
-                    improvements.append(cr.case.id)
-
-        if regressions:
-            w(f"**Regressions** (PASS → FAIL): {', '.join(f'`{r}`' for r in regressions)}  ")
-        if improvements:
-            w(f"**Improvements** (FAIL → PASS): {', '.join(f'`{r}`' for r in improvements)}  ")
-        if not regressions and not improvements:
-            w("No case status changes vs baseline.")
-        w("")
+    # Model comparison
+    if baselines:
+        _write_model_comparison(w, stats, overall_acc, model_tag, baselines, results)
 
     # Failed cases detail
     failed = [cr for cr in results if cr.status in ("FAIL", "ERROR")]
@@ -643,15 +619,126 @@ def save_result_md(
     return path
 
 
+def _write_model_comparison(
+    w,
+    stats: dict[str, dict[str, Any]],
+    overall_acc: float,
+    model_tag: str,
+    baselines: list[dict[str, Any]],
+    results: list[CaseResult],
+) -> None:
+    """Write model comparison section to the markdown report.
+
+    Single baseline: two-column Baseline vs Current table.
+    Multiple baselines: full model comparison matrix.
+    """
+    # Collect all dimensions across current + baselines
+    all_dims = list(stats.keys())
+
+    if len(baselines) == 1:
+        # Single baseline — compact two-column view
+        bl = baselines[0]
+        bl_stats = bl.get("dim_stats", {})
+        bl_overall = bl.get("overall_accuracy", 0.0)
+        bl_model = bl.get("model", "baseline")
+        bl_ts = bl.get("timestamp", "unknown")
+
+        w("## Model Comparison vs Baseline")
+        w("")
+        w(f"Baseline model: **{bl_model}** (saved {bl_ts})  ")
+        w(f"Current model: **{model_tag}**")
+        w("")
+        w("| Dimension | Baseline | Current | Delta |")
+        w("|-----------|----------|---------|-------|")
+        for dim in all_dims:
+            bl_dim = bl_stats.get(dim, {})
+            bl_acc = bl_dim.get("accuracy", 0.0)
+            cur_acc = stats[dim]["accuracy"]
+            delta = cur_acc - bl_acc
+            sign = "+" if delta > 0 else ""
+            w(f"| {dim} | {bl_acc:.1%} | {cur_acc:.1%} | {sign}{delta:.1%} |")
+        delta_overall = overall_acc - bl_overall
+        sign = "+" if delta_overall > 0 else ""
+        w(f"| **OVERALL** | **{bl_overall:.1%}** | **{overall_acc:.1%}** | **{sign}{delta_overall:.1%}** |")
+        w("")
+
+    else:
+        # Multiple baselines — full matrix
+        w("## Model Comparison")
+        w("")
+
+        # Build rows: each model is a row, each dimension + OVERALL is a column
+        # Collect model entries: [{model, dim_stats, overall_accuracy}, ...]
+        model_rows: list[dict[str, Any]] = []
+        for bl in baselines:
+            model_rows.append({
+                "model": bl.get("model", "unknown"),
+                "dim_stats": bl.get("dim_stats", {}),
+                "overall": bl.get("overall_accuracy", 0.0),
+            })
+        # Current run is the last row
+        model_rows.append({
+            "model": f"{model_tag} (current)",
+            "dim_stats": stats,
+            "overall": overall_acc,
+        })
+
+        # Header
+        dim_headers = "".join(f" {d} |" for d in all_dims)
+        w(f"| Model |{dim_headers} OVERALL |")
+        sep = "".join(f"{'---':>8}|" for _ in all_dims)
+        w(f"|-------|{sep}---------|")
+
+        for row in model_rows:
+            cells = ""
+            for dim in all_dims:
+                ds = row["dim_stats"].get(dim, {})
+                acc = ds.get("accuracy", 0.0)
+                passed = ds.get("passed", 0)
+                scorable = ds.get("scorable", 0)
+                cells += f" {acc:.1%} ({passed}/{scorable}) |"
+            ov = row["overall"]
+            w(f"| {row['model']} |{cells} **{ov:.1%}** |")
+        w("")
+
+    # Per-case regressions/improvements vs first baseline
+    bl = baselines[0]
+    bl_cases = {c["id"]: c for c in bl.get("cases", [])}
+    regressions: list[str] = []
+    improvements: list[str] = []
+    for cr in results:
+        bl_case = bl_cases.get(cr.case.id)
+        if not bl_case:
+            continue
+        bl_status = bl_case.get("status", "PASS")
+        if cr.status != bl_status:
+            if cr.status == "FAIL" and bl_status == "PASS":
+                regressions.append(cr.case.id)
+            elif cr.status == "PASS" and bl_status == "FAIL":
+                improvements.append(cr.case.id)
+
+    if regressions:
+        w(f"**Regressions** (PASS → FAIL): {', '.join(f'`{r}`' for r in regressions)}  ")
+    if improvements:
+        w(f"**Improvements** (FAIL → PASS): {', '.join(f'`{r}`' for r in improvements)}  ")
+    if not regressions and not improvements:
+        w("No case status changes vs baseline.")
+    w("")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def run_eval(args: argparse.Namespace) -> int:
+    # Resolve model tag
+    model_tag = args.model_tag or detect_model_tag()
+
     # Load cases
     jsonl_path = Path(__file__).parent.parent / "evals" / "tool_calling.jsonl"
     cases = load_cases(jsonl_path)
-    print(f"Loaded {len(cases)} eval cases from {jsonl_path}\n")
+    print(f"Loaded {len(cases)} eval cases from {jsonl_path}")
+    print(f"Model: {model_tag}\n")
 
     # Filter
     if args.dim:
@@ -727,7 +814,7 @@ async def run_eval(args: argparse.Namespace) -> int:
 
     # Report
     print("=" * 60)
-    print("RESULTS")
+    print(f"RESULTS — {model_tag}")
     print("=" * 60)
     print()
 
@@ -736,24 +823,77 @@ async def run_eval(args: argparse.Namespace) -> int:
     stats = compute_dim_stats(results)
     print_dim_summary(stats)
 
-    # Gates
-    exit_code = check_gates(stats, args.threshold, args.compare, args.max_degradation)
+    # Load baselines: explicit --compare paths, else auto-discover evals/baseline-*.json
+    baselines: list[dict[str, Any]] | None = None
+    bl_paths: list[str] = args.compare or sorted(
+        str(p) for p in _OUTPUT_DIR.glob("baseline-*.json")
+    )
+    if bl_paths:
+        baselines = []
+        for bl_path in bl_paths:
+            with open(bl_path) as f:
+                baselines.append(json.load(f))
+        source = "explicit" if args.compare else "auto-discovered"
+        print(f"Baselines ({source}): {', '.join(bl_paths)}")
 
-    # Load baseline for comparison section in report
-    baseline_data = None
-    if args.compare:
-        with open(args.compare) as f:
-            baseline_data = json.load(f)
+    # Gates
+    exit_code = check_gates(stats, args.threshold, baselines, args.max_degradation)
+
+    # Print model comparison matrix to terminal (when baselines exist)
+    if baselines:
+        print()
+        _print_model_comparison(stats, model_tag, baselines)
 
     # Auto-save markdown report + JSON data
     print()
     save_path = Path(args.save) if args.save else None
-    json_path = save_data_json(results, stats, args, path=save_path)
-    md_path = save_result_md(results, stats, args, exit_code, elapsed, baseline_data)
+    json_path = save_data_json(results, stats, args, model_tag, path=save_path)
+    md_path = save_result_md(
+        results, stats, args, exit_code, elapsed, model_tag,
+        baselines=baselines,
+    )
     print(f"Report saved to {md_path}")
     print(f"Data saved to   {json_path}")
 
     return exit_code
+
+
+def _print_model_comparison(
+    stats: dict[str, dict[str, Any]],
+    model_tag: str,
+    baselines: list[dict[str, Any]],
+) -> None:
+    """Print model comparison matrix to the terminal."""
+    total_scorable = sum(s["scorable"] for s in stats.values())
+    total_passed = sum(s["passed"] for s in stats.values())
+    overall_acc = total_passed / total_scorable if total_scorable > 0 else 0.0
+
+    all_dims = list(stats.keys())
+
+    # Build rows
+    rows: list[tuple[str, dict[str, float], float]] = []
+    for bl in baselines:
+        bl_model = bl.get("model", "unknown")
+        bl_dim_accs = {}
+        for dim in all_dims:
+            ds = bl.get("dim_stats", {}).get(dim, {})
+            bl_dim_accs[dim] = ds.get("accuracy", 0.0)
+        rows.append((bl_model, bl_dim_accs, bl.get("overall_accuracy", 0.0)))
+    # Current run
+    cur_dim_accs = {dim: stats[dim]["accuracy"] for dim in all_dims}
+    rows.append((f"{model_tag} (current)", cur_dim_accs, overall_acc))
+
+    # Print
+    print("MODEL COMPARISON")
+    col_w = 18
+    model_w = max(len(r[0]) for r in rows) + 2
+    header = f"{'MODEL':<{model_w}}" + "".join(f"{d:<{col_w}}" for d in all_dims) + "OVERALL"
+    print(header)
+    print("-" * len(header))
+    for name, dim_accs, overall in rows:
+        cells = "".join(f"{dim_accs.get(d, 0.0):.1%}{'':<{col_w - 5}}" for d in all_dims)
+        print(f"{name:<{model_w}}{cells}{overall:.1%}")
+    print()
 
 
 def main() -> int:
@@ -777,12 +917,16 @@ def main() -> int:
         help="Run a single case by ID",
     )
     parser.add_argument(
+        "--model-tag", type=str, default=None,
+        help="Label for this run (e.g. 'ollama-q4'). Auto-detected from config if omitted",
+    )
+    parser.add_argument(
         "--save", type=str, default=None,
         help="Save results JSON to file (for later --compare)",
     )
     parser.add_argument(
-        "--compare", type=str, default=None,
-        help="Compare against a saved baseline JSON",
+        "--compare", type=str, nargs="+", default=None,
+        help="Override baseline JSONs to compare against (default: auto-discover evals/baseline-*.json)",
     )
     parser.add_argument(
         "--max-degradation", type=float, default=0.10,

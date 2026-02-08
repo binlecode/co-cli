@@ -195,8 +195,7 @@ Four pydantic-ai streaming APIs were evaluated:
 
 `rich.Live` + `rich.Markdown` with a fixed 50ms (20 FPS) throttle. Accumulate-and-rerender: each throttled update re-parses the full buffer as Markdown. No two-zone split (scrollback + live region) — co-cli's terse responses don't need it.
 
-<details>
-<summary>Peer analysis — streaming approaches</summary>
+#### Peer Analysis — Streaming Approaches
 
 | System | Stack | Approach | Throttle | Two-Zone Split |
 |--------|-------|----------|----------|----------------|
@@ -205,7 +204,29 @@ Four pydantic-ai streaming APIs were evaluated:
 | **Gemini CLI** (TS) | Custom parser + Ink `<Static>` | Accumulate, split at safe Markdown boundaries | React render cycle | Yes — `<Static>` for completed, pending for streaming |
 | **OpenCode** (TS) | `marked` + `morphdom` | Accumulate, DOM diff on each update | Fixed 100ms | Yes — morphdom patches only changed nodes |
 
-</details>
+### Thinking Display (`--verbose`)
+
+The streaming loop handles `ThinkingPartDelta` events from pydantic-ai. Gated behind `--verbose` / `-v` on `co chat`:
+
+- **Verbose mode:** Thinking deltas accumulate into `thinking_buffer`, rendered progressively in a `Panel(border_style="thinking")` via a second `Live` instance (same 20 FPS throttle). When the first `TextPartDelta` or tool event arrives, the thinking panel is flushed (final render + stop) and the loop transitions to normal text/tool handling.
+- **Default mode:** `ThinkingPartDelta` events are discarded (`continue`). The "Co is thinking..." status line provides awareness without content noise.
+
+Pseudocode for the thinking→text transition:
+
+```
+if event is ThinkingPartDelta:
+    if not verbose: continue
+    thinking_buffer += delta
+    render thinking_live Panel every 50ms
+
+if event is TextPartDelta or ToolCallEvent or ToolResultEvent:
+    if thinking_live or thinking_buffer:
+        flush thinking_live (final render + stop)
+        reset thinking_buffer
+    # proceed with existing text/tool handling
+```
+
+The `thinking` semantic style (`dim italic` in both themes) is defined in `display.py`.
 
 ### Input Dispatch
 
@@ -346,7 +367,7 @@ Each turn's full message history is accumulated via `result.all_messages()` and 
 
 | Command | Description | Implementation |
 |---------|-------------|----------------|
-| `co chat` | Interactive REPL | `asyncio.run(chat_loop())` |
+| `co chat` | Interactive REPL (`--verbose` streams thinking tokens) | `asyncio.run(chat_loop())` |
 | `co status` | System health check | Displays Rich table |
 | `co tail` | Real-time span viewer | Polls SQLite, prints with Rich |
 | `co logs` | Telemetry dashboard | Launches Datasette |
