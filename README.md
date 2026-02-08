@@ -166,7 +166,7 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 | `/compact` | Summarize conversation via LLM to reduce context (2-message compacted history) |
 | `/yolo` | Toggle auto-approve mode for tool calls |
 
-**Context governance** runs automatically — you don't need to use `/compact` manually unless you want an immediate full compaction. The agent's `history_processors` trim old tool output and summarize dropped messages via LLM when history exceeds the configured threshold (default 40 messages). See `docs/DESIGN-conversation-memory.md`.
+**Context governance** runs automatically — you don't need to use `/compact` manually unless you want an immediate full compaction. The agent's `history_processors` trim old tool output and summarize dropped messages via LLM when history exceeds the configured threshold (default 40 messages). See `docs/DESIGN-06-conversation-memory.md`.
 
 ---
 
@@ -288,12 +288,17 @@ uv run pytest -v
 | :--- | :--- | :--- |
 | **Shell** | Sandboxed command execution | `run_shell_command` |
 | **Notes** | RAG over local Obsidian vault | `search_notes`, `list_notes`, `read_note` |
-| **Drive** | Google Drive search and reading | `search_drive`, `read_drive_file` |
-| **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `draft_email` |
+| **Drive** | Google Drive search and reading | `search_drive_files`, `read_drive_file` |
+| **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `create_email_draft` |
 | **Calendar** | List and search events | `list_calendar_events`, `search_calendar_events` |
-| **Slack** | Channels, threads, users, posting | `list_slack_channels`, `get_slack_channel_history`, `get_slack_thread_replies`, `list_slack_users`, `post_slack_message` |
+| **Slack** | Channels, threads, users, posting | `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users`, `send_slack_message` |
+| **Web** | Web search and URL fetch | `web_search`, `web_fetch` |
 
 ---
+
+## Documentation
+
+Design docs are published as a GitHub Pages book: **https://binlecode.github.io/co-cli/**
 
 ## Contributing
 

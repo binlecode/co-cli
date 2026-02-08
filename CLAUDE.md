@@ -107,6 +107,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
 - `docs/TODO-eval-tool-calling.md` — Eval framework for tool-calling quality (statistical golden set, JSONL + script)
+- `docs/TODO-web-tool-hardening.md` — Web tool safety: SSRF protection, content-type guard, domain policy, permission mode
 - *(low priority)* `docs/TODO-approval-flow-extraction.md` — Extract approval/streaming orchestration from main.py (refactor, not a bug fix)
 
 ### Skills
