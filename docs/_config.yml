@@ -21,4 +21,6 @@ exclude:
   - "BACKLOG-*.md"
   - "RESEARCH-*.md"
   - "REVIEW-*.md"
+  - "FIX-*.md"
+  - "fix-*.md"
   - "DESIGN-co-evolution.md"
