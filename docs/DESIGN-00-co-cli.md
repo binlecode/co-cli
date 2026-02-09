@@ -172,7 +172,7 @@ Four defense layers:
 
 ### Concurrency
 
-Single-threaded, synchronous execution loop. Uses `await _stream_agent_run()` inside async loop — query N must complete before query N+1 begins. This prevents conversation history forking and avoids overloading Ollama (can't handle parallel inference on consumer hardware).
+Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the async loop — query N must complete before query N+1 begins. This prevents conversation history forking and avoids overloading Ollama (can't handle parallel inference on consumer hardware).
 
 ### XDG Directory Structure
 
@@ -237,12 +237,14 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `docker` | ^7.1.0 | Container management |
 | `google-genai` | ^1.61.0 | Gemini API |
 | `google-api-python-client` | ^2.189.0 | Drive/Gmail/Calendar |
+| `google-auth-httplib2` | ^0.3.0 | Google auth transport adapter |
 | `google-auth-oauthlib` | ^1.2.4 | OAuth2 |
 | `slack-sdk` | ^3.39.0 | Slack API |
 | `opentelemetry-sdk` | ^1.39.1 | Tracing |
 | `httpx` | ^0.28.1 | HTTP client (web tools) |
-| `html2text` | ^2024.2.26 | HTML→markdown conversion (web_fetch) |
+| `html2text` | ^2025.4.15 | HTML→markdown conversion (web_fetch) |
 | `datasette` | ^0.65.2 | Telemetry dashboard |
+| `datasette-pretty-json` | ^0.3 | Datasette JSON rendering plugin |
 
 ### Development
 

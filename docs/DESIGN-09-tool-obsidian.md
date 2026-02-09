@@ -29,9 +29,9 @@ Local File System: ~/.../ObsidianVault/
 
 ### Tools
 
-**`search_notes(query, limit=10) → dict`** — Multi-keyword AND search with word boundaries (`\bproject\b`). Returns `{"display": "...", "count": N, "has_more": false}`. Empty results return `count=0` (not ModelRetry).
+**`search_notes(query, limit=10, folder=None, tag=None) → dict`** — Multi-keyword AND search with word boundaries (`\bproject\b`). Optional `folder` narrows the search root; optional `tag` checks both YAML frontmatter tags and inline content tags. Returns `{"display": "...", "count": N, "has_more": bool}`. Empty results return `count=0` (not ModelRetry).
 
-**`list_notes(tag=None) → dict`** — Browse vault structure, optionally filter by tag. Returns `{"display": "- file1.md\n- file2.md", "count": N}`.
+**`list_notes(tag=None) → dict`** — Browse vault structure, optionally filter by tag match in note content. Returns `{"display": "- file1.md\n- file2.md", "count": N}`.
 
 **`read_note(filename) → str`** — Read full content of a specific note. Path traversal protection prevents reading outside vault. Returns raw content string.
 
@@ -41,6 +41,7 @@ Local File System: ~/.../ObsidianVault/
 |----------|----------|------------|
 | Vault not configured | `ModelRetry("Ask user to set obsidian_vault_path")` | Inform user |
 | Empty query | `ModelRetry("Provide keywords to search")` | Fix parameters |
+| Invalid folder path | No matches/empty result | Report no results or retry with correct folder |
 | No search results | `{"count": 0}` | Report to user |
 | Note not found | `ModelRetry("Available notes: [...]. Use exact path")` | Retry with correct path |
 | Path traversal | `ModelRetry("Access denied: path is outside the vault")` | Stop |

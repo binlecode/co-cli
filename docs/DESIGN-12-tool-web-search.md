@@ -98,7 +98,7 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 
 ### Security
 
-1. Both tools are read-only — no approval prompt needed.
+1. Both tools are read-only. Default `web_policy` is `allow` (no prompt), while `ask` routes through deferred approval.
 2. Hardcoded timeouts and size limits prevent resource exhaustion.
 3. API key accessed only via `ctx.deps` — never imported from settings.
 4. Key absence = tool disabled (no separate "enabled" flag).

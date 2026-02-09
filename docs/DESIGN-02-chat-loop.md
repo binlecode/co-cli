@@ -86,7 +86,7 @@ sequenceDiagram
                 Agent->>CLI: DeferredToolRequests
                 CLI->>User: Approve? [y/n/a(yolo)]
                 User->>CLI: y / a
-                CLI->>Agent: _stream_agent_run(deferred_tool_results=approvals)
+                CLI->>Agent: _stream_events(deferred_tool_results=approvals)
             else AgentRunResultEvent
                 Note over CLI: Capture final result
             end
@@ -105,7 +105,7 @@ sequenceDiagram
 
 ```
 chat_loop():
-    agent, model_settings, tool_names = get_agent()
+    agent, model_settings, tool_names = get_agent(web_policy=settings.web_policy)
     deps = create_deps()
     frontend = TerminalFrontend()
     message_history = []
@@ -127,7 +127,7 @@ The full orchestration state machine (streaming, approval chaining, provider err
 
 ### Per-Turn Budget Accounting
 
-A single `UsageLimits(request_limit=settings.max_request_limit)` is created **once** before the retry/reflection loop and shared across the initial `_stream_agent_run()`, every deferred-approval resume, and HTTP 400 reflection retries. After each hop, `result.usage()` is passed as the `usage` parameter to the next call — pydantic-ai accumulates internally and checks the cumulative total against the same `UsageLimits`. This prevents a turn with N approval hops from getting N × budget instead of one shared budget.
+A single `UsageLimits(request_limit=settings.max_request_limit)` is created **once** before the retry/reflection loop and shared across the initial `_stream_events()` call, every deferred-approval resume, and HTTP 400 reflection retries. After each hop, `result.usage()` is passed as the `usage` parameter to the next call — pydantic-ai accumulates internally and checks the cumulative total against the same `UsageLimits`. This prevents a turn with N approval hops from getting N × budget instead of one shared budget.
 
 ### Deferred Approval Pattern
 
@@ -299,6 +299,7 @@ COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry
 | `/history` | Show turn/message totals |
 | `/compact` | LLM-summarise history (see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md)) |
 | `/yolo` | Toggle `deps.auto_confirm` |
+| `/model` | Show/switch current model (Ollama only) |
 
 ### Provider Error Handling
 
@@ -325,7 +326,7 @@ Tool errors are classified in `tools/_errors.py` via `classify_google_error()` a
 | `TRANSIENT` | Raise `ModelRetry` — model retries the call | Rate limit (429), server error (5xx) |
 | `MISUSE` | Raise `ModelRetry` with hint — model corrects parameters | Bad resource ID (404) |
 
-Google, Slack, and Shell tools all dispatch through this shared classification. Slack has a local `_classify_slack_error()` that maps Slack-specific error codes to `ToolErrorKind`.
+Google and Slack tools dispatch through this shared classification. Slack has a local `_classify_slack_error()` that maps Slack-specific error codes to `ToolErrorKind`. Shell uses tool-local `RuntimeError` → `ModelRetry` mapping in `tools/shell.py`.
 
 ### Interrupt Handling
 

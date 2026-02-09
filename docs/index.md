@@ -11,11 +11,11 @@ Start with the [System Design](DESIGN-00-co-cli.md) overview, then explore compo
 
 ## Layers
 
-### Core (01–03)
+### Core (01–03, 13)
 - [01 — Agent & Dependencies](DESIGN-01-agent.md) — `get_agent()` factory, `CoDeps`, tool registration
 - [02 — Chat Loop](DESIGN-02-chat-loop.md) — Streaming, approval, slash commands, interrupts
 - [03 — LLM Models](DESIGN-03-llm-models.md) — Gemini/Ollama model selection
-- [13 — Streaming Event Ordering](DESIGN-13-streaming-event-ordering.md) — First-principles RCA and boundary-safe stream rendering
+- [13 — Streaming Event Ordering](DESIGN-13-streaming-event-ordering.md) — Boundary-safe stream rendering, event semantics
 
 ### Infrastructure (04–07)
 - [04 — OpenTelemetry Logging](DESIGN-04-otel-logging.md) — SQLite span exporter, trace viewers

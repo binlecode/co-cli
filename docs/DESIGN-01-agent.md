@@ -32,6 +32,9 @@ classDiagram
         +sandbox_max_timeout: int
         +slack_client: Any | None
         +brave_search_api_key: str | None
+        +web_fetch_allowed_domains: list[str]
+        +web_fetch_blocked_domains: list[str]
+        +web_policy: WebPolicy
     }
 
     class OpenAIChatModel {
@@ -82,6 +85,7 @@ Returns `(agent, model_settings, tool_names)`. Selects the LLM model based on `s
 def get_agent(
     *,
     all_approval: bool = False,
+    web_policy: WebPolicy | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     provider_name = settings.llm_provider.lower()
     model_settings: ModelSettings | None = None
@@ -113,8 +117,11 @@ def get_agent(
     agent.tool(search_notes, requires_approval=all_approval)
     agent.tool(list_notes, requires_approval=all_approval)
     # ... remaining read-only tools
-    agent.tool(web_search, requires_approval=all_approval)
-    agent.tool(web_fetch, requires_approval=all_approval)
+    policy = web_policy or settings.web_policy
+    search_approval = all_approval or (policy.search == "ask")
+    fetch_approval = all_approval or (policy.fetch == "ask")
+    agent.tool(web_search, requires_approval=search_approval)
+    agent.tool(web_fetch, requires_approval=fetch_approval)
 
     tool_names = [fn.__name__ for fn in [run_shell_command, ..., web_fetch]]
     return agent, model_settings, tool_names
@@ -130,6 +137,8 @@ Tools are classified as side-effectful (requires user approval) or read-only (au
 | Read-only | `agent.tool(fn, requires_approval=all_approval)` | None normally; `all_approval=True` forces deferred (for eval) |
 
 **`all_approval` parameter:** When `get_agent(all_approval=True)` is called, all tools (including read-only) are registered with `requires_approval=True`. Every tool call returns `DeferredToolRequests` without executing. Used by the eval framework to extract tool name and args without triggering `ModelRetry` loops from missing credentials.
+
+**Web policy wiring:** `get_agent(web_policy=...)` maps `web_policy.search/fetch == "ask"` to `requires_approval=True` for `web_search`/`web_fetch`. `"deny"` is enforced inside the tool implementations.
 
 ### System Prompt
 
@@ -150,6 +159,8 @@ You are Co, a CLI assistant running in the user's terminal.
 - Use tools proactively to complete tasks
 - Chain operations: read before modifying, test after changing
 - Shell commands run in a Docker sandbox mounted at /workspace
+- Shell commands have a timeout (default 120s). For long tasks, set a higher timeout.
+  For scripts that run forever (servers, bots), warn the user instead of running them.
 
 ### Pagination
 - When a tool result has has_more=true, more results are available
@@ -174,6 +185,9 @@ class CoDeps:
     sandbox_max_timeout: int = 600
     slack_client: Any | None = None  # slack_sdk.WebClient at runtime
     brave_search_api_key: str | None = None  # Brave Search API key for web tools
+    web_fetch_allowed_domains: list[str] = field(default_factory=list)
+    web_fetch_blocked_domains: list[str] = field(default_factory=list)
+    web_policy: WebPolicy = field(default_factory=WebPolicy)
 ```
 
 **Design principle:** `CoDeps` contains runtime resources, NOT config objects. `Settings` creates resources in `main.py`, then injects here.
@@ -183,7 +197,7 @@ class CoDeps:
 ```
 main.py: create_deps()          →  CoDeps(sandbox, vault_path, google_credentials_path, slack_client, ...)
     ↓
-_stream_agent_run(agent, user_input, deps=deps) →  Agent passes deps to tool calls
+run_turn(agent, user_input, deps=deps, ...) →  Agent passes deps to tool calls
     ↓
 tool(ctx: RunContext[CoDeps])    →  ctx.deps.sandbox, ctx.deps.google_creds, etc.
 ```
@@ -196,11 +210,11 @@ pydantic-ai separates state into three tiers:
 |------|-------|----------|-------|---------|
 | **Agent config** | Process | Entire process | `Agent(...)` constructor, module constants | Model name, system prompt, tool registrations |
 | **Session deps** | Session | One REPL loop (`create_deps()` → `sandbox.cleanup()`) | `RunContext.deps` (`CoDeps`) | Sandbox handle, Google creds (lazy-cached), page tokens |
-| **Run state** | Single run | One `_stream_agent_run()` call | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
+| **Run state** | Single run | One `run_turn()` call | `result.state` / `ctx.state` (pydantic-graph) | Per-turn counter (if needed) |
 
 **Critical invariant: mutable per-session state belongs in `CoDeps`, never in module globals.** Module-level variables are process-scoped — they persist across sessions and are shared by all concurrent sessions in the same process.
 
-`CoDeps` is the session boundary. `main.py:create_deps()` instantiates one `CoDeps` per chat session. Every `_stream_agent_run()` call within that session receives the same `CoDeps` instance, so tools accumulate state (like page tokens) across turns. But two sessions get separate `CoDeps` instances with independent state.
+`CoDeps` is the session boundary. `main.py:create_deps()` instantiates one `CoDeps` per chat session. Every `run_turn()` call within that session receives the same `CoDeps` instance, so tools accumulate state (like page tokens) across turns. But two sessions get separate `CoDeps` instances with independent state.
 
 ```
 Process (one Python interpreter)
@@ -231,7 +245,7 @@ The eval suite (`scripts/eval_tool_calling.py`) measures tool-calling quality ac
 
 **Golden cases:** `evals/tool_calling.jsonl` (~26 JSONL lines). Each case specifies `expect_tool`, `expect_args`, and `arg_match` mode (`exact` or `subset`).
 
-**Model tagging:** Every saved results JSON includes a `model` field, auto-detected from `settings.llm_provider` + model name (e.g. `gemini-2.0-flash`, `ollama-glm-4.7-flash:q8_0`). Override with `--model-tag`.
+**Model tagging:** Every saved results JSON includes a `model` field, auto-detected from `settings.llm_provider` + model name (e.g. `gemini-2.0-flash`, `ollama-glm-4.7-flash:q4_k_m`). Override with `--model-tag`.
 
 **Baseline comparison:** The runner auto-discovers `evals/baseline-*.json` and shows a model comparison matrix. Relative gate checks per-dimension accuracy against each baseline — degradation beyond `--max-degradation` (default 10pp) fails the run.
 

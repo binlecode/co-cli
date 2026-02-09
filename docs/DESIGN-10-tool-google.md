@@ -56,16 +56,17 @@ ensure_google_credentials(credentials_path, scopes)
 
 Credentials are cached on the `CoDeps` instance (`deps.google_creds` / `deps._google_creds_resolved`), not module globals — follows session lifecycle.
 
-### Structured Output Pattern
+### Return Shape Pattern
 
-All Google tools return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields. The LLM's system prompt says "show tool output directly" — structured output makes this enforceable.
+Google tools use a mixed return contract:
 
-| Field | Type | Purpose |
-|-------|------|---------|
-| `display` | `str` | Pre-formatted output — URLs baked in |
-| `count` | `int` | Number of items (Gmail, Calendar) |
-| `page` | `int` | Current page number (Drive) |
-| `has_more` | `bool` | More results available (Drive) |
+| Tool | Return Type | Notes |
+|------|-------------|-------|
+| `search_drive_files` | `dict` | Includes `display`, `page`, `has_more` |
+| `read_drive_file` | `str | dict` | Text on success, terminal errors as `{"display": ..., "error": true}` |
+| `list_emails` / `search_emails` | `dict` | Includes `display`, `count` |
+| `create_email_draft` | `str | dict` | Success string, terminal errors as dict |
+| `list_calendar_events` / `search_calendar_events` | `dict` | Includes `display`, `count` |
 
 ### Tools
 
@@ -98,7 +99,8 @@ Errors are classified as **terminal** (config/auth — retrying won't help) or *
 
 Shared helpers in `_errors.py`:
 - `terminal_error(message)` → `{"display": message, "error": True}` (non-retryable)
-- `google_api_error(service, error)` → formatted string for `ModelRetry` (retryable)
+- `classify_google_error(error)` → `(ToolErrorKind, message)` classification
+- `handle_tool_error(kind, message)` → `terminal_error(...)` for TERMINAL, otherwise raises `ModelRetry`
 
 ### Human-in-the-Loop
 

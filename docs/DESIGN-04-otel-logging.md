@@ -45,7 +45,8 @@ Co CLI uses OpenTelemetry (OTel) to trace agent operations. All data stays local
 ### Instrumentation Setup (`main.py`)
 
 ```python
-resource = Resource.create({"service.name": "co-cli", "service.version": "0.1.0"})
+version = read_version_from_pyproject()
+resource = Resource.create({"service.name": "co-cli", "service.version": version})
 tracer_provider = TracerProvider(resource=resource)
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(tracer_provider)

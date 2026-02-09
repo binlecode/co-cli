@@ -107,7 +107,6 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-web-tool-hardening.md` — Web tool safety: SSRF protection, content-type guard, domain policy, permission mode
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

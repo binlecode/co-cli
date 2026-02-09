@@ -35,7 +35,7 @@ co_cli/agent.py: get_agent()
 |-------|-------|
 | Model family | GLM-4.7 (Z.ai / formerly THUDM) |
 | Parameter count | 31B total, ~3B active (MoE) |
-| Default tag | `glm-4.7-flash:q8_0` |
+| Default tag | `glm-4.7-flash:q4_k_m` |
 | Context window | 128K tokens |
 | License | MIT |
 
@@ -56,8 +56,8 @@ agent.py: get_agent() → (agent, model_settings)
     │
     ▼
 main.py: chat_loop()
-    └── _stream_agent_run(agent, ..., model_settings=model_settings)
-            └── pydantic-ai → OpenAI API call with temperature=0.7, top_p=1.0, max_tokens=16384
+    └── run_turn(agent, ..., model_settings=model_settings)
+            └── _stream_events() → pydantic-ai OpenAI API call with temperature=0.7, top_p=1.0, max_tokens=16384
 ```
 
 ### Gemini
@@ -78,7 +78,7 @@ No custom `ModelSettings` — Gemini's API defaults are well-suited for tool-cal
 | `gemini_api_key` | `GEMINI_API_KEY` | `None` | Google GenAI API key |
 | `gemini_model` | `GEMINI_MODEL` | `"gemini-2.0-flash"` | Gemini model name |
 | `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server URL |
-| `ollama_model` | `OLLAMA_MODEL` | `"glm-4.7-flash:q8_0"` | Ollama model tag |
+| `ollama_model` | `OLLAMA_MODEL` | `"glm-4.7-flash:q4_k_m"` | Ollama model tag |
 
 **Not configurable:** `temperature`, `top_p`, `max_tokens` — hardcoded in `agent.py` (model-specific tuning).
 
@@ -87,6 +87,6 @@ No custom `ModelSettings` — Gemini's API defaults are well-suited for tool-cal
 | File | Purpose |
 |------|---------|
 | `co_cli/agent.py` | `get_agent()` factory — model selection + `ModelSettings` |
-| `co_cli/main.py` | Unpacks `(agent, model_settings)`, passes to `_stream_agent_run()` |
+| `co_cli/main.py` | Unpacks `(agent, model_settings)`, passes to `run_turn()` |
 | `co_cli/config.py` | `Settings` with LLM provider fields |
 | `tests/test_llm_e2e.py` | LLM E2E tests for both providers |

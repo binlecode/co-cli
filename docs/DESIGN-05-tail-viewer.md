@@ -31,10 +31,10 @@ nav_order: 2
 One line per completed span, with optional verbose content below model spans:
 
 ```
-14:23:05  model  chat glm-4.7-flash:q8_0       in=3745 out=25  5.26s
+14:23:05  model  chat glm-4.7-flash:q4_k_m     in=3745 out=25  5.26s
            │ [thinking] Let me search the notes for that topic.
 14:23:06  tool   execute_tool search_notes      tool=search_notes  args={"query":"test"}  120ms
-14:23:08  agent  invoke_agent agent             model=glm-4.7-flash:q8_0  tokens=78776→4502  255.72s
+14:23:08  agent  invoke_agent agent             model=glm-4.7-flash:q4_k_m  tokens=78776→4502  255.72s
 ```
 
 | Column | Source | Format |

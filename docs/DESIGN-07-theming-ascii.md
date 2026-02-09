@@ -20,7 +20,7 @@ settings.theme ("light" | "dark")
 │  _THEMES ──▶ Theme() ──▶ Console(theme=...)
 │                                 │ ──▶ banner.py  (accent, art selection)
 │                                 │ ──▶ main.py    (shared output)
-│                                 │ ──▶ _confirm.py (shared output)
+│                                 │ ──▶ _commands.py (shared output)
 │                                 │
 │  Indicators: ❯ ▸ ✦ ✖ ◈         │
 │  display_status(), display_error(), display_info()
@@ -56,6 +56,7 @@ console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
 | `success` | green | green | Success confirmation |
 | `warning` | orange3 | orange3 | Warnings |
 | `hint` | dim | dim | Secondary text, exit instructions |
+| `thinking` | dim italic | dim italic | Verbose thinking stream panel/text |
 
 ### Theme-Aware ASCII Art Banner
 
