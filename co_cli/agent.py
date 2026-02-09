@@ -6,6 +6,7 @@ from pydantic_ai.settings import ModelSettings
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
 from co_cli._history import truncate_tool_returns, truncate_history_window
+from co_cli.prompts import load_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
@@ -78,30 +79,7 @@ def get_agent(
             f"Unknown llm_provider: '{provider_name}'. Use 'gemini' or 'ollama'."
         )
 
-    system_prompt = """You are Co, a CLI assistant running in the user's terminal.
-
-### Response Style
-- Be terse: users want results, not explanations
-- On success: show the output, then a brief note if needed
-- On error: show the error, suggest a fix
-
-### Tool Output
-- Most tools return a dict with a `display` field — show the `display` value verbatim
-- Never reformat, summarize, or drop URLs from tool output
-- If the result has `has_more=true`, tell the user more results are available
-
-### Tool Usage
-- Use tools proactively to complete tasks
-- Chain operations: read before modifying, test after changing
-- Shell commands run in a Docker sandbox mounted at /workspace
-- Shell commands have a timeout (default 120s). For long tasks, set a higher timeout.
-  For scripts that run forever (servers, bots), warn the user instead of running them.
-
-### Pagination
-- When a tool result has has_more=true, more results are available
-- If the user asks for "more", "next", or "next 10", call the same tool with the same query and page incremented by 1
-- Do NOT say "no more results" unless you called the tool and has_more was false
-"""
+    system_prompt = load_prompt("system")
 
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model,
