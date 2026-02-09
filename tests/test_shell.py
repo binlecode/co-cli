@@ -71,7 +71,7 @@ async def test_shell_timeout_raises_model_retry():
     ctx = _make_ctx(sandbox)
 
     try:
-        with pytest.raises(ModelRetry, match="Shell: command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command timed out"):
             await run_shell_command(ctx, "sleep 30", timeout=2)
     finally:
         sandbox.cleanup()
@@ -85,7 +85,7 @@ async def test_shell_timeout_clamped_to_ceiling():
 
     try:
         # Request 300s but ceiling is 3s — sleep 10 should be killed
-        with pytest.raises(ModelRetry, match="Shell: command failed"):
+        with pytest.raises(ModelRetry, match="Shell: command timed out"):
             await run_shell_command(ctx, "sleep 10", timeout=300)
     finally:
         sandbox.cleanup()
@@ -480,7 +480,7 @@ async def test_python_partial_output_on_timeout():
             "print('never')\n"
             "PY",
         )
-        with pytest.raises(ModelRetry, match="Shell: command failed") as exc_info:
+        with pytest.raises(ModelRetry, match="Shell: command timed out") as exc_info:
             await run_shell_command(ctx, "python3 /workspace/_slow.py", timeout=3)
         # 'started' was flushed before kill thanks to PYTHONUNBUFFERED
         assert "started" in str(exc_info.value)
@@ -582,7 +582,7 @@ async def test_subprocess_timeout():
     backend = SubprocessBackend()
     ctx = _make_ctx(backend)
 
-    with pytest.raises(ModelRetry, match="Shell: command failed.*timed out"):
+    with pytest.raises(ModelRetry, match="Shell: command timed out"):
         await run_shell_command(ctx, "sleep 30", timeout=2)
 
 
@@ -592,7 +592,7 @@ async def test_subprocess_timeout_clamped():
     backend = SubprocessBackend()
     ctx = _make_ctx(backend, sandbox_max_timeout=2)
 
-    with pytest.raises(ModelRetry, match="Shell: command failed"):
+    with pytest.raises(ModelRetry, match="Shell: command timed out"):
         await run_shell_command(ctx, "sleep 30", timeout=300)
 
 

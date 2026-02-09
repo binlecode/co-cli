@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import pytest
 from pydantic_ai import ModelRetry
+from slack_sdk.errors import SlackApiError
 
 from co_cli.tools.slack import (
     send_slack_message,
@@ -29,6 +30,44 @@ from co_cli.sandbox import Sandbox
 class Context:
     """Minimal context for tool testing."""
     deps: CoDeps
+
+
+class _TerminalSlackClient:
+    """Stub client that always raises a terminal auth error."""
+
+    def _raise_terminal(self):
+        raise SlackApiError("terminal", {"error": "invalid_auth"})
+
+    def chat_postMessage(self, **kwargs):
+        self._raise_terminal()
+
+    def conversations_list(self, **kwargs):
+        self._raise_terminal()
+
+    def conversations_history(self, **kwargs):
+        self._raise_terminal()
+
+    def conversations_replies(self, **kwargs):
+        self._raise_terminal()
+
+    def users_list(self, **kwargs):
+        self._raise_terminal()
+
+
+class _HistorySlackClient:
+    """Stub client that returns one message for display formatting checks."""
+
+    def conversations_history(self, **kwargs):
+        return {
+            "messages": [
+                {
+                    "ts": "1700000000.000000",
+                    "user": "U123",
+                    "text": "hello",
+                }
+            ],
+            "has_more": False,
+        }
 
 
 def _make_ctx(
@@ -169,6 +208,33 @@ def test_list_slack_users():
     except Exception as e:
         if not _slack_acceptable(e):
             pytest.fail(f"Slack error: {e}")
+
+
+@pytest.mark.parametrize(
+    ("tool_fn", "kwargs"),
+    [
+        (send_slack_message, {"channel": "#general", "text": "hello"}),
+        (list_slack_channels, {}),
+        (list_slack_messages, {"channel": "C01ABC123"}),
+        (list_slack_replies, {"channel": "C01ABC123", "thread_ts": "1234567890.123456"}),
+        (list_slack_users, {}),
+    ],
+)
+def test_slack_terminal_errors_return_error_dict(tool_fn, kwargs):
+    """Terminal Slack API errors should return a structured error dict, not None."""
+    ctx = _make_ctx(slack_client=_TerminalSlackClient())
+    result = tool_fn(ctx, **kwargs)
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+    assert "display" in result
+
+
+def test_slack_message_timestamp_format_minutes_once():
+    """Slack timestamps render as HH:MM (single minute token)."""
+    ctx = _make_ctx(slack_client=_HistorySlackClient())
+    result = list_slack_messages(ctx, "C01ABC123")
+    assert isinstance(result, dict)
+    assert "M <@" not in result["display"]
 
 
 # --- Slack: no-client raises ModelRetry ---

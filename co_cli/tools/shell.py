@@ -1,9 +1,12 @@
+from typing import Any
+
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._errors import terminal_error
 
 
-async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> str:
+async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> str | dict[str, Any]:
     """Execute a shell command in a sandboxed Docker container.
 
     Use this tool for: listing files (ls), reading files (cat), running scripts,
@@ -22,10 +25,10 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
         if "timed out" in msg.lower():
             raise ModelRetry(
                 f"Shell: command timed out after {effective}s. "
-                "Use a shorter command or increase timeout."
+                f"Use a shorter command or increase timeout.\n{msg}"
             )
         if "permission denied" in msg.lower():
-            raise ModelRetry(
+            return terminal_error(
                 "Shell: permission denied. The sandbox user may lack access. "
                 "Try a different path or approach."
             )

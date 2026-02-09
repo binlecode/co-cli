@@ -1,18 +1,11 @@
-"""Functional tests for error classification functions.
+"""Functional tests for error helpers.
 
 All tests use real or constructed exception objects — no mocks, no stubs.
 """
 
-import pytest
-from pydantic_ai import ModelRetry
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 
-from co_cli.tools._errors import (
-    ToolErrorKind,
-    classify_google_error,
-    handle_tool_error,
-    terminal_error,
-)
+from co_cli.tools._errors import terminal_error, http_status_code
 from co_cli._provider_errors import (
     ProviderErrorAction,
     classify_provider_error,
@@ -42,89 +35,36 @@ class FakeHttpErrorWithStatusCode(Exception):
 
 
 # ---------------------------------------------------------------------------
-# classify_google_error
+# http_status_code
 # ---------------------------------------------------------------------------
 
 
-def test_classify_google_401():
-    e = FakeHttpError(401)
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.TERMINAL
-    assert "authentication" in msg.lower()
+def test_http_status_from_resp_status_int_like_string():
+    assert http_status_code(FakeHttpError(401)) == 401
 
 
-def test_classify_google_403():
-    e = FakeHttpError(403)
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.TERMINAL
+def test_http_status_from_status_code_attribute():
+    assert http_status_code(FakeHttpErrorWithStatusCode(429)) == 429
 
 
-def test_classify_google_404():
-    e = FakeHttpError(404)
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.MISUSE
-    assert "not found" in msg.lower()
+def test_http_status_none_without_status_fields():
+    assert http_status_code(Exception("no http status")) is None
 
 
-def test_classify_google_429():
-    e = FakeHttpError(429)
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.TRANSIENT
-    assert "rate" in msg.lower()
-
-
-def test_classify_google_500():
-    e = FakeHttpError(500)
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.TRANSIENT
-    assert "server" in msg.lower()
-
-
-def test_classify_google_status_code_attribute():
-    e = FakeHttpErrorWithStatusCode(429)
-    kind, _ = classify_google_error(e)
-    assert kind == ToolErrorKind.TRANSIENT
-
-
-def test_classify_google_not_enabled():
-    e = Exception("API has not been enabled for project 12345")
-    kind, msg = classify_google_error(e)
-    assert kind == ToolErrorKind.TERMINAL
-    assert "has not been enabled" in msg
-
-
-def test_classify_google_access_not_configured():
-    e = Exception("accessNotConfigured: some details")
-    kind, _ = classify_google_error(e)
-    assert kind == ToolErrorKind.TERMINAL
-
-
-def test_classify_google_unknown_defaults_transient():
-    e = Exception("something went wrong")
-    kind, _ = classify_google_error(e)
-    assert kind == ToolErrorKind.TRANSIENT
+def test_http_status_none_for_non_numeric_resp_status():
+    e = Exception("bad status")
+    e.resp = type("Resp", (), {"status": "not-a-number"})()  # type: ignore[attr-defined]
+    assert http_status_code(e) is None
 
 
 # ---------------------------------------------------------------------------
-# handle_tool_error
+# terminal_error
 # ---------------------------------------------------------------------------
 
 
-def test_handle_tool_error_terminal():
-    result = handle_tool_error(ToolErrorKind.TERMINAL, "auth failed")
-    assert result == terminal_error("auth failed")
-    assert result["error"] is True
-    assert result["display"] == "auth failed"
-
-
-def test_handle_tool_error_transient():
-    with pytest.raises(ModelRetry, match="rate limited"):
-        handle_tool_error(ToolErrorKind.TRANSIENT, "rate limited")
-
-
-def test_handle_tool_error_misuse():
-    with pytest.raises(ModelRetry, match="bad ID"):
-        handle_tool_error(ToolErrorKind.MISUSE, "bad ID")
+def test_terminal_error_structure():
+    result = terminal_error("auth failed")
+    assert result == {"display": "auth failed", "error": True}
 
 
 # ---------------------------------------------------------------------------

@@ -8,10 +8,32 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.google_auth import get_cached_google_creds
-from co_cli.tools._errors import (
-    GOOGLE_NOT_CONFIGURED, terminal_error,
-    classify_google_error, handle_tool_error,
+from co_cli.tools._errors import terminal_error, http_status_code
+
+
+_CALENDAR_NOT_CONFIGURED = (
+    "Calendar: not configured. "
+    "Set google_credentials_path in settings or run: "
+    "gcloud auth application-default login"
 )
+
+
+def _handle_calendar_error(e: Exception) -> dict[str, Any]:
+    """Route Calendar API errors with Calendar-specific guidance."""
+    status = http_status_code(e)
+    if status == 401:
+        return terminal_error("Calendar: authentication error (401). Check credentials.")
+    if status == 403:
+        raise ModelRetry(
+            "Calendar: access forbidden (403). Check API enablement and calendar sharing permissions."
+        )
+    if status == 404:
+        raise ModelRetry("Calendar: event or calendar not found (404). Verify IDs and retry.")
+    if status == 429:
+        raise ModelRetry("Calendar: rate limited (429). Wait a moment and retry.")
+    if status and status >= 500:
+        raise ModelRetry(f"Calendar: server error ({status}). Retry shortly.")
+    raise ModelRetry(f"Calendar: API error ({e}). Check credentials, API enablement, and quota.")
 
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
@@ -21,7 +43,7 @@ def _get_calendar_service(ctx: RunContext[CoDeps]):
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        return None, terminal_error(GOOGLE_NOT_CONFIGURED.format(service="Calendar"))
+        return None, terminal_error(_CALENDAR_NOT_CONFIGURED)
     return build("calendar", "v3", credentials=creds), None
 
 
@@ -63,12 +85,6 @@ def _format_events(events: list[dict]) -> str:
             output += f"  Meet: {meet_link}\n"
 
     return output
-
-
-def _handle_calendar_error(e: Exception):
-    """Classify and dispatch calendar errors via shared error helpers."""
-    kind, message = classify_google_error(e)
-    return handle_tool_error(kind, message)
 
 
 def _fetch_events(service, **kwargs) -> list[dict]:
@@ -146,9 +162,7 @@ def list_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        result = _handle_calendar_error(e)
-        if result:
-            return result
+        return _handle_calendar_error(e)
 
 
 def search_calendar_events(
@@ -200,6 +214,4 @@ def search_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        result = _handle_calendar_error(e)
-        if result:
-            return result
+        return _handle_calendar_error(e)
