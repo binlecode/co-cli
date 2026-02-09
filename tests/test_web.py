@@ -14,7 +14,7 @@ from pydantic_ai import ModelRetry
 
 from co_cli.tools.web import web_search, web_fetch, _is_content_type_allowed, _is_domain_allowed
 from co_cli.tools._url_safety import is_url_safe
-from co_cli.config import settings
+from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
 from co_cli.sandbox import Sandbox
 
@@ -219,6 +219,21 @@ async def test_web_fetch_blocks_metadata():
         await web_fetch(ctx, "http://169.254.169.254/latest/meta-data/")
 
 
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_redirect_to_private():
+    """web_fetch blocks when a public URL redirects to a private IP.
+
+    httpbin 302-redirects to http://127.0.0.1/.  Two code paths can fire:
+    - Connection refused → ModelRetry from the httpx error handler
+    - Connection succeeds (something on port 80) → post-redirect is_url_safe
+      catches it
+    Either way the request is rejected with ModelRetry.
+    """
+    ctx = _make_ctx()
+    with pytest.raises(ModelRetry):
+        await web_fetch(ctx, "https://httpbin.org/redirect-to?url=http://127.0.0.1/")
+
+
 # --- Content-type guard ---
 
 
@@ -262,6 +277,27 @@ async def test_web_fetch_allows_json():
     assert "json" in result["content_type"]
 
 
+# --- Truncation ---
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_truncates_large_response():
+    """web_fetch sets truncated=True when response exceeds _MAX_FETCH_CHARS.
+
+    norvig.com/big.txt is a well-known 6.5 MB plain-text file.  It triggers
+    both the byte-level limit (1 MB) and char-level limit (100k).
+    """
+    from co_cli.tools.web import _MAX_FETCH_CHARS
+
+    ctx = _make_ctx()
+    result = await web_fetch(ctx, "https://norvig.com/big.txt")
+    assert result["truncated"] is True
+    # display = prefix + truncated text — body must not exceed char limit
+    prefix_len = len(f"Content from {result['url']}:\n\n")
+    body_len = len(result["display"]) - prefix_len
+    assert body_len <= _MAX_FETCH_CHARS
+
+
 # --- Domain policy (_is_domain_allowed) ---
 
 
@@ -270,7 +306,8 @@ def _make_policy_ctx(
     brave_search_api_key: str | None = None,
     allowed_domains: list[str] | None = None,
     blocked_domains: list[str] | None = None,
-    web_permission_mode: str = "allow",
+    search_policy: str = "allow",
+    fetch_policy: str = "allow",
 ) -> Context:
     return Context(deps=CoDeps(
         sandbox=Sandbox(container_name="test"),
@@ -279,7 +316,7 @@ def _make_policy_ctx(
         brave_search_api_key=brave_search_api_key,
         web_fetch_allowed_domains=allowed_domains or [],
         web_fetch_blocked_domains=blocked_domains or [],
-        web_permission_mode=web_permission_mode,
+        web_policy=WebPolicy(search=search_policy, fetch=fetch_policy),
     ))
 
 
@@ -323,21 +360,21 @@ def test_domain_both_empty_allows_all():
     assert _is_domain_allowed("anything.com", [], []) is True
 
 
-# --- Permission mode deny ---
+# --- Web policy deny ---
 
 
 @pytest.mark.asyncio
 async def test_web_fetch_deny_mode():
-    """web_fetch raises ModelRetry when web_permission_mode is 'deny'."""
-    ctx = _make_policy_ctx(web_permission_mode="deny")
+    """web_fetch raises ModelRetry when web_policy.fetch is 'deny'."""
+    ctx = _make_policy_ctx(fetch_policy="deny")
     with pytest.raises(ModelRetry, match="disabled by policy"):
         await web_fetch(ctx, "https://example.com")
 
 
 @pytest.mark.asyncio
 async def test_web_search_deny_mode():
-    """web_search raises ModelRetry when web_permission_mode is 'deny'."""
-    ctx = _make_policy_ctx(brave_search_api_key="fake-key", web_permission_mode="deny")
+    """web_search raises ModelRetry when web_policy.search is 'deny'."""
+    ctx = _make_policy_ctx(brave_search_api_key="fake-key", search_policy="deny")
     with pytest.raises(ModelRetry, match="disabled by policy"):
         await web_search(ctx, "test query")
 

@@ -1,6 +1,7 @@
 """Functional tests for agent factory — tool registration and approval wiring."""
 
 from co_cli.agent import get_agent
+from co_cli.config import WebPolicy
 
 
 # Canonical tool inventory. Update this set when adding/removing/renaming tools.
@@ -62,3 +63,23 @@ def test_history_processors_attached():
     processor_names = [p.__name__ for p in agent.history_processors]
     assert "truncate_tool_returns" in processor_names
     assert "truncate_history_window" in processor_names
+
+
+def test_web_search_ask_requires_approval():
+    """web_search requires approval when web_policy.search is 'ask'."""
+    agent, _model_settings, _tool_names = get_agent(
+        web_policy=WebPolicy(search="ask", fetch="allow"),
+    )
+    tool_map = {t.name: t for t in agent._function_toolset.tools.values()}
+    assert tool_map["web_search"].requires_approval is True
+    assert tool_map["web_fetch"].requires_approval is False
+
+
+def test_web_fetch_ask_requires_approval():
+    """web_fetch requires approval when web_policy.fetch is 'ask'."""
+    agent, _model_settings, _tool_names = get_agent(
+        web_policy=WebPolicy(search="allow", fetch="ask"),
+    )
+    tool_map = {t.name: t for t in agent._function_toolset.tools.values()}
+    assert tool_map["web_search"].requires_approval is False
+    assert tool_map["web_fetch"].requires_approval is True

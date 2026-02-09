@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Eval improvement**: `er-drive-01` error recovery case now passes 3/3 (was 0/3) after `terminal_error()` fix — model no longer loops on unconfigured Drive API.
 
 ### Changed
+- **Web policy model simplified**: Replaced `web_permission_mode` with per-tool `web_policy` (`search` and `fetch`, each `allow|ask|deny`). Approval wiring in `get_agent()` is now per tool, and deny enforcement moved to `ctx.deps.web_policy.search/fetch` checks in web tools. Added env overrides `CO_CLI_WEB_POLICY_SEARCH` and `CO_CLI_WEB_POLICY_FETCH`. Updated reference config and web design doc.
 - **Thinking display**: Replaced bordered `Panel` with plain dim italic `Text` in `on_thinking_delta()` and `on_thinking_commit()` — lighter weight, codex-style.
 - **`co_cli/main.py`**: LLM turn block collapsed from ~60 lines to a single `run_turn()` call. Removed `_stream_agent_run`, `_handle_approvals`, `_patch_dangling_tool_calls`, `_CHOICES_HINT`, `_RENDER_INTERVAL`.
 - **`co_cli/tools/google_drive.py`, `google_gmail.py`, `google_calendar.py`**: Replaced ad-hoc `except Exception` blocks with `classify_google_error()` + `handle_tool_error()`.

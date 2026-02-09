@@ -3,7 +3,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import settings
+from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
 from co_cli._history import truncate_tool_returns, truncate_history_window
 from co_cli.tools.shell import run_shell_command
@@ -24,7 +24,7 @@ from co_cli.tools.web import web_search, web_fetch
 def get_agent(
     *,
     all_approval: bool = False,
-    web_permission_mode: str = "allow",
+    web_policy: WebPolicy | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
@@ -34,9 +34,8 @@ def get_agent(
         all_approval: When True, register ALL tools with requires_approval=True.
             Used by the eval framework so every tool call returns
             DeferredToolRequests without executing (no ModelRetry loops).
-        web_permission_mode: "allow" (default), "ask" (approval required), or
-            "deny" (tools raise ModelRetry). "deny" is enforced inside the tools;
-            "ask" is wired here via requires_approval.
+        web_policy: Per-tool web permission policy. "ask" is wired here via
+            requires_approval while "deny" is enforced inside tool execution.
     """
     provider_name = settings.llm_provider.lower()
 
@@ -132,9 +131,11 @@ def get_agent(
     agent.tool(list_slack_messages, requires_approval=all_approval)
     agent.tool(list_slack_replies, requires_approval=all_approval)
     agent.tool(list_slack_users, requires_approval=all_approval)
-    web_approval = all_approval or (web_permission_mode == "ask")
-    agent.tool(web_search, requires_approval=web_approval)
-    agent.tool(web_fetch, requires_approval=web_approval)
+    policy = web_policy or settings.web_policy
+    search_approval = all_approval or (policy.search == "ask")
+    fetch_approval = all_approval or (policy.fetch == "ask")
+    agent.tool(web_search, requires_approval=search_approval)
+    agent.tool(web_fetch, requires_approval=fetch_approval)
 
     tool_names = [
         run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,

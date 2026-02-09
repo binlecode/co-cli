@@ -54,9 +54,17 @@ Agent.instrument_all(InstrumentationSettings(
 ))
 
 app = typer.Typer(
-    help="Co - The Production-Grade Personal Assistant CLI",
+    help="Co — personal AI operator · local-first · approval-first",
     context_settings={"help_option_names": ["--help", "-h"]},
+    invoke_without_command=True,
 )
+
+
+@app.callback()
+def _default(ctx: typer.Context):
+    """Start an interactive chat session (default when no subcommand is given)."""
+    if ctx.invoked_subcommand is None:
+        chat()
 
 
 def _create_sandbox(session_id: str) -> SandboxProtocol:
@@ -109,13 +117,13 @@ def create_deps() -> CoDeps:
         brave_search_api_key=settings.brave_search_api_key,
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
         web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
-        web_permission_mode=settings.web_permission_mode,
+        web_policy=settings.web_policy,
     )
 
 
 async def chat_loop(verbose: bool = False):
     agent, model_settings, tool_names = get_agent(
-        web_permission_mode=settings.web_permission_mode,
+        web_policy=settings.web_policy,
     )
     deps = create_deps()
     frontend = TerminalFrontend()

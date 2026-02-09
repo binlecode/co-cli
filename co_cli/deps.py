@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from co_cli.config import WebPolicy
 from co_cli.sandbox import SandboxProtocol
 
 
@@ -39,4 +40,4 @@ class CoDeps:
     brave_search_api_key: str | None = None
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
     web_fetch_blocked_domains: list[str] = field(default_factory=list)
-    web_permission_mode: str = "allow"
+    web_policy: WebPolicy = field(default_factory=WebPolicy)

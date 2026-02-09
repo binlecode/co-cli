@@ -4,12 +4,8 @@ Tests exercise real load_config() and find_project_config() — no mocks.
 """
 
 import json
-import os
-from pathlib import Path
 
-import pytest
-
-from co_cli.config import Settings, find_project_config, load_config, SETTINGS_FILE
+from co_cli.config import find_project_config, load_config
 
 
 def test_project_config_overrides_user(tmp_path, monkeypatch):
@@ -91,3 +87,37 @@ def test_malformed_project_config_skipped(tmp_path, monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "Error loading project config" in captured.out
+
+
+def test_web_policy_parses_from_project_config(tmp_path, monkeypatch):
+    """web_policy object in project config is parsed into Settings."""
+    project_dir = tmp_path / ".co-cli"
+    project_dir.mkdir()
+    (project_dir / "settings.json").write_text(json.dumps({
+        "web_policy": {"search": "deny", "fetch": "ask"},
+    }))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_config()
+    assert settings.web_policy.search == "deny"
+    assert settings.web_policy.fetch == "ask"
+
+
+def test_env_overrides_web_policy_fields(tmp_path, monkeypatch):
+    """CO_CLI_WEB_POLICY_SEARCH/FETCH override file values."""
+    project_dir = tmp_path / ".co-cli"
+    project_dir.mkdir()
+    (project_dir / "settings.json").write_text(json.dumps({
+        "web_policy": {"search": "allow", "fetch": "allow"},
+    }))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CO_CLI_WEB_POLICY_SEARCH", "ask")
+    monkeypatch.setenv("CO_CLI_WEB_POLICY_FETCH", "deny")
+
+    settings = load_config()
+    assert settings.web_policy.search == "ask"
+    assert settings.web_policy.fetch == "deny"

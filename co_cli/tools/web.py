@@ -92,7 +92,7 @@ async def web_search(
         max_results: Number of results to return (default 5, max 8).
         domains: Optional list of domains to scope the search to (adds site: operators).
     """
-    if ctx.deps.web_permission_mode == "deny":
+    if ctx.deps.web_policy.search == "deny":
         raise ModelRetry("web_search: web access disabled by policy.")
 
     if not query or not query.strip():
@@ -159,7 +159,7 @@ async def web_fetch(
     Args:
         url: The URL to fetch (must be http:// or https://).
     """
-    if ctx.deps.web_permission_mode == "deny":
+    if ctx.deps.web_policy.fetch == "deny":
         raise ModelRetry("web_fetch: web access disabled by policy.")
 
     if not url or not re.match(r"https?://", url.strip()):

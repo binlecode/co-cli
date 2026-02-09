@@ -38,6 +38,15 @@ SETTINGS_FILE = CONFIG_DIR / "settings.json"
 CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+
+WebDecision = Literal["allow", "ask", "deny"]
+
+
+class WebPolicy(BaseModel):
+    search: WebDecision = Field(default="allow")
+    fetch: WebDecision = Field(default="allow")
+
+
 class Settings(BaseModel):
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
@@ -71,7 +80,7 @@ class Settings(BaseModel):
     # Web domain policy
     web_fetch_allowed_domains: list[str] = Field(default=[])
     web_fetch_blocked_domains: list[str] = Field(default=[])
-    web_permission_mode: Literal["allow", "ask", "deny"] = Field(default="allow")
+    web_policy: WebPolicy = Field(default_factory=WebPolicy)
 
     @field_validator("shell_safe_commands", mode="before")
     @classmethod
@@ -124,7 +133,6 @@ class Settings(BaseModel):
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
             "web_fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",
             "web_fetch_blocked_domains": "CO_CLI_WEB_FETCH_BLOCKED_DOMAINS",
-            "web_permission_mode": "CO_CLI_WEB_PERMISSION_MODE",
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
             "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",
@@ -139,6 +147,18 @@ class Settings(BaseModel):
             val = os.getenv(env_var)
             if val:
                 data[field] = val
+
+        web_policy_search = os.getenv("CO_CLI_WEB_POLICY_SEARCH")
+        web_policy_fetch = os.getenv("CO_CLI_WEB_POLICY_FETCH")
+        if web_policy_search or web_policy_fetch:
+            policy_data = data.get("web_policy", {})
+            if not isinstance(policy_data, dict):
+                policy_data = {}
+            if web_policy_search:
+                policy_data["search"] = web_policy_search
+            if web_policy_fetch:
+                policy_data["fetch"] = web_policy_fetch
+            data["web_policy"] = policy_data
         return data
 
     def save(self):

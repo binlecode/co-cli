@@ -8,13 +8,13 @@ nav_order: 5
 
 ## 1. What & How
 
-The web tools give the agent external perception — `web_search` queries the Brave Search API for structured results, and `web_fetch` retrieves a URL and converts it to markdown. Both are read-only by default (`web_permission_mode=allow`); set to `ask` for approval prompts or `deny` to disable. The Brave API key is injected via `CoDeps`; `web_fetch` needs no API key.
+The web tools give the agent external perception — `web_search` queries the Brave Search API for structured results, and `web_fetch` retrieves a URL and converts it to markdown. Both are read-only by default (`web_policy.search=allow`, `web_policy.fetch=allow`); set each tool to `ask` for approval prompts or `deny` to disable. The Brave API key is injected via `CoDeps`; `web_fetch` needs no API key.
 
 ```
 Tool Execution:
 
   web_search(ctx, query, max_results, domains?)
-    ├── permission_mode == "deny" ?   ← policy gate
+    ├── web_policy.search == "deny" ?  ← policy gate
     ├── api_key = ctx.deps.brave_search_api_key
     ├── prepend site: operators        ← if domains provided
     └── httpx.get(BRAVE_SEARCH_URL, params, headers)
@@ -23,7 +23,7 @@ Tool Execution:
       Brave Search API ──▶ structured results ──▶ display + metadata
 
   web_fetch(ctx, url)
-    ├── permission_mode == "deny" ?   ← policy gate
+    ├── web_policy.fetch == "deny" ?   ← policy gate
     ├── _is_domain_allowed()          ← domain allow/block check
     ├── is_url_safe(url)              ← SSRF pre-request check
     ├── httpx.get(url, follow_redirects=True)
@@ -42,9 +42,9 @@ Tool Execution:
 
 ### Tools
 
-**`web_search(query, max_results=5, domains=None) → dict`** — Query Brave Search. Returns `{"display": "1. **Title** — snippet\n   URL\n\n...", "results": [...], "count": N}`. Empty query raises `ModelRetry`. `max_results` capped at `_MAX_RESULTS` (8). Optional `domains` list prepends `site:` operators to scope the search to specific sites. Permission mode `deny` raises `ModelRetry` before any work.
+**`web_search(query, max_results=5, domains=None) → dict`** — Query Brave Search. Returns `{"display": "1. **Title** — snippet\n   URL\n\n...", "results": [...], "count": N}`. Empty query raises `ModelRetry`. `max_results` capped at `_MAX_RESULTS` (8). Optional `domains` list prepends `site:` operators to scope the search to specific sites. `web_policy.search="deny"` raises `ModelRetry` before any work.
 
-**`web_fetch(url) → dict`** — Fetch a URL and return content as markdown. Returns `{"display": "Content from {final_url}:\n\n...", "url": str, "content_type": str, "truncated": bool}`. The `url` field reflects the actual URL after redirects. Non-http/https URLs raise `ModelRetry`. Permission mode `deny` raises `ModelRetry` before any work. The hostname is checked against the domain allow/blocklist before the SSRF check. Before the request, the URL is validated against the SSRF blocklist; after redirects, the final URL is re-checked. Binary content types are rejected. The response body is byte-truncated at 1 MB before decoding, then char-truncated at 100k after markdown conversion.
+**`web_fetch(url) → dict`** — Fetch a URL and return content as markdown. Returns `{"display": "Content from {final_url}:\n\n...", "url": str, "content_type": str, "truncated": bool}`. The `url` field reflects the actual URL after redirects. Non-http/https URLs raise `ModelRetry`. `web_policy.fetch="deny"` raises `ModelRetry` before any work. The hostname is checked against the domain allow/blocklist before the SSRF check. Before the request, the URL is validated against the SSRF blocklist; after redirects, the final URL is re-checked. Binary content types are rejected. The response body is byte-truncated at 1 MB before decoding, then char-truncated at 100k after markdown conversion.
 
 ### Helpers
 
@@ -107,7 +107,7 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 7. **Content-type guard** — `_is_content_type_allowed()` rejects binary responses (images, PDFs, etc.) before processing. Only `text/*` and structured data MIME types (`application/json`, `application/xml`, etc.) are allowed. Empty Content-Type is permitted (servers often omit it for text).
 8. **Two-tier body limit** — Response body is first truncated at `_MAX_FETCH_BYTES` (1 MB) before decoding, preventing memory exhaustion from large binary payloads. Decoded text is then truncated at `_MAX_FETCH_CHARS` (100k chars) as a secondary limit.
 9. **Domain policy** — `_is_domain_allowed()` checks hostnames against user-configured allow/blocklists before the SSRF check. Blocklist takes precedence over allowlist. Subdomain matching via `.endswith("." + domain)`.
-10. **Permission mode** — `web_permission_mode` setting controls web tool access: `allow` (default, no approval), `ask` (deferred approval via `requires_approval=True` in agent registration), `deny` (tools raise `ModelRetry` immediately). Checked at the top of both `web_search` and `web_fetch` before any work.
+10. **Per-tool web policy** — `web_policy` controls web tool access independently: `search` and `fetch` each support `allow` (default, no approval), `ask` (deferred approval via `requires_approval=True` in agent registration), and `deny` (tools raise `ModelRetry` immediately). Checked at the top of each tool before any work.
 
 ## 3. Config
 
@@ -116,7 +116,8 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `None` | Brave Search API key. Presence enables `web_search`; `web_fetch` works without it |
 | `web_fetch_allowed_domains` | `CO_CLI_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | If non-empty, only these domains (and subdomains) are permitted for `web_fetch` |
 | `web_fetch_blocked_domains` | `CO_CLI_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Always blocked, even if allowlist is empty. Comma-separated in env var |
-| `web_permission_mode` | `CO_CLI_WEB_PERMISSION_MODE` | `"allow"` | `allow` = no approval, `ask` = deferred approval, `deny` = tools disabled |
+| `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | Web search decision: `allow` = no approval, `ask` = deferred approval, `deny` = disabled |
+| `web_policy.fetch` | `CO_CLI_WEB_POLICY_FETCH` | `"allow"` | Web fetch decision: `allow` = no approval, `ask` = deferred approval, `deny` = disabled |
 
 ### Setup
 
@@ -130,9 +131,9 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 |------|---------|
 | `co_cli/tools/web.py` | Both tools: `web_search`, `web_fetch`, helpers, constants |
 | `co_cli/tools/_url_safety.py` | SSRF protection: blocked networks/hostnames, `is_url_safe()` |
-| `co_cli/config.py` | `brave_search_api_key`, domain lists, `web_permission_mode` settings + env mappings |
-| `co_cli/deps.py` | `CoDeps` fields: `brave_search_api_key`, domain lists, `web_permission_mode` |
-| `co_cli/main.py` | Wires web settings in `create_deps()`, passes `web_permission_mode` to `get_agent()` |
-| `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on permission mode |
+| `co_cli/config.py` | `brave_search_api_key`, domain lists, `web_policy` settings + env mappings |
+| `co_cli/deps.py` | `CoDeps` fields: `brave_search_api_key`, domain lists, `web_policy` |
+| `co_cli/main.py` | Wires web settings in `create_deps()`, passes `web_policy` to `get_agent()` |
+| `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on `web_policy.search/fetch` |
 | `co_cli/status.py` | Web tools status row |
 | `tests/test_web.py` | Validation + functional tests |

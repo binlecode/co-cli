@@ -1,151 +1,112 @@
-# TODO: Web Tool Hardening
+# TODO: Web Tool Hardening (MVP Trim)
 
-**Origin:** Review of `web_search` + `web_fetch` against top CLI-agent systems (Claude Code, Gemini CLI, Codex, Copilot CLI, OpenCode, Goose, Aider).
+**Goal:** remove policy ambiguity with one web permission system, shipped in the smallest safe change.
 
----
+## Scope (MVP Only)
 
-## Peer Convergence Summary
+In scope:
 
-All top systems that ship web-fetch tools converge on three safety layers co-cli currently lacks:
+- Replace `web_permission_mode` with one `web_policy` config object.
+- Support per-tool decision without a rule engine.
+- Keep existing web security controls unchanged (SSRF/content-type/domain checks).
 
-1. **Network-target guards** — Block private/loopback/link-local IPs and cloud metadata endpoints before request; re-check after redirects. (Claude Code, Gemini CLI, Codex, Copilot CLI)
-2. **Domain/URL policy controls** — Allow/block domain lists and a permission mode (`allow|ask|deny`) separate from the read/write tool classification. (Claude Code, Copilot CLI, OpenCode)
-3. **Content-aware payload handling** — Allowlist textual content types, reject binary, enforce byte-level body limits before full decode. (Gemini CLI, Codex)
+Out of scope (follow-up TODO):
 
-Additional gaps identified: missing safety-path tests, limited search parameters (`domains`, `recency`), and no retrieval-mode toggle (`live|disabled`).
-
----
-
-## Phase 1 — SSRF Protection + Content-Type Guard
-
-Goal: close the highest-severity gaps — network-target safety and payload handling. Ship the smallest thing that blocks SSRF and binary-payload waste.
-
-### SSRF / private-network guard
-
-New helper `co_cli/tools/_url_safety.py` with `is_url_safe(url: str) -> bool`:
-
-- Resolve hostname to IP(s)
-- Block loopback (`127.0.0.0/8`, `::1`), link-local (`169.254.0.0/16`, `fe80::/10`), RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
-- Block cloud metadata endpoints (`169.254.169.254`, `metadata.google.internal`)
-- Return `False` for any blocked address, `True` otherwise
-
-Integration in `web_fetch`:
-
-- Call `is_url_safe(url)` before issuing the HTTP request — raise `ModelRetry` if unsafe
-- After following redirects, re-check the final URL with `is_url_safe()` — raise `ModelRetry` if redirect target is unsafe
-
-### Content-type allowlist
-
-- Before reading the response body, check `Content-Type` header against allowlist: `text/*`, `application/json`, `application/xml`, `application/xhtml+xml`, `application/x-yaml`, `application/yaml`
-- Reject non-matching types (binary, images, PDFs, etc.) with `ModelRetry` explaining the restriction
-- Enforce byte-level body limit (e.g. 1 MB) before full decode — truncate and note truncation in response
-
-### Tests
-
-- Private IP blocking: `127.0.0.1`, `10.x.x.x`, `192.168.x.x`, `169.254.169.254`
-- Redirect-to-private: URL that 302s to a private IP must be blocked
-- Content-type rejection: binary content type returns `ModelRetry`
-- Truncation edge cases: response at/over byte limit
-
-### Items
-
-- [x] Create `co_cli/tools/_url_safety.py` with `is_url_safe(url)` function
-- [x] Add pre-request `is_url_safe()` check to `web_fetch` in `co_cli/tools/web.py`
-- [x] Add post-redirect `is_url_safe()` re-check to `web_fetch`
-- [x] Add content-type allowlist check before body read in `web_fetch`
-- [x] Add byte-level body limit before full decode in `web_fetch`
-- [x] Add functional tests: private IP blocking, content-type rejection
-- [ ] Add functional test: redirect-to-private (URL that 302s to private IP)
-- [ ] Add functional test: truncation edge cases (response at/over byte limit)
-- [x] Update `docs/DESIGN-12-tool-web-search.md` security section
-
-### File changes
-
-| File | Change |
-|---|---|
-| `co_cli/tools/_url_safety.py` | New — `is_url_safe()` helper |
-| `co_cli/tools/web.py` | Pre-request + post-redirect URL check, content-type guard, byte limit |
-| `tests/test_web.py` | SSRF and content-type safety tests |
-| `docs/DESIGN-12-tool-web-search.md` | Document SSRF protection + content-type guard |
+- `recency_days`
+- pagination tokens
+- richer search metadata (`published_date`, `total_estimated`)
+- generic rule lists / precedence resolver
 
 ---
 
-## Phase 2 — Domain/URL Policy Controls
+## Target Config (Simple)
 
-Goal: give users config-driven control over which domains `web_fetch` can reach, and add a permission mode for web access.
+Add to `Settings`:
 
-### Domain allowlist / blocklist
+```python
+class WebPolicy(BaseModel):
+    search: Literal["allow", "ask", "deny"] = "allow"
+    fetch: Literal["allow", "ask", "deny"] = "allow"
+```
 
-New settings in `co_cli/config.py`:
+```python
+web_policy: WebPolicy = Field(default_factory=WebPolicy)
+```
 
-- `web_fetch_allowed_domains: list[str]` — if non-empty, only these domains (and subdomains) are permitted
-- `web_fetch_blocked_domains: list[str]` — always blocked, checked even when allowlist is empty
-- Checked in `web_fetch` after URL parsing, before request
+Why this shape:
 
-### Search domain filtering
-
-Optional `domains` parameter on `web_search` — maps to Brave API `site:` operator prefix in query string. Lets the agent scope searches to specific sites without user needing to spell out `site:` syntax.
-
-### Web permission mode
-
-New setting:
-
-- `web_permission_mode: Literal["allow", "ask", "deny"]` — default `"allow"`
-- `allow` — web tools run without approval (current behavior, backward-compatible)
-- `ask` — web tools require approval via the deferred-approval flow
-- `deny` — web tools raise `ModelRetry("web access disabled by policy")`
-
-Integration: check `web_permission_mode` at the top of `web_search` and `web_fetch` tool functions.
-
-### Items
-
-- [x] Add `web_fetch_allowed_domains` and `web_fetch_blocked_domains` settings to `co_cli/config.py`
-- [x] Implement domain check in `web_fetch` (before request, after URL parse)
-- [x] Add optional `domains` parameter to `web_search` (Brave `site:` prefix)
-- [x] Add `web_permission_mode` setting to `co_cli/config.py`
-- [x] Implement permission mode check in `web_search` and `web_fetch`
-- [x] Add functional tests: domain allowlist/blocklist, permission mode deny/ask
-- [x] Update `docs/DESIGN-12-tool-web-search.md` config table with new settings
-
-### File changes
-
-| File | Change |
-|---|---|
-| `co_cli/config.py` | Add `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_permission_mode` |
-| `co_cli/tools/web.py` | Domain checks, permission mode gate, `domains` param on `web_search` |
-| `tests/test_web.py` | Domain policy and permission mode tests |
-| `docs/DESIGN-12-tool-web-search.md` | Document domain policy + permission mode |
+- one policy system
+- explicit behavior per tool
+- no matching engine, no precedence rules, no ambiguity
 
 ---
 
-## Phase 3 (Post-MVP) — Search Modes + Richer Metadata
+## Refactor Plan
 
-Goal: feature parity with top systems on search controls and result richness. Lower priority — ship after safety baseline (Phases 1-2) lands.
+### 1) Config and deps
 
-### Search mode toggle
+- [x] Add `WebPolicy` model in `co_cli/config.py`.
+- [x] Add `web_policy` field to `Settings`.
+- [x] Remove `web_permission_mode` from `Settings`.
+- [x] Add `web_policy` to `CoDeps`; remove `web_permission_mode`.
 
-New setting:
+Files:
 
-- `web_search_mode: Literal["live", "disabled"]` — default `"live"`
-- `disabled` — `web_search` returns `ModelRetry("web search disabled by policy")` without calling Brave API
+- `co_cli/config.py`
+- `co_cli/deps.py`
+- `settings.reference.json`
 
-### Recency filtering
+### 2) Runtime wiring
 
-Add `recency_days` optional parameter to `web_search` — maps to Brave `freshness` parameter. Lets the agent request only recent results (e.g. last 7 days).
+- [x] Inject `settings.web_policy` in `create_deps()`.
+- [x] Update agent tool registration:
+  - `web_search` requires approval when `web_policy.search == "ask"`
+  - `web_fetch` requires approval when `web_policy.fetch == "ask"`
 
-### Richer result metadata
+Files:
 
-Extend `web_search` return dict with additional fields from Brave API response:
+- `co_cli/main.py`
+- `co_cli/agent.py`
 
-- `published_date` per result (when available)
-- `next_page_token` for pagination (Brave `offset` parameter)
-- `total_estimated` count from Brave response
+### 3) Tool enforcement
 
-### Items
+- [x] In `web_search`, deny when `ctx.deps.web_policy.search == "deny"`.
+- [x] In `web_fetch`, deny when `ctx.deps.web_policy.fetch == "deny"`.
+- [x] Keep all existing fetch hardening logic untouched.
 
-- [ ] Add `web_search_mode` setting to `co_cli/config.py`
-- [ ] Implement mode check in `web_search`
-- [ ] Add `recency_days` parameter to `web_search` (Brave `freshness` mapping)
-- [ ] Extend `web_search` return dict with richer metadata fields
-- [ ] Add functional tests: search mode disabled, recency filtering
-- [ ] Refresh `docs/DESIGN-12-tool-web-search.md` with updated feature landscape
+Files:
+
+- `co_cli/tools/web.py`
+
+### 4) Tests
+
+- [x] Config parse test for `web_policy`.
+- [x] `web_search` deny test via `web_policy.search = "deny"`.
+- [x] `web_fetch` deny test via `web_policy.fetch = "deny"`.
+- [x] Agent registration test for `ask` mode on each tool.
+
+Files:
+
+- `tests/test_config.py`
+- `tests/test_web.py`
+- `tests/test_agent.py`
+
+### 5) Docs
+
+- [x] Update design doc to reflect single policy system.
+- [x] Add migration note in changelog (old `web_permission_mode` removed).
+
+Files:
+
+- `docs/DESIGN-12-tool-web-search.md`
+- `CHANGELOG.md`
+
+---
+
+## Acceptance Criteria
+
+- [x] No `web_permission_mode` in runtime/config.
+- [x] One policy object controls both web tools.
+- [x] `ask` behavior works per tool at registration time.
+- [x] `deny` behavior works per tool at execution time.
+- [x] Existing web fetch security tests still pass.
