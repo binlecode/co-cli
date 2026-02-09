@@ -297,7 +297,7 @@ COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry
 | `/status` | System health check |
 | `/tools` | List registered tool names |
 | `/history` | Show turn/message totals |
-| `/compact` | LLM-summarise history (see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md)) |
+| `/compact` | LLM-summarise history (see [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md)) |
 | `/yolo` | Toggle `deps.auto_confirm` |
 | `/model` | Show/switch current model (Ollama only) |
 
@@ -381,7 +381,7 @@ Python 3.11+ `asyncio.run()` delivers `asyncio.CancelledError` instead of `Keybo
 
 ### Conversation Memory Integration
 
-Each turn's full message history is accumulated via `turn_result.messages` and passed to the next `run_turn()` call. Two history processors run automatically before each model request — see [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md) for details.
+Each turn's full message history is accumulated via `turn_result.messages` and passed to the next `run_turn()` call. Two history processors run automatically before each model request — see [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md) for details.
 
 ### REPL Features
 

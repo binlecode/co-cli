@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool error classification** (`co_cli/tools/_errors.py`): `ToolErrorKind` enum (TERMINAL/TRANSIENT/MISUSE), `classify_google_error()` inspects HttpError status codes and string patterns, `handle_tool_error()` dispatches to `terminal_error()` or `ModelRetry`.
 - **`TerminalFrontend`** in `display.py`: Implements `FrontendProtocol` with Rich `Live`, `Panel`, `Markdown`, `Prompt`. SIGINT handler swap for synchronous approval prompts.
 - **`RecordingFrontend`** in `tests/test_orchestrate.py`: Records `(event_type, payload)` tuples for assertions. Configurable `approval_policy`.
-- **`docs/DESIGN-13-streaming-event-ordering.md`**: First-principles RCA of streaming event ordering, boundary-safe rendering design, and regression coverage.
+- **`docs/DESIGN-04-streaming-event-ordering.md`**: First-principles RCA of streaming event ordering, boundary-safe rendering design, and regression coverage.
 - **`tests/test_errors.py`**: 25 functional tests — `classify_google_error` (9 cases), `handle_tool_error` (3), `classify_provider_error` (8), `_parse_retry_after` (5).
 - **`tests/test_orchestrate.py`**: 11 functional tests — protocol compliance, event recording, approval policies, `_stream_events` regression coverage, `_patch_dangling_tool_calls`, `FinalResultEvent` mid-stream no-op.
 - **`tests/test_display.py`**: Display helper tests.
@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GitHub Pages book**: Replaced `core.md`, `infrastructure.md`, `quickstart.md`, `tools.md` with `BOOK-` prefixed helper pages; updated `_config.yml` excludes.
 - **`docs/DESIGN-02-chat-loop.md`**: Rewritten for `FrontendProtocol`, `run_turn()`, provider error table, tool error classification, updated all function/diagram references.
 - **`docs/DESIGN-00-co-cli.md`**: Added `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` to module table. Updated error handling and tool convention docs.
-- **`docs/DESIGN-10-tool-google.md`**: Updated error handling section for `terminal_error()` vs `ModelRetry` strategy.
+- **`docs/DESIGN-11-tool-google.md`**: Updated error handling section for `terminal_error()` vs `ModelRetry` strategy.
 - **`docs/TODO-web-tool-hardening.md`**: Split out unfinished test items (redirect-to-private, truncation edge cases); added `application/x-yaml` and `application/yaml` to content-type allowlist.
 - **`docs/todo-roi.md`**: Moved agent tool-call hardening to Done section.
 - **`evals/eval_tool_calling-data.json`, `eval_tool_calling-result.md`**: Updated results — overall accuracy 100% (26/26).
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **`docs/TODO-agent-toolcall-recursive-flow.md`**: All Phase C+D items implemented.
 - **`docs/TODO-approval-interrupt-tests.md`**: All items implemented in `tests/test_approval.py`.
-- **`docs/FIX-streaming-leading-token-drop.md`**: Superseded by `DESIGN-13-streaming-event-ordering.md`.
+- **`docs/FIX-streaming-leading-token-drop.md`**: Superseded by `DESIGN-04-streaming-event-ordering.md`.
 - **`docs/DESIGN-co-cli.md`**: Renamed to `DESIGN-00-co-cli.md`.
 
 ---
@@ -68,15 +68,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Eval baselines**: `evals/baseline-gemini.json` and `evals/baseline-ollama.json` — both models at 100% (26/26) on current golden set.
 - **`docs/TODO-eval-tool-calling.md`**: Eval framework design doc — 12 sections covering JSONL format, scoring, CLI interface, golden cases, and key patterns.
 - **Web tool tests** (`tests/test_web.py`): Validation (empty query, invalid URL scheme), missing API key, functional search/fetch integration.
-- **`docs/DESIGN-12-tool-web-search.md`**: Web tools design doc — architecture, tool contracts, constants, error handling, security (SSRF limitation), config, file index.
+- **`docs/DESIGN-13-tool-web-search.md`**: Web tools design doc — architecture, tool contracts, constants, error handling, security (SSRF limitation), config, file index.
 - **LLM E2E web tests** (`tests/test_llm_e2e.py`): Web search tool selection and arg extraction tests.
 
 ### Changed
 - **`co_cli/agent.py`**: `get_agent()` accepts `all_approval: bool = False`. Read-only tools registered with `requires_approval=all_approval`.
-- **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory. Added `DESIGN-12-tool-web-search.md` to design docs index. Removed `TODO-tool-web-search.md` from TODO list (feature complete). Amended testing policy to document skip exception for API-dependent tests (Brave, Slack).
+- **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory. Added `DESIGN-13-tool-web-search.md` to design docs index. Removed `TODO-tool-web-search.md` from TODO list (feature complete). Amended testing policy to document skip exception for API-dependent tests (Brave, Slack).
 
 ### Removed
-- **`docs/TODO-tool-web-search.md`**: Replaced by `docs/DESIGN-12-tool-web-search.md` — feature fully implemented.
+- **`docs/TODO-tool-web-search.md`**: Replaced by `docs/DESIGN-13-tool-web-search.md` — feature fully implemented.
 
 ---
 

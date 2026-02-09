@@ -166,7 +166,7 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 | `/compact` | Summarize conversation via LLM to reduce context (2-message compacted history) |
 | `/yolo` | Toggle auto-approve mode for tool calls |
 
-**Context governance** runs automatically — you don't need to use `/compact` manually unless you want an immediate full compaction. The agent's `history_processors` trim old tool output and summarize dropped messages via LLM when history exceeds the configured threshold (default 40 messages). See `docs/DESIGN-06-conversation-memory.md`.
+**Context governance** runs automatically — you don't need to use `/compact` manually unless you want an immediate full compaction. The agent's `history_processors` trim old tool output and summarize dropped messages via LLM when history exceeds the configured threshold (default 40 messages). See `docs/DESIGN-07-conversation-memory.md`.
 
 ---
 

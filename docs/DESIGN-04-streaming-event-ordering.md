@@ -1,5 +1,5 @@
 ---
-title: "13 — Streaming Event Ordering"
+title: "04 — Streaming Event Ordering"
 parent: Core
 nav_order: 4
 ---
@@ -91,4 +91,4 @@ on stream end:
 |------|---------|
 | `co_cli/_orchestrate.py` | Implements `_stream_events()` event consumption, buffering, flush/commit boundaries |
 | `tests/test_orchestrate.py` | Regression tests for start-event content handling and `FinalResultEvent` boundary behavior |
-| `docs/DESIGN-13-streaming-event-ordering.md` | Design rationale, event model, and verification references |
+| `docs/DESIGN-04-streaming-event-ordering.md` | Design rationale, event model, and verification references |

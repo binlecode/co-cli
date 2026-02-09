@@ -87,16 +87,16 @@ graph TB
 | Agent & Dependencies | [DESIGN-01-agent.md](DESIGN-01-agent.md) | `get_agent()` factory, `CoDeps` dataclass, tool registration, multi-session state |
 | Chat Loop | [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) | Streaming, deferred approval, slash commands, input dispatch, interrupt handling |
 | LLM Models | [DESIGN-03-llm-models.md](DESIGN-03-llm-models.md) | Gemini/Ollama model selection, inference parameters |
-| Telemetry | [DESIGN-04-otel-logging.md](DESIGN-04-otel-logging.md) | SQLite span exporter, WAL concurrency, trace viewers |
-| Tail Viewer | [DESIGN-05-tail-viewer.md](DESIGN-05-tail-viewer.md) | Real-time span viewer (`co tail`) |
-| Conversation Memory | [DESIGN-06-conversation-memory.md](DESIGN-06-conversation-memory.md) | History processors, sliding window, summarisation |
-| Theming | [DESIGN-07-theming-ascii.md](DESIGN-07-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
-| Shell Tool | [DESIGN-08-tool-shell.md](DESIGN-08-tool-shell.md) | Docker sandbox, subprocess fallback, safe-prefix auto-approval |
-| Obsidian Tool | [DESIGN-09-tool-obsidian.md](DESIGN-09-tool-obsidian.md) | Vault search, path traversal protection |
-| Google Tools | [DESIGN-10-tool-google.md](DESIGN-10-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
-| Slack Tool | [DESIGN-11-tool-slack.md](DESIGN-11-tool-slack.md) | Channel/message/user tools, send with approval |
-| Web Tools | [DESIGN-12-tool-web-search.md](DESIGN-12-tool-web-search.md) | Brave Search + URL fetch, read-only |
-| Streaming Event Ordering | [DESIGN-13-streaming-event-ordering.md](DESIGN-13-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
+| Streaming Event Ordering | [DESIGN-04-streaming-event-ordering.md](DESIGN-04-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
+| Telemetry | [DESIGN-05-otel-logging.md](DESIGN-05-otel-logging.md) | SQLite span exporter, WAL concurrency, trace viewers |
+| Tail Viewer | [DESIGN-06-tail-viewer.md](DESIGN-06-tail-viewer.md) | Real-time span viewer (`co tail`) |
+| Conversation Memory | [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md) | History processors, sliding window, summarisation |
+| Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
+| Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Docker sandbox, subprocess fallback, safe-prefix auto-approval |
+| Obsidian Tool | [DESIGN-10-tool-obsidian.md](DESIGN-10-tool-obsidian.md) | Vault search, path traversal protection |
+| Google Tools | [DESIGN-11-tool-google.md](DESIGN-11-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
+| Slack Tool | [DESIGN-12-tool-slack.md](DESIGN-12-tool-slack.md) | Channel/message/user tools, send with approval |
+| Web Tools | [DESIGN-13-tool-web-search.md](DESIGN-13-tool-web-search.md) | Brave Search + URL fetch, read-only |
 
 ## Cross-Cutting Concerns
 
@@ -152,7 +152,7 @@ All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` rema
 
 ### Approval Flow
 
-Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) for the full approval sequence and [DESIGN-08-tool-shell.md](DESIGN-08-tool-shell.md) for safe-command auto-approval.
+Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) for the full approval sequence and [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) for safe-command auto-approval.
 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
@@ -167,7 +167,7 @@ Four defense layers:
 
 1. **Configuration** — Secrets in `settings.json` or env vars, no hardcoded keys, env vars override file values
 2. **Confirmation** — Human-in-the-loop approval for shell commands, Slack messages, email drafts (see approval flow above)
-3. **Isolation** — Docker sandbox with `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, workspace-only mount (see [DESIGN-08-tool-shell.md](DESIGN-08-tool-shell.md))
+3. **Isolation** — Docker sandbox with `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, workspace-only mount (see [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md))
 4. **Input validation** — Path traversal protection in Obsidian tools, API scoping in Google/Slack tools
 
 ### Concurrency

@@ -45,7 +45,7 @@ See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and ap
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
 - **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
-- **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites. See `docs/DESIGN-07-theming-ascii.md` for style inventory and theme architecture
+- **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites. See `docs/DESIGN-08-theming-ascii.md` for style inventory and theme architecture
 
 ## Testing Policy
 
@@ -90,16 +90,16 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-01-agent.md` — Agent factory (`get_agent()`), `CoDeps` dataclass, tool registration, multi-session state
 - `docs/DESIGN-02-chat-loop.md` — Chat loop: streaming, deferred approval, slash commands, input dispatch, interrupt handling
 - `docs/DESIGN-03-llm-models.md` — LLM model configuration (Gemini, Ollama)
-- `docs/DESIGN-04-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
-- `docs/DESIGN-05-tail-viewer.md` — Real-time span tail viewer
-- `docs/DESIGN-06-conversation-memory.md` — Context governance (history processors, sliding window, summarisation)
-- `docs/DESIGN-07-theming-ascii.md` — Theming, ASCII art banner, display helpers
-- `docs/DESIGN-08-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
-- `docs/DESIGN-09-tool-obsidian.md` — Obsidian/notes tool design
-- `docs/DESIGN-10-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
-- `docs/DESIGN-11-tool-slack.md` — Slack tool design
-- `docs/DESIGN-12-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
-- `docs/DESIGN-13-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
+- `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
+- `docs/DESIGN-05-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
+- `docs/DESIGN-06-tail-viewer.md` — Real-time span tail viewer
+- `docs/DESIGN-07-conversation-memory.md` — Context governance (history processors, sliding window, summarisation)
+- `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
+- `docs/DESIGN-09-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
+- `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
+- `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
+- `docs/DESIGN-12-tool-slack.md` — Slack tool design
+- `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning

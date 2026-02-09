@@ -1,5 +1,5 @@
 ---
-title: "05 — Tail Viewer"
+title: "06 — Tail Viewer"
 parent: Infrastructure
 nav_order: 2
 ---
@@ -60,7 +60,7 @@ Matches `trace_viewer.py` for consistency across all three viewers:
 
 ### Span Attribute Reference
 
-These OTel attributes (from `InstrumentationSettings(version=3)`) are available in the `attributes` JSON column — see [DESIGN-04-otel-logging.md](DESIGN-04-otel-logging.md) for the full schema.
+These OTel attributes (from `InstrumentationSettings(version=3)`) are available in the `attributes` JSON column — see [DESIGN-05-otel-logging.md](DESIGN-05-otel-logging.md) for the full schema.
 
 **`invoke_agent agent`:** `model_name`, `gen_ai.usage.input_tokens`/`output_tokens`, `pydantic_ai.all_messages`
 

@@ -1,5 +1,5 @@
 ---
-title: "09 — Obsidian Vault Tools"
+title: "10 — Obsidian Vault Tools"
 parent: Tools
 nav_order: 2
 ---

@@ -1,7 +1,7 @@
 # TODO: Slack Tooling
 
 **Last Updated:** 2026-02-06
-**Files:** `co_cli/tools/slack.py`, `co_cli/agent.py` (registration), `docs/DESIGN-11-tool-slack.md`
+**Files:** `co_cli/tools/slack.py`, `co_cli/agent.py` (registration), `docs/DESIGN-12-tool-slack.md`
 
 ---
 

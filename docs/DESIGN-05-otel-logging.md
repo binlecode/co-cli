@@ -1,5 +1,5 @@
 ---
-title: "04 — OpenTelemetry Logging"
+title: "05 — OpenTelemetry Logging"
 parent: Infrastructure
 nav_order: 1
 ---
@@ -8,7 +8,7 @@ nav_order: 1
 
 ## 1. What & How
 
-Co CLI uses OpenTelemetry (OTel) to trace agent operations. All data stays local in SQLite. Three viewers available: Datasette (table), nested HTML (like Logfire), and real-time tail (see [DESIGN-05-tail-viewer.md](DESIGN-05-tail-viewer.md)).
+Co CLI uses OpenTelemetry (OTel) to trace agent operations. All data stays local in SQLite. Three viewers available: Datasette (table), nested HTML (like Logfire), and real-time tail (see [DESIGN-06-tail-viewer.md](DESIGN-06-tail-viewer.md)).
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -118,7 +118,7 @@ Generates static HTML with nested, collapsible spans. Builds a span tree from fl
 |---------|------|----------|
 | `co logs` | Datasette (browser) | SQL queries, post-hoc deep dives |
 | `co traces` | Static HTML (browser) | Visual span tree, waterfall timing |
-| `co tail` | Terminal (live) | Real-time monitoring (see [DESIGN-05-tail-viewer.md](DESIGN-05-tail-viewer.md)) |
+| `co tail` | Terminal (live) | Real-time monitoring (see [DESIGN-06-tail-viewer.md](DESIGN-06-tail-viewer.md)) |
 
 ### Example SQL Queries
 
