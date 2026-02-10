@@ -50,21 +50,28 @@ def load_personality(personality: str) -> str:
     return personality_file.read_text(encoding="utf-8")
 
 
-def get_system_prompt(provider: str, personality: str | None = None) -> str:
+def get_system_prompt(
+    provider: str,
+    personality: str | None = None,
+    model_name: str | None = None,
+) -> str:
     """Assemble system prompt with model conditionals, personality, and project overrides.
 
     Processing steps:
     1. Load base system.md
     2. Process model conditionals ([IF gemini] / [IF ollama])
     3. Inject personality template (if specified)
-    4. Append project instructions from .co-cli/instructions.md (if exists)
-    5. Validate result (no empty prompt, no unprocessed markers)
+    4. Inject model quirk counter-steering (if known)
+    5. Append project instructions from .co-cli/instructions.md (if exists)
+    6. Validate result (no empty prompt, no unprocessed markers)
 
     Args:
         provider: LLM provider name ("gemini", "ollama", or unknown).
                  Unknown providers default to Ollama (conservative).
         personality: Personality name (professional, friendly, terse, inquisitive).
                     If None, no personality is injected.
+        model_name: Model identifier for quirk lookup (e.g., "gemini-1.5-pro", "deepseek-coder").
+                   If None, no counter-steering is injected.
 
     Returns:
         Assembled system prompt as string.
@@ -74,10 +81,11 @@ def get_system_prompt(provider: str, personality: str | None = None) -> str:
         ValueError: If assembled prompt is empty or has unprocessed conditionals.
 
     Example:
-        >>> prompt = get_system_prompt("gemini", personality="friendly")
+        >>> prompt = get_system_prompt("gemini", personality="friendly", model_name="gemini-1.5-pro")
         >>> assert "[IF ollama]" not in prompt  # Ollama sections removed
         >>> assert "[IF gemini]" not in prompt  # Markers cleaned up
         >>> assert "Personality" in prompt  # Personality injected
+        >>> assert "scope of the user's request" in prompt  # Counter-steering for overeager model
     """
     # 1. Load base prompt
     prompts_dir = Path(__file__).parent
@@ -117,14 +125,22 @@ def get_system_prompt(provider: str, personality: str | None = None) -> str:
         personality_content = load_personality(personality)
         base_prompt += f"\n\n## Personality\n\n{personality_content}"
 
-    # 4. Load project instructions if present
+    # 4. Inject model quirk counter-steering (if known)
+    if model_name:
+        from co_cli.prompts.model_quirks import get_counter_steering
+
+        counter_steering = get_counter_steering(provider, model_name)
+        if counter_steering:
+            base_prompt += f"\n\n## Model-Specific Guidance\n\n{counter_steering}"
+
+    # 5. Load project instructions if present
     project_instructions = Path.cwd() / ".co-cli" / "instructions.md"
     if project_instructions.exists():
         instructions_content = project_instructions.read_text(encoding="utf-8")
         base_prompt += "\n\n## Project-Specific Instructions\n\n"
         base_prompt += instructions_content
 
-    # 5. Validate result
+    # 6. Validate result
     if not base_prompt.strip():
         raise ValueError("Assembled prompt is empty after processing")
 
