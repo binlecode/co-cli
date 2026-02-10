@@ -97,62 +97,7 @@ class ModelQuirks(TypedDict, total=False):
 # Model quirk database
 # Key format: "provider:model_name" (provider lowercased, model_name as returned by API)
 MODEL_QUIRKS: dict[str, ModelQuirks] = {
-    # Gemini models
-    "gemini:gemini-1.5-flash": {
-        "verbose": True,
-        "counter_steering": (
-            "When tools return structured output with a 'display' field, show that display value "
-            "verbatim without adding your own summary or commentary. The tool already formatted "
-            "the output for the user — trust that formatting."
-        ),
-    },
-    "gemini:gemini-1.5-pro": {
-        "overeager": True,
-        "counter_steering": (
-            "Be careful not to exceed the scope of the user's request. "
-            "If the user states an observation ('This function has a bug') or asks a question "
-            "('Why does login fail?'), that is NOT a request to modify code — it's a request "
-            "for explanation only. Only modify code when the user explicitly uses action verbs "
-            "like 'fix', 'add', 'update', 'modify', 'delete', 'refactor', or 'create'."
-        ),
-    },
-    "gemini:gemini-2.0-flash-exp": {
-        "verbose": True,
-        "counter_steering": (
-            "When tools return structured output with a 'display' field, show that display value "
-            "verbatim without adding your own summary or commentary. The tool already formatted "
-            "the output for the user — trust that formatting."
-        ),
-    },
-    # Ollama models
-    "ollama:deepseek-coder": {
-        "lazy": True,
-        "counter_steering": (
-            "You are diligent and thorough! "
-            "Always provide complete, fully working code. "
-            "NEVER leave TODO, FIXME, or placeholder comments. "
-            "If you cannot complete the full implementation, explain why and ask for clarification."
-        ),
-    },
-    "ollama:codellama": {
-        "lazy": True,
-        "counter_steering": (
-            "You are diligent and thorough! "
-            "Always provide complete, fully working code. "
-            "NEVER leave TODO, FIXME, or placeholder comments. "
-            "If you cannot complete the full implementation, explain why and ask for clarification."
-        ),
-    },
-    "ollama:llama3": {
-        "hesitant": True,
-        "counter_steering": (
-            "You are confident and decisive! "
-            "For read-only operations (reading files, searching code, running tests), proceed "
-            "immediately without asking permission. Only ask for approval when side effects are "
-            "involved (modifying files, running shell commands, sending messages). "
-            "Trust your judgment — if the operation is safe and reversible, just do it."
-        ),
-    },
+    # Ollama models (current)
     "ollama:llama3.1": {
         "hesitant": True,
         "counter_steering": (
@@ -161,37 +106,6 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
             "immediately without asking permission. Only ask for approval when side effects are "
             "involved (modifying files, running shell commands, sending messages). "
             "Trust your judgment — if the operation is safe and reversible, just do it."
-        ),
-    },
-    "ollama:mistral": {
-        "verbose": True,
-        "counter_steering": (
-            "When tools return structured output with a 'display' field, show that display value "
-            "verbatim without adding your own summary or commentary. The tool already formatted "
-            "the output for the user — trust that formatting."
-        ),
-    },
-    "ollama:qwen": {
-        "overeager": True,
-        "counter_steering": (
-            "CRITICAL: You tend to modify code when user only asks questions. "
-            "These are NOT action requests: "
-            "'What if we added X?', 'Maybe we should Y', 'This could Z', 'The code looks messy', 'The README could mention X'. "
-            "These are observations/questions - respond with explanation or ask 'Would you like me to do that?'. "
-            "NEVER modify code unless user uses imperative action verbs: 'Fix X', 'Add Y', 'Update Z', 'Delete A'. "
-            "When uncertain, ASK 'Would you like me to [action]?' instead of proceeding."
-        ),
-    },
-    "ollama:phi": {
-        "hesitant": True,
-        "verbose": True,
-        "counter_steering": (
-            "You are confident and concise! "
-            "For read-only operations (reading files, searching code, running tests), proceed "
-            "immediately without asking permission. Only ask for approval when side effects are "
-            "involved (modifying files, running shell commands, sending messages). "
-            "When tools return structured output with a 'display' field, show that display value "
-            "verbatim without adding your own summary or commentary."
         ),
     },
     "ollama:glm-4.7-flash": {
@@ -206,6 +120,21 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
         ),
     },
 }
+
+
+def normalize_model_name(model_name: str) -> str:
+    """Normalize model name for quirk lookup by stripping quantization tags.
+
+    Ollama models may include quantization suffixes (e.g., ":q4_k_m", ":q8_0")
+    that must be removed before quirk database lookup.
+
+    Examples:
+        >>> normalize_model_name("glm-4.7-flash:q4_k_m")
+        "glm-4.7-flash"
+        >>> normalize_model_name("gemini-1.5-pro")
+        "gemini-1.5-pro"
+    """
+    return model_name.split(":")[0]
 
 
 def get_counter_steering(provider: str, model_name: str) -> str:

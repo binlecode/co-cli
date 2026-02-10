@@ -128,12 +128,25 @@ async def _cmd_yolo(ctx: CommandContext, args: str) -> None:
 
 
 def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
-    """Build a new OpenAIChatModel and assign it to the agent."""
+    """Build a new OpenAIChatModel and system prompt, assign both to agent."""
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
+    from co_cli.prompts import get_system_prompt
+    from co_cli.prompts.model_quirks import normalize_model_name
+    from co_cli.config import settings
 
+    # Swap model
     provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
     agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
+
+    # Rebuild system prompt with new model quirks
+    normalized_model = normalize_model_name(model_name)
+    new_system_prompt = get_system_prompt(
+        "ollama",
+        personality=settings.personality,
+        model_name=normalized_model,
+    )
+    agent.system_prompt = new_system_prompt
 
 
 async def _cmd_model(ctx: CommandContext, args: str) -> None:

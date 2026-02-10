@@ -79,7 +79,14 @@ def get_agent(
             f"Unknown llm_provider: '{provider_name}'. Use 'gemini' or 'ollama'."
         )
 
-    system_prompt = get_system_prompt(provider_name, personality=settings.personality)
+    # Normalize model name for quirk lookup (strips quantization tags like ":q4_k_m")
+    from co_cli.prompts.model_quirks import normalize_model_name
+    normalized_model = normalize_model_name(model_name)
+    system_prompt = get_system_prompt(
+        provider_name,
+        personality=settings.personality,
+        model_name=normalized_model,
+    )
 
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model,

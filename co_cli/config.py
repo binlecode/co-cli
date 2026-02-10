@@ -107,9 +107,10 @@ class Settings(BaseModel):
     @field_validator("personality")
     @classmethod
     def _validate_personality(cls, v: str) -> str:
-        valid = ["finch", "jeff", "friendly", "terse", "inquisitive"]
-        if v not in valid:
-            raise ValueError(f"personality must be one of {valid}, got: {v}")
+        from co_cli.prompts.personalities._registry import VALID_PERSONALITIES
+
+        if v not in VALID_PERSONALITIES:
+            raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
         return v
 
     # LLM Settings (Gemini / Ollama)
