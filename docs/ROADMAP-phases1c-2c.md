@@ -14,11 +14,12 @@ This document tracks the comprehensive evolution plan from tool executor to pers
 | **1b** | Personality Templates | ✅ COMPLETE | - | DESIGN-co-evolution.md | - |
 | **1c** | Internal Knowledge | 📝 DOCUMENTED | 8-10h | TODO-prompt-system-phase1c.md | HIGH |
 | **1d** | Prompt Improvements | 📝 DOCUMENTED | 3-4h | TODO-prompt-system-phase1d.md | QUICK WIN |
+| **1e** | Portable Identity | 📝 DOCUMENTED | 9h | TODO-prompt-system-phase1e.md | MEDIUM |
 | **2a** | MCP Client (stdio) | 📝 DOCUMENTED | 6-8h | TODO-mcp-client-IMPL.md | HIGH |
 | **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-prompt-system-phase2b.md | MEDIUM |
 | **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-background-execution.md | MEDIUM |
 
-**Total Documented Work**: 37-46 hours (5-6 days)
+**Total Documented Work**: 46-55 hours (6-7 days)
 
 ---
 
@@ -135,19 +136,26 @@ This document tracks the comprehensive evolution plan from tool executor to pers
 2. **Phase 1c** (8-10 hours) - FOUNDATIONAL
    - Internal knowledge foundational for companion vision
    - Memory tools enable learning
+   - Symlink pattern for basic portability
    - No dependencies
 
-3. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER
+3. **Phase 1e** (9 hours) - PORTABILITY ENHANCEMENT
+   - Identity separation (portable vs machine-local)
+   - Export/import commands
+   - Depends on 1c completion
+   - Can be deferred if needed
+
+4. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER
    - MCP extensibility unlocks tool ecosystem
    - Independent implementation
-   - Can run parallel with 1c/1d
+   - Can run parallel with 1c/1d/1e
 
-4. **Phase 2b** (10-12 hours) - PERSONALIZATION
+5. **Phase 2b** (10-12 hours) - PERSONALIZATION
    - Research complete, ready to implement
    - Depends on 1c for learned preferences
    - Integrates with personality system (1b)
 
-5. **Phase 2c** (10-12 hours) - ADVANCED UX
+6. **Phase 2c** (10-12 hours) - ADVANCED UX
    - Most complex, goes last
    - Benefits from 2a completion (MCP tools in background)
    - Independent core implementation
