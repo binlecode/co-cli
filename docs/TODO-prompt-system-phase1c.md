@@ -6,13 +6,15 @@
 
 **Problem:** Co currently has no persistent memory across sessions. It cannot remember user preferences, project insights, or learned facts. Each session starts fresh with no context about past interactions or accumulated knowledge.
 
-**Solution:** Add internal knowledge system with `.co-cli/internal/context.json` for auto-loaded persistent context and memory tools (`save_memory`, `recall_memory`, `list_memories`) for explicit knowledge management.
+**Solution:** Add internal knowledge system with markdown-based storage using the lakehouse pattern. Always-loaded context at `.co-cli/knowledge/context.md` and on-demand memory tools (`save_memory`, `recall_memory`, `list_memories`) for explicit knowledge management. Markdown files serve as source of truth with optional SQLite index for future retrieval scaling.
 
-**Scope:** Phase 1c focuses ONLY on internal knowledge infrastructure and memory tools. Advanced memory features (summarization, automatic learning) are future phases.
+**Scope:** Phase 1c focuses ONLY on internal knowledge infrastructure and memory tools using markdown format. Advanced features (automatic summarization, vector search) are future phases.
 
-**Effort:** 8-10 hours (schema design + loading + memory tools + testing + verification)
+**Effort:** 8-10 hours (format design + loading + memory tools + testing + verification)
 
 **Risk:** Low-Medium (new feature, no existing behavior to break, comprehensive validation)
+
+**Design Rationale:** Aligns with 4/4 peer systems (Claude Code, Codex, Gemini CLI, Aider) which universally use Markdown for knowledge storage. Markdown provides LLM-native format, human editability, git-friendly diffs, and clear retrieval evolution path.
 
 ---
 
@@ -37,2552 +39,2555 @@
 
 Co currently operates as a stateless agent - each chat session starts fresh with no memory of previous interactions, learned facts, or user preferences. This creates several problems:
 
-**Current limitations:**
-- User must re-explain project context every session
-- Co cannot learn from corrections or feedback
-- No persistent understanding of user preferences
-- Cannot accumulate knowledge about codebase patterns
-- Each session repeats the same discovery process
+1. **Repeated Instructions:** User must re-state preferences every session
+2. **Lost Context:** Insights from previous sessions are forgotten
+3. **No Learning:** Agent cannot accumulate knowledge about user's codebase
+4. **Inefficiency:** Redundant explanations of project conventions
 
-**Desired outcome (Phase 1c):**
-- Internal knowledge auto-loaded at session start (user facts, project insights, learned patterns)
-- Memory tools for explicit knowledge management (save, recall, list)
-- Size-controlled context (10KB target, 20KB hard limit)
-- File-based storage for transparency and git-ability
-- Foundation for future automatic learning features
+### User Impact
 
-### The "Finch" Vision - Internal Knowledge Pillar
+**Before Phase 1c:**
+```
+Session 1:
+User: "I prefer async/await over callbacks"
+Agent: "Understood, I'll use async/await"
+[generates async code]
 
-**"Internal Knowledge" = Co's learned context (distinct from External Knowledge = tools)**
+Session 2 (next day):
+User: "Write concurrent code"
+Agent: [generates callback-based code]  ❌
+User: "No, I prefer async/await" [repeated instruction]
+```
 
-Internal knowledge represents Co's accumulated understanding that should always be available:
-- **User facts:** Name, timezone, preferences, working style
-- **Project insights:** Architecture patterns, team conventions, discovered relationships
-- **Learned facts:** Corrections, clarifications, accumulated wisdom from past sessions
+**After Phase 1c:**
+```
+Session 1:
+User: "I prefer async/await over callbacks"
+Agent: "I'll remember that" [calls save_memory tool]
 
-**Internal vs External boundary:**
-- **Internal:** Always in context, auto-loaded, small budget (10-20KB)
-- **External:** Queried on demand via tools (web_search, obsidian, google, etc.)
+Session 2 (next day):
+User: "Write concurrent code"
+Agent: [recalls preference, generates async code] ✅
+```
 
-**Why this matters:**
-- Reduces repetitive explanations
-- Builds relationship over time (Co "knows" you)
-- Enables adaptive behavior based on learned preferences
-- Foundation for "Finch"-like companion experience
+### Peer System Alignment
 
-### Current State
+This design aligns with 4/4 peer systems analyzed:
 
-**What exists:**
-- ✅ Agent memory system (pydantic-ai) for in-session state
-- ✅ File-based config (`.co-cli/settings.json`)
-- ✅ Tool system for external data access
-- ✅ Prompt assembly pipeline (Phase 1a + 1b)
+| System | Format | Storage | Memory Access |
+|--------|--------|---------|---------------|
+| **Claude Code** | Markdown (`CLAUDE.md`) | Files | Agent memory frontmatter |
+| **Codex** | Markdown (`AGENTS.md`) | SQLite + files | `get_memory` tool |
+| **Gemini CLI** | Markdown (`GEMINI.md`) | Files | `save_memory` appends |
+| **Aider** | YAML + Markdown | Files | Chat history restore |
 
-**What's missing (Phase 1c scope):**
-- ❌ Internal knowledge schema (`context.json` format)
-- ❌ Knowledge loading function (`load_internal_knowledge()`)
-- ❌ Memory tools (`save_memory`, `recall_memory`, `list_memories`)
-- ❌ Integration with prompt assembly (inject after personality)
-- ❌ Size validation and warning system
-- ❌ Tests for knowledge loading and memory tools
+**Convergence:** 4/4 use Markdown for knowledge, 0/4 use JSON as primary format.
 
-**What's deferred (future phases):**
-- ⏳ Automatic learning from conversations (Phase 2)
-- ⏳ Memory summarization and compression (Phase 2)
-- ⏳ Multi-session memory management (Phase 2)
-- ⏳ Memory search and retrieval (Phase 2)
+**Key Insight:** Markdown is the LLM-native format. All peer systems prioritize human editability and git workflow over programmatic schema enforcement.
+
+See `docs/TODO-prompt-system-phase1c-kb-design-research.md` for detailed peer research and `docs/ANALYSIS-phase1c-design-contradiction.md` for format comparison.
+
+### Design Principles
+
+1. **Markdown as Source of Truth (Lakehouse Pattern)**
+   - Files on disk are canonical, human-readable, git-friendly
+   - Optional SQLite index is derived and rebuildable
+   - Aligns with Basic Memory, Obsidian, Cursor patterns
+
+2. **Explicit > Implicit**
+   - No silent learning from user behavior
+   - Memory tools require explicit calls
+   - Manual curation of always-loaded context
+
+3. **Hierarchy with Precedence**
+   - Global context: `~/.config/co-cli/knowledge/context.md`
+   - Project context: `.co-cli/knowledge/context.md` (overrides global)
+   - On-demand memories: `.co-cli/knowledge/memories/*.md`
+
+4. **Budget Management**
+   - Always-loaded context: 10 KiB soft / 20 KiB hard limit
+   - On-demand memories: No limit (managed by agent context window)
+
+5. **Retrieval Evolution**
+   - Phase 1c: grep + frontmatter scan (<200 memories)
+   - Phase 2: SQLite FTS5 (200-500 docs)
+   - Phase 3: Hybrid FTS5 + vectors (500+ docs)
 
 ---
 
 ## Architecture Overview
 
-### Current Flow (Phase 1b)
+### File Structure
 
 ```
-User ──▶ CLI ──▶ get_agent() ──▶ get_system_prompt(provider, personality) ──▶ Agent
-                                        │
-                                        ▼
-                            ┌───────────┴────────────┐
-                            ▼                        ▼
-                      system.md              personalities/
-                   (with conditionals)        {name}.md
-                            │                        │
-                            ▼                        │
-                    Process conditionals             │
-                            │                        │
-                            ▼                        │
-                    Inject personality ──────────────┘
-                            │
-                            ▼
-                    Project instructions
-                   (.co-cli/instructions.md)
-                            │
-                            ▼
-                      Assembled prompt
-```
+~/.config/co-cli/
+└── knowledge/
+    └── context.md                      # Global always-loaded context (3 KiB budget)
 
-### New Flow (Phase 1c)
-
-```
-User ──▶ CLI ──▶ get_agent() ──▶ get_system_prompt(provider, personality) ──▶ Agent
-                      │                      │                                    │
-                      │                      ▼                                    │
-                      │          ┌───────────┴────────────┐                       │
-                      │          ▼                        ▼                       │
-                      │    system.md              personalities/                 │
-                      │ (with conditionals)        {name}.md                     │
-                      │          │                        │                       │
-                      │          ▼                        │                       │
-                      │  Process conditionals             │                       │
-                      │          │                        │                       │
-                      │          ▼                        │                       │
-                      │  Inject personality ──────────────┘                       │
-                      │          │                                                │
-                      │          ▼                                                │
-                      │  Load internal knowledge ◀── NEW                          │
-                      │   (.co-cli/internal/context.json)                        │
-                      │          │                                                │
-                      │          ▼                                                │
-                      │  Project instructions                                     │
-                      │ (.co-cli/instructions.md)                                │
-                      │          │                                                │
-                      │          ▼                                                │
-                      │    Assembled prompt                                       │
-                      │                                                           │
-                      └──▶ Register memory tools ◀── NEW                          │
-                           (save_memory, recall_memory, list_memories)           │
-                                        │                                         │
-                                        └─────────────────────────────────────────┘
-```
-
-### Internal Knowledge Lifecycle
-
-```
-Session Start:
-  1. load_internal_knowledge() reads .co-cli/internal/context.json
-  2. Validate size (<= 20KB, warn if > 10KB)
-  3. Format as markdown section
-  4. Inject into prompt (after personality, before project instructions)
-  5. Agent starts with full context
-
-During Session:
-  User: "I prefer async/await over callbacks"
-  Co calls: save_memory("user_preferences", "Prefers async/await over callbacks")
-
-  Later...
-  User: "How should I structure this async function?"
-  Co recalls: User prefers async/await (from internal knowledge + session memory)
-  Co responds: Using async/await based on your preference...
-
-Session End:
-  Memory persists in .co-cli/internal/context.json
-  Next session auto-loads the same context
-```
-
-### Memory Storage Architecture
-
-```
 .co-cli/
-├── settings.json                    # Configuration (Phase 1a)
-├── instructions.md                  # Project conventions (Phase 1a)
-├── internal/                        # Internal knowledge (Phase 1c - NEW)
-│   └── context.json                 # Auto-loaded persistent context
-└── memories/                        # Memory storage (Phase 1c - NEW)
-    ├── user_preferences.json        # User preference memories
-    ├── project_insights.json        # Project insight memories
-    └── learned_facts.json           # Learned fact memories
+├── settings.json                       # Config (Phase 1a, unchanged)
+├── instructions.md                     # Project conventions (Phase 1a, unchanged)
+└── knowledge/                          # Phase 1c - NEW
+    ├── context.md                      # Project always-loaded context (7 KiB budget)
+    └── memories/                       # Explicit memories (on-demand)
+        ├── 001-prefers-async.md
+        ├── 002-project-sqlalchemy.md
+        └── 003-test-policy.md
 ```
 
-**Storage rationale:**
-- `internal/context.json` - Single source of truth, auto-loaded every session
-- `memories/*.json` - Granular storage for memory tools, merged into context.json
-- Separate directories for clear boundaries (internal vs config vs instructions)
-- JSON format for structure validation and programmatic access
+**Future (Phase 2+):**
+```
+.co-cli/knowledge/
+├── context.md
+├── memories/*.md
+├── articles/                           # Web-fetched knowledge
+│   └── python-asyncio-patterns.md
+└── knowledge.db                        # Derived SQLite index (FTS5 + vectors)
+```
+
+### Knowledge Format
+
+#### context.md (Always-Loaded)
+
+```markdown
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+
+- Name: Bin
+- Timezone: America/Los_Angeles
+- Prefers: concise explanations with reasoning shown
+
+# Project
+
+- Type: Python CLI (typer + pydantic-ai)
+- Architecture: Agent with RunContext[CoDeps] tools
+- Test policy: functional only, no mocks
+
+# Learned
+
+- User prefers async/await over callbacks
+- This project uses SQLAlchemy ORM exclusively
+- Always run `uv sync` before `pytest`
+```
+
+**Frontmatter Fields:**
+- `version`: Schema version (currently `1`)
+- `updated`: ISO8601 timestamp of last edit
+
+**Body Structure:**
+- Freeform markdown sections
+- Common sections: User, Project, Learned
+- No rigid schema - users can add custom sections
+
+#### Memory Files (On-Demand)
+
+```markdown
+---
+id: 1
+created: 2026-02-09T14:30:00Z
+tags: [python, style]
+source: user-told
+---
+
+User prefers async/await over callbacks. When generating Python code
+that involves concurrent operations, always use asyncio patterns
+rather than callback-based approaches.
+```
+
+**Frontmatter Fields:**
+- `id`: Numeric ID (auto-incremented)
+- `created`: ISO8601 timestamp
+- `tags`: List of tags for filtering (optional)
+- `source`: Origin of memory (`user-told`, `agent-inferred`, `web-fetched`)
+
+**Filename Convention:**
+- Format: `{id:03d}-{slug}.md`
+- Example: `001-prefers-async.md`
+- Slug: First 50 chars of content, slugified
+
+### Data Flow
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Session Start                                                 │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+                        ▼
+            ┌───────────────────────┐
+            │ load_internal_knowledge() │
+            └───────────┬───────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+        ▼               ▼               ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ Global       │ │ Project      │ │ Validate     │
+│ context.md   │ │ context.md   │ │ frontmatter  │
+│ (optional)   │ │ (optional)   │ │ + size       │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │
+       └────────────────┼────────────────┘
+                        │
+                        ▼
+              ┌──────────────────┐
+              │ Markdown body    │
+              │ (strip frontmatter) │
+              └─────────┬────────┘
+                        │
+                        ▼
+            ┌───────────────────────┐
+            │ Inject into system prompt │
+            └───────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ During Chat                                                   │
+└───────────────────────┬──────────────────────────────────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        │               │               │
+        ▼               ▼               ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ save_memory  │ │ recall_memory│ │ list_memories│
+│ tool         │ │ tool         │ │ tool         │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │
+       │                │                │
+       ▼                ▼                │
+┌──────────────┐ ┌──────────────┐       │
+│ Write        │ │ grep +       │       │
+│ NNN-slug.md  │ │ frontmatter  │       │
+│ with YAML    │ │ scan         │       │
+└──────────────┘ └──────┬───────┘       │
+                        │                │
+                        ▼                ▼
+              ┌──────────────────┐ ┌──────────────┐
+              │ Return markdown  │ │ List files   │
+              │ for injection    │ │ with metadata│
+              └──────────────────┘ └──────────────┘
+```
+
+### Prompt Assembly
+
+```
+System prompt layers (in order):
+  1. system.md (base)
+  2. Personality template ({name}.md)
+  3. Global knowledge (~/.config/co-cli/knowledge/context.md)      ← Phase 1c NEW
+  4. Project knowledge (.co-cli/knowledge/context.md)              ← Phase 1c NEW
+  5. Project instructions (.co-cli/instructions.md)
+  6. [system_reminder at end — recency bias]                       ← Phase 1d
+```
+
+**Knowledge Injection Format:**
+```markdown
+<system-reminder>
+## Internal Knowledge
+
+### Global Context
+[body of ~/.config/co-cli/knowledge/context.md]
+
+### Project Context
+[body of .co-cli/knowledge/context.md]
+</system-reminder>
+```
+
+**Precedence Rules:**
+- Project context.md overrides global context.md on conflicts
+- Later sections (project instructions) override earlier (global knowledge)
+- Current turn user message has highest precedence
+
+### Context Budget
+
+| Layer | Budget | Enforcement |
+|-------|--------|-------------|
+| Global context.md | 3 KiB soft | Warn if exceeded |
+| Project context.md | 7 KiB soft | Warn if exceeded |
+| **Total always-loaded** | **10 KiB soft / 20 KiB hard** | Error if >20 KiB |
+| On-demand memories | No limit | Agent context window manages |
+
+**Validation at Load Time:**
+- Under 10 KiB: Load silently
+- 10-20 KiB: Load with warning to stderr
+- Over 20 KiB: Truncate to 20 KiB + error message to stderr
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Internal Knowledge Schema
+### Phase 1: Format Design & Schema (2 hours)
 
-**Goal:** Define `context.json` structure with version, sections, and size limits.
-
-**File:** `co_cli/internal_knowledge.py` (NEW)
+**Goal:** Define markdown format, frontmatter schema, file naming conventions.
 
 **Tasks:**
-- [ ] Create `co_cli/internal_knowledge.py` module
-- [ ] Define `InternalKnowledge` Pydantic model
-- [ ] Define `UserContext`, `ProjectContext`, `LearnedFacts` sub-models
-- [ ] Add version field (start with "1.0")
-- [ ] Add timestamp tracking (created, updated)
-- [ ] Add size validation (10KB warn, 20KB error)
-- [ ] Add serialization helpers (to_dict, from_dict, to_markdown)
 
-**Estimated time:** 2 hours
+1. **Document context.md format**
+   - YAML frontmatter: `version`, `updated`
+   - Freeform markdown body with common sections
+   - Example templates for user/project/learned
 
----
+2. **Document memory file format**
+   - YAML frontmatter: `id`, `created`, `tags`, `source`
+   - Markdown body with memory content
+   - Filename convention: `{id:03d}-{slug}.md`
 
-### Phase 2: Knowledge Loading Function
+3. **Define validation rules**
+   - Required frontmatter fields per format
+   - Size limits (10 KiB / 20 KiB)
+   - Valid tag characters
+   - ISO8601 timestamp format
 
-**Goal:** Load and validate internal knowledge from `.co-cli/internal/context.json`.
+4. **Create example files**
+   - `examples/knowledge/context.md` - Template
+   - `examples/knowledge/memories/001-example.md` - Template
 
-**File:** `co_cli/internal_knowledge.py` (continued)
+**Deliverables:**
+- [ ] Format specification documented in this file
+- [ ] Example templates created
+- [ ] Validation rules defined
+
+### Phase 2: Frontmatter Parsing Utilities (1.5 hours)
+
+**Goal:** Implement YAML frontmatter parsing and validation helpers.
 
 **Tasks:**
-- [ ] Add `load_internal_knowledge() -> str | None` function
-- [ ] Check if `.co-cli/internal/context.json` exists
-- [ ] Load and parse JSON (handle malformed files gracefully)
-- [ ] Validate against schema (version, required fields)
-- [ ] Check size constraints (warn if > 10KB, error if > 20KB)
-- [ ] Convert to markdown format for prompt injection
-- [ ] Return None if file missing (graceful degradation)
-- [ ] Log warnings for validation issues
 
-**Estimated time:** 1.5 hours
+1. **Create `co_cli/_frontmatter.py` module**
+   ```python
+   def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]
+   def strip_frontmatter(content: str) -> str
+   def validate_context_frontmatter(fm: dict) -> None
+   def validate_memory_frontmatter(fm: dict) -> None
+   ```
 
----
+2. **Implement frontmatter parsing**
+   - Split on `---` delimiters
+   - Parse YAML in header
+   - Return (metadata_dict, body_markdown)
+   - Handle missing frontmatter gracefully
 
-### Phase 3: Memory Tools
+3. **Implement validation functions**
+   - Check required fields exist
+   - Validate field types
+   - Validate timestamp format (ISO8601)
+   - Validate version compatibility
+
+4. **Error handling**
+   - Graceful degradation on parse errors
+   - Log warnings for malformed files
+   - Skip bad files, continue processing
+
+**Deliverables:**
+- [ ] `_frontmatter.py` module with 4 functions
+- [ ] Unit tests for parsing and validation
+- [ ] Error handling for malformed YAML
+
+### Phase 3: Knowledge Loading Function (1.5 hours)
+
+**Goal:** Implement `load_internal_knowledge()` to read markdown files.
+
+**Tasks:**
+
+1. **Create `co_cli/knowledge.py` module**
+   ```python
+   SIZE_TARGET = 10 * 1024  # 10 KiB soft limit
+   SIZE_LIMIT = 20 * 1024   # 20 KiB hard limit
+
+   def load_internal_knowledge() -> str | None
+   ```
+
+2. **Implement loading logic**
+   - Read global context: `~/.config/co-cli/knowledge/context.md`
+   - Read project context: `.co-cli/knowledge/context.md`
+   - Parse frontmatter, validate fields
+   - Strip frontmatter, return body markdown
+   - Combine with section headers
+
+3. **Implement size validation**
+   - Calculate size of combined markdown body
+   - Warn to stderr if 10-20 KiB
+   - Error if >20 KiB (truncate to 20 KiB)
+
+4. **Handle missing files gracefully**
+   - Return None if no knowledge files exist
+   - Don't error on missing global/project context
+   - Log debug message when loading
+
+**Deliverables:**
+- [ ] `knowledge.py` module with loading function
+- [ ] Size validation with warnings/errors
+- [ ] Integration with existing CoDeps
+
+### Phase 4: Prompt Integration (0.5 hours)
+
+**Goal:** Inject loaded knowledge into system prompt.
+
+**Tasks:**
+
+1. **Update `co_cli/prompts/system.py`**
+   - Import `load_internal_knowledge()`
+   - Call during prompt assembly
+   - Inject after personality, before project instructions
+
+2. **Format knowledge section**
+   ```markdown
+   ## Internal Knowledge
+
+   ### Global Context
+   [global body]
+
+   ### Project Context
+   [project body]
+   ```
+
+3. **Handle None case**
+   - Skip section entirely if no knowledge exists
+   - Don't add empty headers
+
+**Deliverables:**
+- [ ] Knowledge injection in prompt assembly
+- [ ] Proper section formatting
+- [ ] Integration test
+
+### Phase 5: Memory Tools Implementation (3 hours)
 
 **Goal:** Implement `save_memory`, `recall_memory`, `list_memories` tools.
 
-**File:** `co_cli/tools/memory.py` (NEW)
+**Tasks:**
+
+1. **Create `co_cli/tools/memory.py` module**
+   - Three tools using `@agent.tool()` pattern
+   - Access to `RunContext[CoDeps]`
+   - Approval required for `save_memory`
+
+2. **Implement `save_memory` tool**
+   ```python
+   @agent.tool(requires_approval=True)
+   async def save_memory(
+       ctx: RunContext[CoDeps],
+       content: str,
+       tags: list[str] | None = None,
+   ) -> dict[str, Any]:
+       """Save a memory to knowledge/memories/ directory."""
+   ```
+   - Generate next ID from existing files
+   - Slugify first 50 chars for filename
+   - Create YAML frontmatter with id, created, tags, source
+   - Write markdown file with frontmatter + body
+   - Return display message + metadata
+
+3. **Implement `recall_memory` tool**
+   ```python
+   @agent.tool()
+   async def recall_memory(
+       ctx: RunContext[CoDeps],
+       query: str,
+       max_results: int = 5,
+   ) -> dict[str, Any]:
+       """Search memories using grep + frontmatter scan."""
+   ```
+   - Glob all `.co-cli/knowledge/memories/*.md` files
+   - Use ripgrep to search content
+   - Parse frontmatter for tag matching
+   - Sort by relevance (grep rank) and recency
+   - Return top N matches with metadata
+   - Format as markdown list for display
+
+4. **Implement `list_memories` tool**
+   ```python
+   @agent.tool()
+   async def list_memories(
+       ctx: RunContext[CoDeps],
+   ) -> dict[str, Any]:
+       """List all memories with IDs and metadata."""
+   ```
+   - Glob all memory files
+   - Parse frontmatter for id, created, tags
+   - Extract first line of body as summary
+   - Return formatted list with metadata
+
+5. **Helper functions**
+   ```python
+   def _next_memory_id() -> int
+   def _slugify(text: str) -> str
+   def _search_memories(query: str, memory_dir: Path) -> list[dict]
+   ```
+
+**Deliverables:**
+- [ ] `tools/memory.py` with 3 tools + helpers
+- [ ] Approval flow for save_memory
+- [ ] grep-based search implementation
+- [ ] Proper return format (display + metadata)
+
+### Phase 6: Agent Integration (0.5 hours)
+
+**Goal:** Register memory tools with agent.
 
 **Tasks:**
-- [ ] Create `co_cli/tools/memory.py` module
-- [ ] Add `save_memory` tool with `agent.tool()` decorator
-  - [ ] Parameters: category (user|project|learned), key, value
-  - [ ] Storage: Write to `.co-cli/memories/{category}.json`
-  - [ ] Merge into `context.json` after save
-  - [ ] Return confirmation with timestamp
-- [ ] Add `recall_memory` tool with `agent.tool()` decorator
-  - [ ] Parameters: category (optional), key (optional), query (optional)
-  - [ ] Search in `context.json` and `memories/*.json`
-  - [ ] Return matching memories with metadata
-- [ ] Add `list_memories` tool with `agent.tool()` decorator
-  - [ ] Parameters: category (optional)
-  - [ ] List all memories with counts and summaries
-  - [ ] Return formatted display string + metadata
-- [ ] Add memory merge logic (memories/*.json → context.json)
-- [ ] Add duplicate detection and deduplication
 
-**Estimated time:** 3 hours
+1. **Update `co_cli/agent.py`**
+   - Import memory tools from `co_cli.tools.memory`
+   - Register with agent instance
+   - Verify tools appear in tool list
 
----
+2. **Verify tool signatures**
+   - Check RunContext[CoDeps] access
+   - Verify approval setting
+   - Test tool discovery
 
-### Phase 4: Prompt Assembly Integration
-
-**Goal:** Inject internal knowledge into prompt after personality, before project instructions.
-
-**File:** `co_cli/prompts/__init__.py`
-
-**Tasks:**
-- [ ] Import `load_internal_knowledge` from `co_cli.internal_knowledge`
-- [ ] Update `get_system_prompt()` to call `load_internal_knowledge()`
-- [ ] Inject knowledge section after personality, before project instructions
-- [ ] Format with clear header: "## Internal Knowledge"
-- [ ] Handle None return (skip section if no knowledge)
-- [ ] Add size warning logging if knowledge > 10KB
-- [ ] Update docstring to document new section
-
-**Estimated time:** 30 minutes
-
----
-
-### Phase 5: Agent Integration
-
-**Goal:** Register memory tools with agent, ensure internal knowledge loads at startup.
-
-**File:** `co_cli/agent.py`
-
-**Tasks:**
-- [ ] Import memory tools from `co_cli.tools.memory`
-- [ ] Verify `get_system_prompt()` loads internal knowledge (already integrated via Phase 4)
-- [ ] Confirm memory tools are registered (auto-registered via `@agent.tool()`)
-- [ ] Test end-to-end flow (load knowledge → chat → save memory → reload)
-
-**Estimated time:** 30 minutes
-
----
-
-### Phase 6: Testing
-
-**Goal:** Comprehensive test coverage for schema, loading, memory tools, and integration.
-
-**Files:**
-- `tests/test_internal_knowledge.py` (NEW)
-- `tests/test_memory_tools.py` (NEW)
-- `tests/test_prompts.py` (updated)
-
-**Tasks:**
-- [ ] Create `tests/test_internal_knowledge.py` (8 tests)
-  - [ ] Valid context.json loading
-  - [ ] Missing file handling (returns None)
-  - [ ] Malformed JSON handling (logs warning, returns None)
-  - [ ] Size validation (warn > 10KB, error > 20KB)
-  - [ ] Version validation
-  - [ ] Markdown formatting
-  - [ ] Schema validation (required fields)
-  - [ ] Timestamp handling
-- [ ] Create `tests/test_memory_tools.py` (7 tests)
-  - [ ] save_memory creates file and merges to context
-  - [ ] recall_memory finds saved memories
-  - [ ] list_memories shows all categories
-  - [ ] Duplicate detection
-  - [ ] Category validation
-  - [ ] Memory persistence across saves
-  - [ ] Error handling for invalid inputs
-- [ ] Update `tests/test_prompts.py` (3 new tests)
-  - [ ] Internal knowledge injection in prompt
-  - [ ] Knowledge appears after personality, before project
-  - [ ] Prompt assembly with all components (conditionals + personality + knowledge + project)
-- [ ] Run full test suite: `uv run pytest`
-- [ ] Verify no regressions
-
-**Estimated time:** 2.5 hours
+**Deliverables:**
+- [ ] Memory tools registered with agent
+- [ ] Tools visible in `co status --tools`
 
 ---
 
 ## Code Specifications
 
-### Internal Knowledge Schema
+### Module: `co_cli/_frontmatter.py`
 
-**File:** `co_cli/internal_knowledge.py`
+**Purpose:** YAML frontmatter parsing and validation utilities.
+
+**Functions:**
 
 ```python
-"""Internal knowledge management for Co CLI.
+"""YAML frontmatter parsing and validation utilities.
 
-Handles loading, validation, and formatting of Co's learned context
-from .co-cli/internal/context.json.
+Markdown files in knowledge/ use YAML frontmatter for metadata:
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+Body content here...
 """
 
-from pathlib import Path
+import re
 from typing import Any
-from datetime import datetime
-import json
-import logging
-
-from pydantic import BaseModel, Field, field_validator
-
-logger = logging.getLogger(__name__)
-
-# Size constraints
-SIZE_TARGET = 10 * 1024  # 10KB - warn if exceeded
-SIZE_LIMIT = 20 * 1024   # 20KB - error if exceeded
+import yaml
 
 
-class UserContext(BaseModel):
-    """User-specific context and preferences."""
+def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
+    """Parse YAML frontmatter from markdown content.
 
-    name: str | None = None
-    timezone: str | None = None
-    working_hours: str | None = None
-    preferences: dict[str, str] = Field(default_factory=dict)
-    notes: list[str] = Field(default_factory=list)
+    Args:
+        content: Full markdown file content
 
+    Returns:
+        (frontmatter_dict, body_markdown) tuple
 
-class ProjectContext(BaseModel):
-    """Project-specific insights and patterns."""
+    Raises:
+        ValueError: If frontmatter is malformed
 
-    name: str | None = None
-    type: str | None = None
-    architecture: list[str] = Field(default_factory=list)
-    patterns: list[str] = Field(default_factory=list)
-    conventions: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-
-
-class LearnedFacts(BaseModel):
-    """Accumulated knowledge from interactions."""
-
-    facts: list[str] = Field(default_factory=list)
-    corrections: list[str] = Field(default_factory=list)
-    clarifications: list[str] = Field(default_factory=list)
-
-
-class InternalKnowledge(BaseModel):
-    """Co's internal knowledge structure.
-
-    Auto-loaded at session start from .co-cli/internal/context.json.
-    Size target: 10KB (warn if exceeded)
-    Size limit: 20KB (error if exceeded)
+    Example:
+        >>> fm, body = parse_frontmatter(content)
+        >>> print(fm["version"])
+        1
     """
+    # Match frontmatter: ---\n<yaml>\n---\n
+    pattern = r'^---\s*\n(.*?)\n---\s*\n(.*)$'
+    match = re.match(pattern, content, re.DOTALL)
 
-    version: str = "1.0"
-    created: datetime = Field(default_factory=datetime.now)
-    updated: datetime = Field(default_factory=datetime.now)
+    if not match:
+        # No frontmatter - return empty dict and full content
+        return {}, content
 
-    user: UserContext = Field(default_factory=UserContext)
-    project: ProjectContext = Field(default_factory=ProjectContext)
-    learned_facts: LearnedFacts = Field(default_factory=LearnedFacts)
+    yaml_str = match.group(1)
+    body = match.group(2)
 
-    @field_validator("version")
-    @classmethod
-    def validate_version(cls, v: str) -> str:
-        """Validate version format."""
-        if v != "1.0":
-            raise ValueError(f"Unsupported version: {v}. Expected: 1.0")
-        return v
+    try:
+        frontmatter = yaml.safe_load(yaml_str)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML in frontmatter: {e}")
 
-    def to_markdown(self) -> str:
-        """Convert internal knowledge to markdown format for prompt injection.
+    if not isinstance(frontmatter, dict):
+        raise ValueError("Frontmatter must be a YAML object (dict)")
 
-        Returns:
-            Markdown-formatted string with all internal knowledge sections.
-        """
-        lines = []
+    return frontmatter, body
 
-        # User context
-        if self.user.name or self.user.preferences or self.user.notes:
-            lines.append("### User Context")
-            if self.user.name:
-                lines.append(f"- **Name:** {self.user.name}")
-            if self.user.timezone:
-                lines.append(f"- **Timezone:** {self.user.timezone}")
-            if self.user.working_hours:
-                lines.append(f"- **Working Hours:** {self.user.working_hours}")
 
-            if self.user.preferences:
-                lines.append("\n**Preferences:**")
-                for key, value in self.user.preferences.items():
-                    lines.append(f"- {key}: {value}")
+def strip_frontmatter(content: str) -> str:
+    """Strip YAML frontmatter, return only body content.
 
-            if self.user.notes:
-                lines.append("\n**Notes:**")
-                for note in self.user.notes:
-                    lines.append(f"- {note}")
+    Args:
+        content: Full markdown file content
 
-            lines.append("")  # Blank line
+    Returns:
+        Body content without frontmatter
 
-        # Project context
-        if self.project.name or self.project.patterns or self.project.notes:
-            lines.append("### Project Context")
-            if self.project.name:
-                lines.append(f"- **Name:** {self.project.name}")
-            if self.project.type:
-                lines.append(f"- **Type:** {self.project.type}")
+    Example:
+        >>> body = strip_frontmatter(content)
+        >>> assert body.startswith("# User")
+    """
+    _, body = parse_frontmatter(content)
+    return body
 
-            if self.project.architecture:
-                lines.append("\n**Architecture:**")
-                for item in self.project.architecture:
-                    lines.append(f"- {item}")
 
-            if self.project.patterns:
-                lines.append("\n**Patterns:**")
-                for pattern in self.project.patterns:
-                    lines.append(f"- {pattern}")
+def validate_context_frontmatter(fm: dict[str, Any]) -> None:
+    """Validate context.md frontmatter fields.
 
-            if self.project.conventions:
-                lines.append("\n**Conventions:**")
-                for conv in self.project.conventions:
-                    lines.append(f"- {conv}")
+    Required fields:
+        - version: int (currently must be 1)
+        - updated: ISO8601 timestamp string
 
-            if self.project.notes:
-                lines.append("\n**Notes:**")
-                for note in self.project.notes:
-                    lines.append(f"- {note}")
+    Args:
+        fm: Frontmatter dictionary
 
-            lines.append("")  # Blank line
+    Raises:
+        ValueError: If validation fails
+    """
+    if "version" not in fm:
+        raise ValueError("Missing required field: version")
 
-        # Learned facts
-        if self.learned_facts.facts or self.learned_facts.corrections:
-            lines.append("### Learned Facts")
+    if fm["version"] != 1:
+        raise ValueError(f"Unsupported version: {fm['version']} (expected 1)")
 
-            if self.learned_facts.facts:
-                lines.append("\n**Facts:**")
-                for fact in self.learned_facts.facts:
-                    lines.append(f"- {fact}")
+    if "updated" not in fm:
+        raise ValueError("Missing required field: updated")
 
-            if self.learned_facts.corrections:
-                lines.append("\n**Corrections:**")
-                for correction in self.learned_facts.corrections:
-                    lines.append(f"- {correction}")
+    # Validate ISO8601 format (basic check)
+    updated = fm["updated"]
+    if not isinstance(updated, str):
+        raise ValueError("Field 'updated' must be string")
 
-            if self.learned_facts.clarifications:
-                lines.append("\n**Clarifications:**")
-                for clarification in self.learned_facts.clarifications:
-                    lines.append(f"- {clarification}")
+    if not re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', updated):
+        raise ValueError(f"Field 'updated' must be ISO8601 format: {updated}")
 
-        return "\n".join(lines) if lines else ""
 
-    def size_bytes(self) -> int:
-        """Calculate size of internal knowledge in bytes.
+def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
+    """Validate memory file frontmatter fields.
 
-        Returns:
-            Size in bytes of JSON-serialized knowledge.
-        """
-        return len(json.dumps(self.model_dump(), indent=2).encode("utf-8"))
+    Required fields:
+        - id: int (unique memory ID)
+        - created: ISO8601 timestamp string
+
+    Optional fields:
+        - tags: list[str]
+        - source: str (e.g., "user-told", "agent-inferred")
+
+    Args:
+        fm: Frontmatter dictionary
+
+    Raises:
+        ValueError: If validation fails
+    """
+    if "id" not in fm:
+        raise ValueError("Missing required field: id")
+
+    if not isinstance(fm["id"], int):
+        raise ValueError("Field 'id' must be integer")
+
+    if "created" not in fm:
+        raise ValueError("Missing required field: created")
+
+    # Validate ISO8601 format
+    created = fm["created"]
+    if not isinstance(created, str):
+        raise ValueError("Field 'created' must be string")
+
+    if not re.match(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', created):
+        raise ValueError(f"Field 'created' must be ISO8601 format: {created}")
+
+    # Validate optional fields
+    if "tags" in fm:
+        if not isinstance(fm["tags"], list):
+            raise ValueError("Field 'tags' must be list")
+        if not all(isinstance(t, str) for t in fm["tags"]):
+            raise ValueError("All tags must be strings")
+
+    if "source" in fm:
+        if not isinstance(fm["source"], str):
+            raise ValueError("Field 'source' must be string")
+```
+
+**Tests Required:**
+- Parse valid frontmatter
+- Parse missing frontmatter (return empty dict)
+- Parse malformed YAML (raise ValueError)
+- Validate context frontmatter (valid/invalid cases)
+- Validate memory frontmatter (valid/invalid cases)
+- Strip frontmatter correctly
+
+---
+
+### Module: `co_cli/knowledge.py`
+
+**Purpose:** Load internal knowledge from markdown files.
+
+**Constants:**
+
+```python
+SIZE_TARGET = 10 * 1024  # 10 KiB soft limit (warn)
+SIZE_LIMIT = 20 * 1024   # 20 KiB hard limit (error)
+```
+
+**Functions:**
+
+```python
+"""Internal knowledge loading from markdown files.
+
+Loads always-loaded context from:
+  - ~/.config/co-cli/knowledge/context.md (global)
+  - .co-cli/knowledge/context.md (project, overrides global)
+
+Format: Markdown with YAML frontmatter
+Budget: 10 KiB soft / 20 KiB hard limit
+"""
+
+import sys
+from pathlib import Path
+from loguru import logger
+
+from co_cli._frontmatter import (
+    parse_frontmatter,
+    strip_frontmatter,
+    validate_context_frontmatter,
+)
+
+
+SIZE_TARGET = 10 * 1024  # 10 KiB soft limit
+SIZE_LIMIT = 20 * 1024   # 20 KiB hard limit
 
 
 def load_internal_knowledge() -> str | None:
-    """Load internal knowledge from .co-cli/internal/context.json.
+    """Load internal knowledge from markdown files.
 
-    Processing steps:
-    1. Check if .co-cli/internal/context.json exists
-    2. Load and parse JSON
-    3. Validate schema (version, structure)
-    4. Check size constraints (warn > 10KB, error > 20KB)
-    5. Convert to markdown format
-    6. Return formatted string or None if missing
+    Loads context.md from global and project locations:
+      - Global: ~/.config/co-cli/knowledge/context.md
+      - Project: .co-cli/knowledge/context.md (overrides global)
+
+    Returns markdown-formatted knowledge for prompt injection.
+    Validates frontmatter and enforces size limits.
 
     Returns:
-        Markdown-formatted internal knowledge, or None if file missing.
+        Markdown string with global/project sections, or None if no knowledge
 
     Raises:
-        ValueError: If knowledge exceeds 20KB size limit.
+        ValueError: If frontmatter validation fails or size exceeds hard limit
 
-    Example:
-        >>> knowledge = load_internal_knowledge()
-        >>> if knowledge:
-        ...     print(f"Loaded {len(knowledge)} bytes of internal knowledge")
+    Side effects:
+        - Prints warnings to stderr if size 10-20 KiB
+        - Prints error to stderr if size >20 KiB (then truncates)
     """
-    # 1. Check if file exists
-    knowledge_file = Path.cwd() / ".co-cli" / "internal" / "context.json"
+    global_path = Path.home() / ".config/co-cli/knowledge/context.md"
+    project_path = Path.cwd() / ".co-cli/knowledge/context.md"
 
-    if not knowledge_file.exists():
-        logger.debug("No internal knowledge file found (this is OK)")
+    sections = []
+
+    # Load global context
+    if global_path.exists():
+        logger.debug(f"Loading global knowledge: {global_path}")
+        try:
+            content = global_path.read_text(encoding="utf-8")
+            frontmatter, body = parse_frontmatter(content)
+            validate_context_frontmatter(frontmatter)
+
+            body = body.strip()
+            if body:
+                sections.append(("Global Context", body))
+        except Exception as e:
+            logger.warning(f"Failed to load global knowledge: {e}")
+            # Continue without global knowledge
+
+    # Load project context (overrides global on conflicts)
+    if project_path.exists():
+        logger.debug(f"Loading project knowledge: {project_path}")
+        try:
+            content = project_path.read_text(encoding="utf-8")
+            frontmatter, body = parse_frontmatter(content)
+            validate_context_frontmatter(frontmatter)
+
+            body = body.strip()
+            if body:
+                sections.append(("Project Context", body))
+        except Exception as e:
+            logger.error(f"Failed to load project knowledge: {e}")
+            raise
+
+    # No knowledge to load
+    if not sections:
+        logger.debug("No internal knowledge found")
         return None
 
-    # 2. Load and parse JSON
-    try:
-        content = knowledge_file.read_text(encoding="utf-8")
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.warning(f"Malformed internal knowledge JSON: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to load internal knowledge: {e}")
-        return None
+    # Combine sections
+    combined = "\n\n".join(f"### {title}\n\n{body}" for title, body in sections)
+    knowledge = f"## Internal Knowledge\n\n{combined}"
 
-    # 3. Validate schema
-    try:
-        knowledge = InternalKnowledge(**data)
-    except Exception as e:
-        logger.warning(f"Invalid internal knowledge schema: {e}")
-        return None
-
-    # 4. Check size constraints
-    size = knowledge.size_bytes()
-
-    if size > SIZE_LIMIT:
-        raise ValueError(
-            f"Internal knowledge exceeds size limit: {size} bytes > {SIZE_LIMIT} bytes. "
-            f"Please reduce content size."
-        )
-
-    if size > SIZE_TARGET:
-        logger.warning(
-            f"Internal knowledge exceeds recommended size: {size} bytes > {SIZE_TARGET} bytes. "
-            f"Consider summarizing or moving content to project instructions."
-        )
-
-    # 5. Convert to markdown
-    markdown = knowledge.to_markdown()
-
-    if not markdown.strip():
-        logger.debug("Internal knowledge file exists but is empty")
-        return None
-
-    return markdown
-
-
-def save_internal_knowledge(knowledge: InternalKnowledge, path: Path | None = None) -> None:
-    """Save internal knowledge to .co-cli/internal/context.json.
-
-    Args:
-        knowledge: InternalKnowledge object to save.
-        path: Optional custom path (default: .co-cli/internal/context.json).
-
-    Raises:
-        ValueError: If knowledge exceeds size limit.
-    """
     # Validate size
-    size = knowledge.size_bytes()
+    size = len(knowledge.encode("utf-8"))
+
     if size > SIZE_LIMIT:
-        raise ValueError(
-            f"Cannot save: internal knowledge exceeds size limit ({size} > {SIZE_LIMIT} bytes)"
+        # Hard limit exceeded - truncate
+        print(
+            f"ERROR: Knowledge size {size} bytes exceeds {SIZE_LIMIT} byte limit. "
+            f"Truncating to {SIZE_LIMIT} bytes. Please reduce content in context.md files.",
+            file=sys.stderr,
+        )
+        # Truncate to SIZE_LIMIT bytes
+        knowledge = knowledge.encode("utf-8")[:SIZE_LIMIT].decode("utf-8", errors="ignore")
+
+    elif size > SIZE_TARGET:
+        # Soft limit exceeded - warn
+        print(
+            f"WARNING: Knowledge size {size} bytes exceeds {SIZE_TARGET} byte target. "
+            f"Consider reducing content in context.md files.",
+            file=sys.stderr,
         )
 
-    # Update timestamp
-    knowledge.updated = datetime.now()
-
-    # Determine path
-    if path is None:
-        path = Path.cwd() / ".co-cli" / "internal" / "context.json"
-
-    # Ensure directory exists
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write file
-    content = json.dumps(knowledge.model_dump(), indent=2, default=str)
-    path.write_text(content, encoding="utf-8")
-
-    logger.info(f"Saved internal knowledge ({size} bytes) to {path}")
+    logger.info(f"Loaded {len(sections)} knowledge section(s), {size} bytes")
+    return knowledge
 ```
 
-**Key design decisions:**
-- **Pydantic models** for schema validation and serialization
-- **Size constraints** enforced (10KB target, 20KB limit)
-- **Graceful degradation** (missing file returns None, not error)
-- **Markdown formatting** for prompt injection
-- **Timestamp tracking** (created, updated)
-- **Version field** for future schema evolution
+**Tests Required:**
+- Load valid global context
+- Load valid project context
+- Load both (project overrides global)
+- Load neither (return None)
+- Validate frontmatter (reject invalid)
+- Size validation (under target, warn, error)
+- Truncate when >20 KiB
+- Handle malformed files gracefully
 
 ---
 
-### Boundary Definition Table
+### Module: `co_cli/tools/memory.py`
 
-**What goes in Internal Knowledge vs External Knowledge:**
+**Purpose:** Memory management tools (save, recall, list).
 
-| Category | Internal Knowledge (.co-cli/internal/context.json) | External Knowledge (Tools) |
-|----------|-----------------------------------------------------|---------------------------|
-| **User Info** | Name, timezone, preferences, working style | Calendar events, email threads, detailed history |
-| **Project Context** | Architecture patterns, key conventions, discovered relationships | Full codebase, file contents, git history |
-| **Learned Facts** | Corrections, clarifications, accumulated wisdom | Documentation, web search results, Slack threads |
-| **Size** | 10-20KB (always in context) | Unlimited (queried on demand) |
-| **Access** | Auto-loaded every session | Tool calls (explicit retrieval) |
-| **Update Frequency** | Accumulates over time (append-mostly) | Real-time (always current) |
-| **Examples** | "User prefers async/await", "Project uses FastAPI", "Tests go in tests/ directory" | "Latest commit message", "Current API docs", "Recent Slack discussion" |
-
-**Boundary principle:** If it fits in 20KB and should ALWAYS be available, it's Internal. If it's large, dynamic, or context-dependent, it's External.
-
----
-
-### Memory Tools Specification
-
-**File:** `co_cli/tools/memory.py`
+**Implementation:**
 
 ```python
-"""Memory management tools for Co CLI.
+"""Memory management tools for persistent knowledge.
 
-Provides save_memory, recall_memory, and list_memories tools for
-explicit knowledge management and persistence.
+Tools:
+  - save_memory: Save a memory to knowledge/memories/
+  - recall_memory: Search memories by keyword
+  - list_memories: List all memories with metadata
+
+Storage: Markdown files with YAML frontmatter
+Format: {id:03d}-{slug}.md
+Location: .co-cli/knowledge/memories/
 """
 
+import re
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime
-import json
-import logging
 from typing import Any
 
 from pydantic_ai import RunContext
+from loguru import logger
 
-from co_cli.agent import CoDeps, agent
-from co_cli.internal_knowledge import (
-    load_internal_knowledge,
-    InternalKnowledge,
-    save_internal_knowledge,
-)
-
-logger = logging.getLogger(__name__)
+from co_cli.deps import CoDeps
+from co_cli._frontmatter import parse_frontmatter
+import yaml
 
 
-@agent.tool()
+def _next_memory_id() -> int:
+    """Get next available memory ID.
+
+    Scans existing memory files in .co-cli/knowledge/memories/
+    and returns max(id) + 1.
+
+    Returns:
+        Next available ID (starts at 1)
+    """
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    if not memory_dir.exists():
+        return 1
+
+    max_id = 0
+    for path in memory_dir.glob("*.md"):
+        try:
+            content = path.read_text(encoding="utf-8")
+            fm, _ = parse_frontmatter(content)
+            if "id" in fm and isinstance(fm["id"], int):
+                max_id = max(max_id, fm["id"])
+        except Exception:
+            # Skip malformed files
+            continue
+
+    return max_id + 1
+
+
+def _slugify(text: str) -> str:
+    """Convert text to URL-friendly slug.
+
+    Args:
+        text: Text to slugify
+
+    Returns:
+        Lowercase slug with hyphens (max 50 chars)
+
+    Example:
+        >>> _slugify("User prefers async/await!")
+        'user-prefers-async-await'
+    """
+    # Lowercase and replace non-alphanumeric with hyphens
+    slug = re.sub(r'[^a-z0-9]+', '-', text.lower())
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    # Limit length
+    return slug[:50]
+
+
+def _search_memories(query: str, memory_dir: Path, max_results: int = 5) -> list[dict[str, Any]]:
+    """Search memories using grep + frontmatter scan.
+
+    Phase 1c: Simple grep-based search.
+    Phase 2+: Use SQLite FTS5 index.
+
+    Args:
+        query: Search query
+        memory_dir: Directory containing memory files
+        max_results: Maximum results to return
+
+    Returns:
+        List of memory dicts with keys: id, path, content, tags, created
+    """
+    if not memory_dir.exists():
+        return []
+
+    results = []
+    query_lower = query.lower()
+
+    for path in memory_dir.glob("*.md"):
+        try:
+            content = path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(content)
+
+            # Search in body and tags
+            body_match = query_lower in body.lower()
+            tag_match = False
+            if "tags" in fm:
+                tag_match = any(query_lower in tag.lower() for tag in fm["tags"])
+
+            if body_match or tag_match:
+                results.append({
+                    "id": fm.get("id", 0),
+                    "path": str(path),
+                    "content": body.strip(),
+                    "tags": fm.get("tags", []),
+                    "created": fm.get("created", ""),
+                })
+        except Exception as e:
+            logger.warning(f"Failed to search {path}: {e}")
+            continue
+
+    # Sort by recency (created timestamp descending)
+    results.sort(key=lambda r: r["created"], reverse=True)
+
+    return results[:max_results]
+
+
 async def save_memory(
     ctx: RunContext[CoDeps],
-    category: str,
-    key: str,
-    value: str,
+    content: str,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Save a memory for future sessions.
+    """Save a memory to knowledge/memories/ directory.
 
-    Stores knowledge in .co-cli/memories/{category}.json and merges
-    into .co-cli/internal/context.json for auto-loading.
+    Creates a markdown file with YAML frontmatter containing
+    the memory content and metadata.
+
+    Filename format: {id:03d}-{slug}.md
+    Example: 001-prefers-async.md
 
     Args:
-        category: Memory category (user_preferences, project_insights, learned_facts)
-        key: Memory identifier (e.g., "coding_style", "database_schema")
-        value: Memory content to save
+        ctx: Agent runtime context
+        content: Memory content (markdown)
+        tags: Optional list of tags for categorization
 
     Returns:
-        Dict with:
-        - display: Human-readable confirmation message
-        - category: Category name
-        - key: Memory key
-        - timestamp: Save timestamp
+        dict with keys:
+            - display: Human-readable confirmation message
+            - path: Absolute path to saved file
+            - memory_id: Numeric ID of memory
 
-    Example:
-        User: "I prefer async/await over callbacks"
-        save_memory("user_preferences", "async_style", "Prefers async/await over callbacks")
+    Tool configuration:
+        requires_approval: True (side-effectful)
     """
-    # Validate category
-    valid_categories = ["user_preferences", "project_insights", "learned_facts"]
-    if category not in valid_categories:
-        return {
-            "display": f"Error: Invalid category '{category}'. "
-                      f"Must be one of: {', '.join(valid_categories)}",
-            "error": True,
-        }
+    # Generate ID and filename
+    memory_id = _next_memory_id()
+    slug = _slugify(content[:50])
+    filename = f"{memory_id:03d}-{slug}.md"
 
-    # Memory file path
-    memory_file = Path.cwd() / ".co-cli" / "memories" / f"{category}.json"
-    memory_file.parent.mkdir(parents=True, exist_ok=True)
-
-    # Load existing memories
-    if memory_file.exists():
-        try:
-            memories = json.loads(memory_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            logger.warning(f"Malformed memory file: {memory_file}. Starting fresh.")
-            memories = {}
-    else:
-        memories = {}
-
-    # Save memory with timestamp
-    timestamp = datetime.now().isoformat()
-    memories[key] = {
-        "value": value,
-        "timestamp": timestamp,
+    # Create frontmatter
+    frontmatter = {
+        "id": memory_id,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "tags": tags or [],
+        "source": "user-told",
     }
 
-    # Write memory file
-    memory_file.write_text(
-        json.dumps(memories, indent=2, ensure_ascii=False),
-        encoding="utf-8"
-    )
+    # Build markdown content
+    md_content = f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{content.strip()}\n"
 
-    # Merge into context.json
-    await _merge_memories_to_context()
+    # Write file
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    memory_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Saved memory: {category}/{key}")
+    file_path = memory_dir / filename
+    file_path.write_text(md_content, encoding="utf-8")
+
+    logger.info(f"Saved memory {memory_id}: {filename}")
 
     return {
-        "display": f"Saved memory to {category}: {key}\n"
-                  f"Value: {value}\n"
-                  f"Timestamp: {timestamp}",
-        "category": category,
-        "key": key,
-        "timestamp": timestamp,
+        "display": f"Saved memory {memory_id}: {filename}\nLocation: {file_path}",
+        "path": str(file_path),
+        "memory_id": memory_id,
     }
 
 
-@agent.tool()
 async def recall_memory(
     ctx: RunContext[CoDeps],
-    category: str | None = None,
-    key: str | None = None,
-    query: str | None = None,
+    query: str,
+    max_results: int = 5,
 ) -> dict[str, Any]:
-    """Recall saved memories.
+    """Search memories using keyword search.
 
-    Search internal knowledge and memory files for matching memories.
+    Phase 1c: Uses grep + frontmatter scan.
+    Phase 2+: Will use SQLite FTS5 index.
+
+    Searches both content and tags. Returns markdown-formatted
+    results for injection into current turn context.
 
     Args:
-        category: Optional category filter (user_preferences, project_insights, learned_facts)
-        key: Optional specific key to retrieve
-        query: Optional text search in memory values
+        ctx: Agent runtime context
+        query: Search query (keywords)
+        max_results: Maximum number of results (default 5)
 
     Returns:
-        Dict with:
-        - display: Formatted list of matching memories
-        - memories: List of memory dicts (category, key, value, timestamp)
-        - count: Number of matches
-
-    Example:
-        recall_memory(category="user_preferences")  # All user preferences
-        recall_memory(key="async_style")             # Specific memory
-        recall_memory(query="async")                 # Text search
+        dict with keys:
+            - display: Markdown-formatted search results
+            - count: Number of results found
+            - results: List of result dicts (id, content, tags, created)
     """
-    memories_dir = Path.cwd() / ".co-cli" / "memories"
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    results = _search_memories(query, memory_dir, max_results)
 
-    if not memories_dir.exists():
+    if not results:
         return {
-            "display": "No memories saved yet.",
-            "memories": [],
+            "display": f"No memories found matching '{query}'",
             "count": 0,
+            "results": [],
         }
 
-    # Collect all memories
-    all_memories = []
+    # Format as markdown
+    lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
 
-    # Determine categories to search
-    if category:
-        categories = [category]
-    else:
-        categories = ["user_preferences", "project_insights", "learned_facts"]
-
-    # Load memories from each category
-    for cat in categories:
-        memory_file = memories_dir / f"{cat}.json"
-        if not memory_file.exists():
-            continue
-
-        try:
-            memories = json.loads(memory_file.read_text(encoding="utf-8"))
-            for mem_key, mem_data in memories.items():
-                # Apply filters
-                if key and mem_key != key:
-                    continue
-                if query and query.lower() not in mem_data["value"].lower():
-                    continue
-
-                all_memories.append({
-                    "category": cat,
-                    "key": mem_key,
-                    "value": mem_data["value"],
-                    "timestamp": mem_data.get("timestamp", "unknown"),
-                })
-        except json.JSONDecodeError:
-            logger.warning(f"Skipping malformed memory file: {memory_file}")
-            continue
-
-    # Format display
-    if not all_memories:
-        display = "No matching memories found."
-    else:
-        lines = [f"Found {len(all_memories)} memories:\n"]
-        for mem in all_memories:
-            lines.append(f"**{mem['category']}/{mem['key']}**")
-            lines.append(f"  Value: {mem['value']}")
-            lines.append(f"  Saved: {mem['timestamp']}\n")
-        display = "\n".join(lines)
-
-    return {
-        "display": display,
-        "memories": all_memories,
-        "count": len(all_memories),
-    }
-
-
-@agent.tool()
-async def list_memories(
-    ctx: RunContext[CoDeps],
-    category: str | None = None,
-) -> dict[str, Any]:
-    """List all saved memories with counts and summaries.
-
-    Args:
-        category: Optional category filter (user_preferences, project_insights, learned_facts)
-
-    Returns:
-        Dict with:
-        - display: Formatted summary of all memories
-        - categories: Dict of category -> count
-        - total_count: Total number of memories
-
-    Example:
-        list_memories()  # All categories
-        list_memories(category="user_preferences")  # One category
-    """
-    memories_dir = Path.cwd() / ".co-cli" / "memories"
-
-    if not memories_dir.exists():
-        return {
-            "display": "No memories saved yet.",
-            "categories": {},
-            "total_count": 0,
-        }
-
-    # Determine categories
-    if category:
-        categories = [category]
-    else:
-        categories = ["user_preferences", "project_insights", "learned_facts"]
-
-    # Count memories per category
-    category_counts = {}
-    total_count = 0
-
-    for cat in categories:
-        memory_file = memories_dir / f"{cat}.json"
-        if not memory_file.exists():
-            category_counts[cat] = 0
-            continue
-
-        try:
-            memories = json.loads(memory_file.read_text(encoding="utf-8"))
-            count = len(memories)
-            category_counts[cat] = count
-            total_count += count
-        except json.JSONDecodeError:
-            logger.warning(f"Skipping malformed memory file: {memory_file}")
-            category_counts[cat] = 0
-
-    # Format display
-    lines = [f"Memory Summary (Total: {total_count})\n"]
-    for cat, count in category_counts.items():
-        lines.append(f"- **{cat}**: {count} memories")
+    for r in results:
+        lines.append(f"**Memory {r['id']}** (created {r['created'][:10]})")
+        if r["tags"]:
+            lines.append(f"Tags: {', '.join(r['tags'])}")
+        lines.append(f"{r['content']}\n")
 
     display = "\n".join(lines)
 
+    logger.info(f"Recalled {len(results)} memories for query: {query}")
+
     return {
         "display": display,
-        "categories": category_counts,
-        "total_count": total_count,
+        "count": len(results),
+        "results": results,
     }
 
 
-async def _merge_memories_to_context() -> None:
-    """Merge memory files into context.json for auto-loading.
+async def list_memories(
+    ctx: RunContext[CoDeps],
+) -> dict[str, Any]:
+    """List all memories with IDs and metadata.
 
-    Internal helper function. Reads all .co-cli/memories/*.json files
-    and merges content into .co-cli/internal/context.json.
+    Returns summary of all memories: ID, creation date, tags,
+    and first line of content as preview.
+
+    Args:
+        ctx: Agent runtime context
+
+    Returns:
+        dict with keys:
+            - display: Markdown-formatted memory list
+            - count: Total number of memories
+            - memories: List of memory summary dicts
     """
-    memories_dir = Path.cwd() / ".co-cli" / "memories"
-    context_file = Path.cwd() / ".co-cli" / "internal" / "context.json"
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
 
-    # Load existing context or create new
-    if context_file.exists():
+    if not memory_dir.exists():
+        return {
+            "display": "No memories saved yet.",
+            "count": 0,
+            "memories": [],
+        }
+
+    memories = []
+
+    for path in sorted(memory_dir.glob("*.md")):
         try:
-            data = json.loads(context_file.read_text(encoding="utf-8"))
-            knowledge = InternalKnowledge(**data)
-        except Exception as e:
-            logger.warning(f"Failed to load context.json: {e}. Creating new.")
-            knowledge = InternalKnowledge()
-    else:
-        knowledge = InternalKnowledge()
+            content = path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(content)
 
-    # Merge user preferences
-    pref_file = memories_dir / "user_preferences.json"
-    if pref_file.exists():
-        try:
-            prefs = json.loads(pref_file.read_text(encoding="utf-8"))
-            for key, data in prefs.items():
-                knowledge.user.preferences[key] = data["value"]
-        except Exception as e:
-            logger.warning(f"Failed to merge user preferences: {e}")
+            # Extract first line as summary
+            first_line = body.strip().split("\n")[0][:80]
 
-    # Merge project insights
-    insights_file = memories_dir / "project_insights.json"
-    if insights_file.exists():
-        try:
-            insights = json.loads(insights_file.read_text(encoding="utf-8"))
-            # Add to patterns list (deduplicate)
-            for key, data in insights.items():
-                value = data["value"]
-                if value not in knowledge.project.patterns:
-                    knowledge.project.patterns.append(value)
+            memories.append({
+                "id": fm.get("id", 0),
+                "created": fm.get("created", ""),
+                "tags": fm.get("tags", []),
+                "summary": first_line,
+                "path": str(path),
+            })
         except Exception as e:
-            logger.warning(f"Failed to merge project insights: {e}")
+            logger.warning(f"Failed to read {path}: {e}")
+            continue
 
-    # Merge learned facts
-    facts_file = memories_dir / "learned_facts.json"
-    if facts_file.exists():
-        try:
-            facts = json.loads(facts_file.read_text(encoding="utf-8"))
-            # Add to facts list (deduplicate)
-            for key, data in facts.items():
-                value = data["value"]
-                if value not in knowledge.learned_facts.facts:
-                    knowledge.learned_facts.facts.append(value)
-        except Exception as e:
-            logger.warning(f"Failed to merge learned facts: {e}")
+    if not memories:
+        return {
+            "display": "No memories found.",
+            "count": 0,
+            "memories": [],
+        }
 
-    # Save merged context
-    try:
-        save_internal_knowledge(knowledge)
-        logger.debug("Merged memories into context.json")
-    except ValueError as e:
-        logger.error(f"Cannot merge memories: {e}")
+    # Sort by ID
+    memories.sort(key=lambda m: m["id"])
+
+    # Format as markdown
+    lines = [f"Total memories: {len(memories)}\n"]
+
+    for m in memories:
+        tags_str = f" [{', '.join(m['tags'])}]" if m["tags"] else ""
+        lines.append(f"**{m['id']:03d}** ({m['created'][:10]}){tags_str}: {m['summary']}")
+
+    display = "\n".join(lines)
+
+    logger.info(f"Listed {len(memories)} memories")
+
+    return {
+        "display": display,
+        "count": len(memories),
+        "memories": memories,
+    }
 ```
 
-**Key design decisions:**
-- **Three memory categories:** user_preferences, project_insights, learned_facts
-- **Granular storage:** Each category in separate JSON file for clarity
-- **Auto-merge:** save_memory() automatically merges into context.json
-- **Deduplication:** Prevents duplicate entries in lists
-- **Timestamp tracking:** Each memory has save timestamp
-- **Tool return format:** Dict with `display` (formatted string) + metadata
+**Tool Registration (in `co_cli/agent.py`):**
+
+```python
+from co_cli.tools.memory import save_memory, recall_memory, list_memories
+
+# Register memory tools
+agent.tool(save_memory, requires_approval=True)
+agent.tool(recall_memory)
+agent.tool(list_memories)
+```
+
+**Tests Required:**
+- `save_memory`: Create file with frontmatter, increment ID
+- `recall_memory`: Search by content and tags
+- `list_memories`: List all with summaries
+- `_next_memory_id`: Generate sequential IDs
+- `_slugify`: Convert text to slug
+- `_search_memories`: grep-based search
 
 ---
 
-### Prompt Assembly Integration
+### Module: `co_cli/prompts/system.py`
 
-**File:** `co_cli/prompts/__init__.py`
+**Purpose:** System prompt assembly with knowledge injection.
 
-**Update `get_system_prompt()` function:**
+**Update:**
 
 ```python
-def get_system_prompt(provider: str, personality: str | None = None) -> str:
-    """Assemble system prompt with model-specific conditionals, personality,
-    internal knowledge, and project overrides.
+"""System prompt assembly with knowledge injection."""
 
-    Processing steps:
-    1. Load base system.md
-    2. Process model conditionals ([IF gemini] / [IF ollama])
-    3. Inject personality template (if specified)
-    4. Load internal knowledge from .co-cli/internal/context.json  # NEW
-    5. Append project instructions from .co-cli/instructions.md (if exists)
-    6. Validate result (no empty prompt, no unprocessed markers)
+from co_cli.knowledge import load_internal_knowledge
+
+def assemble_system_prompt(personality: str | None = None) -> str:
+    """Assemble full system prompt with all layers.
+
+    Layers (in order):
+      1. Base system.md
+      2. Personality template (if specified)
+      3. Internal knowledge (global + project)          ← Phase 1c NEW
+      4. Project instructions.md
+      5. [system_reminder] (future: Phase 1d)
 
     Args:
-        provider: LLM provider name ("gemini", "ollama", or unknown)
-        personality: Optional personality template name
+        personality: Optional personality name (e.g., "sonnet", "finch")
 
     Returns:
-        Assembled system prompt as string
-
-    Raises:
-        FileNotFoundError: If system.md doesn't exist
-        ValueError: If assembled prompt is empty or has unprocessed conditionals
-
-    Example:
-        >>> prompt = get_system_prompt("gemini", personality="friendly")
-        >>> assert "Internal Knowledge" in prompt or True  # May or may not be present
+        Full system prompt string
     """
-    # ... [existing code for steps 1-3] ...
+    sections = []
 
-    # 4. Load internal knowledge (NEW)
-    from co_cli.internal_knowledge import load_internal_knowledge
+    # 1. Base system prompt
+    base = load_base_system_prompt()
+    sections.append(base)
 
-    internal_knowledge = load_internal_knowledge()
-    if internal_knowledge:
-        base_prompt += "\n\n## Internal Knowledge\n\n"
-        base_prompt += internal_knowledge
+    # 2. Personality (optional)
+    if personality:
+        personality_content = load_personality(personality)
+        if personality_content:
+            sections.append(personality_content)
 
-    # 5. Load project instructions (existing)
-    project_instructions = Path.cwd() / ".co-cli" / "instructions.md"
-    if project_instructions.exists():
-        instructions_content = project_instructions.read_text(encoding="utf-8")
-        base_prompt += "\n\n## Project-Specific Instructions\n\n"
-        base_prompt += instructions_content
+    # 3. Internal knowledge (NEW)
+    knowledge = load_internal_knowledge()
+    if knowledge:
+        # Wrap in system-reminder tags for recency bias
+        sections.append(f"<system-reminder>\n{knowledge}\n</system-reminder>")
 
-    # ... [existing validation code] ...
+    # 4. Project instructions
+    instructions = load_project_instructions()
+    if instructions:
+        sections.append(instructions)
 
-    return base_prompt
+    return "\n\n".join(sections)
 ```
 
-**Prompt assembly order (final):**
-```
-1. Base system.md (identity, principles, tool guidance)
-2. Model conditionals ([IF gemini] / [IF ollama])          ← Phase 1a ✅
-3. Personality template                                     ← Phase 1b ✅
-4. Internal knowledge (.co-cli/internal/context.json)      ← Phase 1c (NEW)
-5. Project instructions (.co-cli/instructions.md)          ← Phase 1a ✅
-```
+**Tests Required:**
+- Prompt includes knowledge when present
+- Prompt excludes knowledge when absent
+- Knowledge appears after personality, before instructions
+- Proper section formatting
 
 ---
 
 ## Test Specifications
 
-### Test Structure
+### Module: `tests/test_frontmatter.py` (8 tests)
 
-```
-tests/
-├── test_internal_knowledge.py (NEW) - Schema, loading, validation (8 tests)
-├── test_memory_tools.py (NEW) - Memory tools functionality (7 tests)
-└── test_prompts.py (UPDATED) - Prompt assembly with knowledge (3 new tests)
-```
-
-### Test File: `tests/test_internal_knowledge.py`
-
-**Complete test suite:**
+**Purpose:** Test YAML frontmatter parsing and validation.
 
 ```python
-"""Tests for internal knowledge management."""
-
-import json
-from pathlib import Path
+"""Tests for YAML frontmatter parsing."""
 
 import pytest
-
-from co_cli.internal_knowledge import (
-    InternalKnowledge,
-    UserContext,
-    ProjectContext,
-    LearnedFacts,
-    load_internal_knowledge,
-    save_internal_knowledge,
-    SIZE_TARGET,
-    SIZE_LIMIT,
+from co_cli._frontmatter import (
+    parse_frontmatter,
+    strip_frontmatter,
+    validate_context_frontmatter,
+    validate_memory_frontmatter,
 )
 
 
-class TestInternalKnowledgeSchema:
-    """Test internal knowledge schema and validation."""
+def test_parse_valid_frontmatter():
+    """Parse valid YAML frontmatter."""
+    content = """---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
 
-    def test_empty_knowledge_valid(self):
-        """Empty knowledge object is valid."""
-        knowledge = InternalKnowledge()
-        assert knowledge.version == "1.0"
-        assert knowledge.user.name is None
-        assert knowledge.project.name is None
-        assert knowledge.learned_facts.facts == []
-
-    def test_full_knowledge_valid(self):
-        """Fully populated knowledge object is valid."""
-        knowledge = InternalKnowledge(
-            user=UserContext(
-                name="Alex",
-                timezone="America/Los_Angeles",
-                preferences={"coding_style": "async/await"},
-            ),
-            project=ProjectContext(
-                name="co-cli",
-                type="python_cli",
-                patterns=["Uses pydantic-ai", "Docker for sandboxing"],
-            ),
-            learned_facts=LearnedFacts(
-                facts=["User prefers detailed explanations"],
-                corrections=["Database is PostgreSQL, not MySQL"],
-            ),
-        )
-        assert knowledge.user.name == "Alex"
-        assert knowledge.project.name == "co-cli"
-        assert len(knowledge.learned_facts.facts) == 1
-
-    def test_invalid_version_raises_error(self):
-        """Invalid version raises ValidationError."""
-        with pytest.raises(ValueError, match="Unsupported version"):
-            InternalKnowledge(version="2.0")
-
-    def test_markdown_formatting_empty(self):
-        """Empty knowledge produces empty markdown."""
-        knowledge = InternalKnowledge()
-        markdown = knowledge.to_markdown()
-        assert markdown == ""
-
-    def test_markdown_formatting_full(self):
-        """Full knowledge produces formatted markdown."""
-        knowledge = InternalKnowledge(
-            user=UserContext(
-                name="Alex",
-                preferences={"style": "async/await"},
-            ),
-            project=ProjectContext(
-                name="co-cli",
-                patterns=["Uses pydantic-ai"],
-            ),
-            learned_facts=LearnedFacts(
-                facts=["Prefers detailed explanations"],
-            ),
-        )
-        markdown = knowledge.to_markdown()
-
-        assert "### User Context" in markdown
-        assert "Alex" in markdown
-        assert "async/await" in markdown
-        assert "### Project Context" in markdown
-        assert "co-cli" in markdown
-        assert "pydantic-ai" in markdown
-        assert "### Learned Facts" in markdown
-        assert "detailed explanations" in markdown
-
-    def test_size_calculation(self):
-        """Size calculation returns accurate byte count."""
-        knowledge = InternalKnowledge(
-            user=UserContext(name="Test"),
-        )
-        size = knowledge.size_bytes()
-        assert size > 0
-        assert isinstance(size, int)
+# User
+- Name: Test
+"""
+    fm, body = parse_frontmatter(content)
+    assert fm["version"] == 1
+    assert fm["updated"] == "2026-02-09T14:30:00Z"
+    assert body.strip().startswith("# User")
 
 
-class TestLoadInternalKnowledge:
-    """Test loading internal knowledge from file."""
-
-    def test_load_missing_file_returns_none(self, tmp_path, monkeypatch):
-        """Missing context.json returns None gracefully."""
-        monkeypatch.chdir(tmp_path)
-        result = load_internal_knowledge()
-        assert result is None
-
-    def test_load_valid_file_returns_markdown(self, tmp_path, monkeypatch):
-        """Valid context.json loads and returns markdown."""
-        monkeypatch.chdir(tmp_path)
-
-        # Create valid context file
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-
-        data = {
-            "version": "1.0",
-            "user": {
-                "name": "Test User",
-                "preferences": {"style": "async"},
-            },
-            "project": {},
-            "learned_facts": {"facts": ["Test fact"]},
-        }
-        context_file.write_text(json.dumps(data), encoding="utf-8")
-
-        result = load_internal_knowledge()
-        assert result is not None
-        assert "Test User" in result
-        assert "async" in result
-        assert "Test fact" in result
-
-    def test_load_malformed_json_returns_none(self, tmp_path, monkeypatch):
-        """Malformed JSON returns None with warning."""
-        monkeypatch.chdir(tmp_path)
-
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-        context_file.write_text("{ invalid json }", encoding="utf-8")
-
-        result = load_internal_knowledge()
-        assert result is None
-
-    def test_load_invalid_schema_returns_none(self, tmp_path, monkeypatch):
-        """Invalid schema returns None with warning."""
-        monkeypatch.chdir(tmp_path)
-
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-
-        # Invalid: missing required fields, wrong version
-        data = {"version": "99.0", "invalid_field": "test"}
-        context_file.write_text(json.dumps(data), encoding="utf-8")
-
-        result = load_internal_knowledge()
-        assert result is None
-
-    def test_load_empty_knowledge_returns_none(self, tmp_path, monkeypatch):
-        """Empty but valid knowledge returns None."""
-        monkeypatch.chdir(tmp_path)
-
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-
-        # Valid structure but no content
-        data = {
-            "version": "1.0",
-            "user": {},
-            "project": {},
-            "learned_facts": {},
-        }
-        context_file.write_text(json.dumps(data), encoding="utf-8")
-
-        result = load_internal_knowledge()
-        assert result is None
-
-    def test_load_warns_on_size_target_exceeded(self, tmp_path, monkeypatch):
-        """Loading knowledge > 10KB logs warning."""
-        monkeypatch.chdir(tmp_path)
-
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-
-        # Create knowledge just over 10KB
-        large_facts = ["Fact " + "x" * 100 for _ in range(120)]
-        data = {
-            "version": "1.0",
-            "user": {},
-            "project": {},
-            "learned_facts": {"facts": large_facts},
-        }
-        context_file.write_text(json.dumps(data), encoding="utf-8")
-
-        # Should load but warn
-        result = load_internal_knowledge()
-        assert result is not None
-
-    def test_load_raises_on_size_limit_exceeded(self, tmp_path, monkeypatch):
-        """Loading knowledge > 20KB raises ValueError."""
-        monkeypatch.chdir(tmp_path)
-
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
-
-        # Create knowledge over 20KB
-        huge_facts = ["Fact " + "x" * 200 for _ in range(120)]
-        data = {
-            "version": "1.0",
-            "user": {},
-            "project": {},
-            "learned_facts": {"facts": huge_facts},
-        }
-        context_file.write_text(json.dumps(data), encoding="utf-8")
-
-        with pytest.raises(ValueError, match="exceeds size limit"):
-            load_internal_knowledge()
+def test_parse_missing_frontmatter():
+    """Parse content without frontmatter."""
+    content = "# Just markdown content"
+    fm, body = parse_frontmatter(content)
+    assert fm == {}
+    assert body == content
 
 
-class TestSaveInternalKnowledge:
-    """Test saving internal knowledge to file."""
+def test_parse_malformed_yaml():
+    """Reject malformed YAML in frontmatter."""
+    content = """---
+version: 1
+invalid yaml: [
+---
 
-    def test_save_creates_file(self, tmp_path, monkeypatch):
-        """save_internal_knowledge creates context.json."""
-        monkeypatch.chdir(tmp_path)
+Body
+"""
+    with pytest.raises(ValueError, match="Invalid YAML"):
+        parse_frontmatter(content)
 
-        knowledge = InternalKnowledge(
-            user=UserContext(name="Test User"),
-        )
-        save_internal_knowledge(knowledge)
 
-        context_file = tmp_path / ".co-cli" / "internal" / "context.json"
-        assert context_file.exists()
+def test_strip_frontmatter():
+    """Strip frontmatter, return only body."""
+    content = """---
+version: 1
+---
 
-        data = json.loads(context_file.read_text(encoding="utf-8"))
-        assert data["user"]["name"] == "Test User"
+Body content
+"""
+    body = strip_frontmatter(content)
+    assert body.strip() == "Body content"
+    assert "version" not in body
 
-    def test_save_raises_on_size_limit(self, tmp_path, monkeypatch):
-        """save_internal_knowledge raises error if size > 20KB."""
-        monkeypatch.chdir(tmp_path)
 
-        huge_facts = ["Fact " + "x" * 200 for _ in range(120)]
-        knowledge = InternalKnowledge(
-            learned_facts=LearnedFacts(facts=huge_facts),
-        )
+def test_validate_context_valid():
+    """Validate valid context frontmatter."""
+    fm = {
+        "version": 1,
+        "updated": "2026-02-09T14:30:00Z",
+    }
+    validate_context_frontmatter(fm)  # Should not raise
 
-        with pytest.raises(ValueError, match="exceeds size limit"):
-            save_internal_knowledge(knowledge)
+
+def test_validate_context_missing_version():
+    """Reject context missing version field."""
+    fm = {"updated": "2026-02-09T14:30:00Z"}
+    with pytest.raises(ValueError, match="Missing required field: version"):
+        validate_context_frontmatter(fm)
+
+
+def test_validate_memory_valid():
+    """Validate valid memory frontmatter."""
+    fm = {
+        "id": 1,
+        "created": "2026-02-09T14:30:00Z",
+        "tags": ["python", "style"],
+        "source": "user-told",
+    }
+    validate_memory_frontmatter(fm)  # Should not raise
+
+
+def test_validate_memory_invalid_id():
+    """Reject memory with non-integer ID."""
+    fm = {
+        "id": "not-an-int",
+        "created": "2026-02-09T14:30:00Z",
+    }
+    with pytest.raises(ValueError, match="Field 'id' must be integer"):
+        validate_memory_frontmatter(fm)
 ```
-
-**Test count:** 8 tests covering schema, loading, validation, size constraints
 
 ---
 
-### Test File: `tests/test_memory_tools.py`
+### Module: `tests/test_knowledge.py` (7 tests)
 
-**Complete test suite:**
+**Purpose:** Test internal knowledge loading from markdown files.
 
 ```python
-"""Tests for memory management tools."""
-
-import json
-from pathlib import Path
+"""Tests for internal knowledge loading."""
 
 import pytest
+from pathlib import Path
+from co_cli.knowledge import load_internal_knowledge, SIZE_TARGET, SIZE_LIMIT
 
-from co_cli.tools.memory import save_memory, recall_memory, list_memories
-from co_cli.agent import CoDeps
+
+def test_load_valid_project_context(tmp_path, monkeypatch):
+    """Load valid project context.md."""
+    monkeypatch.chdir(tmp_path)
+
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+
+    context_file = knowledge_dir / "context.md"
+    context_file.write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+- Name: Test User
+- Prefers: async/await
+""")
+
+    result = load_internal_knowledge()
+    assert result is not None
+    assert "## Internal Knowledge" in result
+    assert "### Project Context" in result
+    assert "# User" in result
+    assert "Test User" in result
+
+
+def test_load_valid_global_context(tmp_path, monkeypatch):
+    """Load valid global context.md."""
+    monkeypatch.chdir(tmp_path)
+
+    global_knowledge = Path.home() / ".config/co-cli/knowledge"
+    global_knowledge.mkdir(parents=True, exist_ok=True)
+
+    global_context = global_knowledge / "context.md"
+    global_context.write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+- Name: Global User
+""")
+
+    result = load_internal_knowledge()
+    assert result is not None
+    assert "### Global Context" in result
+    assert "Global User" in result
+
+
+def test_load_both_contexts(tmp_path, monkeypatch):
+    """Load both global and project contexts."""
+    monkeypatch.chdir(tmp_path)
+
+    # Global context
+    global_knowledge = Path.home() / ".config/co-cli/knowledge"
+    global_knowledge.mkdir(parents=True, exist_ok=True)
+    (global_knowledge / "context.md").write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+Global content
+""")
+
+    # Project context
+    project_knowledge = tmp_path / ".co-cli/knowledge"
+    project_knowledge.mkdir(parents=True)
+    (project_knowledge / "context.md").write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+Project content
+""")
+
+    result = load_internal_knowledge()
+    assert "### Global Context" in result
+    assert "### Project Context" in result
+    assert "Global content" in result
+    assert "Project content" in result
+
+
+def test_load_no_knowledge(tmp_path, monkeypatch):
+    """Return None when no knowledge exists."""
+    monkeypatch.chdir(tmp_path)
+    result = load_internal_knowledge()
+    assert result is None
+
+
+def test_size_under_target(tmp_path, monkeypatch, capsys):
+    """Load silently when size under 10 KiB."""
+    monkeypatch.chdir(tmp_path)
+
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+
+    # Create small context (< 10 KiB)
+    content = "# User\n" + ("- Item\n" * 100)  # ~800 bytes
+    (knowledge_dir / "context.md").write_text(f"""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+{content}
+""")
+
+    result = load_internal_knowledge()
+    assert result is not None
+
+    # No warnings
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.err
+    assert "ERROR" not in captured.err
+
+
+def test_size_warn_threshold(tmp_path, monkeypatch, capsys):
+    """Warn when size between 10-20 KiB."""
+    monkeypatch.chdir(tmp_path)
+
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+
+    # Create context at 15 KiB
+    content = "# User\n" + ("- Item with some text\n" * 600)  # ~15 KiB
+    (knowledge_dir / "context.md").write_text(f"""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+{content}
+""")
+
+    result = load_internal_knowledge()
+    assert result is not None
+
+    # Warning printed
+    captured = capsys.readouterr()
+    assert "WARNING" in captured.err
+    assert f"exceeds {SIZE_TARGET}" in captured.err
+
+
+def test_size_error_threshold(tmp_path, monkeypatch, capsys):
+    """Error and truncate when size >20 KiB."""
+    monkeypatch.chdir(tmp_path)
+
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+
+    # Create context at 25 KiB
+    content = "# User\n" + ("- Item with some text\n" * 1000)  # ~25 KiB
+    (knowledge_dir / "context.md").write_text(f"""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+{content}
+""")
+
+    result = load_internal_knowledge()
+    assert result is not None
+
+    # Result truncated to SIZE_LIMIT
+    size = len(result.encode("utf-8"))
+    assert size <= SIZE_LIMIT
+
+    # Error printed
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert f"exceeds {SIZE_LIMIT}" in captured.err
+```
+
+---
+
+### Module: `tests/test_memory_tools.py` (7 tests)
+
+**Purpose:** Test memory management tools (save, recall, list).
+
+```python
+"""Tests for memory tools."""
+
+import pytest
+from pathlib import Path
+from co_cli.tools.memory import (
+    save_memory,
+    recall_memory,
+    list_memories,
+    _next_memory_id,
+    _slugify,
+    _search_memories,
+)
+from co_cli.deps import CoDeps
 from pydantic_ai import RunContext
 
 
-class TestSaveMemory:
-    """Test save_memory tool."""
-
-    @pytest.mark.asyncio
-    async def test_save_memory_creates_file(self, tmp_path, monkeypatch):
-        """save_memory creates memory file."""
-        monkeypatch.chdir(tmp_path)
-
-        # Create minimal RunContext
-        ctx = RunContext(deps=CoDeps())
-
-        result = await save_memory(
-            ctx,
-            category="user_preferences",
-            key="coding_style",
-            value="Prefers async/await",
-        )
-
-        assert result["category"] == "user_preferences"
-        assert result["key"] == "coding_style"
-        assert "Saved memory" in result["display"]
-
-        # Check file created
-        memory_file = tmp_path / ".co-cli" / "memories" / "user_preferences.json"
-        assert memory_file.exists()
-
-        data = json.loads(memory_file.read_text(encoding="utf-8"))
-        assert "coding_style" in data
-        assert data["coding_style"]["value"] == "Prefers async/await"
-
-    @pytest.mark.asyncio
-    async def test_save_memory_invalid_category_returns_error(self, tmp_path, monkeypatch):
-        """save_memory with invalid category returns error."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        result = await save_memory(
-            ctx,
-            category="invalid_category",
-            key="test",
-            value="test",
-        )
-
-        assert result.get("error") is True
-        assert "Invalid category" in result["display"]
-
-    @pytest.mark.asyncio
-    async def test_save_memory_merges_to_context(self, tmp_path, monkeypatch):
-        """save_memory merges to context.json."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        await save_memory(
-            ctx,
-            category="learned_facts",
-            key="fact1",
-            value="Test fact",
-        )
-
-        # Check context.json created and contains fact
-        context_file = tmp_path / ".co-cli" / "internal" / "context.json"
-        assert context_file.exists()
-
-        data = json.loads(context_file.read_text(encoding="utf-8"))
-        assert "Test fact" in data["learned_facts"]["facts"]
+@pytest.fixture
+def mock_ctx():
+    """Mock RunContext for tool tests."""
+    deps = CoDeps(settings={}, agent=None)
+    return RunContext(deps=deps, retry=0)
 
 
-class TestRecallMemory:
-    """Test recall_memory tool."""
-
-    @pytest.mark.asyncio
-    async def test_recall_memory_no_memories_returns_empty(self, tmp_path, monkeypatch):
-        """recall_memory with no saved memories returns empty."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        result = await recall_memory(ctx)
-
-        assert result["count"] == 0
-        assert "No memories" in result["display"]
-
-    @pytest.mark.asyncio
-    async def test_recall_memory_finds_saved_memory(self, tmp_path, monkeypatch):
-        """recall_memory finds previously saved memory."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        # Save a memory
-        await save_memory(
-            ctx,
-            category="user_preferences",
-            key="style",
-            value="Async preferred",
-        )
-
-        # Recall it
-        result = await recall_memory(ctx, category="user_preferences")
-
-        assert result["count"] == 1
-        assert result["memories"][0]["key"] == "style"
-        assert result["memories"][0]["value"] == "Async preferred"
-
-    @pytest.mark.asyncio
-    async def test_recall_memory_filters_by_key(self, tmp_path, monkeypatch):
-        """recall_memory filters by specific key."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        # Save multiple memories
-        await save_memory(ctx, "user_preferences", "key1", "Value 1")
-        await save_memory(ctx, "user_preferences", "key2", "Value 2")
-
-        # Recall specific key
-        result = await recall_memory(ctx, key="key1")
-
-        assert result["count"] == 1
-        assert result["memories"][0]["key"] == "key1"
-
-    @pytest.mark.asyncio
-    async def test_recall_memory_text_search(self, tmp_path, monkeypatch):
-        """recall_memory searches in memory values."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
-
-        await save_memory(ctx, "learned_facts", "fact1", "Python uses async/await")
-        await save_memory(ctx, "learned_facts", "fact2", "JavaScript uses promises")
-
-        # Search for "async"
-        result = await recall_memory(ctx, query="async")
-
-        assert result["count"] == 1
-        assert "async/await" in result["memories"][0]["value"]
+def test_next_memory_id_empty(tmp_path, monkeypatch):
+    """Get ID 1 when no memories exist."""
+    monkeypatch.chdir(tmp_path)
+    assert _next_memory_id() == 1
 
 
-class TestListMemories:
-    """Test list_memories tool."""
+def test_next_memory_id_existing(tmp_path, monkeypatch):
+    """Get max(id) + 1 when memories exist."""
+    monkeypatch.chdir(tmp_path)
 
-    @pytest.mark.asyncio
-    async def test_list_memories_no_memories_returns_empty(self, tmp_path, monkeypatch):
-        """list_memories with no saved memories returns empty."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
+    memory_dir = tmp_path / ".co-cli/knowledge/memories"
+    memory_dir.mkdir(parents=True)
 
-        result = await list_memories(ctx)
+    # Create memory with id=5
+    (memory_dir / "005-test.md").write_text("""---
+id: 5
+created: 2026-02-09T14:30:00Z
+---
 
-        assert result["total_count"] == 0
-        assert "No memories" in result["display"]
+Memory content
+""")
 
-    @pytest.mark.asyncio
-    async def test_list_memories_counts_all_categories(self, tmp_path, monkeypatch):
-        """list_memories counts memories across all categories."""
-        monkeypatch.chdir(tmp_path)
-        ctx = RunContext(deps=CoDeps())
+    assert _next_memory_id() == 6
 
-        # Save memories in different categories
-        await save_memory(ctx, "user_preferences", "pref1", "Value 1")
-        await save_memory(ctx, "user_preferences", "pref2", "Value 2")
-        await save_memory(ctx, "learned_facts", "fact1", "Fact 1")
 
-        result = await list_memories(ctx)
+def test_slugify():
+    """Convert text to URL-friendly slug."""
+    assert _slugify("User prefers async/await!") == "user-prefers-async-await"
+    assert _slugify("Multiple   spaces") == "multiple-spaces"
+    assert _slugify("A" * 100) == "a" * 50  # Truncate to 50 chars
 
-        assert result["total_count"] == 3
-        assert result["categories"]["user_preferences"] == 2
-        assert result["categories"]["learned_facts"] == 1
+
+async def test_save_memory(tmp_path, monkeypatch, mock_ctx):
+    """Save memory creates markdown file with frontmatter."""
+    monkeypatch.chdir(tmp_path)
+
+    result = await save_memory(
+        mock_ctx,
+        content="User prefers async/await over callbacks",
+        tags=["python", "style"],
+    )
+
+    # Check return value
+    assert result["memory_id"] == 1
+    assert "001-user-prefers-async-await.md" in result["path"]
+
+    # Check file created
+    memory_file = Path(result["path"])
+    assert memory_file.exists()
+
+    # Check file content
+    content = memory_file.read_text()
+    assert "---" in content
+    assert "id: 1" in content
+    assert "tags:" in content
+    assert "- python" in content
+    assert "- style" in content
+    assert "User prefers async/await" in content
+
+
+async def test_recall_memory_found(tmp_path, monkeypatch, mock_ctx):
+    """Recall finds matching memories."""
+    monkeypatch.chdir(tmp_path)
+
+    # Create test memory
+    memory_dir = tmp_path / ".co-cli/knowledge/memories"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "001-async.md").write_text("""---
+id: 1
+created: 2026-02-09T14:30:00Z
+tags: [python]
+---
+
+User prefers async/await over callbacks
+""")
+
+    result = await recall_memory(mock_ctx, query="async")
+
+    assert result["count"] == 1
+    assert "Memory 1" in result["display"]
+    assert "async/await" in result["display"]
+
+
+async def test_recall_memory_not_found(tmp_path, monkeypatch, mock_ctx):
+    """Recall returns empty when no matches."""
+    monkeypatch.chdir(tmp_path)
+
+    result = await recall_memory(mock_ctx, query="nonexistent")
+
+    assert result["count"] == 0
+    assert "No memories found" in result["display"]
+
+
+async def test_list_memories(tmp_path, monkeypatch, mock_ctx):
+    """List all memories with summaries."""
+    monkeypatch.chdir(tmp_path)
+
+    # Create test memories
+    memory_dir = tmp_path / ".co-cli/knowledge/memories"
+    memory_dir.mkdir(parents=True)
+
+    (memory_dir / "001-async.md").write_text("""---
+id: 1
+created: 2026-02-09T14:30:00Z
+tags: [python]
+---
+
+User prefers async/await over callbacks
+""")
+
+    (memory_dir / "002-sqlalchemy.md").write_text("""---
+id: 2
+created: 2026-02-09T15:00:00Z
+tags: [database]
+---
+
+This project uses SQLAlchemy ORM exclusively
+""")
+
+    result = await list_memories(mock_ctx)
+
+    assert result["count"] == 2
+    assert "Total memories: 2" in result["display"]
+    assert "001" in result["display"]
+    assert "002" in result["display"]
+    assert "async/await" in result["display"]
+    assert "SQLAlchemy" in result["display"]
 ```
-
-**Test count:** 7 tests covering save, recall, list, filtering, search
 
 ---
 
-### Test File: `tests/test_prompts.py` (Updates)
+### Module: `tests/test_prompts.py` (3 tests, updated)
 
-**Add to existing test file:**
+**Purpose:** Test prompt assembly with knowledge injection.
 
 ```python
-class TestInternalKnowledgeIntegration:
-    """Test internal knowledge integration in prompt assembly."""
+"""Tests for prompt assembly."""
 
-    def test_prompt_with_internal_knowledge(self, tmp_path, monkeypatch):
-        """Prompt includes internal knowledge when present."""
-        monkeypatch.chdir(tmp_path)
+import pytest
+from pathlib import Path
+from co_cli.prompts.system import assemble_system_prompt
 
-        # Create internal knowledge
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        context_file = context_dir / "context.json"
 
-        data = {
-            "version": "1.0",
-            "user": {"name": "Test User"},
-            "project": {"name": "test-project"},
-            "learned_facts": {"facts": ["Test fact"]},
-        }
-        context_file.write_text(json.dumps(data), encoding="utf-8")
+def test_prompt_includes_knowledge_when_present(tmp_path, monkeypatch):
+    """System prompt includes knowledge when context.md exists."""
+    monkeypatch.chdir(tmp_path)
 
-        prompt = get_system_prompt("gemini")
+    # Create knowledge
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+    (knowledge_dir / "context.md").write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
 
-        assert "## Internal Knowledge" in prompt
-        assert "Test User" in prompt
-        assert "test-project" in prompt
-        assert "Test fact" in prompt
+# User
+- Name: Test User
+""")
 
-    def test_prompt_without_internal_knowledge(self, tmp_path, monkeypatch):
-        """Prompt works without internal knowledge."""
-        monkeypatch.chdir(tmp_path)
+    prompt = assemble_system_prompt()
 
-        prompt = get_system_prompt("gemini")
+    assert "## Internal Knowledge" in prompt
+    assert "### Project Context" in prompt
+    assert "Test User" in prompt
 
-        # Should not have internal knowledge section
-        assert "## Internal Knowledge" not in prompt
-        # Should still be valid
-        assert "You are Co" in prompt
 
-    def test_prompt_assembly_order(self, tmp_path, monkeypatch):
-        """Internal knowledge appears after personality, before project instructions."""
-        monkeypatch.chdir(tmp_path)
+def test_prompt_excludes_knowledge_when_absent(tmp_path, monkeypatch):
+    """System prompt excludes knowledge when no context.md."""
+    monkeypatch.chdir(tmp_path)
 
-        # Create internal knowledge
-        context_dir = tmp_path / ".co-cli" / "internal"
-        context_dir.mkdir(parents=True)
-        (context_dir / "context.json").write_text(
-            json.dumps({
-                "version": "1.0",
-                "user": {"name": "Test"},
-                "project": {},
-                "learned_facts": {},
-            }),
-            encoding="utf-8"
-        )
+    prompt = assemble_system_prompt()
 
-        # Create project instructions
-        instructions_dir = tmp_path / ".co-cli"
-        instructions_dir.mkdir(exist_ok=True)
-        (instructions_dir / "instructions.md").write_text("# Project Rules")
+    assert "## Internal Knowledge" not in prompt
 
-        prompt = get_system_prompt("gemini", personality="professional")
 
-        # Check order
-        base_idx = prompt.index("You are Co")
-        personality_idx = prompt.index("## Personality")
-        knowledge_idx = prompt.index("## Internal Knowledge")
-        project_idx = prompt.index("## Project-Specific Instructions")
+def test_prompt_knowledge_ordering(tmp_path, monkeypatch):
+    """Knowledge appears after personality, before instructions."""
+    monkeypatch.chdir(tmp_path)
 
-        assert base_idx < personality_idx < knowledge_idx < project_idx
+    # Create knowledge
+    knowledge_dir = tmp_path / ".co-cli/knowledge"
+    knowledge_dir.mkdir(parents=True)
+    (knowledge_dir / "context.md").write_text("""---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+Knowledge content
+""")
+
+    # Create instructions
+    instructions_file = tmp_path / ".co-cli/instructions.md"
+    instructions_file.write_text("# Project Instructions\n\nInstructions content")
+
+    prompt = assemble_system_prompt(personality="sonnet")
+
+    # Check ordering
+    knowledge_pos = prompt.find("## Internal Knowledge")
+    instructions_pos = prompt.find("# Project Instructions")
+
+    assert knowledge_pos > 0
+    assert instructions_pos > 0
+    assert knowledge_pos < instructions_pos  # Knowledge before instructions
 ```
-
-**Test count:** 3 new tests for internal knowledge integration
-
-**Total test count for Phase 1c:** 18 tests (8 + 7 + 3)
 
 ---
 
 ## Verification Procedures
 
-### Automated Testing
+### Manual Testing Checklist
 
-**Step 1: Run internal knowledge tests**
-```bash
-uv run pytest tests/test_internal_knowledge.py -v
-```
-
-**Expected output:**
-```
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_empty_knowledge_valid PASSED
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_full_knowledge_valid PASSED
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_invalid_version_raises_error PASSED
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_markdown_formatting_empty PASSED
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_markdown_formatting_full PASSED
-tests/test_internal_knowledge.py::TestInternalKnowledgeSchema::test_size_calculation PASSED
-tests/test_internal_knowledge.py::TestLoadInternalKnowledge::test_load_missing_file_returns_none PASSED
-tests/test_internal_knowledge.py::TestLoadInternalKnowledge::test_load_valid_file_returns_markdown PASSED
-
-=================== 8 passed in 0.5s ===================
-```
-
-**Step 2: Run memory tools tests**
-```bash
-uv run pytest tests/test_memory_tools.py -v
-```
-
-**Expected output:**
-```
-tests/test_memory_tools.py::TestSaveMemory::test_save_memory_creates_file PASSED
-tests/test_memory_tools.py::TestSaveMemory::test_save_memory_invalid_category_returns_error PASSED
-tests/test_memory_tools.py::TestSaveMemory::test_save_memory_merges_to_context PASSED
-tests/test_memory_tools.py::TestRecallMemory::test_recall_memory_no_memories_returns_empty PASSED
-tests/test_memory_tools.py::TestRecallMemory::test_recall_memory_finds_saved_memory PASSED
-tests/test_memory_tools.py::TestRecallMemory::test_recall_memory_filters_by_key PASSED
-tests/test_memory_tools.py::TestRecallMemory::test_recall_memory_text_search PASSED
-
-=================== 7 passed in 1.2s ===================
-```
-
-**Step 3: Run full test suite**
-```bash
-uv run pytest
-```
-
-**Check for regressions:**
-- All existing tests should still pass
-- No new warnings or errors
-- Test count increases by ~18
-
-**Step 4: Run with coverage**
-```bash
-uv run pytest tests/test_internal_knowledge.py tests/test_memory_tools.py \
-  --cov=co_cli.internal_knowledge --cov=co_cli.tools.memory \
-  --cov-report=term-missing
-```
-
-**Expected coverage:**
-- `co_cli/internal_knowledge.py`: >90% coverage
-- `co_cli/tools/memory.py`: >90% coverage
-
----
-
-### Manual Verification - Internal Knowledge Loading
+#### 1. Knowledge Loading
 
 **Setup:**
 ```bash
-# Create test internal knowledge
-mkdir -p .co-cli/internal
-cat > .co-cli/internal/context.json << 'EOF'
-{
-  "version": "1.0",
-  "user": {
-    "name": "Alex",
-    "timezone": "America/Los_Angeles",
-    "preferences": {
-      "coding_style": "Prefer async/await over callbacks",
-      "verbosity": "Detailed explanations preferred"
-    }
-  },
-  "project": {
-    "name": "co-cli",
-    "type": "python_cli",
-    "patterns": [
-      "Uses pydantic-ai for agent framework",
-      "Docker for sandboxing",
-      "pytest for testing (no mocks)"
-    ]
-  },
-  "learned_facts": {
-    "facts": [
-      "User prefers explicit imports (no import *)",
-      "Database is SQLite for local development"
-    ]
-  }
-}
+# Create global context
+mkdir -p ~/.config/co-cli/knowledge
+cat > ~/.config/co-cli/knowledge/context.md <<'EOF'
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+- Name: Test User
+- Timezone: America/Los_Angeles
 EOF
 
-# Start chat
-uv run co chat
-```
-
-**Test 1: Verify knowledge is loaded**
-```
-User: What do you know about me?
-
-# Expected response should mention:
-# - Name: Alex
-# - Timezone: America/Los_Angeles
-# - Prefers async/await
-# - Detailed explanations
-```
-
-**Test 2: Verify knowledge affects behavior**
-```
-User: How should I structure this async function?
-
-# Expected response should:
-# ✓ Use async/await (from preferences)
-# ✓ Include detailed explanation (from preferences)
-```
-
-**Test 3: Verify project knowledge**
-```
-User: What testing framework does this project use?
-
-# Expected response should mention:
-# - pytest
-# - No mocks policy
-```
-
-**Checklist:**
-- [ ] Internal knowledge loaded at session start
-- [ ] User preferences visible in responses
-- [ ] Project context used in recommendations
-- [ ] Learned facts influence behavior
-- [ ] No error if context.json missing
-
+# Create project context
+mkdir -p .co-cli/knowledge
+cat > .co-cli/knowledge/context.md <<'EOF'
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
 ---
 
-### Manual Verification - Memory Tools
-
-**Test 1: save_memory tool**
-```
-User: I prefer snake_case for variable names
-
-# Co should call save_memory
-# Check response mentions "Saved memory"
-
-# Verify file created
-cat .co-cli/memories/user_preferences.json
-# Should contain snake_case preference
-```
-
-**Test 2: recall_memory tool**
-```
-User: What are my coding preferences?
-
-# Co should call recall_memory
-# Should list saved preferences including snake_case
-```
-
-**Test 3: list_memories tool**
-```
-User: List all my saved memories
-
-# Co should call list_memories
-# Should show count per category
-```
-
-**Test 4: Memory persistence**
-```bash
-# Exit chat
-# Restart chat
-uv run co chat
-
-# Ask about preferences
-User: What variable naming style do I prefer?
-
-# Should recall snake_case from previous session
-```
-
-**Checklist:**
-- [ ] save_memory creates .co-cli/memories/*.json
-- [ ] recall_memory finds saved memories
-- [ ] list_memories shows counts
-- [ ] Memories persist across sessions
-- [ ] Memories merge into context.json
-
----
-
-### Manual Verification - Size Limits
-
-**Test 1: Size warning**
-```bash
-# Create large context (~12KB, above 10KB target)
-cat > .co-cli/internal/context.json << 'EOF'
-{
-  "version": "1.0",
-  "user": {},
-  "project": {},
-  "learned_facts": {
-    "facts": [
-      "Fact 1 with lots of text...",
-      "Fact 2 with lots of text...",
-      ... (many facts totaling ~12KB)
-    ]
-  }
-}
+# Project
+- Type: Python CLI
+- Test policy: functional only
 EOF
-
-# Start chat
-uv run co chat
-
-# Check logs for warning
-# Should see: "exceeds recommended size"
 ```
 
-**Test 2: Size error**
+**Test:**
 ```bash
-# Create huge context (~25KB, above 20KB limit)
-# Should raise error on load
-# Agent should refuse to start
+uv run co chat
+# Check banner/startup messages for knowledge loading
+# Look for: "Loaded 2 knowledge section(s), NNNN bytes"
 ```
 
-**Checklist:**
-- [ ] Warning logged when size > 10KB
-- [ ] Error raised when size > 20KB
-- [ ] Clear error message with size info
-- [ ] Suggests reducing content size
+**Verify:**
+- [ ] Global context loads without errors
+- [ ] Project context loads without errors
+- [ ] Size reported in logs
+- [ ] No warnings if size <10 KiB
+
+#### 2. Size Warnings
+
+**Setup:**
+```bash
+# Create large context (15 KiB)
+python -c "print('# User\n' + ('- Item with text\n' * 600))" > .co-cli/knowledge/context.md
+# Add frontmatter manually
+```
+
+**Test:**
+```bash
+uv run co chat
+# Check stderr for warnings
+```
+
+**Verify:**
+- [ ] Warning printed to stderr
+- [ ] Warning mentions size and target (10 KiB)
+- [ ] Chat still starts successfully
+- [ ] Knowledge still loaded
+
+#### 3. Save Memory Tool
+
+**Test:**
+```bash
+uv run co chat
+> save a memory: I prefer async/await over callbacks, tag it with python and style
+# Agent should call save_memory tool
+# Tool requires approval
+```
+
+**Verify:**
+- [ ] Approval prompt appears
+- [ ] After approval, memory file created
+- [ ] File at `.co-cli/knowledge/memories/001-*.md`
+- [ ] File contains YAML frontmatter
+- [ ] Frontmatter has id, created, tags
+- [ ] Body contains memory content
+- [ ] Confirmation message displayed
+
+#### 4. Recall Memory Tool
+
+**Test:**
+```bash
+uv run co chat
+> recall memories about async
+# Agent should call recall_memory tool
+```
+
+**Verify:**
+- [ ] Search executes successfully
+- [ ] Results displayed with memory ID, date
+- [ ] Content preview shown
+- [ ] Tags shown if present
+- [ ] No errors on empty results
+
+#### 5. List Memories Tool
+
+**Test:**
+```bash
+uv run co chat
+> list all my memories
+# Agent should call list_memories tool
+```
+
+**Verify:**
+- [ ] All memories listed
+- [ ] Each shows: ID, date, tags, summary
+- [ ] Summary is first line (truncated to 80 chars)
+- [ ] Sorted by ID
+- [ ] Count displayed
+
+#### 6. Manual Editing
+
+**Setup:**
+```bash
+# Edit context manually
+vim .co-cli/knowledge/context.md
+# Add a new section:
+# # Custom
+# - My custom preference
+```
+
+**Test:**
+```bash
+uv run co chat
+# Start new session, check if change loaded
+```
+
+**Verify:**
+- [ ] Edited content appears in new session
+- [ ] No errors on reload
+- [ ] Agent can see updated content
+
+#### 7. Malformed Files
+
+**Setup:**
+```bash
+# Create malformed frontmatter
+cat > .co-cli/knowledge/context.md <<'EOF'
+---
+invalid yaml: [
+---
+Content
+EOF
+```
+
+**Test:**
+```bash
+uv run co chat
+# Check error handling
+```
+
+**Verify:**
+- [ ] Error logged to stderr
+- [ ] Session starts anyway (graceful degradation)
+- [ ] Other knowledge still loads if present
+
+#### 8. Missing Files
+
+**Test:**
+```bash
+# Remove all knowledge
+rm -rf .co-cli/knowledge ~/.config/co-cli/knowledge
+uv run co chat
+```
+
+**Verify:**
+- [ ] No errors
+- [ ] No knowledge section in prompt
+- [ ] Chat works normally
 
 ---
 
-### Debug Verification
+### Automated Test Execution
 
-**Check internal knowledge loading:**
+```bash
+# Run all Phase 1c tests
+uv run pytest tests/test_frontmatter.py -v
+uv run pytest tests/test_knowledge.py -v
+uv run pytest tests/test_memory_tools.py -v
+uv run pytest tests/test_prompts.py -v
 
-```python
-from co_cli.internal_knowledge import load_internal_knowledge
-from pathlib import Path
-
-# Check file exists
-context_file = Path.cwd() / ".co-cli" / "internal" / "context.json"
-print(f"File exists: {context_file.exists()}")
-
-# Load knowledge
-knowledge = load_internal_knowledge()
-if knowledge:
-    print(f"Loaded {len(knowledge)} bytes")
-    print("Content preview:")
-    print(knowledge[:500])
-else:
-    print("No knowledge loaded")
+# Run with coverage
+uv run pytest tests/test_frontmatter.py tests/test_knowledge.py tests/test_memory_tools.py tests/test_prompts.py --cov=co_cli --cov-report=term-missing
 ```
 
-**Check memory tools:**
-
-```python
-from co_cli.tools.memory import save_memory, recall_memory, list_memories
-from co_cli.agent import CoDeps
-from pydantic_ai import RunContext
-
-ctx = RunContext(deps=CoDeps())
-
-# Save test memory
-result = await save_memory(
-    ctx,
-    category="user_preferences",
-    key="test",
-    value="Test value"
-)
-print(result["display"])
-
-# List memories
-result = await list_memories(ctx)
-print(result["display"])
-```
+**Expected Results:**
+- [ ] 25 tests pass (8 + 7 + 7 + 3)
+- [ ] No test failures
+- [ ] Coverage >90% for new modules
+- [ ] No warnings about missing imports
 
 ---
 
 ## Documentation Updates
 
-### File: `README.md`
+### 1. User Documentation
 
-**Add new section:** "Internal Knowledge & Memory"
+**File: `README.md`**
 
-**Location:** After "Project-Specific Instructions" section
-
-**Content:**
+Add section after "Configuration":
 
 ```markdown
-## Internal Knowledge & Memory
+## Internal Knowledge
 
-Co can remember information across sessions using internal knowledge and memory tools.
+Co can remember user preferences, project insights, and learned facts across sessions.
 
-### Internal Knowledge
+### Always-Loaded Context
 
-Internal knowledge is auto-loaded from `.co-cli/internal/context.json` at every session start.
+Create context files for persistent knowledge:
 
-**Structure:**
-```json
-{
-  "version": "1.0",
-  "user": {
-    "name": "Your Name",
-    "timezone": "America/Los_Angeles",
-    "preferences": {
-      "coding_style": "Prefer async/await over callbacks",
-      "verbosity": "Detailed explanations preferred"
-    }
-  },
-  "project": {
-    "name": "my-project",
-    "type": "python_web_app",
-    "patterns": [
-      "Uses FastAPI for web framework",
-      "SQLAlchemy for database ORM",
-      "pytest for testing"
-    ]
-  },
-  "learned_facts": {
-    "facts": [
-      "Database is PostgreSQL in production, SQLite in dev",
-      "Team prefers explicit imports (no import *)"
-    ]
-  }
-}
+**Global (all projects):**
+```
+~/.config/co-cli/knowledge/context.md
 ```
 
-**Size limits:**
-- Target: 10KB (warning if exceeded)
-- Maximum: 20KB (error if exceeded)
+**Project (current directory):**
+```
+.co-cli/knowledge/context.md
+```
+
+**Format:**
+```markdown
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+- Name: Your Name
+- Prefers: concise explanations
+
+# Project
+- Type: Python CLI
+- Test policy: functional only
+```
+
+Project context overrides global context on conflicts.
 
 ### Memory Tools
 
-Co provides three memory tools for explicit knowledge management:
+During chat, Co can save and recall memories:
 
-**save_memory** - Save information for future sessions
-```
-User: I prefer snake_case for variable names
-Co: [calls save_memory("user_preferences", "variable_naming", "Prefers snake_case")]
-```
+- **Save:** "Remember that I prefer async/await over callbacks"
+- **Recall:** "What do you remember about async?"
+- **List:** "Show me all my memories"
 
-**recall_memory** - Retrieve saved memories
-```
-User: What are my coding preferences?
-Co: [calls recall_memory(category="user_preferences")]
-```
+Memories are saved to `.co-cli/knowledge/memories/` as markdown files.
 
-**list_memories** - Show all saved memories
-```
-User: List my saved memories
-Co: [calls list_memories()]
-```
+### Manual Editing
 
-**Storage locations:**
-- Internal knowledge: `.co-cli/internal/context.json` (auto-loaded)
-- Memory files: `.co-cli/memories/*.json` (granular storage)
+All knowledge files are plain markdown. Edit with any text editor:
 
-**How it works:**
-1. Use memory tools during conversations to save important information
-2. Memories are stored in `.co-cli/memories/` (granular files)
-3. Memories auto-merge into `.co-cli/internal/context.json`
-4. Internal knowledge auto-loads at next session start
-5. Co remembers context across sessions
-
-**Example workflow:**
 ```bash
-# Session 1
-$ uv run co chat
-User: I prefer async/await over callbacks
-Co: I'll remember that preference. [saves to memory]
-
-# Session 2 (later)
-$ uv run co chat
-User: How should I structure this async function?
-Co: Based on your preference for async/await... [recalls from internal knowledge]
+vim .co-cli/knowledge/context.md
+vim .co-cli/knowledge/memories/001-prefers-async.md
 ```
 
-**Tips:**
-- Keep internal knowledge under 10KB for best performance
-- Use descriptive keys when saving memories
-- Review `.co-cli/internal/context.json` periodically to prune old facts
-- Commit context.json to git for team-shared knowledge
+Changes take effect in the next session.
+
+### Size Limits
+
+- Always-loaded context: 10 KiB soft / 20 KiB hard limit
+- On-demand memories: No limit (managed by agent)
 ```
 
----
+### 2. Component Documentation
 
-### File: `docs/DESIGN-00-co-cli.md`
-
-**Update component table:**
-
-Add new row:
+**File: `docs/DESIGN-14-internal-knowledge.md` (new)**
 
 ```markdown
-| `co_cli/internal_knowledge.py` | Internal knowledge schema, loading, and validation |
+# DESIGN-14: Internal Knowledge System
+
+## What & How
+
+Internal knowledge system provides persistent memory across Co sessions. Uses markdown files as source of truth (lakehouse pattern) with optional SQLite index for retrieval.
+
+**Architecture:**
+```
+~/.config/co-cli/knowledge/context.md    (global, 3 KiB)
+.co-cli/knowledge/context.md             (project, 7 KiB, overrides global)
+.co-cli/knowledge/memories/*.md          (on-demand, no limit)
+```
+
+Always-loaded context injected into system prompt. Memories retrieved via tools (`save_memory`, `recall_memory`, `list_memories`).
+
+## Core Logic
+
+### Loading
+
+Function: `load_internal_knowledge()` in `co_cli/knowledge.py`
+
+Processing:
+1. Read global context: `~/.config/co-cli/knowledge/context.md` (if exists)
+2. Read project context: `.co-cli/knowledge/context.md` (if exists)
+3. Parse YAML frontmatter, validate version/updated fields
+4. Strip frontmatter, combine bodies with section headers
+5. Validate size (10 KiB warn, 20 KiB error)
+6. Return markdown for prompt injection
+
+Precedence: Project overrides global on conflicts.
+
+### Frontmatter Parsing
+
+Module: `co_cli/_frontmatter.py`
+
+Functions:
+- `parse_frontmatter(content) -> (dict, str)`: Split YAML + body
+- `strip_frontmatter(content) -> str`: Return body only
+- `validate_context_frontmatter(fm)`: Check required fields
+- `validate_memory_frontmatter(fm)`: Check required fields
+
+Format: YAML between `---` delimiters, followed by markdown body.
+
+### Memory Tools
+
+Module: `co_cli/tools/memory.py`
+
+**save_memory:**
+- Generate next ID (max existing + 1)
+- Slugify content for filename: `{id:03d}-{slug}.md`
+- Create YAML frontmatter (id, created, tags, source)
+- Write markdown file to `.co-cli/knowledge/memories/`
+- Requires approval (side-effectful)
+
+**recall_memory:**
+- Search using grep + frontmatter scan (Phase 1c)
+- Match query against body content and tags
+- Sort by recency (created timestamp descending)
+- Return top N matches formatted as markdown
+
+**list_memories:**
+- Glob all `.md` files in memories/
+- Parse frontmatter for metadata
+- Extract first line as summary
+- Return formatted list with ID, date, tags, summary
+
+### Retrieval Evolution
+
+**Phase 1c (MVP): grep + frontmatter**
+- Suitable for <200 memories
+- No dependencies beyond ripgrep
+- Full-text search via grep, tag match via frontmatter
+
+**Phase 2 (Scale): SQLite FTS5**
+- Derived index from markdown files
+- BM25 keyword search
+- Files remain source of truth
+
+**Phase 3 (Semantic): Hybrid FTS5 + vectors**
+- Add sqlite-vec for embeddings
+- Reciprocal Rank Fusion (RRF) merge
+- Handles vocabulary mismatch
+
+### Prompt Injection
+
+Injection point: After personality, before project instructions
+
+Format:
+```markdown
+<system-reminder>
+## Internal Knowledge
+
+### Global Context
+[body of global context.md]
+
+### Project Context
+[body of project context.md]
+</system-reminder>
+```
+
+Frontmatter stripped before injection (metadata is for tooling, not LLM).
+
+### Error Handling
+
+**Malformed files:**
+- Log warning, skip file, continue processing
+- Don't crash on bad YAML or missing fields
+
+**Size limits:**
+- Warn to stderr if 10-20 KiB
+- Error to stderr + truncate if >20 KiB
+- Always allow session to start
+
+**Missing files:**
+- Return None from loader (no knowledge)
+- Don't error on missing global/project context
+
+### Security
+
+**No injection risks:**
+- Markdown bodies injected into system prompt (not user input)
+- YAML parsing via `yaml.safe_load()` (no code execution)
+
+**File access:**
+- Only reads from known directories
+- No user-specified paths in tools
+
+## Config
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| Global context path | - | `~/.config/co-cli/knowledge/context.md` | Global always-loaded context |
+| Project context path | - | `.co-cli/knowledge/context.md` | Project always-loaded context |
+| Memories directory | - | `.co-cli/knowledge/memories/` | On-demand memory files |
+| Soft size limit | - | 10 KiB | Warn if exceeded |
+| Hard size limit | - | 20 KiB | Error + truncate if exceeded |
+
+**Budget Allocation:**
+- Global context: 3 KiB soft
+- Project context: 7 KiB soft
+- Total always-loaded: 10 KiB soft / 20 KiB hard
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `co_cli/_frontmatter.py` | YAML frontmatter parsing and validation |
+| `co_cli/knowledge.py` | Internal knowledge loading function |
 | `co_cli/tools/memory.py` | Memory management tools (save, recall, list) |
+| `co_cli/prompts/system.py` | Prompt assembly with knowledge injection |
+| `tests/test_frontmatter.py` | Frontmatter parsing tests (8 tests) |
+| `tests/test_knowledge.py` | Knowledge loading tests (7 tests) |
+| `tests/test_memory_tools.py` | Memory tools tests (7 tests) |
+| `tests/test_prompts.py` | Prompt assembly tests (3 updated) |
+| `examples/knowledge/context.md` | Example context template |
+| `examples/knowledge/memories/001-example.md` | Example memory template |
 ```
 
-**Update cross-cutting concerns:**
+### 3. CLAUDE.md Updates
 
-Add new section:
+**File: `CLAUDE.md`**
+
+Add to "Architecture" section:
 
 ```markdown
-### Internal Knowledge
+## Internal Knowledge
 
-Internal knowledge represents Co's accumulated understanding that should always be available:
-- Auto-loaded from `.co-cli/internal/context.json` at session start
-- Size-controlled (10KB target, 20KB limit)
-- Structured: user context, project context, learned facts
-- Injected into prompt after personality, before project instructions
+Co loads persistent knowledge from markdown files:
+- `~/.config/co-cli/knowledge/context.md` - Global context (3 KiB)
+- `.co-cli/knowledge/context.md` - Project context (7 KiB, overrides global)
+- `.co-cli/knowledge/memories/*.md` - On-demand memories (no limit)
 
-See `co_cli/internal_knowledge.py` for schema and loading logic.
-See `co_cli/tools/memory.py` for memory management tools.
+**Format:** Markdown with YAML frontmatter
+
+**Tools:** `save_memory`, `recall_memory`, `list_memories` (agent-callable)
+
+**Retrieval:** grep + frontmatter (Phase 1c) → FTS5 (Phase 2) → hybrid (Phase 3)
+
+See `docs/DESIGN-14-internal-knowledge.md` for implementation.
 ```
 
 ---
 
 ## Success Criteria
 
-Phase 1c is complete when ALL of the following are true:
+Phase 1c is complete when ALL of the following are achieved:
 
-### Code Criteria
-- [ ] `co_cli/internal_knowledge.py` module exists with schema classes
-- [ ] `InternalKnowledge` Pydantic model defined with validation
-- [ ] `load_internal_knowledge() -> str | None` function implemented
-- [ ] Size validation enforced (10KB warn, 20KB error)
-- [ ] Markdown formatting for prompt injection
-- [ ] `co_cli/tools/memory.py` module exists with three tools
-- [ ] `save_memory` tool saves and merges to context
-- [ ] `recall_memory` tool searches and retrieves memories
-- [ ] `list_memories` tool shows counts and summaries
-- [ ] Internal knowledge integrated into `get_system_prompt()`
-- [ ] Prompt assembly order correct (base → conditionals → personality → knowledge → project)
+### Functional Requirements
 
-### Test Criteria
-- [ ] `tests/test_internal_knowledge.py` exists with 8 tests
-- [ ] All schema tests pass (validation, formatting, size)
-- [ ] All loading tests pass (valid, missing, malformed, size limits)
-- [ ] `tests/test_memory_tools.py` exists with 7 tests
-- [ ] All save_memory tests pass (create, validate, merge)
-- [ ] All recall_memory tests pass (search, filter, retrieve)
-- [ ] All list_memories tests pass (count, summary)
-- [ ] `tests/test_prompts.py` updated with 3 new tests
-- [ ] Integration tests pass (knowledge in prompt, order correct)
-- [ ] No regressions: `uv run pytest` (all tests pass)
-- [ ] Coverage >90% for internal_knowledge and memory modules
+- [ ] **Load global context:** `~/.config/co-cli/knowledge/context.md` loads at session start
+- [ ] **Load project context:** `.co-cli/knowledge/context.md` loads at session start
+- [ ] **Precedence:** Project context overrides global on conflicts
+- [ ] **Prompt injection:** Knowledge appears after personality, before instructions
+- [ ] **Save memory:** `save_memory` tool creates markdown file with frontmatter
+- [ ] **Recall memory:** `recall_memory` tool searches via grep + frontmatter
+- [ ] **List memories:** `list_memories` tool lists all with summaries
+- [ ] **Approval flow:** `save_memory` requires approval before execution
 
-### Behavioral Criteria
-- [ ] Internal knowledge auto-loads at session start
-- [ ] User context influences Co's responses
-- [ ] Project context informs recommendations
-- [ ] Learned facts affect behavior
-- [ ] save_memory persists data across sessions
-- [ ] recall_memory retrieves saved memories correctly
-- [ ] list_memories shows accurate counts
-- [ ] Memories merge into context.json automatically
-- [ ] Size warning logged when knowledge > 10KB
-- [ ] Size error raised when knowledge > 20KB
-- [ ] Graceful degradation when context.json missing
+### Quality Requirements
 
-### Documentation Criteria
-- [ ] README.md documents internal knowledge structure
-- [ ] README.md documents memory tools usage
-- [ ] README.md includes example workflow
-- [ ] DESIGN-00-co-cli.md updated with new modules
-- [ ] Code comments explain boundary (internal vs external)
+- [ ] **Test coverage:** All 25 tests pass (8 frontmatter + 7 knowledge + 7 memory + 3 prompt)
+- [ ] **Size validation:** Warnings at 10 KiB, errors at 20 KiB
+- [ ] **Error handling:** Graceful degradation on malformed files
+- [ ] **Manual editing:** Users can edit markdown files directly
+- [ ] **Git-friendly:** Clean diffs for knowledge changes
 
-### Quality Criteria
-- [ ] All functions have type hints
-- [ ] All functions have docstrings (Google style)
-- [ ] Pydantic models used for schema validation
-- [ ] Error messages clear and actionable
-- [ ] Logging appropriate (debug, warning, error levels)
-- [ ] File paths use pathlib.Path
-- [ ] JSON encoding specifies UTF-8
-- [ ] No global state or mutable defaults
-- [ ] Code follows Black formatting
-- [ ] No import *
+### Documentation Requirements
+
+- [ ] **User docs:** README.md section on internal knowledge
+- [ ] **Component docs:** `DESIGN-14-internal-knowledge.md` created
+- [ ] **CLAUDE.md:** Architecture section updated
+- [ ] **Examples:** Template files created in `examples/knowledge/`
+
+### Integration Requirements
+
+- [ ] **Agent registration:** Memory tools registered with agent
+- [ ] **Tool discovery:** Tools visible in `co status --tools`
+- [ ] **Prompt assembly:** Knowledge injection integrated into system prompt
 
 ---
 
 ## Risk Assessment
 
-### Identified Risks
+### Low Risk
 
-| Risk | Likelihood | Impact | Mitigation |
-|------|-----------|--------|------------|
-| Internal knowledge grows unbounded | Medium | High | Size limits enforced (10KB warn, 20KB error), clear error messages |
-| Malformed JSON breaks loading | Low | Medium | Graceful error handling, returns None with warning, agent still works |
-| Memory merge conflicts | Low | Medium | Simple append/merge strategy, deduplication for lists |
-| Size limit too restrictive | Medium | Low | Conservative limits (20KB = ~5000 words), can adjust in Phase 2 |
-| Performance impact from large context | Low | Low | Size limits prevent excessive context, loading happens once at startup |
-| Schema evolution challenges | Medium | Medium | Version field for future migrations, Pydantic validation catches issues |
-| Memory tools misused by users | Low | Low | Clear tool descriptions, validation, category constraints |
-| File permission issues | Low | Low | Standard file operations, clear error messages |
+**Manual editing workflow**
+- Risk: Users might break YAML syntax
+- Mitigation: Validation at load time, graceful error handling, clear examples
 
-### Risk Mitigation Strategy
+**File system paths**
+- Risk: Path construction errors on different OS
+- Mitigation: Use `pathlib.Path` everywhere, test on macOS/Linux
 
-**1. Size Management**
-- Enforce hard limit (20KB) to prevent context explosion
-- Warn at 10KB to encourage pruning
-- Clear error messages with actual size vs limit
-- Documentation suggests regular review and cleanup
+### Medium Risk
 
-**2. Graceful Degradation**
-- Missing context.json returns None (not error)
-- Malformed JSON logs warning and returns None
-- Invalid schema logs warning and returns None
-- Agent works fine without internal knowledge
+**Size budget enforcement**
+- Risk: Truncation might break markdown structure
+- Mitigation: Truncate at byte boundary with UTF-8 error handling, warn users proactively
 
-**3. Data Validation**
-- Pydantic models enforce schema structure
-- Version field enables future migrations
-- Category validation for memory tools
-- Timestamp tracking for audit trail
+**Grep-based search performance**
+- Risk: Slow with many memories
+- Mitigation: Phase 1c targets <200 memories, clear upgrade path to FTS5
 
-**4. Error Handling**
-- Try/except blocks around JSON parsing
-- Specific error messages with context
-- Logging at appropriate levels
-- User-friendly display messages
+**Precedence conflicts**
+- Risk: Project/global conflict resolution unclear
+- Mitigation: Document precedence rules clearly, last-write-wins on sections
 
-**5. Testing Coverage**
-- 18 comprehensive tests cover all paths
-- Edge cases explicitly tested
-- Integration tests verify end-to-end flow
-- No mocks (functional tests only)
+### Deferred Risks
+
+**Auto-learning** (Phase 2+)
+- Risk: Silent inference without user approval
+- Mitigation: Explicitly deferred, requires opt-in design
+
+**Vector search** (Phase 3)
+- Risk: Embedding generation cost/latency
+- Mitigation: Only needed at scale, clear thresholds defined
 
 ---
 
 ## Future Enhancements
 
-### Phase 2: Advanced Memory Features
+### Phase 2: SQLite FTS5 Index (when >200 memories)
 
-**Automatic Learning:**
-- Detect when user corrects Co → save as learned fact
-- Identify user preferences from repeated patterns
-- Extract project conventions from code interactions
+**Motivation:** Grep becomes slow with hundreds of memory files.
 
-**Memory Summarization:**
-- Compress old memories to save space
-- Keep recent memories detailed, summarize old ones
-- LLM-powered summarization of learned facts
-
-**Memory Search:**
-- Semantic search over memories (embedding-based)
-- Relevance ranking for recall queries
-- Cross-category search
-
-**Memory Management:**
-- Archive old memories
-- Export/import memory sets
-- Team-shared memories (merge strategies)
-
-**Estimated effort:** 12-15 hours (includes research)
-
----
-
-### Phase 3: Context Governance
-
-**Dynamic Context Budget:**
-- Adjust knowledge size based on model context window
-- Prioritize recent memories over old ones
-- Auto-prune least-used facts
-
-**Memory Policies:**
-- TTL for temporary facts
-- Pinned memories (never prune)
-- Category-specific size limits
-
-**Privacy Controls:**
-- Mark sensitive memories (exclude from logs)
-- Per-project memory isolation
-- User-level vs project-level separation
-
-**Estimated effort:** 8-10 hours
-
----
-
-## Implementation Checklist
-
-### Phase 1: Schema Design (2 hours)
-
-- [ ] Create `co_cli/internal_knowledge.py` module
-- [ ] Add module docstring
-- [ ] Define `UserContext` Pydantic model
-  - [ ] name, timezone, working_hours fields
-  - [ ] preferences dict
-  - [ ] notes list
-- [ ] Define `ProjectContext` Pydantic model
-  - [ ] name, type fields
-  - [ ] architecture, patterns, conventions lists
-  - [ ] notes list
-- [ ] Define `LearnedFacts` Pydantic model
-  - [ ] facts, corrections, clarifications lists
-- [ ] Define `InternalKnowledge` Pydantic model
-  - [ ] version field with validation
-  - [ ] created, updated timestamp fields
-  - [ ] user, project, learned_facts sub-models
-  - [ ] to_markdown() method
-  - [ ] size_bytes() method
-- [ ] Add SIZE_TARGET and SIZE_LIMIT constants
-- [ ] Test models in Python REPL
-
----
-
-### Phase 2: Loading Logic (1.5 hours)
-
-- [ ] Add `load_internal_knowledge() -> str | None` function
-- [ ] Check if `.co-cli/internal/context.json` exists
-- [ ] Load and parse JSON with try/except
-- [ ] Validate against InternalKnowledge schema
-- [ ] Check size constraints (warn/error)
-- [ ] Convert to markdown format
-- [ ] Return None if missing or empty
-- [ ] Add logging (debug, warning, error)
-- [ ] Add `save_internal_knowledge()` helper function
-- [ ] Test loading with various inputs
-
----
-
-### Phase 3: Memory Tools (3 hours)
-
-- [ ] Create `co_cli/tools/memory.py` module
-- [ ] Add module docstring
-- [ ] Add `save_memory` tool
-  - [ ] Add `@agent.tool()` decorator
-  - [ ] Parameters: category, key, value
-  - [ ] Validate category (user_preferences | project_insights | learned_facts)
-  - [ ] Create `.co-cli/memories/{category}.json`
-  - [ ] Save memory with timestamp
-  - [ ] Call `_merge_memories_to_context()`
-  - [ ] Return dict with display + metadata
-- [ ] Add `recall_memory` tool
-  - [ ] Parameters: category (optional), key (optional), query (optional)
-  - [ ] Search in memories/*.json
-  - [ ] Apply filters (category, key, text query)
-  - [ ] Return formatted results
-- [ ] Add `list_memories` tool
-  - [ ] Parameters: category (optional)
-  - [ ] Count memories per category
-  - [ ] Format summary with counts
-  - [ ] Return dict with display + metadata
-- [ ] Add `_merge_memories_to_context()` helper
-  - [ ] Load existing context or create new
-  - [ ] Merge user_preferences into user.preferences
-  - [ ] Merge project_insights into project.patterns
-  - [ ] Merge learned_facts into learned_facts.facts
-  - [ ] Deduplicate lists
-  - [ ] Save merged context
-- [ ] Test each tool manually
-
----
-
-### Phase 4: Prompt Integration (30 minutes)
-
-- [ ] Open `co_cli/prompts/__init__.py`
-- [ ] Add import: `from co_cli.internal_knowledge import load_internal_knowledge`
-- [ ] Update `get_system_prompt()` function
-  - [ ] Call `load_internal_knowledge()` after personality injection
-  - [ ] If knowledge returned: append "## Internal Knowledge" section
-  - [ ] If None: skip section
-- [ ] Update docstring to document internal knowledge section
-- [ ] Test prompt assembly manually
-
----
-
-### Phase 5: Agent Integration (30 minutes)
-
-- [ ] Open `co_cli/agent.py`
-- [ ] Verify `get_system_prompt()` call includes internal knowledge (via Phase 4)
-- [ ] Import memory tools (auto-registered via decorator)
-- [ ] Test end-to-end flow:
-  - [ ] Start chat session
-  - [ ] Check internal knowledge loaded
-  - [ ] Save a memory
-  - [ ] Restart session
-  - [ ] Verify memory persisted
-
----
-
-### Phase 6: Testing (2.5 hours)
-
-**File: `tests/test_internal_knowledge.py`**
-- [ ] Create test file with module docstring
-- [ ] Add `TestInternalKnowledgeSchema` class
-  - [ ] `test_empty_knowledge_valid`
-  - [ ] `test_full_knowledge_valid`
-  - [ ] `test_invalid_version_raises_error`
-  - [ ] `test_markdown_formatting_empty`
-  - [ ] `test_markdown_formatting_full`
-  - [ ] `test_size_calculation`
-- [ ] Add `TestLoadInternalKnowledge` class
-  - [ ] `test_load_missing_file_returns_none`
-  - [ ] `test_load_valid_file_returns_markdown`
-  - [ ] `test_load_malformed_json_returns_none`
-  - [ ] `test_load_invalid_schema_returns_none`
-  - [ ] `test_load_empty_knowledge_returns_none`
-  - [ ] `test_load_warns_on_size_target_exceeded`
-  - [ ] `test_load_raises_on_size_limit_exceeded`
-- [ ] Add `TestSaveInternalKnowledge` class
-  - [ ] `test_save_creates_file`
-  - [ ] `test_save_raises_on_size_limit`
-- [ ] Run: `uv run pytest tests/test_internal_knowledge.py -v`
-
-**File: `tests/test_memory_tools.py`**
-- [ ] Create test file with module docstring
-- [ ] Add `TestSaveMemory` class
-  - [ ] `test_save_memory_creates_file`
-  - [ ] `test_save_memory_invalid_category_returns_error`
-  - [ ] `test_save_memory_merges_to_context`
-- [ ] Add `TestRecallMemory` class
-  - [ ] `test_recall_memory_no_memories_returns_empty`
-  - [ ] `test_recall_memory_finds_saved_memory`
-  - [ ] `test_recall_memory_filters_by_key`
-  - [ ] `test_recall_memory_text_search`
-- [ ] Add `TestListMemories` class
-  - [ ] `test_list_memories_no_memories_returns_empty`
-  - [ ] `test_list_memories_counts_all_categories`
-- [ ] Run: `uv run pytest tests/test_memory_tools.py -v`
-
-**File: `tests/test_prompts.py`**
-- [ ] Add `TestInternalKnowledgeIntegration` class
-  - [ ] `test_prompt_with_internal_knowledge`
-  - [ ] `test_prompt_without_internal_knowledge`
-  - [ ] `test_prompt_assembly_order`
-- [ ] Run: `uv run pytest tests/test_prompts.py::TestInternalKnowledgeIntegration -v`
-
-**Full suite:**
-- [ ] Run: `uv run pytest`
-- [ ] Verify all tests pass (no regressions)
-- [ ] Check coverage: `uv run pytest --cov=co_cli.internal_knowledge --cov=co_cli.tools.memory`
-
----
-
-### Phase 7: Documentation (30 minutes)
-
-- [ ] Update `README.md`
-  - [ ] Add "Internal Knowledge & Memory" section
-  - [ ] Document context.json structure
-  - [ ] Document memory tools
-  - [ ] Include example workflow
-  - [ ] Document size limits
-- [ ] Update `docs/DESIGN-00-co-cli.md`
-  - [ ] Add internal_knowledge.py to component table
-  - [ ] Add tools/memory.py to component table
-  - [ ] Add cross-cutting concern section
-- [ ] Review documentation for clarity
-
----
-
-### Phase 8: Verification (1 hour)
-
-**Automated:**
-- [ ] Run full test suite: `uv run pytest`
-- [ ] Check coverage: `uv run pytest --cov=co_cli`
-- [ ] Verify no warnings or errors
-
-**Manual - Internal Knowledge:**
-- [ ] Create test context.json with sample data
-- [ ] Start chat session
-- [ ] Ask Co what it knows about user
-- [ ] Verify responses include internal knowledge
-- [ ] Test with missing context.json (should work)
-
-**Manual - Memory Tools:**
-- [ ] Save memory via conversation
-- [ ] Verify file created in .co-cli/memories/
-- [ ] Recall memory via conversation
-- [ ] List all memories
-- [ ] Restart session, verify persistence
-
-**Manual - Size Limits:**
-- [ ] Create context.json ~12KB (warn)
-- [ ] Create context.json ~25KB (error)
-- [ ] Verify appropriate warnings/errors
-
----
-
-### Phase 9: Completion
-
-- [ ] All success criteria met
-- [ ] All tests pass
-- [ ] Manual verification complete
-- [ ] Documentation complete
-- [ ] Code review complete
-
-**Git commit:**
-```bash
-git add co_cli/internal_knowledge.py
-git add co_cli/tools/memory.py
-git add co_cli/prompts/__init__.py
-git add tests/test_internal_knowledge.py
-git add tests/test_memory_tools.py
-git add tests/test_prompts.py
-git add README.md
-git add docs/DESIGN-00-co-cli.md
-
-git commit -m "feat(knowledge): add internal knowledge and memory tools
-
-- Add InternalKnowledge schema with user/project/learned_facts sections
-- Add load_internal_knowledge() with size validation (10KB warn, 20KB limit)
-- Add memory tools: save_memory, recall_memory, list_memories
-- Integrate internal knowledge into prompt assembly (after personality)
-- Add comprehensive test suite (18 tests, >90% coverage)
-- Document internal knowledge and memory system in README
-
-Phase 1c complete: Co now has persistent memory across sessions
-Ref: docs/TODO-prompt-system-phase1c.md"
+**Implementation:**
+```sql
+CREATE VIRTUAL TABLE memories USING fts5(
+    id UNINDEXED,
+    content,
+    tags,
+    created UNINDEXED,
+    source_path UNINDEXED
+);
 ```
 
----
+**Index build:** Scan all `.md` files, parse frontmatter, insert to FTS5
 
-## Appendix A: Schema Examples
+**Query:** BM25 keyword search via `SELECT ... FROM memories WHERE memories MATCH ?`
 
-### Minimal Context
+**Files remain source of truth:** SQLite is derived, rebuildable with `co knowledge --reindex`
 
-```json
-{
-  "version": "1.0",
-  "user": {
-    "name": "Alex"
-  },
-  "project": {
-    "name": "co-cli"
-  },
-  "learned_facts": {}
-}
+**Effort:** 4-6 hours (schema + indexing + query + tests)
+
+### Phase 3: Hybrid Search with sqlite-vec (when >500 docs)
+
+**Motivation:** Keyword search misses semantic matches (e.g., "concurrency" vs "parallelism").
+
+**Implementation:**
+```sql
+CREATE VIRTUAL TABLE memory_vectors USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
 ```
 
-### Full Context
+**Embeddings:** Local model via Ollama (sentence-transformers) or small API call
 
-```json
-{
-  "version": "1.0",
-  "created": "2026-02-09T10:00:00",
-  "updated": "2026-02-09T15:30:00",
-  "user": {
-    "name": "Alex Chen",
-    "timezone": "America/Los_Angeles",
-    "working_hours": "9am-6pm PT",
-    "preferences": {
-      "coding_style": "Prefer async/await over callbacks",
-      "verbosity": "Detailed explanations preferred",
-      "variable_naming": "snake_case for Python, camelCase for JavaScript",
-      "imports": "Explicit imports only (no import *)"
-    },
-    "notes": [
-      "Works best with concrete examples",
-      "Prefers functional programming style when possible"
-    ]
-  },
-  "project": {
-    "name": "co-cli",
-    "type": "python_cli",
-    "architecture": [
-      "Agent-based architecture using pydantic-ai",
-      "Tool system with RunContext pattern",
-      "SQLite for telemetry and traces"
-    ],
-    "patterns": [
-      "Uses pydantic-ai for agent framework",
-      "Docker for sandboxing shell commands",
-      "pytest for testing (no mocks)",
-      "Rich library for terminal output",
-      "OpenTelemetry for observability"
-    ],
-    "conventions": [
-      "Type hints required for all functions",
-      "Google-style docstrings",
-      "Black formatting (88 char line limit)",
-      "Explicit imports only (no import *)",
-      "Empty __init__.py files (no re-exports)"
-    ],
-    "notes": [
-      "Config precedence: env vars > project > user > defaults",
-      "XDG paths for config and data",
-      "Functional tests only (no mocks policy)"
-    ]
-  },
-  "learned_facts": {
-    "facts": [
-      "Database is SQLite for local development, co-cli.db",
-      "Tests require Docker running for shell sandbox tests",
-      "LLM provider can be 'gemini' or 'ollama'",
-      "User prefers async/await pattern over callbacks",
-      "Project follows semantic versioning (MAJOR.MINOR.PATCH)"
-    ],
-    "corrections": [
-      "Initial assumption: Database was PostgreSQL. Corrected: It's SQLite.",
-      "Thought shell commands ran directly. Corrected: They run in Docker sandbox."
-    ],
-    "clarifications": [
-      "When user says 'test', they mean 'pytest', not unittest",
-      "'Config' refers to Settings class in co_cli/config.py",
-      "'Agent' refers to pydantic-ai Agent instance"
-    ]
-  }
-}
+**Retrieval:** Reciprocal Rank Fusion (RRF) combining FTS5 + vector scores
+
+**Effort:** 6-8 hours (embedding generation + vector index + hybrid query + evaluation)
+
+### Phase 4: Web Knowledge Internalization
+
+**Motivation:** Agent fetches useful web content, should save for reuse.
+
+**Flow:**
+```
+Agent calls web_fetch(url)
+  → Gets markdown content
+  → Judges relevance
+  → If relevant: save_knowledge(content, source=url, tags=[...])
+  → Saved to .co-cli/knowledge/articles/{slug}.md
 ```
 
----
-
-## Appendix B: Markdown Formatting Example
-
-**Input (context.json):**
-```json
-{
-  "version": "1.0",
-  "user": {
-    "name": "Alex",
-    "preferences": {
-      "style": "async/await"
-    }
-  },
-  "project": {
-    "name": "co-cli",
-    "patterns": ["Uses pydantic-ai"]
-  },
-  "learned_facts": {
-    "facts": ["Database is SQLite"]
-  }
-}
+**Storage pattern:**
+```
+.co-cli/knowledge/
+├── articles/           # Web-fetched knowledge
+│   └── python-asyncio-patterns.md
+└── attachments/        # Binary originals (PDFs, images)
+    └── api-diagram.png
 ```
 
-**Output (markdown in prompt):**
+**Quality gate:** Agent decides what to keep, not automatic for every fetch
+
+**Effort:** 3-4 hours (save_knowledge tool + article storage + tests)
+
+### Phase 5: Auto-Learning with Opt-In
+
+**Motivation:** Reduce user burden of explicitly saving every preference.
+
+**Design:**
+- `co learn --auto` enables auto-learning mode
+- Agent silently records observations during session
+- At session end, shows draft memories for approval
+- User approves/rejects/edits before saving
+
+**Safeguards:**
+- Always requires final approval
+- Clear indicator when in auto-learn mode
+- Easy to disable: `co learn --auto=false`
+
+**Effort:** 8-10 hours (observation logic + approval UX + draft memory + tests)
+
+### Phase 6: Memory Summarization
+
+**Motivation:** Many small memories become redundant over time.
+
+**Flow:**
+```
+co knowledge --summarize
+  → Agent reads all memories
+  → Groups related memories
+  → Generates concise summary
+  → Proposes merged memory + deletion of originals
+  → User approves changes
+```
+
+**LLM task:** Summarization with citation to source memories
+
+**Effort:** 5-6 hours (summarization prompt + merge logic + approval UX + tests)
+
+### Phase 7: Multi-Project Knowledge Graph
+
+**Motivation:** Learn patterns across projects (e.g., "always use async" applies to all Python projects).
+
+**Design:**
+- Memory tags include `scope: [project, language, global]`
+- Cross-project memories saved to global knowledge
+- Query-time expansion: "python" tag matches all Python projects
+
+**Schema:**
 ```markdown
-## Internal Knowledge
+---
+id: 42
+scope: language
+language: python
+tags: [style, concurrency]
+---
 
-### User Context
-- **Name:** Alex
+In Python projects, prefer async/await over callbacks for concurrency.
+```
 
-**Preferences:**
-- style: async/await
+**Effort:** 6-8 hours (scope taxonomy + cross-project query + UI + tests)
 
-### Project Context
-- **Name:** co-cli
+---
 
-**Patterns:**
-- Uses pydantic-ai
+## Appendix: Format Examples
 
-### Learned Facts
+### Global Context Example
 
-**Facts:**
-- Database is SQLite
+**File:** `~/.config/co-cli/knowledge/context.md`
+
+```markdown
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+
+- Name: Bin Le
+- Timezone: America/Los_Angeles
+- Communication: Prefers concise explanations with reasoning shown
+- Work schedule: Weekdays 9am-5pm PST
+
+# Preferences
+
+- Coding style: Async/await over callbacks
+- Testing: Functional tests only, no mocks
+- Error handling: Explicit error types, no silent failures
+- Documentation: Code comments for "why", not "what"
+```
+
+### Project Context Example
+
+**File:** `.co-cli/knowledge/context.md`
+
+```markdown
+---
+version: 1
+updated: 2026-02-09T15:00:00Z
+---
+
+# Project
+
+- Name: co-cli
+- Type: Python CLI tool (typer + pydantic-ai)
+- Python version: 3.12+
+- Package manager: uv
+
+# Architecture
+
+- Agent pattern: RunContext[CoDeps] for all tools
+- Tool approval: Side-effectful tools use `requires_approval=True`
+- Config: JSON files in `.co-cli/` and `~/.config/co-cli/`
+- Testing: Functional only, no mocks, Docker required for shell tests
+
+# Learned
+
+- Always run `uv sync` before `pytest`
+- This project uses SQLAlchemy ORM exclusively
+- Tool return format: `dict[str, Any]` with `display` field
+- Imports: Always explicit, never `from X import *`
+```
+
+### Memory Example
+
+**File:** `.co-cli/knowledge/memories/001-prefers-async.md`
+
+```markdown
+---
+id: 1
+created: 2026-02-09T14:30:00Z
+tags: [python, style, concurrency]
+source: user-told
+---
+
+User prefers async/await over callbacks. When generating Python code
+that involves concurrent operations, always use asyncio patterns
+rather than callback-based approaches.
+
+Example preference:
+```python
+# Preferred
+async def fetch_data():
+    result = await api_call()
+    return result
+
+# Avoid
+def fetch_data(callback):
+    api_call().then(callback)
+```
+
+This applies to all Python projects unless project-specific context
+overrides this preference.
 ```
 
 ---
 
-## Appendix C: Timeline Estimate
+## Appendix: Peer Alignment Evidence
 
-| Phase | Task | Time Estimate |
-|-------|------|---------------|
-| 1 | Schema design (Pydantic models) | 2 hours |
-| 2 | Loading logic (load_internal_knowledge) | 1.5 hours |
-| 3 | Memory tools (save/recall/list) | 3 hours |
-| 4 | Prompt integration | 30 minutes |
-| 5 | Agent integration | 30 minutes |
-| 6 | Testing (18 comprehensive tests) | 2.5 hours |
-| 7 | Documentation (README, DESIGN) | 30 minutes |
-| 8 | Verification (manual testing) | 1 hour |
-| **Total** | | **~11 hours** |
+### Format Convergence
 
-**Breakdown by activity:**
-- **Implementation:** 7.5 hours
-- **Testing:** 2.5 hours
-- **Documentation:** 0.5 hour
-- **Verification:** 0.5 hour
+| System | Project Context File | Format | Auto-load? |
+|--------|---------------------|--------|------------|
+| Claude Code | `CLAUDE.md` | Markdown | Yes |
+| Codex | `AGENTS.md` | Markdown | Yes |
+| Gemini CLI | `GEMINI.md` | Markdown | Yes |
+| Aider | `.aider.conf.yml` | YAML + Markdown | Yes |
+| **Co (Phase 1c)** | `.co-cli/knowledge/context.md` | **Markdown + YAML frontmatter** | **Yes** |
 
-**Assumptions:**
-- Uninterrupted work time
-- No major design changes
-- Tests pass on first or second attempt
-- Familiar with Pydantic and tool system
+**Conclusion:** 4/4 peers use Markdown. Co aligns.
 
-**Buffer:**
-- Add 20% for context switching (13 hours)
-- Add 50% for discovery/debugging (16 hours)
+### Hierarchy Convergence
 
-**Realistic estimate:** 2-3 days (including reviews, breaks, other tasks)
+| System | Global | Project | Precedence |
+|--------|--------|---------|------------|
+| Claude Code | `~/.config/claude-code/CLAUDE.md` | `./CLAUDE.md` | Project > Global |
+| Codex | `~/.codex/context` | Git tree walk | Subdirectory > Root |
+| Gemini CLI | `~/.config/gemini-cli/GEMINI.md` | 3-tier BFS | Closest > Parent |
+| **Co (Phase 1c)** | **`~/.config/co-cli/knowledge/context.md`** | **`.co-cli/knowledge/context.md`** | **Project > Global** |
+
+**Conclusion:** 3/4 peers use hierarchical discovery. Co aligns with 2-tier model.
+
+### Memory Storage Convergence
+
+| System | Memory Format | Storage | Retrieval |
+|--------|---------------|---------|-----------|
+| Claude Code | Frontmatter in agent .md files | Inline | Parse frontmatter |
+| Codex | Summaries | SQLite | SQL query |
+| Gemini CLI | Markdown entries | Single file append | grep |
+| Aider | Chat history | Markdown files | Load on restore |
+| **Co (Phase 1c)** | **Markdown + YAML frontmatter** | **Separate .md files** | **grep + frontmatter** |
+
+**Conclusion:** Markdown is universal. Co's approach (atomic files) combines Claude Code's frontmatter with Codex's structured storage.
+
+### Retrieval Pattern Convergence
+
+| System | Initial Retrieval | Scaled Retrieval |
+|--------|------------------|------------------|
+| Basic Memory | grep | SQLite FTS5 |
+| Khoj | - | pgvector |
+| Cursor | ripgrep | Hybrid (ripgrep + vector + AI rerank) |
+| sqlite-vec demos | - | FTS5 + vectors (RRF) |
+| **Co Roadmap** | **grep (Phase 1c)** | **FTS5 (Phase 2) → Hybrid (Phase 3)** |
+
+**Conclusion:** grep → FTS5 → hybrid is the proven evolution path. Co aligns.
 
 ---
 
 **END OF PHASE 1C IMPLEMENTATION GUIDE**
-
-This document contains all specifications for Phase 1c implementation. Nothing has been omitted.
