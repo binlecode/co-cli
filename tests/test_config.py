@@ -4,8 +4,10 @@ Tests exercise real load_config() and find_project_config() — no mocks.
 """
 
 import json
+import pytest
+from pydantic import ValidationError
 
-from co_cli.config import find_project_config, load_config
+from co_cli.config import find_project_config, load_config, Settings
 
 
 def test_project_config_overrides_user(tmp_path, monkeypatch):
@@ -121,3 +123,55 @@ def test_env_overrides_web_policy_fields(tmp_path, monkeypatch):
     settings = load_config()
     assert settings.web_policy.search == "ask"
     assert settings.web_policy.fetch == "deny"
+
+
+def test_personality_validation():
+    """Personality field validates allowed values."""
+    # Valid personalities
+    settings = Settings(personality="finch")
+    assert settings.personality == "finch"
+
+    settings = Settings(personality="jeff")
+    assert settings.personality == "jeff"
+
+    settings = Settings(personality="friendly")
+    assert settings.personality == "friendly"
+
+    settings = Settings(personality="terse")
+    assert settings.personality == "terse"
+
+    settings = Settings(personality="inquisitive")
+    assert settings.personality == "inquisitive"
+
+    # Invalid personality
+    with pytest.raises(ValidationError, match="personality must be one of"):
+        Settings(personality="invalid")
+
+
+def test_personality_default():
+    """Personality defaults to 'finch'."""
+    settings = Settings()
+    assert settings.personality == "finch"
+
+
+def test_personality_from_project_config(tmp_path, monkeypatch):
+    """Personality can be set in project config."""
+    project_dir = tmp_path / ".co-cli"
+    project_dir.mkdir()
+    (project_dir / "settings.json").write_text(json.dumps({"personality": "friendly"}))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_config()
+    assert settings.personality == "friendly"
+
+
+def test_personality_from_env(tmp_path, monkeypatch):
+    """Personality can be set via CO_CLI_PERSONALITY env var."""
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CO_CLI_PERSONALITY", "terse")
+
+    settings = load_config()
+    assert settings.personality == "terse"

@@ -13,7 +13,7 @@
 - ✓ Simple inquiry ("When is lunch today?") → Concise: "No lunch event scheduled today"
 - ✗ Complex inquiry ("What's my next meeting?") → Verbose multi-paragraph summary
 
-**Root Cause:** See `docs/RCA-test3-verbose-inquiry.md`
+**Root Cause:**
 - Model capability limitation (not prompt failure)
 - Question ambiguity without explicit temporal context
 - Large data volume (3.4KB, 7 events) triggers summarization mode

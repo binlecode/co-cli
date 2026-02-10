@@ -1,14 +1,5 @@
 # TODO ROI Ranking
 
-Last updated against current TODO set (2026-02-08).
-
-Sources:
-- `docs/RESEARCH-cli-agent-tools-landscape-2026.md`
-- OpenClaw reference implementation analysis
-- `co_cli/main.py`
-- `co_cli/tools/web.py`
-- `co_cli/config.py`
-
 | TODO | Effort | User Impact | Dependencies | ROI |
 | --- | --- | --- | --- | --- |
 | **Model Fallback Chain** (OpenClaw pattern) | Medium | High (Gemini/Ollama graceful degradation) | None | **Best** |
@@ -18,6 +9,8 @@ Sources:
 | **Session Persistence** (OpenClaw pattern) | Medium | Medium-High (resume, cost tracking, audit) | None | Medium-High |
 | Slack Tooling — Phase 2/3 (`docs/TODO-slack-tooling.md`) | Small-Medium | Medium | None | Medium-High |
 | **Auth Profile Rotation** (OpenClaw pattern) | Medium | Medium (Brave rate limits, multi-account) | None | Medium |
+| **User Workflow Preferences** | Small-Medium | High (personalization, fit to user patterns) | None | Medium-High |
+| **Skills System** (Claude Code pattern) | Small-Medium | High (domain knowledge injection, zero-code extensibility) | None | Medium-High |
 | Cross-Tool RAG (`docs/TODO-cross-tool-rag.md`) | Large | High (at scale) | sqlite-vec, embedding/reranker stack | Low |
 
 ## Pattern Details (from OpenClaw)
@@ -61,6 +54,37 @@ Sources:
   - Phase 2: Multi-profile support for Google + Slack with round-robin
 - **Key OpenClaw files:** `src/agents/auth-profiles/usage.ts`, `src/agents/auth-profiles/order.ts`
 
+### User Workflow Preferences
+- **What:** Local user-driven settings to adapt agent behavior to specific workflows (e.g., verbosity, tool usage patterns, approval preferences, output formats)
+- **Why:** Enable personalization so the agent fits naturally into each user's unique work patterns and preferences
+- **Implementation:**
+  - Workflow profiles stored in user config (`~/.config/co-cli/workflows.json`)
+  - Settings can control: default tool approval modes, output verbosity levels, preferred file formats, chat behavior (proactive vs reactive)
+  - Profile switching via command flag or interactive menu
+  - Auto-learn patterns from user approval history (optional)
+- **Potential settings:**
+  - `auto_approve_tools`: list of trusted tools that don't need approval prompts
+  - `verbosity_level`: minimal/normal/verbose output
+  - `output_preferences`: preferred formats for different data types
+  - `proactive_suggestions`: whether agent offers suggestions vs waits for explicit requests
+
+### Skills System
+- **What:** Knowledge modules (markdown) that teach the agent domain expertise—patterns, workflows, conventions
+- **Why:** Zero-code extensibility. Users inject knowledge without writing Python tools
+- **Architecture:** Agent → Skills (optional guidance) → Tools (execution)
+- **Implementation:**
+  - Use native pydantic-ai `@agent.instructions` decorator for runtime injection
+  - Skills directory: `.co-cli/skills/<name>/`
+    - `SKILL.md` (required) - Core guidance loaded via `@agent.instructions`
+    - `scripts/` (optional) - Skill-specific utilities (Codex pattern: deterministic/repeated ops)
+    - `references/` (optional) - Deep-dive docs loaded on demand
+  - Skill-specific scripts vs general tools:
+    - General tools (co_cli/tools/) - Used across domains (shell, web_search)
+    - Skill scripts (skills/<name>/scripts/) - Domain-specific utilities (django-security/check-csrf.py)
+- **Examples:** `django-security/SKILL.md` + `scripts/check-csrf.py`, `react-patterns/SKILL.md`
+- **2026 best practice:** All top systems (Codex, Claude Code, Gemini CLI, OpenCode) now use skills
+- **Key reference:** Codex `core/src/skills/assets/samples/skill-creator/SKILL.md`
+
 ## Recommendations
 
 - **Do first:** Model Fallback Chain OR MCP Client (both "Best" ROI; fallback is faster to implement)
@@ -71,9 +95,3 @@ Sources:
 ## Skip for Now
 
 - **Cross-Tool RAG**: highest effort; value mainly materializes with larger corpora and multi-source retrieval pressure.
-
-## Done
-
-- **Agent Tool-Call + Recursive Flow Hardening** (was `TODO-agent-toolcall-recursive-flow.md`): Phase C (provider/tool error normalization) and Phase D (orchestration extraction) implemented. `_orchestrate.py`, `_provider_errors.py`, `tools/_errors.py` expanded, `TerminalFrontend` added. TODO file removed.
-- **Streaming Thinking Display** (was `TODO-thinking-display.md`): Implemented via `TerminalFrontend.on_thinking_delta/on_thinking_commit`, verbose-gated thinking rendering in `_orchestrate.py`, and regression coverage in `tests/test_display.py` + `tests/test_orchestrate.py`. TODO file removed.
-- **Web Tool Hardening MVP** (was `TODO-web-tool-hardening.md`): Implemented unified per-tool `web_policy`, updated config/deps/runtime wiring, and added coverage for deny/ask/security paths. TODO file removed.

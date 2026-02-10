@@ -58,6 +58,7 @@ class Settings(BaseModel):
     auto_confirm: bool = Field(default=False)
     docker_image: str = Field(default="co-cli-sandbox")
     theme: str = Field(default="light")
+    personality: str = Field(default="finch")
     tool_retries: int = Field(default=3)
     model_http_retries: int = Field(default=2)
     max_request_limit: int = Field(default=25)
@@ -103,6 +104,14 @@ class Settings(BaseModel):
             raise ValueError(f"sandbox_mem_limit must be Docker memory format (e.g. '512m', '1g'), got '{v}'")
         return v
 
+    @field_validator("personality")
+    @classmethod
+    def _validate_personality(cls, v: str) -> str:
+        valid = ["finch", "jeff", "friendly", "terse", "inquisitive"]
+        if v not in valid:
+            raise ValueError(f"personality must be one of {valid}, got: {v}")
+        return v
+
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
@@ -122,6 +131,7 @@ class Settings(BaseModel):
             "auto_confirm": "CO_CLI_AUTO_CONFIRM",
             "docker_image": "CO_CLI_DOCKER_IMAGE",
             "theme": "CO_CLI_THEME",
+            "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",

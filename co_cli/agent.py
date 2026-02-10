@@ -6,7 +6,7 @@ from pydantic_ai.settings import ModelSettings
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
 from co_cli._history import truncate_tool_returns, truncate_history_window
-from co_cli.prompts import load_prompt
+from co_cli.prompts import get_system_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
@@ -79,7 +79,7 @@ def get_agent(
             f"Unknown llm_provider: '{provider_name}'. Use 'gemini' or 'ollama'."
         )
 
-    system_prompt = load_prompt("system")
+    system_prompt = get_system_prompt(provider_name, personality=settings.personality)
 
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model,
