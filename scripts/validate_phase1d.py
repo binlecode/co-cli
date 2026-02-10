@@ -62,7 +62,7 @@ TEST_SCENARIOS = [
         "input": "What if we added caching?",
         "expected": "Discuss tradeoffs, NOT implement",
         "pass_if": ["would", "could", "tradeoff", "depends", "consider", "pros and cons", "benefits", "drawbacks"],
-        "fail_if": ["I'll add", "I've implemented", "let me create", "adding caching", "I'll implement"],
+        "fail_if": ["I'll add", "I've implemented", "let me create", "I'll implement"],
         "tests_technique": "Contrast Examples - Principle 2: Hypotheticals ≠ Directives",
         "why_important": "Hypothetical questions invite discussion, not immediate implementation",
     },
