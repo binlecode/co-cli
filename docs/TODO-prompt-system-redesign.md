@@ -6,12 +6,12 @@ Layered prompt composition with scoped instructions, adaptation overlays, and ma
 
 ## Current State
 
-The prompt system uses an aspect-driven architecture (~5.6 KiB total) with tier-based selection, composable personalities, and model counter-steering. Key modules:
+The prompt system uses an aspect-driven architecture (~5.6 KiB total) with adaptive aspect selection, composable personalities, and model counter-steering. Key modules:
 
-- **Aspects:** 7 behavioral markdown files (`identity.md`, `inquiry.md`, `fact_verify.md`, `multi_turn.md`, `response_style.md`, `approval.md`, `tool_output.md`) selected by model tier (1/2/3)
+- **Aspects:** 7 behavioral markdown files (`identity.md`, `intent.md`, `safety.md`, `reasoning.md`, `tool_use.md`, `response_style.md`, `workflow.md`) selected per turn by reasoning LLM call (direct multi-select from query + conversation history)
 - **Personalities:** composable character + style aspects with preset registry (`_registry.py`, `_composer.py`). Original role essays preserved in `roles/` (not loaded at runtime)
-- **Model quirks:** `model_quirks.py` — tier classification, counter-steering text, `normalize_model_name()`
-- **Memory/knowledge:** `knowledge.py` loads always-on context; `tools/memory.py` provides on-demand memory tools. Independent modules — no prompt structure dependency
+- **Model quirks:** `model_quirks.py` — counter-steering text, `normalize_model_name()`
+- **Memory:** `knowledge.py` loads always-on context (background memory); `tools/memory.py` provides on-demand memory tools. Independent modules — no prompt structure dependency
 - **Assembly:** `get_system_prompt(provider, personality, model_name)` in `prompts/__init__.py` — 5-layer string concatenation
 
 ### Gaps
@@ -19,35 +19,35 @@ The prompt system uses an aspect-driven architecture (~5.6 KiB total) with tier-
 The current system works but has structural gaps:
 
 1. **No test coverage** — all prompt tests were deleted during the aspect refactor; no replacements written
-2. **No instruction layering** — only one project-level file (`.co-cli/instructions.md`) is loaded; no global scope
+2. **No instruction layering** — only one project-level file (`.co-cli/instructions.md`) is loaded; no structured layer
 3. **Prompt/runtime policy divergence** — `aspects/approval.md` says "side-effectful tools require approval" but runtime auto-approves safe shell commands in sandbox mode; the model never learns the actual policy
 4. **No assembly diagnostics** — no manifest or introspection for what layers were loaded, which instruction files contributed, or what the token budget looks like
 
-### Current Assembly (5 layers, string concatenation)
+### Current Assembly (5 layers, string concatenation with per-turn aspect selection)
 
 ```
 get_system_prompt(provider, personality, model_name) → str
 
-  1. aspects[tier]           # tier-selected markdown files (identity, inquiry, ...)
+  Pre-assembly: select_aspects(query, history, model)  # reasoning LLM multi-selects relevant aspects
+  1. aspects[selected]       # adaptively selected markdown files (identity, intent, ...)
   2. counter_steering        # model quirk text (optional)
-  3. personality             # tier-dependent: skip / style-only / full
-  4. knowledge               # load_internal_knowledge() in <system-reminder>
+  3. personality             # always full (character + style)
+  4. memory                  # load_memory() in <system-reminder>
   5. project instructions    # .co-cli/instructions.md (single file)
 ```
 
 Callers: `agent.py:94` (startup), `_commands.py:151` (`/model` switch). Both call `get_system_prompt()` directly.
 
-### Target Assembly (7 layers, typed composition with manifest)
+### Target Assembly (6 layers, typed composition with manifest)
 
 ```
 assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
-  Priority 10: Core aspects       — tier-selected from aspects/ (unchanged)
-  Priority 20: Mode overlay       — chat/task/code placeholder (returns None for MVP)
+  Priority 10: Core aspects       — adaptively selected from aspects/ (per-turn LLM multi-select)
   Priority 30: Counter-steering   — model quirk text from MODEL_QUIRKS (unchanged)
-  Priority 40: Personality        — character+style, tier-dependent (unchanged)
-  Priority 60: Knowledge          — <system-reminder> wrapped (unchanged)
-  Priority 70: Scoped instructions — global → project (NEW)
+  Priority 40: Personality        — character+style, always full (unchanged)
+  Priority 60: Memory             — <system-reminder> wrapped (unchanged)
+  Priority 70: Project instructions — .co-cli/instructions.md (NEW)
   Priority 90: Runtime policy     — generated from live safe_commands list (NEW)
 ```
 
@@ -56,8 +56,17 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 ### Architecture Diagram
 
 ```
+                    User query + conversation history
+                         │
+                         ▼
+              ┌─────────────────────┐
+              │  Aspect selector    │  ← reasoning LLM call
+              │  (per-turn)         │  ← multi-selects from 7 aspects
+              └────────┬────────────┘
+                       │ selected aspects
+                       ▼
                     PromptContext
-                   (provider, model, personality, mode, cwd)
+                   (provider, model, personality, aspects, cwd)
                          │
                          ▼
               ┌─────────────────────┐
@@ -68,10 +77,9 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
         ▼              ▼                      ▼
   Core Layers    Adaptation Layers      Scoped Layers
   ─────────────  ──────────────────    ──────────────
-  aspects/*.md   mode overlay (p20)    instructions (p70)
-  (p10)          counter-steer (p30)   runtime policy (p90)
-  personality    knowledge (p60)
-  (p40)
+  aspects/*.md   counter-steer (p30)   project instrs (p70)
+  (p10, selected)personality (p40)     runtime policy (p90)
+                 memory (p60)
         │              │                      │
         └──────────────┼──────────────────────┘
                        ▼
@@ -88,25 +96,39 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
                         tokens, warnings)
 ```
 
+### Aspect Inventory
+
+7 behavioral aspects, each a focused markdown file in `aspects/`. Selected per turn by reasoning LLM call.
+
+| Aspect | Concern | Peer convergence | Content summary |
+|--------|---------|------------------|----------------|
+| **identity** | Who Co is, values, conversation awareness | Universal: Identity & Role | Role, local-first, approval-first, multi-turn context |
+| **intent** | Inquiry vs Directive classification | Gemini, Codex, Aider | Default to inquiry; action verbs trigger directive |
+| **safety** | Side-effect approval, credential protection, destructive caution | Universal: Safety & Approval | Approval gates, no credentials, explain destructive ops, scope limits |
+| **reasoning** | Ground truth, fact verification, anti-sycophancy | Near-universal: Honesty | Trust tools, verify math, escalate contradictions, objectivity |
+| **tool_use** | Tool invocation, result presentation, errors | Universal: Tool Use Policy | When to use tools, show display verbatim, error reporting, verify success |
+| **response_style** | Terseness, formatting, completeness | Universal: Tone & Style | High-signal, no filler, complete before yielding |
+| **workflow** | Multi-step task process | Gemini, Codex, Claude Code | Research → Plan → Execute → Verify |
+
 ### Key Design Decisions
 
 **PromptLayer as frozen dataclass, not dict.** Every layer has typed fields: `name`, `content`, `section_heading`, `scope` (enum-like string), `priority` (int), `tag` (optional wrapper like `<system-reminder>`). Layers are immutable after creation — composition never mutates.
 
 **Priority-based ordering, not insertion order.** Layers are sorted by `priority` before joining. This lets callers add layers in any order and get deterministic output. Gaps between priority numbers (10, 20, 30...) leave room for future insertion without renumbering.
 
-**PromptManifest for diagnostics.** Every assembly returns a manifest with: provider, model, tier, personality, mode, layers loaded (by name), instruction files discovered, quirk flags, total chars, estimated tokens (chars/4 heuristic), and warnings. The manifest is available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
+**Realizes the 3-tier context model.** The layered assembler composes three orthogonal context tiers (Instructions, Memory, Knowledge) into a single prompt. The tiers define *what* context exists; this redesign defines *how* it's assembled. See `TODO-3-tier-context-model.md` for the tier definitions, peer evidence, and naming conventions.
 
-**Instruction discovery: two scopes.** Instruction files are discovered at two scopes:
-- Global: `~/.config/co-cli/instructions.md`
-- Project: `{project_root}/.co-cli/instructions.md` (already exists today)
+**PromptManifest for diagnostics.** Every assembly returns a manifest with: provider, model, personality, aspects_selected, layers loaded (by name), instruction files discovered, quirk flags, total chars, estimated tokens (chars/4 heuristic), and warnings. The manifest is available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
 
-Each file becomes a separate PromptLayer at priority 70, ordered global → project (project has higher effective precedence via recency). `_find_project_root()` walks up from `cwd` looking for `.co-cli/` or `.git/` markers.
+**Instruction discovery: project scope.** The project instruction file `{project_root}/.co-cli/instructions.md` (already exists today) becomes a PromptLayer at priority 70. `_find_project_root()` walks up from `cwd` looking for `.co-cli/` or `.git/` markers. Global scope (`~/.config/co-cli/instructions.md`) is deferred to a future iteration.
 
 **Runtime policy overlay fixes prompt/runtime divergence.** `get_runtime_policy_overlay(safe_commands)` generates a policy layer from the live `shell_safe_commands` list. The model sees the actual auto-approved commands, not a generic "side-effectful tools require approval" statement. This closes the gap where the model doesn't know `ls`, `cat`, `git status` etc. are auto-approved in sandbox mode.
 
-**Mode overlay is a placeholder.** `get_mode_overlay("chat", tier)` returns `None` for MVP. The hook exists for future modes that need different behavioral emphasis without changing the assembly pipeline. Planned modes include:
-- **learn** — knowledge curation behavior: research topics using existing tools (`web_search`, `web_fetch`), evaluate source quality, check for duplicates via `recall_memory`, propose structured `save_memory` calls with proper tags/categorization. No separate agent — the main agent with a learn-mode prompt overlay and existing tools is sufficient.
-- **task/code/review** — future behavioral emphasis changes.
+**Direct adaptive aspect selection.** A reasoning LLM call examines each user query (with full conversation history) and multi-selects which of the 7 aspects are relevant for this turn. There is no intermediate "mode" abstraction — the model judges directly which behavioral instructions apply. This replaces tier-based aspect removal which had no peer backing and created safety gaps (tier 1 models never saw approval rules). The selector uses the same reasoning model, not cheap heuristics, because accurate alignment with user intent is critical. User can override but autonomous selection should make this rarely necessary.
+
+**Aspect set redesigned from peer convergence.** The 7 aspects map to categories that 10+ peer systems independently converge on: identity (universal), intent classification (Gemini/Codex/Aider), safety (universal), reasoning/honesty (near-universal), tool use policy (universal), response style (universal), workflow (Gemini/Codex/Claude Code). `multi_turn.md` is absorbed into identity (conversation awareness is foundational, not a selectable behavior — no peer system treats it as a separate aspect). `approval.md` expands to `safety` (peer systems include credential protection, destructive action caution, not just approval gates). `fact_verify.md` expands to `reasoning` (peer category is broader: anti-sycophancy, professional objectivity). `tool_output.md` expands to `tool_use` (peer category is full tool policy, not just output formatting). `workflow` is new (converged across Gemini, Codex, Claude Code — Research → Plan → Execute → Verify).
+
+**No tier-based aspect or personality selection.** `TIER_ASPECTS` and tier-dependent personality scaling are removed. Model-specific adaptation is handled exclusively by counter-steering. `multi_turn.md` counter-steering stays for models that need explicit conversation awareness reminding (e.g., GLM-4.7).
 
 **Clean replacement.** `get_system_prompt()` is replaced by `assemble_prompt(ctx: PromptContext) -> (str, PromptManifest)`. Callers in `agent.py` and `_commands.py` are updated to construct a `PromptContext` and call `assemble_prompt()` directly.
 
@@ -114,10 +136,12 @@ Each file becomes a separate PromptLayer at priority 70, ordered global → proj
 
 | Changed | Unchanged |
 |---------|-----------|
-| `co_cli/prompts/__init__.py` — `get_system_prompt()` replaced by `assemble_prompt()` | `co_cli/prompts/model_quirks.py` — consumed as-is |
-| `co_cli/agent.py` — updated to call `assemble_prompt()` | `co_cli/prompts/personalities/` — registry, composer, aspects, roles/ |
-| `co_cli/_commands.py` — updated to call `assemble_prompt()` | `co_cli/prompts/aspects/*.md` — 7 aspect files |
-| New: `_layers.py`, `_manifest.py`, `_context.py` | `co_cli/knowledge.py` — `load_internal_knowledge()` consumed as layer |
+| `co_cli/prompts/__init__.py` — `get_system_prompt()` replaced by `assemble_prompt()` | `co_cli/prompts/personalities/` — registry, composer, aspects, roles/ |
+| `co_cli/prompts/model_quirks.py` — `TIER_ASPECTS` removed, `get_model_tier()` removed | `co_cli/knowledge.py` — `load_memory()` consumed as memory layer |
+| `co_cli/prompts/aspects/*.md` — 7 files renamed/merged/expanded per aspect inventory | |
+| `co_cli/agent.py` — updated to call `assemble_prompt()` | |
+| `co_cli/_commands.py` — updated to call `assemble_prompt()` | |
+| New: `_layers.py`, `_manifest.py`, `_context.py` | |
 | New: `_instructions.py`, `_adaptations.py` | |
 | New: `tests/test_prompt_contracts.py`, `tests/test_instructions.py` | |
 
@@ -125,11 +149,13 @@ Each file becomes a separate PromptLayer at priority 70, ordered global → proj
 
 | Pattern | Peer Evidence | co-cli Adoption |
 |---------|--------------|-----------------|
-| Hierarchical instruction files | Codex `AGENTS.md` traversal, Gemini folder-level `GEMINI.md`, Claude Code `CLAUDE.md` scopes | 2-scope discovery: global → project |
+| Hierarchical instruction files | Codex `AGENTS.md` traversal, Gemini folder-level `GEMINI.md`, Claude Code `CLAUDE.md` scopes | Project-scope discovery (global scope deferred) |
 | Typed prompt composition | Claude Code `PromptConfig` + policy fragments, Codex `PermissionMode` | `PromptLayer` + `PromptManifest` |
 | Runtime policy injection | Codex safe-command allowlists in prompt, Claude Code hook-based permission engine | `get_runtime_policy_overlay(safe_commands)` |
-| Model-specific adaptation | Aider model warnings, Codex quirk database | Existing tier + counter-steering (unchanged) |
+| Model-specific adaptation | Aider model warnings, Codex quirk database | Counter-steering only (tier removed) |
+| Direct adaptive aspect selection | No peer uses tier-based removal. All send full behavioral spec. Adaptation is additive (counter-steering), not subtractive | Per-turn reasoning LLM multi-selects from 7 peer-converged aspects |
 | Prompt budget enforcement | All peers have implicit or explicit size limits | Manifest `total_chars` + contract test assertions |
+| 3-tier context model | See `TODO-3-tier-context-model.md` for full peer evidence | Instructions (p70) + Memory (p60) + Knowledge (deferred) |
 
 ---
 
@@ -138,29 +164,29 @@ Each file becomes a separate PromptLayer at priority 70, ordered global → proj
 ### A1. Pure dataclasses (no deps)
 
 - [ ] `co_cli/prompts/_layers.py` — `PromptLayer` frozen dataclass
-  - Fields: `name`, `content`, `section_heading`, `scope` (core|mode|quirk|personality|knowledge|instructions|policy), `priority` (int), `tag` (optional wrapper tag)
+  - Fields: `name`, `content`, `section_heading`, `scope` (core|quirk|personality|memory|instructions|policy), `priority` (int), `tag` (optional wrapper tag)
 - [ ] `co_cli/prompts/_manifest.py` — `PromptManifest` dataclass
-  - Fields: `provider`, `model`, `tier`, `personality`, `mode`, `layers_loaded` (list[str]), `instruction_files` (list[str]), `quirk_flags` (dict), `total_chars` (int), `estimated_tokens` (int), `warnings` (list[str])
+  - Fields: `provider`, `model`, `personality`, `aspects_selected` (list[str]), `layers_loaded` (list[str]), `instruction_files` (list[str]), `quirk_flags` (dict), `total_chars` (int), `estimated_tokens` (int), `warnings` (list[str])
 - [ ] `co_cli/prompts/_context.py` — `PromptContext` dataclass
-  - Fields: `provider`, `model_name`, `personality` (optional), `mode` (default "chat"), `cwd` (default Path.cwd())
+  - Fields: `provider`, `model_name`, `personality` (optional), `aspects` (list[str], default all 7), `cwd` (default Path.cwd())
 
 ### A2. Instruction discovery
 
 - [ ] `co_cli/prompts/_instructions.py`
-  - `discover_instruction_files(cwd) -> list[tuple[str, Path]]` — scoped discovery (global, project)
+  - `discover_instruction_files(cwd) -> list[tuple[str, Path]]` — project-scope discovery
   - `_find_project_root(start) -> Path` — walk up to `.co-cli/` or `.git/` marker
 
 ### A3. Adaptation overlays
 
 - [ ] `co_cli/prompts/_adaptations.py`
-  - `get_mode_overlay(mode, tier) -> PromptLayer | None` — placeholder (returns None for "chat")
+  - `select_aspects(query, history, model) -> list[str]` — reasoning LLM call, multi-selects from ALL_ASPECTS
   - `get_runtime_policy_overlay(safe_commands) -> PromptLayer` — generates approval policy text from live settings
 
 ### A4. Assembler in `__init__.py`
 
 - [ ] `assemble_prompt(ctx: PromptContext) -> tuple[str, PromptManifest]` — new layered assembler
 - [ ] `_compose_layers(layers: list[PromptLayer]) -> str` — sort by priority, join with headings
-- [ ] `_build_personality_layer(personality, tier) -> PromptLayer | None` — tier-aware personality
+- [ ] `_build_personality_layer(personality) -> PromptLayer | None` — always full
 - [ ] Remove `get_system_prompt()` — update `agent.py` and `_commands.py` to call `assemble_prompt()` directly
 
 Assembly pseudocode:
@@ -169,15 +195,14 @@ Assembly pseudocode:
 assemble_prompt(ctx):
   layers = []
 
-  # Core aspects (priority 10) — one layer per aspect
-  tier = get_model_tier(ctx.provider, ctx.model_name)
-  for name in TIER_ASPECTS[tier]:
+  # Core aspects (priority 10) — selected by reasoning LLM call
+  # ctx.aspects populated by select_aspects() before assembly
+  ALL_ASPECTS = ["identity", "intent", "safety", "reasoning",
+                 "tool_use", "response_style", "workflow"]
+  aspects = ctx.aspects if ctx.aspects else ALL_ASPECTS  # fallback: all 7
+  for name in aspects:
     layers.append(PromptLayer(name=name, content=_load_aspect(name),
                               scope="core", priority=10))
-
-  # Mode overlay (priority 20) — placeholder
-  mode_layer = get_mode_overlay(ctx.mode, tier)
-  if mode_layer: layers.append(mode_layer)
 
   # Counter-steering (priority 30)
   if ctx.model_name:
@@ -187,24 +212,24 @@ assemble_prompt(ctx):
                                 heading="Model-Specific Guidance",
                                 scope="quirk", priority=30))
 
-  # Personality (priority 40)
-  personality_layer = _build_personality_layer(ctx.personality, tier)
+  # Personality (priority 40) — always full
+  personality_layer = _build_personality_layer(ctx.personality)
   if personality_layer: layers.append(personality_layer)
 
-  # Knowledge (priority 60)
-  knowledge = load_internal_knowledge()
-  if knowledge:
-    layers.append(PromptLayer(name="knowledge", content=knowledge,
-                              scope="knowledge", priority=60,
+  # Memory (priority 60)
+  memory = load_memory()
+  if memory:
+    layers.append(PromptLayer(name="memory", content=memory,
+                              scope="memory", priority=60,
                               tag="system-reminder"))
 
-  # Scoped instructions (priority 70)
+  # Project instructions (priority 70)
   for scope_name, path in discover_instruction_files(ctx.cwd):
     content = path.read_text(encoding="utf-8").strip()
     if content:
       layers.append(PromptLayer(name=f"instructions_{scope_name}",
                                 content=content,
-                                heading=f"{scope_name} Instructions",
+                                heading="Project Instructions",
                                 scope="instructions", priority=70))
 
   # Runtime policy (priority 90) — safe commands from settings
@@ -215,8 +240,8 @@ assemble_prompt(ctx):
   # Compose and build manifest
   prompt = _compose_layers(layers)
   manifest = PromptManifest(
-    provider=ctx.provider, model=ctx.model_name, tier=tier,
-    personality=ctx.personality, mode=ctx.mode,
+    provider=ctx.provider, model=ctx.model_name,
+    personality=ctx.personality, aspects_selected=aspects,
     layers_loaded=[l.name for l in sorted(layers, key=lambda l: l.priority)],
     instruction_files=[str(p) for _, p in discover_instruction_files(ctx.cwd)],
     quirk_flags=get_quirk_flags(ctx.provider, ctx.model_name or ""),
@@ -229,7 +254,7 @@ assemble_prompt(ctx):
 
 ## Part B: Tests (First Principles Redesign)
 
-**Philosophy:** All prior prompt/memory/knowledge tests were deleted — they tested an obsolete monolithic prompt or implementation details that changed. New tests are designed from the contracts that matter: what each module promises, not how it works inside.
+**Philosophy:** All prior prompt/memory tests were deleted — they tested an obsolete monolithic prompt or implementation details that changed. New tests are designed from the contracts that matter: what each module promises, not how it works inside.
 
 **No mocks, no stubs.** Per project policy: functional tests that exercise real code paths with real files on disk. Use `tmp_path` fixtures for filesystem isolation.
 
@@ -280,9 +305,9 @@ Tests the core memory lifecycle: file I/O, dedup, consolidation, decay, search.
 - [ ] `test_detect_source_no_signal` — tags like ["python"] → "user-told"
 - [ ] `test_detect_category` — first matching category tag is returned
 
-### B2. Knowledge Loading Tests — `tests/test_knowledge.py`
+### B2. Memory Loading Tests — `tests/test_memory_loading.py`
 
-Tests the always-on context loading pipeline: file discovery, frontmatter validation, size enforcement.
+Tests the always-on context loading pipeline (`knowledge.py` — background memory in the 3-tier model): file discovery, frontmatter validation, size enforcement.
 
 **Loading contract:**
 - [ ] `test_no_files_returns_none` — neither global nor project context.md exists → `None`
@@ -301,12 +326,12 @@ Tests the always-on context loading pipeline: file discovery, frontmatter valida
 - [ ] `test_malformed_yaml_returns_empty` — `---\n: :\n---\nbody` → `parse_frontmatter` returns `({}, content)`
 
 **Size enforcement:**
-- [ ] `test_soft_limit_warns` — knowledge between 10–20 KiB → warning to stderr, content not truncated
-- [ ] `test_hard_limit_truncates` — knowledge over 20 KiB → truncated to 20 KiB
+- [ ] `test_soft_limit_warns` — memory between 10–20 KiB → warning to stderr, content not truncated
+- [ ] `test_hard_limit_truncates` — memory over 20 KiB → truncated to 20 KiB
 
 ### B3. Personality Tests — `tests/test_personality.py`
 
-Tests the composable personality system: registry, composition, tier behavior, role essays.
+Tests the composable personality system: registry, composition, always-full behavior, role essays.
 
 **Registry contract — all presets are valid:**
 - [ ] `test_all_presets_have_aspect_files` — every entry in PRESETS has a valid style file; presets with character≠None have a valid character file
@@ -319,10 +344,8 @@ Tests the composable personality system: registry, composition, tier behavior, r
 - [ ] `test_compose_unknown_preset` — raises KeyError
 - [ ] `test_compose_missing_aspect_file` — rigged preset pointing to nonexistent file → raises FileNotFoundError
 
-**Tier behavior in assembler:**
-- [ ] `test_tier1_skips_personality` — tier 1 model + personality="finch" → prompt does not contain personality text
-- [ ] `test_tier2_style_only` — tier 2 model + personality="finch" → prompt contains style text but not character text
-- [ ] `test_tier3_full_personality` — tier 3 model + personality="finch" → prompt contains both character and style text
+**Always-full personality:**
+- [ ] `test_personality_always_loaded` — any model + personality="finch" → prompt contains both character and style text
 
 **Role essays — baseline reference preserved:**
 - [ ] `test_role_essays_exist` — `roles/{name}.md` exists for every preset name in PRESETS
@@ -333,11 +356,12 @@ Tests the composable personality system: registry, composition, tier behavior, r
 Tests the assembled prompt output: layer presence, ordering, budget.
 
 **Layer presence contract:**
-- [ ] `test_tier1_minimal_aspects` — tier 1 prompt contains identity + multi_turn aspects only
-- [ ] `test_tier3_all_aspects` — tier 3 prompt contains all 7 aspect names' content
+- [ ] `test_all_aspects_selected` — all 7 in ctx.aspects → all present in prompt
+- [ ] `test_subset_aspects_selected` — subset in ctx.aspects → only those in prompt
+- [ ] `test_empty_aspects_fallback` — empty ctx.aspects → fallback to all 7 (safety net)
 - [ ] `test_counter_steering_present` — known quirk model (glm-4.7-flash) → prompt contains "Model-Specific Guidance"
 - [ ] `test_counter_steering_absent` — default model with no quirks → prompt does not contain "Model-Specific Guidance"
-- [ ] `test_knowledge_wrapped_in_system_reminder` — when knowledge exists, prompt contains `<system-reminder>` tags around it
+- [ ] `test_memory_wrapped_in_system_reminder` — when memory exists, prompt contains `<system-reminder>` tags around it
 - [ ] `test_project_instructions_appended` — when `.co-cli/instructions.md` exists, its content appears in prompt
 
 **Budget contract:**
@@ -349,16 +373,14 @@ Tests the assembled prompt output: layer presence, ordering, budget.
 - [ ] `test_manifest_layers_match_output` — manifest `layers_loaded` list matches what's actually in the prompt string
 - [ ] `test_manifest_char_count_accurate` — manifest `total_chars` == `len(prompt)`
 - [ ] `test_runtime_policy_includes_safe_commands` — policy layer text contains command names from settings
-- [ ] `test_scoped_instructions_global_and_project` — both instruction scopes appear in manifest `instruction_files`
+- [ ] `test_project_instructions_in_manifest` — project instruction file appears in manifest `instruction_files`
 
 ### B5. Instruction Discovery Tests — `tests/test_instructions.py`
 
-Tests the scoped instruction file discovery (Part A2 — write after `_instructions.py` exists).
+Tests the project-scope instruction file discovery (Part A2 — write after `_instructions.py` exists).
 
 - [ ] `test_no_instruction_files` — empty tmp dir → empty list
-- [ ] `test_global_only` — only `~/.config/co-cli/instructions.md` → `[("global", path)]`
-- [ ] `test_project_only` — only `{root}/.co-cli/instructions.md` → `[("project", path)]`
-- [ ] `test_both_scopes` — both files exist → list has 2 entries in global→project order
+- [ ] `test_project_instructions_found` — `{root}/.co-cli/instructions.md` exists → `[("project", path)]`
 - [ ] `test_project_root_detection_git` — `.git/` marker identifies project root
 - [ ] `test_project_root_detection_co_cli` — `.co-cli/` marker identifies project root
 
