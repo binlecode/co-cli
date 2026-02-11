@@ -1,3 +1,5 @@
+import os
+
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -54,7 +56,6 @@ def get_agent(
 
         # pydantic-ai reads GEMINI_API_KEY from the environment.
         # Direct assignment so the settings value always wins over a stale env var.
-        import os
         os.environ["GEMINI_API_KEY"] = api_key
         model = f"google-gla:{model_name}"
     elif provider_name == "ollama":
@@ -103,11 +104,17 @@ def get_agent(
         from pydantic_ai.mcp import MCPServerStdio
 
         for name, cfg in mcp_servers.items():
+            env = dict(cfg.env) if cfg.env else {}
+            # Lazy GitHub token: resolve at session start, not at config import
+            if name == "github" and "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
+                token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
+                if token:
+                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
             server = MCPServerStdio(
                 cfg.command,
                 args=cfg.args,
                 timeout=cfg.timeout,
-                env=cfg.env or None,
+                env=env or None,
                 tool_prefix=cfg.prefix or name,
             )
             if cfg.approval == "auto":

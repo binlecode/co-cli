@@ -59,18 +59,12 @@ class MCPServerConfig(BaseModel):
     prefix: str | None = Field(default=None)
 
 
-def _github_env() -> dict[str, str]:
-    """Resolve GitHub token from environment for the default GitHub MCP server."""
-    token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
-    return {"GITHUB_PERSONAL_ACCESS_TOKEN": token} if token else {}
-
-
 # Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
+# GitHub token is resolved lazily in agent.py at session start, not here at import time.
 _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
     "github": MCPServerConfig(
         command="npx",
         args=["-y", "@modelcontextprotocol/server-github"],
-        env=_github_env(),
         approval="auto",
     ),
     "thinking": MCPServerConfig(
@@ -168,12 +162,12 @@ class Settings(BaseModel):
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
     ollama_host: str = Field(default="http://localhost:11434")
-    # IMPORTANT: Use -agentic Modelfile variants (e.g. glm-4.7-flash:q4_k_m-agentic).
+    # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
     # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
     # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 2048
     # tokens and silently lose multi-turn conversation history.
     # See docs/GUIDE-ollama-local-setup.md for Modelfile setup.
-    ollama_model: str = Field(default="glm-4.7-flash:q4_k_m-agentic")
+    ollama_model: str = Field(default="qwen3:30b-a3b-thinking-2507-q8_0")
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
     ollama_num_ctx: int = Field(default=202752)

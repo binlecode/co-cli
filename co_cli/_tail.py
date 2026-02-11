@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.text import Text
 
 from co_cli.config import DATA_DIR
-from co_cli.trace_viewer import format_duration, get_span_type
+from co_cli._trace_viewer import format_duration, get_span_type
 
 # Rich style per span type (matches trace_viewer.py color scheme)
 TYPE_STYLES = {

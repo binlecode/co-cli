@@ -18,7 +18,7 @@ settings.theme ("light" | "dark")
 │  display.py                     │
 │                                 │
 │  _THEMES ──▶ Theme() ──▶ Console(theme=...)
-│                                 │ ──▶ banner.py  (accent, art selection)
+│                                 │ ──▶ _banner.py  (accent, art selection)
 │                                 │ ──▶ main.py    (shared output)
 │                                 │ ──▶ _commands.py (shared output)
 │                                 │
@@ -86,5 +86,5 @@ The banner is a Rich `Panel` with `expand=False` so it hugs the content width. B
 | File | Purpose |
 |------|---------|
 | `co_cli/display.py` | Shared console, `_THEMES`, `set_theme()`, indicators, display helpers |
-| `co_cli/banner.py` | Welcome banner with theme-aware ASCII art, `display_welcome_banner()` |
+| `co_cli/_banner.py` | Welcome banner with theme-aware ASCII art, `display_welcome_banner()` |
 | `co_cli/config.py` | `theme` field in Settings |

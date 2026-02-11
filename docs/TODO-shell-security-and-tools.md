@@ -1,95 +1,21 @@
-# TODO: Critical Tool Convergence Program (Rewritten + Deferred)
+# TODO: Critical Tool Convergence Program
 
 **Date:** 2026-02-10
 **Owner:** co-cli core
-**Status:** ⏸️ **DEFERRED TO PHASE 2.5** (after Phase 2c completion)
+**Status:** Deferred to Phase 2.5 (after Phase 2c completion)
 **Primary reference:** `docs/REVIEW-co-sandbox-shell-jail-vs-peers-2026-02-10.md`
 **Merged scope:** incorporates former `docs/TODO-subprocess-fallback-policy.md`
-**Deferral decision:** Architecture review (2026-02-10) - See `docs/ROADMAP-co-evolution.md`
 
 ---
 
-## 🔴 DEFERRAL NOTICE (2026-02-10)
-
-**This work has been deferred to Phase 2.5** based on comprehensive architecture review findings.
-
-### Why Deferred?
-
-An architecture review assessed whether shell security issues (Phase S0) represent fundamental architectural problems requiring large-scale refactoring before adding new capabilities.
-
-**Verdict**: ✅ **Architecture is Fundamentally Sound (9.9/10)**
-- Tool registration: 9.9/10 (centralized, zero global state)
-- Approval system: 9.8/10 (unified, no LLM bypass paths)
-- Tool contracts: 9.9/10 (uniform signatures, consistent returns)
-
-**Key Findings**:
-- S0's concerns are **policy gaps**, not architecture flaws
-- The `!cmd` bypass is intentional (escape hatch), not a bug
-- No architectural debt found - system is production-ready
-- Adding Phase 1e/2a tools poses no structural risk
-
-### When Will This Execute?
-
-**Phase 2.5**: After Phase 2a → 2b → 2c complete (before Phase 3 expansion)
-- S0 (Shell Boundary Hardening): 3-5 days
-- S1 (Policy Engine Upgrade): 3-4 days
-- C1 (File Tools): Deferred to Phase 2d (3-4h)
-
-**Phase 1e-FOLLOW-ON**: After Phase 2.5+ complete and knowledge system stabilizes
-
-**Or immediately if**: Incidents occur (then prioritize over feature work)
-
-### What Changed in Roadmap?
-
-**Original concern**: Need to fix S0 now (blocks all feature work for 3-5 days)
-
-**Revised sequence**:
-```
-Phase 2a (MCP Client, 6-8h) + security advisory re: `!` bypass
-  ↓
-Phase 2b (User Preferences, 10-12h)
-  ↓
-Phase 2c (Background Execution, 10-12h)
-  ↓
-Phase 2.5 (Shell Security S0+S1, 6-9 days) ← THIS DOCUMENT
-  ↓
-Phase 2d (File Tools C1, 3-4h)
-  ↓
-Phase 1e-FOLLOW-ON (Portable Identity, 9h) - deferred, non-core
-```
-
-**Reference**: Full review findings in plan mode transcript (search for "Architecture Review: Co Tooling System Health Check")
-
----
-
-## Why This Rewrite Exists (Original Context)
-
-The previous plan focused on adding missing tool families. That is still needed, but the latest review found a more fundamental issue:
-
-- the main risk is **control-plane mismatch** across shell entry paths and fallback modes,
-- not simply a lack of tool count.
-
-This rewritten TODO makes shell/sandbox policy integrity the first milestone. New tool families ship only after that baseline is stable.
-
-**Note**: While this remains the plan for Phase 2.5, it is no longer blocking immediate feature work (Phases 1e-2c).
-
----
-
-## Program Objective (Updated for Phase 2.5)
+## Program Objective
 
 Close converged peer gaps while preserving first-principles security, MVP scope, and Pythonic simplicity.
 
-**Active capability targets for Phase 2.5**:
-1. ✅ Shell/sandbox security hardening (S0+S1) - **PRIMARY FOCUS**
-2. Workspace file tools (C1 - Phase 2d)
-3. ~~Persistent memory tools (C2)~~ - **SKIP** (already shipped in Phase 1c with markdown lakehouse)
-4. Task/todo tools (C3)
-5. ~~MCP client integration (C4)~~ - **SKIP** (covered by Phase 2a)
-
-**Updated prerequisite**:
-- Phase 2.5 executes after Phase 1e → 2a → 2b → 2c complete
-- S0+S1 harden shell/sandbox approval boundary
-- C1 (file tools) ships as Phase 2d after S0+S1 complete
+**Capability targets**:
+1. Shell/sandbox security hardening (S0+S1)
+2. Workspace file tools (C1)
+3. Task/todo tools (C3)
 
 ---
 
@@ -111,7 +37,7 @@ Close converged peer gaps while preserving first-principles security, MVP scope,
 
 This program covers:
 - shell/sandbox control-plane hardening
-- MVP implementations for file/memory/todo/MCP tool families
+- MVP implementations for file and todo tool families
 - approval consistency and testable policy invariants
 - prompt + docs alignment with real tool signatures and behavior
 
@@ -119,7 +45,8 @@ This program does not cover:
 - multi-agent orchestration
 - plugin marketplace UX
 - long-running autonomous schedulers
-- non-essential integration expansion beyond MCP v1 stdio
+- memory tools (shipped in Phase 1c)
+- MCP client (covered by Phase 2a)
 
 ---
 
@@ -210,7 +137,7 @@ Merged implementation checklist:
 - `co_cli/deps.py`
 - `co_cli/config.py`
 - `co_cli/status.py`
-- `co_cli/banner.py`
+- `co_cli/_banner.py`
 - `settings.defaults.json`
 - `docs/DESIGN-09-tool-shell.md`
 
@@ -302,59 +229,6 @@ Goal: stop overusing shell for standard read/write/edit/list operations.
 
 ---
 
-## Phase C2: Memory v1 Tools ⚠️ CONFLICTS WITH PHASE 1C
-
-**Status**: **NOT PURSUING** - Conflicts with completed Phase 1c (Markdown Lakehouse)
-
-**Reason**: Phase 1c already implemented memory system with different architecture:
-- Markdown files as source of truth (`.co-cli/knowledge/memories/*.md`)
-- Frontmatter + grep-based search (Phase 1c MVP, evolving to FTS5 → vectors)
-- Three memory tools: `save_memory`, `recall_memory`, `list_memories` (already shipped)
-- Design: `docs/DESIGN-14-memory-lifecycle-system.md`
-
-This Phase C2 proposal (SQLite-based key-value store) conflicts with the shipped markdown lakehouse pattern. **Do not implement C2 - use Phase 1c memory tools instead.**
-
----
-
-## ~~Phase C2: Memory v1 Tools (Original Proposal - SUPERSEDED)~~
-
-Goal: provide explicit durable memory primitives under user control.
-
-### Tools
-
-- `save_memory(key: str, value: str, scope: str = "user")`
-- `recall_memory(query: str, limit: int = 10)`
-- `list_memories(limit: int = 50, scope: str | None = None)`
-- `delete_memory(key: str, scope: str = "user")`
-
-### Storage
-
-- SQLite in XDG data path (preferred MVP).
-
-### Approval Policy
-
-- no approval: `recall_memory`, `list_memories`
-- requires approval: `save_memory`, `delete_memory`
-
-### Constraints
-
-- [ ] durable preference/fact storage only.
-- [ ] avoid transient task state in memory store.
-- [ ] enforce key/value limits and normalization.
-
-### Tests
-
-- [ ] save/recall/list/delete roundtrip.
-- [ ] upsert behavior and scope filters.
-- [ ] persistence across restart.
-- [ ] approval wiring for writes.
-
-### Exit Criteria
-
-- [ ] memory behavior is explicit, local, and predictable.
-
----
-
 ## Phase C3: Todo Tools (Critical Capability)
 
 Goal: explicit progress state instead of implicit plan text only.
@@ -384,52 +258,6 @@ Goal: explicit progress state instead of implicit plan text only.
 ### Exit Criteria
 
 - [ ] agent can maintain visible, deterministic task state.
-
----
-
-## Phase C4: MCP Client v1 ⚠️ DUPLICATE OF PHASE 2A
-
-**Status**: **NOT PURSUING** - Duplicate of Phase 2a (MCP Client)
-
-**Reason**: Phase 2a already covers MCP client integration with comprehensive implementation guide:
-- Document: `docs/TODO-co-evolution-phase2a-mcp-client.md` (1,850 lines)
-- Scope: stdio transport, config schema, tool discovery, approval inheritance
-- Timeline: 6-8 hours (scheduled after Phase 1e)
-
-This Phase C4 is redundant. **Use Phase 2a implementation guide instead.**
-
----
-
-## ~~Phase C4: MCP Client v1 (Original Proposal - SUPERSEDED)~~
-
-Goal: extensibility without native reimplementation of every integration.
-
-### Scope
-
-- stdio transport first
-- project/user config
-- tool discovery at startup
-- approval compatibility with host policy flow
-
-### Tasks
-
-- [ ] add `mcp_servers` config schema.
-- [ ] implement MCP setup/runtime wiring helper.
-- [ ] attach MCP toolsets in agent creation.
-- [ ] ensure lifecycle management and teardown correctness.
-- [ ] prevent tool name collisions via server prefixing.
-- [ ] expose MCP status in `co status` surfaces.
-
-### Tests
-
-- [ ] config parse and validation coverage.
-- [ ] tool attachment and prefix collision prevention.
-- [ ] deferred approval compatibility checks.
-
-### Exit Criteria
-
-- [ ] at least one stdio MCP server works end-to-end.
-- [ ] native + MCP tools coexist without approval regressions.
 
 ---
 
@@ -472,30 +300,16 @@ Exit:
 - [ ] fallback behavior explicit and tested.
 - [ ] unsandboxed risk state persistently visible.
 
-## M1: Policy Uplift + File Tools (Phase 2.5, Weeks 2-3)
+## M1: Policy Uplift + Tools (Phase 2.5, Weeks 2-3)
 
 - [ ] Phase S1 complete.
 - [ ] Phase C1 complete.
+- [ ] Phase C3 complete.
 
 Exit:
 - [ ] shell policy decisions deterministic and tested.
 - [ ] file tool workflows replace shell for common operations.
-
-## M2: Todos (Phase 2.5, Weeks 3-4)
-
-- [ ] ~~Phase C2 complete~~ **SKIP** (conflicts with Phase 1c - already shipped)
-- [ ] Phase C3 complete.
-
-Exit:
-- [ ] ~~durable memory~~ (already shipped in Phase 1c)
 - [ ] explicit task tracking is production-usable.
-
-## M3: MCP v1 (Skipped - Covered by Phase 2a)
-
-- [ ] ~~Phase C4 complete~~ **SKIP** (duplicate of Phase 2a)
-
-Exit:
-- [ ] MCP stdio server integration is stable with approval parity. ← **Covered by Phase 2a instead**
 
 ---
 
@@ -513,10 +327,7 @@ Exit:
 4. Risk: path safety vulnerabilities in file tools.
 - Mitigation: centralized path safety helper + adversarial tests.
 
-5. Risk: MCP lifecycle complexity destabilizes chat loop.
-- Mitigation: stdio-only MVP and strict config validation first.
-
-6. Risk: prompt/docs drift from runtime.
+5. Risk: prompt/docs drift from runtime.
 - Mitigation: prompt-contract tests and mandatory docs sync per milestone.
 
 ---
@@ -524,25 +335,9 @@ Exit:
 ## Program Definition of Done
 
 - [ ] Shell/sandbox control plane is consistent and policy-safe.
-- [ ] All four critical capability families are shipped at MVP level.
+- [ ] File and todo capability families are shipped at MVP level.
 - [ ] Side effects are consistently behind approval policy.
 - [ ] No silent fail-open behavior in default secure path.
 - [ ] Prompt/tool contracts match runtime registration.
 - [ ] Functional tests cover policy invariants and each capability family.
 - [ ] Core workflows (`chat`, approval flow, status, existing tools) have no regressions.
-
----
-
-## Immediate Next Actions (DEFERRED TO PHASE 2.5)
-
-⏸️ **These actions are deferred until Phase 2.5** (after Phase 2c completion).
-
-**Current priority**: Execute Phase 2a → 2b → 2c first. (Phase 1e deferred to follow-on)
-
-**When Phase 2.5 begins**:
-1. Execute Phase S0 tasks first.
-2. Add `tests/test_shell_policy_invariants.py` and make it gating.
-3. Update `docs/DESIGN-09-tool-shell.md` after S0 lands.
-4. Start C1 file tools only after S0 exit criteria are green.
-5. Skip C2 (memory) - already completed in Phase 1c with different architecture.
-6. Skip C4 (MCP client) - covered by Phase 2a implementation.

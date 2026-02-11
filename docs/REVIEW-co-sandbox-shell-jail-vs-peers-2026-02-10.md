@@ -17,7 +17,7 @@ Primary code reviewed:
 - `co_cli/config.py`
 - `co_cli/_commands.py`
 - `co_cli/status.py`
-- `co_cli/banner.py`
+- `co_cli/_banner.py`
 - `tests/test_shell.py`
 - `tests/test_commands.py`
 
@@ -118,7 +118,7 @@ MVP fix:
 Evidence:
 - Fallback warning is one-time print (`co_cli/main.py:89`).
 - Status table marks sandbox as "Active" whenever not unavailable (`co_cli/status.py:147`), including subprocess mode.
-- Banner shows mode text (`co_cli/banner.py:36`) but no persistent caution state beyond startup.
+- Banner shows mode text (`co_cli/_banner.py:36`) but no persistent caution state beyond startup.
 
 Why this matters:
 - Risk state should be sticky and obvious, especially after fallback.

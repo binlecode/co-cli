@@ -65,7 +65,7 @@ We use `InstrumentationSettings(version=3)` for full spec compliance:
 | 2 (default) | `agent run`, `running tool` | `gen_ai.*` + `tool_arguments` |
 | **3 (spec)** | `invoke_agent {name}`, `execute_tool {name}` | `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` |
 
-### SQLite Span Exporter (`telemetry.py`)
+### SQLite Span Exporter (`_telemetry.py`)
 
 Custom exporter that writes spans to SQLite. Uses two-phase export: serialise spans into tuples (no DB lock), then write all rows in a single `executemany` (minimal lock window).
 
@@ -108,7 +108,7 @@ Short-lived connections (opened per `export()` call) avoid stale WAL readers tha
 | `running tools` | INTERNAL | tools (list of tool names) |
 | `execute_tool {name}` | INTERNAL | gen_ai.tool.name, gen_ai.tool.call.arguments, gen_ai.tool.call.result |
 
-### Trace Viewer (`trace_viewer.py`)
+### Trace Viewer (`_trace_viewer.py`)
 
 Generates static HTML with nested, collapsible spans. Builds a span tree from flat DB rows via `build_span_tree()`, then renders recursively with waterfall timing bars showing relative duration.
 
@@ -156,8 +156,8 @@ All data stays local (no external telemetry endpoints). Tool responses and full 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/telemetry.py` | SQLiteSpanExporter (OTel → SQLite) |
-| `co_cli/trace_viewer.py` | HTML generator (collapsible nested view) |
+| `co_cli/_telemetry.py` | SQLiteSpanExporter (OTel → SQLite) |
+| `co_cli/_trace_viewer.py` | HTML generator (collapsible nested view) |
 | `co_cli/datasette_metadata.json` | Datasette UI config |
 | `~/.local/share/co-cli/co-cli.db` | Span storage |
 | `~/.local/share/co-cli/traces.html` | Generated viewer (static, no server) |

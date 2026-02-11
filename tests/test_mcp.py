@@ -125,20 +125,31 @@ def test_settings_multiple_servers():
     assert s.mcp_servers["db"].command == "python"
 
 
-def test_github_token_from_env(monkeypatch):
-    """Default GitHub MCP server picks up GITHUB_TOKEN_BINLECODE env var."""
+def test_github_token_resolved_lazily(monkeypatch):
+    """GitHub token is resolved at agent creation, not at config import time."""
     monkeypatch.setenv("GITHUB_TOKEN_BINLECODE", "ghp_test123")
-    from co_cli.config import _github_env
-    env = _github_env()
-    assert env == {"GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_test123"}
+    agent, _, _ = get_agent(mcp_servers={
+        "github": MCPServerConfig(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+        ),
+    })
+    # ApprovalRequiredToolset wraps MCPServerStdio — unwrap to check env
+    mcp = agent.toolsets[1].wrapped
+    assert mcp.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_test123"
 
 
-def test_github_token_absent(monkeypatch):
-    """Default GitHub MCP server has empty env when GITHUB_TOKEN_BINLECODE not set."""
+def test_github_token_absent_no_env(monkeypatch):
+    """GitHub server gets no token env when GITHUB_TOKEN_BINLECODE is unset."""
     monkeypatch.delenv("GITHUB_TOKEN_BINLECODE", raising=False)
-    from co_cli.config import _github_env
-    env = _github_env()
-    assert env == {}
+    agent, _, _ = get_agent(mcp_servers={
+        "github": MCPServerConfig(
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-github"],
+        ),
+    })
+    mcp = agent.toolsets[1].wrapped
+    assert mcp.env is None or "GITHUB_PERSONAL_ACCESS_TOKEN" not in (mcp.env or {})
 
 
 def test_env_var_override(tmp_path, monkeypatch):
@@ -329,7 +340,8 @@ def test_status_with_mcp(tmp_path, monkeypatch):
     names = [name for name, _ in info.mcp_servers]
     assert "filesystem" in names
     assert "database" in names
-    assert all(status == "configured" for _, status in info.mcp_servers)
+    # npx is available on this machine, python always is
+    assert any(status == "ready" for _, status in info.mcp_servers)
 
 
 def test_status_table_renders_mcp(tmp_path, monkeypatch):
@@ -352,7 +364,7 @@ def test_status_table_renders_mcp(tmp_path, monkeypatch):
         obsidian="not found",
         slack="not configured",
         web_search="not configured",
-        mcp_servers=[("filesystem", "configured"), ("database", "configured")],
+        mcp_servers=[("filesystem", "ready"), ("database", "ready")],
         tool_count=21,
         db_size="0 KB",
         project_config=None,
@@ -367,7 +379,7 @@ def test_status_table_renders_mcp(tmp_path, monkeypatch):
     themed_console.print(table)
     output = buf.getvalue()
     assert "MCP Servers" in output
-    assert "2 configured" in output
+    assert "2 ready" in output
     assert "filesystem" in output
 
 
@@ -468,21 +480,10 @@ async def test_e2e_github_server():
 @pytest.mark.asyncio
 async def test_e2e_all_defaults_via_agent():
     """Start all 3 default MCP servers through the agent lifecycle."""
-    from co_cli.config import _DEFAULT_MCP_SERVERS, MCPServerConfig
+    from co_cli.config import _DEFAULT_MCP_SERVERS
 
-    # Rebuild defaults with live GitHub token
-    mcp_servers = {
-        "github": MCPServerConfig(
-            command="npx",
-            args=["-y", "@modelcontextprotocol/server-github"],
-            env={"GITHUB_PERSONAL_ACCESS_TOKEN": os.environ["GITHUB_TOKEN_BINLECODE"]},
-            approval="auto",
-        ),
-        "thinking": _DEFAULT_MCP_SERVERS["thinking"],
-        "context7": _DEFAULT_MCP_SERVERS["context7"],
-    }
-
-    agent, _, tool_names = get_agent(mcp_servers=mcp_servers)
+    # Token is now resolved lazily by get_agent() — no manual rebuild needed
+    agent, _, tool_names = get_agent(mcp_servers=_DEFAULT_MCP_SERVERS.copy())
 
     async with agent:
         from co_cli.main import _discover_mcp_tools

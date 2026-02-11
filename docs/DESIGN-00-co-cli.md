@@ -87,8 +87,7 @@ graph TB
 
 | Component | Doc | Summary |
 |-----------|-----|---------|
-| Agent & Dependencies | [DESIGN-01-agent.md](DESIGN-01-agent.md) | `get_agent()` factory, `CoDeps` dataclass, tool registration, multi-session state |
-| Chat Loop | [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) | Streaming, deferred approval, slash commands, input dispatch, interrupt handling |
+| Agent Loop | [DESIGN-01-agent-chat-loop.md](DESIGN-01-agent-chat-loop.md) | Agent factory, `CoDeps`, orchestration state machine, streaming, approval, slash commands, interrupts |
 | LLM Models | [DESIGN-03-llm-models.md](DESIGN-03-llm-models.md) | Gemini/Ollama model selection, inference parameters |
 | Streaming Event Ordering | [DESIGN-04-streaming-event-ordering.md](DESIGN-04-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
 | Telemetry | [DESIGN-05-otel-logging.md](DESIGN-05-otel-logging.md) | SQLite span exporter, WAL concurrency, trace viewers |
@@ -101,6 +100,7 @@ graph TB
 | Google Tools | [DESIGN-11-tool-google.md](DESIGN-11-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
 | Slack Tool | [DESIGN-12-tool-slack.md](DESIGN-12-tool-slack.md) | Channel/message/user tools, send with approval |
 | Web Tools | [DESIGN-13-tool-web-search.md](DESIGN-13-tool-web-search.md) | Brave Search + URL fetch, read-only |
+| MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
 
 ## Cross-Cutting Concerns
 
@@ -152,13 +152,13 @@ Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` r
 
 **Retry budget:** Agent-level `retries=settings.tool_retries` (default 3). All tools inherit the same budget.
 
-**Provider error handling:** `run_turn()` classifies provider errors via `classify_provider_error()`: HTTP 400 → reflection (inject error, re-run), 429/5xx/network → exponential backoff retry, 401/403/404 → abort. All retries capped at `settings.model_http_retries` (default 2). See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md).
+**Provider error handling:** `run_turn()` classifies provider errors via `classify_provider_error()`: HTTP 400 → reflection (inject error, re-run), 429/5xx/network → exponential backoff retry, 401/403/404 → abort. All retries capped at `settings.model_http_retries` (default 2). See [DESIGN-01-agent-chat-loop.md](DESIGN-01-agent-chat-loop.md).
 
 **Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 25) caps LLM round-trips per user turn.
 
 ### Approval Flow
 
-Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) for the full approval sequence and [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) for safe-command auto-approval.
+Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-01-agent-chat-loop.md](DESIGN-01-agent-chat-loop.md) for the full approval sequence and [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) for safe-command auto-approval.
 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
@@ -212,16 +212,16 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
 | `sandbox.py` | `SandboxProtocol` + backends (Docker, subprocess fallback) |
-| `telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
+| `_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
 | `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` |
-| `banner.py` | ASCII art welcome banner |
+| `_banner.py` | ASCII art welcome banner |
 | `_commands.py` | Slash command registry, handlers, `dispatch()` |
 | `_history.py` | History processors and `summarize_messages()` |
 | `_approval.py` | Shell safe-command classification |
-| `tail.py` | Real-time span viewer (`co tail`) |
-| `trace_viewer.py` | Static HTML trace viewer (`co traces`) |
-| `google_auth.py` | Google credential resolution (ensure/get/cached) |
+| `_tail.py` | Real-time span viewer (`co tail`) |
+| `_trace_viewer.py` | Static HTML trace viewer (`co traces`) |
+| `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `tools/shell.py` | `run_shell_command` — sandbox execution |
 | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |

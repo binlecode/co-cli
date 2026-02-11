@@ -12,8 +12,7 @@ Start with the [System Design](DESIGN-00-co-cli.md) overview, then explore compo
 ## Layers
 
 ### Core (01–04)
-- [01 — Agent & Dependencies](DESIGN-01-agent.md) — `get_agent()` factory, `CoDeps`, tool registration
-- [02 — Chat Loop](DESIGN-02-chat-loop.md) — Streaming, approval, slash commands, interrupts
+- [01 — Agent Loop](DESIGN-01-agent-chat-loop.md) — Agent factory, `CoDeps`, orchestration, streaming, approval, interrupts
 - [03 — LLM Models](DESIGN-03-llm-models.md) — Gemini/Ollama model selection
 - [04 — Streaming Event Ordering](DESIGN-04-streaming-event-ordering.md) — Boundary-safe stream rendering, event semantics
 

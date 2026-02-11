@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.google_auth import get_cached_google_creds
+from co_cli.tools._google_auth import get_cached_google_creds
 from co_cli.tools._errors import terminal_error, http_status_code
 
 

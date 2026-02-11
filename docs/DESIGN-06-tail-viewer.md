@@ -49,7 +49,7 @@ One line per completed span, with optional verbose content below model spans:
 
 ### Color Scheme
 
-Matches `trace_viewer.py` for consistency across all three viewers:
+Matches `_trace_viewer.py` for consistency across all three viewers:
 
 | Type | Rich Style |
 |------|------------|
@@ -93,8 +93,8 @@ These OTel attributes (from `InstrumentationSettings(version=3)`) are available 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/tail.py` | Polling loop, span formatting, `run_tail()` entry point |
+| `co_cli/_tail.py` | Polling loop, span formatting, `run_tail()` entry point |
 | `co_cli/main.py` | `@app.command() def tail(...)` — CLI wrapper |
-| `co_cli/trace_viewer.py` | Shared: `get_span_type()`, `format_duration()` |
+| `co_cli/_trace_viewer.py` | Shared: `get_span_type()`, `format_duration()` |
 | `co_cli/config.py` | Shared: `DATA_DIR` |
 | `~/.local/share/co-cli/co-cli.db` | SQLite span storage |

@@ -1,6 +1,7 @@
 """Environment / health checks and status table rendering."""
 
 import os
+import shutil
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -83,7 +84,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
             llm_status = "offline"
 
     # -- google credentials --
-    from co_cli.google_auth import GOOGLE_TOKEN_PATH, ADC_PATH
+    from co_cli.tools._google_auth import GOOGLE_TOKEN_PATH, ADC_PATH
 
     if (
         settings.google_credentials_path
@@ -116,9 +117,12 @@ def get_status(tool_count: int = 0) -> StatusInfo:
     web_search = "configured" if settings.brave_search_api_key else "not configured"
 
     # -- mcp servers --
-    mcp_status = [
-        (name, "configured") for name in settings.mcp_servers
-    ]
+    mcp_status = []
+    for name, cfg in settings.mcp_servers.items():
+        if shutil.which(cfg.command):
+            mcp_status.append((name, "ready"))
+        else:
+            mcp_status.append((name, f"{cfg.command} not found"))
 
     # -- db size --
     db_path = DATA_DIR / "co-cli.db"
@@ -158,8 +162,14 @@ def render_status_table(info: StatusInfo) -> Table:
     table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
     table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")
     if info.mcp_servers:
-        names = ", ".join(name for name, _ in info.mcp_servers)
-        table.add_row("MCP Servers", f"{len(info.mcp_servers)} configured", names)
+        ready = sum(1 for _, s in info.mcp_servers if s == "ready")
+        total = len(info.mcp_servers)
+        status_str = f"{ready}/{total} ready" if ready < total else f"{total} ready"
+        details = ", ".join(
+            name if s == "ready" else f"{name} ({s})"
+            for name, s in info.mcp_servers
+        )
+        table.add_row("MCP Servers", status_str, details)
     table.add_row("Database", "Active", info.db_size)
     if info.project_config:
         table.add_row("Project Config", "Active", info.project_config)

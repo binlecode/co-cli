@@ -50,7 +50,7 @@ Co loads persistent knowledge from markdown files at session start:
 - `recall_memory(query, max_results)` — Search memories by keyword
 - `list_memories()` — List all memories with summaries
 
-**Retrieval:** grep + frontmatter for Phase 1c MVP (<200 memories). Future phases: SQLite FTS5 → hybrid search with vectors.
+**Retrieval:** grep + frontmatter for MVP (<200 memories). Future: SQLite FTS5 → hybrid search with vectors.
 
 **Prompt injection:** Knowledge is wrapped in `<system-reminder>` tags and injected after personality, before project instructions.
 
@@ -114,8 +114,7 @@ Every component DESIGN doc follows a 4-section template:
 
 ### Design (architecture and implementation details, kept in sync with code)
 - `docs/DESIGN-00-co-cli.md` — Architecture overview, component index, cross-cutting concerns (config, tools, approval, security, concurrency)
-- `docs/DESIGN-01-agent.md` — Agent factory (`get_agent()`), `CoDeps` dataclass, tool registration, multi-session state
-- `docs/DESIGN-02-chat-loop.md` — Chat loop: streaming, deferred approval, slash commands, input dispatch, interrupt handling
+- `docs/DESIGN-01-agent-chat-loop.md` — Agent loop: factory, `CoDeps`, orchestration state machine, streaming, approval, slash commands, interrupts
 - `docs/DESIGN-03-llm-models.md` — LLM model configuration (Gemini, Ollama)
 - `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
 - `docs/DESIGN-05-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
@@ -131,11 +130,15 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-co-evolution-phase2.5-critical-tools.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)
-- `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
-- `docs/TODO-co-evolution-phase2a-mcp-client.md` — MCP client implementation checklist (stdio → HTTP → OAuth)
+- `docs/TODO-prompt-system-redesign.md` — Layered prompt composition, instruction discovery, test governance
+- `docs/TODO-user-preferences.md` — Workflow preferences system
+- `docs/TODO-background-execution.md` — Background task execution for long-running operations
+- `docs/TODO-shell-security-and-tools.md` — Shell security hardening + file/todo tools
+- `docs/TODO-knowledge-evolution.md` — Knowledge system: articles, learn mode, search scaling
+- `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
+- `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

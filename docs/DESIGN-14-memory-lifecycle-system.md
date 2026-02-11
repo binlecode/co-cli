@@ -63,7 +63,7 @@ The agent autonomously detects memory-worthy information through linguistic patt
 
 ### Signal Detection Patterns
 
-Located in `co_cli/prompts/system.md`. Markdown table showing input → signal → action:
+Described in the `save_memory` tool docstring (extracted by pydantic-ai as the tool description). Markdown table showing input → signal → action:
 
 | Signal Type | Trigger Phrases | Tag Convention |
 |-------------|-----------------|----------------|
@@ -271,14 +271,11 @@ Context.md lives "above" the conversation (system-level), memories live "in" the
 
 | File | Purpose |
 |------|---------|
-| `co_cli/prompts/system.md` | Signal patterns, negative guidance, triggering examples (section 2) |
 | `co_cli/knowledge.py` | `load_internal_knowledge()` — session start loader, size validation |
 | `co_cli/_frontmatter.py` | YAML frontmatter parsing and validation |
-| `co_cli/tools/memory.py` | Memory tools (`save_memory`, `recall_memory`, `list_memories`) + `MemoryEntry` dataclass + `_load_all_memories` scanner + `_detect_source()`, `_detect_category()` helpers |
+| `co_cli/tools/memory.py` | Memory tools (`save_memory`, `recall_memory`, `list_memories`) + `MemoryEntry` dataclass + `_load_all_memories` scanner + `_detect_source()`, `_detect_category()` helpers. Signal patterns and negative guidance live in tool docstrings (section 2) |
 | `co_cli/config.py` | Memory lifecycle settings (5 settings) |
 | `co_cli/_commands.py` | `/forget` slash command |
 | `co_cli/agent.py` | Tool registration (3 memory tools) |
 | `co_cli/prompts/__init__.py` | Prompt assembly with knowledge injection |
-| `tests/test_memory_lifecycle.py` | Lifecycle tests (34 tests) |
-| `tests/test_memory_tools.py` | Memory tool tests (14 tests) |
 | `scripts/demo_memory_lifecycle.py` | Interactive lifecycle demo |

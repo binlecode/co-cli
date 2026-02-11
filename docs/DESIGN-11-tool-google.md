@@ -33,7 +33,7 @@ The Google tools provide agent access to three Google Cloud services: Drive (sea
 
 ## 2. Core Logic
 
-### Google Auth (`co_cli/google_auth.py`)
+### Google Auth (`co_cli/tools/_google_auth.py`)
 
 Three infrastructure functions for credential resolution:
 
@@ -160,7 +160,7 @@ Tools never import `settings` — they access credentials via `ctx.deps`. Write 
 
 | File | Purpose |
 |------|---------|
-| `co_cli/google_auth.py` | `ensure_google_credentials()` + `get_google_credentials()` + `get_cached_google_creds()` |
+| `co_cli/tools/_google_auth.py` | `ensure_google_credentials()` + `get_google_credentials()` + `get_cached_google_creds()` |
 | `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
 | `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
