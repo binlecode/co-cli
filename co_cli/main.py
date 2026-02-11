@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import time
+from contextlib import AsyncExitStack
 from pathlib import Path
 from uuid import uuid4
 
@@ -122,9 +123,41 @@ def create_deps() -> CoDeps:
     )
 
 
+async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list[str]:
+    """Discover MCP tool names from connected servers (after async with agent).
+
+    Falls back to ``{prefix}_*`` placeholders if list_tools() is unavailable.
+    """
+    from pydantic_ai.mcp import MCPServerStdio
+
+    mcp_tool_names: list[str] = []
+    native_set = set(native_tool_names)
+
+    for toolset in agent.toolsets:
+        # Unwrap approval wrappers to reach MCPServerStdio
+        inner = getattr(toolset, "wrapped", toolset)
+        if not isinstance(inner, MCPServerStdio):
+            continue
+        try:
+            tools = await inner.list_tools()
+            prefix = inner.tool_prefix or ""
+            for t in tools:
+                name = f"{prefix}_{t.name}" if prefix else t.name
+                if name not in native_set:
+                    mcp_tool_names.append(name)
+        except Exception:
+            # Server not yet connected or list failed — use placeholder
+            prefix = inner.tool_prefix or "mcp"
+            mcp_tool_names.append(f"{prefix}_*")
+
+    return native_tool_names + sorted(mcp_tool_names)
+
+
 async def chat_loop(verbose: bool = False):
+    mcp_servers = settings.mcp_servers if settings.mcp_servers else None
     agent, model_settings, tool_names = get_agent(
         web_policy=settings.web_policy,
+        mcp_servers=mcp_servers,
     )
     deps = create_deps()
     frontend = TerminalFrontend()
@@ -138,12 +171,31 @@ async def chat_loop(verbose: bool = False):
         complete_while_typing=False,
     )
 
-    info = get_status(tool_count=len(tool_names))
-    display_welcome_banner(info)
+    # Start agent context (connects MCP servers).
+    # AsyncExitStack guarantees __aexit__ even if fallback path is taken.
+    stack = AsyncExitStack()
+    try:
+        await stack.enter_async_context(agent)
+    except Exception as e:
+        console.print(f"[yellow]MCP servers unavailable ({e}) — continuing without MCP[/yellow]")
+        await stack.aclose()  # clean up partially-started first agent
+        stack = AsyncExitStack()
+        agent, model_settings, tool_names = get_agent(
+            web_policy=settings.web_policy,
+        )
+        await stack.enter_async_context(agent)
+        mcp_servers = None
 
     message_history = []
     last_interrupt_time = 0.0
     try:
+        # MCP tools discovered after context entry — update tool_names
+        if mcp_servers:
+            tool_names = await _discover_mcp_tools(agent, tool_names)
+
+        info = get_status(tool_count=len(tool_names))
+        display_welcome_banner(info)
+
         while True:
             try:
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
@@ -209,6 +261,7 @@ async def chat_loop(verbose: bool = False):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
+        await stack.aclose()
         deps.sandbox.cleanup()
 
 

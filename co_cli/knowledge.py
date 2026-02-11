@@ -94,7 +94,7 @@ def load_internal_knowledge() -> str | None:
         section_parts.append(f"### {title}\n\n{body}")
 
     combined = "\n\n".join(section_parts)
-    knowledge = f"## Internal Knowledge\n\n{combined}"
+    knowledge = f"## Background Reference (not current conversation)\n\n{combined}"
 
     # Validate size
     size = len(knowledge.encode("utf-8"))

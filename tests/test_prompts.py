@@ -465,7 +465,7 @@ updated: 2026-02-09T14:30:00Z
         )
 
         prompt = get_system_prompt("gemini")
-        assert "Internal Knowledge" in prompt
+        assert "Background Reference" in prompt
         assert "Project Context" in prompt
         assert "Type: Python CLI" in prompt
         assert "<system-reminder>" in prompt
@@ -498,7 +498,7 @@ Test knowledge.
 
         base_idx = prompt.index("You are Co")
         personality_idx = prompt.index("Personality")
-        knowledge_idx = prompt.index("Internal Knowledge")
+        knowledge_idx = prompt.index("Background Reference")
         project_idx = prompt.index("Project-Specific Instructions")
 
         assert base_idx < personality_idx < knowledge_idx < project_idx

@@ -20,7 +20,7 @@ Start with the [System Design](DESIGN-00-co-cli.md) overview, then explore compo
 ### Infrastructure (05–08)
 - [05 — OpenTelemetry Logging](DESIGN-05-otel-logging.md) — SQLite span exporter, trace viewers
 - [06 — Tail Viewer](DESIGN-06-tail-viewer.md) — Real-time span viewer (`co tail`)
-- [07 — Conversation Memory](DESIGN-07-conversation-memory.md) — History processors, summarisation
+- [07 — Context Governance](DESIGN-07-context-governance.md) — History processors, summarisation
 - [08 — Theming & ASCII Art](DESIGN-08-theming-ascii.md) — Light/dark themes, semantic styles
 
 ### Tools (09–13)

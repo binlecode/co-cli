@@ -64,6 +64,7 @@ Co loads persistent knowledge from markdown files at session start:
 - **Tool approval**: Side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools
 - **Tool return type**: Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). Never return raw `list[dict]`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
+- **Pydantic-ai idiomatic**: Agent, deps, tools, and agentic flows must follow pydantic-ai's patterns — flat deps dataclass with direct field access (`ctx.deps.api_key`), `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, history processors for memory. Don't wrap, abstract over, or deviate from the SDK's conventions
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
@@ -117,18 +118,17 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
 - `docs/DESIGN-05-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
 - `docs/DESIGN-06-tail-viewer.md` — Real-time span tail viewer
-- `docs/DESIGN-07-conversation-memory.md` — Context governance (history processors, sliding window, summarisation)
+- `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
 - `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
 - `docs/DESIGN-09-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
 - `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-12-tool-slack.md` — Slack tool design
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management (context loading, dedup, consolidation, decay, protection, search evolution)
-- `docs/DESIGN-15-proactive-memory-detection.md` — Proactive memory detection (signal patterns, prompt engineering, interface to lifecycle)
+- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-critical-tools-convergence.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)
+- `docs/TODO-co-evolution-phase2.5-critical-tools.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)

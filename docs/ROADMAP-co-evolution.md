@@ -100,7 +100,7 @@ Based on the current repository:
 2. Web fetch already includes domain policy + private-network blocking + redirect revalidation.
 3. Google/Slack/Obsidian/Shell tools exist; this is already a multi-surface assistant.
 4. Explicit persistent personal memory tools (`save_memory`, `recall_memory`, `list_memories`) are implemented and shipped (Phase 1c ✅).
-5. MCP client support is planned but not yet shipped (`docs/TODO-phase2a-mcp-client.md`).
+5. MCP client support is planned but not yet shipped (`docs/TODO-co-evolution-phase2a-mcp-client.md`).
 6. No built-in background job runner for long agent tasks yet.
 7. No voice runtime yet.
 
@@ -149,7 +149,7 @@ Exit criteria:
 
 **Extensibility:**
 
-1. Implement MCP client Phase 1 (stdio) from `docs/TODO-phase2a-mcp-client.md`.
+1. Implement MCP client Phase 1 (stdio) from `docs/TODO-co-evolution-phase2a-mcp-client.md`.
 2. Add background job execution with:
    - explicit start command,
    - status inspection,
@@ -188,74 +188,21 @@ Exit criteria:
 1. Unattended tasks are opt-in, bounded, and reversible.
 2. Voice/computer-use do not bypass approval or audit trails.
 
-### 4.1 Voice-to-Voice Round Trip Design
+### 4.1 Voice-to-Voice Round Trip (Phase 3)
 
-Industry research (2025-2026) across OpenAI Realtime API, Google Gemini Live, Pipecat, LiveKit Agents, Bolna, and Vocode shows strong convergence. No peer CLI tool (codex, gemini-cli, opencode, claude-code, aider) has voice support — this is greenfield.
+**Architecture**: Cascading pipeline (STT → LLM → TTS) as overlay on existing text loop. Voice feeds transcribed text to `run_turn()`, synthesizes text response to audio. No changes to agent, tools, or approval flow.
 
-#### Architecture
+**Components** (local-first): Silero VAD, faster-whisper (STT), Kokoro-82M (TTS), sounddevice (I/O). Total ~500MB models, <800ms latency target.
 
-Three paradigms exist in production: cascading (STT → LLM → TTS, 800ms-2s), speech-to-speech (single model, 200-500ms), and hybrid (audio encoder → text LLM → TTS, 500-800ms). Co adopts cascading for Phase 3 because it preserves full text transcripts, keeps every component swappable, and integrates directly with the existing pydantic-ai agent. The protocol boundary allows a hybrid upgrade later with zero caller changes.
+**Activation**: Push-to-talk only (`co chat --voice` or `/voice`). Continuous listening deferred (requires echo cancellation).
 
-Pipeline:
+**Key Features**: Streaming at all stages, barge-in/interruption (<200ms), silence-based turn detection, OTel logging.
 
-```
-sounddevice (mic)
-    → silero-vad (speech detection)
-    → faster-whisper (STT)
-    → existing pydantic-ai agent (LLM, unchanged)
-    → kokoro-onnx (TTS)
-    → sounddevice (speaker)
-```
+**Boundaries**: No wake word, no voice cloning, no telephony, no speech-to-speech. Text remains primary — voice is convenience overlay.
 
-#### Component picks (converged local-first best-in-class)
+**Status**: Research complete, implementation deferred until Phase 2c ships. Design will be refreshed before execution to validate component choices against 2026+ frontier.
 
-| Component | Pick | Package | Size | Latency | License |
-|-----------|------|---------|------|---------|---------|
-| VAD | Silero VAD | `silero-vad` | 2MB | <1ms | MIT |
-| STT | faster-whisper base.en | `faster-whisper` | ~150MB | 200-500ms CPU | MIT |
-| TTS | Kokoro-82M | `kokoro-onnx` | ~350MB | <300ms | Apache 2.0 |
-| Audio I/O | sounddevice | `sounddevice` | tiny | — | MIT |
-
-Total model weight: ~500MB. Five pip packages (+ `soundfile`).
-
-Silero VAD is the de facto standard (Pipecat, LiveKit, RealtimeSTT, WhisperX all use it). Kokoro-82M is the quality/speed winner for local TTS. Piper is a faster fallback at lower quality.
-
-#### Streaming
-
-All production voice frameworks converge: streaming at every stage is mandatory. Partial STT results feed the LLM before the user finishes speaking. LLM token streaming feeds TTS incrementally. The pipeline runs concurrently via asyncio — capture, transcription, reasoning, and synthesis overlap.
-
-#### Activation model
-
-Push-to-talk first (key press to speak, release to submit). Toggled via `co chat --voice` or `/voice` slash command. Continuous VAD (always-listening) deferred — it requires acoustic echo cancellation to prevent the system from hearing its own TTS output, adding significant complexity.
-
-#### Barge-in and interruption
-
-Converged pattern across all production systems: (1) stop TTS playback immediately, (2) truncate unplayed audio buffer, (3) cancel in-progress LLM generation, (4) preserve partial response in conversation context, (5) start processing new utterance. Target: <200ms from detection to new processing.
-
-#### Turn detection
-
-Silence-based VAD with 300-500ms configurable threshold is the baseline. Semantic VAD (ML classifier scoring probability user is done speaking based on content) is the frontier — OpenAI shipped it, still immature. Co starts with silence-based, leaves protocol space for semantic upgrade.
-
-#### Latency target
-
-```
-VAD (<1ms) + STT (200ms) + LLM TTFT (300ms cloud) + TTS (300ms) ≈ 800ms
-```
-
-LLM TTFT + TTS TTFB account for 90%+ of total loop time. The cloud LLM path (Gemini Flash ~300ms TTFT) hits the 500-800ms production quality bar. Fully local (Ollama 7B ~800ms TTFT) lands at ~1250ms — acceptable but not conversational.
-
-Human response time is ~230ms. Production voice AI bar is 500-800ms. Above 1500ms feels broken.
-
-#### Integration point
-
-Voice wraps the existing text chat loop as an overlay. Text remains primary. The voice loop feeds transcribed text into `run_turn()` and synthesizes the text response — no changes to agent, tools, or approval flow. All voice I/O is logged in the same OTel trace pipeline.
-
-#### Boundaries
-
-1. No wake word in Phase 3 (push-to-talk only).
-2. No voice cloning or custom voice training.
-3. No phone/telephony integration.
-4. No speech-to-speech models — cascading keeps text in the loop for debugging, approval, and logging.
+**Full Design**: See `docs/TODO-co-evolution-phase3-voice.md` for detailed architecture, component rationale, latency analysis, and external research sources.
 
 ## 5. Boundaries and Non-Goals (Near Term)
 
@@ -285,11 +232,11 @@ Adopt frontier patterns where they improve outcomes, but keep Co's design contra
 | **1c** | Internal Knowledge | ✅ COMPLETE | 8-10h | TODO-co-evolution-phase1c-COMPLETE.md | - |
 | **1d** | Prompt Improvements | ✅ COMPLETE | 3-4h | TODO-co-evolution-phase1d-COMPLETE.md | - |
 | **1e-FOLLOW-ON** | Portable Identity | 📅 DEFERRED | 9h | TODO-co-evolution-phase1e-FOLLOW-ON.md | LOW |
-| **2a** | MCP Client (stdio) | 📝 DOCUMENTED | 6-8h | TODO-phase2a-mcp-client.md | HIGH |
+| **2a** | MCP Client (stdio) | 📝 DOCUMENTED | 6-8h | TODO-co-evolution-phase2a-mcp-client.md | HIGH |
 | **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-co-evolution-phase2b.md | MEDIUM |
-| **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-background-execution.md | MEDIUM |
-| **2.5** | Shell Security (S0+S1) | 📅 DEFERRED | 6-9d | TODO-critical-tools-convergence.md | HIGH |
-| **2d** | File Tools (C1) | 📅 DEFERRED | 3-4h | TODO-critical-tools-convergence.md | LOW |
+| **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-co-evolution-phase2c-background-execution.md | MEDIUM |
+| **2.5** | Shell Security (S0+S1) | 📅 DEFERRED | 6-9d | TODO-co-evolution-phase2.5-critical-tools.md | HIGH |
+| **2d** | File Tools (C1) | 📅 DEFERRED | 3-4h | TODO-co-evolution-phase2.5-critical-tools.md | LOW |
 
 **Total Remaining Work (Active)**: 26-32 hours (4 days)
 **Deferred Work (Phase 2.5+ and follow-ons)**: 6-9 days + 12-13 hours
@@ -298,7 +245,7 @@ Adopt frontier patterns where they improve outcomes, but keep Co's design contra
 
 ## Architecture Review (2026-02-10): Deferral Decision
 
-Before proceeding with Phase 1e, we conducted a comprehensive architecture review to assess if shell security issues identified in `TODO-critical-tools-convergence.md` (Phase S0) represent fundamental architectural problems requiring large-scale refactoring.
+Before proceeding with Phase 1e, we conducted a comprehensive architecture review to assess if shell security issues identified in `TODO-co-evolution-phase2.5-critical-tools.md` (Phase S0) represent fundamental architectural problems requiring large-scale refactoring.
 
 ### Review Findings: ✅ **Architecture is Fundamentally Sound (9.9/10)**
 
@@ -396,7 +343,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ---
 
 ### Phase 2a: MCP Client Integration
-**File**: `docs/TODO-phase2a-mcp-client.md` (1,850 lines) ✅
+**File**: `docs/TODO-co-evolution-phase2a-mcp-client.md` (1,850 lines) ✅
 
 **Goal**: Integrate MCP servers as external tool sources via stdio transport.
 
@@ -462,7 +409,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ---
 
 ### Phase 2c: Background Execution
-**File**: `docs/TODO-background-execution.md` (1,900 lines) ✅
+**File**: `docs/TODO-co-evolution-phase2c-background-execution.md` (1,900 lines) ✅
 
 **Goal**: Long-running tasks run in background without blocking chat. User can start, check status, cancel, and view results asynchronously.
 
@@ -486,7 +433,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ---
 
 ### Phase 2.5: Shell Security Hardening (S0+S1) 📅 DEFERRED
-**File**: `docs/TODO-critical-tools-convergence.md` (S0: Shell Boundary Hardening, S1: Policy Engine Upgrade)
+**File**: `docs/TODO-co-evolution-phase2.5-critical-tools.md` (S0: Shell Boundary Hardening, S1: Policy Engine Upgrade)
 
 **Goal**: Harden shell/sandbox approval boundary and establish structured command-policy evaluation.
 
@@ -505,7 +452,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ---
 
 ### Phase 2d: File Tools (C1) 📅 DEFERRED
-**File**: `docs/TODO-critical-tools-convergence.md` (Phase C1)
+**File**: `docs/TODO-co-evolution-phase2.5-critical-tools.md` (Phase C1)
 
 **Goal**: Stop overusing shell for standard read/write/edit/list operations.
 
@@ -518,6 +465,46 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 - ✅ No path escape in functional tests
 
 **Deferral Reason**: Not critical for current roadmap. Execute after Phase 2.5 (shell security) complete.
+
+---
+
+## Documentation Lifecycle Pattern
+
+### Phase Completion Workflow
+
+**Standard pattern for completing implementation phases:**
+
+1. Execute work following TODO implementation guide
+2. Create `-COMPLETE.md` file documenting outcomes, test results, time tracking
+3. Delete TODO file once COMPLETE file is committed and verified
+4. Move on to next phase
+
+**Example (Phase 1a, 1b completed 2026-02-09):**
+```
+TODO-co-evolution-phase1a.md (66KB, 1,800 lines implementation guide)
+  ↓ (work completed)
+TODO-co-evolution-phase1a-COMPLETE.md (6KB, 200 lines summary)
+  ↓ (cleanup)
+DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
+```
+
+**File size impact:**
+- Phase 1a TODO: 66KB → COMPLETE: 6KB (90% reduction)
+- Phase 1b TODO: 13KB → COMPLETE: 10KB (23% reduction)
+- **Rationale**: COMPLETE files capture all essential outcomes (what was delivered, test results, lessons learned, time tracking). TODO files are verbose implementation scaffolding only needed during execution.
+
+**Exception**: If implementation guide has significant historical value (novel architecture, complex decisions), consider renaming to `IMPLEMENTATION-phase*.md` instead of deleting. Not typically needed for straightforward implementations.
+
+### Anti-Pattern Note
+
+**Observed naming issue**: Phase TODO files (1,500-2,000 lines) are actually full implementation guides with architecture, code specs, and tests — not just "work items" as CLAUDE.md convention suggests.
+
+**Better naming for future phases** (post-Phase 2c):
+- `SPEC-phase*.md` or `IMPLEMENTATION-phase*.md` (implementation guide)
+- `TODO-phase*-items.md` (just the checklist/work items)
+- `COMPLETE-phase*.md` (completion report)
+
+**Current approach**: Keep `TODO-phase*.md` naming for consistency with existing phases 1c-2c.
 
 ---
 
@@ -603,16 +590,15 @@ Future enhancements beyond current Phase 1-2 roadmap, ranked by return on invest
 
 ## Unified Prompt Assembly Order
 
-After all phases complete, system prompt will assemble as:
+System prompt assembles as (recency = precedence):
 
 ```
-1. Base system.md (identity, principles, tool guidance)
-2. Model conditionals ([IF gemini] / [IF ollama])          ← Phase 1a ✅
-3. Model quirk counter-steering (if model_name provided)   ← Phase 1d ✅
-4. Personality template (if specified)                      ← Phase 1b ✅
-5. Internal knowledge (.co-cli/knowledge/context.md)        ← Phase 1c ✅
-6. User preferences (computed from settings)                ← Phase 2b
-7. Project instructions (.co-cli/instructions.md)           ← Phase 1a ✅
+1. Base system.md (identity, principles, tool guidance)     ← Phase 1a ✅
+2. Model quirk counter-steering (if model_name provided)    ← Phase 1d ✅
+3. Personality template (if specified)                       ← Phase 1b ✅
+4. Internal knowledge (.co-cli/knowledge/context.md)         ← Phase 1c ✅
+5. User preferences (computed from settings)                 ← Phase 2b
+6. Project instructions (.co-cli/instructions.md)            ← Phase 1a ✅
 ```
 
 Total context budget: ~15-20KB (manageable within LLM context window)
@@ -722,11 +708,12 @@ Total context budget: ~15-20KB (manageable within LLM context window)
 ### Implementation Guides
 - `docs/TODO-co-evolution-phase1c-COMPLETE.md` (2,594 lines) - Internal knowledge ✅
 - `docs/TODO-co-evolution-phase1d-COMPLETE.md` (1,500 lines) - Prompt improvements ✅
-- `docs/TODO-phase2a-mcp-client.md` (1,850 lines) - MCP client
+- `docs/TODO-co-evolution-phase2a-mcp-client.md` (1,850 lines) - MCP client
 - `docs/TODO-co-evolution-phase2b.md` (2,000 lines) - User preferences
-- `docs/TODO-background-execution.md` (1,900 lines) - Background execution
-- `docs/TODO-critical-tools-convergence.md` - Shell security + file tools (Phase 2.5+2d)
+- `docs/TODO-co-evolution-phase2c-background-execution.md` (1,900 lines) - Background execution
+- `docs/TODO-co-evolution-phase2.5-critical-tools.md` - Shell security + file tools (Phase 2.5+2d)
 - `docs/TODO-co-evolution-phase1e-FOLLOW-ON.md` - Portable identity (deferred)
+- `docs/TODO-co-evolution-phase3-voice.md` - Voice-to-voice round trip (Phase 3, deferred)
 
 ### Verification & Review
 - `docs/VERIFICATION-phase1c-demo-results.md` - Phase 1c verification
@@ -771,6 +758,8 @@ Total context budget: ~15-20KB (manageable within LLM context window)
 - **2026-02-10**: Phase 1d complete (prompt improvements, peer learnings)
 - **2026-02-10**: Architecture review complete - 9.9/10 score, defer Phase 2.5 and Phase 1e
 - **2026-02-10**: Documentation consolidation - merged DESIGN-co-evolution.md + ROADMAP-phases1c-2c.md → ROADMAP-co-evolution.md
+- **2026-02-10**: Added documentation lifecycle pattern from REVIEW-phase-documentation-cleanup.md
+- **2026-02-10**: Extracted voice detail to TODO-co-evolution-phase3-voice.md, replaced with 10-line summary (audit recommendation)
 - **2026-02-09**: Documentation phase complete (6 guides, ~10,100 lines)
 - **2026-02-09**: Phase 1a, 1b complete (model conditionals, personalities)
 

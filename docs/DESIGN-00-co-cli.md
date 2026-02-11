@@ -33,6 +33,7 @@ graph TB
         ToolCalendar[Calendar Tool]
         ToolSlack[Slack Tool]
         ToolWeb[Web Tools]
+        MCP[MCP Toolsets]
     end
 
     subgraph External Services
@@ -44,6 +45,7 @@ graph TB
         GCal[Calendar API]
         BraveAPI[Brave Search API]
         HTTP[HTTP / Web]
+        MCPServers[MCP Servers stdio]
     end
 
     subgraph Infrastructure
@@ -74,6 +76,7 @@ graph TB
     ToolSlack --> SlackAPI
     ToolWeb --> BraveAPI
     ToolWeb --> HTTP
+    MCP --> MCPServers
 
     Config --> Agent
     Agent --> Telemetry
@@ -90,10 +93,9 @@ graph TB
 | Streaming Event Ordering | [DESIGN-04-streaming-event-ordering.md](DESIGN-04-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
 | Telemetry | [DESIGN-05-otel-logging.md](DESIGN-05-otel-logging.md) | SQLite span exporter, WAL concurrency, trace viewers |
 | Tail Viewer | [DESIGN-06-tail-viewer.md](DESIGN-06-tail-viewer.md) | Real-time span viewer (`co tail`) |
-| Conversation Memory | [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md) | History processors, sliding window, summarisation |
+| Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
 | Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
-| Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files |
-| Proactive Memory Detection | [DESIGN-15-proactive-memory-detection.md](DESIGN-15-proactive-memory-detection.md) | Autonomous signal detection via prompt engineering—agent recognizes preferences, corrections, decisions without explicit commands |
+| Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files. Includes proactive signal detection (preferences, corrections, decisions) and lifecycle management (dedup, consolidation, decay) |
 | Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Docker sandbox, subprocess fallback, safe-prefix auto-approval |
 | Obsidian Tool | [DESIGN-10-tool-obsidian.md](DESIGN-10-tool-obsidian.md) | Vault search, path traversal protection |
 | Google Tools | [DESIGN-11-tool-google.md](DESIGN-11-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
@@ -117,9 +119,11 @@ XDG-compliant configuration with project-level overrides. Resolution order (high
 
 Project config is checked at `cwd/.co-cli/settings.json` only — no upward directory walk. `save()` always writes to the user-level file.
 
+MCP servers are configured in `settings.json` under `mcp_servers` (dict of name → `MCPServerConfig`) or via `CO_CLI_MCP_SERVERS` env var (JSON). Each server specifies `command`, `args`, `timeout`, `env`, `approval` ("auto"|"never"), and optional `prefix`.
+
 ### Tool Conventions
 
-All tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` remaining.
+Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` remaining. External tools are provided by MCP servers configured in `settings.json` and connected as pydantic-ai `MCPServerStdio` toolsets.
 
 **Return convention:** Tools returning data for the user return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_events()` renders tool returns inline as events arrive via `frontend.on_tool_result()`.
 
@@ -161,7 +165,9 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved in Docker. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
 | `send_slack_message` | Yes | Sends message visible to others |
-| All other tools | No | Read-only operations |
+| MCP tools (approval=auto) | Yes | External tools default to requiring approval |
+| MCP tools (approval=never) | No | Explicitly trusted by user config |
+| All other native tools | No | Read-only operations |
 
 ### Security Model
 
@@ -204,7 +210,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
 | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| `config.py` | `Settings` (Pydantic BaseModel) from `settings.json` + env vars |
+| `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
 | `sandbox.py` | `SandboxProtocol` + backends (Docker, subprocess fallback) |
 | `telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
 | `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |

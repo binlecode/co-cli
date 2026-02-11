@@ -6,4 +6,4 @@ has_children: true
 
 # Infrastructure (05–08)
 
-Telemetry, tail viewer, conversation memory, and theming — supporting subsystems.
+Telemetry, tail viewer, context governance, and theming — supporting subsystems.

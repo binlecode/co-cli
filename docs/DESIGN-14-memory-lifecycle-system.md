@@ -10,7 +10,7 @@ nav_order: 5
 
 The Memory Lifecycle system provides persistent knowledge across Co sessions using markdown files with YAML frontmatter. Two mechanisms:
 
-1. **Always-loaded context** — Static knowledge files injected into system prompt at session start (constant per session, not selective, not subject to DESIGN-07 history management)
+1. **Always-loaded context** — Static knowledge files injected into system prompt at session start (constant per session, not selective, not subject to DESIGN-07 context governance)
 2. **On-demand memories** — Searchable memories managed via agent tools with automatic dedup-on-write and size-based decay ("notes with gravity")
 
 **Memory lifecycle:** write (dedup → consolidate or create → decay if limit exceeded) → read (search/list) → manage (forget/protect).
@@ -24,7 +24,16 @@ The Memory Lifecycle system provides persistent knowledge across Co sessions usi
 
 ```mermaid
 flowchart TD
-    subgraph Write Path
+    subgraph trigger["Triggering (Section 2)"]
+        U[User input] --> V{Signal detection}
+        V -->|Preference/Correction/Decision| W[Agent calls save_memory]
+        V -->|No signal| X[Normal response]
+        W --> Y[Approval prompt]
+        Y -->|Approved| A
+        Y -->|Rejected| Z[Discard]
+    end
+
+    subgraph write["Write Path (Section 3)"]
         A[save_memory content, tags] --> B[_load_all_memories]
         B --> C{Dedup check<br/>recent window}
         C -->|≥85% similar| D[_update_existing_memory<br/>consolidate in-place]
@@ -36,7 +45,7 @@ flowchart TD
         G --> H
     end
 
-    subgraph Read Path
+    subgraph read["Read Path (Section 3)"]
         I[recall_memory query] --> J[_load_all_memories]
         J --> K[Filter by query + tags]
         K --> L[Sort by recency, return top N]
@@ -46,7 +55,73 @@ flowchart TD
     end
 ```
 
-## 2. Core Logic
+## 2. Knowledge Addition Triggering
+
+The agent autonomously detects memory-worthy information through linguistic pattern recognition. Pure prompt engineering — no hardcoded rules. The agent **reasons** about signals, not follows `if/then` rules.
+
+> **Interface to lifecycle:** This section covers the *input* side (detection → approval → `save_memory` call). Section 3 covers the *storage* side (dedup → consolidate → create → decay). The handoff point is the `save_memory(content, tags)` function call.
+
+### Signal Detection Patterns
+
+Located in `co_cli/prompts/system.md`. Markdown table showing input → signal → action:
+
+| Signal Type | Trigger Phrases | Tag Convention |
+|-------------|-----------------|----------------|
+| **Preference** | "I prefer", "I like", "I favor", "I use" | `["preference", domain]` |
+| **Correction** | "Actually", "No wait", "That's wrong", "I meant" | `["correction", domain]` |
+| **Decision** | "We decided", "We chose", "We implemented" | `["decision", domain]` |
+| **Context** | Factual statements about team/project/environment | `["context", domain]` |
+| **Pattern** | "We always", "When we [do X]", "Never [do Y]" | `["pattern", domain]` |
+
+The LLM uses these as **fuzzy matching templates** — similar phrasings trigger the same recognition.
+
+### Negative Guidance
+
+Equally important — what NOT to save:
+
+- **Speculation:** "Maybe we should...", "I think...", "Could we..."
+- **Questions:** "Should we use X?", "What if we tried Y?"
+- **Transient details:** Only relevant to current session
+- **Already known:** Information in context files
+- **Uncertain statements:** Lacking confidence
+
+Without negative guidance, models over-trigger (especially on speculation and questions).
+
+### Tool Docstring Design
+
+`save_memory` and `recall_memory` docstrings include structured "when to use" sections with signal examples, negative guidance, tag conventions, and concrete examples. Pydantic-AI extracts these as tool descriptions — the LLM sees them when deciding tool calls.
+
+`recall_memory` docstring says "Use this **proactively**" — the agent recalls memories without being asked when context would benefit.
+
+### Tone Calibration
+
+Modern models are tone-sensitive. Balanced tone produces better reasoning than aggressive language:
+
+- Declarative over imperative ("here are patterns" not "you must do X")
+- Pattern-focused over command-focused
+- Examples over rules
+- No intensity markers (bold, caps, "immediately", "CRITICAL")
+
+### Metadata Auto-Detection
+
+`_detect_source(tags)` and `_detect_category(tags)` derive `source` and `auto_category` from the tags the agent provides. If tags include signal types (preference, correction, etc.) → `source: "detected"`. First matching signal tag becomes `auto_category`. Keeps tool signature simple (no extra parameters).
+
+### Approval Flow
+
+Uses existing DeferredToolRequests pattern — no changes needed. `save_memory` has `requires_approval=True`. User sees content before save and can approve (`y`), reject (`n`), or auto-approve (`a`).
+
+### Example Flow
+
+```
+User: "I prefer async/await"
+  → Agent reads system prompt signal patterns
+  → Matches "I prefer" → Preference signal
+  → Calls save_memory("User prefers async/await", tags=["preference", "python"])
+  → Approval prompt: "Save memory 5? [y/n/a]"
+  → User approves → Passes to lifecycle system (section 3)
+```
+
+## 3. Core Logic
 
 ### Context Loading (Session Start)
 
@@ -161,9 +236,9 @@ Legacy field `consolidation_reason` accepted in validation for backward compatib
 
 File format remains stable — migration only adds indices.
 
-### Comparison with DESIGN-07 (Conversation Memory)
+### Comparison with DESIGN-07 (Context Governance)
 
-| Aspect | DESIGN-14 (Lifecycle) | DESIGN-07 (Conversation) |
+| Aspect | DESIGN-14 (Lifecycle) | DESIGN-07 (Context History) |
 |--------|----------------------|--------------------------|
 | **Scope** | Cross-session, persistent | In-session, ephemeral |
 | **Storage** | Markdown files | Message history (in-memory) |
@@ -172,7 +247,7 @@ File format remains stable — migration only adds indices.
 
 Context.md lives "above" the conversation (system-level), memories live "in" the conversation (message-level, ephemeral).
 
-## 3. Config
+## 4. Config
 
 ### Context Paths
 
@@ -192,13 +267,14 @@ Context.md lives "above" the conversation (system-level), memories live "in" the
 | `memory_decay_strategy` | `CO_CLI_MEMORY_DECAY_STRATEGY` | `"summarize"` | `"summarize"` \| `"cut"` |
 | `memory_decay_percentage` | `CO_CLI_MEMORY_DECAY_PERCENTAGE` | `0.2` | Fraction of oldest to decay (0.0-1.0) |
 
-## 4. Files
+## 5. Files
 
 | File | Purpose |
 |------|---------|
+| `co_cli/prompts/system.md` | Signal patterns, negative guidance, triggering examples (section 2) |
 | `co_cli/knowledge.py` | `load_internal_knowledge()` — session start loader, size validation |
 | `co_cli/_frontmatter.py` | YAML frontmatter parsing and validation |
-| `co_cli/tools/memory.py` | Memory tools (`save_memory`, `recall_memory`, `list_memories`) + `MemoryEntry` dataclass + `_load_all_memories` scanner |
+| `co_cli/tools/memory.py` | Memory tools (`save_memory`, `recall_memory`, `list_memories`) + `MemoryEntry` dataclass + `_load_all_memories` scanner + `_detect_source()`, `_detect_category()` helpers |
 | `co_cli/config.py` | Memory lifecycle settings (5 settings) |
 | `co_cli/_commands.py` | `/forget` slash command |
 | `co_cli/agent.py` | Tool registration (3 memory tools) |

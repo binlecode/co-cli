@@ -85,7 +85,7 @@ This design aligns with 4/4 peer systems analyzed:
 
 **Key Insight:** Markdown is the LLM-native format. All peer systems prioritize human editability and git workflow over programmatic schema enforcement.
 
-See `docs/REVIEW-phase1c-kb-peer-research.md` for detailed peer research and `docs/ANALYSIS-phase1c-design-contradiction.md` for format comparison.
+See `docs/REVIEW-kb-peer-research.md` for detailed peer research and `docs/ANALYSIS-phase1c-design-contradiction.md` for format comparison.
 
 ### Design Principles
 

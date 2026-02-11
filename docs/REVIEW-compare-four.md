@@ -8,7 +8,7 @@
 - **Claude Code** (`~/workspace_genai/claude-code`) — Binary + plugin system
 - **Aider** (`~/workspace_genai/aider`) — Python, class-based edit format specialization
 
-**Per-system reviews:** `REVIEW-codex-prompts.md`, `REVIEW-gemini-prompts.md`, `REVIEW-claude-code-prompts.md`, `REVIEW-aider-prompts.md`
+**Per-system reviews:** `REVIEW-prompts-codex.md`, `REVIEW-prompts-gemini.md`, `REVIEW-prompts-claude-code.md`, `REVIEW-aider-prompts.md`
 
 ---
 

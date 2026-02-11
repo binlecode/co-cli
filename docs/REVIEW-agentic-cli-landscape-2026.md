@@ -809,9 +809,9 @@ Systems range from **minimal** (Aider: ~500 lines, approval-first) to **massive*
 ### Comparative Document Evolution
 
 **Current:**
-- `REVIEW-codex-prompts.md` ✅
-- `REVIEW-gemini-prompts.md` ✅
-- `REVIEW-claude-code-prompts.md` ✅
+- `REVIEW-prompts-codex.md` ✅
+- `REVIEW-prompts-gemini.md` ✅
+- `REVIEW-prompts-claude-code.md` ✅
 - `REVIEW-compare-three.md` ✅
 
 **Recommended Next:**

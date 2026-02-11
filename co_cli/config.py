@@ -34,9 +34,11 @@ CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_N
 DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
-# Ensure directories exist
-CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def _ensure_dirs() -> None:
+    """Create config and data directories (idempotent)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 WebDecision = Literal["allow", "ask", "deny"]
@@ -45,6 +47,43 @@ WebDecision = Literal["allow", "ask", "deny"]
 class WebPolicy(BaseModel):
     search: WebDecision = Field(default="allow")
     fetch: WebDecision = Field(default="allow")
+
+
+class MCPServerConfig(BaseModel):
+    """Configuration for a single MCP server (stdio transport)."""
+    command: str = Field(description="Executable to launch (e.g. 'npx', 'uvx', 'python')")
+    args: list[str] = Field(default_factory=list)
+    timeout: int = Field(default=10, ge=1, le=60)
+    env: dict[str, str] = Field(default_factory=dict)
+    approval: Literal["auto", "never"] = Field(default="auto")
+    prefix: str | None = Field(default=None)
+
+
+def _github_env() -> dict[str, str]:
+    """Resolve GitHub token from environment for the default GitHub MCP server."""
+    token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
+    return {"GITHUB_PERSONAL_ACCESS_TOKEN": token} if token else {}
+
+
+# Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
+_DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
+    "github": MCPServerConfig(
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-github"],
+        env=_github_env(),
+        approval="auto",
+    ),
+    "thinking": MCPServerConfig(
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
+        approval="never",
+    ),
+    "context7": MCPServerConfig(
+        command="npx",
+        args=["-y", "@upstash/context7-mcp@latest"],
+        approval="never",
+    ),
+}
 
 
 class Settings(BaseModel):
@@ -89,6 +128,11 @@ class Settings(BaseModel):
     web_fetch_allowed_domains: list[str] = Field(default=[])
     web_fetch_blocked_domains: list[str] = Field(default=[])
     web_policy: WebPolicy = Field(default_factory=WebPolicy)
+
+    # MCP servers (stdio transport)
+    mcp_servers: dict[str, MCPServerConfig] = Field(
+        default_factory=lambda: _DEFAULT_MCP_SERVERS.copy()
+    )
 
     @field_validator("shell_safe_commands", mode="before")
     @classmethod
@@ -171,6 +215,10 @@ class Settings(BaseModel):
             if val:
                 data[field] = val
 
+        mcp_env = os.getenv("CO_CLI_MCP_SERVERS")
+        if mcp_env:
+            data["mcp_servers"] = json.loads(mcp_env)
+
         web_policy_search = os.getenv("CO_CLI_WEB_POLICY_SEARCH")
         web_policy_fetch = os.getenv("CO_CLI_WEB_POLICY_FETCH")
         if web_policy_search or web_policy_fetch:
@@ -222,5 +270,21 @@ def load_config() -> Settings:
 # Resolved project config path (None when no .co-cli/settings.json in cwd)
 project_config_path: Path | None = find_project_config()
 
-# Global config instance
-settings = load_config()
+# Lazy settings singleton — directories created on first access, not at import time.
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Return the global Settings instance, creating it on first call."""
+    global _settings
+    if _settings is None:
+        _ensure_dirs()
+        _settings = load_config()
+    return _settings
+
+
+def __getattr__(name: str):
+    """Lazy module attribute — ``from co_cli.config import settings`` works without import-time side effects."""
+    if name == "settings":
+        return get_settings()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

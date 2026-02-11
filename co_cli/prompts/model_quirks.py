@@ -116,7 +116,12 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
             "'What if we added X?', 'Maybe we should Y', 'This could Z', 'The code looks messy', 'The README could mention X'. "
             "These are observations/questions - respond with explanation or ask 'Would you like me to do that?'. "
             "NEVER modify code unless user uses imperative action verbs: 'Fix X', 'Add Y', 'Update Z', 'Delete A'. "
-            "When uncertain, ASK 'Would you like me to [action]?' instead of proceeding."
+            "When uncertain, ASK 'Would you like me to [action]?' instead of proceeding.\n\n"
+            "CRITICAL: You are in a MULTI-TURN conversation. The messages above this system prompt "
+            "ARE your conversation history — previous user messages and your previous responses. "
+            "When the user says 'the first one', 'option 2', 'yes', 'that one', or any short reference, "
+            "look at YOUR PREVIOUS RESPONSE in the message array to understand what they mean. "
+            "Do NOT claim you have no context. Do NOT look for conversation history inside the system prompt."
         ),
     },
 }

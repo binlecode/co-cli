@@ -8,7 +8,7 @@ nav_order: 2
 
 ## 1. What & How
 
-The chat loop in `main.py` is the REPL orchestrator: it dispatches slash commands, manages conversation memory, and handles interrupts. The LLM turn — streaming, approval chaining, and provider error handling — is delegated to `run_turn()` in `_orchestrate.py`, which communicates with the terminal through the `FrontendProtocol` abstraction. `TerminalFrontend` in `display.py` implements that protocol using Rich `Live` + `Markdown`.
+The chat loop in `main.py` is the REPL orchestrator: it dispatches slash commands, manages context history, and handles interrupts. The LLM turn — streaming, approval chaining, and provider error handling — is delegated to `run_turn()` in `_orchestrate.py`, which communicates with the terminal through the `FrontendProtocol` abstraction. `TerminalFrontend` in `display.py` implements that protocol using Rich `Live` + `Markdown`.
 
 ```mermaid
 stateDiagram-v2
@@ -297,7 +297,7 @@ COMMANDS: dict[str, SlashCommand] = { ... }  # explicit registry
 | `/status` | System health check |
 | `/tools` | List registered tool names |
 | `/history` | Show turn/message totals |
-| `/compact` | LLM-summarise history (see [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md)) |
+| `/compact` | LLM-summarise history (see [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md)) |
 | `/yolo` | Toggle `deps.auto_confirm` |
 | `/model` | Show/switch current model (Ollama only) |
 
@@ -379,9 +379,9 @@ Python 3.11+ `asyncio.run()` delivers `asyncio.CancelledError` instead of `Keybo
 | At prompt | Ctrl+C (2nd after 2s) | Treated as new 1st press (timeout reset) |
 | Anywhere | Ctrl+D (EOF) | Exits immediately |
 
-### Conversation Memory Integration
+### Context History Integration
 
-Each turn's full message history is accumulated via `turn_result.messages` and passed to the next `run_turn()` call. Two history processors run automatically before each model request — see [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md) for details.
+Each turn's full message history is accumulated via `turn_result.messages` and passed to the next `run_turn()` call. Two history processors run automatically before each model request — see [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) for details.
 
 ### REPL Features
 

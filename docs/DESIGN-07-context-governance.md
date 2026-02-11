@@ -1,10 +1,10 @@
 ---
-title: "07 — Conversation Memory"
+title: "07 — Context Governance"
 parent: Infrastructure
 nav_order: 3
 ---
 
-# Design: Conversation Memory
+# Design: Context Governance
 
 ## 1. What & How
 

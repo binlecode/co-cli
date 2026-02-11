@@ -392,7 +392,7 @@ Goal: explicit progress state instead of implicit plan text only.
 **Status**: **NOT PURSUING** - Duplicate of Phase 2a (MCP Client)
 
 **Reason**: Phase 2a already covers MCP client integration with comprehensive implementation guide:
-- Document: `docs/TODO-phase2a-mcp-client.md` (1,850 lines)
+- Document: `docs/TODO-co-evolution-phase2a-mcp-client.md` (1,850 lines)
 - Scope: stdio transport, config schema, tool discovery, approval inheritance
 - Timeline: 6-8 hours (scheduled after Phase 1e)
 

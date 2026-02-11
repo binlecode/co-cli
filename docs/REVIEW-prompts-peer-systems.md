@@ -18,7 +18,7 @@ Verbatim prompts extracted from 5 peer repos for review, learning, and borrowing
 
 **Repo:** `~/workspace_genai/codex` (Rust)
 
-⚠️ **DEEP DIVE AVAILABLE:** See [`REVIEW-codex-prompts.md`](./REVIEW-codex-prompts.md) for comprehensive architecture analysis, design patterns, and implementation recommendations.
+⚠️ **DEEP DIVE AVAILABLE:** See [`REVIEW-prompts-codex.md`](./REVIEW-prompts-codex.md) for comprehensive architecture analysis, design patterns, and implementation recommendations.
 
 ### 1.1 Base Instructions (default.md)
 
@@ -348,7 +348,7 @@ Sub-agents are there to make you go fast and time is a big constraint.
 
 **Repo:** `~/workspace_genai/gemini-cli` (TypeScript)
 
-⚠️ **DEEP DIVE AVAILABLE:** See [`REVIEW-gemini-prompts.md`](./REVIEW-gemini-prompts.md) for comprehensive architecture analysis, conditional composition system, and key innovations.
+⚠️ **DEEP DIVE AVAILABLE:** See [`REVIEW-prompts-gemini.md`](./REVIEW-prompts-gemini.md) for comprehensive architecture analysis, conditional composition system, and key innovations.
 
 ### 2.1 Main System Prompt (Gemini 3.x)
 
@@ -1014,8 +1014,8 @@ Don't request contributions for:
 
 This document provides high-level prompt excerpts from 4 peer systems. For **Codex** and **Gemini CLI**, comprehensive deep-dive analyses are available:
 
-- **[REVIEW-codex-prompts.md](./REVIEW-codex-prompts.md)** — 24-file modular architecture, 360+ configurations, layered composition
-- **[REVIEW-gemini-prompts.md](./REVIEW-gemini-prompts.md)** — Conditional block composition, Directive vs Inquiry innovation, anti-prompt-injection
+- **[REVIEW-prompts-codex.md](./REVIEW-prompts-codex.md)** — 24-file modular architecture, 360+ configurations, layered composition
+- **[REVIEW-prompts-gemini.md](./REVIEW-prompts-gemini.md)** — Conditional block composition, Directive vs Inquiry innovation, anti-prompt-injection
 
 ### Architecture Comparison
 

@@ -27,6 +27,7 @@ class StatusInfo:
     obsidian: str  # "configured" | "not found"
     slack: str  # "configured" | "not configured"
     web_search: str  # "configured" | "not configured"
+    mcp_servers: list[tuple[str, str]]  # [(name, "configured"), ...]
     tool_count: int
     db_size: str  # "1.2 KB" | "0 KB"
     project_config: str | None  # path to .co-cli/settings.json or None
@@ -114,6 +115,11 @@ def get_status(tool_count: int = 0) -> StatusInfo:
     # -- web search --
     web_search = "configured" if settings.brave_search_api_key else "not configured"
 
+    # -- mcp servers --
+    mcp_status = [
+        (name, "configured") for name in settings.mcp_servers
+    ]
+
     # -- db size --
     db_path = DATA_DIR / "co-cli.db"
     db_size = f"{os.path.getsize(db_path) / 1024:.1f} KB" if db_path.exists() else "0 KB"
@@ -130,6 +136,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         obsidian=obsidian,
         slack=slack,
         web_search=web_search,
+        mcp_servers=mcp_status,
         tool_count=tool_count,
         db_size=db_size,
         project_config=str(project_config_path) if project_config_path else None,
@@ -150,6 +157,9 @@ def render_status_table(info: StatusInfo) -> Table:
     table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
     table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
     table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")
+    if info.mcp_servers:
+        names = ", ".join(name for name, _ in info.mcp_servers)
+        table.add_row("MCP Servers", f"{len(info.mcp_servers)} configured", names)
     table.add_row("Database", "Active", info.db_size)
     if info.project_config:
         table.add_row("Project Config", "Active", info.project_config)

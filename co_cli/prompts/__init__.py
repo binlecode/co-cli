@@ -31,15 +31,14 @@ def get_system_prompt(
     personality: str | None = None,
     model_name: str | None = None,
 ) -> str:
-    """Assemble system prompt with personality and model quirk counter-steering.
+    """Assemble system prompt following the roadmap assembly order.
 
-    Processing steps:
-    1. Load base system.md
-    2. Inject personality template (if specified)
-    3. Inject internal knowledge from context files (if present)
-    4. Inject model quirk counter-steering (if known)
-    5. Append project instructions from .co-cli/instructions.md (if exists)
-    6. Validate result (no empty prompt)
+    Assembly order (recency = precedence):
+    1. Base system.md (identity, principles, tool guidance)
+    2. Model quirk counter-steering (shapes how personality is expressed)
+    3. Personality template (character + style)
+    4. Internal knowledge (background reference)
+    5. Project instructions (highest precedence user customization)
 
     Args:
         provider: LLM provider name ("gemini", "ollama", or unknown).
@@ -64,19 +63,7 @@ def get_system_prompt(
 
     base_prompt = prompt_file.read_text(encoding="utf-8")
 
-    # 2. Inject personality (if specified)
-    if personality:
-        personality_content = load_personality(personality)
-        base_prompt += f"\n\n## Personality\n\n{personality_content}"
-
-    # 3. Inject internal knowledge (if present)
-    from co_cli.knowledge import load_internal_knowledge
-
-    knowledge = load_internal_knowledge()
-    if knowledge:
-        base_prompt += f"\n\n<system-reminder>\n{knowledge}\n</system-reminder>"
-
-    # 4. Inject model quirk counter-steering (if known)
+    # 2. Inject model quirk counter-steering (if known)
     if model_name:
         from co_cli.prompts.model_quirks import get_counter_steering
 
@@ -84,14 +71,26 @@ def get_system_prompt(
         if counter_steering:
             base_prompt += f"\n\n## Model-Specific Guidance\n\n{counter_steering}"
 
-    # 6. Load project instructions if present
+    # 3. Inject personality (if specified)
+    if personality:
+        personality_content = load_personality(personality)
+        base_prompt += f"\n\n## Personality\n\n{personality_content}"
+
+    # 4. Inject internal knowledge (if present)
+    from co_cli.knowledge import load_internal_knowledge
+
+    knowledge = load_internal_knowledge()
+    if knowledge:
+        base_prompt += f"\n\n<system-reminder>\n{knowledge}\n</system-reminder>"
+
+    # 5. Load project instructions if present
     project_instructions = Path.cwd() / ".co-cli" / "instructions.md"
     if project_instructions.exists():
         instructions_content = project_instructions.read_text(encoding="utf-8")
         base_prompt += "\n\n## Project-Specific Instructions\n\n"
         base_prompt += instructions_content
 
-    # 7. Validate result
+    # Validate result
     if not base_prompt.strip():
         raise ValueError("Assembled prompt is empty after processing")
 

@@ -3,7 +3,7 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import settings, WebPolicy
+from co_cli.config import settings, WebPolicy, MCPServerConfig
 from co_cli.deps import CoDeps
 from co_cli._history import truncate_tool_returns, truncate_history_window
 from co_cli.prompts import get_system_prompt
@@ -27,6 +27,7 @@ def get_agent(
     *,
     all_approval: bool = False,
     web_policy: WebPolicy | None = None,
+    mcp_servers: dict[str, MCPServerConfig] | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
@@ -38,6 +39,8 @@ def get_agent(
             DeferredToolRequests without executing (no ModelRetry loops).
         web_policy: Per-tool web permission policy. "ask" is wired here via
             requires_approval while "deny" is enforced inside tool execution.
+        mcp_servers: MCP server configs to connect as toolsets. Servers are
+            started/stopped via ``async with agent``.
     """
     provider_name = settings.llm_provider.lower()
 
@@ -89,6 +92,23 @@ def get_agent(
         model_name=normalized_model,
     )
 
+    # Build MCP toolsets from config
+    mcp_toolsets = []
+    if mcp_servers:
+        from pydantic_ai.mcp import MCPServerStdio
+
+        for name, cfg in mcp_servers.items():
+            server = MCPServerStdio(
+                cfg.command,
+                args=cfg.args,
+                timeout=cfg.timeout,
+                env=cfg.env or None,
+                tool_prefix=cfg.prefix or name,
+            )
+            if cfg.approval == "auto":
+                server = server.approval_required()
+            mcp_toolsets.append(server)
+
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model,
         deps_type=CoDeps,
@@ -96,6 +116,7 @@ def get_agent(
         retries=settings.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[truncate_tool_returns, truncate_history_window],
+        toolsets=mcp_toolsets if mcp_toolsets else None,
     )
 
     # Side-effectful tools — require human approval via DeferredToolRequests
