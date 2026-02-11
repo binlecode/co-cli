@@ -8,7 +8,7 @@ Best practices for configuring Ollama as a local LLM backend for agentic CLI too
 
 Ollama ships models with a **4096-token default context window**. That's fine for single-turn chat, but agentic systems need much more: system prompts, tool schemas, conversation history, and tool outputs compete for context space. A 4K window causes silent prompt truncation — Ollama drops input without error, degrading tool calling and instruction following.
 
-**Two-layer defence:** configure context at the Ollama server level (Modelfile) so all clients benefit, *and* send `num_ctx` from Co as a client-side guarantee.
+**Critical:** Ollama's OpenAI-compatible API (`/v1/chat/completions`) **silently ignores `num_ctx`** from request parameters. The Modelfile is the only reliable way to set context window size. The `-agentic` variants in this repo ship with the correct `num_ctx`. Without it, GLM-4.7-Flash defaults to 2048 tokens and **loses multi-turn conversation history** even for short conversations.
 
 ---
 
@@ -78,12 +78,12 @@ PARAMETER repeat_penalty 1.0
 
 ## 2. Client-Level: Co Configuration
 
-Co sends `num_ctx` with every Ollama request as a client-side guarantee, independent of the Modelfile. This ensures consistent behaviour even if someone uses a base model tag without a custom Modelfile.
+Co sends `num_ctx` with every Ollama request via `extra_body`. **However**, Ollama's OpenAI-compatible API currently ignores this parameter (see [ollama#5356](https://github.com/ollama/ollama/issues/5356)). The Modelfile `PARAMETER num_ctx` is the only reliable mechanism. Co's client-side setting serves as documentation and future-proofing for when Ollama adds support.
 
 | Setting | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
 | `ollama_host` | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
-| `ollama_model` | `OLLAMA_MODEL` | `glm-4.7-flash:q4_k_m` | Model tag (use your custom tag) |
+| `ollama_model` | `OLLAMA_MODEL` | `glm-4.7-flash:q4_k_m-agentic` | Model tag (must use `-agentic` variant) |
 | `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `202752` | Context window sent per request |
 
 Example `settings.json`:
@@ -96,7 +96,7 @@ Example `settings.json`:
 }
 ```
 
-**Both layers matter:** the Modelfile sets the default for all Ollama clients (Open WebUI, curl, other tools). The Co setting guarantees the right value reaches the API regardless of which model tag is selected.
+**The Modelfile is the single source of truth** for `num_ctx`. Always use `-agentic` tags which have `num_ctx` baked in. Base tags (e.g. `glm-4.7-flash:q4_k_m` without `-agentic`) default to 2048 tokens and will break multi-turn conversations.
 
 ---
 
@@ -214,4 +214,6 @@ ollama serve
 
 - [Ollama Modelfile Reference](https://docs.ollama.com/modelfile)
 - [Ollama num_ctx behaviour](https://github.com/ollama/ollama/issues/2714)
+- [OpenAI API ignores num_ctx](https://github.com/ollama/ollama/issues/5356) — `num_ctx` must be in Modelfile, not API request
+- [GLM-4.7-Flash chat template issues](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/discussions/15) — Ollama template incompatibility
 - [GLM-4.7-Flash model card](https://huggingface.co/zai-org/GLM-4.7-Flash)

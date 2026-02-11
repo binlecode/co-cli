@@ -148,6 +148,11 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
         "tier": 1,
         # Terminal / SWE-Bench Verified profile
         # Source: https://huggingface.co/zai-org/GLM-4.7-Flash
+        # IMPORTANT: Ollama's OpenAI-compatible API ignores num_ctx from request
+        # params — num_ctx MUST be baked into the Modelfile. Use the -agentic
+        # variant (e.g. glm-4.7-flash:q4_k_m-agentic) which has
+        # PARAMETER num_ctx 202752. Without it, Ollama defaults to 2048 tokens
+        # and GLM loses multi-turn conversation history.
         "inference": {
             "temperature": 0.7,
             "top_p": 1.0,

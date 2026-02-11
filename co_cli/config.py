@@ -168,10 +168,14 @@ class Settings(BaseModel):
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="gemini")
     ollama_host: str = Field(default="http://localhost:11434")
-    ollama_model: str = Field(default="glm-4.7-flash:q4_k_m")
-    # Client-side num_ctx sent with every request for consistent context window.
-    # Also configure num_ctx in the Ollama Modelfile for other clients.
-    # See docs/GUIDE-ollama-local-setup.md for server-level best practices.
+    # IMPORTANT: Use -agentic Modelfile variants (e.g. glm-4.7-flash:q4_k_m-agentic).
+    # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
+    # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 2048
+    # tokens and silently lose multi-turn conversation history.
+    # See docs/GUIDE-ollama-local-setup.md for Modelfile setup.
+    ollama_model: str = Field(default="glm-4.7-flash:q4_k_m-agentic")
+    # Client-side num_ctx sent with every request. Currently ignored by Ollama's
+    # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
     ollama_num_ctx: int = Field(default=202752)
     gemini_model: str = Field(default="gemini-2.0-flash")
 
