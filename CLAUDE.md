@@ -16,6 +16,11 @@ uv run pytest -v                 # Verbose output
 uv run pytest tests/test_tools.py            # Single test file
 uv run pytest tests/test_tools.py::test_name # Single test function
 uv run pytest --cov=co_cli                   # With coverage
+
+# Demo & Evaluation Scripts
+uv run python scripts/demo_knowledge_roundtrip.py  # Knowledge system demo
+uv run python scripts/demo_e2e_streaming.py        # Streaming output demo
+uv run python scripts/eval_tool_calling.py         # Tool calling eval
 ```
 
 ## Architecture
@@ -30,6 +35,24 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 ```
 
 See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and approval pattern.
+
+## Internal Knowledge
+
+Co loads persistent knowledge from markdown files at session start:
+
+**Files:**
+- `~/.config/co-cli/knowledge/context.md` — Global context (3 KiB budget)
+- `.co-cli/knowledge/context.md` — Project context (7 KiB budget, overrides global)
+- `.co-cli/knowledge/memories/*.md` — On-demand memories (agent-searchable)
+
+**Tools:**
+- `save_memory(content, tags)` — Save a memory (requires approval)
+- `recall_memory(query, max_results)` — Search memories by keyword
+- `list_memories()` — List all memories with summaries
+
+**Retrieval:** grep + frontmatter for Phase 1c MVP (<200 memories). Future phases: SQLite FTS5 → hybrid search with vectors.
+
+**Prompt injection:** Knowledge is wrapped in `<system-reminder>` tags and injected after personality, before project instructions.
 
 ## Coding Standards
 
@@ -49,6 +72,7 @@ See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and ap
 
 ## Testing Policy
 
+- **Only pytest files in tests/** — All files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts (demos, evaluations, utilities) go in `scripts/`.
 - **Functional tests only** — no mocks or stubs. Tests hit real services.
 - **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search, Slack) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
@@ -100,9 +124,10 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-12-tool-slack.md` — Slack tool design
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
+- `docs/DESIGN-14-knowledge-system.md` — Knowledge system architecture (always-loaded context, memory tools, grep→FTS5→vector evolution)
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-subprocess-fallback-policy.md` — Tighten sandbox fallback: fail-fast option, persistent warning
+- `docs/TODO-critical-tools-convergence.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
 - `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)

@@ -101,7 +101,7 @@ From existing repo research (`docs/REVIEW-prompts-peer-systems.md:977`, `docs/RE
 
 **Evidence:**
 - Base prompt size: `26063` chars (~6516 token rough estimate). With default `finch`: `34586` chars (~8646 tokens), measured locally.
-- Design target says `<20KB total prompt context` (`docs/COMPLETION-phase-documentation.md:297`) and total overhead ~`7-17KB` (`docs/COMPLETION-phase-documentation.md:213`).
+- Design target: `<20KB total prompt context` with total overhead ~`7-17KB` (from Phase 1-2 roadmap).
 
 **Impact:**
 - Context headroom drops, especially for smaller local contexts.
@@ -128,7 +128,7 @@ From existing repo research (`docs/REVIEW-prompts-peer-systems.md:977`, `docs/RE
 ## P2-1: Documentation and Test Drift Is Visible
 
 **Evidence:**
-- Phase 1d marked “Not Started” (`docs/TODO-prompt-system-phase1d.md:3`) while results say complete (`docs/PHASE1D-RESULTS.md:5`).
+- Phase 1d is complete (see `docs/TODO-prompt-system-phase1d-COMPLETE.md`) but documentation drift remains in some areas.
 - Prompt test suite currently fails due stale expectation (`tests/test_prompts_phase1d.py:211` expects 10 models, actual 11).
 - `DESIGN-01-agent.md` prompt snippet no longer reflects current `system.md` scale/content (`docs/DESIGN-01-agent.md:145`).
 

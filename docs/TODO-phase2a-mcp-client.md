@@ -5,16 +5,43 @@
 **Risk:** Medium (process lifecycle, approval inheritance)
 **Target:** Phase 1 (stdio transport only)
 
+## Peer Landscape (Claude Code, Gemini CLI, Codex, Goose)
+
+All four systems that ship MCP client support converge on:
+
+1. **Config-driven server declaration** — JSON object in settings file mapping server names to transport config. Claude Code: `mcpServers` in project config; Gemini CLI: settings + CLI flags; Codex: env vars > project > global.
+2. **Stdio for local, HTTP for remote** — Every peer defaults to stdio transport for local servers (subprocess, single-client). Streamable HTTP for remote. SSE is deprecated — avoid for new work.
+3. **Dynamic tool discovery** — Query each server for available tools at startup. Support `notifications/tools/list_changed` for runtime updates.
+4. **Approval integration** — MCP tools inherit the host's existing approval/permission model. Claude Code: allow/ask/deny rules; Gemini CLI: `tools.allowed` prefix matching; Codex: policy engine.
+5. **Tool prefixing** — Avoid name collisions when multiple servers expose the same tool name. Prefix with server name (e.g. `github_create_issue`).
+
+**pydantic-ai v1.52+ has first-class MCP client support:**
+- `MCPServerStdio(command, args=[], timeout=10)` — stdio transport, launches subprocess
+- `MCPServerStreamableHTTP(url)` — Streamable HTTP transport for remote servers
+- `Agent(..., toolsets=[server1, server2])` — register MCP servers as toolsets alongside native tools
+- Tool prefixing via `tool_prefix` parameter on server instances
+- `async with agent` context manager handles server lifecycle (connect/disconnect)
+
 ## Executive Summary
 
 ### Goal
 Integrate MCP (Model Context Protocol) servers as external tool sources, allowing co-cli to discover and use tools from stdio-based MCP servers without writing custom tool code.
 
 ### Problem
-Co's tool ecosystem is currently limited to built-in tools registered in `agent.py`. Users cannot extend functionality without modifying co-cli source code. MCP provides a standard protocol for tool discovery and execution across language boundaries.
+Co's tool ecosystem currently has **21 native tools** across 6 platforms (Google Suite, Slack, Obsidian, Web, Memory, Shell) — excellent coverage of core use cases. However, users cannot extend beyond these without modifying co-cli source code.
+
+**The long tail problem**: Co cannot natively support:
+- Every communication platform (Discord, Teams, WhatsApp)
+- Every file storage service (Dropbox, OneDrive, S3)
+- Task managers (Jira, Linear, Asana)
+- Additional note systems (Notion, Roam, LogSeq)
+- Databases (Postgres, MySQL, MongoDB)
+- User-specific company APIs and custom integrations
+
+**MCP solves this** by providing a standard protocol for tool discovery and execution. Co maintains excellent native coverage for the top 6 platforms, while MCP unlocks the infinite long tail through community-maintained servers.
 
 ### Solution
-Add MCP client support via pydantic-ai's first-class MCP integration (`MCPServerStdio`, `MCPServerStreamableHTTP`). Phase 1 focuses on stdio transport for local servers. Future phases add HTTP transport and OAuth.
+Add MCP client support via pydantic-ai's first-class MCP integration (`MCPServerStdio`, `MCPServerStreamableHTTP`). **Native tools remain first-class** for core platforms; MCP extends beyond what's practical to maintain natively. Phase 1 focuses on stdio transport for local servers. Future phases add HTTP transport and OAuth.
 
 ### Scope — Phase 1
 - Config-driven server declaration in `settings.json`
@@ -882,7 +909,6 @@ ps aux | grep -E "(npx|node.*mcp)" | wc -l  # Should match before count
 ## References
 
 ### Design Docs
-- [TODO-mcp-client.md](TODO-mcp-client.md) — Original design document (Phase 1 stdio transport)
 - [DESIGN-00-co-cli.md](DESIGN-00-co-cli.md) — Architecture overview, tool conventions
 - [DESIGN-01-agent.md](DESIGN-01-agent.md) — Agent factory, `CoDeps`, tool registration
 - [DESIGN-02-chat-loop.md](DESIGN-02-chat-loop.md) — Approval flow, `DeferredToolRequests`

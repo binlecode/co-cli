@@ -36,9 +36,10 @@ def get_system_prompt(
     Processing steps:
     1. Load base system.md
     2. Inject personality template (if specified)
-    3. Inject model quirk counter-steering (if known)
-    4. Append project instructions from .co-cli/instructions.md (if exists)
-    5. Validate result (no empty prompt)
+    3. Inject internal knowledge from context files (if present)
+    4. Inject model quirk counter-steering (if known)
+    5. Append project instructions from .co-cli/instructions.md (if exists)
+    6. Validate result (no empty prompt)
 
     Args:
         provider: LLM provider name ("gemini", "ollama", or unknown).
@@ -68,7 +69,14 @@ def get_system_prompt(
         personality_content = load_personality(personality)
         base_prompt += f"\n\n## Personality\n\n{personality_content}"
 
-    # 3. Inject model quirk counter-steering (if known)
+    # 3. Inject internal knowledge (if present)
+    from co_cli.knowledge import load_internal_knowledge
+
+    knowledge = load_internal_knowledge()
+    if knowledge:
+        base_prompt += f"\n\n<system-reminder>\n{knowledge}\n</system-reminder>"
+
+    # 4. Inject model quirk counter-steering (if known)
     if model_name:
         from co_cli.prompts.model_quirks import get_counter_steering
 
@@ -76,14 +84,14 @@ def get_system_prompt(
         if counter_steering:
             base_prompt += f"\n\n## Model-Specific Guidance\n\n{counter_steering}"
 
-    # 4. Load project instructions if present
+    # 6. Load project instructions if present
     project_instructions = Path.cwd() / ".co-cli" / "instructions.md"
     if project_instructions.exists():
         instructions_content = project_instructions.read_text(encoding="utf-8")
         base_prompt += "\n\n## Project-Specific Instructions\n\n"
         base_prompt += instructions_content
 
-    # 5. Validate result
+    # 7. Validate result
     if not base_prompt.strip():
         raise ValueError("Assembled prompt is empty after processing")
 

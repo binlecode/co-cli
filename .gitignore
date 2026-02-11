@@ -25,6 +25,9 @@ settings.json
 coverage.xml
 htmlcov/
 
+# Demo and eval output
+demo_knowledge_temp/
+
 # Misc
 *.log
 .DS_Store

@@ -43,7 +43,7 @@ The `-COMPLETE.md` files contain all essential information about completed work.
 |------|------|-------|------|--------|--------|
 | `TODO-prompt-system-phase1c.md` | 83KB | 2,050 | Implementation guide | ⏳ Pending | **KEEP** |
 | `TODO-prompt-system-phase1d.md` | 63KB | 1,500 | Implementation guide | ⏳ Pending | **KEEP** |
-| `TODO-mcp-client-IMPL.md` | 32KB | 1,850 | Implementation guide | ⏳ Pending | **KEEP** |
+| `TODO-phase2a-mcp-client.md` | 32KB | 1,850 | Implementation guide | ⏳ Pending | **KEEP** |
 | `TODO-prompt-system-phase2b.md` | Not listed | 2,000 | Implementation guide | ⏳ Pending | **KEEP** |
 | `TODO-background-execution.md` | 64KB | 1,900 | Implementation guide | ⏳ Pending | **KEEP** |
 
@@ -51,23 +51,19 @@ The `-COMPLETE.md` files contain all essential information about completed work.
 
 ### Supporting Documentation
 
-| File | Size | Type | Status | Action |
-|------|------|------|--------|--------|
-| `RESEARCH-user-preferences.md` | 24KB | Research findings | ✅ Done | **KEEP** |
-| `ROADMAP-phases1c-2c.md` | 11KB | Roadmap summary | ✅ Done | **KEEP** |
-| `COMPLETION-phase-documentation.md` | 15KB | Documentation completion report | ✅ Done | **KEEP** |
+**Rationale**: All process documents have been cleaned up - gaps resolved, documentation complete, roadmap unified
 
-**Rationale**: Valuable reference material for implementation
+**Note**: `RESEARCH-user-preferences.md` (24KB) deleted - superseded by co's soul evolution approach (knowledge system learns preferences dynamically vs static config files)
 
 ### Other TODO Files (Not Phase-Related)
 
 | File | Type | Status | Action |
 |------|------|--------|--------|
 | `TODO-prompts-refactor.md` | Known issues | Active | **KEEP** |
-| `TODO-subprocess-fallback-policy.md` | Remaining work | Active | **KEEP** |
+| `TODO-critical-tools-convergence.md` | Remaining work (includes sandbox fallback policy) | Active | **KEEP** |
 | `TODO-cross-tool-rag.md` | Future work | Active | **KEEP** |
 | `TODO-slack-tooling.md` | Future work | Active | **KEEP** |
-| `TODO-mcp-client.md` | Design (superseded by TODO-mcp-client-IMPL.md) | Superseded | **EVALUATE** |
+| `TODO-mcp-client.md` | Design (superseded by TODO-phase2a-mcp-client.md) | Superseded | **DELETED ✅** (2026-02-10, merged into IMPL) |
 
 ---
 
@@ -255,22 +251,60 @@ Retained content (in COMPLETE):
 
 ---
 
-## Special Case: TODO-mcp-client.md
+## Roadmap Consolidation ✅ (2026-02-10)
+
+**Action**: Merged `DESIGN-co-evolution.md` + `ROADMAP-phases1c-2c.md` → `ROADMAP-co-evolution.md`
+
+**Rationale**:
+- Reduce documentation noise (2 files → 1 file)
+- Combine strategic vision (DESIGN) with tactical execution (ROADMAP)
+- Zero information loss - all content preserved
+- Single source of truth for roadmap
+- Both documents were complementary, not redundant
+
+**Structure**:
+- **Part I: Strategic Context** (from DESIGN-co-evolution.md)
+  - Vision (Finch companion, five pillars)
+  - Frontier Snapshot (2026 AI landscape: OpenAI, Anthropic, Google convergence)
+  - Ground Truth (Co's current capabilities)
+  - Strategic Roadmap (Phase 1/2/3 high-level goals)
+  - Boundaries & Principles
+- **Part II: Tactical Execution** (from ROADMAP-phases1c-2c.md)
+  - Phase Status Overview (table with 1a-2c + 2.5)
+  - Architecture Review Findings (9.9/10 score, deferral decisions)
+  - Documentation Summary (detailed phase descriptions)
+  - Implementation Sequence (recommended order, parallel workstreams)
+  - Future Work ROI Ranking
+  - Unified Prompt Assembly Order
+  - Success Metrics
+  - Risk Assessment
+  - Next Steps
+- **Part III: Reference**
+  - Design & Implementation Docs
+  - External Sources (24 frontier research URLs)
+  - Version History
+
+**Files Changed**:
+- ✅ Created: `docs/ROADMAP-co-evolution.md` (~750 lines)
+- ✅ Deleted: `docs/DESIGN-co-evolution.md` (291 lines)
+- ✅ Deleted: `docs/ROADMAP-phases1c-2c.md` (473 lines)
+- ✅ Updated: Cross-references in 6 other docs
+
+**Result**: Single unified roadmap serving both strategic planning and tactical execution needs.
+
+---
+
+## Special Case: TODO-mcp-client.md — RESOLVED ✅
 
 **Files**:
-- `TODO-mcp-client.md` (original design, Phase 1 stdio transport)
-- `TODO-mcp-client-IMPL.md` (implementation tracking, created 2026-02-09)
+- `TODO-mcp-client.md` (original design, Phase 1 stdio transport) — **DELETED 2026-02-10**
+- `TODO-phase2a-mcp-client.md` (implementation tracking, created 2026-02-09) — **ACTIVE**
 
-**Question**: Does TODO-mcp-client-IMPL.md supersede TODO-mcp-client.md?
-
-**Analysis**:
-- `TODO-mcp-client.md`: Original design document (Phase 1 only)
-- `TODO-mcp-client-IMPL.md`: Implementation tracking (extends original design)
-
-**Recommendation**: **KEEP BOTH for now**
-- Original design may have architectural context
-- Implementation tracking is the active guide
-- Evaluate after Phase 2a completion (may merge or delete original)
+**Resolution**: **MERGED AND DELETED**
+- Unique content from `TODO-mcp-client.md` (peer landscape, convergence analysis) merged into `TODO-phase2a-mcp-client.md`
+- `TODO-mcp-client.md` deleted to eliminate duplication
+- `TODO-phase2a-mcp-client.md` is now the single source of truth for MCP implementation
+- All references updated to point to the unified file
 
 ---
 

@@ -1,8 +1,52 @@
-# Phase 1e: Portable Identity - TODO
+# Phase 1e-FOLLOW-ON: Portable Identity - TODO
 
-**Status:** ⏳ Pending (follows Phase 1c completion)
+**Status:** 📅 **DEFERRED** (Non-Core Feature)
 **Estimated Effort:** 9 hours
-**Dependencies:** Phase 1c (internal knowledge system)
+**Dependencies:** Phase 1c (internal knowledge system) - Already Complete ✅
+
+---
+
+## 🔴 DEFERRAL NOTICE (2026-02-10)
+
+**This phase has been deferred to follow-on status** based on architecture review and roadmap prioritization.
+
+### Why Deferred?
+
+**Phase 1e is portability polish, not core functionality.**
+
+**Rationale**:
+1. **Let Phase 1c stabilize first** - Knowledge system just shipped, needs production validation
+2. **Co should have a soul before making it portable** - First *use* knowledge in production, then worry about export/import/sync
+3. **Symlinks work today** - Users can already achieve portability: `ln -s ~/Dropbox/co-knowledge ~/.config/co-cli/knowledge`
+4. **Higher priorities waiting** - Phase 2a (MCP Client), 2b (User Preferences), 2c (Background Execution) deliver more immediate user value
+
+### When Will This Execute?
+
+**Phase 1e-FOLLOW-ON**: After Phase 1c knowledge system stabilizes in production usage
+- No earlier than Phase 3+ timeframe
+- When users explicitly request export/import/sync features
+- After Phase 2a-2c complete and stabilize
+
+### What Changed in Roadmap?
+
+**Original plan**: Phase 1e after Phase 1c (portable identity next)
+
+**Revised sequence**:
+```
+Phase 2a (MCP Client, 6-8h) ← NEXT
+  ↓
+Phase 2b (User Preferences, 10-12h)
+  ↓
+Phase 2c (Background Execution, 10-12h)
+  ↓
+Phase 2.5 (Shell Security S0+S1, 6-9 days)
+  ↓
+Phase 2d (File Tools C1, 3-4h)
+  ↓
+Phase 1e-FOLLOW-ON (Portable Identity, 9h) ← THIS DOCUMENT
+```
+
+**Reference**: Architecture review and roadmap in `docs/ROADMAP-co-evolution.md`
 
 ---
 

@@ -10,7 +10,10 @@ EXPECTED_TOOLS = {
     "run_shell_command",
     "create_email_draft",
     "send_slack_message",
+    "save_memory",
     # Read-only
+    "recall_memory",
+    "list_memories",
     "search_notes",
     "list_notes",
     "read_note",
@@ -32,6 +35,7 @@ EXPECTED_APPROVAL_TOOLS = {
     "run_shell_command",
     "create_email_draft",
     "send_slack_message",
+    "save_memory",
 }
 
 

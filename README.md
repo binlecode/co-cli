@@ -170,6 +170,51 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 
 ---
 
+## Internal Knowledge
+
+Co can remember your preferences and project context across sessions using markdown-based knowledge files.
+
+**Always-loaded context** (injected into every prompt):
+- **Global**: `~/.config/co-cli/knowledge/context.md` — user preferences (3 KiB budget)
+- **Project**: `.co-cli/knowledge/context.md` — project-specific context (7 KiB budget, overrides global)
+
+**On-demand memories** (agent can search during chat):
+- Stored in `.co-cli/knowledge/memories/` as numbered markdown files
+- Agent uses three tools: `save_memory`, `recall_memory`, `list_memories`
+
+**Usage during chat:**
+```
+You: "Remember that I prefer async/await over callbacks"
+Co: ✓ Saved memory 1: prefers-async-await.md
+
+You: "What do you remember about my coding style?"
+Co: Found 1 memory matching 'coding style':
+    Memory 1 (created 2026-02-09)
+    User prefers async/await over callbacks
+```
+
+**Manual editing:**
+All knowledge files are plain markdown with YAML frontmatter. Edit with any text editor — changes take effect in the next session.
+
+**Example context.md:**
+```markdown
+---
+version: 1
+updated: 2026-02-09T14:30:00Z
+---
+
+# User
+- Name: Bin
+- Timezone: US/Pacific
+- Prefers: async/await, pytest for tests
+
+# Project
+- Type: Python CLI using pydantic-ai
+- Test policy: functional tests only, no mocks
+```
+
+---
+
 ## Security & Architecture
 
 ### Sandbox (Docker + Subprocess Fallback)

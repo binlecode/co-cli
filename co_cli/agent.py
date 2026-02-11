@@ -20,6 +20,7 @@ from co_cli.tools.slack import (
     list_slack_users,
 )
 from co_cli.tools.web import web_search, web_fetch
+from co_cli.tools.memory import save_memory, recall_memory, list_memories
 
 
 def get_agent(
@@ -101,8 +102,11 @@ def get_agent(
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(send_slack_message, requires_approval=True)
+    agent.tool(save_memory, requires_approval=True)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
+    agent.tool(recall_memory, requires_approval=all_approval)
+    agent.tool(list_memories, requires_approval=all_approval)
     agent.tool(search_notes, requires_approval=all_approval)
     agent.tool(list_notes, requires_approval=all_approval)
     agent.tool(read_note, requires_approval=all_approval)
@@ -124,6 +128,7 @@ def get_agent(
 
     tool_names = [
         run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,
+        save_memory.__name__, recall_memory.__name__, list_memories.__name__,
         search_notes.__name__, list_notes.__name__, read_note.__name__,
         search_drive_files.__name__, read_drive_file.__name__,
         list_emails.__name__, search_emails.__name__,

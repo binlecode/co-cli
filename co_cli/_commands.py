@@ -149,6 +149,40 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
     agent.system_prompt = new_system_prompt
 
 
+async def _cmd_forget(ctx: CommandContext, args: str) -> None:
+    """Delete a memory by ID."""
+    from pathlib import Path
+
+    if not args.strip():
+        console.print("[bold red]Usage:[/bold red] /forget <memory_id>")
+        console.print("[dim]Example: /forget 5[/dim]")
+        return None
+
+    try:
+        memory_id = int(args.strip())
+    except ValueError:
+        console.print(f"[bold red]Invalid memory ID:[/bold red] {args}")
+        console.print("[dim]Memory ID must be a number.[/dim]")
+        return None
+
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    if not memory_dir.exists():
+        console.print("[dim]No memories directory found.[/dim]")
+        return None
+
+    # Find file with this ID
+    matching_files = list(memory_dir.glob(f"{memory_id:03d}-*.md"))
+    if not matching_files:
+        console.print(f"[bold red]Memory {memory_id} not found[/bold red]")
+        console.print("[dim]Use /list_memories to see available IDs.[/dim]")
+        return None
+
+    # Delete file
+    matching_files[0].unlink()
+    console.print(f"[success]✓ Deleted memory {memory_id}: {matching_files[0].name}[/success]")
+    return None
+
+
 async def _cmd_model(ctx: CommandContext, args: str) -> None:
     """Switch Ollama model or show current model."""
     from co_cli.config import settings
@@ -210,6 +244,7 @@ COMMANDS: dict[str, SlashCommand] = {
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "yolo": SlashCommand("yolo", "Toggle auto-approve mode", _cmd_yolo),
     "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
+    "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
 }
 
 
