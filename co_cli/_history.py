@@ -93,6 +93,7 @@ def truncate_tool_returns(
     Registered as the *first* history processor — cheap string work, no
     LLM call.
     """
+    # Sync processor — no RunContext available; reads global settings directly.
     from co_cli.config import settings
 
     threshold = settings.tool_output_trim_chars
@@ -180,9 +181,7 @@ async def truncate_history_window(
 
     Registered as the *second* history processor.
     """
-    from co_cli.config import settings
-
-    max_msgs = settings.max_history_messages
+    max_msgs = ctx.deps.max_history_messages
     if max_msgs <= 0 or len(messages) <= max_msgs:
         return messages
 
@@ -205,7 +204,7 @@ async def truncate_history_window(
     summary_marker: ModelRequest
     try:
         # Resolve summarisation model
-        model = settings.summarization_model or ctx.model
+        model = ctx.deps.summarization_model or ctx.model
         summary_text = await summarize_messages(dropped, model)
         summary_marker = ModelRequest(parts=[
             UserPromptPart(

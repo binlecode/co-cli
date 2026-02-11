@@ -62,6 +62,9 @@ def _real_run_context(model):
     deps = CoDeps(
         sandbox=SubprocessBackend(),
         session_id="test-history",
+        max_history_messages=40,
+        tool_output_trim_chars=2000,
+        summarization_model="",
     )
     return RunContext(
         deps=deps,

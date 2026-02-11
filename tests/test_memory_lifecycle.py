@@ -20,7 +20,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-from co_cli.config import Settings
 from co_cli.deps import CoDeps
 from co_cli.tools.memory import (
     MemoryEntry,
@@ -55,13 +54,11 @@ def mock_ctx():
         def __init__(self):
             self.deps = CoDeps(
                 sandbox=SubprocessBackend(),
-                settings=Settings(
-                    memory_max_count=200,
-                    memory_dedup_window_days=7,
-                    memory_dedup_threshold=85,
-                    memory_decay_strategy="summarize",
-                    memory_decay_percentage=0.2,
-                ),
+                memory_max_count=200,
+                memory_dedup_window_days=7,
+                memory_dedup_threshold=85,
+                memory_decay_strategy="summarize",
+                memory_decay_percentage=0.2,
             )
 
     return Context()
@@ -754,8 +751,8 @@ class TestE2EFlows:
     async def test_e2e_decay_flow(self, temp_memory_dir, mock_ctx):
         """Full decay flow: save 201 → verify decay triggered."""
         # Configure for testing
-        mock_ctx.deps.settings.memory_max_count = 10
-        mock_ctx.deps.settings.memory_decay_percentage = 0.2
+        mock_ctx.deps.memory_max_count = 10
+        mock_ctx.deps.memory_decay_percentage = 0.2
 
         # Save 10 memories (at limit)
         for i in range(10):

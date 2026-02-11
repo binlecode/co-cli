@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.10] - 2026-02-11
 
+### Fixed
+- **CoDeps flat settings injection**: Eliminated hybrid config access pattern — removed `settings: Settings` object from `CoDeps`, flattened 8 memory/history fields as scalars. Tools now use `ctx.deps.memory_max_count` (not `ctx.deps.settings.memory_max_count`). `truncate_history_window` uses DI via `ctx.deps` instead of importing global singleton. Prevents divergence traps where `deps.X` and `deps.settings.X` could hold different values at runtime.
+
 ### Added
 - **Ollama agentic Modelfiles** (`ollama/`): Pre-built Modelfiles for GLM-4.7-Flash (q4_k_m, q8_0) and Qwen3-30B-A3B with verified inference parameters from official model cards. Parameters: `num_ctx` (native context), `num_predict`, `temperature`, `top_p`, `repeat_penalty`.
 - **`docs/GUIDE-ollama-local-setup.md`**: Comprehensive guide for configuring Ollama as a local LLM backend for agentic systems — Modelfile configuration, client-level settings, RAM-to-context sizing guide, model recommendations with tool-calling verification, server tuning (flash attention, keep-alive, memory management), Apple Silicon specifics.

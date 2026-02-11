@@ -1,24 +1,20 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from co_cli.config import WebPolicy
 from co_cli.sandbox import SandboxProtocol
-
-if TYPE_CHECKING:
-    from co_cli.config import Settings
 
 
 @dataclass
 class CoDeps:
     """Runtime dependencies for agent tools.
 
-    Design: Contains runtime resources, NOT config objects.
-    Settings creates these in main.py, then injects here.
+    Flat fields only — no config objects. main.py reads Settings once and
+    injects scalar values here. Tools access ctx.deps.field_name directly.
     """
 
     sandbox: SandboxProtocol
-    settings: "Settings" = field(default=None)  # Added for memory lifecycle configuration
     auto_confirm: bool = False  # Session-yolo: set True when user picks "a" in approval prompt
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
@@ -45,3 +41,15 @@ class CoDeps:
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
     web_fetch_blocked_domains: list[str] = field(default_factory=list)
     web_policy: WebPolicy = field(default_factory=WebPolicy)
+
+    # Memory lifecycle
+    memory_max_count: int = 200
+    memory_dedup_window_days: int = 7
+    memory_dedup_threshold: int = 85
+    memory_decay_strategy: str = "summarize"
+    memory_decay_percentage: float = 0.2
+
+    # History governance
+    max_history_messages: int = 40
+    tool_output_trim_chars: int = 2000
+    summarization_model: str = ""

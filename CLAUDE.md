@@ -64,6 +64,7 @@ Co loads persistent knowledge from markdown files at session start:
 - **Tool approval**: Side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools
 - **Tool return type**: Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). Never return raw `list[dict]`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
+- **CoDeps is flat scalars only**: `CoDeps` holds flat fields (`ctx.deps.memory_max_count`, `ctx.deps.brave_search_api_key`), never config objects. `main.py` reads `Settings` once and injects scalar values into `CoDeps`. Tools never import or reference `Settings` — simple is good
 - **Pydantic-ai idiomatic**: Agent, deps, tools, and agentic flows must follow pydantic-ai's patterns — flat deps dataclass with direct field access (`ctx.deps.api_key`), `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, history processors for memory. Don't wrap, abstract over, or deviate from the SDK's conventions
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
@@ -89,6 +90,7 @@ Co loads persistent knowledge from markdown files at session start:
 
 - Do not use `tool_plain()` for new tools — use `agent.tool()` with `RunContext`
 - Do not import `settings` directly in tool files — use `ctx.deps`
+- Do not pass `Settings` objects into `CoDeps` — flatten to scalar fields. One access pattern, no divergence traps
 - Do not put approval prompts inside tools — use `requires_approval=True` and handle in the chat loop
 - Do not use mocks in tests
 - Do not use `.env` files — use `settings.json` or env vars
@@ -126,11 +128,12 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-12-tool-slack.md` — Slack tool design
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
+- `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-co-evolution-phase2.5-critical-tools.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)
 - `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
-- `docs/TODO-mcp-client.md` — MCP client support (stdio → HTTP → OAuth), pydantic-ai toolsets integration
+- `docs/TODO-co-evolution-phase2a-mcp-client.md` — MCP client implementation checklist (stdio → HTTP → OAuth)
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
 

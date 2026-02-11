@@ -373,11 +373,10 @@ async def _decay_memories(
             - decayed: Number of memories decayed
             - strategy: "summarize" | "cut"
     """
-    settings = ctx.deps.settings
     total_count = len(memories)
 
     # Calculate how many to decay
-    decay_count = int(total_count * settings.memory_decay_percentage)
+    decay_count = int(total_count * ctx.deps.memory_decay_percentage)
     if decay_count == 0:
         decay_count = 1  # Always decay at least 1 when triggered
 
@@ -388,13 +387,14 @@ async def _decay_memories(
     )[:decay_count]
 
     # Execute decay strategy
-    if settings.memory_decay_strategy == "summarize":
+    strategy = ctx.deps.memory_decay_strategy
+    if strategy == "summarize":
         return await _decay_summarize(ctx, memory_dir, oldest, memories)
-    elif settings.memory_decay_strategy == "cut":
+    elif strategy == "cut":
         return await _decay_cut(ctx, memory_dir, oldest)
     else:
         logger.warning(
-            f"Unknown decay strategy: {settings.memory_decay_strategy}, using summarize"
+            f"Unknown decay strategy: {strategy}, using summarize"
         )
         return await _decay_summarize(ctx, memory_dir, oldest, memories)
 
@@ -457,11 +457,10 @@ async def save_memory(
 
     # Load all memories once
     memories = _load_all_memories(memory_dir)
-    settings = ctx.deps.settings
 
     # Step 1: Check for duplicates in recent memories
     cutoff = datetime.now(timezone.utc) - timedelta(
-        days=settings.memory_dedup_window_days
+        days=ctx.deps.memory_dedup_window_days
     )
     recent = sorted(
         [m for m in memories if _parse_created(m.created) >= cutoff],
@@ -470,7 +469,7 @@ async def save_memory(
     )[:10]
 
     is_dup, match, similarity = _check_duplicate(
-        content, recent, threshold=settings.memory_dedup_threshold
+        content, recent, threshold=ctx.deps.memory_dedup_threshold
     )
 
     # Step 2: If duplicate found, update existing memory
@@ -520,9 +519,9 @@ async def save_memory(
     total_count = len(all_memories)
 
     decay_info = ""
-    if total_count > settings.memory_max_count:
+    if total_count > ctx.deps.memory_max_count:
         logger.info(
-            f"Memory limit exceeded ({total_count}/{settings.memory_max_count}) "
+            f"Memory limit exceeded ({total_count}/{ctx.deps.memory_max_count}) "
             f"- triggering decay"
         )
         decay_result = await _decay_memories(ctx, memory_dir, all_memories)
@@ -645,7 +644,6 @@ async def list_memories(
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memories = _load_all_memories(memory_dir)
-    settings = ctx.deps.settings
 
     if not memories:
         no_dir = not memory_dir.exists()
@@ -653,7 +651,7 @@ async def list_memories(
         return {
             "display": msg,
             "count": 0,
-            "limit": settings.memory_max_count,
+            "limit": ctx.deps.memory_max_count,
             "memories": [],
         }
 
@@ -681,7 +679,7 @@ async def list_memories(
         )
 
     # Format as markdown list with lifecycle indicators
-    lines = [f"Total memories: {len(memories)}/{settings.memory_max_count}\n"]
+    lines = [f"Total memories: {len(memories)}/{ctx.deps.memory_max_count}\n"]
 
     for md in memory_dicts:
         # Format dates
@@ -708,6 +706,6 @@ async def list_memories(
     return {
         "display": "\n".join(lines),
         "count": len(memories),
-        "limit": settings.memory_max_count,
+        "limit": ctx.deps.memory_max_count,
         "memories": memory_dicts,
     }

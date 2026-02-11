@@ -21,10 +21,10 @@ from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.sandbox import SandboxProtocol, DockerSandbox, SubprocessBackend
-from co_cli.telemetry import SQLiteSpanExporter
+from co_cli._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
-from co_cli.banner import display_welcome_banner
+from co_cli._banner import display_welcome_banner
 from co_cli.status import get_status, render_status_table
 from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
 
@@ -108,7 +108,6 @@ def create_deps() -> CoDeps:
 
     return CoDeps(
         sandbox=_create_sandbox(session_id),
-        settings=settings,
         auto_confirm=settings.auto_confirm,
         session_id=session_id,
         obsidian_vault_path=vault_path,
@@ -120,6 +119,14 @@ def create_deps() -> CoDeps:
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
         web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
         web_policy=settings.web_policy,
+        memory_max_count=settings.memory_max_count,
+        memory_dedup_window_days=settings.memory_dedup_window_days,
+        memory_dedup_threshold=settings.memory_dedup_threshold,
+        memory_decay_strategy=settings.memory_decay_strategy,
+        memory_decay_percentage=settings.memory_decay_percentage,
+        max_history_messages=settings.max_history_messages,
+        tool_output_trim_chars=settings.tool_output_trim_chars,
+        summarization_model=settings.summarization_model,
     )
 
 
@@ -325,7 +332,7 @@ def logs():
 def traces():
     """Open a visual trace viewer with nested spans (like Logfire)."""
     import webbrowser
-    from co_cli.trace_viewer import write_trace_html
+    from co_cli._trace_viewer import write_trace_html
 
     db_path = DATA_DIR / "co-cli.db"
     if not db_path.exists():
@@ -348,7 +355,7 @@ def tail(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show LLM input/output content for model spans"),
 ):
     """Tail agent spans in real time (like tail -f for OTel traces)."""
-    from co_cli.tail import run_tail
+    from co_cli._tail import run_tail
 
     run_tail(
         trace_id=trace_id,
