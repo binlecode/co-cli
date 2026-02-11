@@ -1,0 +1,13 @@
+FROM glm-4.7-flash:q8_0
+
+# GLM-4.7-Flash "Terminal / SWE-Bench Verified" agentic profile.
+# Source: https://huggingface.co/zai-org/GLM-4.7-Flash
+#
+# Inference cost scales with filled context, not the limit.
+# Ollama default num_ctx (4096) is far too small for agentic use.
+
+PARAMETER num_ctx 202752
+PARAMETER num_predict 16384
+PARAMETER temperature 0.7
+PARAMETER top_p 1.0
+PARAMETER repeat_penalty 1.0

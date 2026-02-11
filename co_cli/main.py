@@ -233,6 +233,8 @@ async def chat_loop(verbose: bool = False):
                     if handled:
                         if new_history is not None:
                             message_history = new_history
+                        if cmd_ctx.model_settings is not None:
+                            model_settings = cmd_ctx.model_settings
                         continue
 
                 # LLM turn — delegated to _orchestrate.run_turn()

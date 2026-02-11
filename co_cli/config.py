@@ -169,6 +169,10 @@ class Settings(BaseModel):
     llm_provider: str = Field(default="gemini")
     ollama_host: str = Field(default="http://localhost:11434")
     ollama_model: str = Field(default="glm-4.7-flash:q4_k_m")
+    # Client-side num_ctx sent with every request for consistent context window.
+    # Also configure num_ctx in the Ollama Modelfile for other clients.
+    # See docs/GUIDE-ollama-local-setup.md for server-level best practices.
+    ollama_num_ctx: int = Field(default=202752)
     gemini_model: str = Field(default="gemini-2.0-flash")
 
     @model_validator(mode='before')
@@ -207,6 +211,7 @@ class Settings(BaseModel):
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
             "ollama_model": "OLLAMA_MODEL",
+            "ollama_num_ctx": "OLLAMA_NUM_CTX",
             "gemini_model": "GEMINI_MODEL",
         }
         

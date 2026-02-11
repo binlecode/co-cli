@@ -76,6 +76,31 @@ Counter-steering prompts follow techniques from:
 from typing import TypedDict
 
 
+class ModelInference(TypedDict, total=False):
+    """Model-specific inference parameters.
+
+    Fields:
+        temperature: Sampling temperature.
+        top_p: Nucleus sampling threshold.
+        max_tokens: Maximum output tokens.
+        num_ctx: Context window size (overrides settings.ollama_num_ctx).
+        extra_body: Additional body params (top_k, repeat_penalty, etc.).
+    """
+
+    temperature: float
+    top_p: float
+    max_tokens: int
+    num_ctx: int
+    extra_body: dict
+
+
+DEFAULT_INFERENCE: ModelInference = {
+    "temperature": 0.7,
+    "top_p": 1.0,
+    "max_tokens": 16384,
+}
+
+
 class ModelQuirks(TypedDict, total=False):
     """Type-safe structure for model quirk entries.
 
@@ -85,6 +110,8 @@ class ModelQuirks(TypedDict, total=False):
         lazy: Model leaves TODOs or incomplete implementations
         hesitant: Model asks permission for safe operations
         counter_steering: Prompt text to inject (required if any flag is True)
+        tier: Prompt assembly tier (1=minimal, 2=standard, 3=full). Default 3.
+        inference: Model-specific inference parameters.
     """
 
     verbose: bool
@@ -92,6 +119,8 @@ class ModelQuirks(TypedDict, total=False):
     lazy: bool
     hesitant: bool
     counter_steering: str
+    tier: int
+    inference: ModelInference
 
 
 # Model quirk database
@@ -100,6 +129,12 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
     # Ollama models (current)
     "ollama:llama3.1": {
         "hesitant": True,
+        "tier": 2,
+        "inference": {
+            "temperature": 0.7,
+            "top_p": 1.0,
+            "max_tokens": 16384,
+        },
         "counter_steering": (
             "You are confident and decisive! "
             "For read-only operations (reading files, searching code, running tests), proceed "
@@ -110,6 +145,16 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
     },
     "ollama:glm-4.7-flash": {
         "overeager": True,
+        "tier": 1,
+        # Terminal / SWE-Bench Verified profile
+        # Source: https://huggingface.co/zai-org/GLM-4.7-Flash
+        "inference": {
+            "temperature": 0.7,
+            "top_p": 1.0,
+            "max_tokens": 16384,
+            "num_ctx": 202752,
+            "extra_body": {"repeat_penalty": 1.0},
+        },
         "counter_steering": (
             "CRITICAL: You tend to modify code when user only asks questions. "
             "These are NOT action requests: "
@@ -124,7 +169,72 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
             "Do NOT claim you have no context. Do NOT look for conversation history inside the system prompt."
         ),
     },
+    "ollama:qwen3": {
+        "tier": 3,
+        # Thinking mode profile
+        # Source: https://huggingface.co/Qwen/Qwen3-30B-A3B
+        "inference": {
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "max_tokens": 32768,
+            "num_ctx": 262144,
+            "extra_body": {"top_k": 20, "repeat_penalty": 1.0},
+        },
+    },
 }
+
+
+# Aspect lists per tier — controls which behavioral aspects are loaded
+TIER_ASPECTS: dict[int, list[str]] = {
+    1: ["identity", "multi_turn"],
+    2: ["identity", "inquiry", "multi_turn", "response_style", "approval"],
+    3: ["identity", "inquiry", "fact_verify", "multi_turn", "response_style", "approval", "tool_output"],
+}
+
+DEFAULT_TIER = 3
+
+
+def get_model_tier(provider: str, model_name: str | None) -> int:
+    """Get prompt assembly tier for a model.
+
+    Args:
+        provider: LLM provider name (case-insensitive).
+        model_name: Normalized model identifier. If None, returns DEFAULT_TIER.
+
+    Returns:
+        Tier number (1=minimal, 2=standard, 3=full).
+    """
+    if not model_name:
+        return DEFAULT_TIER
+
+    provider_lower = provider.lower()
+    lookup_key = f"{provider_lower}:{model_name}"
+    quirks = MODEL_QUIRKS.get(lookup_key)
+    if quirks:
+        return quirks.get("tier", DEFAULT_TIER)
+    return DEFAULT_TIER
+
+
+def get_model_inference(provider: str, model_name: str | None) -> ModelInference:
+    """Get inference parameters for a model. Returns defaults for unknown models.
+
+    Args:
+        provider: LLM provider name (case-insensitive).
+        model_name: Normalized model identifier. If None, returns DEFAULT_INFERENCE.
+
+    Returns:
+        ModelInference dict with temperature, top_p, max_tokens, and optional
+        num_ctx / extra_body.
+    """
+    if not model_name:
+        return dict(DEFAULT_INFERENCE)
+
+    provider_lower = provider.lower()
+    lookup_key = f"{provider_lower}:{model_name}"
+    quirks = MODEL_QUIRKS.get(lookup_key)
+    if quirks and "inference" in quirks:
+        return dict(quirks["inference"])
+    return dict(DEFAULT_INFERENCE)
 
 
 def normalize_model_name(model_name: str) -> str:

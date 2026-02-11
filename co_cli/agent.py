@@ -70,13 +70,18 @@ def get_agent(
             provider=provider
         )
 
-        # GLM-4.7-Flash "Terminal / SWE-Bench Verified" profile.
-        # Best match for Co CLI's tool-calling pattern (shell commands + API calls).
-        # See: https://huggingface.co/zai-org/GLM-4.7-Flash
+        # Model-specific inference parameters from quirk database
+        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
+        inf = get_model_inference("ollama", _normalize(model_name))
+        num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
+        extra: dict = {"num_ctx": num_ctx}
+        extra.update(inf.get("extra_body", {}))
+
         model_settings = ModelSettings(
-            temperature=0.7,
-            top_p=1.0,
-            max_tokens=16384,
+            temperature=inf.get("temperature", 0.7),
+            top_p=inf.get("top_p", 1.0),
+            max_tokens=inf.get("max_tokens", 16384),
+            extra_body=extra,
         )
     else:
         raise ValueError(
@@ -147,16 +152,5 @@ def get_agent(
     agent.tool(web_search, requires_approval=search_approval)
     agent.tool(web_fetch, requires_approval=fetch_approval)
 
-    tool_names = [
-        run_shell_command.__name__, create_email_draft.__name__, send_slack_message.__name__,
-        save_memory.__name__, recall_memory.__name__, list_memories.__name__,
-        search_notes.__name__, list_notes.__name__, read_note.__name__,
-        search_drive_files.__name__, read_drive_file.__name__,
-        list_emails.__name__, search_emails.__name__,
-        list_calendar_events.__name__, search_calendar_events.__name__,
-        list_slack_channels.__name__, list_slack_messages.__name__,
-        list_slack_replies.__name__, list_slack_users.__name__,
-        web_search.__name__, web_fetch.__name__,
-    ]
-
+    tool_names = list(agent._function_toolset.tools.keys())
     return agent, model_settings, tool_names

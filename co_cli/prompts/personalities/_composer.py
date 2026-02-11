@@ -47,3 +47,27 @@ def compose_personality(name: str) -> str:
     parts.append(style_file.read_text(encoding="utf-8").strip())
 
     return "\n\n".join(parts)
+
+
+def compose_style_only(name: str) -> str:
+    """Load only the style aspect of a personality (skip character).
+
+    Used by tier 2 models where character content is too expensive
+    but style guidance is still valuable.
+
+    Args:
+        name: Personality preset name (e.g., "finch", "terse").
+
+    Returns:
+        Style-only personality prompt text.
+
+    Raises:
+        KeyError: If name is not a registered preset.
+        FileNotFoundError: If the style aspect file is missing.
+    """
+    preset = PRESETS[name]
+    style = preset["style"]
+    style_file = _ASPECTS_DIR / "style" / f"{style}.md"
+    if not style_file.exists():
+        raise FileNotFoundError(f"Style aspect not found: {style_file}")
+    return style_file.read_text(encoding="utf-8").strip()

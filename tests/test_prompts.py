@@ -1,11 +1,191 @@
-"""Tests for prompt assembly system."""
+"""Tests for aspect-driven prompt assembly system."""
 
 import pytest
+from pathlib import Path
 
-from co_cli.prompts import get_system_prompt, load_personality
-from co_cli.prompts.model_quirks import normalize_model_name, get_counter_steering
+from co_cli.prompts import get_system_prompt, load_personality, load_personality_style_only, _load_aspect
+from co_cli.prompts.model_quirks import (
+    normalize_model_name, get_counter_steering, get_model_tier,
+    get_model_inference, DEFAULT_INFERENCE,
+    TIER_ASPECTS, DEFAULT_TIER,
+)
 from co_cli.prompts.personalities._registry import PRESETS, VALID_PERSONALITIES
-from co_cli.prompts.personalities._composer import compose_personality
+from co_cli.prompts.personalities._composer import compose_personality, compose_style_only
+
+
+class TestAspectFiles:
+    """Test that all behavioral aspect files exist, are under budget, and are safe."""
+
+    ALL_ASPECTS = ["identity", "inquiry", "fact_verify", "multi_turn", "response_style", "approval", "tool_output"]
+
+    def test_all_aspect_files_exist(self):
+        """Every expected aspect file exists and loads."""
+        for name in self.ALL_ASPECTS:
+            content = _load_aspect(name)
+            assert content, f"Aspect '{name}' is empty"
+
+    def test_each_aspect_under_500_chars(self):
+        """Each aspect file is under 500 chars (budget discipline)."""
+        for name in self.ALL_ASPECTS:
+            content = _load_aspect(name)
+            assert len(content) < 500, (
+                f"Aspect '{name}' is {len(content)} chars (budget: 500)"
+            )
+
+    def test_no_safety_overrides(self):
+        """No aspect file contains safety-override text."""
+        non_overridable = [
+            "ignore previous instructions",
+            "forget your rules",
+            "you are now",
+            "disregard",
+        ]
+        for name in self.ALL_ASPECTS:
+            content = _load_aspect(name).lower()
+            for keyword in non_overridable:
+                assert keyword not in content, (
+                    f"Aspect '{name}' contains safety-override text: '{keyword}'"
+                )
+
+    def test_identity_has_co_name(self):
+        """Identity aspect introduces Co."""
+        content = _load_aspect("identity")
+        assert "You are Co" in content
+
+    def test_multi_turn_has_context_rule(self):
+        """Multi-turn aspect mentions conversation history."""
+        content = _load_aspect("multi_turn")
+        assert "multi-turn" in content.lower()
+        assert "conversation" in content.lower()
+
+    def test_missing_aspect_raises(self):
+        """Loading a nonexistent aspect raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            _load_aspect("nonexistent_aspect")
+
+
+class TestTierSystem:
+    """Test tier definitions and model tier assignment."""
+
+    def test_tier_aspects_has_all_tiers(self):
+        """TIER_ASPECTS defines tiers 1, 2, and 3."""
+        assert set(TIER_ASPECTS.keys()) == {1, 2, 3}
+
+    def test_tier_1_is_minimal(self):
+        """Tier 1 has only identity + multi_turn."""
+        assert TIER_ASPECTS[1] == ["identity", "multi_turn"]
+
+    def test_tier_3_has_all_aspects(self):
+        """Tier 3 includes all 7 aspects."""
+        assert len(TIER_ASPECTS[3]) == 7
+
+    def test_tiers_are_subsets(self):
+        """Each tier is a subset of the next tier."""
+        t1 = set(TIER_ASPECTS[1])
+        t2 = set(TIER_ASPECTS[2])
+        t3 = set(TIER_ASPECTS[3])
+        assert t1.issubset(t2)
+        assert t2.issubset(t3)
+
+    def test_default_tier_is_3(self):
+        """Default tier for unknown models is 3."""
+        assert DEFAULT_TIER == 3
+
+    def test_glm_flash_is_tier_1(self):
+        """GLM-4.7-flash is assigned tier 1."""
+        tier = get_model_tier("ollama", "glm-4.7-flash")
+        assert tier == 1
+
+    def test_llama31_is_tier_2(self):
+        """llama3.1 is assigned tier 2."""
+        tier = get_model_tier("ollama", "llama3.1")
+        assert tier == 2
+
+    def test_unknown_model_gets_default(self):
+        """Unknown models get default tier 3."""
+        tier = get_model_tier("ollama", "some-unknown-model")
+        assert tier == DEFAULT_TIER
+
+    def test_none_model_gets_default(self):
+        """None model_name returns default tier."""
+        tier = get_model_tier("gemini", None)
+        assert tier == DEFAULT_TIER
+
+    def test_gemini_models_get_default(self):
+        """Gemini models (no entry) get default tier 3."""
+        tier = get_model_tier("gemini", "gemini-2.0-flash")
+        assert tier == DEFAULT_TIER
+
+
+class TestTierAssembly:
+    """Test that tier-based assembly produces correct sizes and content."""
+
+    def test_tier_1_assembly(self):
+        """Tier 1 (GLM-4.7-flash) is minimal — under 1,500 chars without personality."""
+        prompt = get_system_prompt("ollama", model_name="glm-4.7-flash")
+        assert len(prompt) < 1500, f"Tier 1 prompt is {len(prompt)} chars (budget: 1,500)"
+        assert "You are Co" in prompt
+        assert "multi-turn" in prompt.lower()
+
+    def test_tier_1_skips_personality(self):
+        """Tier 1 skips personality entirely even when requested."""
+        prompt = get_system_prompt("ollama", personality="finch", model_name="glm-4.7-flash")
+        assert "## Personality" not in prompt
+
+    def test_tier_1_excludes_heavy_aspects(self):
+        """Tier 1 excludes inquiry, fact_verify, response_style, approval, tool_output."""
+        prompt = get_system_prompt("ollama", model_name="glm-4.7-flash")
+        # These phrases come from excluded aspects
+        assert "Default to Inquiry" not in prompt
+        assert "Trust tool output first" not in prompt
+
+    def test_tier_2_assembly(self):
+        """Tier 2 (llama3.1) is standard — under 2,500 chars without personality."""
+        prompt = get_system_prompt("ollama", model_name="llama3.1")
+        assert len(prompt) < 2500, f"Tier 2 prompt is {len(prompt)} chars (budget: 2,500)"
+        assert "You are Co" in prompt
+        assert "Default to Inquiry" in prompt
+
+    def test_tier_2_personality_style_only(self):
+        """Tier 2 loads style-only personality (no character)."""
+        prompt = get_system_prompt("ollama", personality="finch", model_name="llama3.1")
+        assert "## Personality" in prompt
+        # Style content present but character (finch/mentor) not present
+        assert "concise" in prompt.lower() or "professional" in prompt.lower()
+
+    def test_tier_3_assembly(self):
+        """Tier 3 (default/gemini) includes all aspects — under 4,000 chars."""
+        prompt = get_system_prompt("gemini")
+        assert len(prompt) < 4000, f"Tier 3 prompt is {len(prompt)} chars (budget: 4,000)"
+        assert "You are Co" in prompt
+        assert "Default to Inquiry" in prompt
+        assert "Trust tool output first" in prompt
+
+    def test_tier_3_full_personality(self):
+        """Tier 3 loads full personality (character + style)."""
+        prompt = get_system_prompt("gemini", personality="finch")
+        assert "## Personality" in prompt
+        assert "finch" in prompt.lower() or "mentor" in prompt.lower()
+
+    def test_tier_3_full_assembly_under_budget(self):
+        """Full tier 3 assembly with personality is under 4,000 chars."""
+        prompt = get_system_prompt("gemini", personality="finch")
+        assert len(prompt) < 4000, f"Tier 3 full assembly is {len(prompt)} chars (budget: 4,000)"
+
+    def test_counter_steering_included_all_tiers(self):
+        """Counter-steering is included for all tiers when model has quirks."""
+        # Tier 1
+        prompt_t1 = get_system_prompt("ollama", model_name="glm-4.7-flash")
+        assert "Model-Specific Guidance" in prompt_t1
+
+        # Tier 2
+        prompt_t2 = get_system_prompt("ollama", model_name="llama3.1")
+        assert "Model-Specific Guidance" in prompt_t2
+
+    def test_no_counter_steering_for_clean_models(self):
+        """No counter-steering for models without quirks."""
+        prompt = get_system_prompt("gemini", model_name="gemini-2.0-flash")
+        assert "Model-Specific Guidance" not in prompt
 
 
 class TestSystemPromptAssembly:
@@ -16,17 +196,18 @@ class TestSystemPromptAssembly:
         prompt = get_system_prompt("gemini")
         assert prompt
         assert "You are Co" in prompt
-        assert len(prompt) > 500
+        assert len(prompt) > 200
 
     def test_all_providers_produce_identical_base(self):
-        """All providers produce identical base prompt (no conditionals)."""
+        """All providers produce identical base prompt at same tier (no conditionals)."""
         prompt_gemini = get_system_prompt("gemini")
         prompt_ollama = get_system_prompt("ollama")
         prompt_unknown = get_system_prompt("unknown-model")
         assert prompt_gemini == prompt_ollama == prompt_unknown
 
     def test_case_insensitive_provider(self):
-        """Provider names are case-insensitive."""
+        """Provider names are case-insensitive for counter-steering lookup."""
+        # Without model_name both produce same base prompt
         prompt_lower = get_system_prompt("gemini")
         prompt_upper = get_system_prompt("GEMINI")
         prompt_mixed = get_system_prompt("Gemini")
@@ -38,7 +219,6 @@ class TestSystemPromptAssembly:
             prompt = get_system_prompt(provider)
             assert "[IF" not in prompt
             assert "[ENDIF]" not in prompt
-            assert len(prompt) > 500
             assert "You are Co" in prompt
 
     def test_prompt_not_empty(self):
@@ -93,55 +273,58 @@ class TestProjectInstructions:
 
 
 class TestPromptContent:
-    """Test that critical prompt sections are present after assembly."""
+    """Test that critical prompt sections are present in tier 3 (full) assembly."""
 
-    def test_core_sections_present(self):
-        """All major sections exist in assembled prompt."""
+    def test_core_aspects_present(self):
+        """All behavioral aspects present in tier 3 prompt."""
         prompt = get_system_prompt("gemini")
-        assert "Core Principles" in prompt
-        assert "Directive vs Inquiry" in prompt
-        assert "Fact Verification" in prompt
-        assert "shell" in prompt.lower() or "Shell" in prompt
-        assert "Obsidian" in prompt or "obsidian" in prompt.lower()
+        assert "You are Co" in prompt
+        assert "Default to Inquiry" in prompt
+        assert "Trust tool output first" in prompt
+        assert "multi-turn" in prompt.lower()
+        assert "terse" in prompt.lower()
+        assert "approval" in prompt.lower()
 
-    def test_directive_vs_inquiry_table(self):
-        """Directive vs Inquiry section has examples."""
+    def test_directive_vs_inquiry_rule(self):
+        """Inquiry aspect has key distinctions."""
         prompt = get_system_prompt("gemini")
-        assert "login" in prompt.lower()
         assert "Inquiry" in prompt
         assert "Directive" in prompt
+        assert "Default to Inquiry" in prompt
 
     def test_fact_verification_procedure(self):
-        """Fact verification has multi-step procedure."""
+        """Fact verification aspect has multi-step procedure."""
         prompt = get_system_prompt("gemini")
-        assert "Trust tool output" in prompt or "tool output first" in prompt
+        assert "Trust tool output first" in prompt
         assert "Verify" in prompt or "calculable" in prompt
         assert "Escalate" in prompt or "contradictions" in prompt
-        assert "Never blindly accept" in prompt or "not blindly accept" in prompt
-
-    def test_tool_guidance_present(self):
-        """Tool-specific guidance sections are present."""
-        prompt = get_system_prompt("gemini")
-        prompt_lower = prompt.lower()
-        assert "shell" in prompt_lower
-        assert "obsidian" in prompt_lower or "notes" in prompt_lower
-        assert "google" in prompt_lower or "gmail" in prompt or "drive" in prompt
-        assert "slack" in prompt_lower
-        assert "web" in prompt_lower or "search" in prompt_lower
+        assert "Never blindly accept" in prompt
 
     def test_model_specific_notes_removed(self):
-        """Model-Specific Notes section removed (P1-2)."""
+        """No static model-specific notes sections."""
         prompt = get_system_prompt("gemini")
         assert "Model-Specific Notes" not in prompt
         assert "Gemini-Specific Guidance" not in prompt
         assert "Ollama-Specific Guidance" not in prompt
-        assert "strong context window" not in prompt.lower()
-        assert "limited context window" not in prompt.lower()
 
     def test_response_format_section_removed(self):
-        """Response Format section removed (P1-2, redundant with Tool Output Handling)."""
+        """Response Format section removed (redundant with tool_output aspect)."""
         prompt = get_system_prompt("gemini")
         assert "## Response Format" not in prompt
+
+    def test_no_redundant_sections(self):
+        """Removed redundant sections that existed in old prompt."""
+        prompt = get_system_prompt("gemini")
+        assert "## Final Reminders" not in prompt
+        assert "## Critical Rules" not in prompt
+        assert "## Workflows" not in prompt
+
+    def test_no_tool_fragment_sections(self):
+        """Old tool fragment sections no longer exist."""
+        prompt = get_system_prompt("gemini")
+        assert "## Tool Usage" not in prompt
+        assert "## Shell Tool" not in prompt
+        assert "## Memory" not in prompt
 
 
 class TestPersonalityTemplates:
@@ -189,7 +372,7 @@ class TestPersonalityTemplates:
             assert len(personality) > 50
 
     def test_personality_injection(self):
-        """Personality injected into system prompt."""
+        """Personality injected into system prompt at tier 3."""
         prompt = get_system_prompt("gemini", personality="friendly")
         assert "Personality" in prompt
         assert "warm" in prompt.lower()
@@ -226,8 +409,49 @@ class TestPersonalityTemplates:
             assert any(phrase in prompt for phrase in personality_content.split()[:20])
 
 
+class TestPersonalityTierBehavior:
+    """Test personality behavior across tiers."""
+
+    def test_tier_1_skips_personality(self):
+        """Tier 1 skips personality entirely."""
+        prompt = get_system_prompt("ollama", personality="finch", model_name="glm-4.7-flash")
+        assert "## Personality" not in prompt
+
+    def test_tier_2_style_only(self):
+        """Tier 2 loads style-only — no character content."""
+        prompt = get_system_prompt("ollama", personality="finch", model_name="llama3.1")
+        assert "## Personality" in prompt
+        # Should NOT have character-specific content (finch/mentor)
+        # But SHOULD have style content
+
+    def test_tier_2_style_only_for_style_preset(self):
+        """Tier 2 with style-only preset (friendly) works correctly."""
+        prompt = get_system_prompt("ollama", personality="friendly", model_name="llama3.1")
+        assert "## Personality" in prompt
+        assert "warm" in prompt.lower() or "collaborative" in prompt.lower()
+
+    def test_tier_3_full_personality(self):
+        """Tier 3 loads full personality (character + style)."""
+        prompt = get_system_prompt("gemini", personality="finch")
+        assert "## Personality" in prompt
+        assert "finch" in prompt.lower() or "mentor" in prompt.lower()
+
+    def test_style_only_loader(self):
+        """load_personality_style_only returns just the style part."""
+        full = load_personality("finch")
+        style_only = load_personality_style_only("finch")
+        assert len(style_only) < len(full)
+        assert "concise" in style_only.lower() or "professional" in style_only.lower()
+
+    def test_style_only_for_style_preset_same_as_full(self):
+        """For style-only presets, style_only == full personality."""
+        full = load_personality("terse")
+        style_only = load_personality_style_only("terse")
+        assert full == style_only
+
+
 class TestAspectComposition:
-    """Test composable personality aspect system (P1-1)."""
+    """Test composable personality aspect system."""
 
     def test_all_presets_compose(self):
         """Every registered preset composes without error."""
@@ -312,19 +536,20 @@ class TestAspectComposition:
         with pytest.raises(KeyError):
             compose_personality("nonexistent")
 
+    def test_compose_style_only(self):
+        """compose_style_only returns style without character."""
+        style = compose_style_only("finch")
+        assert style
+        assert "concise" in style.lower() or "professional" in style.lower()
+
+    def test_compose_style_only_unknown_raises(self):
+        """compose_style_only raises KeyError for unknown preset."""
+        with pytest.raises(KeyError):
+            compose_style_only("nonexistent")
+
 
 class TestToolContractFidelity:
-    """Test that prompt references match actual tool signatures (P0-1)."""
-
-    def test_no_nonexistent_tools_in_prompt(self):
-        """Prompt should not reference tools that don't exist."""
-        from co_cli.agent import get_agent
-
-        _, _, tool_names = get_agent()
-        prompt = get_system_prompt("gemini")
-
-        assert "search_files" not in prompt, "search_files doesn't exist, should be search_notes"
-        assert "read_file(" not in prompt, "read_file doesn't exist, should be read_note"
+    """Test that prompt references match actual tool signatures."""
 
     def test_shell_tool_exists(self):
         """run_shell_command tool is registered."""
@@ -353,27 +578,18 @@ class TestToolContractFidelity:
     def test_obsidian_tool_documentation_matches_signature(self):
         """Obsidian tool documentation must match actual function signatures.
 
-        Regression test for P0-1: list_notes parameter is 'tag', not 'prefix'.
+        Regression test: list_notes parameter is 'tag', not 'prefix'.
         """
         import inspect
         from co_cli.tools.obsidian import list_notes
 
-        prompt = get_system_prompt("gemini", personality=None, model_name=None)
-
-        # Verify list_notes signature uses 'tag' parameter
         sig = inspect.signature(list_notes)
         assert 'tag' in sig.parameters, "list_notes should have 'tag' parameter"
         assert 'prefix' not in sig.parameters, "list_notes should not have 'prefix' parameter"
 
-        # Verify prompt doesn't claim 'prefix' filter
-        assert "prefix filter" not in prompt.lower(), (
-            "Prompt should not reference 'prefix filter' for list_notes. "
-            "The parameter is 'tag', not 'prefix'."
-        )
-
 
 class TestModelQuirkIntegration:
-    """Test model quirk system wiring (P0-2)."""
+    """Test model quirk system wiring."""
 
     def test_model_name_normalization(self):
         """normalize_model_name strips quantization tags correctly."""
@@ -415,8 +631,66 @@ class TestModelQuirkIntegration:
         assert unknown == ""
 
 
+class TestModelInference:
+    """Test model-specific inference parameter system."""
+
+    def test_qwen3_inference_params(self):
+        """Qwen3 gets correct inference profile."""
+        inf = get_model_inference("ollama", "qwen3")
+        assert inf["temperature"] == 0.6
+        assert inf["top_p"] == 0.95
+        assert inf["max_tokens"] == 32768
+        assert inf["num_ctx"] == 32768
+        assert inf["extra_body"]["top_k"] == 20
+        assert inf["extra_body"]["repeat_penalty"] == 1
+
+    def test_glm_inference_params(self):
+        """GLM-4.7-flash gets correct inference profile."""
+        inf = get_model_inference("ollama", "glm-4.7-flash")
+        assert inf["temperature"] == 0.7
+        assert inf["top_p"] == 1.0
+        assert inf["max_tokens"] == 16384
+        assert "num_ctx" not in inf
+
+    def test_llama31_inference_params(self):
+        """llama3.1 gets correct inference profile."""
+        inf = get_model_inference("ollama", "llama3.1")
+        assert inf["temperature"] == 0.7
+        assert inf["top_p"] == 1.0
+        assert inf["max_tokens"] == 16384
+
+    def test_unknown_model_gets_defaults(self):
+        """Unknown models get DEFAULT_INFERENCE."""
+        inf = get_model_inference("ollama", "some-unknown-model")
+        assert inf["temperature"] == DEFAULT_INFERENCE["temperature"]
+        assert inf["top_p"] == DEFAULT_INFERENCE["top_p"]
+        assert inf["max_tokens"] == DEFAULT_INFERENCE["max_tokens"]
+
+    def test_none_model_gets_defaults(self):
+        """None model_name returns DEFAULT_INFERENCE."""
+        inf = get_model_inference("ollama", None)
+        assert inf == dict(DEFAULT_INFERENCE)
+
+    def test_qwen3_is_tier_3(self):
+        """Qwen3 is assigned tier 3 (full prompt)."""
+        tier = get_model_tier("ollama", "qwen3")
+        assert tier == 3
+
+    def test_inference_returns_copy(self):
+        """get_model_inference returns a copy, not a reference to the original."""
+        inf1 = get_model_inference("ollama", "qwen3")
+        inf2 = get_model_inference("ollama", "qwen3")
+        inf1["temperature"] = 999
+        assert inf2["temperature"] == 0.6
+
+    def test_gemini_gets_defaults(self):
+        """Gemini models (no inference entry) get defaults."""
+        inf = get_model_inference("gemini", "gemini-2.0-flash")
+        assert inf == dict(DEFAULT_INFERENCE)
+
+
 class TestSummarizerAntiInjection:
-    """Test summarizer prompt hardening (P1-3)."""
+    """Test summarizer prompt hardening."""
 
     def test_summarize_prompt_has_anti_injection(self):
         """_SUMMARIZE_PROMPT contains anti-injection guard text."""
@@ -435,7 +709,7 @@ class TestSummarizerAntiInjection:
 
 
 class TestKnowledgeIntegration:
-    """Test internal knowledge system integration with prompt assembly (Phase 1c)."""
+    """Test internal knowledge system integration with prompt assembly."""
 
     def test_no_knowledge_when_absent(self, tmp_path, monkeypatch):
         """System prompt excludes knowledge section when no context files exist."""

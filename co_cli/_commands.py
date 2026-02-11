@@ -7,20 +7,25 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic_ai.messages import ModelRequest
+from pydantic_ai.settings import ModelSettings
 
 from co_cli.display import console, prompt_selection
 
 
 # -- Types -----------------------------------------------------------------
 
-@dataclass(frozen=True)
+@dataclass
 class CommandContext:
-    """Immutable grab-bag passed to every slash-command handler."""
+    """Grab-bag passed to every slash-command handler.
+
+    Mutable so handlers like /model can set model_settings for the chat loop.
+    """
 
     message_history: list[Any]
     deps: Any  # CoDeps — typed as Any to avoid circular import
     agent: Any  # Agent[CoDeps, ...] — same reason
     tool_names: list[str]
+    model_settings: ModelSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -127,12 +132,15 @@ async def _cmd_yolo(ctx: CommandContext, args: str) -> None:
     return None
 
 
-def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
-    """Build a new OpenAIChatModel and system prompt, assign both to agent."""
+def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:
+    """Build a new OpenAIChatModel, system prompt, and ModelSettings for agent.
+
+    Returns the new ModelSettings so the chat loop can use them.
+    """
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
     from co_cli.prompts import get_system_prompt
-    from co_cli.prompts.model_quirks import normalize_model_name
+    from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
     from co_cli.config import settings
 
     # Swap model
@@ -147,6 +155,19 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> None:
         model_name=normalized_model,
     )
     agent.system_prompt = new_system_prompt
+
+    # Build ModelSettings from inference profile
+    inf = get_model_inference("ollama", normalized_model)
+    num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
+    extra: dict = {"num_ctx": num_ctx}
+    extra.update(inf.get("extra_body", {}))
+
+    return ModelSettings(
+        temperature=inf.get("temperature", 0.7),
+        top_p=inf.get("top_p", 1.0),
+        max_tokens=inf.get("max_tokens", 16384),
+        extra_body=extra,
+    )
 
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
@@ -197,7 +218,7 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
     # Explicit name given — switch directly
     if args.strip():
         try:
-            _switch_ollama_model(ctx.agent, args.strip(), settings.ollama_host)
+            ctx.model_settings = _switch_ollama_model(ctx.agent, args.strip(), settings.ollama_host)
             console.print(f"[success]Switched to model: [accent]{args.strip()}[/accent][/success]")
         except Exception as e:
             console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
@@ -226,7 +247,7 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
         return None
 
     try:
-        _switch_ollama_model(ctx.agent, selected, settings.ollama_host)
+        ctx.model_settings = _switch_ollama_model(ctx.agent, selected, settings.ollama_host)
         console.print(f"[success]Switched to model: [accent]{selected}[/accent][/success]")
     except Exception as e:
         console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
