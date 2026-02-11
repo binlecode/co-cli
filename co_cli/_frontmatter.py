@@ -113,8 +113,11 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
 
     Optional fields:
         - tags: list[str]
-        - source: str (detected | user-told)
+        - source: str (detected | user-told | auto_decay)
         - auto_category: str (preference | correction | decision | context | pattern)
+        - updated: ISO8601 timestamp string (added when consolidated)
+        - consolidation_reason: str (reason for consolidation)
+        - decay_protected: bool (prevent decay if true)
 
     Args:
         fm: Frontmatter dictionary
@@ -151,3 +154,24 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     if "auto_category" in fm:
         if fm["auto_category"] is not None and not isinstance(fm["auto_category"], str):
             raise ValueError("memory frontmatter field 'auto_category' must be a string or null")
+
+    if "updated" in fm:
+        if not isinstance(fm["updated"], str):
+            raise ValueError("memory frontmatter field 'updated' must be a string")
+        # Basic ISO8601 format check
+        if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["updated"]):
+            raise ValueError(
+                "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
+            )
+
+    if "consolidation_reason" in fm:
+        if fm["consolidation_reason"] is not None and not isinstance(
+            fm["consolidation_reason"], str
+        ):
+            raise ValueError(
+                "memory frontmatter field 'consolidation_reason' must be a string or null"
+            )
+
+    if "decay_protected" in fm:
+        if not isinstance(fm["decay_protected"], bool):
+            raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")

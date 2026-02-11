@@ -92,7 +92,7 @@ graph TB
 | Tail Viewer | [DESIGN-06-tail-viewer.md](DESIGN-06-tail-viewer.md) | Real-time span viewer (`co tail`) |
 | Conversation Memory | [DESIGN-07-conversation-memory.md](DESIGN-07-conversation-memory.md) | History processors, sliding window, summarisation |
 | Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
-| Knowledge System | [DESIGN-14-knowledge-system.md](DESIGN-14-knowledge-system.md) | Persistent knowledge and memory across sessions via markdown files |
+| Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files |
 | Proactive Memory Detection | [DESIGN-15-proactive-memory-detection.md](DESIGN-15-proactive-memory-detection.md) | Autonomous signal detection via prompt engineering—agent recognizes preferences, corrections, decisions without explicit commands |
 | Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Docker sandbox, subprocess fallback, safe-prefix auto-approval |
 | Obsidian Tool | [DESIGN-10-tool-obsidian.md](DESIGN-10-tool-obsidian.md) | Vault search, path traversal protection |

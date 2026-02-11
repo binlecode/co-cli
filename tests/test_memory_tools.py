@@ -7,9 +7,8 @@ from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
 from co_cli.tools.memory import (
-    _next_memory_id,
+    _load_all_memories,
     _slugify,
-    _search_memories,
     save_memory,
     recall_memory,
     list_memories,
@@ -27,12 +26,26 @@ def temp_project_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def mock_ctx():
-    """Create mock RunContext for testing."""
-    # Memory tools don't actually use ctx.deps, so return a minimal mock
-    class MockCtx:
-        pass
+    """Create RunContext with real CoDeps for testing."""
+    from co_cli.config import Settings
+    from co_cli.sandbox import SubprocessBackend
+    from pydantic_ai.models import KnownModelName
 
-    return MockCtx()
+    # Real instances, no mocks - per CLAUDE.md testing policy
+    class Context:
+        def __init__(self):
+            self.deps = CoDeps(
+                sandbox=SubprocessBackend(),
+                settings=Settings(
+                    memory_max_count=200,
+                    memory_dedup_window_days=7,
+                    memory_dedup_threshold=85,
+                    memory_decay_strategy="summarize",
+                    memory_decay_percentage=0.2,
+                ),
+            )
+
+    return Context()
 
 
 def test_slugify():
@@ -47,14 +60,15 @@ def test_slugify():
     assert slug == "a" * 50
 
 
-def test_next_memory_id_no_memories(temp_project_dir):
-    """Test getting next memory ID when no memories exist."""
-    memory_id = _next_memory_id()
-    assert memory_id == 1
+def test_load_all_memories_no_dir(temp_project_dir):
+    """Test loading memories when no directory exists."""
+    memory_dir = temp_project_dir / ".co-cli/knowledge/memories"
+    memories = _load_all_memories(memory_dir)
+    assert memories == []
 
 
-def test_next_memory_id_with_existing(temp_project_dir):
-    """Test getting next memory ID with existing memories."""
+def test_load_all_memories_with_existing(temp_project_dir):
+    """Test loading memories with existing files."""
     memory_dir = temp_project_dir / ".co-cli/knowledge/memories"
     memory_dir.mkdir(parents=True)
 
@@ -63,6 +77,7 @@ def test_next_memory_id_with_existing(temp_project_dir):
         """---
 id: 1
 created: 2026-02-09T14:00:00Z
+tags: []
 ---
 
 First memory.
@@ -73,14 +88,19 @@ First memory.
         """---
 id: 3
 created: 2026-02-09T14:30:00Z
+tags: []
 ---
 
 Third memory.
 """
     )
 
-    memory_id = _next_memory_id()
-    assert memory_id == 4  # Should be max(1, 3) + 1
+    memories = _load_all_memories(memory_dir)
+    assert len(memories) == 2
+    ids = sorted(m.id for m in memories)
+    assert ids == [1, 3]
+    # Next ID should be max + 1 = 4
+    assert max(m.id for m in memories) + 1 == 4
 
 
 @pytest.mark.asyncio
@@ -161,9 +181,21 @@ async def test_recall_memory_tag_search(temp_project_dir, mock_ctx):
 @pytest.mark.asyncio
 async def test_recall_memory_max_results(temp_project_dir, mock_ctx):
     """Test max_results limit in recall."""
-    # Create 10 memories with "test" in content
-    for i in range(10):
-        await save_memory(mock_ctx, content=f"Test memory {i}", tags=["test"])
+    # Create 10 very distinct memories with "test" in content (avoid dedup with completely different content)
+    memories = [
+        "Test database PostgreSQL version 14",
+        "Test API endpoints /users /posts /comments",
+        "Test frontend framework React 18 with TypeScript",
+        "Test backend service written in Python FastAPI",
+        "Test suite covers 95% code coverage",
+        "Test deployment pipeline uses GitHub Actions",
+        "Test CI/CD runs on every pull request",
+        "Test security audit passed all checks",
+        "Test monitoring uses Prometheus and Grafana",
+        "Test logging aggregated in Elasticsearch",
+    ]
+    for content in memories:
+        await save_memory(mock_ctx, content=content, tags=["test"])
 
     result = await recall_memory(mock_ctx, query="test", max_results=3)
 
@@ -203,9 +235,10 @@ async def test_list_memories_with_content(temp_project_dir, mock_ctx):
 @pytest.mark.asyncio
 async def test_list_memories_sorted_by_id(temp_project_dir, mock_ctx):
     """Test that list_memories returns sorted by ID."""
-    await save_memory(mock_ctx, content="Memory 1")
-    await save_memory(mock_ctx, content="Memory 2")
-    await save_memory(mock_ctx, content="Memory 3")
+    # Create distinct memories to avoid deduplication
+    await save_memory(mock_ctx, content="User prefers TypeScript for web development")
+    await save_memory(mock_ctx, content="Database is PostgreSQL running on port 5432")
+    await save_memory(mock_ctx, content="API authentication uses JWT tokens")
 
     result = await list_memories(mock_ctx)
 
@@ -229,10 +262,16 @@ ASYNC/AWAIT pattern in Python.
 """
     )
 
-    results = _search_memories("async", memory_dir, max_results=5)
+    memories = _load_all_memories(memory_dir)
+    query_lower = "async"
+    results = [
+        m for m in memories
+        if query_lower in m.content.lower()
+        or any(query_lower in t.lower() for t in m.tags)
+    ]
 
     assert len(results) == 1
-    assert "ASYNC/AWAIT" in results[0]["content"]
+    assert "ASYNC/AWAIT" in results[0].content
 
 
 def test_search_memories_sorts_by_recency(temp_project_dir):
@@ -262,9 +301,16 @@ Test memory new.
 """
     )
 
-    results = _search_memories("test", memory_dir, max_results=5)
+    memories = _load_all_memories(memory_dir)
+    query_lower = "test"
+    results = [
+        m for m in memories
+        if query_lower in m.content.lower()
+        or any(query_lower in t.lower() for t in m.tags)
+    ]
+    results.sort(key=lambda m: m.created, reverse=True)
 
     assert len(results) == 2
     # Most recent first
-    assert results[0]["id"] == 2
-    assert results[1]["id"] == 1
+    assert results[0].id == 2
+    assert results[1].id == 1

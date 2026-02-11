@@ -1,7 +1,7 @@
 # Phase 1c Knowledge Base — Portable Identity Design
 
 **Purpose:** Make co's internal knowledge, personality, and learned traits portable across machines.
-Self-contained reference for Phase 1c implementation. See also `TODO-prompt-system-phase1c-kb-design-research.md` for full peer research data.
+Self-contained reference for Phase 1c implementation. See also `TODO-co-evolution-phase1c-kb-design-research.md` for full peer research data.
 
 ---
 

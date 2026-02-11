@@ -1,9 +1,12 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from co_cli.config import WebPolicy
 from co_cli.sandbox import SandboxProtocol
+
+if TYPE_CHECKING:
+    from co_cli.config import Settings
 
 
 @dataclass
@@ -15,6 +18,7 @@ class CoDeps:
     """
 
     sandbox: SandboxProtocol
+    settings: "Settings" = field(default=None)  # Added for memory lifecycle configuration
     auto_confirm: bool = False  # Session-yolo: set True when user picks "a" in approval prompt
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault

@@ -142,8 +142,8 @@ Full test suite: 43/43 PASSED ✅
 - `tests/test_config.py` - Added 4 personality tests (+30 lines)
 
 ### Documentation
-- `docs/TODO-prompt-system-phase1b.md` - Implementation plan
-- `docs/TODO-prompt-system-phase1b-COMPLETE.md` - This completion summary
+- `docs/TODO-co-evolution-phase1b.md` - Implementation plan
+- `docs/TODO-co-evolution-phase1b-COMPLETE.md` - This completion summary
 
 ---
 

@@ -107,6 +107,7 @@ def create_deps() -> CoDeps:
 
     return CoDeps(
         sandbox=_create_sandbox(session_id),
+        settings=settings,
         auto_confirm=settings.auto_confirm,
         session_id=session_id,
         obsidian_vault_path=vault_path,

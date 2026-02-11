@@ -13,8 +13,8 @@
 The `-COMPLETE.md` files contain all essential information about completed work. The large TODO files (66KB, 13KB) were implementation guides that served their purpose during execution. Keeping them creates confusion about what work remains.
 
 **Actions**:
-- ✅ DELETE: `docs/TODO-prompt-system-phase1a.md` (66KB, 1,800+ lines)
-- ✅ DELETE: `docs/TODO-prompt-system-phase1b.md` (13KB, 450+ lines)
+- ✅ DELETE: `docs/TODO-co-evolution-phase1a.md` (66KB, 1,800+ lines)
+- ✅ DELETE: `docs/TODO-co-evolution-phase1b.md` (13KB, 450+ lines)
 - ✅ KEEP: All `-COMPLETE.md` files (summary of what was done)
 - ✅ KEEP: All Phase 1c, 1d, 2a, 2b, 2c TODO files (remaining work)
 
@@ -26,10 +26,10 @@ The `-COMPLETE.md` files contain all essential information about completed work.
 
 | File | Size | Lines | Type | Status | Action |
 |------|------|-------|------|--------|--------|
-| `TODO-prompt-system-phase1a-COMPLETE.md` | 6KB | ~200 | Completion report | ✅ Done 2026-02-09 | **KEEP** |
-| `TODO-prompt-system-phase1a.md` | 66KB | 1,800+ | Implementation guide | ✅ Done 2026-02-09 | **DELETE** |
-| `TODO-prompt-system-phase1b-COMPLETE.md` | 10KB | ~300 | Completion report | ✅ Done 2026-02-09 | **KEEP** |
-| `TODO-prompt-system-phase1b.md` | 13KB | 450+ | Implementation guide | ✅ Done 2026-02-09 | **DELETE** |
+| `TODO-co-evolution-phase1a-COMPLETE.md` | 6KB | ~200 | Completion report | ✅ Done 2026-02-09 | **KEEP** |
+| `TODO-co-evolution-phase1a.md` | 66KB | 1,800+ | Implementation guide | ✅ Done 2026-02-09 | **DELETE** |
+| `TODO-co-evolution-phase1b-COMPLETE.md` | 10KB | ~300 | Completion report | ✅ Done 2026-02-09 | **KEEP** |
+| `TODO-co-evolution-phase1b.md` | 13KB | 450+ | Implementation guide | ✅ Done 2026-02-09 | **DELETE** |
 
 **Rationale**:
 - **COMPLETE files** are concise summaries (200-300 lines) documenting what was delivered, test results, and time spent
@@ -41,10 +41,10 @@ The `-COMPLETE.md` files contain all essential information about completed work.
 
 | File | Size | Lines | Type | Status | Action |
 |------|------|-------|------|--------|--------|
-| `TODO-prompt-system-phase1c.md` | 83KB | 2,050 | Implementation guide | ⏳ Pending | **KEEP** |
-| `TODO-prompt-system-phase1d.md` | 63KB | 1,500 | Implementation guide | ⏳ Pending | **KEEP** |
+| `TODO-co-evolution-phase1c.md` | 83KB | 2,050 | Implementation guide | ⏳ Pending | **KEEP** |
+| `TODO-co-evolution-phase1d.md` | 63KB | 1,500 | Implementation guide | ⏳ Pending | **KEEP** |
 | `TODO-phase2a-mcp-client.md` | 32KB | 1,850 | Implementation guide | ⏳ Pending | **KEEP** |
-| `TODO-prompt-system-phase2b.md` | Not listed | 2,000 | Implementation guide | ⏳ Pending | **KEEP** |
+| `TODO-co-evolution-phase2b.md` | Not listed | 2,000 | Implementation guide | ⏳ Pending | **KEEP** |
 | `TODO-background-execution.md` | 64KB | 1,900 | Implementation guide | ⏳ Pending | **KEEP** |
 
 **Rationale**: These are active work items needed for future implementation
@@ -73,16 +73,16 @@ The `-COMPLETE.md` files contain all essential information about completed work.
 
 **Pattern 1: Completed Phases**
 ```
-TODO-prompt-system-phase1a.md (1,800 lines implementation guide)
+TODO-co-evolution-phase1a.md (1,800 lines implementation guide)
   ↓ (work completed)
-TODO-prompt-system-phase1a-COMPLETE.md (200 lines summary)
+TODO-co-evolution-phase1a-COMPLETE.md (200 lines summary)
 ```
 
 **Pattern 2: Remaining Phases**
 ```
-TODO-prompt-system-phase1c.md (2,050 lines implementation guide)
+TODO-co-evolution-phase1c.md (2,050 lines implementation guide)
   ↓ (work pending)
-TODO-prompt-system-phase1c-COMPLETE.md (will be created when done)
+TODO-co-evolution-phase1c-COMPLETE.md (will be created when done)
 ```
 
 ### Anti-Pattern Identified ⚠️
@@ -105,7 +105,7 @@ TODO-prompt-system-phase1c-COMPLETE.md (will be created when done)
 
 ### Phase 1a Files
 
-**`TODO-prompt-system-phase1a.md` (66KB, 1,800+ lines)**
+**`TODO-co-evolution-phase1a.md` (66KB, 1,800+ lines)**
 
 **Contents**:
 - Executive summary
@@ -121,7 +121,7 @@ TODO-prompt-system-phase1c-COMPLETE.md (will be created when done)
 
 ---
 
-**`TODO-prompt-system-phase1a-COMPLETE.md` (6KB, ~200 lines)**
+**`TODO-co-evolution-phase1a-COMPLETE.md` (6KB, ~200 lines)**
 
 **Contents**:
 - Summary of what was delivered (5 items)
@@ -138,7 +138,7 @@ TODO-prompt-system-phase1c-COMPLETE.md (will be created when done)
 
 ### Phase 1b Files
 
-**`TODO-prompt-system-phase1b.md` (13KB, 450+ lines)**
+**`TODO-co-evolution-phase1b.md` (13KB, 450+ lines)**
 
 **Contents**:
 - Overview and scope
@@ -154,7 +154,7 @@ TODO-prompt-system-phase1c-COMPLETE.md (will be created when done)
 
 ---
 
-**`TODO-prompt-system-phase1b-COMPLETE.md` (10KB, ~300 lines)**
+**`TODO-co-evolution-phase1b-COMPLETE.md` (10KB, ~300 lines)**
 
 **Contents**:
 - Summary of what was delivered (7 items)
@@ -217,14 +217,14 @@ Retained content (in COMPLETE):
 
 1. **DELETE Phase 1a TODO file**
    ```bash
-   rm docs/TODO-prompt-system-phase1a.md
+   rm docs/TODO-co-evolution-phase1a.md
    ```
    - Reason: Work complete, 1,800 lines of scaffolding no longer needed
    - Essential info preserved in COMPLETE file
 
 2. **DELETE Phase 1b TODO file**
    ```bash
-   rm docs/TODO-prompt-system-phase1b.md
+   rm docs/TODO-co-evolution-phase1b.md
    ```
    - Reason: Work complete, 450 lines of scaffolding no longer needed
    - Essential info preserved in COMPLETE file
@@ -311,8 +311,8 @@ Retained content (in COMPLETE):
 ## File Size Savings
 
 **Deletion impact**:
-- `TODO-prompt-system-phase1a.md`: -66KB
-- `TODO-prompt-system-phase1b.md`: -13KB
+- `TODO-co-evolution-phase1a.md`: -66KB
+- `TODO-co-evolution-phase1b.md`: -13KB
 - **Total saved**: 79KB, ~2,250 lines
 
 **Retention**:
@@ -342,7 +342,7 @@ Retained content (in COMPLETE):
 
 **Command**:
 ```bash
-rm docs/TODO-prompt-system-phase1a.md docs/TODO-prompt-system-phase1b.md
+rm docs/TODO-co-evolution-phase1a.md docs/TODO-co-evolution-phase1b.md
 git add docs/
 git commit -m "Clean up completed phase documentation
 
@@ -350,8 +350,8 @@ Remove Phase 1a and 1b TODO implementation guides (1,800+ lines). Work
 completed 2026-02-09 and documented in respective -COMPLETE.md files.
 
 Kept:
-- TODO-prompt-system-phase1a-COMPLETE.md (outcomes, tests, time tracking)
-- TODO-prompt-system-phase1b-COMPLETE.md (outcomes, movie research, time tracking)
+- TODO-co-evolution-phase1a-COMPLETE.md (outcomes, tests, time tracking)
+- TODO-co-evolution-phase1b-COMPLETE.md (outcomes, movie research, time tracking)
 
 Rationale: COMPLETE files capture all essential information. Large TODO files
 were implementation scaffolding only needed during execution."

@@ -282,11 +282,11 @@ Adopt frontier patterns where they improve outcomes, but keep Co's design contra
 |-------|------|--------|--------|---------------|----------|
 | **1a** | Model Conditionals | ✅ COMPLETE | - | DESIGN-co-evolution.md | - |
 | **1b** | Personality Templates | ✅ COMPLETE | - | DESIGN-co-evolution.md | - |
-| **1c** | Internal Knowledge | ✅ COMPLETE | 8-10h | TODO-prompt-system-phase1c-COMPLETE.md | - |
-| **1d** | Prompt Improvements | ✅ COMPLETE | 3-4h | TODO-prompt-system-phase1d-COMPLETE.md | - |
-| **1e-FOLLOW-ON** | Portable Identity | 📅 DEFERRED | 9h | TODO-prompt-system-phase1e-FOLLOW-ON.md | LOW |
+| **1c** | Internal Knowledge | ✅ COMPLETE | 8-10h | TODO-co-evolution-phase1c-COMPLETE.md | - |
+| **1d** | Prompt Improvements | ✅ COMPLETE | 3-4h | TODO-co-evolution-phase1d-COMPLETE.md | - |
+| **1e-FOLLOW-ON** | Portable Identity | 📅 DEFERRED | 9h | TODO-co-evolution-phase1e-FOLLOW-ON.md | LOW |
 | **2a** | MCP Client (stdio) | 📝 DOCUMENTED | 6-8h | TODO-phase2a-mcp-client.md | HIGH |
-| **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-prompt-system-phase2b.md | MEDIUM |
+| **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-co-evolution-phase2b.md | MEDIUM |
 | **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-background-execution.md | MEDIUM |
 | **2.5** | Shell Security (S0+S1) | 📅 DEFERRED | 6-9d | TODO-critical-tools-convergence.md | HIGH |
 | **2d** | File Tools (C1) | 📅 DEFERRED | 3-4h | TODO-critical-tools-convergence.md | LOW |
@@ -358,9 +358,9 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ## Documentation Summary
 
 ### Phase 1c: Internal Knowledge System ✅ COMPLETE
-**File**: `docs/TODO-prompt-system-phase1c-COMPLETE.md` (2,594 lines)
+**File**: `docs/TODO-co-evolution-phase1c-COMPLETE.md` (2,594 lines)
 **Verification**: `docs/VERIFICATION-phase1c-demo-results.md`
-**Design**: `docs/DESIGN-14-knowledge-system.md`
+**Design**: `docs/DESIGN-14-memory-lifecycle-system.md`
 
 **Goal**: Load co's learned context from markdown files - facts about user, project patterns, learned preferences that persist across sessions.
 
@@ -378,7 +378,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 ---
 
 ### Phase 1d: Prompt Improvements (Peer Learnings) ✅ COMPLETE
-**File**: `docs/TODO-prompt-system-phase1d-COMPLETE.md` (1,500 lines)
+**File**: `docs/TODO-co-evolution-phase1d-COMPLETE.md` (1,500 lines)
 
 **Goal**: Apply 5 high-impact techniques from peer system analysis to improve system.md without adding complexity.
 
@@ -438,7 +438,7 @@ Phase 1e-FOLLOW-ON: Portable Identity (9h) - when knowledge system stabilizes
 
 ### Phase 2b: User Preferences System
 **Files**:
-- `docs/TODO-prompt-system-phase2b.md` (2,000 lines) ✅
+- `docs/TODO-co-evolution-phase2b.md` (2,000 lines) ✅
 
 **Note**: Original research (`RESEARCH-user-preferences.md`) superseded by co's knowledge system approach - preferences learned dynamically through interaction rather than static configuration files.
 
@@ -716,17 +716,17 @@ Total context budget: ~15-20KB (manageable within LLM context window)
 - `docs/DESIGN-00-co-cli.md` - Architecture overview
 - `docs/DESIGN-01-agent.md` - Agent factory, CoDeps
 - `docs/DESIGN-02-chat-loop.md` - Chat loop, streaming, commands
-- `docs/DESIGN-14-knowledge-system.md` - Knowledge system architecture
+- `docs/DESIGN-14-memory-lifecycle-system.md` - Knowledge system architecture
 - `docs/REVIEW-compare-four.md` - Peer system analysis (prompt techniques)
 
 ### Implementation Guides
-- `docs/TODO-prompt-system-phase1c-COMPLETE.md` (2,594 lines) - Internal knowledge ✅
-- `docs/TODO-prompt-system-phase1d-COMPLETE.md` (1,500 lines) - Prompt improvements ✅
+- `docs/TODO-co-evolution-phase1c-COMPLETE.md` (2,594 lines) - Internal knowledge ✅
+- `docs/TODO-co-evolution-phase1d-COMPLETE.md` (1,500 lines) - Prompt improvements ✅
 - `docs/TODO-phase2a-mcp-client.md` (1,850 lines) - MCP client
-- `docs/TODO-prompt-system-phase2b.md` (2,000 lines) - User preferences
+- `docs/TODO-co-evolution-phase2b.md` (2,000 lines) - User preferences
 - `docs/TODO-background-execution.md` (1,900 lines) - Background execution
 - `docs/TODO-critical-tools-convergence.md` - Shell security + file tools (Phase 2.5+2d)
-- `docs/TODO-prompt-system-phase1e-FOLLOW-ON.md` - Portable identity (deferred)
+- `docs/TODO-co-evolution-phase1e-FOLLOW-ON.md` - Portable identity (deferred)
 
 ### Verification & Review
 - `docs/VERIFICATION-phase1c-demo-results.md` - Phase 1c verification

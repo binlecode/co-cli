@@ -120,7 +120,7 @@ co identity import --merge      # Merge with existing
 
 ## Implementation Plan
 
-See `docs/TODO-prompt-system-phase1c-kb-portable-follow-on.md` for complete design.
+See `docs/TODO-co-evolution-phase1c-kb-portable-follow-on.md` for complete design.
 
 **High-level phases:**
 1. Create `identity/` directory structure (1h)
@@ -169,5 +169,5 @@ See `docs/TODO-prompt-system-phase1c-kb-portable-follow-on.md` for complete desi
 
 ## References
 
-- Design document: `docs/TODO-prompt-system-phase1c-kb-portable-follow-on.md`
-- Phase 1c (prerequisite): `docs/TODO-prompt-system-phase1c.md`
+- Design document: `docs/TODO-co-evolution-phase1c-kb-portable-follow-on.md`
+- Phase 1c (prerequisite): `docs/TODO-co-evolution-phase1c.md`

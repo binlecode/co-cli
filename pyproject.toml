@@ -24,6 +24,7 @@ dependencies = [
     "datasette-pretty-json>=0.3",
     "httpx>=0.28.1",
     "html2text>=2025.4.15",
+    "rapidfuzz>=3.14.3",
 ]
 
 [project.scripts]

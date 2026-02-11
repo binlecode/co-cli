@@ -128,7 +128,7 @@ From existing repo research (`docs/REVIEW-prompts-peer-systems.md:977`, `docs/RE
 ## P2-1: Documentation and Test Drift Is Visible
 
 **Evidence:**
-- Phase 1d is complete (see `docs/TODO-prompt-system-phase1d-COMPLETE.md`) but documentation drift remains in some areas.
+- Phase 1d is complete (see `docs/TODO-co-evolution-phase1d-COMPLETE.md`) but documentation drift remains in some areas.
 - Prompt test suite currently fails due stale expectation (`tests/test_prompts_phase1d.py:211` expects 10 models, actual 11).
 - `DESIGN-01-agent.md` prompt snippet no longer reflects current `system.md` scale/content (`docs/DESIGN-01-agent.md:145`).
 

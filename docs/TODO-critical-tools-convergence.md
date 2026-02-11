@@ -310,7 +310,7 @@ Goal: stop overusing shell for standard read/write/edit/list operations.
 - Markdown files as source of truth (`.co-cli/knowledge/memories/*.md`)
 - Frontmatter + grep-based search (Phase 1c MVP, evolving to FTS5 → vectors)
 - Three memory tools: `save_memory`, `recall_memory`, `list_memories` (already shipped)
-- Design: `docs/DESIGN-14-knowledge-system.md`
+- Design: `docs/DESIGN-14-memory-lifecycle-system.md`
 
 This Phase C2 proposal (SQLite-based key-value store) conflicts with the shipped markdown lakehouse pattern. **Do not implement C2 - use Phase 1c memory tools instead.**
 

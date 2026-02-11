@@ -124,7 +124,8 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-12-tool-slack.md` — Slack tool design
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
-- `docs/DESIGN-14-knowledge-system.md` — Knowledge system architecture (always-loaded context, memory tools, grep→FTS5→vector evolution)
+- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management (context loading, dedup, consolidation, decay, protection, search evolution)
+- `docs/DESIGN-15-proactive-memory-detection.md` — Proactive memory detection (signal patterns, prompt engineering, interface to lifecycle)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-critical-tools-convergence.md` — Critical convergence program (includes shell/sandbox fallback policy hardening)

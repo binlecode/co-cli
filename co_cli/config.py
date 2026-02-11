@@ -68,6 +68,13 @@ class Settings(BaseModel):
     max_history_messages: int = Field(default=40)
     summarization_model: str = Field(default="")
 
+    # Memory lifecycle (notes with gravity)
+    memory_max_count: int = Field(default=200, ge=10)
+    memory_dedup_window_days: int = Field(default=7, ge=1)
+    memory_dedup_threshold: int = Field(default=85, ge=0, le=100)
+    memory_decay_strategy: Literal["summarize", "cut"] = Field(default="summarize")
+    memory_decay_percentage: float = Field(default=0.2, ge=0.0, le=1.0)
+
     # Sandbox limits
     sandbox_backend: Literal["auto", "docker", "subprocess"] = Field(default="auto")
     sandbox_max_timeout: int = Field(default=600)
@@ -147,6 +154,11 @@ class Settings(BaseModel):
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
             "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",
+            "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
+            "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
+            "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",
+            "memory_decay_strategy": "CO_CLI_MEMORY_DECAY_STRATEGY",
+            "memory_decay_percentage": "CO_CLI_MEMORY_DECAY_PERCENTAGE",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",

@@ -111,8 +111,8 @@ Full test suite: 245/248 PASSED ✅
 - `tests/test_prompts.py` - New comprehensive test suite (+250 lines)
 
 ### Documentation
-- `docs/TODO-prompt-system-phase1a.md` - Complete implementation guide (8500+ lines)
-- `docs/TODO-prompt-system-phase1a-COMPLETE.md` - This completion summary
+- `docs/TODO-co-evolution-phase1a.md` - Complete implementation guide (8500+ lines)
+- `docs/TODO-co-evolution-phase1a-COMPLETE.md` - This completion summary
 
 ---
 

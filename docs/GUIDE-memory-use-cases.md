@@ -672,7 +672,7 @@ Yes! Memories are optional. Co works fine without them—you just won't have per
 
 4. **Read the design doc:**
    ```bash
-   cat docs/DESIGN-14-knowledge-system.md
+   cat docs/DESIGN-14-memory-lifecycle-system.md
    ```
 
 ---

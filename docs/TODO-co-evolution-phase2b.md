@@ -1386,7 +1386,7 @@ Phase 2b is complete when ALL of the following are true:
 - `co_cli/preferences.py` - UserPreferences dataclass + formatting
 - `tests/test_preferences.py` - 15+ preference tests
 - `docs/RESEARCH-preferences-2026.md` - Peer system research summary
-- `docs/TODO-prompt-system-phase2b.md` - This implementation plan
+- `docs/TODO-co-evolution-phase2b.md` - This implementation plan
 
 ### Modified Files
 - `co_cli/config.py` - Add load_preferences(), save_preferences(), PREFERENCES_FILE
