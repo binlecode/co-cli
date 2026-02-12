@@ -8,7 +8,7 @@ from pydantic_ai.settings import ModelSettings
 from co_cli.config import settings, WebPolicy, MCPServerConfig
 from co_cli.deps import CoDeps
 from co_cli._history import truncate_tool_returns, truncate_history_window
-from co_cli.prompts import get_system_prompt
+from co_cli.prompts import assemble_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
@@ -23,6 +23,7 @@ from co_cli.tools.slack import (
 )
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
+from co_cli.tools.context import load_aspect, load_personality
 
 
 def get_agent(
@@ -92,9 +93,8 @@ def get_agent(
     # Normalize model name for quirk lookup (strips quantization tags like ":q4_k_m")
     from co_cli.prompts.model_quirks import normalize_model_name
     normalized_model = normalize_model_name(model_name)
-    system_prompt = get_system_prompt(
+    system_prompt, _manifest = assemble_prompt(
         provider_name,
-        personality=settings.personality,
         model_name=normalized_model,
     )
 
@@ -136,6 +136,10 @@ def get_agent(
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(send_slack_message, requires_approval=True)
     agent.tool(save_memory, requires_approval=True)
+
+    # Context tools — read-only, no approval needed
+    agent.tool(load_aspect, requires_approval=all_approval)
+    agent.tool(load_personality, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
     agent.tool(recall_memory, requires_approval=all_approval)

@@ -12,7 +12,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from co_cli.prompts import get_system_prompt
+from co_cli.prompts import assemble_prompt
 
 
 def extract_section(prompt: str, start_marker: str, end_marker: str = None) -> str:
@@ -80,8 +80,8 @@ def main():
     print()
 
     # Get prompts with and without model quirks
-    prompt_with_quirks = get_system_prompt("gemini", None, "gemini-1.5-pro")
-    prompt_without_quirks = get_system_prompt("gemini", None, None)
+    prompt_with_quirks, _ = assemble_prompt("gemini", model_name="gemini-1.5-pro")
+    prompt_without_quirks, _ = assemble_prompt("gemini")
 
     # 1. Escape Hatches
     escape_hatch_1 = extract_section(

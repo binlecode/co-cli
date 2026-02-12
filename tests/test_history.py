@@ -53,7 +53,7 @@ def _tool_call_response(name: str, call_id: str = "c1") -> ModelResponse:
     ])
 
 
-def _real_run_context(model):
+def _real_run_context(model, *, max_history_messages=40, summarization_model=""):
     """Build a real RunContext for truncate_history_window tests."""
     from pydantic_ai._run_context import RunContext
     from co_cli.deps import CoDeps
@@ -62,9 +62,9 @@ def _real_run_context(model):
     deps = CoDeps(
         sandbox=SubprocessBackend(),
         session_id="test-history",
-        max_history_messages=40,
+        max_history_messages=max_history_messages,
         tool_output_trim_chars=2000,
-        summarization_model="",
+        summarization_model=summarization_model,
     )
     return RunContext(
         deps=deps,
@@ -337,10 +337,8 @@ async def test_summarize_messages_preserves_file_paths():
 
 
 @pytest.mark.asyncio
-async def test_truncate_history_window_under_threshold(monkeypatch):
+async def test_truncate_history_window_under_threshold():
     """When messages are under the threshold, history is returned unchanged."""
-    monkeypatch.setattr("co_cli.config.settings.max_history_messages", 100)
-
     from co_cli.agent import get_agent
     agent, _, _ = get_agent()
 
@@ -351,20 +349,17 @@ async def test_truncate_history_window_under_threshold(monkeypatch):
         _assistant("fine"),
     ]
 
-    ctx = _real_run_context(agent.model)
+    ctx = _real_run_context(agent.model, max_history_messages=100)
     result = await truncate_history_window(ctx, msgs)
     assert result is msgs  # identity — no copy, no change
 
 
 @pytest.mark.asyncio
-async def test_truncate_history_window_triggers_compaction(monkeypatch):
+async def test_truncate_history_window_triggers_compaction():
     """When messages exceed threshold, the middle is replaced with a summary.
 
     Requires a running LLM provider.
     """
-    monkeypatch.setattr("co_cli.config.settings.max_history_messages", 6)
-    monkeypatch.setattr("co_cli.config.settings.summarization_model", "")
-
     from co_cli.agent import get_agent
     agent, _, _ = get_agent()
 
@@ -383,7 +378,7 @@ async def test_truncate_history_window_triggers_compaction(monkeypatch):
     ]
     assert len(msgs) == 10
 
-    ctx = _real_run_context(agent.model)
+    ctx = _real_run_context(agent.model, max_history_messages=6)
     result = await truncate_history_window(ctx, msgs)
 
     # Result must be shorter
@@ -406,14 +401,11 @@ async def test_truncate_history_window_triggers_compaction(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_truncate_history_window_output_is_valid_history(monkeypatch):
+async def test_truncate_history_window_output_is_valid_history():
     """Compacted history is structurally valid — alternating request/response pattern.
 
     Requires a running LLM provider.
     """
-    monkeypatch.setattr("co_cli.config.settings.max_history_messages", 6)
-    monkeypatch.setattr("co_cli.config.settings.summarization_model", "")
-
     from co_cli.agent import get_agent
     agent, _, _ = get_agent()
 
@@ -430,7 +422,7 @@ async def test_truncate_history_window_output_is_valid_history(monkeypatch):
         _assistant("answer 5"),
     ]
 
-    ctx = _real_run_context(agent.model)
+    ctx = _real_run_context(agent.model, max_history_messages=6)
     result = await truncate_history_window(ctx, msgs)
 
     # Every message is a real ModelRequest or ModelResponse

@@ -110,7 +110,6 @@ class ModelQuirks(TypedDict, total=False):
         lazy: Model leaves TODOs or incomplete implementations
         hesitant: Model asks permission for safe operations
         counter_steering: Prompt text to inject (required if any flag is True)
-        tier: Prompt assembly tier (1=minimal, 2=standard, 3=full). Default 3.
         inference: Model-specific inference parameters.
     """
 
@@ -119,7 +118,6 @@ class ModelQuirks(TypedDict, total=False):
     lazy: bool
     hesitant: bool
     counter_steering: str
-    tier: int
     inference: ModelInference
 
 
@@ -129,7 +127,6 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
     # Ollama models (current)
     "ollama:llama3.1": {
         "hesitant": True,
-        "tier": 2,
         "inference": {
             "temperature": 0.7,
             "top_p": 1.0,
@@ -145,7 +142,6 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
     },
     "ollama:glm-4.7-flash": {
         "overeager": True,
-        "tier": 1,
         # Terminal / SWE-Bench Verified profile
         # Source: https://huggingface.co/zai-org/GLM-4.7-Flash
         # IMPORTANT: Ollama's OpenAI-compatible API ignores num_ctx from request
@@ -175,7 +171,6 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
         ),
     },
     "ollama:qwen3": {
-        "tier": 3,
         # Thinking mode profile
         # Source: https://huggingface.co/Qwen/Qwen3-30B-A3B
         "inference": {
@@ -187,37 +182,6 @@ MODEL_QUIRKS: dict[str, ModelQuirks] = {
         },
     },
 }
-
-
-# Aspect lists per tier — controls which behavioral aspects are loaded
-TIER_ASPECTS: dict[int, list[str]] = {
-    1: ["identity", "multi_turn"],
-    2: ["identity", "inquiry", "multi_turn", "response_style", "approval"],
-    3: ["identity", "inquiry", "fact_verify", "multi_turn", "response_style", "approval", "tool_output"],
-}
-
-DEFAULT_TIER = 3
-
-
-def get_model_tier(provider: str, model_name: str | None) -> int:
-    """Get prompt assembly tier for a model.
-
-    Args:
-        provider: LLM provider name (case-insensitive).
-        model_name: Normalized model identifier. If None, returns DEFAULT_TIER.
-
-    Returns:
-        Tier number (1=minimal, 2=standard, 3=full).
-    """
-    if not model_name:
-        return DEFAULT_TIER
-
-    provider_lower = provider.lower()
-    lookup_key = f"{provider_lower}:{model_name}"
-    quirks = MODEL_QUIRKS.get(lookup_key)
-    if quirks:
-        return quirks.get("tier", DEFAULT_TIER)
-    return DEFAULT_TIER
 
 
 def get_model_inference(provider: str, model_name: str | None) -> ModelInference:

@@ -17,6 +17,7 @@ import logging
 import sys
 import time
 
+from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -367,6 +368,7 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
 
     # Final scored turn
     scored_prompt = case["turns"][-1]
+    t0 = time.monotonic()
     result = await agent.run(
         scored_prompt,
         deps=deps,
@@ -374,7 +376,22 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
         model_settings=eval_settings,
         usage_limits=limits,
     )
-    followup_response = str(result.output)
+    elapsed = time.monotonic() - t0
+
+    # Extract text from result — DeferredToolRequests means the model
+    # returned a tool call instead of a text answer (overeager behavior)
+    if isinstance(result.output, DeferredToolRequests):
+        # Try to find any text in the last ModelResponse
+        followup_response = "[model returned tool call instead of text]"
+        for msg in reversed(result.all_messages()):
+            if isinstance(msg, ModelResponse):
+                text_parts = [p.content for p in msg.parts if isinstance(p, TextPart)]
+                if text_parts:
+                    followup_response = " ".join(text_parts)
+                break
+    else:
+        followup_response = str(result.output)
+
     all_messages = result.all_messages()
     response_lower = followup_response.lower()
 
@@ -394,6 +411,7 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
         "setup_history_len": setup_history_len,
         "total_msgs": len(all_messages),
         "msg_structure": _describe_messages(all_messages),
+        "elapsed": elapsed,
     }
 
 
@@ -401,7 +419,7 @@ def _switch_model(agent, model_name: str):
     """Switch the agent to a different Ollama model, rebuilding prompt and settings."""
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
-    from co_cli.prompts import get_system_prompt
+    from co_cli.prompts import assemble_prompt
     from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
 
     ollama_host = settings.ollama_host
@@ -409,9 +427,8 @@ def _switch_model(agent, model_name: str):
     agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
 
     normalized = normalize_model_name(model_name)
-    new_prompt = get_system_prompt(
+    new_prompt, _manifest = assemble_prompt(
         "ollama",
-        personality=settings.personality,
         model_name=normalized,
     )
     agent.system_prompt = new_prompt
@@ -470,6 +487,14 @@ async def main():
         google_credentials_path=None,
         slack_client=None,
         shell_safe_commands=[],
+        memory_max_count=settings.memory_max_count,
+        memory_dedup_window_days=settings.memory_dedup_window_days,
+        memory_dedup_threshold=settings.memory_dedup_threshold,
+        memory_decay_strategy=settings.memory_decay_strategy,
+        memory_decay_percentage=settings.memory_decay_percentage,
+        max_history_messages=settings.max_history_messages,
+        tool_output_trim_chars=settings.tool_output_trim_chars,
+        summarization_model=settings.summarization_model,
     )
 
     all_results: list[dict] = []
@@ -489,7 +514,7 @@ async def main():
                 result = await run_case(case, agent, deps, model_settings, model_name)
                 all_results.append(result)
                 status = "PASS" if result["passed"] else "FAIL"
-                print(status)
+                print(f"{status} ({result['elapsed']:.1f}s)")
 
                 print(f"    Response: {result['followup_response'][:200]}")
 

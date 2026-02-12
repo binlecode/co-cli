@@ -14,7 +14,7 @@ from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, Deferr
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
-    ModelRequest, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
+    ModelRequest, ModelResponse, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
     PartEndEvent, FinalResultEvent,
     ThinkingPart, ThinkingPartDelta,
     ToolCallPart, ToolReturnPart, UserPromptPart,
@@ -215,20 +215,36 @@ def _handle_part_delta_event(
 def _patch_dangling_tool_calls(
     messages: list, error_message: str = "Interrupted by user."
 ) -> list:
-    """Patch message history if last response has unanswered tool calls.
+    """Patch message history so all ToolCallParts have matching ToolReturnParts.
 
     LLM models expect both a tool call and its corresponding return in
     history. Without this patch, the next agent.run() would fail.
+
+    Scans *all* ModelResponse messages (not just the last one) to handle
+    interrupts during multi-tool approval loops where earlier responses may
+    also have dangling calls.
     """
     if not messages:
         return messages
 
-    last_msg = messages[-1]
-    if not (hasattr(last_msg, "kind") and last_msg.kind == "response"):
-        return messages
+    # Collect all tool_call_ids that already have a ToolReturnPart
+    answered_ids: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, ModelRequest):
+            for p in msg.parts:
+                if isinstance(p, ToolReturnPart) and p.tool_call_id:
+                    answered_ids.add(p.tool_call_id)
 
-    tool_calls = [p for p in last_msg.parts if isinstance(p, ToolCallPart)]
-    if not tool_calls:
+    # Scan all ModelResponse messages for unanswered ToolCallParts
+    dangling: list[ToolCallPart] = []
+    for msg in messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for p in msg.parts:
+            if isinstance(p, ToolCallPart) and p.tool_call_id not in answered_ids:
+                dangling.append(p)
+
+    if not dangling:
         return messages
 
     return_parts = [
@@ -237,7 +253,7 @@ def _patch_dangling_tool_calls(
             tool_call_id=tc.tool_call_id,
             content=error_message,
         )
-        for tc in tool_calls
+        for tc in dangling
     ]
     return messages + [ModelRequest(parts=return_parts)]
 

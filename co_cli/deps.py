@@ -49,6 +49,9 @@ class CoDeps:
     memory_decay_strategy: str = "summarize"
     memory_decay_percentage: float = 0.2
 
+    # Personality / role
+    personality: str | None = None
+
     # History governance
     max_history_messages: int = 40
     tool_output_trim_chars: int = 2000

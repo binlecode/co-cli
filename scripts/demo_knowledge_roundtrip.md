@@ -65,13 +65,13 @@ updated: 2026-02-10T20:03:47.399498+00:00
 3. **`co_cli/prompts/__init__.py:get_system_prompt()`** → calls knowledge loader:
    ```python
    # Step 3 in prompt assembly
-   from co_cli.knowledge import load_internal_knowledge
-   knowledge = load_internal_knowledge()
+   from co_cli.knowledge import load_memory
+   knowledge = load_memory()
    if knowledge:
        base_prompt += f"\n\n<system-reminder>\n{knowledge}\n</system-reminder>"
    ```
 
-4. **`co_cli/knowledge.py:load_internal_knowledge()`** → checks for context files:
+4. **`co_cli/knowledge.py:load_memory()`** → checks for context files:
    ```python
    global_path = Path.home() / ".config/co-cli/knowledge/context.md"
    project_path = Path.cwd() / ".co-cli/knowledge/context.md"
@@ -397,7 +397,7 @@ Co: [Agent recalls memories about database preferences]
 ```
 Session Start
     ↓
-get_agent() → get_system_prompt() → load_internal_knowledge()
+get_agent() → get_system_prompt() → load_memory()
     ↓                                        ↓
     ↓                    Reads: ~/.config/co-cli/knowledge/context.md
     ↓                           .co-cli/knowledge/context.md
@@ -575,7 +575,7 @@ uv run co chat
 
 ## Key Takeaways
 
-1. **Always-loaded context** is injected at session start via `load_internal_knowledge()`
+1. **Always-loaded context** is injected at session start via `load_memory()`
 2. **save_memory** requires approval (side-effectful) - writes markdown files
 3. **recall_memory** is read-only - grep-based search through files
 4. **list_memories** shows all memories with summaries

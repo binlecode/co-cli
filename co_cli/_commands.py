@@ -139,7 +139,7 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
     """
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
-    from co_cli.prompts import get_system_prompt
+    from co_cli.prompts import assemble_prompt
     from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
     from co_cli.config import settings
 
@@ -149,9 +149,8 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
 
     # Rebuild system prompt with new model quirks
     normalized_model = normalize_model_name(model_name)
-    new_system_prompt = get_system_prompt(
+    new_system_prompt, _manifest = assemble_prompt(
         "ollama",
-        personality=settings.personality,
         model_name=normalized_model,
     )
     agent.system_prompt = new_system_prompt

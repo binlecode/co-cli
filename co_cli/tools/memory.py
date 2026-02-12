@@ -146,6 +146,92 @@ def _parse_created(created_str: str) -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# Gravity — touched memories rise in recency
+# ---------------------------------------------------------------------------
+
+
+def _touch_memory(entry: MemoryEntry) -> None:
+    """Refresh the updated timestamp of a pulled memory (gravity).
+
+    Moves the memory to the top of the recency sequence so frequently-used
+    memories naturally stay accessible.
+
+    Args:
+        entry: MemoryEntry to touch
+    """
+    try:
+        content = entry.path.read_text(encoding="utf-8")
+        fm, body = parse_frontmatter(content)
+        fm["updated"] = datetime.now(timezone.utc).isoformat()
+
+        md_content = (
+            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+            f"{body.strip()}\n"
+        )
+        entry.path.write_text(md_content, encoding="utf-8")
+        entry.updated = fm["updated"]
+    except Exception as e:
+        logger.warning(f"Failed to touch memory {entry.id}: {e}")
+
+
+def _dedup_pulled(
+    entries: list[MemoryEntry], threshold: int = 85
+) -> list[MemoryEntry]:
+    """Deduplicate pulled results by pairwise similarity.
+
+    When two pulled memories are too similar, consolidates them: merges tags,
+    keeps newer content, deletes the older file.
+
+    Args:
+        entries: List of pulled MemoryEntry objects
+        threshold: Similarity threshold percentage
+
+    Returns:
+        Deduplicated list of MemoryEntry objects
+    """
+    if len(entries) <= 1:
+        return entries
+
+    # Track which entries are still alive (not merged away)
+    alive = list(entries)
+    to_remove: set[int] = set()
+
+    for i in range(len(alive)):
+        if alive[i].id in to_remove:
+            continue
+        for j in range(i + 1, len(alive)):
+            if alive[j].id in to_remove:
+                continue
+
+            similarity = fuzz.token_sort_ratio(
+                alive[i].content.lower().strip(),
+                alive[j].content.lower().strip(),
+            )
+
+            if similarity >= threshold:
+                # Keep the newer one, consolidate into it
+                newer, older = alive[i], alive[j]
+                if _parse_created(older.created) > _parse_created(newer.created):
+                    newer, older = older, newer
+
+                # Merge tags and update
+                try:
+                    _update_existing_memory(
+                        newer, newer.content, list(set(newer.tags + older.tags))
+                    )
+                    older.path.unlink()
+                    to_remove.add(older.id)
+                    logger.info(
+                        f"Dedup: merged memory {older.id} into {newer.id} "
+                        f"(similarity: {similarity:.1f}%)"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to dedup memories {older.id}/{newer.id}: {e}")
+
+    return [e for e in alive if e.id not in to_remove]
+
+
+# ---------------------------------------------------------------------------
 # Dedup
 # ---------------------------------------------------------------------------
 
@@ -374,11 +460,23 @@ async def _decay_memories(
             - strategy: "summarize" | "cut"
     """
     total_count = len(memories)
+    max_count = ctx.deps.memory_max_count
+    excess = total_count - max_count
 
-    # Calculate how many to decay
+    # Calculate how many to decay: at least enough to get below the limit
     decay_count = int(total_count * ctx.deps.memory_decay_percentage)
     if decay_count == 0:
         decay_count = 1  # Always decay at least 1 when triggered
+
+    strategy = ctx.deps.memory_decay_strategy
+
+    # Summarize creates 1 new file, so net removal = decay_count - 1.
+    # Ensure net removal >= excess so total drops below the limit.
+    if strategy == "summarize":
+        min_needed = excess + 1  # +1 accounts for the summary file created
+        decay_count = max(decay_count, min_needed)
+    else:
+        decay_count = max(decay_count, excess)
 
     # Get oldest unprotected memories
     oldest = sorted(
@@ -387,7 +485,6 @@ async def _decay_memories(
     )[:decay_count]
 
     # Execute decay strategy
-    strategy = ctx.deps.memory_decay_strategy
     if strategy == "summarize":
         return await _decay_summarize(ctx, memory_dir, oldest, memories)
     elif strategy == "cut":
@@ -585,8 +682,11 @@ async def recall_memory(
         or any(query_lower in t.lower() for t in m.tags)
     ]
 
-    # Sort by recency (created desc)
-    matches.sort(key=lambda m: m.created, reverse=True)
+    # Sort by recency (updated or created, desc)
+    matches.sort(
+        key=lambda m: m.updated or m.created,
+        reverse=True,
+    )
     matches = matches[:max_results]
 
     if not matches:
@@ -595,6 +695,13 @@ async def recall_memory(
             "count": 0,
             "results": [],
         }
+
+    # Gravity: dedup collisions among pulled results
+    matches = _dedup_pulled(matches, threshold=ctx.deps.memory_dedup_threshold)
+
+    # Gravity: touch pulled memories (refresh updated timestamp)
+    for match in matches:
+        _touch_memory(match)
 
     # Format as markdown list
     lines = [

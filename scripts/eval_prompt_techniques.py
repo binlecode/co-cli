@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import os
 from pydantic_ai import Agent
 
-from co_cli.prompts import get_system_prompt
+from co_cli.prompts import assemble_prompt
 
 
 # Comprehensive test scenarios covering all Phase 1d techniques
@@ -491,7 +491,7 @@ async def main():
     # Get system prompt WITH Phase 1d features
     # For quirk lookup, use base model name (strip quantization tags)
     quirk_model_name = model_name.split(":")[0] if provider == "ollama" else model_name
-    system_prompt = get_system_prompt(provider, None, quirk_model_name)
+    system_prompt, _manifest = assemble_prompt(provider, model_name=quirk_model_name)
 
     # Verify Phase 1d features present
     features = {

@@ -9,7 +9,7 @@ Future enhancements to the memory/knowledge system beyond what Phase 1c shipped.
 Phase 1c delivered:
 - **Context:** always-loaded `context.md` files (global + project scope, 3+7 KiB budgets)
 - **Memories:** on-demand `save_memory`/`recall_memory`/`list_memories` tools, markdown files with YAML frontmatter, dedup, consolidation, decay
-- **Loading:** `knowledge.py` → `load_internal_knowledge()`, injected as prompt layer
+- **Loading:** `knowledge.py` → `load_memory()`, injected as prompt layer
 - **Search:** grep + frontmatter matching (sufficient for <200 memories)
 
 ## Planned Enhancements
@@ -54,7 +54,7 @@ Store images, PDFs, and code snippets alongside articles:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge.py` | Context loading (`load_internal_knowledge()`) |
+| `co_cli/knowledge.py` | Context loading (`load_memory()`) |
 | `co_cli/tools/memory.py` | Memory tools (save, recall, list) |
 | `co_cli/_frontmatter.py` | YAML frontmatter parsing |
 | `docs/DESIGN-14-memory-lifecycle-system.md` | Current design (Phase 1c) |

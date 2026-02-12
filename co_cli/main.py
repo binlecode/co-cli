@@ -119,6 +119,7 @@ def create_deps() -> CoDeps:
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
         web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
         web_policy=settings.web_policy,
+        personality=settings.personality,
         memory_max_count=settings.memory_max_count,
         memory_dedup_window_days=settings.memory_dedup_window_days,
         memory_dedup_threshold=settings.memory_dedup_threshold,

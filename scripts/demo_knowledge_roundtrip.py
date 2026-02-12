@@ -79,13 +79,13 @@ async def demo_step_1_context_loading():
     """Step 1: Verify context was loaded into system prompt."""
     console.print("\n[bold cyan]═══ Step 1: Context Loading at Session Start ═══[/bold cyan]")
 
-    from co_cli.knowledge import load_internal_knowledge
+    from co_cli.knowledge import load_memory
 
-    knowledge = load_internal_knowledge()
-    if knowledge:
-        console.print("✓ Knowledge loaded successfully")
-        console.print(f"  Size: {len(knowledge)} bytes")
-        if "Python CLI" in knowledge:
+    memory = load_memory()
+    if memory:
+        console.print("✓ Memory loaded successfully")
+        console.print(f"  Size: {len(memory)} bytes")
+        if "Python CLI" in memory:
             console.print("  ✓ Contains project context about 'Python CLI'")
         console.print(f"  ✓ Wrapped in <system-reminder> tags: {knowledge[:50]}...")
     else:

@@ -43,6 +43,13 @@ def _find_first_run_end(messages: list[ModelMessage]) -> int:
     This anchors the "first run" boundary — everything up to and including
     this message belongs to the initial exchange that establishes session
     context.  If no such message exists, returns 0 (keep nothing pinned).
+
+    Design note: if the first ModelResponse is tool-only (no TextPart), this
+    returns 0, so head_end=1 — only the initial ModelRequest is pinned. The
+    first run's tool call/return cycle falls into the dropped middle section
+    and gets captured in the LLM summary. This is acceptable for MVP: the
+    summary preserves the tool interaction semantics without pinning
+    potentially large tool output in the head.
     """
     for i, msg in enumerate(messages):
         if isinstance(msg, ModelResponse):

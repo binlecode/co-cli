@@ -70,7 +70,7 @@ Triggers when `len(messages)` exceeds `max_history_messages` (default 40). Split
    run                                             (most relevant)
 ```
 
-**Head boundary:** `_find_first_run_end(messages)` — scans for the first `ModelResponse` containing a `TextPart`. Returns the index (inclusive). Does not assume a fixed count of 2: first run may span 4+ messages if it includes tool calls. Returns 0 if no text response found (keep nothing pinned).
+**Head boundary:** `_find_first_run_end(messages)` — scans for the first `ModelResponse` containing a `TextPart`. Returns the index (inclusive). Does not assume a fixed count of 2: first run may span 4+ messages if it includes tool calls. Returns 0 if no text response found (keep nothing pinned). **Design note:** if the first `ModelResponse` is tool-only (no `TextPart`), head_end=1 — only the initial `ModelRequest` is pinned. The first run's tool call/return cycle falls into the dropped middle and gets captured in the LLM summary. This is acceptable: the summary preserves tool interaction semantics without pinning potentially large tool output in the head.
 
 **Tail size:** `max(4, max_history_messages // 2)` — at least 4 messages for usable context.
 
@@ -107,7 +107,7 @@ Returns `None` on empty history or on summarisation failure.
 
 **`_patch_dangling_tool_calls(messages, error_message)`** (`_orchestrate.py`)
 
-When a `KeyboardInterrupt` or `CancelledError` occurs mid-turn, the last message may be a `ModelResponse` with unanswered `ToolCallPart` entries. LLM models expect paired tool call + return in history. This function appends a synthetic `ModelRequest` with `ToolReturnPart(content="Interrupted by user.")` for each dangling call, keeping history structurally valid.
+When a `KeyboardInterrupt` or `CancelledError` occurs mid-turn, `ModelResponse` messages may contain unanswered `ToolCallPart` entries. LLM models expect paired tool call + return in history. This function scans *all* messages (not just the last one) to find `ToolCallPart` entries without a corresponding `ToolReturnPart`, then appends a single synthetic `ModelRequest` with `ToolReturnPart(content="Interrupted by user.")` for each dangling call. The full scan handles interrupts during multi-tool approval loops where earlier `ModelResponse` messages may also have unmatched calls.
 
 ### History Processor Registration
 
@@ -137,6 +137,33 @@ pydantic-ai runs processors in order before every model request. Sync processors
 **Deferred:** token-based triggering, output offloading to disk, compression inflation guard.
 
 </details>
+
+### DeferredToolRequests Interaction
+
+Approval-gated tool calls (`DeferredToolRequests`) interact with conversation history:
+
+- **Approved tools:** `_handle_approvals()` in `_orchestrate.py` resumes the agent with `DeferredToolResults`. pydantic-ai re-runs with the tool return — history grows naturally with the `ToolCallPart` + `ToolReturnPart` pair
+- **Denied tools:** The approval loop passes `ToolDenied("User denied this action")` for the call ID. pydantic-ai injects a synthetic `ToolReturnPart` so history remains structurally valid
+- **Interrupted:** If the user interrupts during an approval loop, `_patch_dangling_tool_calls()` scans all messages and patches any unmatched `ToolCallPart` entries with synthetic returns
+
+### Model Quirks and History
+
+Model behavioural quirks (defined in `prompts/model_quirks.py`) interact with conversation history management:
+
+- **Overeager tool calling (GLM):** GLM models trigger spurious tool calls on conversational prompts (e.g. calling `run_shell_command` when asked a factual question). This pollutes history with unnecessary `ToolCallPart`/`ToolReturnPart` pairs and can cause `DeferredToolRequests` on scored/final turns. Counter-steering in `model_quirks.py` duplicates `multi_turn.md` guidance to emphasise conversation context awareness
+- **Tier system:** Controls prompt volume — tier 1 (minimal) loads only `identity` + `multi_turn` aspects to reduce confusion for models prone to overeager behaviour. Fewer instructions = less surface area for misinterpretation
+- **Eval implications:** The eval harness (`scripts/eval_conversation_history.py`) must handle `DeferredToolRequests` as output — extract text parts from the message history or mark as `[model returned tool call instead of text]` for scoring
+
+### Summarisation Model Rationale
+
+Two-model design for summarisation:
+
+| Callsite | Model | Rationale |
+|----------|-------|-----------|
+| `truncate_history_window` (automatic processor) | `ctx.deps.summarization_model` with fallback to `ctx.model` (primary) | Automatic — runs frequently, cheaper/faster model preferred to reduce latency and cost |
+| `/compact` (manual command) | `ctx.agent.model` (primary always) | User-initiated — quality matters more than cost, user is waiting for a good summary |
+
+When `summarization_model` is empty (default), both paths use the primary model.
 
 ### Session Persistence (Future)
 

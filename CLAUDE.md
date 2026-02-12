@@ -58,6 +58,7 @@ Co loads persistent knowledge from markdown files at session start:
 
 - **Python 3.12+** with type hints everywhere
 - **Imports**: Always explicit — never `from X import *`
+- **Comments**: No trailing comments — put comments on the line above, not at end of code lines
 - **`__init__.py`**: Prefer empty (docstring-only) — no re-exports unless the module is a public API facade
 - **`_prefix.py` helpers**: Internal/shared helpers in a package use leading underscore. Private to the package — not registered as tools, not part of the public API
 - **Tool pattern**: New tools must use `agent.tool()` with `RunContext[CoDeps]`, access runtime resources via `ctx.deps`
@@ -130,6 +131,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
+- `docs/TODO-3-tier-context-model.md` — 3-tier context model: Instructions / Memory / Knowledge tier definitions, naming conventions, peer evidence
 - `docs/TODO-prompt-system-redesign.md` — Layered prompt composition, instruction discovery, test governance
 - `docs/TODO-user-preferences.md` — Workflow preferences system
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations

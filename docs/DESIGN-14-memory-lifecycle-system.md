@@ -125,7 +125,7 @@ User: "I prefer async/await"
 
 ### Context Loading (Session Start)
 
-**`load_internal_knowledge() → str | None`** — called once per session from `get_system_prompt()`. Loads global + project context files, validates frontmatter, checks size limits (warn at 10 KiB, truncate at 20 KiB). Returns combined markdown wrapped in `<system-reminder>` tags.
+**`load_memory() → str | None`** — called once per session from `get_system_prompt()`. Loads global + project context files, validates frontmatter, checks size limits (warn at 10 KiB, truncate at 20 KiB). Returns combined markdown wrapped in `<system-reminder>` tags.
 
 Positioned in prompt after personality template, before project instructions (CLAUDE.md). Returns `None` if no files exist (graceful degradation).
 
@@ -271,7 +271,7 @@ Context.md lives "above" the conversation (system-level), memories live "in" the
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge.py` | `load_internal_knowledge()` — session start loader, size validation |
+| `co_cli/knowledge.py` | `load_memory()` — session start loader, size validation |
 | `co_cli/_frontmatter.py` | YAML frontmatter parsing and validation |
 | `co_cli/tools/memory.py` | Memory tools (`save_memory`, `recall_memory`, `list_memories`) + `MemoryEntry` dataclass + `_load_all_memories` scanner + `_detect_source()`, `_detect_category()` helpers. Signal patterns and negative guidance live in tool docstrings (section 2) |
 | `co_cli/config.py` | Memory lifecycle settings (5 settings) |

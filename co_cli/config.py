@@ -99,6 +99,7 @@ class Settings(BaseModel):
     # Conversation memory
     tool_output_trim_chars: int = Field(default=2000)
     max_history_messages: int = Field(default=40)
+    # Empty = fall back to agent's primary model
     summarization_model: str = Field(default="")
 
     # Memory lifecycle (notes with gravity)
@@ -167,10 +168,10 @@ class Settings(BaseModel):
     # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 2048
     # tokens and silently lose multi-turn conversation history.
     # See docs/GUIDE-ollama-local-setup.md for Modelfile setup.
-    ollama_model: str = Field(default="qwen3:30b-a3b-thinking-2507-q8_0")
+    ollama_model: str = Field(default="qwen3:30b-a3b-thinking-2507-q8_0-agentic")
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
-    ollama_num_ctx: int = Field(default=202752)
+    ollama_num_ctx: int = Field(default=262144)
     gemini_model: str = Field(default="gemini-2.0-flash")
 
     @model_validator(mode='before')

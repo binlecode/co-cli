@@ -1,143 +1,130 @@
-"""Prompt templates for the Co CLI agent.
+"""Prompt assembly for the Co CLI agent.
 
-Aspect-driven system prompt assembly with tier-based model adaptation.
-Behavioral aspects are stored as independent Markdown files in aspects/.
+Rules-fixed system prompt: instructions + behavioral rules + counter-steering.
+Context (personality, knowledge) is loaded on-demand via tools.
 """
 
+import re
 from pathlib import Path
 
+from co_cli.prompts._manifest import PromptManifest
 
-_ASPECTS_DIR = Path(__file__).parent / "aspects"
+
+_PROMPTS_DIR = Path(__file__).parent
+_RULES_DIR = _PROMPTS_DIR / "rules"
+
+_RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
 
 
-def _load_aspect(name: str) -> str:
-    """Load a single behavioral aspect file by name.
-
-    Args:
-        name: Aspect filename without extension (e.g., "identity").
-
-    Returns:
-        Stripped text content of the aspect file.
-
-    Raises:
-        FileNotFoundError: If the aspect file doesn't exist.
-    """
-    path = _ASPECTS_DIR / f"{name}.md"
+def _load_instructions() -> str:
+    """Load the bootstrap instructions file."""
+    path = _PROMPTS_DIR / "instructions.md"
     if not path.exists():
-        raise FileNotFoundError(f"Aspect file not found: {path}")
+        raise FileNotFoundError(f"Instructions file not found: {path}")
     return path.read_text(encoding="utf-8").strip()
 
 
-def load_personality(personality: str) -> str:
-    """Load personality by composing orthogonal aspects (character + style).
+def _collect_rule_files() -> list[tuple[int, str, Path]]:
+    """Load and validate numbered rule filenames.
 
-    Args:
-        personality: Personality preset name (finch, jeff, friendly, terse, inquisitive)
-
-    Returns:
-        Composed personality prompt text.
-
-    Raises:
-        FileNotFoundError: If personality preset or aspect files don't exist.
+    Contract:
+    - Filename format: ``NN_rule_id.md`` (e.g. ``01_identity.md``)
+    - Numeric prefixes must be unique and contiguous from 01
     """
-    from co_cli.prompts.personalities._composer import compose_personality
+    rule_paths = sorted(_RULES_DIR.glob("*.md"))
+    if not rule_paths:
+        raise ValueError(f"No rule files found in {_RULES_DIR}")
 
-    try:
-        return compose_personality(personality)
-    except KeyError:
-        raise FileNotFoundError(f"Personality preset not found: {personality}")
+    parsed: list[tuple[int, str, Path]] = []
+    invalid_names: list[str] = []
+    for path in rule_paths:
+        match = _RULE_FILENAME_RE.fullmatch(path.name)
+        if not match:
+            invalid_names.append(path.name)
+            continue
+        parsed.append((int(match.group("order")), match.group("rule_id"), path))
+
+    if invalid_names:
+        invalid_sorted = ", ".join(sorted(invalid_names))
+        raise ValueError(
+            "Invalid rule filename(s): "
+            f"{invalid_sorted}. Expected format: NN_rule_id.md"
+        )
+
+    order_counts: dict[int, int] = {}
+    for order, _rule_id, _path in parsed:
+        order_counts[order] = order_counts.get(order, 0) + 1
+    duplicates = sorted(order for order, count in order_counts.items() if count > 1)
+    if duplicates:
+        duplicate_str = ", ".join(f"{n:02d}" for n in duplicates)
+        raise ValueError(f"Duplicate rule order prefix(es): {duplicate_str}")
+
+    parsed.sort(key=lambda item: item[0])
+    orders = [order for order, _rule_id, _path in parsed]
+    expected = list(range(1, len(parsed) + 1))
+    if orders != expected:
+        found = ", ".join(f"{n:02d}" for n in orders)
+        raise ValueError(
+            "Rule order prefixes must be contiguous starting at 01. "
+            f"Found: {found}"
+        )
+
+    return parsed
 
 
-def load_personality_style_only(personality: str) -> str:
-    """Load only the style aspect of a personality (skip character).
-
-    Used by tier 2 models where character content is too expensive.
-
-    Args:
-        personality: Personality preset name.
-
-    Returns:
-        Style-only personality prompt text.
-
-    Raises:
-        FileNotFoundError: If personality preset or style file doesn't exist.
-    """
-    from co_cli.prompts.personalities._composer import compose_style_only
-
-    try:
-        return compose_style_only(personality)
-    except KeyError:
-        raise FileNotFoundError(f"Personality preset not found: {personality}")
-
-
-def get_system_prompt(
+def assemble_prompt(
     provider: str,
-    personality: str | None = None,
     model_name: str | None = None,
-) -> str:
-    """Assemble system prompt from behavioral aspects with tier-based selection.
+) -> tuple[str, PromptManifest]:
+    """Assemble rules-only system prompt.
 
-    Assembly order (recency = precedence):
-    1. Behavioral aspects (tier-selected subset from aspects/)
-    2. Model quirk counter-steering (shapes how personality is expressed)
-    3. Personality template (tier-dependent: skip / style-only / full)
-    4. Internal knowledge (background reference)
-    5. Project instructions (highest precedence user customization)
+    Assembly order:
+    1. Bootstrap instructions (instructions.md)
+    2. All behavioral rules (rules/*.md)
+    3. Model-specific counter-steering (if quirks exist)
+
+    Context (personality, knowledge) is NOT included — loaded
+    on-demand by the agent via context tools.
 
     Args:
-        provider: LLM provider name ("gemini", "ollama", or unknown).
-        personality: Personality preset name (finch, jeff, friendly, terse, inquisitive).
-                    If None, no personality is injected.
-        model_name: Model identifier for quirk/tier lookup (e.g., "gemini-2.0-flash",
-                   "glm-4.7-flash"). If None, uses default tier (3).
+        provider: LLM provider name ("gemini", "ollama").
+        model_name: Normalized model identifier for quirk lookup.
 
     Returns:
-        Assembled system prompt as string.
+        Tuple of (assembled_prompt, manifest).
 
     Raises:
-        FileNotFoundError: If aspect files or personality template doesn't exist.
+        FileNotFoundError: If instructions or rule files are missing.
         ValueError: If assembled prompt is empty.
     """
-    from co_cli.prompts.model_quirks import get_model_tier, get_counter_steering, TIER_ASPECTS
+    manifest = PromptManifest()
+    parts: list[str] = []
 
-    # 1. Load aspects by tier
-    tier = get_model_tier(provider, model_name)
-    aspect_names = TIER_ASPECTS[tier]
-    prompt = "\n\n".join(_load_aspect(name) for name in aspect_names)
+    # 1. Bootstrap instructions
+    instructions = _load_instructions()
+    parts.append(instructions)
+    manifest.parts_loaded.append("instructions")
 
-    # 2. Counter-steering (all tiers)
+    # 2. All behavioral rules (strict numbered order)
+    for _order, name, rule_path in _collect_rule_files():
+        content = rule_path.read_text(encoding="utf-8").strip()
+        if content:
+            parts.append(content)
+            manifest.parts_loaded.append(name)
+
+    # 3. Counter-steering (model-specific quirks)
     if model_name:
+        from co_cli.prompts.model_quirks import get_counter_steering
+
         counter_steering = get_counter_steering(provider, model_name)
         if counter_steering:
-            prompt += f"\n\n## Model-Specific Guidance\n\n{counter_steering}"
+            parts.append(f"## Model-Specific Guidance\n\n{counter_steering}")
+            manifest.parts_loaded.append("counter_steering")
 
-    # 3. Personality (tier-dependent)
-    if personality:
-        if tier == 1:
-            pass  # skip personality entirely — budget too tight
-        elif tier == 2:
-            style_content = load_personality_style_only(personality)
-            prompt += f"\n\n## Personality\n\n{style_content}"
-        else:
-            personality_content = load_personality(personality)
-            prompt += f"\n\n## Personality\n\n{personality_content}"
+    prompt = "\n\n".join(parts)
 
-    # 4. Internal knowledge (all tiers)
-    from co_cli.knowledge import load_internal_knowledge
-
-    knowledge = load_internal_knowledge()
-    if knowledge:
-        prompt += f"\n\n<system-reminder>\n{knowledge}\n</system-reminder>"
-
-    # 5. Project instructions (all tiers)
-    project_instructions = Path.cwd() / ".co-cli" / "instructions.md"
-    if project_instructions.exists():
-        instructions_content = project_instructions.read_text(encoding="utf-8")
-        prompt += "\n\n## Project-Specific Instructions\n\n"
-        prompt += instructions_content
-
-    # Validate result
     if not prompt.strip():
         raise ValueError("Assembled prompt is empty after processing")
 
-    return prompt
+    manifest.total_chars = len(prompt)
+    return prompt, manifest
