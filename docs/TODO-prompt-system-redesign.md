@@ -76,8 +76,8 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
     ┌─────┴──────┐
     ▼            ▼
   prompt    PromptManifest
-  (str)     (aspects_selected, parts,
-             chars, tokens, warnings)
+  (str)     (aspects_selected, parts_loaded,
+             total_chars, warnings)
 ```
 
 ### Aspect Inventory
@@ -96,7 +96,7 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 ### Key Design Decisions
 
-**PromptManifest for diagnostics.** Every assembly returns a manifest with: provider, model, personality, aspects_selected, parts included (by name), quirk flags, total chars, estimated tokens (chars/4 heuristic), and warnings. The manifest is available for debugging (`/prompt` slash command, log output) without parsing the prompt text. A lightweight dataclass — no intermediate layer objects.
+**PromptManifest for diagnostics.** Every assembly returns a manifest with: `aspects_selected`, `parts_loaded`, `total_chars`, and `warnings`. Input params (provider, model, personality) stay in `PromptContext` — no echo-back. Available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
 
 **Runtime policy overlay fixes prompt/runtime divergence.** `get_runtime_policy_overlay(safe_commands)` generates policy text from the live `shell_safe_commands` list. The model sees the actual auto-approved commands, not a generic "side-effectful tools require approval" statement. This closes the gap where the model doesn't know `ls`, `cat`, `git status` etc. are auto-approved in sandbox mode.
 
@@ -139,7 +139,7 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 ### A1. Pure dataclasses (no deps)
 
 - [ ] `co_cli/prompts/_manifest.py` — `PromptManifest` dataclass
-  - Fields: `provider`, `model`, `personality`, `aspects_selected` (list[str]), `parts_loaded` (list[str]), `quirk_flags` (dict), `total_chars` (int), `estimated_tokens` (int), `warnings` (list[str])
+  - Fields: `aspects_selected` (list[str]), `parts_loaded` (list[str]), `total_chars` (int), `warnings` (list[str])
 - [ ] `co_cli/prompts/_context.py` — `PromptContext` dataclass
   - Fields: `provider`, `model_name`, `personality` (optional), `aspects` (list[str], default all 7)
 
@@ -195,12 +195,9 @@ assemble_prompt(ctx):
 
   prompt = "\n\n".join(parts)
   manifest = PromptManifest(
-    provider=ctx.provider, model=ctx.model_name,
-    personality=ctx.personality, aspects_selected=aspects,
+    aspects_selected=aspects,
     parts_loaded=part_names,
-    quirk_flags=get_quirk_flags(ctx.provider, ctx.model_name or ""),
     total_chars=len(prompt),
-    estimated_tokens=len(prompt) // 4,
     warnings=[...]
   )
   return prompt, manifest
@@ -368,7 +365,7 @@ from co_cli.prompts._context import PromptContext
 ctx = PromptContext(provider='gemini', model_name='gemini-2.0-flash', personality='finch')
 prompt, manifest = assemble_prompt(ctx)
 print(f'Parts: {manifest.parts_loaded}')
-print(f'Chars: {manifest.total_chars}, ~Tokens: {manifest.estimated_tokens}')
+print(f'Chars: {manifest.total_chars}')
 print(f'Warnings: {manifest.warnings}')
 "
 ```
