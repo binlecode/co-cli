@@ -1,6 +1,6 @@
 # TODO: Prompt System Redesign
 
-Layered prompt composition with adaptation overlays and manifest diagnostics.
+Prompt composition with adaptation overlays and manifest diagnostics.
 
 ---
 
@@ -12,7 +12,7 @@ The prompt system uses an aspect-driven architecture (~5.6 KiB total) with adapt
 - **Personalities:** composable character + style aspects with preset registry (`_registry.py`, `_composer.py`). Original role essays preserved in `roles/` (not loaded at runtime)
 - **Model quirks:** `model_quirks.py` — counter-steering text, `normalize_model_name()`
 - **Memory:** `knowledge.py` loads always-on context (background memory); `tools/memory.py` provides on-demand memory tools. Independent modules — no prompt structure dependency
-- **Assembly:** `get_system_prompt(provider, personality, model_name)` in `prompts/__init__.py` — 5-layer string concatenation
+- **Assembly:** `get_system_prompt(provider, personality, model_name)` in `prompts/__init__.py` — 5-part string concatenation
 
 ### Gaps
 
@@ -20,9 +20,9 @@ The current system works but has structural gaps:
 
 1. **No test coverage** — all prompt tests were deleted during the aspect refactor; no replacements written
 2. **Prompt/runtime policy divergence** — `aspects/approval.md` says "side-effectful tools require approval" but runtime auto-approves safe shell commands in sandbox mode; the model never learns the actual policy
-3. **No assembly diagnostics** — no manifest or introspection for what layers were loaded or what the token budget looks like
+3. **No assembly diagnostics** — no manifest or introspection for what parts were loaded or what the token budget looks like
 
-### Current Assembly (4 layers, string concatenation with per-turn aspect selection)
+### Current Assembly (4 parts, string concatenation with per-turn aspect selection)
 
 ```
 get_system_prompt(provider, personality, model_name) → str
@@ -36,16 +36,16 @@ get_system_prompt(provider, personality, model_name) → str
 
 Callers: `agent.py:94` (startup), `_commands.py:151` (`/model` switch). Both call `get_system_prompt()` directly.
 
-### Target Assembly (5 layers, typed composition with manifest)
+### Target Assembly (5 parts, direct string building with manifest)
 
 ```
 assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
-  Priority 10: Core aspects       — adaptively selected from aspects/ (per-turn LLM multi-select)
-  Priority 30: Counter-steering   — model quirk text from MODEL_QUIRKS (unchanged)
-  Priority 40: Personality        — character+style, always full (unchanged)
-  Priority 60: Memory             — <system-reminder> wrapped (unchanged)
-  Priority 90: Runtime policy     — generated from live safe_commands list (NEW)
+  1. Core aspects       — adaptively selected from aspects/ (per-turn LLM multi-select)
+  2. Counter-steering   — model quirk text from MODEL_QUIRKS (if applicable)
+  3. Personality        — character+style, always full
+  4. Memory             — <system-reminder> wrapped
+  5. Runtime policy     — generated from live safe_commands list (NEW)
 ```
 
 `get_system_prompt()` is replaced by `assemble_prompt()`. Callers (`agent.py`, `_commands.py`) updated to use the new API directly.
@@ -53,44 +53,31 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 ### Architecture Diagram
 
 ```
-                    User query + conversation history
-                         │
-                         ▼
-              ┌─────────────────────┐
-              │  Aspect selector    │  ← reasoning LLM call
-              │  (per-turn)         │  ← multi-selects from 7 aspects
-              └────────┬────────────┘
-                       │ selected aspects
-                       ▼
-                    PromptContext
-                   (provider, model, personality, aspects)
-                         │
-                         ▼
-              ┌─────────────────────┐
-              │   assemble_prompt() │
-              └────────┬────────────┘
-                       │
-        ┌──────────────┼──────────────────────┐
-        ▼              ▼                      ▼
-  Core Layers    Adaptation Layers      Runtime Layers
-  ─────────────  ──────────────────    ──────────────
-  aspects/*.md   counter-steer (p30)   runtime policy (p90)
-  (p10, selected)personality (p40)
-                 memory (p60)
-        │              │                      │
-        └──────────────┼──────────────────────┘
-                       ▼
-              ┌─────────────────────┐
-              │  _compose_layers()  │
-              │  sort by priority   │
-              │  join with headings │
-              └────────┬────────────┘
-                       │
-               ┌───────┴───────┐
-               ▼               ▼
-         prompt: str    PromptManifest
-                       (layers, files, chars,
-                        tokens, warnings)
+  User query + history
+         │
+         ▼
+  ┌────────────────┐
+  │ select_aspects │  reasoning LLM → picks from 7 aspects
+  └───────┬────────┘
+          │ e.g. [identity, intent, safety, tool_use]
+          ▼
+  ┌────────────────────────────────────────┐
+  │            assemble_prompt()           │
+  │                                        │
+  │  1. aspects/*.md    (selected only)    │
+  │  2. counter-steering (if model quirk)  │
+  │  3. personality     (always full)      │
+  │  4. memory          (<system-reminder>)│
+  │  5. runtime policy  (safe commands)    │
+  │                                        │
+  │  → append in order, join with headings │
+  └───────┬────────────────────────────────┘
+          │
+    ┌─────┴──────┐
+    ▼            ▼
+  prompt    PromptManifest
+  (str)     (aspects_selected, parts,
+             chars, tokens, warnings)
 ```
 
 ### Aspect Inventory
@@ -109,13 +96,9 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 ### Key Design Decisions
 
-**PromptLayer as frozen dataclass, not dict.** Every layer has typed fields: `name`, `content`, `section_heading`, `scope` (enum-like string), `priority` (int), `tag` (optional wrapper like `<system-reminder>`). Layers are immutable after creation — composition never mutates.
+**PromptManifest for diagnostics.** Every assembly returns a manifest with: provider, model, personality, aspects_selected, parts included (by name), quirk flags, total chars, estimated tokens (chars/4 heuristic), and warnings. The manifest is available for debugging (`/prompt` slash command, log output) without parsing the prompt text. A lightweight dataclass — no intermediate layer objects.
 
-**Priority-based ordering, not insertion order.** Layers are sorted by `priority` before joining. This lets callers add layers in any order and get deterministic output. Gaps between priority numbers (10, 20, 30...) leave room for future insertion without renumbering.
-
-**PromptManifest for diagnostics.** Every assembly returns a manifest with: provider, model, personality, aspects_selected, layers loaded (by name), quirk flags, total chars, estimated tokens (chars/4 heuristic), and warnings. The manifest is available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
-
-**Runtime policy overlay fixes prompt/runtime divergence.** `get_runtime_policy_overlay(safe_commands)` generates a policy layer from the live `shell_safe_commands` list. The model sees the actual auto-approved commands, not a generic "side-effectful tools require approval" statement. This closes the gap where the model doesn't know `ls`, `cat`, `git status` etc. are auto-approved in sandbox mode.
+**Runtime policy overlay fixes prompt/runtime divergence.** `get_runtime_policy_overlay(safe_commands)` generates policy text from the live `shell_safe_commands` list. The model sees the actual auto-approved commands, not a generic "side-effectful tools require approval" statement. This closes the gap where the model doesn't know `ls`, `cat`, `git status` etc. are auto-approved in sandbox mode.
 
 **Direct adaptive aspect selection.** A reasoning LLM call examines each user query (with full conversation history) and multi-selects which of the 7 aspects are relevant for this turn. There is no intermediate "mode" abstraction — the model judges directly which behavioral instructions apply. This replaces tier-based aspect removal which had no peer backing and created safety gaps (tier 1 models never saw approval rules). The selector uses the same reasoning model, not cheap heuristics, because accurate alignment with user intent is critical. User can override but autonomous selection should make this rarely necessary.
 
@@ -130,11 +113,11 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 | Changed | Unchanged |
 |---------|-----------|
 | `co_cli/prompts/__init__.py` — `get_system_prompt()` replaced by `assemble_prompt()` | `co_cli/prompts/personalities/` — registry, composer, aspects, roles/ |
-| `co_cli/prompts/model_quirks.py` — `TIER_ASPECTS` removed, `get_model_tier()` removed | `co_cli/knowledge.py` — `load_memory()` consumed as memory layer |
+| `co_cli/prompts/model_quirks.py` — `TIER_ASPECTS` removed, `get_model_tier()` removed | `co_cli/knowledge.py` — `load_memory()` consumed as memory part |
 | `co_cli/prompts/aspects/*.md` — 7 files renamed/merged/expanded per aspect inventory | |
 | `co_cli/agent.py` — updated to call `assemble_prompt()` | |
 | `co_cli/_commands.py` — updated to call `assemble_prompt()` | |
-| New: `_layers.py`, `_manifest.py`, `_context.py` | |
+| New: `_manifest.py`, `_context.py` | |
 | New: `_adaptations.py` | |
 | New: `tests/test_prompt_contracts.py` | |
 
@@ -142,7 +125,7 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 | Pattern | Peer Evidence | co-cli Adoption |
 |---------|--------------|-----------------|
-| Typed prompt composition | Claude Code `PromptConfig` + policy fragments, Codex `PermissionMode` | `PromptLayer` + `PromptManifest` |
+| Structured prompt composition | Claude Code `PromptConfig` + policy fragments, Codex `PermissionMode` | `assemble_prompt()` + `PromptManifest` |
 | Runtime policy injection | Codex safe-command allowlists in prompt, Claude Code hook-based permission engine | `get_runtime_policy_overlay(safe_commands)` |
 | Model-specific adaptation | Aider model warnings, Codex quirk database | Counter-steering only (tier removed) |
 | Direct adaptive aspect selection | No peer uses tier-based removal. All send full behavioral spec. Adaptation is additive (counter-steering), not subtractive | Per-turn reasoning LLM multi-selects from 7 peer-converged aspects |
@@ -155,10 +138,8 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 ### A1. Pure dataclasses (no deps)
 
-- [ ] `co_cli/prompts/_layers.py` — `PromptLayer` frozen dataclass
-  - Fields: `name`, `content`, `section_heading`, `scope` (core|quirk|personality|memory|policy), `priority` (int), `tag` (optional wrapper tag)
 - [ ] `co_cli/prompts/_manifest.py` — `PromptManifest` dataclass
-  - Fields: `provider`, `model`, `personality`, `aspects_selected` (list[str]), `layers_loaded` (list[str]), `quirk_flags` (dict), `total_chars` (int), `estimated_tokens` (int), `warnings` (list[str])
+  - Fields: `provider`, `model`, `personality`, `aspects_selected` (list[str]), `parts_loaded` (list[str]), `quirk_flags` (dict), `total_chars` (int), `estimated_tokens` (int), `warnings` (list[str])
 - [ ] `co_cli/prompts/_context.py` — `PromptContext` dataclass
   - Fields: `provider`, `model_name`, `personality` (optional), `aspects` (list[str], default all 7)
 
@@ -166,60 +147,57 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 - [ ] `co_cli/prompts/_adaptations.py`
   - `select_aspects(query, history, model) -> list[str]` — reasoning LLM call, multi-selects from ALL_ASPECTS
-  - `get_runtime_policy_overlay(safe_commands) -> PromptLayer` — generates approval policy text from live settings
+  - `get_runtime_policy_overlay(safe_commands) -> str` — generates approval policy text from live settings
 
 ### A3. Assembler in `__init__.py`
 
-- [ ] `assemble_prompt(ctx: PromptContext) -> tuple[str, PromptManifest]` — new layered assembler
-- [ ] `_compose_layers(layers: list[PromptLayer]) -> str` — sort by priority, join with headings
-- [ ] `_build_personality_layer(personality) -> PromptLayer | None` — always full
+- [ ] `assemble_prompt(ctx: PromptContext) -> tuple[str, PromptManifest]` — direct string builder
 - [ ] Remove `get_system_prompt()` — update `agent.py` and `_commands.py` to call `assemble_prompt()` directly
 
 Assembly pseudocode:
 
 ```
 assemble_prompt(ctx):
-  layers = []
+  parts = []
+  part_names = []
 
-  # Core aspects (priority 10) — selected by reasoning LLM call
-  # ctx.aspects populated by select_aspects() before assembly
+  # 1. Aspects — selected by reasoning LLM call
   ALL_ASPECTS = ["identity", "intent", "safety", "reasoning",
                  "tool_use", "response_style", "workflow"]
-  aspects = ctx.aspects if ctx.aspects else ALL_ASPECTS  # fallback: all 7
+  aspects = ctx.aspects if ctx.aspects else ALL_ASPECTS
   for name in aspects:
-    layers.append(PromptLayer(name=name, content=_load_aspect(name),
-                              scope="core", priority=10))
+    parts.append(_load_aspect(name))
+    part_names.append(name)
 
-  # Counter-steering (priority 30)
-  if ctx.model_name:
-    cs = get_counter_steering(ctx.provider, ctx.model_name)
-    if cs:
-      layers.append(PromptLayer(name="counter_steering", content=cs,
-                                heading="Model-Specific Guidance",
-                                scope="quirk", priority=30))
+  # 2. Counter-steering
+  cs = get_counter_steering(ctx.provider, ctx.model_name)
+  if cs:
+    parts.append(f"## Model-Specific Guidance\n{cs}")
+    part_names.append("counter_steering")
 
-  # Personality (priority 40) — always full
-  personality_layer = _build_personality_layer(ctx.personality)
-  if personality_layer: layers.append(personality_layer)
+  # 3. Personality — always full
+  personality = compose_personality(ctx.personality)
+  if personality:
+    parts.append(personality)
+    part_names.append("personality")
 
-  # Memory (priority 60)
+  # 4. Memory
   memory = load_memory()
   if memory:
-    layers.append(PromptLayer(name="memory", content=memory,
-                              scope="memory", priority=60,
-                              tag="system-reminder"))
+    parts.append(f"<system-reminder>{memory}</system-reminder>")
+    part_names.append("memory")
 
-  # Runtime policy (priority 90) — safe commands from settings
-  # Note: safe_commands read from settings at assembly time
-  policy_layer = get_runtime_policy_overlay(safe_commands)
-  layers.append(policy_layer)
+  # 5. Runtime policy — safe commands from settings
+  policy = get_runtime_policy_overlay(safe_commands)
+  if policy:
+    parts.append(policy)
+    part_names.append("runtime_policy")
 
-  # Compose and build manifest
-  prompt = _compose_layers(layers)
+  prompt = "\n\n".join(parts)
   manifest = PromptManifest(
     provider=ctx.provider, model=ctx.model_name,
     personality=ctx.personality, aspects_selected=aspects,
-    layers_loaded=[l.name for l in sorted(layers, key=lambda l: l.priority)],
+    parts_loaded=part_names,
     quirk_flags=get_quirk_flags(ctx.provider, ctx.model_name or ""),
     total_chars=len(prompt),
     estimated_tokens=len(prompt) // 4,
@@ -329,9 +307,9 @@ Tests the composable personality system: registry, composition, always-full beha
 
 ### B4. Prompt Assembly Tests — `tests/test_prompt_assembly.py`
 
-Tests the assembled prompt output: layer presence, ordering, budget.
+Tests the assembled prompt output: part presence, ordering, budget.
 
-**Layer presence contract:**
+**Part presence contract:**
 - [ ] `test_all_aspects_selected` — all 7 in ctx.aspects → all present in prompt
 - [ ] `test_subset_aspects_selected` — subset in ctx.aspects → only those in prompt
 - [ ] `test_empty_aspects_fallback` — empty ctx.aspects → fallback to all 7 (safety net)
@@ -344,9 +322,9 @@ Tests the assembled prompt output: layer presence, ordering, budget.
 
 **Post-redesign (after Part A):**
 - [ ] `test_assemble_prompt_returns_manifest` — `assemble_prompt(ctx)` returns `(str, PromptManifest)` tuple
-- [ ] `test_manifest_layers_match_output` — manifest `layers_loaded` list matches what's actually in the prompt string
+- [ ] `test_manifest_parts_match_output` — manifest `parts_loaded` list matches what's actually in the prompt string
 - [ ] `test_manifest_char_count_accurate` — manifest `total_chars` == `len(prompt)`
-- [ ] `test_runtime_policy_includes_safe_commands` — policy layer text contains command names from settings
+- [ ] `test_runtime_policy_includes_safe_commands` — policy text contains command names from settings
 
 ## Part C: Doc Consolidation
 
@@ -359,8 +337,8 @@ Tests the assembled prompt output: layer presence, ordering, budget.
 ### C2. Design doc
 
 - [ ] Write `docs/DESIGN-16-prompt-system.md` (4-section template)
-  - What & How: layered prompt composition with diagram
-  - Core Logic: layer types, assembly algorithm, adaptation, manifest
+  - What & How: prompt composition with diagram
+  - Core Logic: assembly algorithm, adaptation, manifest
   - Config: personality setting
   - Files: all prompt system files
 
@@ -389,7 +367,7 @@ from co_cli.prompts import assemble_prompt
 from co_cli.prompts._context import PromptContext
 ctx = PromptContext(provider='gemini', model_name='gemini-2.0-flash', personality='finch')
 prompt, manifest = assemble_prompt(ctx)
-print(f'Layers: {manifest.layers_loaded}')
+print(f'Parts: {manifest.parts_loaded}')
 print(f'Chars: {manifest.total_chars}, ~Tokens: {manifest.estimated_tokens}')
 print(f'Warnings: {manifest.warnings}')
 "
