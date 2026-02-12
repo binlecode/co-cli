@@ -6,9 +6,9 @@ Prompt composition with adaptation overlays and manifest diagnostics.
 
 ## Current State
 
-The prompt system uses an aspect-driven architecture (~5.6 KiB total) with adaptive aspect selection, composable personalities, and model counter-steering. Key modules:
+The prompt system uses an aspect-driven architecture (~5.6 KiB total) with composable personalities and model counter-steering. Key modules:
 
-- **Aspects:** 7 behavioral markdown files (`identity.md`, `intent.md`, `safety.md`, `reasoning.md`, `tool_use.md`, `response_style.md`, `workflow.md`) selected per turn by reasoning LLM call (direct multi-select from query + conversation history)
+- **Aspects:** 7 behavioral markdown files (`identity.md`, `intent.md`, `safety.md`, `reasoning.md`, `tool_use.md`, `response_style.md`, `workflow.md`) — always all loaded. The LLM reasons natively about what's relevant
 - **Personalities:** composable character + style aspects with preset registry (`_registry.py`, `_composer.py`). Original role essays preserved in `roles/` (not loaded at runtime)
 - **Model quirks:** `model_quirks.py` — counter-steering text, `normalize_model_name()`
 - **Memory:** `knowledge.py` loads always-on context (background memory); `tools/memory.py` provides on-demand memory tools. Independent modules — no prompt structure dependency
@@ -22,13 +22,12 @@ The current system works but has structural gaps:
 2. **Prompt/runtime policy divergence** — `aspects/approval.md` says "side-effectful tools require approval" but runtime auto-approves safe shell commands in sandbox mode; the model never learns the actual policy
 3. **No assembly diagnostics** — no manifest or introspection for what parts were loaded or what the token budget looks like
 
-### Current Assembly (4 parts, string concatenation with per-turn aspect selection)
+### Current Assembly (4 parts, string concatenation)
 
 ```
 get_system_prompt(provider, personality, model_name) → str
 
-  Pre-assembly: select_aspects(query, history, model)  # reasoning LLM multi-selects relevant aspects
-  1. aspects[selected]       # adaptively selected markdown files (identity, intent, ...)
+  1. aspects (all 7)         # behavioral markdown files, always loaded
   2. counter_steering        # model quirk text (optional)
   3. personality             # always full (character + style)
   4. memory                  # load_memory() in <system-reminder>
@@ -36,16 +35,15 @@ get_system_prompt(provider, personality, model_name) → str
 
 Callers: `agent.py:94` (startup), `_commands.py:151` (`/model` switch). Both call `get_system_prompt()` directly.
 
-### Target Assembly (5 parts, direct string building with manifest)
+### Target Assembly (4 parts, direct string building with manifest)
 
 ```
 assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
-  1. Core aspects       — adaptively selected from aspects/ (per-turn LLM multi-select)
+  1. Aspects (all 7)    — always loaded; safety aspect includes safe commands list (NEW)
   2. Counter-steering   — model quirk text from MODEL_QUIRKS (if applicable)
   3. Personality        — character+style, always full
   4. Memory             — <system-reminder> wrapped
-  5. Runtime policy     — generated from live safe_commands list (NEW)
 ```
 
 `get_system_prompt()` is replaced by `assemble_prompt()`. Callers (`agent.py`, `_commands.py`) updated to use the new API directly.
@@ -53,36 +51,28 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 ### Architecture Diagram
 
 ```
-  User query + history
-         │
-         ▼
-  ┌────────────────┐
-  │ select_aspects │  reasoning LLM → picks from 7 aspects
-  └───────┬────────┘
-          │ e.g. [identity, intent, safety, tool_use]
-          ▼
   ┌────────────────────────────────────────┐
   │            assemble_prompt()           │
   │                                        │
-  │  1. aspects/*.md    (selected only)    │
+  │  1. aspects/*.md    (all 7, always)    │
+  │     └─ safety includes safe commands   │
   │  2. counter-steering (if model quirk)  │
   │  3. personality     (always full)      │
   │  4. memory          (<system-reminder>)│
-  │  5. runtime policy  (safe commands)    │
   │                                        │
-  │  → append in order, join with headings │
+  │  → append in order, join              │
   └───────┬────────────────────────────────┘
           │
     ┌─────┴──────┐
     ▼            ▼
   prompt    PromptManifest
-  (str)     (aspects_selected, parts_loaded,
-             total_chars, warnings)
+  (str)     (parts_loaded, total_chars,
+             warnings)
 ```
 
 ### Aspect Inventory
 
-7 behavioral aspects, each a focused markdown file in `aspects/`. Selected per turn by reasoning LLM call.
+7 behavioral aspects, each a focused markdown file in `aspects/`. Always all loaded — the LLM reasons natively about relevance.
 
 | Aspect | Concern | Peer convergence | Content summary |
 |--------|---------|------------------|----------------|
@@ -96,15 +86,15 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 ### Key Design Decisions
 
-**PromptManifest for diagnostics.** Every assembly returns a manifest with: `aspects_selected`, `parts_loaded`, `total_chars`, and `warnings`. Input params (provider, model, personality) stay in `PromptContext` — no echo-back. Available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
+**PromptManifest for diagnostics.** Every assembly returns a manifest with: `parts_loaded`, `total_chars`, and `warnings`. Available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
 
-**Runtime policy overlay fixes prompt/runtime divergence.** `get_runtime_policy_overlay(safe_commands)` generates policy text from the live `shell_safe_commands` list. The model sees the actual auto-approved commands, not a generic "side-effectful tools require approval" statement. This closes the gap where the model doesn't know `ls`, `cat`, `git status` etc. are auto-approved in sandbox mode.
+**Always-all aspects, no selection.** All 7 aspects are always loaded. No pre-turn classifier, no aspect selection, no tier-based removal. This is the converged pattern across every peer system (Claude Code, Codex, Gemini CLI) — all send the full behavioral spec and let the LLM reason natively about what's relevant. A pre-turn classifier adds latency, can conflict with the model's judgment, and no production system does it.
 
-**Direct adaptive aspect selection.** A reasoning LLM call examines each user query (with full conversation history) and multi-selects which of the 7 aspects are relevant for this turn. There is no intermediate "mode" abstraction — the model judges directly which behavioral instructions apply. This replaces tier-based aspect removal which had no peer backing and created safety gaps (tier 1 models never saw approval rules). The selector uses the same reasoning model, not cheap heuristics, because accurate alignment with user intent is critical. User can override but autonomous selection should make this rarely necessary.
+**Safe commands folded into safety aspect.** The safety aspect includes the live `shell_safe_commands` list (interpolated at load time). The model sees the actual auto-approved commands alongside the approval rules, closing the prompt/runtime policy gap. No separate runtime policy part needed.
 
-**Aspect set redesigned from peer convergence.** The 7 aspects map to categories that 10+ peer systems independently converge on: identity (universal), intent classification (Gemini/Codex/Aider), safety (universal), reasoning/honesty (near-universal), tool use policy (universal), response style (universal), workflow (Gemini/Codex/Claude Code). `multi_turn.md` is absorbed into identity (conversation awareness is foundational, not a selectable behavior — no peer system treats it as a separate aspect). `approval.md` expands to `safety` (peer systems include credential protection, destructive action caution, not just approval gates). `fact_verify.md` expands to `reasoning` (peer category is broader: anti-sycophancy, professional objectivity). `tool_output.md` expands to `tool_use` (peer category is full tool policy, not just output formatting). `workflow` is new (converged across Gemini, Codex, Claude Code — Research → Plan → Execute → Verify).
+**Aspect set redesigned from peer convergence.** The 7 aspects map to categories that 10+ peer systems independently converge on. `multi_turn.md` absorbed into identity (conversation awareness is foundational — no peer treats it as separate). `approval.md` expands to `safety` (adds credential protection, destructive action caution). `fact_verify.md` expands to `reasoning` (adds anti-sycophancy, professional objectivity). `tool_output.md` expands to `tool_use` (full tool policy, not just output formatting). `workflow` is new (Research → Plan → Execute → Verify, converged across Gemini/Codex/Claude Code).
 
-**No tier-based aspect or personality selection.** `TIER_ASPECTS` and tier-dependent personality scaling are removed. Model-specific adaptation is handled exclusively by counter-steering. `multi_turn.md` counter-steering stays for models that need explicit conversation awareness reminding (e.g., GLM-4.7).
+**Model adaptation is counter-steering only.** `TIER_ASPECTS` and tier-dependent personality scaling are removed. `multi_turn.md` counter-steering stays for models that need explicit conversation awareness reminding (e.g., GLM-4.7).
 
 **Clean replacement.** `get_system_prompt()` is replaced by `assemble_prompt(ctx: PromptContext) -> (str, PromptManifest)`. Callers in `agent.py` and `_commands.py` are updated to construct a `PromptContext` and call `assemble_prompt()` directly.
 
@@ -118,19 +108,17 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 | `co_cli/agent.py` — updated to call `assemble_prompt()` | |
 | `co_cli/_commands.py` — updated to call `assemble_prompt()` | |
 | New: `_manifest.py`, `_context.py` | |
-| New: `_adaptations.py` | |
 | New: `tests/test_prompt_contracts.py` | |
 
 ### Peer Patterns Informing This Design
 
 | Pattern | Peer Evidence | co-cli Adoption |
 |---------|--------------|-----------------|
-| Structured prompt composition | Claude Code `PromptConfig` + policy fragments, Codex `PermissionMode` | `assemble_prompt()` + `PromptManifest` |
-| Runtime policy injection | Codex safe-command allowlists in prompt, Claude Code hook-based permission engine | `get_runtime_policy_overlay(safe_commands)` |
+| Full behavioral spec, always present | Claude Code, Codex, Gemini CLI — all send complete behavioral instructions every turn. No peer selects/removes aspects | All 7 aspects always loaded |
+| Safe commands in prompt | Codex safe-command allowlists in prompt, Claude Code hook-based permission engine | Interpolated into safety aspect |
 | Model-specific adaptation | Aider model warnings, Codex quirk database | Counter-steering only (tier removed) |
-| Direct adaptive aspect selection | No peer uses tier-based removal. All send full behavioral spec. Adaptation is additive (counter-steering), not subtractive | Per-turn reasoning LLM multi-selects from 7 peer-converged aspects |
 | Prompt budget enforcement | All peers have implicit or explicit size limits | Manifest `total_chars` + contract test assertions |
-| 3-tier context model | See `TODO-3-tier-context-model.md` for full peer evidence | Memory (p60) + Knowledge (deferred) |
+| Post-hoc tool policy | All three systems enforce safety after model proposes tool call (allow/ask/deny) | `requires_approval=True` + safe command allowlist |
 
 ---
 
@@ -139,17 +127,11 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 ### A1. Pure dataclasses (no deps)
 
 - [ ] `co_cli/prompts/_manifest.py` — `PromptManifest` dataclass
-  - Fields: `aspects_selected` (list[str]), `parts_loaded` (list[str]), `total_chars` (int), `warnings` (list[str])
+  - Fields: `parts_loaded` (list[str]), `total_chars` (int), `warnings` (list[str])
 - [ ] `co_cli/prompts/_context.py` — `PromptContext` dataclass
-  - Fields: `provider`, `model_name`, `personality` (optional), `aspects` (list[str], default all 7)
+  - Fields: `provider`, `model_name`, `personality` (optional)
 
-### A2. Adaptation overlays
-
-- [ ] `co_cli/prompts/_adaptations.py`
-  - `select_aspects(query, history, model) -> list[str]` — reasoning LLM call, multi-selects from ALL_ASPECTS
-  - `get_runtime_policy_overlay(safe_commands) -> str` — generates approval policy text from live settings
-
-### A3. Assembler in `__init__.py`
+### A2. Assembler in `__init__.py`
 
 - [ ] `assemble_prompt(ctx: PromptContext) -> tuple[str, PromptManifest]` — direct string builder
 - [ ] Remove `get_system_prompt()` — update `agent.py` and `_commands.py` to call `assemble_prompt()` directly
@@ -161,12 +143,12 @@ assemble_prompt(ctx):
   parts = []
   part_names = []
 
-  # 1. Aspects — selected by reasoning LLM call
-  ALL_ASPECTS = ["identity", "intent", "safety", "reasoning",
-                 "tool_use", "response_style", "workflow"]
-  aspects = ctx.aspects if ctx.aspects else ALL_ASPECTS
-  for name in aspects:
-    parts.append(_load_aspect(name))
+  # 1. All 7 aspects — always loaded
+  for name in ALL_ASPECTS:
+    text = _load_aspect(name)
+    if name == "safety":
+      text += _format_safe_commands(safe_commands)  # interpolate live allowlist
+    parts.append(text)
     part_names.append(name)
 
   # 2. Counter-steering
@@ -187,15 +169,8 @@ assemble_prompt(ctx):
     parts.append(f"<system-reminder>{memory}</system-reminder>")
     part_names.append("memory")
 
-  # 5. Runtime policy — safe commands from settings
-  policy = get_runtime_policy_overlay(safe_commands)
-  if policy:
-    parts.append(policy)
-    part_names.append("runtime_policy")
-
   prompt = "\n\n".join(parts)
   manifest = PromptManifest(
-    aspects_selected=aspects,
     parts_loaded=part_names,
     total_chars=len(prompt),
     warnings=[...]
@@ -307,12 +282,12 @@ Tests the composable personality system: registry, composition, always-full beha
 Tests the assembled prompt output: part presence, ordering, budget.
 
 **Part presence contract:**
-- [ ] `test_all_aspects_selected` — all 7 in ctx.aspects → all present in prompt
-- [ ] `test_subset_aspects_selected` — subset in ctx.aspects → only those in prompt
-- [ ] `test_empty_aspects_fallback` — empty ctx.aspects → fallback to all 7 (safety net)
+- [ ] `test_all_aspects_always_present` — prompt contains content from all 7 aspect files
+- [ ] `test_safety_includes_safe_commands` — safety section contains command names from settings
 - [ ] `test_counter_steering_present` — known quirk model (glm-4.7-flash) → prompt contains "Model-Specific Guidance"
 - [ ] `test_counter_steering_absent` — default model with no quirks → prompt does not contain "Model-Specific Guidance"
 - [ ] `test_memory_wrapped_in_system_reminder` — when memory exists, prompt contains `<system-reminder>` tags around it
+
 **Budget contract:**
 - [ ] `test_prompt_under_budget` — all provider/model combos produce prompt < 8K chars (iterates known models)
 - [ ] `test_prompt_nonempty` — all provider/model combos produce non-empty prompt
@@ -321,7 +296,6 @@ Tests the assembled prompt output: part presence, ordering, budget.
 - [ ] `test_assemble_prompt_returns_manifest` — `assemble_prompt(ctx)` returns `(str, PromptManifest)` tuple
 - [ ] `test_manifest_parts_match_output` — manifest `parts_loaded` list matches what's actually in the prompt string
 - [ ] `test_manifest_char_count_accurate` — manifest `total_chars` == `len(prompt)`
-- [ ] `test_runtime_policy_includes_safe_commands` — policy text contains command names from settings
 
 ## Part C: Doc Consolidation
 
@@ -347,7 +321,7 @@ Tests the assembled prompt output: part presence, ordering, budget.
 
 ## Execution Order
 
-1. A1 → A2 → A3 (code, sequential — each builds on prior)
+1. A1 → A2 (code, sequential — dataclasses then assembler)
 2. B1 + B2 + B3 + B4 (tests, can parallelize after Part A)
 3. C1 + C2 (docs, can parallelize)
 4. C3 (delete source review docs)
