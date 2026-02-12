@@ -33,17 +33,20 @@ get_system_prompt(provider, personality, model_name) → str
   4. memory                  # load_memory() in <system-reminder>
 ```
 
+No base instructions layer — fundamental rules are scattered across aspect files.
+
 Callers: `agent.py:94` (startup), `_commands.py:151` (`/model` switch). Both call `get_system_prompt()` directly.
 
-### Target Assembly (4 parts, direct string building with manifest)
+### Target Assembly (5 parts, direct string building with manifest)
 
 ```
 assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
-  1. Aspects (all 7)    — always loaded; safety aspect includes safe commands list (NEW)
-  2. Counter-steering   — model quirk text from MODEL_QUIRKS (if applicable)
-  3. Personality        — character+style, always full
-  4. Memory             — <system-reminder> wrapped
+  1. Instructions       — base system rules from instructions.md (NEW, largely empty for MVP)
+  2. Aspects (all 7)    — always loaded; safety aspect includes safe commands list (NEW)
+  3. Counter-steering   — model quirk text from MODEL_QUIRKS (if applicable)
+  4. Personality        — character+style, always full
+  5. Memory             — <system-reminder> wrapped
 ```
 
 `get_system_prompt()` is replaced by `assemble_prompt()`. Callers (`agent.py`, `_commands.py`) updated to use the new API directly.
@@ -54,11 +57,12 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
   ┌────────────────────────────────────────┐
   │            assemble_prompt()           │
   │                                        │
-  │  1. aspects/*.md    (all 7, always)    │
+  │  1. instructions.md (base rules)       │
+  │  2. aspects/*.md    (all 7, always)    │
   │     └─ safety includes safe commands   │
-  │  2. counter-steering (if model quirk)  │
-  │  3. personality     (always full)      │
-  │  4. memory          (<system-reminder>)│
+  │  3. counter-steering (if model quirk)  │
+  │  4. personality     (always full)      │
+  │  5. memory          (<system-reminder>)│
   │                                        │
   │  → append in order, join              │
   └───────┬────────────────────────────────┘
@@ -88,6 +92,8 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 **PromptManifest for diagnostics.** Every assembly returns a manifest with: `parts_loaded`, `total_chars`, and `warnings`. Available for debugging (`/prompt` slash command, log output) without parsing the prompt text.
 
+**Base instructions layer.** `instructions.md` is loaded first, before all aspects. It holds fundamental system rules that apply unconditionally — the kind of rules that should never be scattered across aspect files. Largely empty for MVP; provides a stable extension point for future guardrails without touching aspect files. Every peer system has an equivalent (Claude Code's system prompt preamble, Codex's orchestrator template header, Gemini CLI's system prompt constants).
+
 **Always-all aspects, no selection.** All 7 aspects are always loaded. No pre-turn classifier, no aspect selection, no tier-based removal. This is the converged pattern across every peer system (Claude Code, Codex, Gemini CLI) — all send the full behavioral spec and let the LLM reason natively about what's relevant. A pre-turn classifier adds latency, can conflict with the model's judgment, and no production system does it.
 
 **Safe commands folded into safety aspect.** The safety aspect includes the live `shell_safe_commands` list (interpolated at load time). The model sees the actual auto-approved commands alongside the approval rules, closing the prompt/runtime policy gap. No separate runtime policy part needed.
@@ -105,6 +111,7 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 | `co_cli/prompts/__init__.py` — `get_system_prompt()` replaced by `assemble_prompt()` | `co_cli/prompts/personalities/` — registry, composer, aspects, roles/ |
 | `co_cli/prompts/model_quirks.py` — `TIER_ASPECTS` removed, `get_model_tier()` removed | `co_cli/knowledge.py` — `load_memory()` consumed as memory part |
 | `co_cli/prompts/aspects/*.md` — 7 files renamed/merged/expanded per aspect inventory | |
+| New: `co_cli/prompts/instructions.md` — base system rules (largely empty for MVP) | |
 | `co_cli/agent.py` — updated to call `assemble_prompt()` | |
 | `co_cli/_commands.py` — updated to call `assemble_prompt()` | |
 | New: `_manifest.py`, `_context.py` | |
@@ -114,6 +121,7 @@ assemble_prompt(ctx: PromptContext) → (str, PromptManifest)
 
 | Pattern | Peer Evidence | co-cli Adoption |
 |---------|--------------|-----------------|
+| Base system instructions | Claude Code system prompt preamble, Codex orchestrator template header, Gemini CLI system prompt constants | `instructions.md` loaded first, before aspects |
 | Full behavioral spec, always present | Claude Code, Codex, Gemini CLI — all send complete behavioral instructions every turn. No peer selects/removes aspects | All 7 aspects always loaded |
 | Safe commands in prompt | Codex safe-command allowlists in prompt, Claude Code hook-based permission engine | Interpolated into safety aspect |
 | Model-specific adaptation | Aider model warnings, Codex quirk database | Counter-steering only (tier removed) |
@@ -143,7 +151,13 @@ assemble_prompt(ctx):
   parts = []
   part_names = []
 
-  # 1. All 7 aspects — always loaded
+  # 1. Base instructions — fundamental system rules
+  instructions = _load_file("instructions.md")
+  if instructions:
+    parts.append(instructions)
+    part_names.append("instructions")
+
+  # 2. All 7 aspects — always loaded
   for name in ALL_ASPECTS:
     text = _load_aspect(name)
     if name == "safety":
@@ -151,19 +165,19 @@ assemble_prompt(ctx):
     parts.append(text)
     part_names.append(name)
 
-  # 2. Counter-steering
+  # 3. Counter-steering
   cs = get_counter_steering(ctx.provider, ctx.model_name)
   if cs:
     parts.append(f"## Model-Specific Guidance\n{cs}")
     part_names.append("counter_steering")
 
-  # 3. Personality — always full
+  # 4. Personality — always full
   personality = compose_personality(ctx.personality)
   if personality:
     parts.append(personality)
     part_names.append("personality")
 
-  # 4. Memory
+  # 5. Memory
   memory = load_memory()
   if memory:
     parts.append(f"<system-reminder>{memory}</system-reminder>")
@@ -282,6 +296,7 @@ Tests the composable personality system: registry, composition, always-full beha
 Tests the assembled prompt output: part presence, ordering, budget.
 
 **Part presence contract:**
+- [ ] `test_instructions_loaded_first` — prompt starts with content from `instructions.md`
 - [ ] `test_all_aspects_always_present` — prompt contains content from all 7 aspect files
 - [ ] `test_safety_includes_safe_commands` — safety section contains command names from settings
 - [ ] `test_counter_steering_present` — known quirk model (glm-4.7-flash) → prompt contains "Model-Specific Guidance"
