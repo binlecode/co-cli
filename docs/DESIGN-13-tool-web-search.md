@@ -60,6 +60,10 @@ Tool Execution:
 
 **`_is_domain_allowed(hostname, allowed, blocked)`** — Domain policy check. If hostname matches any entry in `blocked` (exact or subdomain via `.endswith("." + domain)`) → `False`. If `allowed` is non-empty and hostname doesn't match any entry → `False`. Otherwise → `True`. Hostname is lowercased before comparison.
 
+**`_build_fetch_headers(hostname)`** — Builds request headers for `web_fetch`. Returns User-Agent, Accept, and Accept-Language. For Wikimedia hosts (`wikipedia.org`, `wikimedia.org`), adds `Api-User-Agent` for policy compliance.
+
+**`_http_get_with_retries(...)`** — Shared retry loop for both tools. Bounded exponential backoff with jitter, Retry-After aware. Classifies errors via `classify_web_http_error()`. Terminal errors (4xx) return immediately; retryable errors (429, 5xx, timeout) retry up to budget. Optional `cf_fallback_headers` triggers a one-shot Cloudflare recovery before error classification.
+
 **`is_url_safe(url)`** *(in `_url_safety.py`)* — SSRF guard. Processing:
 1. Parse URL, extract hostname
 2. Reject if hostname is in `_BLOCKED_HOSTNAMES` (cloud metadata)
@@ -77,26 +81,39 @@ Tool Execution:
 | `_MAX_FETCH_CHARS` | 100,000 | Char-level truncation limit for fetched content |
 | `_MAX_FETCH_BYTES` | 1,048,576 (1 MB) | Byte-level pre-decode limit for response body |
 | `_ALLOWED_CONTENT_TYPES` | `text/*`, `application/json`, `application/xml`, `application/xhtml+xml`, `application/x-yaml`, `application/yaml` | Content-type allowlist for `web_fetch` |
+| `_CF_FALLBACK_HEADERS` | `{"User-Agent": _FETCH_USER_AGENT}` | Minimal honest headers for Cloudflare fallback retry |
 
 ### Error Handling
 
-All errors use `ModelRetry` with actionable messages:
+Pre-request validation errors use `ModelRetry` (the model can adjust and retry). HTTP errors after the request use `terminal_error()` — the tool returns an error result and the model decides what to do next (try a different URL, fall back to curl, etc.).
+
+**`ModelRetry` (pre-request validation):**
 
 | Condition | Message |
 |-----------|---------|
 | Missing API key | `Web search not configured. Set BRAVE_SEARCH_API_KEY in settings or env.` |
 | Empty query | `Query is required for web_search.` |
 | Invalid URL scheme | `web_fetch requires an http:// or https:// URL.` |
-| Search timeout | `Web search timed out. Retry with a shorter query.` |
-| Search HTTP error | `Web search error (HTTP {status}). Retry later.` |
-| Fetch timeout | `web_fetch timed out fetching {url}. Try a different URL.` |
-| Fetch HTTP error | `web_fetch error (HTTP {status}) for {url}.` |
 | SSRF: private/internal URL | `web_fetch blocked: URL resolves to a private or internal address.` |
 | SSRF: redirect to private | `web_fetch blocked: redirect target resolves to a private or internal address.` |
-| Unsupported content type | `web_fetch blocked: unsupported content type '{type}'.` |
 | Domain not allowed | `web_fetch blocked: domain '{hostname}' not allowed by policy.` |
 | Web access denied (fetch) | `web_fetch: web access disabled by policy.` |
 | Web access denied (search) | `web_search: web access disabled by policy.` |
+
+**`terminal_error` (HTTP failures — classified by `_http_retry.py`):**
+
+| Condition | Message pattern |
+|-----------|----------------|
+| 401 Unauthorized | `{tool} blocked (HTTP 401) for {target}: authentication required.` |
+| 403 Forbidden | `{tool} blocked (HTTP 403) for {target}: origin policy denied access.` |
+| 404 Not Found | `{tool} not found (HTTP 404) for {target}.` |
+| 422 Unprocessable | `{tool} rejected (HTTP 422) for {target}: request not processable.` |
+| Other 4xx | `{tool} rejected (HTTP {code}) for {target}.` |
+| 429 Rate Limit | `{tool} rate limited (HTTP 429) for {target}. Retries exhausted ({n}).` |
+| 5xx Server Error | `{tool} transient HTTP {code} for {target}. Retries exhausted ({n}).` |
+| Timeout | `{tool} timed out while contacting {target}. Retries exhausted ({n}).` |
+| Network error | `{tool} network error while contacting {target}: {detail}. Retries exhausted ({n}).` |
+| Unsupported content type | `web_fetch blocked: unsupported content type '{type}'.` |
 
 Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decoding. Decoded text exceeding `_MAX_FETCH_CHARS` is further truncated with `truncated: true` in the return value (not an error).
 

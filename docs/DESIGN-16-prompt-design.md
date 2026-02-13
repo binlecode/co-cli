@@ -1,16 +1,6 @@
 # DESIGN-16: Soul-First Prompt Design
 
-Soul seed (always-on personality fingerprint) + 6 companion rules. Replaces the original 8 tool-agent rules with a personal companion model aligned to the Finch vision.
-
----
-
-## Motivation
-
-Three gaps identified in the first-principle review against the Finch vision:
-
-1. **No personality in system prompt** — Co sounds generic until `load_personality()` is called, which the LLM often skips
-2. **Rules are reactive constraints** — nothing about relationship, continuity, proactive memory, emotional awareness
-3. **Response style conflicts with personality** — rule says "be concise, technically precise"; jeff personality says "use emoji, celebrate learning"
+Soul seed (always-on personality fingerprint) + 6 companion rules. A personal companion model aligned to the Finch vision.
 
 ---
 
@@ -41,7 +31,7 @@ Tools (Co decides when to call):
 
 **Prompt content decoupled from code:** All prompt text lives in markdown files (instructions, rules, soul seeds, character, style, roles, aspects). Python handles only loading and composition. This separates authoring from logic.
 
-**Rules revised for companion:** From constraints to character. Identity includes relationship awareness, emotional tone adaptation, and soft intent understanding. Response style deleted — personality owns voice.
+**Rules shaped for companion:** Identity includes relationship awareness, emotional tone adaptation, and soft intent understanding. Response style is not a separate rule — personality owns voice.
 
 **Personality modulates, never overrides:** Personality shapes HOW rules are expressed (warmth in words, curiosity in questions). It NEVER weakens safety, approval gates, or factual accuracy. The soul seed framing line makes this explicit.
 
@@ -51,35 +41,7 @@ Tools (Co decides when to call):
 
 ---
 
-## Rule revision rationale (8 to 6)
-
-| Old Rule | Action | Rationale |
-|---|---|---|
-| `01_identity.md` | **REWRITE** | Identity should define who Co is to the user — relationship, emotion, soft intent, multi-turn awareness — not just list constraints |
-| `02_intent.md` | **DELETE** → folded into 01 | Rigid inquiry/directive binary suppresses curiosity; soft version lives in identity |
-| `03_safety.md` | **KEEP** → renumbered 02 | Solid. Approval gates are absolute |
-| `04_reasoning.md` | **KEEP** → renumbered 03 | Solid. Factual accuracy is absolute |
-| `05_tool_use.md` | **KEEP** → renamed `04_tool_protocol.md` | Clarity. Removed context tool catalog (moved to 05_context), added depth guidance |
-| `06_context.md` | **REWRITE** → renumbered 05 | Made proactive: session-start recall, topic-triggered recall, persist step absorbed from workflow |
-| `07_response_style.md` | **DELETE** → replaced by soul seed | Personality owns voice. Style rule conflicted with personality presets |
-| `08_workflow.md` | **TRIM** → renumbered 06 | Absorbed "complete before yielding", added non-task interaction note |
-
-### Personality-rule interaction model
-
-| Rule | Can Personality Modify? | How |
-|---|---|---|
-| 01_identity | **MODULATES** | Finch explains tradeoffs before acting; Jeff asks more questions; Terse executes with minimal commentary |
-| 02_safety | **NEVER** | Approval gates, credential protection are absolute. Jeff still requires approval — just says it differently |
-| 03_reasoning | **NEVER** | Facts are facts regardless of personality. Jeff doesn't agree with wrong claims |
-| 04_tool_protocol | **MODULATES** | Depth guidance adapts: Finch is more detailed in explanations; Terse shows less |
-| 05_context | **MODULATES** | Inquisitive loads more context proactively; Terse loads less |
-| 06_workflow | **MODULATES** | Finch explains each step; Jeff narrates thinking; Terse reports result only |
-
-Soul seed framing: "Your personality shapes how you follow the rules below. It never overrides safety or factual accuracy."
-
----
-
-## Detailed design
+## Core Logic
 
 ### Bootstrap instruction
 
@@ -97,7 +59,7 @@ You are Co, a personal companion for knowledge work, running in the user's termi
 | terse | You are direct and minimal. Fragments over sentences, bullets over prose, silence over filler. Expand only when asked why. |
 | inquisitive | You explore before acting. You present options with tradeoffs, clarify ambiguity, and help the user see the full picture before choosing a path. |
 
-### Rule content (6 rules)
+### Rules (6)
 
 **01_identity.md** — Identity & Relationship
 
@@ -120,7 +82,7 @@ This is a multi-turn conversation.
 When the user references earlier exchanges, resolve from conversation history.
 ```
 
-**02_safety.md** — Safety & Approval (unchanged from original 03)
+**02_safety.md** — Safety & Approval
 
 ```
 Side-effectful tools require approval by default (for example shell commands, email drafts,
@@ -134,7 +96,7 @@ For destructive actions (delete, overwrite, irreversible changes), confirm inten
 clearly before execution.
 ```
 
-**03_reasoning.md** — Reasoning & Integrity (unchanged from original 04)
+**03_reasoning.md** — Reasoning & Integrity
 
 ```
 Trust tool output over prior assumptions when they conflict.
@@ -145,7 +107,7 @@ Do not agree with incorrect user claims about deterministic facts; correct them 
 For user preferences and subjective choices, treat the user's statement as ground truth.
 ```
 
-**04_tool_protocol.md** — Tool Protocol (from original 05, removed context catalog, added depth guidance)
+**04_tool_protocol.md** — Tool Protocol
 
 ```
 Tools return {"display": "..."}: show display verbatim and preserve URLs.
@@ -155,9 +117,12 @@ Report errors with the exact message and do not silently retry.
 Verify side effects succeeded before reporting success.
 Match explanation depth to the operation: detailed for destructive, security, or
 architectural changes; concise for read-only and repeated operations.
+For web research, use web_search to find URLs first, then web_fetch to retrieve content.
+Do not guess URLs.
+If web_fetch returns 403 or is blocked, retry the same URL with shell_exec: curl -sL <url>.
 ```
 
-**05_context.md** — Context & Memory (rewritten, proactive)
+**05_context.md** — Context & Memory
 
 ```
 At the start of a conversation, recall memories relevant to the user's greeting or topic.
@@ -169,7 +134,7 @@ from deeper methodology.
 Load your full role description when extended character expression benefits the conversation.
 ```
 
-**06_workflow.md** — Execution Workflow (trimmed from original 08)
+**06_workflow.md** — Execution Workflow
 
 ```
 For multi-step work:
@@ -182,6 +147,19 @@ When blocked, state the blocker and the exact next action needed.
 Not every interaction is a task — casual questions, brainstorming, and check-ins need no
 execution loop.
 ```
+
+### Personality-rule interaction model
+
+| Rule | Can Personality Modify? | How |
+|---|---|---|
+| 01_identity | **MODULATES** | Finch explains tradeoffs before acting; Jeff asks more questions; Terse executes with minimal commentary |
+| 02_safety | **NEVER** | Approval gates, credential protection are absolute. Jeff still requires approval — just says it differently |
+| 03_reasoning | **NEVER** | Facts are facts regardless of personality. Jeff doesn't agree with wrong claims |
+| 04_tool_protocol | **MODULATES** | Depth guidance adapts: Finch is more detailed in explanations; Terse shows less |
+| 05_context | **MODULATES** | Inquisitive loads more context proactively; Terse loads less |
+| 06_workflow | **MODULATES** | Finch explains each step; Jeff narrates thinking; Terse reports result only |
+
+Soul seed framing: "Your personality shapes how you follow the rules below. It never overrides safety or factual accuracy."
 
 ### Assembly format
 
@@ -225,83 +203,33 @@ When personality is None, the `## Soul` block is omitted entirely.
 
 ---
 
-## Implementation checklist
+## Files
 
-### Part 1: Soul seed in personality registry ✅
+| File | Purpose |
+|------|---------|
+| `co_cli/prompts/__init__.py` | `assemble_prompt()` — composes instructions + soul seed + rules + counter-steering |
+| `co_cli/prompts/_manifest.py` | `PromptManifest` dataclass tracking loaded parts |
+| `co_cli/prompts/instructions.md` | Bootstrap identity (1 sentence) |
+| `co_cli/prompts/model_quirks.py` | Counter-steering for known model quirks |
+| `co_cli/prompts/rules/01_identity.md` | Relationship, emotion, soft intent, multi-turn |
+| `co_cli/prompts/rules/02_safety.md` | Approval gates, credential protection |
+| `co_cli/prompts/rules/03_reasoning.md` | Factual integrity, evidence handling |
+| `co_cli/prompts/rules/04_tool_protocol.md` | Display contract, depth guidance, web research flow |
+| `co_cli/prompts/rules/05_context.md` | Proactive memory, aspect loading |
+| `co_cli/prompts/rules/06_workflow.md` | Execution loop, non-task awareness |
+| `co_cli/prompts/personalities/_registry.py` | `PRESETS` dict, `PersonalityPreset` TypedDict |
+| `co_cli/prompts/personalities/_composer.py` | `get_soul_seed()`, `compose_personality()` |
+| `co_cli/prompts/personalities/seed/*.md` | Always-on personality fingerprints (5 presets) |
+| `co_cli/prompts/personalities/character/*.md` | Full character definitions (on-demand) |
+| `co_cli/prompts/personalities/style/*.md` | Voice/tone guidelines (on-demand) |
+| `co_cli/prompts/personalities/roles/*.md` | Complete role descriptions (on-demand) |
+| `co_cli/prompts/aspects/*.md` | Task methodology: debugging, planning, code_review (on-demand) |
+| `co_cli/agent.py` | Passes `personality=settings.personality` to `assemble_prompt()` |
+| `co_cli/_commands.py` | Passes `personality=settings.personality` on `/model` switch |
+| `co_cli/tools/context.py` | `load_personality()`, `load_aspect()` tools |
+| `tests/test_prompt_assembly.py` | 17 tests for rules, soul seed, manifest |
 
-- [x] 1a. Soul seed as markdown files in `personalities/seed/*.md` (decoupled from code)
-- [x] 1a. Populate seed files for all 5 presets (finch, jeff, friendly, terse, inquisitive)
-- [x] 1b. Add `get_soul_seed(name)` function in `_composer.py` — loads from `seed/{name}.md`
-- [x] Flatten `personalities/aspects/` → move `character/`, `style/`, `seed/` up to `personalities/`
-
-### Part 2: Inject soul seed into prompt assembly ✅
-
-- [x] 2a. Add `personality: str | None = None` parameter to `assemble_prompt()` in `__init__.py`
-- [x] 2a. Insert soul seed between instructions and rules with `## Soul` heading + framing text
-- [x] 2a. Record `"soul_seed"` in manifest.parts_loaded
-- [x] 2b. Update `instructions.md` — "personal companion for knowledge work"
-- [x] 2c. Pass `personality=settings.personality` in `agent.py` call to `assemble_prompt()`
-- [x] 2c. Pass `personality=settings.personality` in `_commands.py` `/model` switch
-
-### Part 3: Revise rules (8 → 6) ✅
-
-- [x] Delete `02_intent.md` (folded into identity)
-- [x] Delete `07_response_style.md` (replaced by soul seed)
-- [x] Rewrite `01_identity.md` — relationship, emotion, soft intent, multi-turn
-- [x] Renumber `03_safety.md` → `02_safety.md` (content unchanged)
-- [x] Renumber `04_reasoning.md` → `03_reasoning.md` (content unchanged)
-- [x] Rename+edit `05_tool_use.md` → `04_tool_protocol.md` (add depth guidance)
-- [x] Rewrite `06_context.md` → `05_context.md` (proactive memory, persist step)
-- [x] Trim+renumber `08_workflow.md` → `06_workflow.md` (absorb "complete before yielding", add non-task note)
-- [x] Verified against first principles: 6 traits, 5 pillars, safety boundary, no conflicts
-
-### Part 4: Tests ✅
-
-- [x] Update `test_prompt_starts_with_instructions` — "personal companion"
-- [x] Update `test_prompt_contains_all_rules` — 6 rules, new IDs
-- [x] Replace `test_prompt_has_no_personality` → `test_prompt_contains_soul_seed`
-- [x] Add `test_prompt_soul_seed_absent_without_personality`
-- [x] Add `test_soul_seed_framing_present`
-- [x] Add `test_soul_seed_swaps_with_personality`
-- [x] Add `test_deleted_rules_absent`
-- [x] Update `test_manifest_parts_match` — new rule IDs + soul_seed
-- [x] Add `test_all_presets_have_soul_seed`
-- [x] Add `test_get_soul_seed_returns_string`
-- [x] 17 prompt tests + 14 context tools tests = 31 passed
-
----
-
-## Files changed
-
-| File | Change |
-|------|--------|
-| `co_cli/prompts/__init__.py` | Add `personality` param, inject soul seed between instructions and rules |
-| `co_cli/prompts/instructions.md` | Shortened to "personal companion for knowledge work" |
-| `co_cli/prompts/rules/*.md` | 8 rules → 6 rules (atomic swap) |
-| `co_cli/prompts/personalities/_registry.py` | Docstring updated (soul seed loaded from file by convention) |
-| `co_cli/prompts/personalities/_composer.py` | Add `get_soul_seed(name)`, update paths for flattened layout |
-| `co_cli/prompts/personalities/seed/*.md` | NEW — 5 soul seed files (finch, jeff, friendly, terse, inquisitive) |
-| `co_cli/prompts/personalities/aspects/` | REMOVED — character/, style/, seed/ flattened to personalities/ top level |
-| `co_cli/agent.py` | Pass `personality=settings.personality` |
-| `co_cli/_commands.py` | Pass `personality=settings.personality` |
-| `co_cli/tools/context.py` | Update paths for flattened personality layout |
-| `tests/test_prompt_assembly.py` | Rewritten: 17 tests for 6 rules + soul seed |
-
-### Files NOT changed
-
-- `co_cli/deps.py` — `personality` field already existed
-- `co_cli/config.py` — `personality` setting already existed and validates
-- `co_cli/tools/memory.py` — memory tools unchanged
-- `co_cli/prompts/personalities/roles/*.md` — on-demand role files unchanged
-- `co_cli/prompts/personalities/character/*.md` — character aspects unchanged
-- `co_cli/prompts/personalities/style/*.md` — style aspects unchanged
-- `co_cli/prompts/aspects/*.md` — task aspects (debugging, planning, code_review) unchanged
-- `co_cli/prompts/model_quirks.py` — counter-steering unchanged
-- `co_cli/prompts/_manifest.py` — PromptManifest unchanged
-
----
-
-## Directory layout (post-implementation)
+### Directory layout
 
 ```
 co_cli/prompts/

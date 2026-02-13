@@ -1,6 +1,6 @@
 # ROADMAP: Co Evolution (Frontier-Grounded)
 
-**Status**: Phase 1 Complete ✅ | Prompt System Redesign In Progress 🔄 | Phases 2a-2c Ready ⏳ | Phase 2.5 (S0+S1) Deferred 📅
+**Status**: Phase 1 Complete ✅ | Prompt System Redesign In Progress 🔄 | Phase 2c Ready ⏳ | Phase 2.5 (S0+S1) Deferred 📅
 
 This is the unified strategic + tactical roadmap for co-cli evolution: from capable tool executor to personal companion for knowledge work. Part I provides strategic context (why we're building, where the frontier is, where co is heading). Part II provides tactical execution detail (what to build, when to build it, how to implement).
 
@@ -145,7 +145,7 @@ Exit criteria:
 3. Users can select personality that shapes co's interaction style.
 4. Internal knowledge persists across sessions without manual memory tool calls.
 
-### Phase 2: Ship MCP + background execution + user preferences
+### Phase 2: Ship MCP + background execution
 
 **Extensibility:**
 
@@ -157,25 +157,10 @@ Exit criteria:
    - persisted logs/traces.
 3. Require approval policy inheritance for every MCP tool call.
 
-**Personalization:**
-
-4. Add user workflow preferences system:
-   - **Need:** One-size-fits-all preference won't work for different job contexts
-   - **Design approach:** Research peer systems (Codex, Gemini CLI, Claude Code, Aider) + 2026 best practices
-   - **Implementation:** Simple, explicit templating solution (code or LLM, explicit > implicit)
-   - **Injection point:** Prompt assembly time, after personality, before project instructions
-   - **Settings examples:**
-     - `auto_approve_tools`: list of trusted tools
-     - `verbosity_level`: minimal/normal/verbose
-     - `proactive_suggestions`: whether to offer unsolicited ideas
-     - `output_format_preferences`: preferred formats by data type
-   - **Storage:** `.co-cli/preferences.json` with template selection or explicit overrides
-
 Exit criteria:
 
 1. Co can run long tasks without blocking the chat loop.
 2. External tools are extensible via MCP without weakening approvals.
-3. Users can configure workflow preferences that adapt co's behavior to their work style.
 
 ### Phase 3: Selective autonomy and richer I/O
 
@@ -233,12 +218,12 @@ Adopt frontier patterns where they improve outcomes, but keep Co's design contra
 | **1d** | Aspect Refactor | ✅ COMPLETE | 3-4h | DESIGN-16-prompt-design.md | - |
 | **1e** | Portable Identity | 📅 DEFERRED | 9h | (archived) | LOW |
 | **2a** | MCP Client (stdio) | ✅ COMPLETE | 6-8h | DESIGN-15-mcp-client.md | HIGH |
-| **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-user-preferences.md | MEDIUM |
+| ~~**2b**~~ | ~~User Preferences~~ | ❌ CANCELLED | - | (redundant — covered by memory system + personality) | - |
 | **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-background-execution.md | MEDIUM |
 | **2.5** | Shell Security (S0+S1) | 📅 DEFERRED | 6-9d | TODO-shell-security-and-tools.md | HIGH |
 | **2d** | File Tools (C1) | 📅 DEFERRED | 3-4h | TODO-shell-security-and-tools.md | LOW |
 
-**Total Remaining Work (Active)**: 26-32 hours (4 days)
+**Total Remaining Work (Active)**: 10-12 hours (Phase 2c)
 **Deferred Work (Phase 2.5+ and follow-ons)**: 6-9 days + 12-13 hours
 
 ---
@@ -265,7 +250,7 @@ Before proceeding with Phase 1e, we conducted a comprehensive architecture revie
 **Why defer S0 (Shell Security) to Phase 2.5?**
 1. **No incidents** - `!` bypass hasn't caused problems in practice
 2. **Policy work** - S0 is policy refinement, not architecture repair
-3. **User value waiting** - Phase 2a (MCP Client) and 2b (User Preferences) deliver visible benefits
+3. **User value waiting** - Phase 2a (MCP Client) and 2c (Background Execution) deliver visible benefits
 4. **No compounding risk** - Tool architecture is solid, expansion is safe
 
 **Why defer Portable Identity?**
@@ -283,7 +268,7 @@ Before proceeding with Phase 1e, we conducted a comprehensive architecture revie
 ```
 Prompt System Redesign (in progress)
   ↓
-Phase 2a (MCP Client, 6-8h) → Phase 2b (User Preferences, 10-12h) → Phase 2c (Background Execution, 10-12h)
+Phase 2a (MCP Client) ✅ → Phase 2c (Background Execution, 10-12h)
   ↓
 Phase 2.5: Shell Security Hardening (S0+S1, 6-9 days)
   ↓
@@ -346,28 +331,9 @@ Phases 1a–1d are complete. Implementation guides were archived (deleted) as th
 
 ---
 
-### Phase 2b: User Preferences System
-**Files**:
-- `docs/TODO-user-preferences.md` (2,000 lines) ✅
+### ~~Phase 2b: User Preferences System~~ — CANCELLED
 
-**Note**: Original research (`RESEARCH-user-preferences.md`) superseded by co's knowledge system approach - preferences learned dynamically through interaction rather than static configuration files.
-
-**Goal**: Workflow preferences that adapt co's behavior to user's work style, separate from personality.
-
-**Research Findings**:
-- Analyzed 4 peer systems (Codex, Gemini CLI, Claude Code, Aider)
-- 10 MVP preferences identified (approval, sandbox, output, UI, telemetry, updates)
-- JSON with comments storage pattern
-- Hierarchical precedence model
-
-**Key Features**:
-- `UserPreferences` dataclass with 10 core preferences
-- Conflict resolution: command > preference > personality > base
-- Runtime overrides: `/verbose`, `/terse`, `/explain`, `/cautious`, `/yolo`
-- Progressive disclosure (only show non-default)
-- 15+ comprehensive tests
-
-**Success Criteria**: 31 checkboxes (code, test, behavioral, quality)
+**Reason**: Redundant with existing systems. The memory system (Phase 1c) already captures user preferences as tagged memories (`preference` signal type). The personality system (Phase 1b) already controls communication style via composable styles (terse/balanced/warm/educational). A separate structured preferences system would create dual state conflicts and add complexity without meaningful capability gain. The roadmap's own research note acknowledged this: "superseded by co's knowledge system approach." See TODO-slash-command-overrides.md for the one salvaged piece (runtime session toggles).
 
 ---
 
@@ -473,7 +439,7 @@ DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
 
 ## Implementation Sequence
 
-### Recommended Order (Updated 2026-02-11)
+### Recommended Order (Updated 2026-02-12)
 
 1. ✅ **Phase 1** - COMPLETE (model conditionals, personalities, memory, aspect refactor)
 
@@ -481,34 +447,25 @@ DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
    - Layered composition, instruction discovery, test governance
    - See [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md)
 
-3. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER - NEXT
+3. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER ✅ COMPLETE
    - MCP extensibility unlocks tool ecosystem
-   - Architecture ready (tool registration is solid)
-   - **Add security advisory**: Document `!` bypass, recommend explicit `sandbox_backend: docker`
-   - No dependencies, ready to start immediately
 
-4. **Phase 2b** (10-12 hours) - PERSONALIZATION
-   - Research complete, ready to implement
-   - Depends on memory system for learned preferences
-   - Integrates with personality system
-
-5. **Phase 2c** (10-12 hours) - ADVANCED UX
-   - Most complex, goes last
+4. **Phase 2c** (10-12 hours) - ADVANCED UX - NEXT
    - Benefits from 2a completion (MCP tools in background)
    - Independent core implementation
 
-6. **Phase 2.5** (6-9 days) - SHELL SECURITY HARDENING - DEFERRED
+5. **Phase 2.5** (6-9 days) - SHELL SECURITY HARDENING - DEFERRED
    - S0 (3-5 days): Shell boundary hardening, approval unification
    - S1 (3-4 days): Policy engine upgrade, parser-assisted evaluation
    - Execute after Phase 2c, before Phase 3 expansion
    - **Rationale**: Policy refinement, not architectural blocker
 
-7. **Phase 2d** (3-4 hours) - FILE TOOLS - DEFERRED
+6. **Phase 2d** (3-4 hours) - FILE TOOLS - DEFERRED
    - Workspace file tools (list/read/write/edit)
    - Execute after Phase 2.5 (shell security complete)
    - Low priority for current roadmap
 
-8. **Portable Identity** (9 hours) - PORTABILITY - DEFERRED (NON-CORE)
+7. **Portable Identity** (9 hours) - PORTABILITY - DEFERRED (NON-CORE)
    - Identity separation (portable vs machine-local)
    - Export/import/sync commands
    - **Rationale**: Let memory system stabilize in production first
@@ -520,9 +477,7 @@ DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
 If multiple implementers available:
 
 - **Stream A**: Prompt system redesign
-- **Stream B**: Phase 2a (MCP client)
-- **Stream C**: Phase 2b research → implementation
-- **Stream D**: Phase 2c (after Stream B complete)
+- **Stream B**: Phase 2c (background execution)
 
 ---
 
@@ -537,7 +492,6 @@ Future enhancements beyond current Phase 1-2 roadmap, ranked by return on invest
 | Critical Tools S0 (Shell Security) | Small-Medium | High (safety + trust) | **Best** | Phase 2.5 |
 | **Context Window Guard** | Small | Medium (prevents truncation) | **High** | Planned |
 | **Session Persistence** | Medium | Medium-High (resume, audit) | Medium-High | Planned |
-| User Workflow Preferences | Small-Medium | High (personalization) | Medium-High | Phase 2b |
 | **Skills System** | Small-Medium | High (zero-code extensibility) | Medium-High | Planned |
 | Slack Tooling — Phase 2/3 | Small-Medium | Medium | Medium-High | Planned |
 | Cross-Tool RAG | Large | High (at scale) | Low | Deferred |
@@ -573,13 +527,13 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 
 - **Test Coverage**: >90% for all new code
 - **Performance**: <100ms overhead per phase at session start
-- **Memory**: <10KB per phase (internal knowledge, preferences)
+- **Memory**: <10KB per phase (internal knowledge)
 - **Reliability**: No regressions in existing test suite
 
 ### Behavioral Metrics
 
 - **Companion Behavior**: Co remembers user context across sessions
-- **Adaptive Communication**: Personality + preferences work together without conflict
+- **Adaptive Communication**: Personality + memory-based preferences adapt naturally
 - **Extensible Tooling**: MCP servers integrate seamlessly with native tools
 - **Async Capable**: Long tasks run in background without blocking interaction
 
@@ -598,10 +552,6 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 - **Tool name collisions** → Mitigation: Automatic prefixing
 - **Approval bypass** → Mitigation: Strict inheritance of host approval model
 
-### Phase 2b Risks
-- **Preference explosion** → Mitigation: Start with 10 core preferences, grow slowly
-- **Personality vs preference conflicts** → Mitigation: Clear precedence rules, tests
-
 ### Phase 2c Risks
 - **Resource leaks** → Mitigation: Task cleanup policy, monitoring
 - **Silent failures** → Mitigation: Status tracking, error logging
@@ -618,7 +568,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 3. 🔄 **IN PROGRESS**: Prompt system redesign (layered composition, instruction discovery, test governance)
 4. ⏳ **NEXT**: Phase 2a (MCP client)
 
-**Sequence**: Prompt redesign → 2a (MCP) → 2b (preferences) → 2c (background) → 2.5 (shell security).
+**Sequence**: Prompt redesign → 2c (background) → 2.5 (shell security).
 
 ### Phase-Specific Next Steps
 
@@ -628,13 +578,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 - Scoped instruction discovery (global → project)
 - First-principles test governance for memory and personality
 
-**Phase 2a** (NEXT):
-- See [TODO-mcp-client.md](TODO-mcp-client.md)
-
-**Phase 2b** (After 2a):
-- See [TODO-user-preferences.md](TODO-user-preferences.md)
-
-**Phase 2c** (After 2b):
+**Phase 2c** (NEXT):
 - See [TODO-background-execution.md](TODO-background-execution.md)
 
 ---
@@ -652,7 +596,6 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 ### Active Implementation Guides
 - `docs/DESIGN-16-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
 - `docs/TODO-mcp-client.md` — MCP client
-- `docs/TODO-user-preferences.md` — User preferences
 - `docs/TODO-background-execution.md` — Background execution
 - `docs/TODO-shell-security-and-tools.md` — Shell security + file tools (Phase 2.5+2d)
 - `docs/TODO-voice.md` — Voice-to-voice round trip (Phase 3, deferred)
@@ -693,6 +636,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 
 ## Version History
 
+- **2026-02-12**: Phase 2b (User Preferences) cancelled — redundant with memory system + personality system. TODO deleted, roadmap sequence updated to 2a → 2c → 2.5
 - **2026-02-11**: Prompt system redesign started — archived Phase 1 docs, deleted stale tests, first-principles test redesign
 - **2026-02-10**: Phase 1 complete (1a model conditionals, 1b personalities, 1c memory system, 1d aspect refactor)
 - **2026-02-10**: Architecture review complete — 9.9/10, no refactoring needed
@@ -700,4 +644,4 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 
 ---
 
-**Current Status**: Phase 1 complete ✅. Prompt system redesign in progress 🔄. Next: Phase 2a (MCP client). Phase 2.5 (shell security) deferred until after Phase 2c.
+**Current Status**: Phase 1 complete ✅. Phase 2a (MCP) complete ✅. Prompt system redesign in progress 🔄. Next: Phase 2c (background execution). Phase 2.5 (shell security) deferred until after Phase 2c.

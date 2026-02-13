@@ -129,7 +129,7 @@ Every component DESIGN doc follows a 4-section template:
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-3-tier-context-model.md` — 3-tier context model: Instructions / Memory / Knowledge tier definitions, naming conventions, peer evidence
-- `docs/TODO-user-preferences.md` — Workflow preferences system
+- `docs/TODO-slash-command-overrides.md` — Runtime session-scoped slash command overrides (/verbose, /terse, /yolo)
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-shell-security-and-tools.md` — Shell security hardening + file/todo tools
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
