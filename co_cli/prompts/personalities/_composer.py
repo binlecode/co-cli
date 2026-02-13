@@ -14,7 +14,7 @@ _PERSONALITIES_DIR = Path(__file__).parent
 def get_soul_seed(name: str) -> str:
     """Return the always-on personality fingerprint for a preset.
 
-    Loads from ``aspects/seed/{name}.md``. The soul seed is a compact
+    Loads from ``seed/{name}.md``. The soul seed is a compact
     (2-3 sentence) personality summary injected into the system prompt
     on every turn — ensures Co has a consistent voice without needing
     to call ``load_personality()``.

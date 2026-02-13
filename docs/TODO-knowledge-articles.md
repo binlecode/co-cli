@@ -31,7 +31,7 @@ Knowledge curation behavior via prompt mode overlay — not a separate agent.
 - Uses existing tools: `web_search`, `web_fetch`, `recall_memory`, `save_memory` (+ future `save_article`)
 - Agent classifies input (topic/suggestion/fact/question), researches, evaluates quality, proposes structured saves
 - User approves/edits/rejects via standard approval flow (`requires_approval=True`)
-- Wired through `get_mode_overlay("learn")` in prompt assembly (see TODO-prompt-design.md)
+- Wired through `get_mode_overlay("learn")` in prompt assembly (see DESIGN-16-prompt-design.md)
 
 ### 3. Search Scaling
 

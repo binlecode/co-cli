@@ -125,10 +125,10 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
+- `docs/DESIGN-16-prompt-design.md` — Soul-first prompt design: soul seed, 6 companion rules, personality-rule interaction
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-3-tier-context-model.md` — 3-tier context model: Instructions / Memory / Knowledge tier definitions, naming conventions, peer evidence
-- `docs/TODO-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
 - `docs/TODO-user-preferences.md` — Workflow preferences system
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-shell-security-and-tools.md` — Shell security hardening + file/todo tools

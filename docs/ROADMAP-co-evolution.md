@@ -230,7 +230,7 @@ Adopt frontier patterns where they improve outcomes, but keep Co's design contra
 | **1a** | Model Conditionals | ✅ COMPLETE | - | (archived) | - |
 | **1b** | Personality Templates | ✅ COMPLETE | - | (archived) | - |
 | **1c** | Memory System | ✅ COMPLETE | 8-10h | DESIGN-14-memory-lifecycle-system.md | - |
-| **1d** | Aspect Refactor | ✅ COMPLETE | 3-4h | TODO-prompt-design.md | - |
+| **1d** | Aspect Refactor | ✅ COMPLETE | 3-4h | DESIGN-16-prompt-design.md | - |
 | **1e** | Portable Identity | 📅 DEFERRED | 9h | (archived) | LOW |
 | **2a** | MCP Client (stdio) | ✅ COMPLETE | 6-8h | DESIGN-15-mcp-client.md | HIGH |
 | **2b** | User Preferences | 📝 DOCUMENTED | 10-12h | TODO-user-preferences.md | MEDIUM |
@@ -300,7 +300,7 @@ Phase 3+: Advanced capabilities
 
 Phases 1a–1d are complete. Implementation guides were archived (deleted) as they described code patterns that no longer exist (monolithic `system.md`, `[IF provider]` conditionals, monolithic personality files). Current architecture is documented in:
 - **Memory system**: [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md)
-- **Prompt system**: [TODO-prompt-design.md](TODO-prompt-design.md) (active redesign)
+- **Prompt system**: [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) (active redesign)
 - **Personality system**: `co_cli/prompts/personalities/` (registry, composer, aspects, roles)
 
 ---
@@ -479,7 +479,7 @@ DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
 
 2. 🔄 **Prompt System Redesign** - IN PROGRESS
    - Layered composition, instruction discovery, test governance
-   - See [TODO-prompt-design.md](TODO-prompt-design.md)
+   - See [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md)
 
 3. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER - NEXT
    - MCP extensibility unlocks tool ecosystem
@@ -623,7 +623,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 ### Phase-Specific Next Steps
 
 **Prompt System Redesign** (IN PROGRESS):
-- See [TODO-prompt-design.md](TODO-prompt-design.md) for full plan
+- See [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) for full plan
 - Layered PromptLayer composition with PromptManifest diagnostics
 - Scoped instruction discovery (global → project)
 - First-principles test governance for memory and personality
@@ -650,7 +650,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 - `docs/REVIEW-compare-four.md` — Peer system analysis (prompt techniques)
 
 ### Active Implementation Guides
-- `docs/TODO-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
+- `docs/DESIGN-16-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
 - `docs/TODO-mcp-client.md` — MCP client
 - `docs/TODO-user-preferences.md` — User preferences
 - `docs/TODO-background-execution.md` — Background execution
