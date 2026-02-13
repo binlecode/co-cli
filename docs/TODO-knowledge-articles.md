@@ -7,10 +7,9 @@ Future enhancements to the memory/knowledge system beyond what Phase 1c shipped.
 ## Current State
 
 Phase 1c delivered:
-- **Context:** always-loaded `context.md` files (global + project scope, 3+7 KiB budgets)
-- **Memories:** on-demand `save_memory`/`recall_memory`/`list_memories` tools, markdown files with YAML frontmatter, dedup, consolidation, decay
-- **Loading:** `knowledge.py` → `load_memory()`, injected as prompt layer
+- **Memory:** on-demand `save_memory`/`recall_memory`/`list_memories` tools, markdown files with YAML frontmatter, dedup, consolidation, decay
 - **Search:** grep + frontmatter matching (sufficient for <200 memories)
+- **Architecture:** all knowledge is dynamic, loaded via tools — nothing baked into the system prompt
 
 ## Planned Enhancements
 
@@ -32,7 +31,7 @@ Knowledge curation behavior via prompt mode overlay — not a separate agent.
 - Uses existing tools: `web_search`, `web_fetch`, `recall_memory`, `save_memory` (+ future `save_article`)
 - Agent classifies input (topic/suggestion/fact/question), researches, evaluates quality, proposes structured saves
 - User approves/edits/rejects via standard approval flow (`requires_approval=True`)
-- Wired through `get_mode_overlay("learn", tier)` in prompt assembly (see TODO-prompt-system-redesign.md)
+- Wired through `get_mode_overlay("learn")` in prompt assembly (see TODO-prompt-design.md)
 
 ### 3. Search Scaling
 
@@ -54,8 +53,6 @@ Store images, PDFs, and code snippets alongside articles:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge.py` | Context loading (`load_memory()`) |
 | `co_cli/tools/memory.py` | Memory tools (save, recall, list) |
 | `co_cli/_frontmatter.py` | YAML frontmatter parsing |
-| `docs/DESIGN-14-memory-lifecycle-system.md` | Current design (Phase 1c) |
-| Future: `co_cli/tools/articles.py` | Article tools |
+| Future: `co_cli/tools/articles.py` | Article/lakehouse tools |

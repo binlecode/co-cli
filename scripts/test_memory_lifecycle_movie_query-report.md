@@ -16,9 +16,13 @@ The test creates a `CoDeps` with real credentials (Brave search API key, web pol
 
 pydantic-ai injects the system prompt as the first message. This is the rules-only prompt from the redesign — `instructions.md` + `rules/*.md` + counter-steering. No personality, no aspects, no memory loaded yet. Just bootstrap rules and the tool menu.
 
+==> instructions should be fundamential principles, and expect it to be short for now, all rules should be defined in rules/ folder, such as personality loading
+
 The user prompt follows immediately:
 
 > Go online and learn from Wikipedia about the movie Finch. Save a short summary of what you learn to memory.
+
+==> this is too explicit, more naturally, the ask should be like: go online learn... and then tell me about this movie, make it interesting
 
 ---
 

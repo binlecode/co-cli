@@ -1,5 +1,6 @@
 """Web intelligence tools: search (Brave) and fetch (direct HTTP)."""
 
+import asyncio
 import re
 from urllib.parse import urlparse
 from typing import Any
@@ -9,6 +10,8 @@ import httpx
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._errors import terminal_error
+from co_cli.tools._http_retry import classify_web_http_error, compute_backoff_delay
 from co_cli.tools._url_safety import is_url_safe
 
 _MAX_RESULTS = 8
@@ -17,6 +20,7 @@ _FETCH_TIMEOUT = 15
 _MAX_FETCH_CHARS = 100_000
 _MAX_FETCH_BYTES = 1_048_576  # 1 MB pre-decode limit
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+_FETCH_USER_AGENT = "co-cli/0.3 (+https://github.com/binlecode/co-cli)"
 
 _ALLOWED_CONTENT_TYPES = (
     "text/",
@@ -70,6 +74,43 @@ def _get_api_key(ctx: RunContext[CoDeps]) -> str:
     return key
 
 
+def _is_cloudflare_challenge(resp: httpx.Response) -> bool:
+    """Detect Cloudflare TLS fingerprint mismatch block.
+
+    Cloudflare compares the User-Agent (browser-like) against the actual TLS
+    handshake fingerprint (Python httpx).  When they mismatch, Cloudflare
+    returns 403 with ``cf-mitigated: challenge``.  Retrying with an honest
+    tool-only User-Agent removes the mismatch and often succeeds.
+    """
+    return (
+        resp.status_code == 403
+        and resp.headers.get("cf-mitigated") == "challenge"
+    )
+
+
+def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
+    """Build request headers for web fetch.
+
+    Wikimedia endpoints may block generic/scraper signatures unless a policy-
+    compliant agent string is provided. Add Api-User-Agent for Wikimedia hosts.
+    """
+    headers = {
+        "User-Agent": _FETCH_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if hostname and (
+        hostname.endswith("wikipedia.org")
+        or hostname.endswith("wikimedia.org")
+    ):
+        headers["Api-User-Agent"] = _FETCH_USER_AGENT
+    return headers
+
+
+# Minimal honest headers used when Cloudflare blocks the primary request.
+_CF_FALLBACK_HEADERS: dict[str, str] = {"User-Agent": _FETCH_USER_AGENT}
+
+
 def _html_to_markdown(html: str) -> str:
     """Convert HTML to readable markdown text."""
     converter = html2text.HTML2Text()
@@ -77,6 +118,61 @@ def _html_to_markdown(html: str) -> str:
     converter.ignore_images = True
     converter.body_width = 0  # No line wrapping
     return converter.handle(html)
+
+
+async def _http_get_with_retries(
+    *,
+    client: httpx.AsyncClient,
+    tool_name: str,
+    target: str,
+    url: str,
+    headers: dict[str, str],
+    params: dict[str, Any] | None,
+    max_retries: int,
+    backoff_base_seconds: float,
+    backoff_max_seconds: float,
+    backoff_jitter_ratio: float,
+    cf_fallback_headers: dict[str, str] | None = None,
+) -> httpx.Response | dict[str, Any]:
+    attempts_total = max(0, max_retries) + 1
+
+    for attempt in range(1, attempts_total + 1):
+        try:
+            resp = await client.get(url, headers=headers, params=params)
+            # Cloudflare TLS fingerprint mismatch — retry once with
+            # honest headers before falling through to error handling.
+            if cf_fallback_headers and _is_cloudflare_challenge(resp):
+                resp = await client.get(
+                    url, headers=cf_fallback_headers, params=params,
+                )
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPError as e:
+            decision = classify_web_http_error(
+                tool_name=tool_name,
+                target=target,
+                error=e,
+                max_retry_after_seconds=backoff_max_seconds,
+            )
+            if not decision.retryable:
+                return terminal_error(decision.message)
+
+            if attempt >= attempts_total:
+                return terminal_error(
+                    f"{decision.message} Retries exhausted ({max_retries})."
+                )
+
+            delay = compute_backoff_delay(
+                attempt=attempt,
+                base_seconds=backoff_base_seconds,
+                max_seconds=backoff_max_seconds,
+                jitter_ratio=backoff_jitter_ratio,
+            )
+            if decision.delay_seconds > 0:
+                delay = max(delay, min(decision.delay_seconds, backoff_max_seconds))
+            await asyncio.sleep(delay)
+
+    return terminal_error(f"{tool_name} failed for {target}.")
 
 
 async def web_search(
@@ -106,24 +202,26 @@ async def web_search(
         site_prefix = " OR ".join(f"site:{d}" for d in domains)
         effective_query = f"{site_prefix} {effective_query}"
 
-    try:
-        async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
-            resp = await client.get(
-                _BRAVE_SEARCH_URL,
-                params={"q": effective_query, "count": capped},
-                headers={
-                    "Accept": "application/json",
-                    "Accept-Encoding": "gzip",
-                    "X-Subscription-Token": api_key,
-                },
-            )
-            resp.raise_for_status()
-    except httpx.TimeoutException:
-        raise ModelRetry("Web search timed out. Retry with a shorter query.")
-    except httpx.HTTPStatusError as e:
-        raise ModelRetry(f"Web search error (HTTP {e.response.status_code}). Retry later.")
-    except httpx.HTTPError as e:
-        raise ModelRetry(f"Web search error: {e}")
+    async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+        resp_or_error = await _http_get_with_retries(
+            client=client,
+            tool_name="web_search",
+            target=effective_query,
+            url=_BRAVE_SEARCH_URL,
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": api_key,
+            },
+            params={"q": effective_query, "count": capped},
+            max_retries=ctx.deps.web_http_max_retries,
+            backoff_base_seconds=ctx.deps.web_http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.web_http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.web_http_jitter_ratio,
+        )
+    if isinstance(resp_or_error, dict):
+        return resp_or_error
+    resp = resp_or_error
 
     data = resp.json()
     raw_results = data.get("web", {}).get("results", [])
@@ -178,20 +276,27 @@ async def web_fetch(
     if not is_url_safe(url):
         raise ModelRetry("web_fetch blocked: URL resolves to a private or internal address.")
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=_FETCH_TIMEOUT,
-            follow_redirects=True,
-            max_redirects=5,
-        ) as client:
-            resp = await client.get(url, headers={"User-Agent": "co-cli/web_fetch"})
-            resp.raise_for_status()
-    except httpx.TimeoutException:
-        raise ModelRetry(f"web_fetch timed out fetching {url}. Try a different URL.")
-    except httpx.HTTPStatusError as e:
-        raise ModelRetry(f"web_fetch error (HTTP {e.response.status_code}) for {url}.")
-    except httpx.HTTPError as e:
-        raise ModelRetry(f"web_fetch error: {e}")
+    async with httpx.AsyncClient(
+        timeout=_FETCH_TIMEOUT,
+        follow_redirects=True,
+        max_redirects=5,
+    ) as client:
+        resp_or_error = await _http_get_with_retries(
+            client=client,
+            tool_name="web_fetch",
+            target=url,
+            url=url,
+            headers=_build_fetch_headers(hostname),
+            params=None,
+            max_retries=ctx.deps.web_http_max_retries,
+            backoff_base_seconds=ctx.deps.web_http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.web_http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.web_http_jitter_ratio,
+            cf_fallback_headers=_CF_FALLBACK_HEADERS,
+        )
+    if isinstance(resp_or_error, dict):
+        return resp_or_error
+    resp = resp_or_error
 
     final_url = str(resp.url)
     if final_url != url and not is_url_safe(final_url):
@@ -200,7 +305,7 @@ async def web_fetch(
     content_type = resp.headers.get("content-type", "")
 
     if not _is_content_type_allowed(content_type):
-        raise ModelRetry(
+        return terminal_error(
             f"web_fetch blocked: unsupported content type '{content_type}'. "
             "Only text and structured data formats are supported."
         )

@@ -12,9 +12,7 @@ EXPECTED_TOOLS = {
     "send_slack_message",
     "save_memory",
     # Context tools (read-only)
-    "load_aspects",
     "load_personality",
-    "load_context",
     # Read-only
     "recall_memory",
     "list_memories",

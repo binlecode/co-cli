@@ -123,6 +123,10 @@ class Settings(BaseModel):
     web_fetch_allowed_domains: list[str] = Field(default=[])
     web_fetch_blocked_domains: list[str] = Field(default=[])
     web_policy: WebPolicy = Field(default_factory=WebPolicy)
+    web_http_max_retries: int = Field(default=2, ge=0, le=10)
+    web_http_backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    web_http_backoff_max_seconds: float = Field(default=8.0, ge=0.5, le=120.0)
+    web_http_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
 
     # MCP servers (stdio transport)
     mcp_servers: dict[str, MCPServerConfig] = Field(
@@ -158,6 +162,14 @@ class Settings(BaseModel):
         if v not in VALID_PERSONALITIES:
             raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
         return v
+
+    @model_validator(mode="after")
+    def _validate_web_retry_bounds(self) -> "Settings":
+        if self.web_http_backoff_base_seconds > self.web_http_backoff_max_seconds:
+            raise ValueError(
+                "web_http_backoff_base_seconds must be <= web_http_backoff_max_seconds"
+            )
+        return self
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
@@ -198,6 +210,10 @@ class Settings(BaseModel):
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
             "web_fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",
             "web_fetch_blocked_domains": "CO_CLI_WEB_FETCH_BLOCKED_DOMAINS",
+            "web_http_max_retries": "CO_CLI_WEB_HTTP_MAX_RETRIES",
+            "web_http_backoff_base_seconds": "CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS",
+            "web_http_backoff_max_seconds": "CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS",
+            "web_http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
             "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",

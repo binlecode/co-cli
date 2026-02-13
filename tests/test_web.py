@@ -9,10 +9,18 @@ unconditionally.
 
 from dataclasses import dataclass
 
+import httpx
 import pytest
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.web import web_search, web_fetch, _is_content_type_allowed, _is_domain_allowed
+from co_cli.tools.web import (
+    web_search,
+    web_fetch,
+    _build_fetch_headers,
+    _is_cloudflare_challenge,
+    _is_content_type_allowed,
+    _is_domain_allowed,
+)
 from co_cli.tools._url_safety import is_url_safe
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
@@ -230,8 +238,12 @@ async def test_web_fetch_blocks_redirect_to_private():
     Either way the request is rejected with ModelRetry.
     """
     ctx = _make_ctx()
-    with pytest.raises(ModelRetry):
-        await web_fetch(ctx, "https://httpbin.org/redirect-to?url=http://127.0.0.1/")
+    try:
+        result = await web_fetch(ctx, "https://httpbin.org/redirect-to?url=http://127.0.0.1/")
+    except ModelRetry:
+        # Post-redirect URL safety check can still raise ModelRetry.
+        return
+    assert result["error"] is True
 
 
 # --- Content-type guard ---
@@ -263,10 +275,11 @@ def test_content_type_allows_empty():
 
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_binary_content():
-    """web_fetch raises ModelRetry for binary content types."""
+    """web_fetch returns terminal error for binary content types."""
     ctx = _make_ctx()
-    with pytest.raises(ModelRetry, match="unsupported content type"):
-        await web_fetch(ctx, "https://httpbin.org/image/png")
+    result = await web_fetch(ctx, "https://httpbin.org/image/png")
+    assert result["error"] is True
+    assert "unsupported content type" in result["display"]
 
 
 @pytest.mark.asyncio
@@ -275,6 +288,25 @@ async def test_web_fetch_allows_json():
     ctx = _make_ctx()
     result = await web_fetch(ctx, "https://httpbin.org/json")
     assert "json" in result["content_type"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_http_403_is_terminal():
+    """HTTP 403 returns terminal error result (no ModelRetry)."""
+    ctx = _make_ctx()
+    result = await web_fetch(ctx, "https://httpbin.org/status/403")
+    assert result["error"] is True
+    assert "HTTP 403" in result["display"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_http_503_retries_then_terminal():
+    """HTTP 503 retries within tool and returns terminal error on exhaustion."""
+    ctx = _make_ctx()
+    result = await web_fetch(ctx, "https://httpbin.org/status/503")
+    assert result["error"] is True
+    assert "HTTP 503" in result["display"]
+    assert "Retries exhausted" in result["display"]
 
 
 # --- Truncation ---
@@ -358,6 +390,54 @@ def test_domain_blocked_overrides_allowed():
 def test_domain_both_empty_allows_all():
     """Empty allowlist + empty blocklist → all domains allowed."""
     assert _is_domain_allowed("anything.com", [], []) is True
+
+
+def test_build_fetch_headers_general_host():
+    """General hosts get standard browser-ish headers."""
+    headers = _build_fetch_headers("example.com")
+    assert "User-Agent" in headers
+    assert "Accept" in headers
+    assert "Accept-Language" in headers
+    assert "Api-User-Agent" not in headers
+
+
+def test_build_fetch_headers_wikipedia_host():
+    """Wikimedia hosts include Api-User-Agent for policy compliance."""
+    headers = _build_fetch_headers("en.wikipedia.org")
+    assert headers["Api-User-Agent"] == headers["User-Agent"]
+
+
+# --- Cloudflare challenge detection ---
+
+
+def test_cloudflare_challenge_detected():
+    """403 with cf-mitigated: challenge is detected."""
+    resp = httpx.Response(
+        403,
+        headers={"cf-mitigated": "challenge"},
+        request=httpx.Request("GET", "https://example.com"),
+    )
+    assert _is_cloudflare_challenge(resp) is True
+
+
+def test_cloudflare_challenge_plain_403():
+    """Plain 403 without cf-mitigated header is not a Cloudflare challenge."""
+    resp = httpx.Response(
+        403,
+        headers={},
+        request=httpx.Request("GET", "https://example.com"),
+    )
+    assert _is_cloudflare_challenge(resp) is False
+
+
+def test_cloudflare_challenge_wrong_status():
+    """Non-403 with cf-mitigated header is not a Cloudflare challenge."""
+    resp = httpx.Response(
+        200,
+        headers={"cf-mitigated": "challenge"},
+        request=httpx.Request("GET", "https://example.com"),
+    )
+    assert _is_cloudflare_challenge(resp) is False
 
 
 # --- Web policy deny ---

@@ -27,6 +27,8 @@ Tool Execution:
     ├── _is_domain_allowed()          ← domain allow/block check
     ├── is_url_safe(url)              ← SSRF pre-request check
     ├── httpx.get(url, follow_redirects=True)
+    │     └── 403 + cf-mitigated: challenge ?  ← Cloudflare TLS mismatch
+    │           └── retry once with honest-only headers
     ├── is_url_safe(final_url)        ← SSRF post-redirect check
     ├── _is_content_type_allowed()    ← reject binary
     ├── resp.content[:1 MB]           ← byte-level truncate
@@ -47,6 +49,8 @@ Tool Execution:
 **`web_fetch(url) → dict`** — Fetch a URL and return content as markdown. Returns `{"display": "Content from {final_url}:\n\n...", "url": str, "content_type": str, "truncated": bool}`. The `url` field reflects the actual URL after redirects. Non-http/https URLs raise `ModelRetry`. `web_policy.fetch="deny"` raises `ModelRetry` before any work. The hostname is checked against the domain allow/blocklist before the SSRF check. Before the request, the URL is validated against the SSRF blocklist; after redirects, the final URL is re-checked. Binary content types are rejected. The response body is byte-truncated at 1 MB before decoding, then char-truncated at 100k after markdown conversion.
 
 ### Helpers
+
+**`_is_cloudflare_challenge(resp)`** — Detects Cloudflare TLS fingerprint mismatch blocks. Returns `True` when the response is HTTP 403 with `cf-mitigated: challenge` header. Used inside `_http_get_with_retries` to trigger a one-shot retry with honest headers before falling through to normal error classification.
 
 **`_get_api_key(ctx)`** — Extracts and validates `brave_search_api_key` from context. Raises `ModelRetry` if not configured.
 
@@ -108,6 +112,7 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 8. **Two-tier body limit** — Response body is first truncated at `_MAX_FETCH_BYTES` (1 MB) before decoding, preventing memory exhaustion from large binary payloads. Decoded text is then truncated at `_MAX_FETCH_CHARS` (100k chars) as a secondary limit.
 9. **Domain policy** — `_is_domain_allowed()` checks hostnames against user-configured allow/blocklists before the SSRF check. Blocklist takes precedence over allowlist. Subdomain matching via `.endswith("." + domain)`.
 10. **Per-tool web policy** — `web_policy` controls web tool access independently: `search` and `fetch` each support `allow` (default, no approval), `ask` (deferred approval via `requires_approval=True` in agent registration), and `deny` (tools raise `ModelRetry` immediately). Checked at the top of each tool before any work.
+11. **Cloudflare TLS fingerprint recovery** — Cloudflare compares the User-Agent claim against the actual TLS handshake fingerprint. When httpx (Python TLS) sends browser-like headers, Cloudflare detects the mismatch and returns 403 with `cf-mitigated: challenge`. The retry loop detects this via `_is_cloudflare_challenge()` and retries once with minimal honest headers (`User-Agent: co-cli/0.3` only, no browser-like Accept). This removes the UA/TLS mismatch and often succeeds. The fallback is a one-shot within a single retry attempt — it does not consume the retry budget. Only applied to `web_fetch` (not `web_search`, which hits Brave's API directly).
 
 ## 3. Config
 
@@ -130,10 +135,12 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/web.py` | Both tools: `web_search`, `web_fetch`, helpers, constants |
+| `co_cli/tools/_http_retry.py` | Shared HTTP retry helpers: error classification, backoff, Retry-After parsing |
 | `co_cli/tools/_url_safety.py` | SSRF protection: blocked networks/hostnames, `is_url_safe()` |
 | `co_cli/config.py` | `brave_search_api_key`, domain lists, `web_policy` settings + env mappings |
 | `co_cli/deps.py` | `CoDeps` fields: `brave_search_api_key`, domain lists, `web_policy` |
 | `co_cli/main.py` | Wires web settings in `create_deps()`, passes `web_policy` to `get_agent()` |
 | `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on `web_policy.search/fetch` |
 | `co_cli/status.py` | Web tools status row |
-| `tests/test_web.py` | Validation + functional tests |
+| `tests/test_web.py` | Validation, functional, and Cloudflare detection tests |
+| `tests/test_web_retry_policy.py` | Retry classifier, backoff, and Retry-After parsing tests |

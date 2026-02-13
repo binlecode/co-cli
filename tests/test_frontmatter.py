@@ -5,7 +5,6 @@ import pytest
 from co_cli._frontmatter import (
     parse_frontmatter,
     strip_frontmatter,
-    validate_context_frontmatter,
     validate_memory_frontmatter,
 )
 
@@ -76,46 +75,6 @@ Body content here."""
     body = strip_frontmatter(content)
 
     assert body == "Body content here."
-
-
-def test_validate_context_frontmatter_valid():
-    """Test validating valid context frontmatter."""
-    frontmatter = {"version": 1, "updated": "2026-02-09T14:30:00Z"}
-
-    # Should not raise
-    validate_context_frontmatter(frontmatter)
-
-
-def test_validate_context_frontmatter_missing_version():
-    """Test validation fails when version is missing."""
-    frontmatter = {"updated": "2026-02-09T14:30:00Z"}
-
-    with pytest.raises(ValueError, match="missing required field: version"):
-        validate_context_frontmatter(frontmatter)
-
-
-def test_validate_context_frontmatter_invalid_version_type():
-    """Test validation fails when version is wrong type."""
-    frontmatter = {"version": "1", "updated": "2026-02-09T14:30:00Z"}
-
-    with pytest.raises(ValueError, match="must be an integer"):
-        validate_context_frontmatter(frontmatter)
-
-
-def test_validate_context_frontmatter_missing_updated():
-    """Test validation fails when updated is missing."""
-    frontmatter = {"version": 1}
-
-    with pytest.raises(ValueError, match="missing required field: updated"):
-        validate_context_frontmatter(frontmatter)
-
-
-def test_validate_context_frontmatter_invalid_updated_format():
-    """Test validation fails when updated is not ISO8601."""
-    frontmatter = {"version": 1, "updated": "not-a-timestamp"}
-
-    with pytest.raises(ValueError, match="must be ISO8601 format"):
-        validate_context_frontmatter(frontmatter)
 
 
 def test_validate_memory_frontmatter_valid():

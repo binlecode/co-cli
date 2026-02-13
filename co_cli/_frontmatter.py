@@ -75,35 +75,6 @@ def strip_frontmatter(content: str) -> str:
     return body
 
 
-def validate_context_frontmatter(fm: dict[str, Any]) -> None:
-    """Validate context.md frontmatter structure.
-
-    Required fields:
-        - version: int
-        - updated: ISO8601 timestamp string
-
-    Args:
-        fm: Frontmatter dictionary
-
-    Raises:
-        ValueError: If frontmatter is invalid
-    """
-    if "version" not in fm:
-        raise ValueError("context.md frontmatter missing required field: version")
-    if not isinstance(fm["version"], int):
-        raise ValueError("context.md frontmatter field 'version' must be an integer")
-
-    if "updated" not in fm:
-        raise ValueError("context.md frontmatter missing required field: updated")
-    if not isinstance(fm["updated"], str):
-        raise ValueError("context.md frontmatter field 'updated' must be a string")
-    # Basic ISO8601 format check (not exhaustive)
-    if not re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", fm["updated"]):
-        raise ValueError(
-            "context.md frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
-        )
-
-
 def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     """Validate memory file frontmatter structure.
 

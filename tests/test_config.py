@@ -125,6 +125,31 @@ def test_env_overrides_web_policy_fields(tmp_path, monkeypatch):
     assert settings.web_policy.fetch == "deny"
 
 
+def test_env_overrides_web_http_retry_settings(tmp_path, monkeypatch):
+    """Web retry/backoff env vars override defaults."""
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CO_CLI_WEB_HTTP_MAX_RETRIES", "4")
+    monkeypatch.setenv("CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS", "0.5")
+    monkeypatch.setenv("CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS", "12")
+    monkeypatch.setenv("CO_CLI_WEB_HTTP_JITTER_RATIO", "0.4")
+
+    settings = load_config()
+    assert settings.web_http_max_retries == 4
+    assert settings.web_http_backoff_base_seconds == 0.5
+    assert settings.web_http_backoff_max_seconds == 12.0
+    assert settings.web_http_jitter_ratio == 0.4
+
+
+def test_web_http_retry_bounds_validation():
+    """Backoff base must not exceed backoff max."""
+    with pytest.raises(ValidationError, match="web_http_backoff_base_seconds"):
+        Settings(
+            web_http_backoff_base_seconds=10.0,
+            web_http_backoff_max_seconds=1.0,
+        )
+
+
 def test_personality_validation():
     """Personality field validates allowed values."""
     # Valid personalities

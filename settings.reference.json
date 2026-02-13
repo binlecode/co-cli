@@ -11,6 +11,10 @@
   "brave_search_api_key": "",
   "web_fetch_allowed_domains": [],
   "web_fetch_blocked_domains": [],
+  "web_http_max_retries": 2,
+  "web_http_backoff_base_seconds": 1.0,
+  "web_http_backoff_max_seconds": 8.0,
+  "web_http_jitter_ratio": 0.2,
   "web_policy": {
     "search": "allow",
     "fetch": "allow"

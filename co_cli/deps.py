@@ -41,6 +41,10 @@ class CoDeps:
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
     web_fetch_blocked_domains: list[str] = field(default_factory=list)
     web_policy: WebPolicy = field(default_factory=WebPolicy)
+    web_http_max_retries: int = 2
+    web_http_backoff_base_seconds: float = 1.0
+    web_http_backoff_max_seconds: float = 8.0
+    web_http_jitter_ratio: float = 0.2
 
     # Memory lifecycle
     memory_max_count: int = 200

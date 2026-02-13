@@ -220,49 +220,6 @@ async def test_ollama_context_tool_personality():
 
 
 @pytest.mark.asyncio
-async def test_ollama_context_tool_aspects():
-    """LLM calls load_aspects tool and receives guidance content.
-
-    Requires LLM_PROVIDER=ollama and Ollama server running.
-    """
-    if os.getenv("LLM_PROVIDER") != "ollama":
-        return  # Not targeting Ollama this run
-
-    agent, model_settings, tool_names = get_agent()
-    assert "load_aspects" in tool_names
-
-    deps = _make_deps("test-context-aspects")
-
-    # Ask the model to call the tool and report what it returns.
-    # The exact content is unknowable without calling load_aspects.
-    result = await agent.run(
-        'Call the load_aspects tool with names=["inquiry"]. '
-        "Report the aspects_loaded list from the result.",
-        deps=deps,
-        model_settings=model_settings,
-    )
-
-    # Verify load_aspects was called
-    messages = result.all_messages()
-    tool_calls_made = []
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart):
-                    tool_calls_made.append(part.tool_name)
-
-    assert "load_aspects" in tool_calls_made, (
-        f"Agent did not call load_aspects. Tool calls: {tool_calls_made}"
-    )
-
-    # Response should reference the loaded aspect name
-    output_lower = result.output.lower() if isinstance(result.output, str) else ""
-    assert "inquiry" in output_lower, (
-        f"Response doesn't reference 'inquiry' aspect: {result.output!r}"
-    )
-
-
-@pytest.mark.asyncio
 async def test_ollama_autonomous_personality():
     """Model proactively loads personality without explicit tool instruction.
 

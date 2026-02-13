@@ -18,9 +18,9 @@ uv run pytest tests/test_tools.py::test_name # Single test function
 uv run pytest --cov=co_cli                   # With coverage
 
 # Demo & Evaluation Scripts
-uv run python scripts/demo_knowledge_roundtrip.py  # Knowledge system demo
-uv run python scripts/demo_e2e_streaming.py        # Streaming output demo
-uv run python scripts/eval_tool_calling.py         # Tool calling eval
+uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle test
+uv run python scripts/eval_e2e_streaming.py           # Streaming output eval
+uv run python scripts/eval_tool_calling.py            # Tool calling eval
 ```
 
 ## Architecture
@@ -36,23 +36,19 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
 
 See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and approval pattern.
 
-## Internal Knowledge
+## Knowledge System
 
-Co loads persistent knowledge from markdown files at session start:
+All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt. Two tiers:
 
-**Files:**
-- `~/.config/co-cli/knowledge/context.md` — Global context (3 KiB budget)
-- `.co-cli/knowledge/context.md` — Project context (7 KiB budget, overrides global)
-- `.co-cli/knowledge/memories/*.md` — On-demand memories (agent-searchable)
+**Memory** — conversation-derived knowledge (preferences, decisions, corrections, patterns):
+- Storage: `.co-cli/knowledge/memories/*.md`
+- Tools: `save_memory(content, tags)`, `recall_memory(query)`, `list_memories()`
 
-**Tools:**
-- `save_memory(content, tags)` — Save a memory (requires approval)
-- `recall_memory(query, max_results)` — Search memories by keyword
-- `list_memories()` — List all memories with summaries
+**Lakehouse** — curated articles and multimodal assets (future):
+- Storage: `.co-cli/knowledge/articles/*.md`, assets in `articles/assets/{slug}/`
+- Tools: `save_article()`, `recall_article()`, `list_articles()` (planned)
 
-**Retrieval:** grep + frontmatter for MVP (<200 memories). Future: SQLite FTS5 → hybrid search with vectors.
-
-**Prompt injection:** Knowledge is wrapped in `<system-reminder>` tags and injected after personality, before project instructions.
+**Retrieval:** grep + frontmatter for MVP (<200 items). Future: SQLite FTS5 → hybrid search with vectors.
 
 ## Coding Standards
 
@@ -132,11 +128,11 @@ Every component DESIGN doc follows a 4-section template:
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-3-tier-context-model.md` — 3-tier context model: Instructions / Memory / Knowledge tier definitions, naming conventions, peer evidence
-- `docs/TODO-prompt-system-redesign.md` — Layered prompt composition, instruction discovery, test governance
+- `docs/TODO-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
 - `docs/TODO-user-preferences.md` — Workflow preferences system
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-shell-security-and-tools.md` — Shell security hardening + file/todo tools
-- `docs/TODO-knowledge-evolution.md` — Knowledge system: articles, learn mode, search scaling
+- `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
 - `docs/TODO-slack-tooling.md` — Slack tool enhancements
