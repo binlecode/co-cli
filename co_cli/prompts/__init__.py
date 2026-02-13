@@ -75,20 +75,25 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
 def assemble_prompt(
     provider: str,
     model_name: str | None = None,
+    personality: str | None = None,
 ) -> tuple[str, PromptManifest]:
-    """Assemble rules-only system prompt.
+    """Assemble system prompt: instructions + soul seed + rules + counter-steering.
 
     Assembly order:
     1. Bootstrap instructions (instructions.md)
-    2. All behavioral rules (rules/*.md)
-    3. Model-specific counter-steering (if quirks exist)
+    2. Soul seed (personality fingerprint, if personality is set)
+    3. All behavioral rules (rules/*.md)
+    4. Model-specific counter-steering (if quirks exist)
 
-    Context (personality, knowledge) is NOT included — loaded
+    Full personality (character, style, role) and knowledge are loaded
     on-demand by the agent via context tools.
 
     Args:
         provider: LLM provider name ("gemini", "ollama").
         model_name: Normalized model identifier for quirk lookup.
+        personality: Personality preset name (e.g. "finch"). When set,
+            the soul seed is loaded from ``personalities/seed/{name}.md``
+            and injected between instructions and rules.
 
     Returns:
         Tuple of (assembled_prompt, manifest).
@@ -105,14 +110,26 @@ def assemble_prompt(
     parts.append(instructions)
     manifest.parts_loaded.append("instructions")
 
-    # 2. All behavioral rules (strict numbered order)
+    # 2. Soul seed (always-on personality fingerprint)
+    if personality:
+        from co_cli.prompts.personalities._composer import get_soul_seed
+
+        seed = get_soul_seed(personality)
+        parts.append(
+            f"## Soul\n\n{seed}\n\n"
+            "Your personality shapes how you follow the rules below. "
+            "It never overrides safety or factual accuracy."
+        )
+        manifest.parts_loaded.append("soul_seed")
+
+    # 3. All behavioral rules (strict numbered order)
     for _order, name, rule_path in _collect_rule_files():
         content = rule_path.read_text(encoding="utf-8").strip()
         if content:
             parts.append(content)
             manifest.parts_loaded.append(name)
 
-    # 3. Counter-steering (model-specific quirks)
+    # 4. Counter-steering (model-specific quirks)
     if model_name:
         from co_cli.prompts.model_quirks import get_counter_steering
 

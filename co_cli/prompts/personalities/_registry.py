@@ -7,7 +7,10 @@ from typing import TypedDict
 
 
 class PersonalityPreset(TypedDict):
-    """A personality preset: optional character aspect + required style aspect."""
+    """A personality preset: optional character aspect + required style aspect.
+
+    Soul seed is loaded from ``aspects/seed/{preset_name}.md`` by convention.
+    """
 
     character: str | None
     style: str

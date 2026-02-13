@@ -96,6 +96,7 @@ def get_agent(
     system_prompt, _manifest = assemble_prompt(
         provider_name,
         model_name=normalized_model,
+        personality=settings.personality,
     )
 
     # Build MCP toolsets from config

@@ -55,7 +55,7 @@ async def load_personality(
         }
 
     preset = PRESETS[role_name]
-    aspects_dir = Path(__file__).parent.parent / "prompts" / "personalities" / "aspects"
+    personalities_dir = Path(__file__).parent.parent / "prompts" / "personalities"
     roles_dir = Path(__file__).parent.parent / "prompts" / "personalities" / "roles"
 
     # Determine which pieces are available for this role
@@ -63,12 +63,12 @@ async def load_personality(
 
     # Character piece (optional per preset)
     if preset["character"]:
-        character_path = aspects_dir / "character" / f"{preset['character']}.md"
+        character_path = personalities_dir / "character" / f"{preset['character']}.md"
         if character_path.exists():
             available_pieces["character"] = character_path
 
     # Style piece (required per preset)
-    style_path = aspects_dir / "style" / f"{preset['style']}.md"
+    style_path = personalities_dir / "style" / f"{preset['style']}.md"
     if style_path.exists():
         available_pieces["style"] = style_path
 

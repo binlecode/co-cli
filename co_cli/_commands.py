@@ -152,6 +152,7 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
     new_system_prompt, _manifest = assemble_prompt(
         "ollama",
         model_name=normalized_model,
+        personality=settings.personality,
     )
     agent.system_prompt = new_system_prompt
 
