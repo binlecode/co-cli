@@ -6,6 +6,25 @@
 
 This document designs co's agentic loop and prompting architecture from scratch. It ignores current implementation details and focuses on the target architecture that serves co's ultimate vision: a personal companion for knowledge work (the "Finch" vision) that is local-first, approval-first, and grows with its user.
 
+### Review Resolution (2026-02-14)
+
+Critique review (`TODO-co-agentic-loop-and-prompting-critique.md`) identified 7 issues where the design over-engineered or deviated from MVP principles. Resolution:
+
+| # | Issue | Severity | Verdict | Resolution |
+|---|---|---|---|---|
+| 1 | Phase 1 test gate should block later phases | High | **Accepted** | Phases 2-5 made conditional on Phase 1 results. Safety (Phase 2) remains always-ship per user decision |
+| 2 | Conditional composition is premature | High | **Accepted** | PromptFlags/frontmatter removed. Use pydantic-ai `@agent.system_prompt` for conditional content (§9.1) |
+| 3 | Goal system should be conditional | High | **Partially accepted** | Goal system kept as Phase 3b, conditional on Phase 3a (system nudge) results. Tool-based escalation (not heuristic) per user decision |
+| 4 | Instruction discovery solves no current problem | High | **Accepted** | Simplified to single file: `.co-cli/instructions.md` (§9.2) |
+| 5 | Phase 3 is an unshippable monolith | Medium | **Accepted** | Decomposed into Phase 3a (system nudge) and Phase 3b (goal tools) |
+| 6 | TurnOutcome refactor blocks critical path | Medium | **Accepted** | Deferred to Phase 5 polish (§4.1) |
+| 7 | Personality matrix adds no new value | Medium | **Partially accepted** | §11 rewritten: role files kept as reference docs, derive personality axes for token-efficient targeted injection instead of essay dumping |
+
+**User decisions (2026-02-14):**
+1. **Tool-based goal escalation** — If the goal system is needed (Phase 3b), use `set_goal`/`complete_goal` tools, not orchestration-layer heuristics. The LLM should declare its own goals explicitly
+2. **Always-ship safety** — Phase 2 (doom loop, turn limits) ships regardless of Phase 1 results. Safety is not conditional
+3. **Full rule rewrite** — Phase 1 includes a complete rewrite of all 5 companion rules (§10.1-10.5), not incremental patches
+
 ---
 
 ## Part I: Design Principles
@@ -69,6 +88,8 @@ Patterns studied and deliberately excluded:
 
 The agent loop has two nested loops with clear separation of concerns.
 
+**pydantic-ai mapping:** Each "inner loop iteration" is one `agent.run_stream_events()` invocation. pydantic-ai manages the tool-call → result → next-LLM-request cycle internally within that call. The inner loop boundary sits *outside* `agent.run_stream_events()` — the outer loop decides whether to re-enter based on the `TurnOutcome`. Tool dispatch, approval gates, and streaming all happen inside the pydantic-ai event stream, not in co's loop code.
+
 ```
 User Input
     |
@@ -76,50 +97,51 @@ User Input
 OUTER LOOP (orchestration) ─── one iteration per user message
     |
     ├── Pre-turn checks:
-    |     - turn limit guard
+    |     - turn limit guard (remaining UsageLimits budget)
     |     - context overflow → trigger compaction
     |     - active background tasks → status injection
     |
-    ├── INNER LOOP (execution) ─── one iteration per LLM call
+    ├── INNER LOOP (execution) ─── one agent.run_stream_events() call
     |     |
-    |     ├── Assemble prompt (conditional composition)
-    |     ├── Run history processors (trim, inject goal, inject memories)
-    |     ├── Pre-dispatch: doom loop detection
-    |     ├── LLM call with streaming
+    |     ├── History processors run (pydantic-ai calls them before each LLM request)
+    |     ├── pydantic-ai internal cycle:
+    |     |     ├── LLM request with streaming
     |     |     ├── Text delta → render to terminal
-    |     |     ├── Tool call → dispatch (approval check → execute → result)
-    |     |     ├── Finish reason → check for truncation
-    |     |     └── Error → retry with backoff
+    |     |     ├── Tool call → approval gate → execute → result → next LLM request
+    |     |     └── Repeat until model produces text or hits UsageLimits
     |     |
-    |     └── Return: TurnOutcome
-    |           "continue"  → more tool calls needed, loop again
-    |           "respond"   → LLM produced final text, exit inner loop
-    |           "compact"   → context overflow mid-turn, compact and continue
-    |           "error"     → unrecoverable error, exit inner loop
+    |     └── Determine TurnOutcome from result:
+    |           "respond"   → model produced final text
+    |           "compact"   → context overflow detected mid-turn
+    |           "error"     → unrecoverable error (API down after retries)
     |
     ├── Post-turn checks:
-    |     - goal still active? → continuation nudge (system-level)
-    |     - shell command failed? → reflection loop
+    |     - goal still active? → continuation nudge → re-enter inner loop
     |     - finish reason = length? → warn user
     |     - history growing? → schedule background compaction
     |
     └── Return: TurnResult
-          output, interrupted, messages, usage, goal_status
+          output, interrupted, streamed_text, messages, usage, goal_status
 ```
+
+The `"continue"` outcome from the original OpenCode pattern maps to the outer loop deciding to re-enter `agent.run_stream_events()` (e.g., after a continuation nudge or compaction), not to an iteration within one call.
 
 #### 4.1 TurnOutcome (inner loop return type)
 
+**Phasing note:** TurnOutcome is deferred to Phase 5 (polish). The existing `while True` loop in `_orchestrate.py` handles all cases. The nudge re-entry (Phase 3a/3b) works as a conditional in the existing loop — it doesn't require typed outcomes. This section describes the target refactor, not a prerequisite.
+
 ```python
-TurnOutcome = Literal["continue", "respond", "compact", "error"]
+TurnOutcome = Literal["respond", "compact", "error"]
 ```
 
 The inner loop returns a typed value. The outer loop pattern-matches:
-- `"continue"` — LLM made tool calls, results available, loop again for follow-up
-- `"respond"` — LLM produced a text response, exit inner loop
-- `"compact"` — context overflow detected mid-turn, trigger compaction, then continue
+- `"respond"` — model produced a text response, exit inner loop
+- `"compact"` — context overflow detected mid-turn, trigger compaction, then re-enter
 - `"error"` — unrecoverable error (API down after retries), exit with error display
 
-This replaces implicit control flow with explicit, testable state transitions. Directly adopted from OpenCode's `"stop" | "continue" | "compact"` pattern.
+Re-entry (after nudge or compaction) is an outer-loop decision, not an inner-loop outcome. This keeps the inner loop simple: one `agent.run_stream_events()` call, one outcome.
+
+Directly adopted from OpenCode's `"stop" | "continue" | "compact"` pattern, adapted to pydantic-ai's execution model.
 
 #### 4.2 TurnResult (outer loop return type)
 
@@ -128,10 +150,13 @@ This replaces implicit control flow with explicit, testable state transitions. D
 class TurnResult:
     output: str | None           # final text response (None if interrupted)
     interrupted: bool            # True if user cancelled mid-turn
+    streamed_text: bool          # True if text was already streamed to terminal
     messages: list[ModelMessage] # accumulated message history
     usage: UsageInfo             # token usage for this turn
     goal_status: str | None      # "completed" | "best_effort" | None
 ```
+
+The `streamed_text` flag tells the chat loop whether text was already emitted via `on_text_delta()` during streaming. When `True`, the loop must not call `on_final_output()` again — that would duplicate the output. When `False` (pure tool-call turns that produced no text), the loop can display `output` directly.
 
 The chat loop (REPL) receives `TurnResult` and decides what to do next: display output, prompt for input, show usage, etc. The REPL owns display; the loop owns execution.
 
@@ -146,6 +171,14 @@ Hard cap on tool-call turns per user message. Prevents cost/time runaway.
 ```
 Setting: max_turns_per_prompt (default: 50)
 Injected into CoDeps as flat scalar.
+
+pydantic-ai mapping:
+  max_turns_per_prompt maps to UsageLimits(request_limit=N).
+  A single UsageLimits instance is created per user message and shared
+  across all agent.run_stream_events() invocations (including nudge
+  re-entries and approval continuations). pydantic-ai accumulates usage
+  internally, so the remaining budget decreases across re-entries.
+  This makes max_turns_per_prompt and UsageLimits one unified mechanism.
 
 When exceeded:
   1. Inject system message: "Turn limit reached. Summarize your progress."
@@ -188,6 +221,8 @@ Mechanism:
 Setting: max_reflections (default: 3)
 ```
 
+**Interaction with pydantic-ai's ModelRetry:** Reflection *replaces* `ModelRetry` for shell command errors. The shell tool returns error output as a structured result (`{"display": ..., "exit_code": N, "error": True}`) instead of raising `ModelRetry`. The orchestration layer inspects the tool result and decides whether to inject it as reflection context for the next `agent.run_stream_events()` call. `ModelRetry` remains in use for other tools' transient failures (malformed args, network timeouts, validation errors) where pydantic-ai's built-in retry is the right mechanism. This separation keeps shell errors visible to the orchestration layer (for reflection cap enforcement and telemetry) while leaving non-shell retries to the framework.
+
 Adopted from Aider, which proves this across 35k+ users. The 3-round cap prevents infinite loops. Reflection only fires for shell commands (deterministic errors), not for network-dependent tool failures (which may be transient).
 
 ### 6. Retry & Resilience
@@ -220,7 +255,9 @@ Mechanism:
 
 Adopted from Aider (FinishReasonLength exception handling). Detection is cheap; continuation (assistant prefill) is optional and can be deferred.
 
-#### 6.3 Abort Marker in History
+#### 6.3 Abort Marker in History (Context Quality)
+
+Note: This is a context fidelity improvement, not a safety mechanism. It's grouped here with other resilience features but implemented in Phase 1 (prompt foundation) since it's a ~5-line addition to the interrupt handler.
 
 ```
 Mechanism:
@@ -235,6 +272,8 @@ Mechanism:
 Adopted from Codex (`<turn_aborted>` marker insertion after cancellation). Without this marker, the model on the next turn doesn't know the previous turn was interrupted and may repeat work or miss partial state.
 
 ### 7. Goal-Driven Execution
+
+**Phasing note:** This section describes the Phase 3b escalation path — built only if Phase 1 (prompt + docstrings) and Phase 3a (system-level nudge without tools) prove insufficient. See §20 for conditional gating. Phase 3a is a lighter approach: the orchestration layer detects premature exit (text response while tool chain appears incomplete) and re-enters `agent.run_stream_events()` with a continuation nudge via history processor — no `set_goal`/`complete_goal` tools needed. If Phase 3a solves the problem, this section is deferred.
 
 For multi-step tasks, the agent sets a goal with completion criteria and works until all criteria are met. This is the structural defense against the "good enough" early exit problem.
 
@@ -345,17 +384,19 @@ Mechanism:
       If still no complete_goal: force-clear active_goal, let response through
 ```
 
+**Cost model:** Each nudge is a full `agent.run_stream_events()` re-entry — not a lightweight injection. This means one complete LLM round-trip per nudge (token cost + latency), and pydantic-ai re-runs all history processors on re-entry. With `max_continuations = 3`, worst case is 4 `agent.run_stream_events()` invocations per user message (1 original + 3 nudges), each potentially containing multiple internal LLM requests for tool calls. The shared `UsageLimits` instance (§5.1) ensures the total request budget is cumulative across all re-entries — a nudge-heavy turn cannot exceed `max_turns_per_prompt` total requests.
+
 Peer evidence against synthetic user messages is strong — 4/5 systems use system-level injection. OpenCode's `<system-reminder>` pattern and Gemini CLI's grace period instruction are both system-level.
 
 **Five exit paths from the ReAct loop:**
 
 | Path | How it works | Cost |
 |------|-------------|------|
-| **Completed** | LLM meets all criteria → calls `complete_goal("completed")` → responds with findings | Zero extra calls |
-| **Best effort** | LLM is stuck after exhausting alternatives → calls `complete_goal("best_effort")` → responds with what it has, explains gaps | Zero extra calls |
-| **Nudge-and-recover** | LLM produces text without calling `complete_goal` → nudge fires → LLM continues or calls `complete_goal` | 1-2 extra calls |
-| **Grace period** | LLM never calls `complete_goal` despite nudges → `max_continuations` exhausted → bail-out instruction → LLM calls `complete_goal("best_effort")` | `max_continuations` + 1 extra calls |
-| **Hard stop** | LLM ignores even the grace period bail-out instruction → goal force-cleared → response goes through | `max_continuations` + 1 extra calls |
+| **Completed** | LLM meets all criteria → calls `complete_goal("completed")` → responds with findings | Zero extra `run_stream_events()` calls |
+| **Best effort** | LLM is stuck after exhausting alternatives → calls `complete_goal("best_effort")` → responds with what it has, explains gaps | Zero extra `run_stream_events()` calls |
+| **Nudge-and-recover** | LLM produces text without calling `complete_goal` → nudge fires → LLM continues or calls `complete_goal` | 1-2 full `run_stream_events()` re-entries |
+| **Grace period** | LLM never calls `complete_goal` despite nudges → `max_continuations` exhausted → bail-out instruction → LLM calls `complete_goal("best_effort")` | `max_continuations` + 1 re-entries |
+| **Hard stop** | LLM ignores even the grace period bail-out instruction → goal force-cleared → response goes through | `max_continuations` + 1 re-entries |
 
 The first two paths should cover nearly all cases. The nudge catches cases where the LLM forgets to signal. The grace period salvages partial results. The hard stop is the last resort for truly confused states.
 
@@ -380,9 +421,25 @@ This integrates Gemini CLI's Directive/Inquiry distinction with the goal-setting
 
 The LLM self-assesses at three points: generates criteria, evaluates criteria, signals completion. The system never independently verifies any assessment. This is a deliberate trade-off — programmatic comparison of free-text criteria is fragile and not worth the complexity.
 
-**Mitigation:** Monitor in telemetry. When `complete_goal("completed")` fires with low action counts (e.g., ≤1 tool call after `set_goal`), that signals criteria quality is too low or the model is gaming the system. Implementation: log the action count alongside goal status in OTEL spans. This is cheap (one counter + one span attribute) and provides a data-driven signal for when to tighten criteria guidance.
+**Active guard:** `complete_goal()` includes a zero-tool-call check. If `complete_goal("completed")` is called with zero tool calls since `set_goal()`, the tool returns a warning and does NOT clear the goal:
 
-If telemetry reveals systematic self-assessment failures, lightweight programmatic checks can be added (scan tool call history for tool names implied by criteria) without changing the architecture.
+```
+When complete_goal("completed") is called:
+  tool_count = distinct tool calls since set_goal()
+  if tool_count == 0:
+    Return: "No tool calls made since goal was set. Verify all criteria
+    are truly met. If work is genuinely complete, call complete_goal again.
+    Otherwise, continue working or call complete_goal('best_effort')."
+    Do NOT clear active_goal — force the model to re-assess.
+  else:
+    Normal completion — clear goal, echo criteria.
+```
+
+This catches the most common gaming mode (immediate completion without doing work). It's ~10 lines, zero LLM cost. A 1:1 mapping between criteria count and tool calls is not assumed — a single tool call can satisfy multiple criteria. The guard only catches the degenerate zero-work case.
+
+**Passive telemetry:** Log the tool-call count alongside goal status in OTEL spans. This is cheap (one counter + one span attribute) and provides a data-driven signal for when to tighten criteria guidance or add more sophisticated heuristics.
+
+If telemetry reveals systematic self-assessment failures beyond the zero-call case, lightweight programmatic checks can be added (scan tool call history for tool names implied by criteria) without changing the architecture.
 
 #### 7.8 Interaction with Existing Systems
 
@@ -479,12 +536,11 @@ PROMPT ASSEMBLY ORDER:
      Included only when quirks exist for current model
 
 5. PROJECT INSTRUCTIONS — user-provided project context
-     Source: discovered instruction files (CLAUDE.md, CO.md, AGENTS.md)
-     Precedence: subdirectory > workspace root > global
-     Included only when files exist
+     Source: .co-cli/instructions.md (single file, §9.2)
+     Included only when file exists
 
 DYNAMIC (tool-loaded, not in system prompt):
-  - Personality (character + style + role)  — via load_personality tool
+  - Personality depth (beyond soul seed + axes)  — via load_personality tool
   - Memories                                 — via recall_memory tool
   - Knowledge articles                       — via recall_article tool (future)
   - Active goal                              — via inject_active_goal history processor
@@ -492,71 +548,54 @@ DYNAMIC (tool-loaded, not in system prompt):
 
 #### 9.1 Conditional Composition
 
-Inspired by Gemini CLI's `getCoreSystemPrompt()` with boolean options, but implemented as frontmatter on rule files:
+Static layers (identity seed, companion rules, model quirks) are assembled by `assemble_prompt()` — a plain function that concatenates markdown files and returns a string. All 5 companion rules are loaded unconditionally (they're universal, ~800 tokens total).
 
-```yaml
-# prompts/rules/XX_shell.md
----
-requires:
-  - has_shell_tool
----
-When running shell commands...
-```
-
-Assembly reads frontmatter. If `requires` is present and any requirement is unmet, the file is skipped entirely. No "if X then ignore this" cluttering the prompt.
+Conditional prompt content uses pydantic-ai's native `@agent.system_prompt` decorator with `RunContext[CoDeps]`. This is zero-infrastructure, SDK-idiomatic, and testable with a deps fixture:
 
 ```python
-def assemble_prompt(flags: PromptFlags) -> str:
-    """Assemble system prompt from layers with conditional inclusion."""
+# Static layers — always included
+def assemble_prompt(personality: str, model_id: str) -> str:
     parts = []
-    parts.append(load_identity_seed(flags.personality))
+    parts.append(load_identity_seed(personality))
     for rule_path in sorted(glob("prompts/rules/*.md")):
-        if meets_requirements(rule_path, flags):
-            parts.append(read_file(rule_path))
-    if flags.has_capability_context:
-        parts.append(generate_capability_context(flags))
-    if model_quirks := get_quirks(flags.model_id):
+        parts.append(read_file(rule_path))
+    if model_quirks := get_quirks(model_id):
         parts.append(model_quirks.counter_steering)
-    if project_instructions := discover_instructions(flags.workspace_root):
-        parts.append(project_instructions)
     return "\n\n".join(parts)
 
-@dataclass
-class PromptFlags:
-    personality: str = "finch"
-    model_id: str = ""
-    has_shell_tool: bool = False
-    has_memory: bool = True
-    has_web: bool = False
-    has_mcp_tools: bool = False
-    is_git_repo: bool = False
-    workspace_root: Path | None = None
+# Conditional layers — runtime-gated via decorator
+@agent.system_prompt
+def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
+    if ctx.deps.sandbox_mode:
+        return "When running shell commands..."
+    return ""
+
+@agent.system_prompt
+def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
+    instructions_path = ctx.deps.workspace_root / ".co-cli" / "instructions.md"
+    if instructions_path.exists():
+        return instructions_path.read_text()
+    return ""
 ```
 
-This keeps the composition engine at ~40 lines while supporting arbitrary conditional logic. Adding a new capability flag is one field + one frontmatter requirement — no prompt rewriting needed.
+If a future capability genuinely needs conditional prompt content (e.g., git-specific guidance, MCP tool listing), add one `@agent.system_prompt` function — no framework needed.
 
 #### 9.2 Instruction File Discovery
 
-Project-level instructions are discovered by walking upward from the working directory:
+Single file: `.co-cli/instructions.md` in the project root. If it exists, append its content to the system prompt via an `@agent.system_prompt` decorator (see §9.1). If not, skip.
 
 ```
-Discovery order (first found wins per level):
-  1. .co-cli/instructions.md (project root)
-  2. CO.md (project root)
-  3. CLAUDE.md (project root — compatibility)
-  4. AGENTS.md (project root — compatibility)
-  5. ~/.config/co-cli/instructions.md (global)
-
-Precedence (matches Gemini CLI's 4-level hierarchy):
-  Subdirectory > Workspace root > Global
-  Safety rules cannot be overridden by any instruction file
+Path: {workspace_root}/.co-cli/instructions.md
+Behavior: exists → append to system prompt; absent → no-op
 ```
 
-Adopted from OpenCode's `InstructionPrompt` pattern (walks parent directories, discovers instruction files) and Gemini CLI's context precedence hierarchy.
+No directory walking, no precedence hierarchy, no compatibility filenames. Co is a personal companion — single user, single machine. Multi-level discovery can be added if users request it.
 
 ### 10. Rule Design: Five Companion Rules
 
 Five rules define co's behavior. Each rule is a focused markdown file, loaded in order. Rules contain cross-cutting principles — never tool-specific instructions.
+
+**Token budget:** Every token in the system prompt is paid on every LLM request. The rule text shown below is the *content intent* — the actual rule files should be compressed to the minimum wording that achieves the behavioral goal. Target: <1000 tokens total for all 5 rules. The goal-setting procedure (§10.5) should be the most compressed, since it fires on every request but is only relevant for directive messages. Capability-specific guidance (shell, git) lives in `@agent.system_prompt` decorators (§9.1), not in the rules.
 
 ```
 01_identity.md    — Who co is, core traits, relationship with user
@@ -741,31 +780,58 @@ Integrates: Gemini CLI's directive/inquiry distinction, the goal-driven ReAct lo
 
 ### 11. Personality System
 
-Personality is decoupled from behavioral rules. Two independent axes:
+Personality is decoupled from behavioral rules. The current system (`_registry.py` + `_composer.py`) maps preset names to character/style/role files. This works, but the role files are full essays — dumping them into the system prompt wastes tokens on every LLM request.
+
+#### 11.1 Role Files as Reference Documents
+
+Role files (e.g., `prompts/personalities/finch/role.md`) are the **source of truth** for a personality — the complete description of character, values, communication patterns, and quirks. They are reference documents, not prompt content. They should never be injected directly into the system prompt.
+
+#### 11.2 Personality Axes
+
+From each role file, derive concrete **axes** — independent dimensions that can be targeted for injection or overwriting:
 
 ```
-PERSONALITY = CHARACTER x STYLE
+AXES (derived from role reference doc):
 
-Character: who co is (soul seed, values, traits)
-  finch     — curious, empathetic, growing companion
-  jeff      — experienced engineer, pragmatic
-  friendly  — warm, encouraging, team-oriented
-  terse     — minimal, efficient, no-nonsense
-  inquisitive — deeply curious, asks probing questions
+1. Soul seed        — 2-5 sentence essence (always in system prompt, <100 tokens)
+                      Who co is at its core. Non-negotiable identity.
 
-Style: how co communicates (verbosity, formality, expression)
-  balanced    — default, adapts to user
-  terse       — minimal tokens, direct
-  warm        — encouraging, explanatory
-  educational — teaches as it works
+2. Communication    — terse | balanced | warm | educational
+                      Controls verbosity, formality, explanation depth.
 
-Selection: settings.personality (default: "finch") + settings.style (default: "balanced")
-Switchable: /personality <name> and /style <name> slash commands
+3. Relationship     — companion | professional | mentor | peer
+                      How co addresses the user, emotional distance.
+
+4. Curiosity        — proactive | reactive
+                      Whether co asks follow-up questions unprompted.
+
+5. Emotional tone   — empathetic | neutral | analytical
+                      Warmth vs objectivity balance in responses.
 ```
 
-Character affects the soul seed (injected at assembly position 1). Style affects response formatting and tone. Both are loaded dynamically via the `load_personality` tool, not baked into the system prompt.
+Each axis is a short value, not a paragraph. The system prompt injects a compressed representation of active axis values (<200 tokens total), not the essay.
 
-Adopted from Codex (personality as swappable module with pragmatic/friendly variants) and extended with co's richer character system.
+#### 11.3 Targeted Injection
+
+```
+System prompt receives:
+  Soul seed (always, <100 tokens) + axis summary (<100 tokens)
+
+NOT:
+  Full role file (500-1000+ tokens of essay)
+
+Example axis summary for "finch" personality:
+  "Communication: balanced. Relationship: companion. Curiosity: proactive.
+   Emotional tone: empathetic."
+```
+
+This achieves the same behavioral effect with ~5x fewer tokens. The LLM's training fills in the behavioral details from the compressed signals — it doesn't need an essay to be curious and empathetic.
+
+#### 11.4 Overwriting Individual Axes
+
+Individual axes can be changed without touching the soul seed or other axes. `/style terse` changes the communication axis. A future `/tone analytical` changes the emotional tone axis. The registry maps preset names to axis value sets, and individual overrides layer on top.
+
+Adopted from Codex (personality as swappable module) and refined with token-efficient axis derivation. The current `_registry.py` + `_composer.py` infrastructure supports this — the change is in what gets composed (axis values, not essays), not in the composition machinery.
 
 ### 12. Model Adaptation
 
@@ -905,9 +971,10 @@ class CoDeps:
     active_goal: dict | None = None       # {"objective": str, "criteria": list[str]}
     max_continuations: int = 3            # nudge budget per turn
     goal_nudge_count: int = 0             # current nudge count (reset per turn)
+    goal_tool_count: int = 0             # tool calls since set_goal (for §7.7 guard)
 
     # Safety
-    max_turns_per_prompt: int = 50        # hard cap on tool-call turns
+    max_turns_per_prompt: int = 50        # hard cap — maps to UsageLimits(request_limit=N)
     doom_loop_threshold: int = 3          # identical calls before intervention
     max_reflections: int = 3              # shell error reflection rounds
 
@@ -924,17 +991,8 @@ All flat scalars or simple containers. No config objects, no nested structures. 
 # In agent.py or equivalent:
 
 def create_agent(deps: CoDeps) -> Agent:
-    flags = PromptFlags(
-        personality=deps.personality,
-        model_id=deps.model_id,
-        has_shell_tool=deps.sandbox_mode is not None,
-        has_memory=True,
-        has_web=bool(deps.brave_search_api_key),
-        has_mcp_tools=bool(deps.mcp_servers),
-        is_git_repo=is_git_repo(deps.workspace_root),
-        workspace_root=deps.workspace_root,
-    )
-    system_prompt = assemble_prompt(flags)
+    # Static layers: identity seed + rules + model quirks
+    system_prompt = assemble_prompt(deps.personality, deps.model_id)
 
     agent = Agent(
         model=deps.model,
@@ -946,6 +1004,9 @@ def create_agent(deps: CoDeps) -> Agent:
             inject_active_goal,
         ],
     )
+
+    # Conditional layers via @agent.system_prompt decorators (§9.1)
+    # e.g., shell guidance, project instructions
 
     # Register tools...
     return agent
@@ -963,17 +1024,24 @@ async def chat_loop(agent, deps):
         # Reset per-turn state
         deps.turn_count = 0
         deps.goal_nudge_count = 0
+        deps.goal_tool_count = 0
         deps.recent_tool_hashes.clear()
 
-        result = await run_turn(agent, deps, user_input)
+        # Single UsageLimits shared across all run_stream_events() calls
+        # (including nudge re-entries). Budget is cumulative.
+        turn_limits = UsageLimits(request_limit=deps.max_turns_per_prompt)
+
+        result = await run_turn(agent, deps, user_input, turn_limits)
 
         match result:
             case TurnResult(interrupted=True):
                 display("Interrupted.")
-            case TurnResult(goal_status="completed"):
-                display(result.output)
-            case TurnResult(goal_status="best_effort"):
-                display(result.output)  # includes gap explanation
+            case TurnResult(streamed_text=True):
+                pass  # text already emitted via on_text_delta()
+            case TurnResult(goal_status="completed", output=text) if text:
+                display(text)
+            case TurnResult(goal_status="best_effort", output=text) if text:
+                display(text)  # includes gap explanation
             case TurnResult(output=text) if text:
                 display(text)
             case TurnResult(output=None):
@@ -986,55 +1054,60 @@ async def chat_loop(agent, deps):
 
 ### 20. Phased Rollout
 
-The implementation is phased with testing gates between phases. Prompt changes are validated before code changes, because prompt-only fixes may solve the problem without infrastructure.
+The implementation uses **conditional gating**: test gates between phases determine whether the next phase is needed. Prompt changes are validated before code changes, because prompt-only fixes may solve the problem without infrastructure. Safety (Phase 2) and resilience (Phase 4) always ship.
 
 ```
-PHASE 1: Prompt Foundation (effort: 1-2 days)
-  ├── 1a. Write 5 companion rules (§10.1-10.5)
-  ├── 1b. Implement conditional composition with PromptFlags (§9.1)
-  ├── 1c. Optimize tool docstrings with chain hints (§14)
-  ├── 1d. Add anti-injection to compaction prompt (§8.2)
-  ├── 1e. Add first-person + handoff framing to compaction (§8.2)
-  └── TEST GATE: run 5 research prompts across 2 models
+Phase 1: Prompt + Docstrings (1-2 days)  [ALWAYS DO]
+  ├── 1a. Full rewrite of 5 companion rules (§10.1-10.5), compressed to <1000 tokens
+  ├── 1b. Optimize tool docstrings with chain hints (§14)
+  ├── 1c. Improve compaction prompt: anti-injection + first-person + handoff (§8.2)
+  ├── 1d. Abort marker in history (§6.3) — ~5 lines
+  └── TEST GATE: 5 research prompts across 2 models
       Pass criterion: 80%+ complete full tool chains without code changes
+      → Pass (≥80%): Phase 3 deferred. Proceed to Phase 2 + 4.
+      → Fail (<80%): Proceed to Phase 3a after Phase 2.
 
-PHASE 2: Safety Layer (effort: 1-2 days)
-  ├── 2a. Turn limit guard (§5.1) — ~15 lines
-  ├── 2b. Doom loop detection (§5.2) — ~30 lines
-  ├── 2c. Abort marker in history (§6.3) — ~5 lines
-  ├── 2d. Finish reason detection (§6.2) — ~10 lines
-  ├── 2e. Typed TurnOutcome return values (§4.1) — ~30 lines refactor
+Phase 2: Safety (1 day)  [ALWAYS DO]
+  ├── 2a. Doom loop detection (§5.2) — ~30 lines
+  ├── 2b. Approval loop cap
+  │       (Turn limit already exists: max_request_limit=25 via UsageLimits)
   └── TEST GATE: safety mechanisms trigger correctly in synthetic scenarios
 
-PHASE 3: Goal System (effort: 2-3 days)
-  ├── 3a. CoDeps additions (§17)
-  ├── 3b. set_goal tool (§7.2)
-  ├── 3c. complete_goal tool with criteria echo (§7.3)
-  ├── 3d. inject_active_goal history processor (§7.4)
-  ├── 3e. Continuation nudge (system-level) (§7.5)
-  ├── 3f. Grace period before force-clear (§7.5)
-  └── TEST GATE: Finch scenario + 3 multi-step research prompts succeed
+Phase 3a: System-Level Nudge (1 day)  [ONLY IF Phase 1 < 80%]
+  ├── Continuation nudge via history processor, no new tools
+  │   Orchestration detects premature exit (text response while tool chain
+  │   appears incomplete), re-enters agent.run_stream_events() with nudge
+  └── TEST GATE: Finch scenario + 3 multi-step prompts
+      → Pass: Ship. Goal tools deferred.
+      → Fail: Proceed to Phase 3b.
 
-PHASE 4: Resilience (effort: 1-2 days)
-  ├── 4a. LLM retry with backoff and Retry-After (§6.1) — ~50 lines
-  ├── 4b. Reflection loop for shell errors (§5.3) — ~40 lines
-  ├── 4c. Instruction file discovery (§9.2) — ~40 lines
-  └── TEST GATE: retry fires on 429, reflection fixes a failing test command
+Phase 3b: Goal Tools (2 days)  [ONLY IF Phase 3a insufficient]
+  ├── set_goal / complete_goal tools (§7.2-7.3)
+  ├── inject_active_goal history processor (§7.4)
+  ├── Grace period + zero-call guard (§7.5, §7.7)
+  └── TEST GATE: Finch scenario + 3 multi-step prompts succeed
 
-PHASE 5: Polish (effort: 1-2 days)
-  ├── 5a. Background compaction (§8.1 Layer 3)
+Phase 4: Resilience (1-2 days)  [ALWAYS DO]
+  ├── 4a. Shell reflection loop (§5.3) — ~40 lines
+  ├── 4b. Instruction file (one file, §9.2) — ~5 lines
+  └── TEST GATE: reflection fixes a failing test command
+
+Phase 5: Polish  [AS NEEDED]
+  ├── 5a. TurnOutcome refactor (§4.1) — code quality, not functional
   ├── 5b. Expand model quirk database (§12.1)
-  ├── 5c. Confidence-scored tool outputs (§15) — if needed
+  ├── 5c. Background compaction (§8.1 Layer 3)
+  ├── 5d. Confidence-scored tool outputs (§15) — if needed
   └── SHIP
 ```
 
 ### 21. Dependencies
 
 ```
-Phase 1 has no dependencies — pure prompt/assembly work
-Phase 2 depends on Phase 1 (rules must exist for turn limit messaging)
-Phase 3 depends on Phase 2 (TurnOutcome type for goal loop control flow)
-Phase 4 is independent of Phase 3 (can be parallelized)
+Phase 1 has no dependencies — pure prompt/docstring work + abort marker
+Phase 2 has no dependencies — safety is independent of prompt content
+Phase 3a depends on Phase 1 results (conditional: only if Phase 1 < 80%)
+Phase 3b depends on Phase 3a results (conditional: only if Phase 3a insufficient)
+Phase 4 is independent — resilience features work with any prompt/goal configuration
 Phase 5 is independent (can run anytime after Phase 1)
 ```
 
@@ -1094,7 +1167,7 @@ SAFETY:
 │                         │ → TurnOutcome     │                    │
 │                         └───────────────────┘                    │
 │                                                                  │
-│  → TurnResult (output, interrupted, messages, usage, goal)       │
+│  → TurnResult (output, interrupted, streamed_text, messages, ...) │
 └──────────────────────────────────────────────────────────────────┘
        │                              ▲
        ▼                              │
@@ -1107,9 +1180,9 @@ SAFETY:
 │  Model quirks     │    │  4. inject_context [fut] │
 │  Project instrs   │    └─────────────────────────┘
 │                   │
-│  (conditional     │    ┌─────────────────────────┐
-│   composition     │    │  TOOL LAYER              │
-│   via PromptFlags)│    │                          │
+│  (conditional via  │    ┌─────────────────────────┐
+│   @system_prompt  │    │  TOOL LAYER              │
+│   decorators)     │    │                          │
 └──────────────────┘    │  set_goal / complete_goal│
                         │  web_search / web_fetch   │
                         │  save_memory / recall     │
@@ -1153,12 +1226,12 @@ How each component traces back to peer system evidence:
 | Abort marker | Codex | — | System message, not user message |
 | Retry with Retry-After | OpenCode | Codex | Abortable sleep |
 | Finish reason detection | Aider | — | Warning + /continue |
-| Conditional composition | Gemini CLI | — | Frontmatter-based requirements |
-| Personality module | Codex | — | Character x Style matrix |
+| Conditional composition | Gemini CLI | — | pydantic-ai `@agent.system_prompt` decorators |
+| Personality axes | Codex | — | Role files as reference docs, axis-based injection |
 | Model quirks | Aider | — | Existing architecture, needs data |
 | Memory constraints | Gemini CLI | — | In safety rule |
 | Confidence scoring | Claude Code | — | Deferred to Phase 5 |
-| Instruction discovery | OpenCode | Gemini CLI | Precedence hierarchy |
+| Instruction discovery | OpenCode | Gemini CLI | Single file: `.co-cli/instructions.md` |
 | Grace period | Gemini CLI | — | One final turn before force-clear |
 
 ---
@@ -1173,16 +1246,29 @@ This design supersedes or consolidates:
 | `TODO-agent-loop-architecture.md` | Subsumed — goal system design incorporated here (§7) with critique refinements |
 | `TODO-agent-loop-architecture-critique.md` | Subsumed — all 10 refinements incorporated |
 | `TODO-prompt-refactor.md` | Subsumed — tool/rule separation principle adopted (§14) |
+| `TODO-co-agentic-loop-and-prompting-critique.md` | Incorporated — 5/7 accepted, 2/7 partially accepted; resolutions in Review Resolution section |
 | `DESIGN-01-agent-chat-loop.md` | Will need update after implementation to reflect new loop topology |
 | `DESIGN-07-context-governance.md` | Will need update for new compaction prompt and goal injection |
-| `DESIGN-16-prompt-design.md` | Will need update for conditional composition and rule redesign |
+| `DESIGN-16-prompt-design.md` | Will need update for rule redesign and personality axis architecture |
 | `REVIEW-agent-loop-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
 | `REVIEW-prompts-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
 | `TAKEAWAY-converged-adoptions.md` | Reference — 22 of 28 items addressed in this design |
 
+### TAKEAWAY Items Deferred
+
+Items from `TAKEAWAY-converged-adoptions.md` not addressed in this design, with rationale:
+
+| TAKEAWAY Item | Rationale for Deferral |
+|---|---|
+| 3.1 Display-only plan tool | Post-MVP enhancement; no dependency on loop/prompt architecture |
+| 3.7 Conversation-driven rule generation | Meta-learning capability; requires stable rule system first (this design) |
+| 3.8 Multi-phase workflow commands | Compound workflow orchestration; post-MVP after goal system proves out |
+
+These items are compatible with this architecture and can be added incrementally. None require architectural changes to what's designed here.
+
 ---
 
-**Design completed**: 2026-02-13
+**Design completed**: 2026-02-13, **revised**: 2026-02-14 (critique resolutions)
 **Peer systems referenced**: Codex, Claude Code, OpenCode, Gemini CLI, Aider
-**Estimated total effort**: 6-11 days across 5 phases
-**Critical path**: Phase 1 (prompt foundation) unblocks everything else
+**Estimated total effort**: 4-9 days (conditional gating; 1-2 days if Phase 1 passes)
+**Critical path**: Phase 1 (prompt + docstrings) — if it passes at 80%+, goal system is deferred
