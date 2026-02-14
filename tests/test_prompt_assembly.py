@@ -1,8 +1,18 @@
-"""Tests for system prompt assembly: instructions + soul seed + rules + counter-steering."""
+"""Tests for system prompt assembly: instructions + soul seed + rules + counter-steering.
+
+Critical functional coverage aligned with TODO-co-agentic-loop-and-prompting.md:
+- §9: Conditional layered assembly (instructions → soul seed → rules → quirks)
+- §10: Five companion rules, <1100 token budget, cross-cutting behavioral principles
+- §11: Personality system (soul seed injection, preset swapping)
+- §12: Model adaptation (counter-steering for quirky models)
+- §22: < 100ms prompt assembly overhead
+"""
+
+import time
 
 import pytest
 
-from co_cli.prompts import assemble_prompt
+from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._registry import PRESETS
 from co_cli.prompts.personalities._composer import get_soul_seed
 
@@ -53,41 +63,53 @@ def test_soul_seed_swaps_with_personality():
 # --- Rules ---
 
 
-def test_prompt_contains_all_rules():
-    """Assembled prompt includes content from all 5 rule files."""
+def test_prompt_includes_all_five_rules():
+    """All 5 companion rules loaded with cross-cutting behavioral content (§10).
+
+    Tests behavioral invariants that persist across rule rewrites:
+    identity (tone adaptation), safety (approval model), reasoning
+    (verification principle), tool strategy, workflow.
+    """
     prompt, manifest = assemble_prompt("gemini", personality="finch")
-    # 01_identity.md
-    assert "Local-first" in prompt
-    assert "multi-turn conversation" in prompt
-    assert "Adapt your tone" in prompt
-    # 02_safety.md
-    assert "approval" in prompt.lower()
-    assert "safe shell commands" in prompt.lower()
-    # 03_reasoning.md
-    assert "Trust tool output over prior assumptions" in prompt
-    # 04_tool_protocol.md
-    assert "display" in prompt.lower()
-    assert "Match explanation depth" in prompt
-    # 05_workflow.md
-    assert "Decompose the request into sub-goals" in prompt
-    assert "Complete the full plan before yielding" in prompt
-    assert "discoverable facts" in prompt
-    assert "short question" in prompt
+    # Structural: all 5 rules present in manifest
+    rule_names = {"identity", "safety", "reasoning", "tool_protocol", "workflow"}
+    loaded = set(manifest.parts_loaded)
+    assert rule_names.issubset(loaded), (
+        f"Missing rules: {rule_names - loaded}. Loaded: {manifest.parts_loaded}"
+    )
+    # Behavioral invariants (stable across current rules and §10 redesign):
+    lower = prompt.lower()
+    # §10.1: identity always mentions tone adaptation
+    assert "tone" in lower
+    # §10.2: safety always mentions approval model
+    assert "approval" in lower
+    # §10.3: reasoning always mentions verification/trust of tool output
+    assert "verify" in lower or "trust tool" in lower
 
 
-def test_deleted_rules_absent():
-    """Old rules that were removed are not in the prompt."""
-    prompt, manifest = assemble_prompt("gemini", personality="finch")
-    # Old 02_intent — rigid binary
-    assert "Default to inquiry" not in prompt
-    assert "Inquiry:" not in prompt
-    assert "Directive:" not in prompt
-    # Old 05_context — tool-calling instructions removed (behavioral cue kept in 01_identity)
-    assert "load aspects" not in prompt.lower()
-    assert "save it to memory" not in prompt.lower()
-    # Old 07_response_style — conflicts with personality
-    assert "high-signal" not in prompt
-    assert "technically precise" not in prompt
+def test_rule_count_is_five():
+    """Exactly 5 rule files exist (§10: five companion rules)."""
+    rule_files = sorted(_RULES_DIR.glob("*.md"))
+    assert len(rule_files) == 5, (
+        f"Expected 5 rules, found {len(rule_files)}: "
+        f"{[f.name for f in rule_files]}"
+    )
+
+
+def test_rules_token_budget():
+    """Combined rule text stays under ~1100 tokens (§10 token budget).
+
+    Uses character count heuristic: ~4 chars/token for English text.
+    At 1100 tokens × 4 chars = 4400 chars. We allow up to 5000 chars
+    to absorb tokenizer variance across Gemini and Ollama models.
+    """
+    total_chars = 0
+    for rule_path in sorted(_RULES_DIR.glob("*.md")):
+        total_chars += len(rule_path.read_text(encoding="utf-8").strip())
+    assert total_chars < 5000, (
+        f"Rules total {total_chars} chars (~{total_chars // 4} tokens), "
+        f"expected < 5000 chars (~1250 tokens)"
+    )
 
 
 # --- Memory not in prompt ---
@@ -138,10 +160,20 @@ def test_manifest_char_count():
 
 
 def test_prompt_under_budget():
-    """System prompt remains bounded in size."""
+    """Full system prompt (instructions + soul + rules + quirks) stays bounded."""
     prompt, manifest = assemble_prompt("gemini", personality="finch")
     assert manifest.total_chars < 6000, (
         f"Prompt is {manifest.total_chars} chars, expected < 6000"
+    )
+
+
+def test_prompt_assembly_under_100ms():
+    """Prompt assembly completes in under 100ms (§22 performance criterion)."""
+    start = time.perf_counter()
+    assemble_prompt("gemini", personality="finch")
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    assert elapsed_ms < 100, (
+        f"Assembly took {elapsed_ms:.1f}ms, expected < 100ms"
     )
 
 

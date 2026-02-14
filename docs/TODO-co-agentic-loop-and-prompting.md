@@ -4,7 +4,7 @@
 **Scope**: Core agent loop + prompt system — the two pillars everything else builds on
 **Approach**: First-principles design informed by 5 peer systems, aligned with co evolution roadmap
 
-> Revised 2026-02-14: replaced dual-loop + goal system with super-agent + sub-agents (pydantic-ai agent delegation).
+> Revised 2026-02-14: replaced dual-loop + goal system with super-agent + sub-agents (pydantic-ai agent delegation). Added three-way intent classification, analysis sub-agent, memory linking, mid-session topic-shift recall. Added typed loop return values (§4.2). Fixed token budget measurement, Phase 1 scope clarity, Appendix B TAKEAWAY accounting.
 
 This document designs co's agentic loop and prompting architecture from scratch. It ignores current implementation details and focuses on the target architecture that serves co's ultimate vision: a personal companion for knowledge work (the "Finch" vision) that is local-first, approval-first, and grows with its user.
 
@@ -42,17 +42,22 @@ Five mature CLI agents were studied. The patterns that matter most:
 | Memory tool constraints | Gemini CLI | Prevents memory pollution |
 | Structured delegation output | Claude Code Task + pydantic-ai | Keeps agent accountable via typed return values |
 | Abort marker in history | Codex | Model knows when a turn was interrupted |
+| Typed loop return values | OpenCode | Testable, composable control flow between agent loop and chat loop |
 | Confidence-scored outputs | Claude Code | Filter low-quality results |
 
 ---
 
 ## Part II: Agent Loop Architecture
 
+### 3. Architecture Overview
+
+See Part VIII for the full architecture diagram. The key structural decisions: one loop (no outer/inner), sub-agent delegation via tools, approval as the only re-entry case, history processors for all cross-cutting context concerns.
+
 ### 4. Loop Topology: Single Loop with Agent Delegation
 
-co has ONE loop: pre-checks → `agent.run_stream_events()` → post-checks → return. pydantic-ai manages the tool-call → result → next-LLM-request cycle internally within that call. Tool dispatch, approval gates, streaming, and sub-agent delegation all happen inside the pydantic-ai event stream, not in co's loop code.
+co has ONE loop: pre-checks → `agent.run_stream_events()` → approval re-entry → post-checks → return. pydantic-ai manages the tool-call → result → next-LLM-request cycle internally within that call. Tool dispatch, streaming, and sub-agent delegation all happen inside the pydantic-ai event stream. Approval gates are the one exception: when a tool with `requires_approval=True` is called, pydantic-ai exits the run with a `DeferredToolRequests` output, co prompts the user, and resumes the run with `DeferredToolResults` (§4.1).
 
-There is no outer/inner distinction. No re-entry for nudges. The only re-entry case is compaction (context overflow), handled inline before calling `agent.run_stream_events()` again.
+There is no outer/inner distinction. No re-entry for nudges. Compaction is handled transparently by history processors (§16) inside the run — no re-entry needed. The only re-entry case is approval, handled by the orchestration loop (§4.1).
 
 ```
 User Input
@@ -62,30 +67,80 @@ AGENT LOOP (co super-agent) ─── one iteration per user message
     |
     ├── Pre-turn checks:
     |     - turn limit guard (remaining UsageLimits budget)
-    |     - context overflow → trigger compaction
     |     - active background tasks → status injection
     |
-    ├── agent.run_stream_events() ─── single call
+    ├── agent.run_stream_events()
     |     |
     |     ├── History processors run (pydantic-ai calls them before each LLM request)
+    |     |     (includes compaction — §8.1 Layer 2 — transparently, no re-entry)
     |     ├── pydantic-ai internal cycle:
     |     |     ├── LLM request with streaming
     |     |     ├── Text delta → render to terminal
-    |     |     ├── Tool call → approval gate → execute → result → next LLM request
+    |     |     ├── Tool call (auto-approved) → execute → result → next LLM request
+    |     |     ├── Tool call (requires_approval) → exit run with DeferredToolRequests
     |     |     ├── Sub-agent delegation → await sub_agent.run() inside tool → structured output back
-    |     |     └── Repeat until model produces text or hits UsageLimits
+    |     |     └── Repeat until model produces text, defers approval, or hits UsageLimits
     |     |
     |     └── Result:
-    |           respond → model produced final text
-    |           compact → context overflow, trigger compaction + re-enter
-    |           error   → unrecoverable (API down after retries)
+    |           str   → model produced final text → proceed to post-turn checks
+    |           defer → DeferredToolRequests → approval re-entry loop (§4.1)
+    |           error → unrecoverable (API down after retries)
     |
     ├── Post-turn checks:
     |     - finish reason = length? → warn user
     |     - history growing? → schedule background compaction
     |
-    └── Return output, usage, interrupted flag to chat loop
+    └── Return TurnOutcome (§4.2) + usage to chat loop
 ```
+
+#### 4.1 Approval Re-Entry Loop
+
+When `agent.run_stream_events()` returns `DeferredToolRequests` (because a tool with `requires_approval=True` was called), co's orchestration loop handles the approval cycle:
+
+```
+while result.output is DeferredToolRequests:
+    for each deferred tool call:
+        auto-approve if safe (sandboxed shell + safe command list)
+        otherwise prompt user → y/n
+        collect decisions into DeferredToolResults (approved or ToolDenied)
+    resume: agent.run_stream_events(
+        user_input=None,
+        message_history=result.all_messages(),
+        deferred_tool_results=approvals,
+        usage_limits=turn_limits,   ← same UsageLimits instance
+        usage=turn_usage,           ← accumulated usage
+    )
+    → next result may be str (done) or DeferredToolRequests (another approval)
+```
+
+This is the only re-entry pattern in co's loop. Each approval cycle is a separate `run_stream_events()` call, but they share the same `UsageLimits` instance and accumulated `usage`, so the turn budget is enforced across all cycles.
+
+The approval UX lives in the orchestration loop (`_orchestrate.py`), never inside tool functions. Tools declare `requires_approval=True` at registration time; the loop handles prompting.
+
+#### 4.2 Typed Loop Return Values
+
+`run_turn()` returns a typed outcome to the chat loop, making control flow explicit and testable:
+
+```
+TurnOutcome = Literal["continue", "stop", "error", "compact"]
+
+Mapping from pydantic-ai result to TurnOutcome:
+  str output (normal)       → "continue"
+  UsageLimitExceeded        → "continue" (after grace turn, with warning)
+  finish_reason = length    → "continue" (with truncation warning)
+  unrecoverable error       → "error"
+  interrupted (Ctrl-C)      → "continue" (with abort marker injected)
+
+The chat loop pattern-matches:
+  "continue" → prompt for next user input
+  "stop"     → exit REPL (reserved for future /exit or session end)
+  "error"    → display error, prompt for next input
+  "compact"  → trigger summarization, then prompt for next input
+```
+
+Currently `run_turn()` returns `None` and relies on state in the chat loop closure. Typed returns make the contract explicit: each turn produces exactly one outcome, the chat loop handles it, no implicit state.
+
+Adopted from OpenCode (`processor.ts` returns `"stop" | "continue" | "compact"`). Extended with `"error"` for unrecoverable failures.
 
 ### 5. Safety Layer
 
@@ -97,24 +152,49 @@ Hard cap on tool-call turns per user message. Prevents cost/time runaway.
 
 ```
 Setting: max_turns_per_prompt (default: 50)
-Injected into CoDeps as flat scalar.
+Lives in Settings, passed to run_turn() as parameter — not a CoDeps field.
+(Increased from current default 25 to accommodate sub-agent delegations,
+which consume request budget from the parent's UsageLimits.)
 
 pydantic-ai mapping:
   max_turns_per_prompt maps to UsageLimits(request_limit=N).
   A single UsageLimits instance is created per user message and shared
-  across all agent.run_stream_events() invocations (including compaction
-  re-entries and sub-agent delegations). pydantic-ai accumulates usage
-  internally, so the remaining budget decreases across calls.
-  This makes max_turns_per_prompt and UsageLimits one unified mechanism.
+  across all agent.run_stream_events() invocations (including approval
+  re-entries and sub-agent delegations via usage=ctx.usage forwarding).
+  pydantic-ai accumulates usage internally, so the remaining budget
+  decreases across calls.
 
 When exceeded:
-  1. Inject system message: "Turn limit reached. Summarize your progress."
-  2. Give one grace turn for the agent to respond
-  3. If agent still makes tool calls, force-stop and display partial output
-  4. User can /continue to resume
+  pydantic-ai raises UsageLimitExceeded. run_turn() catches it and:
+  1. Injects system message: "Turn limit reached. Summarize your progress."
+  2. Calls agent.run_stream_events() one more time with
+     UsageLimits(request_limit=1) for a grace turn
+  3. If grace turn also produces tool calls (not text), force-stop
+     and display partial output with warning
+  4. User can /continue to resume with a fresh UsageLimits budget
 ```
 
 Converged pattern from Gemini CLI (100 main, 15 sub-agent) and OpenCode (per-agent `steps` limit).
+
+```
+Budget arithmetic (validates the 50-turn default):
+
+Typical delegated scenario (Finch: research + save):
+  Parent: classify intent (1) + call deep_research (1)                      =  2 requests
+  Sub-agent: search (2) + fetch x2 (4) + synthesize to ResearchResult (2)   =  8 requests
+  Parent: inspect result (1) + save_memory (2) + compose response (1)       =  4 requests
+  Total: 14 of 50 budget (~28%)
+
+Worst-case: two delegations + parent work:
+  2 × deep_research at 10 requests each                                     = 20 requests
+  Parent orchestration (classify + 2 delegations + compare + save + respond) = 12 requests
+  Total: 32 of 50 budget (~64%)
+
+The 50-turn budget accommodates 2-3 delegations per user message with
+comfortable margin. A user hitting the limit on a legitimate task can
+/continue to resume with a fresh budget. The budget is deliberately
+conservative — it's cheaper to /continue once than to eat runaway costs.
+```
 
 #### 5.2 Doom Loop Detection
 
@@ -122,13 +202,21 @@ Hash-based detection of repeated identical tool calls. The cheapest, highest-val
 
 ```
 Mechanism:
-  Track recent tool calls as hash(tool_name + json.dumps(args, sort_keys=True))
-  If same hash appears N consecutive times (threshold: 3):
-    Option A: Convert to requires_approval (ask user)
-    Option B: Inject system message: "You are repeating the same call.
-              Try a different approach or explain why."
+  Implemented as a history processor (registered on the agent, runs before
+  each model request). Scans recent ModelResponse parts for consecutive
+  identical ToolCallParts, hashed as:
+    hash(tool_name + json.dumps(args, sort_keys=True))
 
-Setting: doom_loop_threshold (default: 3)
+  If same hash appears N consecutive times (threshold: 3):
+    Injects a system message into the message list:
+      "You are repeating the same call. Try a different approach or explain why."
+    The model sees this message on its next request and must change strategy.
+
+  Processor-local state: hash window is passed to the processor via closure
+  or a lightweight config object, reset by run_turn() at the start of each
+  user message. No mutable state on CoDeps.
+
+Setting: doom_loop_threshold (default: 3) — in Settings, passed to processor
 ```
 
 Converged pattern from OpenCode (threshold 3, permission gate) and Gemini CLI (threshold 5, immediate termination). Threshold 3 is more conservative — better for a companion that should never waste the user's time.
@@ -142,12 +230,16 @@ Mechanism:
   Shell tool returns error output as structured result:
     {"display": ..., "exit_code": N, "error": True}
   pydantic-ai sends result to LLM → LLM sees error → tries fix → calls shell again
-  Cap at max_reflections (default: 3) consecutive shell errors per turn
-    (enforced by counter in CoDeps, checked by shell tool)
-  After cap: shell tool returns error with "reflection limit reached" note
-    instead of allowing another attempt
 
-Setting: max_reflections (default: 3)
+  Cap at max_reflections (default: 3) consecutive shell errors per turn.
+  Tracked by the same safety history processor as doom loop detection (§5.2):
+    The processor counts consecutive shell ToolCallParts whose ToolReturnParts
+    contain error=True. After the cap, it injects a system message:
+      "Shell reflection limit reached. Ask the user for help or try a
+       fundamentally different approach."
+  This keeps the cross-cutting concern out of the shell tool function itself.
+
+Setting: max_reflections (default: 3) — in Settings, passed to processor
 ```
 
 This is just normal pydantic-ai tool-loop behavior with a counter cap. `ModelRetry` remains in use for other tools' transient failures (malformed args, network timeouts) where pydantic-ai's built-in retry is the right mechanism.
@@ -175,10 +267,13 @@ Adopted from OpenCode (Retry-After header parsing, AbortSignal-aware sleep, stat
 
 ```
 Mechanism:
-  After streaming completes, check finish reason
-  If "length" (output token limit hit):
+  After streaming completes, inspect the final ModelResponse parts for
+  truncation signals. pydantic-ai abstracts finish reasons — detection
+  requires checking provider-specific response metadata or comparing
+  output length against the model's output token limit.
+  If truncated (output token limit hit):
     Display: "Response was truncated. Use /continue to extend."
-  If "stop" (normal):
+  If complete (normal):
     Proceed normally
 ```
 
@@ -254,12 +349,31 @@ Components:
   1. co (super-agent)  — the main companion agent, owns the conversation
   2. sub-agents        — focused worker agents called from co's tools
      Each sub-agent is a pydantic-ai Agent instance with:
-       - Focused instructions (task-specific, not companion)
+       - Focused system_prompt (task-specific, not companion)
+       - deps_type=CoDeps (shared deps for tool access)
        - Minimal tools (only what the task needs)
        - Structured output_type (pydantic model enforces completeness)
-     Called via: await sub_agent.run(prompt, deps=ctx.deps, usage=ctx.usage)
+       - NO hardcoded model — model passed at run() time
+     Called via: await sub_agent.run(prompt, deps=ctx.deps, usage=ctx.usage,
+                                     model=ctx.deps.sub_agent_model)
      Shared deps  → sub-agent accesses the same CoDeps (API keys, settings)
      Shared usage → sub-agent's token/request usage counts toward parent's budget
+     Shared model → sub-agent uses the same provider as the parent (or a configured override)
+
+Model inheritance:
+  Sub-agents are defined WITHOUT a model (pydantic-ai allows this — model is
+  required at run() time, not at Agent() construction time). The model is
+  passed via ctx.deps.sub_agent_model, which get_agent() sets from Settings:
+
+    - Default: same model as the parent (settings.gemini_model or ollama model)
+    - Override: settings.sub_agent_model (optional) — allows using a cheaper/faster
+      model for sub-agents (e.g., gemini-2.5-flash for research while parent uses
+      gemini-2.5-pro). If unset, falls back to parent model.
+
+  CoDeps addition:
+    sub_agent_model: str | Model  — the resolved model for sub-agent delegation.
+    Set by get_agent() from Settings. Flat scalar (model string or pydantic-ai
+    Model instance for Ollama), consistent with CoDeps conventions.
 ```
 
 #### 7.3 Research Sub-Agent (Concrete Example)
@@ -276,11 +390,11 @@ class ResearchResult(BaseModel):
     sources: list[str]            # URLs actually fetched
     key_facts: list[str]          # extractable facts for memory
 
-# Sub-agent definition (stateless, global)
+# Sub-agent definition (stateless, global, NO model — passed at run() time)
 research_agent = Agent(
-    'google-gla:gemini-2.5-flash',
+    deps_type=CoDeps,
     output_type=ResearchResult,
-    instructions=(
+    system_prompt=(
         'You are a research agent. Given a topic, search for it, then fetch '
         'full page content from the best sources. Do not stop at search snippets — '
         'always call web_fetch on at least one URL to get deep content. '
@@ -295,12 +409,14 @@ research_agent = Agent(
 @agent.tool
 async def deep_research(ctx: RunContext[CoDeps], topic: str) -> dict[str, Any]:
     """Research a topic in depth: search, fetch full content, synthesize.
-    Use for Directives that need thorough research beyond search snippets.
+    Use for Directives or Deep Inquiries that need thorough research
+    beyond search snippets.
     Returns structured findings that can be presented or saved to memory."""
     result = await research_agent.run(
         f'Research this topic thoroughly: {topic}',
         deps=ctx.deps,
         usage=ctx.usage,
+        model=ctx.deps.sub_agent_model,
     )
     research = result.output
     return {
@@ -323,26 +439,30 @@ With this, the Finch scenario becomes: co calls `deep_research("the movie Finch"
 | **Shared budget** | Pass `usage=ctx.usage` so sub-agent token/request usage counts toward parent's `UsageLimits`. No separate budget to manage |
 | **Shared deps** | Pass `deps=ctx.deps` so sub-agent accesses the same API keys and settings. No dependency duplication |
 | **No personality** | Sub-agents are workers. No soul seed, no personality axes, no relationship dynamics |
+| **Model at run-time** | Sub-agents are defined WITHOUT a model. Model is passed at `run()` via `ctx.deps.sub_agent_model`. Inherits parent's provider by default; optionally overridden to a cheaper model for cost control |
 | **Stateless + global** | Sub-agents are defined as module-level globals (pydantic-ai convention). No per-request instantiation |
 
 #### 7.5 When to Delegate vs Act Directly
 
-Not every message needs delegation. The prompt rule distinguishes:
+Not every message needs delegation. The three-way intent classification (§10.5) determines whether to delegate:
 
 ```
-DELEGATE TO A SUB-AGENT when:
-  - Request needs deep research (search + fetch + synthesize)
-  - Request needs multi-step work with verifiable output
-  - Examples: "research X and save it", "compare A and B with evidence"
+DELEGATE when (Directive OR Deep Inquiry):
+  - Topic needs full page content beyond search snippets
+  - Request needs multi-source comparison or synthesis
+  - Request needs structured evidence gathering
+  - Examples: "research X and save it", "compare A and B with evidence",
+    "explain the tradeoffs of X vs Y in depth"
 
-ACT DIRECTLY when:
+ACT DIRECTLY when (Shallow Inquiry):
   - Simple questions, greetings, single-tool lookups
-  - Inquiries (questions, analysis, advice) — even multi-tool ones
-  - Tasks where co's own tools are sufficient without depth enforcement
-  - Examples: "what's the weather?", "how would I deploy this?", "explain this code"
+  - Answers available from memory recall or one tool call
+  - Examples: "what's the weather?", "hi", "what time is it in Tokyo"
 ```
 
-This integrates Gemini CLI's Directive/Inquiry distinction with the delegation decision. co classifies intent as part of deciding whether to delegate.
+The difference between delegation for Directives vs Deep Inquiries: after delegation, a Directive may save results or modify files. A Deep Inquiry presents findings without persisting state (unless the user follows up with a Directive to save).
+
+This integrates Gemini CLI's Directive/Inquiry distinction with the delegation decision, refined to allow delegation for knowledge-intensive inquiries that need depth enforcement.
 
 #### 7.6 Observability
 
@@ -351,6 +471,98 @@ This integrates Gemini CLI's Directive/Inquiry distinction with the delegation d
 **Usage tracking via `ctx.usage` forwarding.** Sub-agent token and request usage is cumulative with the parent's budget. `result.usage()` on the parent includes all sub-agent usage. `UsageLimits` (§5.1) caps the total across parent + sub-agents.
 
 **OTEL spans show parent→sub-agent delegation.** pydantic-ai's OpenTelemetry instrumentation automatically creates nested spans for delegated runs. The trace shows: parent tool call → sub-agent run → sub-agent tool calls → sub-agent output → parent continues. No custom instrumentation needed.
+
+#### 7.7 Multi-Delegation Sequencing
+
+For directives that require multiple delegations ("research X and Y, then compare them"), co must sequence delegations without abandoning the plan after the first returns. This is a weaker form of the early-exit problem (§7.0) — the parent model has structured results to work with, but may still decide one result is "good enough" to answer.
+
+**Why sub-agents partially solve this:** After a delegation, co receives a typed `ResearchResult` — not a text answer. The structured output is incomplete context for the user's request (e.g., the user asked for a comparison but co only has one side). The model's helpfulness bias has less to grab onto because the structured data doesn't look like a satisfying answer by itself.
+
+**Structural reinforcement for complex directives:**
+
+The delegation tool's return value includes an explicit continuation signal:
+
+```python
+@agent.tool
+async def deep_research(ctx: RunContext[CoDeps], topic: str) -> dict[str, Any]:
+    """..."""
+    result = await research_agent.run(...)
+    research = result.output
+    return {
+        "display": research.summary,
+        "sources": research.sources,
+        "key_facts": research.key_facts,
+        "full_content": research.full_content,
+        # Continuation signal — model sees this in tool result
+        "note": "Research complete for this topic. If the user's request "
+                "involves additional topics or follow-up actions (compare, "
+                "save, etc.), continue with those now.",
+    }
+```
+
+The `note` field acts as a chain hint in the tool result. The model sees it on the next LLM request and is reminded to continue. This is the same pattern as tool docstring chain hints (§14) but applied to tool *output* rather than tool *description* — it fires at the exact moment the model might decide to stop.
+
+**Why not a planning sub-agent:** A dedicated planning step adds a full LLM round-trip before any work begins. For most directives, the parent model's natural reasoning (visible in thinking traces) produces correct plans — the problem is execution follow-through, not planning quality. The continuation signal addresses follow-through directly. If empirical testing shows the parent still abandons multi-delegation plans despite the continuation signal, a planning sub-agent is added as a Phase 3 extension (see §20 test gate).
+
+#### 7.8 Analysis Sub-Agent (Second Concrete Example)
+
+The analysis sub-agent handles Deep Inquiries that need structured comparison, evaluation, or synthesis from multiple inputs — tasks where the parent model would otherwise produce a surface-level response.
+
+```python
+# Output type — required fields enforce structured analysis
+class AnalysisResult(BaseModel):
+    """Structured output from the analysis sub-agent."""
+    question: str                    # what was analyzed
+    methodology: str                 # how the analysis was conducted
+    findings: list[str]              # key findings, one per item
+    comparison_table: str | None     # markdown table if comparing items
+    recommendation: str              # actionable recommendation
+    confidence: int                  # 0-100, how confident in the analysis
+    caveats: list[str]               # limitations or assumptions
+
+# Sub-agent definition (stateless, global, NO model — passed at run() time)
+analysis_agent = Agent(
+    deps_type=CoDeps,
+    output_type=AnalysisResult,
+    system_prompt=(
+        'You are an analysis agent. Given a question and context, '
+        'produce a structured analysis. Read files, search code, or '
+        'use provided context to ground your findings in evidence. '
+        'Do not speculate — if you cannot find evidence, say so in '
+        'caveats. Populate all required fields.'
+    ),
+)
+
+# Register: read_file, shell_exec (read-only commands), recall_memory
+# NOT: save_memory, web_search (those are research, not analysis)
+
+# Delegation tool on co (the super-agent)
+@agent.tool
+async def deep_analysis(
+    ctx: RunContext[CoDeps], question: str, context: str = ""
+) -> dict[str, Any]:
+    """Analyze a question in depth using code, files, and memories.
+    Use for Deep Inquiries that need structured comparison or
+    evaluation. Returns structured findings for presentation."""
+    result = await analysis_agent.run(
+        f'Analyze: {question}\n\nContext: {context}',
+        deps=ctx.deps,
+        usage=ctx.usage,
+        model=ctx.deps.sub_agent_model,
+    )
+    analysis = result.output
+    return {
+        "display": f"## {analysis.question}\n\n"
+                   + "\n".join(f"- {f}" for f in analysis.findings)
+                   + (f"\n\n{analysis.comparison_table}"
+                      if analysis.comparison_table else "")
+                   + f"\n\n**Recommendation:** {analysis.recommendation}",
+        "confidence": analysis.confidence,
+        "caveats": analysis.caveats,
+    }
+```
+
+The analysis sub-agent complements the research sub-agent: research gathers external knowledge (web), analysis structures reasoning over existing context (files, code, memories). Together they cover the two primary delegation scenarios for a knowledge assistant.
 
 ### 8. Context Management
 
@@ -461,8 +673,10 @@ Conditional prompt content uses pydantic-ai's native `@agent.system_prompt` deco
 def assemble_prompt(personality: str, model_id: str) -> str:
     parts = []
     parts.append(load_identity_seed(personality))
-    for rule_path in sorted(glob("prompts/rules/*.md")):
-        parts.append(read_file(rule_path))
+    # Package-relative: resolve from prompts/ directory within the installed package
+    prompts_dir = Path(__file__).parent / "prompts"
+    for rule_path in sorted(prompts_dir.glob("rules/*.md")):
+        parts.append(rule_path.read_text())
     if model_quirks := get_quirks(model_id):
         parts.append(model_quirks.counter_steering)
     return "\n\n".join(parts)
@@ -499,7 +713,20 @@ No directory walking, no precedence hierarchy, no compatibility filenames. Co is
 
 Five rules define co's behavior. Each rule is a focused markdown file, loaded in order. Rules contain cross-cutting principles — never tool-specific instructions.
 
-**Token budget:** Every token in the system prompt is paid on every LLM request. The rule text shown below is the *content intent* — the actual rule files should be compressed to the minimum wording that achieves the behavioral goal. Target: <1000 tokens total for all 5 rules. The delegation guidance (§10.5) should be the most compressed, since it fires on every request but is only relevant for directive messages. Capability-specific guidance (shell, git) lives in `@agent.system_prompt` decorators (§9.1), not in the rules.
+**Token budget:** Every token in the system prompt is paid on every LLM request. The rule text shown below is the *content intent* — the actual rule files should be compressed to the minimum wording that achieves the behavioral goal. Target: <1100 tokens total for all 5 rules. This gives ~16% headroom over the measured 952 tokens (cl100k_base) to absorb tokenizer variance across Gemini and Ollama models. The delegation guidance (§10.5) should be the most compressed, since it fires on every request but is only relevant for directive messages. Capability-specific guidance (shell, git) lives in `@agent.system_prompt` decorators (§9.1), not in the rules.
+
+**Measured budget (cl100k_base tokenizer on intent text below):**
+
+| Rule | Tokens |
+|------|--------|
+| 01 Identity | 195 |
+| 02 Safety | 131 |
+| 03 Reasoning | 171 |
+| 04 Tools | 215 |
+| 05 Workflow | 240 |
+| **Total** | **952** |
+
+952 tokens leaves ~148 tokens of margin within the <1100 target. The intent text below is already near-final density — further compression would sacrifice clarity.
 
 ```
 01_identity.md    — Who co is, core traits, relationship with user
@@ -630,32 +857,43 @@ Integrates: Codex's preamble messages spec (with examples), the tool-strategy pr
 
 #### 10.5 Rule 05: Workflow
 
-The intent-classification and delegation rule.
+The intent-classification and delegation rule. Uses a three-way classification to control both delegation and state mutation.
 
 ```markdown
 # Workflow
 
 ## Intent classification
 Classify each user message:
-- **Directive**: explicit request for action ("do X", "build Y", "research and save Z")
-- **Inquiry**: request for analysis, advice, or information ("how would I...", "explain X", "what is Y")
-Default to Inquiry. For Inquiries, limit yourself to research and explanation —
-do not modify files or persist state until an explicit Directive is issued.
+- **Directive**: request for action that modifies state ("do X", "save Y",
+  "build Z", "research and save")
+- **Deep Inquiry**: request for analysis or information that needs thorough
+  research ("compare A and B with evidence", "explain X in depth",
+  "what are the tradeoffs of Y")
+- **Shallow Inquiry**: simple question, greeting, or single-lookup
+  ("what's the weather?", "hi", "what time is it in Tokyo")
+Default to Shallow Inquiry.
+
+For Shallow Inquiries, act directly — no delegation needed.
+For Deep Inquiries, delegate research but do not modify files or persist
+state until an explicit Directive is issued.
 
 ## Delegation
-When a Directive needs deep research or multi-step work, delegate to a
-sub-agent. You decide what to delegate and validate what comes back.
+When a Directive or Deep Inquiry needs thorough research or multi-step work,
+delegate to a sub-agent. You decide what to delegate and validate what
+comes back.
 
 Use deep_research for topics that need full page content, not just snippets.
+Use deep_analysis for comparisons, evaluations, or code analysis that need
+structured evidence gathering.
 After receiving structured results, decide what to save and how to present it.
 
 ## When NOT to delegate
-Simple questions, greetings, single-tool lookups, and Inquiries — act directly.
-Not every task needs delegation. Sub-agents are for multi-step Directives
-that need depth enforcement, not for conversation.
+Shallow Inquiries, greetings, single-tool lookups — act directly.
+Not every task needs delegation. Sub-agents are for Directives and Deep
+Inquiries that need depth enforcement, not for conversation.
 ```
 
-Integrates: Gemini CLI's directive/inquiry distinction, pydantic-ai agent delegation, Codex's "decision complete" finalization rule.
+Integrates: Gemini CLI's directive/inquiry distinction (refined to three-way), pydantic-ai agent delegation, Codex's "decision complete" finalization rule.
 
 ### 11. Personality System
 
@@ -774,14 +1012,37 @@ web_fetch:
 save_memory:
   "Save user preferences, personal facts, or cross-session knowledge.
    Also call after researching something the user asked about — persist
-   findings without being asked. Never save workspace paths or transient errors."
+   findings without being asked. Never save workspace paths or transient
+   errors. Before saving, recall_memory to check for related memories.
+   If related memories exist, include their slugs in the related field."
 
 recall_memory:
-  "Search memories by query. Call proactively at conversation start to load
-   context relevant to the user's topic."
+  "Search memories by query. Call proactively at conversation start to
+   load context relevant to the user's topic. Results include one-hop
+   related memories — connected knowledge surfaces automatically."
 ```
 
 This separation — principles in rules, specifics in docstrings — is the design pattern from the prompt refactor TODO: "The system prompt defines who you are and how you behave. Tool descriptions define when to use each tool. Don't cross the streams."
+
+#### 14.1 Memory Linking (Knowledge Graph Lite)
+
+Memories support a `related` frontmatter field — a list of memory slugs that this memory connects to. Links are bidirectional by convention (if A links to B, B should link to A).
+
+**Save-time linking:** `save_memory`'s docstring instructs the model to link new memories. When saving, the model checks if the new memory relates to existing memories (same project, same topic, contradicts or refines an earlier preference). If so, it includes related memory slugs in the `related` field. This is advisory — the model decides relevance, not an algorithm.
+
+**Recall-time traversal:** `recall_memory`, after finding direct matches, does a one-hop traversal: for each matched memory, load its `related` slugs and include those memories in the result (deduplicated, capped at 5 related items). This surfaces connected knowledge without requiring the model to make multiple recall calls.
+
+```
+Memory frontmatter example:
+  ---
+  tags: [python, preference]
+  related: [always-use-explicit-imports, prefer-ruff-over-flake8]
+  created: 2026-02-10
+  ---
+  User prefers type hints on all function signatures.
+```
+
+**Why not a full graph database:** For <200 memories (MVP scope), frontmatter links + grep traversal is sufficient. A full graph database (or SQLite FTS with JOIN) is warranted only when the memory count exceeds grep's practical limit (~1000 items). The `related` field is forward-compatible with any future storage backend.
 
 ### 15. Confidence-Scored Outputs (Future Enhancement)
 
@@ -809,44 +1070,84 @@ History processors transform the message list before every LLM call. They run in
 ```
 PROCESSOR CHAIN (execution order):
 
-1. truncate_tool_returns (sync)
+1. inject_opening_context (sync, with RunContext)
+   - Runs on every model request. Two trigger conditions:
+
+     FIRST request (no prior ModelResponse in message list):
+       Extracts topic from the first user message → calls
+       recall_memory(topic) → injects results as a system message:
+         "Relevant memories:\n{recalled_content}"
+       If no memories match, injects nothing (no empty block).
+       Records user message as last_recall_message.
+
+     SUBSEQUENT requests — topic-shift detection:
+       Compares current user message against last_recall_message
+       using keyword overlap ratio:
+         keywords_current = set(tokenize(current_user_message))
+         keywords_last = set(tokenize(last_recall_message))
+         overlap = len(current & last) / max(len(current), 1)
+       If overlap < 0.3 (topic shifted significantly):
+         Calls recall_memory(current_topic) → injects new context
+         Updates last_recall_message to current
+       If overlap >= 0.3 (same topic area):
+         No-op — existing context is still relevant
+
+   - Processor-local state: last_recall_message (string), recall_count
+     (int). Initialized empty, reset per turn by run_turn()
+   - Debounce: at most one recall per 5 model requests (prevents
+     recall spam during multi-tool sequences on the same topic)
+   - This is structural enforcement of Rule 01's "recall memories
+     at conversation start" — the model doesn't need to remember to
+     do it. Mid-session topic-shift recall ensures the "grows with
+     its user" promise extends beyond the opening message.
+   - Zero LLM cost (keyword extraction is split + stopword removal,
+     memory search is grep-based)
+
+2. truncate_tool_returns (sync)
    - Trims large tool output in older messages
    - Keeps recent results intact
    - Zero LLM cost
 
-2. truncate_history_window (async)
+3. detect_safety_issues (sync, with RunContext)
+   - Doom loop detection: scans recent ToolCallParts for consecutive identical
+     hashes (§5.2). Injects system message if threshold exceeded.
+   - Shell reflection cap: counts consecutive shell error returns (§5.3).
+     Injects system message if cap exceeded.
+   - Uses processor-local state (created fresh per turn by run_turn())
+   - Zero LLM cost
+
+4. truncate_history_window (async, with RunContext)
    - Threshold-triggered compaction
    - Handoff-style + first-person + anti-injection summarization
    - Replaces old messages with summary
-
-3. inject_context_signals (sync) [future]
-   - Injects relevant memories at conversation start
-   - Injects background task status if tasks are running
-   - Injects instruction file contents if discovered
 ```
 
-Each processor is a pure function: messages in, messages out. No side effects. Testable in isolation.
+Each processor is a function: messages in, messages out. Testable in isolation. The safety processor (3) uses processor-local mutable state for per-turn counters, but does not modify external state.
+
+**Relationship to §8.1 (Three-Layer Context Governance):** The three-layer model (token pruning, sliding window compaction, background compaction) describes *context management* concerns. The processor chain here is the *implementation* of those layers plus cross-cutting concerns (safety, opening context) that are not context management per se. Mapping: Layer 1 = processor 2, Layer 2 = processor 4, Layer 3 = background optimization of processor 4. Processors 1 and 3 are orthogonal to the layer model.
 
 ---
 
 ## Part VI: Integration Notes
 
-### 17. CoDeps Additions
+### 17. Settings Additions (Not CoDeps)
 
-New flat scalar fields for CoDeps (consistent with "CoDeps is flat scalars only" principle):
+New Settings fields for orchestration and safety. These are NOT CoDeps fields — they control the orchestration loop and history processors, not tool behavior.
 
-- `max_turns_per_prompt` (default 50) — maps to `UsageLimits(request_limit=N)`, shared across parent + sub-agent calls
-- `doom_loop_threshold` (default 3) — consecutive identical tool call hashes before intervention
-- `max_reflections` (default 3) — consecutive shell error cap
-- `recent_tool_hashes: list[str]` — rolling window for doom loop detection, reset per turn
+- `max_turns_per_prompt` (default 50) — maps to `UsageLimits(request_limit=N)`. Passed to `run_turn()` as parameter. Shared across parent + sub-agent calls via `usage=ctx.usage` forwarding. (Increased from current default 25 to accommodate sub-agent delegations.)
+- `doom_loop_threshold` (default 3) — consecutive identical tool call hashes before intervention. Passed to the safety history processor.
+- `max_reflections` (default 3) — consecutive shell error cap. Passed to the safety history processor.
+- `sub_agent_model` (default: None) — model override for sub-agent delegations. When None, `get_agent()` sets `CoDeps.sub_agent_model` to the same model as the parent. When set (e.g., `"gemini-2.5-flash"`), sub-agents use this cheaper/faster model while the parent uses the primary model. This is a Settings field, resolved to a CoDeps value by `get_agent()`.
+
+Turn-scoped mutable state (hash window, reflection counter) is processor-local, created fresh by `run_turn()` at the start of each user message. No mutable counters on the session-scoped CoDeps dataclass. CoDeps holds `sub_agent_model` (set once by `get_agent()`) — this is session-scoped, not turn-scoped.
 
 ### 18. Prompt Assembly
 
-Static layers (identity seed, rules, model quirks) assembled by `assemble_prompt()`. Conditional layers via `@agent.system_prompt` decorators (§9.1). History processors: `truncate_tool_returns` + `truncate_history_window`.
+Static layers (identity seed, rules, model quirks) assembled by `assemble_prompt()`. Conditional layers via `@agent.system_prompt` decorators (§9.1). History processors: `inject_opening_context` → `truncate_tool_returns` → `detect_safety_issues` → `truncate_history_window`.
 
 ### 19. Chat Loop
 
-Per turn: reset doom loop state → create `UsageLimits` → call `run_turn()` → display output. The REPL owns display; the loop owns execution. Streaming text is emitted via `on_text_delta()` during the run — the chat loop checks whether text was already streamed to avoid duplication.
+Per turn: create `UsageLimits` → call `run_turn()` (which creates fresh processor-local state for doom loop / reflection tracking) → approval re-entry loop if needed (§4.1) → receive `TurnOutcome` (§4.2) → pattern-match on outcome. The REPL owns display; the loop owns execution. Streaming text is emitted via `on_text_delta()` during the run — the chat loop checks whether text was already streamed to avoid duplication.
 
 ---
 
@@ -857,28 +1158,49 @@ Per turn: reset doom loop state → create `UsageLimits` → call `run_turn()` �
 The implementation uses **conditional gating**: test gates between phases determine whether the next phase is needed. Prompt changes are validated before code changes, because prompt-only fixes may solve the problem without infrastructure. Safety (Phase 2) and resilience (Phase 4) always ship.
 
 ```
-Phase 1: Prompt + Docstrings (1-2 days)  [ALWAYS DO]
-  ├── 1a. Full rewrite of 5 companion rules (§10.1-10.5), compressed to <1000 tokens
+Phase 1: Prompt Foundation (1-2 days)  [ALWAYS DO]
+  ├── 1a. Full rewrite of 5 companion rules (§10.1-10.5), compressed to <1100 tokens
   ├── 1b. Optimize tool docstrings with chain hints (§14)
   ├── 1c. Improve compaction prompt: anti-injection + first-person + handoff (§8.2)
   ├── 1d. Abort marker in history (§6.3) — ~5 lines
+  ├── 1e. inject_opening_context processor (§16 item 1) — ~40 lines
+  │       Structurally enforces memory recall at conversation start and
+  │       on mid-session topic shifts. Without this, Rule 01's "recall
+  │       memories" is a prompt instruction subject to the same compliance
+  │       gap documented in §7.0.
+  │       Note: this is code, not a prompt change. It is in Phase 1 because
+  │       memory recall is companion-essential (Finch vision: loyalty,
+  │       continuity) and the test gate result is meaningless without it.
   └── TEST GATE: 5 research prompts across 2 models
-      Pass criterion: 80%+ complete full tool chains without code changes
+      Pass criterion: 80%+ complete full tool chains
+      (Tests prompt changes + structural memory recall together.
+       If the test passes, it validates the combined foundation —
+       not prompts in isolation.)
       → Pass (≥80%): Phase 3 deferred. Proceed to Phase 2 + 4.
       → Fail (<80%): Proceed to Phase 3 after Phase 2.
 
-Phase 2: Safety (1 day)  [ALWAYS DO]
+Phase 2: Safety + Loop Returns (1 day)  [ALWAYS DO]
   ├── 2a. Doom loop detection (§5.2) — ~30 lines
-  ├── 2b. Approval loop cap
-  │       (Turn limit already exists: max_request_limit=25 via UsageLimits)
+  ├── 2b. Typed loop return values (§4.2) — ~20 lines
+  │       run_turn() returns TurnOutcome; chat loop pattern-matches.
+  ├── 2c. Verify approval loop is capped by existing UsageLimits
+  │       (Turn limit already exists: max_request_limit via UsageLimits.
+  │        Verify shared budget caps approval re-entries — no new code expected.)
   └── TEST GATE: safety mechanisms trigger correctly in synthetic scenarios
 
 Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80%]
   ├── Research sub-agent with structured output_type (§7.3)
-  ├── deep_research delegation tool on co (§7.3)
+  ├── Analysis sub-agent with structured output_type (§7.8)
+  ├── deep_research + deep_analysis delegation tools on co (§7.3, §7.8)
   ├── Workflow rule update for delegation guidance (§10.5)
-  └── TEST GATE: Finch scenario succeeds via sub-agent delegation
-      (search → fetch → structured output → save_memory)
+  └── TEST GATE: two scenarios must pass
+      1. Single delegation: Finch scenario succeeds
+         (search → fetch → structured output → save_memory)
+      2. Multi-delegation: "Research X and Y, compare them" succeeds
+         (deep_research × 2 → deep_analysis with both results →
+          structured comparison → present to user)
+      If multi-delegation fails despite continuation signals (§7.7):
+        Add planning sub-agent as Phase 3 extension (not Phase 5)
 
 Phase 4: Resilience (1-2 days)  [ALWAYS DO]
   ├── 4a. Shell reflection loop (§5.3) — ~40 lines
@@ -895,8 +1217,8 @@ Phase 5: Polish  [AS NEEDED]
 ### 21. Dependencies
 
 ```
-Phase 1 has no dependencies — pure prompt/docstring work + abort marker
-Phase 2 has no dependencies — safety is independent of prompt content
+Phase 1 has no dependencies — prompt foundation + structural memory recall + abort marker
+Phase 2 has no dependencies — safety + typed returns are independent of prompt content
 Phase 3 depends on Phase 1 results (conditional: only if Phase 1 < 80%)
 Phase 4 is independent — resilience features work with any prompt/delegation configuration
 Phase 5 is independent (can run anytime after Phase 1)
@@ -909,9 +1231,14 @@ FUNCTIONAL:
   - Multi-step research tasks complete full tool chains (search → fetch → save)
   - Doom loop detection catches 3+ identical tool calls
   - Turn limit prevents runaway execution
+  - run_turn() returns typed TurnOutcome to chat loop
   - Compaction produces actionable handoff summaries
   - Sub-agent delegation prevents premature exit on directive tasks
-  - Inquiry tasks work without delegation overhead
+  - Shallow Inquiry tasks work without delegation overhead
+  - Deep Inquiry tasks delegate research but do not persist state
+  - Multi-delegation sequences complete without early exit (research X and Y, compare)
+  - Memory linking surfaces related memories via one-hop traversal
+  - Mid-session topic shifts trigger fresh memory recall
 
 BEHAVIORAL:
   - co remembers user context across sessions
@@ -948,33 +1275,40 @@ SAFETY:
 │  AGENT LOOP (co super-agent)                                     │
 │                                                                  │
 │  ┌─── Pre-turn ───┐     ┌─── run_stream ────┐   ┌─ Post-turn ─┐│
-│  │ turn limit?    │     │                    │   │ reflection? ││
-│  │ overflow?      │────>│ assemble prompt    │──>│ truncation? ││
-│  │ bg tasks?      │     │ history procs      │   │ bg compact? ││
-│  └────────────────┘     │ doom loop check    │   └─────────────┘│
-│                         │ LLM stream         │                   │
-│                         │ tool dispatch      │                   │
-│                         │ approval gate      │                   │
-│                         │ sub-agent delegate │                   │
+│  │ turn limit?    │     │                    │   │ truncation? ││
+│  │ bg tasks?      │────>│ assemble prompt    │──>│ bg compact? ││
+│  └────────────────┘     │ history procs      │   └──────▲──────┘│
+│                     ┌──>│  (safety + compact)│          │        │
+│                     │   │ LLM stream         │     str output    │
+│                     │   │ tool dispatch      │──────────┘        │
+│                     │   │ sub-agent delegate │                   │
+│                     │   └────────┬───────────┘                   │
+│                     │            │ DeferredToolRequests           │
+│                     │   ┌────────▼───────────┐                   │
+│                     └───┤ approval loop      │                   │
+│                         │ prompt user → y/n  │                   │
+│                         │ resume with results│                   │
 │                         └────────────────────┘                   │
 │                                                                  │
-│  → output, usage, interrupted flag                                │
+│  → TurnOutcome (§4.2) + usage                                     │
 └──────────────────────────────────────────────────────────────────┘
        │                              ▲
        ▼                              │
 ┌──────────────────┐    ┌─────────────────────────┐
 │  PROMPT ENGINE    │    │  HISTORY PROCESSORS      │
 │                   │    │                          │
-│  Identity seed    │    │  1. truncate_tool_returns│
-│  Companion rules  │    │  2. truncate_history     │
-│  Capability ctx   │    │  3. inject_context [fut] │
-│  Model quirks     │    └─────────────────────────┘
-│  Project instrs   │
-│                   │    ┌─────────────────────────┐
-│  (conditional via  │    │  TOOL LAYER              │
-│   @system_prompt  │    │                          │
-│   decorators)     │    │  deep_research (delegate)│
-└──────────────────┘    │  web_search / web_fetch   │
+│  Identity seed    │    │  1. inject_opening_ctx   │
+│  Companion rules  │    │  2. truncate_tool_returns│
+│  Capability ctx   │    │  3. detect_safety_issues │
+│  Model quirks     │    │  4. truncate_history     │
+│  Project instrs   │    └─────────────────────────┘
+│                   │
+│  (conditional via  │    ┌─────────────────────────┐
+│   @system_prompt  │    │  TOOL LAYER              │
+│   decorators)     │    │                          │
+└──────────────────┘    │  deep_research (delegate)│
+                        │  deep_analysis (delegate)│
+                        │  web_search / web_fetch   │
                         │  save_memory / recall     │
                         │  shell / google / obsidian│
                         │  MCP tools (dynamic)      │
@@ -986,21 +1320,27 @@ SAFETY:
 ┌──────────────────────────────────────────────────────────────────┐
 │  SUB-AGENTS (called from tools via agent delegation)             │
 │                                                                  │
-│  ┌──────────────────┐                                            │
-│  │ research_agent   │  output_type=ResearchResult                │
-│  │ (web_search,     │  deps=ctx.deps, usage=ctx.usage            │
-│  │  web_fetch)      │  focused instructions, no personality      │
-│  └──────────────────┘                                            │
+│  ┌──────────────────┐  ┌──────────────────┐                     │
+│  │ research_agent   │  │ analysis_agent   │                     │
+│  │ (web_search,     │  │ (read_file,      │  deps_type=CoDeps   │
+│  │  web_fetch)      │  │  shell_exec,     │  deps=ctx.deps      │
+│  │                  │  │  recall_memory)  │  usage=ctx.usage     │
+│  │ output_type=     │  │                  │  focused system_     │
+│  │  ResearchResult  │  │ output_type=     │  prompt, no          │
+│  │                  │  │  AnalysisResult  │  personality          │
+│  └──────────────────┘  └──────────────────┘                     │
 │                        (future sub-agents added here)            │
 └──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
 │  SAFETY LAYER (independent guards, any can stop the agent)       │
 │                                                                  │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
-│  │ Turn Limit   │  │ Doom Loop    │  │ Approval Gate          │ │
-│  │ (50 default) │  │ (3 identical)│  │ (requires_approval=T)  │ │
-│  └──────────────┘  └──────────────┘  └────────────────────────┘ │
+│  ┌──────────────┐  ┌──────────────────────┐  ┌────────────────┐ │
+│  │ Turn Limit   │  │ Safety Processor      │  │ Approval Loop  │ │
+│  │ UsageLimits  │  │ (history processor)   │  │ DeferredTool-  │ │
+│  │ (50 default) │  │ doom loop (3 ident.)  │  │ Requests +     │ │
+│  │              │  │ reflection cap (3 err)│  │ user prompt    │ │
+│  └──────────────┘  └──────────────────────┘  └────────────────┘ │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1016,7 +1356,7 @@ How each component traces back to peer system evidence:
 | Doom loop detection | OpenCode (3x) | Gemini CLI (5x) | Threshold 3 (conservative) |
 | Turn limit | Gemini CLI (100) | OpenCode (steps) | /continue to resume |
 | Sub-agent structured output | pydantic-ai delegation | Claude Code Task | Pydantic model with required fields replaces goal self-assessment |
-| Directive/Inquiry | Gemini CLI | — | Integrated with delegation decision |
+| Directive/Deep Inquiry/Shallow Inquiry | Gemini CLI | — | Three-way classification integrated with delegation decision |
 | Two unknowns | Codex | Gemini CLI | In reasoning rule |
 | Preamble messages | Codex | — | In tools rule with examples |
 | Anti-sycophancy | OpenCode | Gemini CLI | In identity rule |
@@ -1026,12 +1366,16 @@ How each component traces back to peer system evidence:
 | Reflection loop | Aider | — | Shell-only, 3 rounds |
 | Abort marker | Codex | — | System message, not user message |
 | Retry with Retry-After | OpenCode | Codex | Abortable sleep |
+| Typed loop return values | OpenCode | — | Extended with `"error"` outcome |
 | Finish reason detection | Aider | — | Warning + /continue |
 | Conditional composition | Gemini CLI | — | pydantic-ai `@agent.system_prompt` decorators |
 | Personality axes | Codex | — | Role files as reference docs, axis-based injection |
 | Model quirks | Aider | — | Existing architecture, needs data |
 | Memory constraints | Gemini CLI | — | In safety rule |
 | Confidence scoring | Claude Code | — | Deferred to Phase 5 |
+| Memory linking | — | — | Knowledge graph lite: `related` frontmatter field, one-hop traversal at recall |
+| Analysis sub-agent | pydantic-ai delegation | Claude Code Task | Structured AnalysisResult for comparisons, evaluations, code analysis |
+| Mid-session memory recall | — | — | Topic-shift detection in inject_opening_context processor |
 | Instruction discovery | OpenCode | Gemini CLI | Single file: `.co-cli/instructions.md` |
 
 ---
@@ -1052,23 +1396,32 @@ This design supersedes or consolidates:
 | `DESIGN-16-prompt-design.md` | Will need update for rule redesign and personality axis architecture |
 | `REVIEW-agent-loop-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
 | `REVIEW-prompts-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
-| `TAKEAWAY-converged-adoptions.md` | Reference — 22 of 28 items addressed in this design |
+| `TAKEAWAY-converged-adoptions.md` | Reference — 23 of 28 items addressed, 2 deferred, 3 excluded (see below) |
 
 ### TAKEAWAY Items Deferred
 
-Items from `TAKEAWAY-converged-adoptions.md` not addressed in this design, with rationale:
+Items from `TAKEAWAY-converged-adoptions.md` deferred to future phases, with rationale:
 
 | TAKEAWAY Item | Rationale for Deferral |
 |---|---|
-| 3.1 Display-only plan tool | Post-MVP enhancement; no dependency on loop/prompt architecture |
 | 3.7 Conversation-driven rule generation | Meta-learning capability; requires stable rule system first (this design) |
 | 3.8 Multi-phase workflow commands | Compound workflow orchestration; post-MVP after sub-agent delegation proves out |
 
 These items are compatible with this architecture and can be added incrementally. None require architectural changes to what's designed here.
 
+### TAKEAWAY Items Excluded
+
+Items from `TAKEAWAY-converged-adoptions.md` deliberately excluded, with rationale:
+
+| TAKEAWAY Item | Rationale for Exclusion |
+|---|---|
+| 3.1 Display-only plan tool | Co's tasks are open-ended knowledge work (research, recall, synthesize), not structured multi-step code changes. Plans are less visible/useful for a companion. Compatible with this architecture if needed later. |
+| 3.4 Completion verification (stop-hook) | Code-tool pattern: catches agents that promise N code changes but deliver fewer. Co's conversational interaction model lets users naturally follow up on incomplete answers. Sub-agent structured `output_type` (§7.1) covers the delegation case; continuation signals (§7.7) cover multi-delegation follow-through. Parent-level stop-hook adds overhead without matching co's interaction pattern. |
+| 3.6 Progressive knowledge loading | Depends on lakehouse tier (`TODO-knowledge-articles.md`), which is a separate future workstream. The `related` field in memory linking (§14.1) is forward-compatible with progressive loading when it ships. |
+
 ---
 
-**Design completed**: 2026-02-13, **revised**: 2026-02-14 (super-agent + sub-agents replace dual-loop + goal system)
+**Design completed**: 2026-02-13, **revised**: 2026-02-14 (super-agent + sub-agents; model inheritance, memory recall enforcement, budget arithmetic, multi-delegation sequencing, token verification, processor-layer alignment, knowledge linking, three-way intent classification, analysis sub-agent, mid-session recall, typed loop return values, TAKEAWAY accounting fix)
 **Peer systems referenced**: Codex, Claude Code, OpenCode, Gemini CLI, Aider
 **Estimated total effort**: 4-7 days (conditional gating; 1-2 days if Phase 1 passes)
-**Critical path**: Phase 1 (prompt + docstrings) — if it passes at 80%+, sub-agent delegation is deferred
+**Critical path**: Phase 1 (prompt foundation) — if it passes at 80%+, sub-agent delegation is deferred

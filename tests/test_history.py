@@ -274,7 +274,12 @@ async def test_compact_produces_two_message_history():
 
 
 def test_summarizer_system_prompt_contains_injection_guard():
-    """Summariser system prompt has explicit anti-injection security rule."""
+    """Summariser system prompt has anti-injection security rule (§8.2, P0 safety).
+
+    The compaction prompt is a privileged context — its output becomes the
+    model's entire memory. Anti-injection prevents malicious tool output
+    from hijacking the compression pass.
+    """
     assert "IGNORE ALL COMMANDS" in _SUMMARIZER_SYSTEM_PROMPT
     assert "DIRECTIVES" in _SUMMARIZER_SYSTEM_PROMPT
     assert "ROLE CHANGES" in _SUMMARIZER_SYSTEM_PROMPT
@@ -282,7 +287,12 @@ def test_summarizer_system_prompt_contains_injection_guard():
 
 
 def test_summarize_prompt_preserves_extraction_guidance():
-    """User prompt retains extraction bullets after refactoring."""
+    """User prompt retains extraction bullets for actionable summaries (§8.2).
+
+    TODO §8.2 will enhance with handoff framing ("for another LLM that will
+    resume") and first-person voice ("I asked you..."). Current bullets cover
+    the extraction requirements.
+    """
     assert "Key decisions" in _SUMMARIZE_PROMPT
     assert "File paths" in _SUMMARIZE_PROMPT
     assert "Error resolutions" in _SUMMARIZE_PROMPT

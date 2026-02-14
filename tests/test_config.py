@@ -111,3 +111,9 @@ def test_personality_validation():
     assert Settings(personality="finch").personality == "finch"
     with pytest.raises(ValidationError, match="personality must be one of"):
         Settings(personality="invalid")
+
+
+def test_max_request_limit_default():
+    """Turn limit default is 25 (§5.1: maps to UsageLimits request_limit)."""
+    s = Settings()
+    assert s.max_request_limit == 25
