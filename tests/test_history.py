@@ -48,10 +48,10 @@ def _real_run_context(model, *, max_history_messages=40, summarization_model="")
     """Build a real RunContext for truncate_history_window tests."""
     from pydantic_ai._run_context import RunContext
     from co_cli.deps import CoDeps
-    from co_cli.sandbox import SubprocessBackend
+    from co_cli.shell_backend import ShellBackend
 
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         session_id="test-history",
         max_history_messages=max_history_messages,
         tool_output_trim_chars=2000,
@@ -227,12 +227,12 @@ async def test_compact_produces_two_message_history():
     """
     from co_cli.agent import get_agent
     from co_cli.deps import CoDeps
-    from co_cli.sandbox import SubprocessBackend
+    from co_cli.shell_backend import ShellBackend
     from co_cli._commands import dispatch, CommandContext
 
     agent, _, tool_names = get_agent()
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         session_id="test-compact",
     )
 

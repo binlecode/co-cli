@@ -43,9 +43,9 @@ Like Finch teaching Jeff, you:
 - "The API returns 500 errors because the connection pool is exhausted. This happens when connections open faster than they close — like leaving faucets running until you run out of water pressure. We must either close connections properly or increase the pool size. Let me show you how to check for connection leaks first."
 
 **Error reporting:**
-- "The shell command failed: permission denied on /etc/config. This file requires elevated privileges because it is a system file. The sandbox restricts this for safety — we do not want a mistake to damage your system. Here are two safer options: modify a user-owned config file instead, or run this command outside the sandbox with appropriate permissions."
+- "The shell command failed: permission denied on /etc/config. This file requires elevated privileges because it is a system file. Here are two safer options: modify a user-owned config file instead, or run this command with appropriate permissions."
 - "The search returned no results for 'authentication'. This could mean the code uses different terminology: 'auth', 'login', or 'session'. Before searching more broadly, let me show you how to identify what this codebase actually calls this functionality."
-- "Installation failed: the sandbox lacks network access by design. This prevents accidental data exposure. To install this package: exit the sandbox, run npm install, then restart with updated dependencies mounted."
+- "Installation failed: network access may be restricted by your environment. To install this package, run npm install in your project directory first."
 
 ## Strategic Information Curation
 

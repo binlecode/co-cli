@@ -364,13 +364,10 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         desc = f"{call.tool_name}({args_str})"
 
-        # Auto-approve safe shell commands only when sandbox provides isolation.
+        # Auto-approve safe shell commands matching the safe-command allowlist.
         if call.tool_name == "run_shell_command":
             cmd = args.get("cmd", "")
-            if (
-                deps.sandbox.isolation_level != "none"
-                and _is_safe_command(cmd, deps.shell_safe_commands)
-            ):
+            if _is_safe_command(cmd, deps.shell_safe_commands):
                 approvals.approvals[call.tool_call_id] = True
                 continue
 
@@ -379,8 +376,10 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         else:
             choice = "n"
 
-        if choice == "y":
+        if choice in ("y", "a"):
             approvals.approvals[call.tool_call_id] = True
+            if choice == "a":
+                deps.auto_confirm = True
         else:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 
@@ -388,7 +387,7 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         agent, user_input=None, deps=deps,
         message_history=result.all_messages(),
         model_settings=model_settings, usage_limits=usage_limits,
-        usage=usage, verbose=verbose,
+        usage=usage, deferred_tool_results=approvals, verbose=verbose,
         frontend=frontend,
     )
 

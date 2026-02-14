@@ -12,7 +12,7 @@ from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps
-from co_cli.sandbox import Sandbox
+from co_cli.shell_backend import ShellBackend
 from co_cli._commands import dispatch, CommandContext, COMMANDS
 
 
@@ -20,7 +20,7 @@ def _make_ctx(message_history: list | None = None) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
     agent, _, tool_names = get_agent()
     deps = CoDeps(
-        sandbox=Sandbox(container_name="co-test-commands"),
+        shell=ShellBackend(),
         session_id="test-commands",
     )
     return CommandContext(
@@ -35,7 +35,7 @@ def _make_agent_and_deps(container_name: str = "co-test-approval"):
     """Build a real agent + deps for approval flow tests."""
     agent, model_settings, _ = get_agent()
     deps = CoDeps(
-        sandbox=Sandbox(container_name=container_name),
+        shell=ShellBackend(),
         session_id="test-approval",
     )
     return agent, model_settings, deps
@@ -162,7 +162,7 @@ async def test_approval_approve():
         assert isinstance(resumed.output, str)
         assert len(resumed.all_messages()) > 0
     finally:
-        deps.sandbox.cleanup()
+        deps.shell.cleanup()
 
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_approval_deny():
 
         assert isinstance(resumed.output, str)
     finally:
-        deps.sandbox.cleanup()
+        deps.shell.cleanup()
 
 
 @pytest.mark.asyncio
@@ -243,7 +243,7 @@ async def test_approval_budget_cumulative():
         assert result.usage().requests <= budget
         assert isinstance(result.output, str)
     finally:
-        deps.sandbox.cleanup()
+        deps.shell.cleanup()
 
 
 # --- Safe command classification ---

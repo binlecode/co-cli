@@ -10,7 +10,7 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.config import settings
 from co_cli.deps import CoDeps
-from co_cli.sandbox import Sandbox
+from co_cli.shell_backend import ShellBackend
 
 
 @dataclass
@@ -21,7 +21,7 @@ class Context:
 
 def _make_ctx() -> Context:
     return Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         session_id="test",
         google_credentials_path=settings.google_credentials_path,
     ))

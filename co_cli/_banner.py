@@ -33,7 +33,7 @@ def display_welcome_banner(info: StatusInfo) -> None:
         f"\n[accent]{art}[/accent]\n",
         f"    v{info.version} — CLI Assistant",
         f"    Model: [accent]{info.llm_provider}[/accent]",
-        f"    Tools: {info.tool_count}  Sandbox: {info.sandbox}",
+        f"    Tools: {info.tool_count}  Shell: {info.shell}",
         f"    Dir: {info.cwd}" + (f"  ({info.git_branch})" if info.git_branch else ""),
         "",
         f"    [dim]Type /help for commands, 'exit' to quit[/dim]",

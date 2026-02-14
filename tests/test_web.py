@@ -14,7 +14,7 @@ from pydantic_ai import ModelRetry
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps
-from co_cli.sandbox import Sandbox
+from co_cli.shell_backend import ShellBackend
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Context:
 
 def _make_ctx(brave_search_api_key: str | None = None) -> Context:
     return Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         session_id="test",
         brave_search_api_key=brave_search_api_key,
     ))
@@ -40,7 +40,7 @@ def _make_policy_ctx(
     fetch_policy: str = "allow",
 ) -> Context:
     return Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         session_id="test",
         brave_search_api_key=brave_search_api_key,
         web_fetch_allowed_domains=allowed_domains or [],

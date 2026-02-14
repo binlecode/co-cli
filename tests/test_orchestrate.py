@@ -11,7 +11,7 @@ from pydantic_ai import FinalResultEvent
 
 from co_cli._orchestrate import FrontendProtocol, _stream_events
 from co_cli.deps import CoDeps
-from co_cli.sandbox import SubprocessBackend
+from co_cli.shell_backend import ShellBackend
 from pydantic_ai.messages import (
     PartDeltaEvent,
     PartStartEvent,
@@ -114,7 +114,7 @@ async def test_stream_events_preserves_text_from_part_start_event():
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta="lo")),
     ])
 
-    deps = CoDeps(sandbox=SubprocessBackend())
+    deps = CoDeps(shell=ShellBackend())
 
     _, streamed_text = await _stream_events(
         agent,
@@ -142,7 +142,7 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
         PartDeltaEvent(index=0, delta=ThinkingPartDelta(content_delta=", thing")),
     ])
 
-    deps = CoDeps(sandbox=SubprocessBackend())
+    deps = CoDeps(shell=ShellBackend())
 
     _, streamed_text = await _stream_events(
         agent,
@@ -171,7 +171,7 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta=" sky")),
     ])
 
-    deps = CoDeps(sandbox=SubprocessBackend())
+    deps = CoDeps(shell=ShellBackend())
 
     _, streamed_text = await _stream_events(
         agent,

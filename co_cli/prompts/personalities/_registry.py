@@ -1,15 +1,22 @@
 """Personality preset registry.
 
-Maps preset names to composable aspect combinations (character + style).
+Maps preset names to two orthogonal axes:
+- character: WHO — identity, philosophy, behavioral patterns, markers
+- style: HOW — format, length, structure, emoji policy
+
+Override precedence: style wins on format, character wins on identity.
 """
 
 from typing import TypedDict
 
 
 class PersonalityPreset(TypedDict):
-    """A personality preset: optional character aspect + required style aspect.
+    """A personality preset: optional character axis + required style axis.
 
-    Soul seed is loaded from ``seed/{preset_name}.md`` by convention.
+    Three tiers per preset:
+    - Seed (always-on): ``seed/{preset_name}.md`` — voice fingerprint
+    - Character (on-demand): ``character/{name}.md`` — identity axis
+    - Style (on-demand): ``style/{name}.md`` — format axis
     """
 
     character: str | None

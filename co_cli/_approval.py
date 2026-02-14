@@ -4,8 +4,7 @@
 def _is_safe_command(cmd: str, safe_commands: list[str]) -> bool:
     """Check if cmd starts with a safe prefix and has no shell chaining.
 
-    This is a UX convenience, not a security boundary — the Docker sandbox
-    provides isolation. See docs/TODO-shell-safety.md for rationale.
+    UX convenience — approval is the security boundary.
     """
     # Reject shell chaining, redirection, and backgrounding — force approval.
     # Single-char ops also catch doubled forms (& catches &&, > catches >>, etc.)

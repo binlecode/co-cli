@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 from co_cli.config import WebPolicy
-from co_cli.sandbox import SandboxProtocol
+from co_cli.shell_backend import ShellBackend
 
 
 @dataclass
@@ -14,7 +14,7 @@ class CoDeps:
     injects scalar values here. Tools access ctx.deps.field_name directly.
     """
 
-    sandbox: SandboxProtocol
+    shell: ShellBackend
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
 
@@ -29,8 +29,8 @@ class CoDeps:
     # Mutable per-session state
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
 
-    # Sandbox limits
-    sandbox_max_timeout: int = 600  # Hard ceiling for per-command timeout (seconds)
+    # Shell limits
+    shell_max_timeout: int = 600  # Hard ceiling for per-command timeout (seconds)
 
     # Batch 5: Web intelligence
     brave_search_api_key: str | None = None

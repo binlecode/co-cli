@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli.sandbox import Sandbox
+from co_cli.shell_backend import ShellBackend
 from co_cli.deps import CoDeps
 
 
@@ -22,7 +22,7 @@ def test_search_notes(tmp_path):
     (tmp_path / "projector.md").write_text("# Equipment\nThe projector needs repair.")
 
     ctx = Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         obsidian_vault_path=tmp_path,
         session_id="test",
     ))
@@ -62,7 +62,7 @@ def test_search_notes_folder_filter(tmp_path):
     (personal / "journal.md").write_text("# Journal\nWorking on project at home.")
 
     ctx = Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         obsidian_vault_path=tmp_path,
         session_id="test",
     ))
@@ -94,7 +94,7 @@ def test_search_notes_tag_filter(tmp_path):
     )
 
     ctx = Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         obsidian_vault_path=tmp_path,
         session_id="test",
     ))
@@ -121,7 +121,7 @@ def test_search_notes_snippet_word_boundaries(tmp_path):
     (tmp_path / "long.md").write_text(long_content)
 
     ctx = Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         obsidian_vault_path=tmp_path,
         session_id="test",
     ))
@@ -148,7 +148,7 @@ def test_obsidian_list_and_read(tmp_path):
     (subdir / "Old.md").write_text("Archived content")
 
     ctx = Context(deps=CoDeps(
-        sandbox=Sandbox(container_name="test"),
+        shell=ShellBackend(),
         obsidian_vault_path=tmp_path,
         session_id="test",
     ))

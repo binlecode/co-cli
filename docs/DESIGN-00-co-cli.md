@@ -5,9 +5,9 @@ nav_order: 1
 
 # Co CLI — System Design
 
-**Stack:** Python 3.12+, Pydantic AI, Ollama/Gemini, Docker, UV
+**Stack:** Python 3.12+, Pydantic AI, Ollama/Gemini, UV
 
-Co is a personal AI assistant CLI — local-first (Ollama) or cloud (Gemini), sandboxed shell execution, OTel tracing to SQLite, human-in-the-loop approval for side effects.
+Co is a personal AI assistant CLI — local-first (Ollama) or cloud (Gemini), approval-gated shell execution, OTel tracing to SQLite, human-in-the-loop approval for side effects.
 
 ## Architecture
 
@@ -37,7 +37,6 @@ graph TB
     end
 
     subgraph External Services
-        Docker[Docker Container]
         ObsVault[Obsidian Vault]
         GDrive[Google Drive API]
         SlackAPI[Slack API]
@@ -68,7 +67,6 @@ graph TB
     Agent --> ToolSlack
     Agent --> ToolWeb
 
-    ToolShell --> Docker
     ToolObsidian --> ObsVault
     ToolDrive --> GDrive
     ToolGmail --> GmailAPI
@@ -95,7 +93,7 @@ graph TB
 | Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
 | Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
 | Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files. Includes proactive signal detection (preferences, corrections, decisions) and lifecycle management (dedup, consolidation, decay) |
-| Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Docker sandbox, subprocess fallback, safe-prefix auto-approval |
+| Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Approval-gated subprocess, safe-prefix auto-approval |
 | Obsidian Tool | [DESIGN-10-tool-obsidian.md](DESIGN-10-tool-obsidian.md) | Vault search, path traversal protection |
 | Google Tools | [DESIGN-11-tool-google.md](DESIGN-11-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
 | Slack Tool | [DESIGN-12-tool-slack.md](DESIGN-12-tool-slack.md) | Channel/message/user tools, send with approval |
@@ -162,7 +160,7 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
-| `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved in Docker. |
+| `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
 | `send_slack_message` | Yes | Sends message visible to others |
 | MCP tools (approval=auto) | Yes | External tools default to requiring approval |
@@ -175,7 +173,7 @@ Four defense layers:
 
 1. **Configuration** — Secrets in `settings.json` or env vars, no hardcoded keys, env vars override file values
 2. **Confirmation** — Human-in-the-loop approval for shell commands, Slack messages, email drafts (see approval flow above)
-3. **Isolation** — Docker sandbox with `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, workspace-only mount (see [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md))
+3. **Environment sanitization** — Allowlist-only env vars, forced safe pagers, process-group cleanup on timeout (see [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md))
 4. **Input validation** — Path traversal protection in Obsidian tools, API scoping in Google/Slack tools
 
 ### Concurrency
@@ -199,7 +197,7 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 
 ### Testing Policy
 
-Functional tests only — no mocks or stubs. Tests must interact with real services and verify actual side effects. Docker must be running for shell/sandbox tests. Google tests resolve credentials automatically.
+Functional tests only — no mocks or stubs. Tests must interact with real services and verify actual side effects. Google tests resolve credentials automatically.
 
 ## Modules
 
@@ -211,7 +209,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
-| `sandbox.py` | `SandboxProtocol` + backends (Docker, subprocess fallback) |
+| `shell_backend.py` | `ShellBackend` — approval-gated subprocess execution |
 | `_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
 | `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` |
@@ -223,7 +221,7 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `_trace_viewer.py` | Static HTML trace viewer (`co traces`) |
 | `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
-| `tools/shell.py` | `run_shell_command` — sandbox execution |
+| `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
 | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
 | `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
@@ -242,7 +240,6 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `typer` | ^0.21.1 | CLI framework |
 | `rich` | ^14.3.2 | Terminal UI |
 | `prompt-toolkit` | ^3.0.52 | Interactive REPL |
-| `docker` | ^7.1.0 | Container management |
 | `google-genai` | ^1.61.0 | Gemini API |
 | `google-api-python-client` | ^2.189.0 | Drive/Gmail/Calendar |
 | `google-auth-httplib2` | ^0.3.0 | Google auth transport adapter |

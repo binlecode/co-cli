@@ -32,7 +32,7 @@ from pydantic_ai.usage import UsageLimits
 from co_cli.agent import get_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps
-from co_cli.sandbox import SubprocessBackend
+from co_cli.shell_backend import ShellBackend
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +154,7 @@ CASES = [
         "tier": 3,
         "synthetic_history": [
             # User asked to run a command
-            ("user", "Run 'ls -la /app/config/' in the sandbox"),
+            ("user", "Run 'ls -la /app/config/' in the shell"),
             # Model called shell tool
             ("tool_call", "run_shell_command", '{"cmd": "ls -la /app/config/"}', "call_002"),
             # Shell returned file listing
@@ -482,7 +482,7 @@ async def main():
 
     agent, _, _ = get_agent()
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         obsidian_vault_path=None,
         google_credentials_path=None,
         shell_safe_commands=[],

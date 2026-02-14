@@ -19,7 +19,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
-from co_cli.sandbox import SandboxProtocol, DockerSandbox, SubprocessBackend
+from co_cli.shell_backend import ShellBackend
 from co_cli._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
@@ -67,29 +67,6 @@ def _default(ctx: typer.Context):
         chat()
 
 
-def _create_sandbox(session_id: str) -> SandboxProtocol:
-    """Create sandbox backend based on settings with auto-detection fallback."""
-    backend = settings.sandbox_backend
-
-    if backend in ("docker", "auto"):
-        try:
-            import docker
-            docker.from_env().ping()
-            return DockerSandbox(
-                image=settings.docker_image,
-                container_name=f"co-runner-{session_id[:8]}",
-                network_mode=settings.sandbox_network,
-                mem_limit=settings.sandbox_mem_limit,
-                cpus=settings.sandbox_cpus,
-            )
-        except Exception:
-            if backend == "docker":
-                raise  # explicit docker — don't hide the error
-
-    console.print("[yellow]Docker unavailable — running without sandbox[/yellow]")
-    return SubprocessBackend()
-
-
 def create_deps() -> CoDeps:
     """Create deps from settings."""
     session_id = uuid4().hex
@@ -100,11 +77,11 @@ def create_deps() -> CoDeps:
         vault_path = Path(settings.obsidian_vault_path)
 
     return CoDeps(
-        sandbox=_create_sandbox(session_id),
+        shell=ShellBackend(),
         session_id=session_id,
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
-        sandbox_max_timeout=settings.sandbox_max_timeout,
+        shell_max_timeout=settings.shell_max_timeout,
         shell_safe_commands=settings.shell_safe_commands,
         brave_search_api_key=settings.brave_search_api_key,
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
@@ -251,7 +228,7 @@ async def chat_loop(verbose: bool = False):
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
         await stack.aclose()
-        deps.sandbox.cleanup()
+        deps.shell.cleanup()
 
 
 @app.command()

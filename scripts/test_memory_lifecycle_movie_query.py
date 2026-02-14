@@ -55,7 +55,7 @@ from pydantic_ai.usage import UsageLimits  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 from co_cli.config import get_settings, WebPolicy  # noqa: E402
 from co_cli.deps import CoDeps  # noqa: E402
-from co_cli.sandbox import SubprocessBackend  # noqa: E402
+from co_cli.shell_backend import ShellBackend  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ async def main():
     personality = settings.personality or "finch"
 
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         session_id="demo-movie-lifecycle",
         personality=personality,
         brave_search_api_key=settings.brave_search_api_key,

@@ -34,9 +34,9 @@ def _run(coro):
 
 
 def test_load_personality_all_pieces():
-    """Loading all pieces returns substantial content with correct role."""
+    """Loading all axes returns substantial content with correct preset."""
     result = _run(load_personality(_ctx(personality="jeff")))
-    assert result["role"] == "jeff"
+    assert result["preset"] == "jeff"
     assert "character" in result["pieces_loaded"]
     assert "style" in result["pieces_loaded"]
     assert len(result["display"]) > 200
@@ -45,13 +45,13 @@ def test_load_personality_all_pieces():
 def test_load_personality_no_preset():
     """No personality configured → informative message."""
     result = _run(load_personality(_ctx(personality=None)))
-    assert result["role"] is None
+    assert result["preset"] is None
     assert result["pieces_loaded"] == []
     assert "No personality" in result["display"]
 
 
 def test_load_personality_invalid_piece():
-    """Invalid piece name → error listing available pieces."""
+    """Invalid axis name → error listing available axes."""
     result = _run(load_personality(_ctx(personality="jeff"), pieces=["nonexistent"]))
     assert result["pieces_loaded"] == []
     assert "Unknown" in result["display"]

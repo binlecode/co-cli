@@ -20,7 +20,7 @@ class StatusInfo:
     version: str
     git_branch: str | None
     cwd: str  # basename
-    sandbox: str  # "Docker (full isolation)" | "subprocess (no isolation)" | "unavailable"
+    shell: str  # "subprocess (approval-gated)"
     llm_provider: str  # "Gemini (model)" | "Ollama (model)"
     llm_status: str  # "configured" | "online" | "offline" | "missing key"
     google: str  # "configured" | "adc" | "not found"
@@ -51,21 +51,8 @@ def get_status(tool_count: int = 0) -> StatusInfo:
     # -- cwd --
     cwd = Path.cwd().name
 
-    # -- sandbox --
-    backend = settings.sandbox_backend
-    if backend == "subprocess":
-        sandbox = "subprocess (no isolation)"
-    elif backend in ("docker", "auto"):
-        try:
-            subprocess.check_output(["docker", "info"], stderr=subprocess.DEVNULL)
-            sandbox = "Docker (full isolation)"
-        except Exception:
-            if backend == "docker":
-                sandbox = "unavailable"
-            else:
-                sandbox = "subprocess (no isolation)"
-    else:
-        sandbox = "unavailable"
+    # -- shell --
+    shell = "subprocess (approval-gated)"
 
     # -- llm --
     provider = settings.llm_provider.lower()
@@ -128,7 +115,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         version=version,
         git_branch=git_branch,
         cwd=cwd,
-        sandbox=sandbox,
+        shell=shell,
         llm_provider=llm_provider,
         llm_status=llm_status,
         google=google,
@@ -150,8 +137,7 @@ def render_status_table(info: StatusInfo) -> Table:
     table.add_column("Details", style="success")
 
     table.add_row("LLM", info.llm_status.title(), info.llm_provider)
-    sandbox_status = "Active" if "unavailable" not in info.sandbox else "Unavailable"
-    table.add_row("Sandbox", sandbox_status, info.sandbox)
+    table.add_row("Shell", "Active", info.shell)
     table.add_row("Google", info.google.title(), info.google_detail)
     table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
     table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")

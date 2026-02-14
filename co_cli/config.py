@@ -1,5 +1,4 @@
 import os
-import re
 import json
 from pathlib import Path
 from typing import Literal, Optional
@@ -7,8 +6,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
 
-# Conservative default safe commands for auto-approval in the sandbox.
-# UX convenience only — the Docker sandbox is the security boundary.
+# Conservative default safe commands for auto-approval.
+# UX convenience — approval is the security boundary.
 _DEFAULT_SAFE_COMMANDS: list[str] = [
     # Filesystem listing
     "ls", "tree", "find", "fd",
@@ -87,7 +86,6 @@ class Settings(BaseModel):
     google_credentials_path: Optional[str] = Field(default=None)
     
     # Behavior
-    docker_image: str = Field(default="co-cli-sandbox")
     theme: str = Field(default="light")
     personality: str = Field(default="finch")
     tool_retries: int = Field(default=3)
@@ -107,12 +105,8 @@ class Settings(BaseModel):
     memory_decay_strategy: Literal["summarize", "cut"] = Field(default="summarize")
     memory_decay_percentage: float = Field(default=0.2, ge=0.0, le=1.0)
 
-    # Sandbox limits
-    sandbox_backend: Literal["auto", "docker", "subprocess"] = Field(default="auto")
-    sandbox_max_timeout: int = Field(default=600)
-    sandbox_network: Literal["none", "bridge"] = Field(default="none")
-    sandbox_mem_limit: str = Field(default="1g")
-    sandbox_cpus: int = Field(default=1, ge=1, le=4)
+    # Shell limits
+    shell_max_timeout: int = Field(default=600)
 
     # Shell safe commands (auto-approved without prompting)
     shell_safe_commands: list[str] = Field(default=_DEFAULT_SAFE_COMMANDS)
@@ -144,13 +138,6 @@ class Settings(BaseModel):
         if isinstance(v, str):
             return [s.strip().lower() for s in v.split(",") if s.strip()]
         return [s.lower() for s in v]
-
-    @field_validator("sandbox_mem_limit")
-    @classmethod
-    def _validate_mem_limit(cls, v: str) -> str:
-        if not re.fullmatch(r"\d+[kmgKMG]", v):
-            raise ValueError(f"sandbox_mem_limit must be Docker memory format (e.g. '512m', '1g'), got '{v}'")
-        return v
 
     @field_validator("personality")
     @classmethod
@@ -192,17 +179,12 @@ class Settings(BaseModel):
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
-            "docker_image": "CO_CLI_DOCKER_IMAGE",
             "theme": "CO_CLI_THEME",
             "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
-            "sandbox_backend": "CO_CLI_SANDBOX_BACKEND",
-            "sandbox_max_timeout": "CO_CLI_SANDBOX_MAX_TIMEOUT",
-            "sandbox_network": "CO_CLI_SANDBOX_NETWORK",
-            "sandbox_mem_limit": "CO_CLI_SANDBOX_MEM_LIMIT",
-            "sandbox_cpus": "CO_CLI_SANDBOX_CPUS",
+            "shell_max_timeout": "CO_CLI_SHELL_MAX_TIMEOUT",
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
             "web_fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",
             "web_fetch_blocked_domains": "CO_CLI_WEB_FETCH_BLOCKED_DOMAINS",

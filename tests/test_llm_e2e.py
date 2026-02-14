@@ -19,7 +19,7 @@ from pydantic_ai.usage import UsageLimits
 from co_cli.agent import get_agent
 from co_cli.config import get_settings
 from co_cli.deps import CoDeps
-from co_cli.sandbox import DockerSandbox, SubprocessBackend
+from co_cli.shell_backend import ShellBackend
 from co_cli.tools.memory import _load_all_memories
 
 
@@ -68,7 +68,7 @@ def test_gemini_api_key_overrides_env():
 def _make_deps(session_id: str = "test", personality: str = "finch") -> CoDeps:
     """Create minimal CoDeps for E2E tests."""
     return CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         session_id=session_id,
         personality=personality,
     )
@@ -163,98 +163,6 @@ async def test_ollama_tool_calling():
     assert len(calls) >= 1, "No tool calls in DeferredToolRequests"
     assert calls[0].tool_name == "run_shell_command", (
         f"Wrong tool selected: {calls[0].tool_name}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_ollama_context_tool_personality():
-    """LLM calls load_personality tool and response reflects the loaded content.
-
-    Verifies the context tool pipeline: agent sees load_personality in its
-    tool list, calls it, receives personality content, and uses it in response.
-    Requires LLM_PROVIDER=ollama and Ollama server running.
-    """
-    if os.getenv("LLM_PROVIDER") != "ollama":
-        return  # Not targeting Ollama this run
-
-    agent, model_settings, tool_names = get_agent()
-    assert "load_personality" in tool_names
-
-    deps = _make_deps("test-context-personality", personality="jeff")
-
-    # Ask for information only obtainable via the tool — the role name
-    # and piece names are dynamic, so the model must call load_personality.
-    result = await agent.run(
-        "Call the load_personality tool now. "
-        "Report the exact role name and list of pieces_loaded it returns.",
-        deps=deps,
-        model_settings=model_settings,
-    )
-
-    # Verify the agent actually called load_personality during the conversation
-    messages = result.all_messages()
-    tool_calls_made = []
-    tool_returns_received = []
-    for msg in messages:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart):
-                    tool_calls_made.append(part.tool_name)
-        elif isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, ToolReturnPart):
-                    tool_returns_received.append(part.tool_name)
-
-    assert "load_personality" in tool_calls_made, (
-        f"Agent did not call load_personality. Tool calls: {tool_calls_made}"
-    )
-    assert "load_personality" in tool_returns_received, (
-        "load_personality tool return not found in conversation"
-    )
-
-    # Verify response reflects the tool's return — role should be "jeff"
-    output = result.output if isinstance(result.output, str) else ""
-    assert "jeff" in output.lower(), (
-        f"Response doesn't mention role 'jeff': {output!r}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_ollama_autonomous_personality():
-    """Model proactively loads personality without explicit tool instruction.
-
-    The system prompt says "At the start of each session, always load your
-    personality character piece to establish your voice." This test sends a
-    normal conversational message — no mention of tools — and verifies the
-    model follows the system prompt instruction autonomously.
-    Requires LLM_PROVIDER=ollama and Ollama server running.
-    """
-    if os.getenv("LLM_PROVIDER") != "ollama":
-        return
-
-    agent, model_settings, _ = get_agent()
-    deps = _make_deps("test-autonomous-personality", personality="jeff")
-
-    # Normal greeting — no mention of tools or load_personality
-    result = await agent.run(
-        "Hello, what's your name?",
-        deps=deps,
-        model_settings=model_settings,
-    )
-
-    tool_calls = _extract_tool_calls(result)
-
-    # The model should have proactively loaded personality per system prompt
-    assert "load_personality" in tool_calls, (
-        f"Model did not autonomously call load_personality. "
-        f"Tool calls: {tool_calls}. "
-        f"System prompt instructs: 'always load your personality character piece'."
-    )
-
-    # Response should reflect Jeff's identity from the loaded personality
-    output = result.output if isinstance(result.output, str) else ""
-    assert "jeff" in output.lower(), (
-        f"Response doesn't reflect Jeff personality: {output!r}"
     )
 
 
@@ -400,7 +308,7 @@ async def test_ollama_web_research_and_save():
 
     # Full deps with web credentials so web_search can work if Brave key exists
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         session_id="test-web-research",
         personality="finch",
         brave_search_api_key=_settings.brave_search_api_key,
@@ -507,7 +415,7 @@ async def test_ollama_memory_decay():
 
         agent, model_settings, _ = get_agent()
         deps = CoDeps(
-            sandbox=SubprocessBackend(),
+            shell=ShellBackend(),
             session_id="test-decay",
             personality="finch",
             memory_max_count=limit,

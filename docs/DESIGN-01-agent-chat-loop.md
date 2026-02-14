@@ -47,7 +47,7 @@ graph LR
 
     Input --> Dispatch
     Dispatch -->|text| RunTurn
-    Dispatch -->|!cmd| Docker[Sandbox]
+    Dispatch -->|!cmd| Shell[Shell]
     Dispatch -->|/cmd| SlashCmd[_commands.py]
     RunTurn --> Stream
     Stream --> PydanticAgent
@@ -97,8 +97,8 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 
 | Group | Fields |
 |-------|--------|
-| **Runtime resources** | `sandbox` (Docker/subprocess), `auto_confirm` (session yolo), `session_id` (uuid4), `slack_client`, `google_creds` (lazy-resolved) |
-| **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `sandbox_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
+| **Runtime resources** | `shell` (ShellBackend), `auto_confirm` (session yolo), `session_id` (uuid4), `slack_client`, `google_creds` (lazy-resolved) |
+| **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
 | **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2) |
 | **History governance** | `max_history_messages` (40), `tool_output_trim_chars` (2000), `summarization_model` (empty = primary model) |
 | **Mutable state** | `drive_page_tokens` (pagination state per query) |
@@ -108,7 +108,7 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 | Tier | Scope | Lifetime | Example |
 |------|-------|----------|---------|
 | **Agent config** | Process | Entire process | Model, system prompt, tool registrations |
-| **Session deps** | Session | One REPL loop | `CoDeps`: sandbox, creds, page tokens |
+| **Session deps** | Session | One REPL loop | `CoDeps`: shell, creds, page tokens |
 | **Run state** | Single run | One `run_turn()` | Per-turn counter (if needed) |
 
 **Invariant:** Mutable per-session state belongs in `CoDeps`, never in module globals. One `CoDeps` per chat session — tools accumulate state across turns within a session.
@@ -129,13 +129,13 @@ chat_loop():
             dispatch:
                 "exit"/"quit"  → break
                 empty/blank    → continue
-                "!cmd"         → sandbox.run_command(cmd), no LLM
+                "!cmd"         → shell.run_command(cmd), no LLM
                 "/command"     → dispatch_command(), no LLM
                 anything else  → run_turn()
 
             message_history = turn_result.messages
 
-    finally: deps.sandbox.cleanup()
+    finally: deps.shell.cleanup()
 ```
 
 **MCP fallback:** If the agent context fails (MCP server unavailable), the chat loop recreates the agent without MCP and continues with native tools only.
@@ -237,8 +237,7 @@ _handle_approvals(agent, deps, result, model_settings, limits, frontend):
         format description as "tool_name(k=v, ...)"
 
         if deps.auto_confirm → approve
-        elif run_shell_command AND sandbox.isolation_level != "none"
-             AND is_safe_command(cmd, shell_safe_commands) → approve
+        elif run_shell_command AND is_safe_command(cmd, shell_safe_commands) → approve
         else:
             choice = frontend.prompt_approval(desc)
             "y" → approve
@@ -250,7 +249,7 @@ _handle_approvals(agent, deps, result, model_settings, limits, frontend):
         deferred_tool_results=approvals, ...)
 ```
 
-**Safe-command gate:** Auto-approval requires sandbox isolation (`isolation_level != "none"`). Subprocess fallback always prompts. **Denial:** LLM sees `ToolDenied` and can suggest alternatives. **Session yolo:** `"a"` sets `auto_confirm = True` for all subsequent calls in the session.
+**Safe-command gate:** Commands matching the safe-prefix list are auto-approved. **Denial:** LLM sees `ToolDenied` and can suggest alternatives. **Session yolo:** `"a"` sets `auto_confirm = True` for all subsequent calls in the session.
 
 ### FrontendProtocol
 

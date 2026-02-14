@@ -1,646 +1,419 @@
-# ROADMAP: Co Evolution (Frontier-Grounded)
+# ROADMAP: Co Evolution
 
-**Status**: Phase 1 Complete ✅ | Prompt System Redesign In Progress 🔄 | Phase 2c Ready ⏳ | Phase 2.5 (S0+S1) Deferred 📅
-
-This is the unified strategic + tactical roadmap for co-cli evolution: from capable tool executor to personal companion for knowledge work. Part I provides strategic context (why we're building, where the frontier is, where co is heading). Part II provides tactical execution detail (what to build, when to build it, how to implement).
+This is the strategic roadmap for co-cli: from capable tool-calling assistant to personal companion for knowledge work. Part I defines what co is and where it's going. Part II charts the evolution path, grounded in what the best peer systems converge on. Part III provides reference material.
 
 ---
 
-# Part I: Strategic Context
+# Part I: Mission, Vision & Core Functionality
 
-## 1. Vision
+## 1. Mission
 
-`co-cli` should evolve from a capable tool-calling assistant into a personal companion for knowledge work, while preserving its identity:
+Co is a personal companion for knowledge work, running in the user's terminal.
 
-1. Local-first runtime and storage.
-2. Approval-first for side effects.
-3. Incremental, testable delivery.
+It connects the tools a knowledge worker already uses — email, calendar, documents, notes, web — into a single conversational interface backed by LLM reasoning. It remembers what matters, develops personality, and forms a lasting working relationship with its user.
 
-The target product shape is text-first, automation-capable, and safe by default.
+Co is not a code editor. It is not an IDE plugin. It is a general-purpose CLI companion that happens to be good at technical tasks because it has a shell, a memory, and access to the user's information surfaces.
 
-### 1.1 The "Finch" Vision
+## 2. Vision: The Finch North Star
 
-Co aspires to be the CLI version of the robot companion from "Finch" (2021): a helpful assistant that learns, develops personality, and forms lasting relationships with its user.
+Co aspires to be the CLI version of the companion from "Finch" (2021): a helpful assistant that learns, develops personality, and forms lasting relationships with its user.
 
 **Core traits:**
-- **Helpful:** Completes tasks efficiently and accurately
-- **Curious:** Asks clarifying questions, seeks to understand context
-- **Adaptive:** Learns user preferences and patterns over time
-- **Empathetic:** Understands emotional context, adjusts tone appropriately
-- **Loyal:** Remembers past interactions, maintains continuity across sessions
-- **Growing:** Evolves from simple command executor to thoughtful partner
+- **Helpful** — completes tasks efficiently and accurately
+- **Curious** — asks clarifying questions, seeks to understand context
+- **Adaptive** — learns user preferences and patterns over time
+- **Empathetic** — understands emotional context, adjusts tone appropriately
+- **Loyal** — remembers past interactions, maintains continuity across sessions
+- **Growing** — evolves from command executor to thoughtful partner
 
 **Five pillars of co's character:**
-1. **Soul:** Identity, personality, interaction style (selected by user from templates)
-2. **Internal Knowledge:** Learned context, patterns, user habits (persists across sessions)
-3. **External Knowledge:** Tools for accessing data (Obsidian, web, Google, Slack, MCP)
-4. **Emotion:** Tone, empathy, context-aware communication (adapts to situation)
-5. **Habit:** Workflow preferences, approval patterns, personalization (user-configurable)
 
-Unlike a pure tool executor, co should anticipate needs, remember preferences, and develop a working relationship with its user over weeks and months of use.
+| Pillar | Description | Status |
+|--------|-------------|--------|
+| **Soul** | Identity, personality, interaction style (user-selectable from presets) | Shipped — 5 presets, soul seed always-on |
+| **Internal Knowledge** | Learned context, patterns, user habits (persists across sessions) | Shipped — memory lifecycle with save/recall/list |
+| **External Knowledge** | Tools for accessing data (Google, Obsidian, web, MCP servers) | Shipped — 16 tools + 3 MCP servers |
+| **Emotion** | Tone, empathy, context-aware communication | Partial — personality modulates tone; no emotion engine |
+| **Habit** | Workflow preferences, approval patterns, personalization | Partial — memory captures preferences; no proactive habits |
 
-## 2. Frontier Snapshot (as of February 9, 2026)
+**Differentiator:** No peer system (0/5 studied) attempts the companion vision. Claude Code, Codex, Gemini CLI, and Aider are code-first tools. Co is relationship-first — it builds a working partnership through memory, personality, and accumulated context.
 
-The current frontier is no longer "single-turn tool calls." It is end-to-end agents with planning, tool orchestration, asynchronous execution, and explicit safety controls.
+## 3. What Co Does Today (v0.3.10)
 
-### 2.1 Unified agent surfaces (research + tools + action)
+### 3.1 Tools
 
-1. OpenAI launched `ChatGPT agent` on July 17, 2025, combining capabilities from Operator and deep research into a single mode with connectors and tool execution.
-2. Anthropic launched Claude 4 on May 22, 2025, with extended thinking + tool use, parallel tools, and stronger long-horizon agent behavior.
-3. Google announced Gemini app `Agent Mode`, Project Mariner, and Jules at I/O 2025, converging on the same "plan + act + user oversight" interaction pattern.
+16 native tools across 5 platforms, plus MCP extensibility:
 
-Implication for Co:
+| Platform | Tools | Description |
+|----------|-------|-------------|
+| **Google Suite** (6) | search_drive_files, read_drive_file, list_emails, search_emails, list_calendar_events, search_calendar_events | Drive, Gmail, Calendar access with lazy OAuth |
+| **Obsidian** (3) | search_notes, list_notes, read_note | Local vault search and reading |
+| **Memory** (3) | save_memory, recall_memory, list_memories | Persistent cross-session knowledge with dedup, decay, gravity, protection |
+| **Web** (2) | web_search, web_fetch | Brave Search API + HTML-to-markdown with domain policy |
+| **Shell** (1) | run_shell_command | Approval-gated subprocess with safe-command auto-approval for read-only commands |
+| **MCP** (3 default servers) | github, thinking, context7 | External tool servers via Model Context Protocol (stdio transport) |
 
-1. Keep one primary loop: observe -> plan -> execute tools -> ask approval when needed -> summarize with citations.
-2. Avoid fragmented "feature islands" (separate research mode, separate automation mode, separate planning mode).
+### 3.2 Prompt System
 
-### 2.2 Asynchronous, long-running execution is now baseline
-
-1. OpenAI's agent stack includes background execution modes for longer tasks.
-2. Anthropic's Claude Code supports background tasks (for example via GitHub Actions integration).
-3. Google Jules moved from beta to broad availability in 2025 and added proactive/scheduled workflows.
-
-Implication for Co:
-
-1. Add resumable background runs as a first-class primitive.
-2. Treat foreground chat as control plane and background jobs as execution plane.
-
-### 2.3 Protocol convergence: MCP now matters
-
-1. OpenAI added remote MCP support in the Responses API tool stack.
-2. Anthropic added MCP connector capabilities and a broader agent-tooling surface (skills, memory tool, tool search).
-3. Google announced A2A protocol support and MCP support in Gemini API/SDK tooling.
-
-Implication for Co:
-
-1. MCP client support should move from TODO to core roadmap.
-2. Keep native tools for critical local/safety paths AND high-value, frequently-used platforms (Google, Slack, Obsidian, Web).
-3. Use MCP to expand breadth beyond what co-cli maintainers can realistically maintain:
-   - **Long tail** (Discord, Notion, Jira, Postgres, 100+ other services)
-   - **User-specific** (company APIs, personal databases, custom workflows)
-   - **Specialized** (vector search, PDF processing, audio transcription)
-4. **Native tools = core senses**; **MCP = extended senses**. Co needs both to achieve the "Finch" companion vision.
-
-### 2.4 Safety posture converges on human-in-the-loop for consequential actions
-
-1. OpenAI agent mode requests confirmation before high-impact actions.
-2. Anthropic computer-use guidance explicitly recommends VM isolation, domain restrictions, and human confirmation for meaningful real-world consequences.
-3. Google Project Mariner UX keeps users in control, with stop/takeover affordances.
-
-Implication for Co:
-
-1. Double down on approval-first rather than diluting it for convenience.
-2. Keep strict network/sandbox policies and explicit user control boundaries.
-
-## 3. Co CLI Ground Truth (Current State)
-
-Based on the current repository:
-
-1. Web intelligence already exists: `web_search` and `web_fetch` are implemented and wired into the agent.
-2. Web fetch already includes domain policy + private-network blocking + redirect revalidation.
-3. Google/Slack/Obsidian/Shell tools exist; this is already a multi-surface assistant.
-4. Explicit persistent personal memory tools (`save_memory`, `recall_memory`, `list_memories`) are implemented and shipped.
-5. MCP client support (stdio transport) is shipped — config, agent integration, status check, tests.
-6. No built-in background job runner for long agent tasks yet.
-7. No voice runtime yet.
-
-This means Co has strong foundations for core platforms. The largest gaps are MCP extensibility (enables long tail + user-specific integrations beyond native tools) and async execution.
-
-## 4. Strategic Roadmap
-
-*This strategic roadmap outlines the high-level phases. See Part II for detailed tactical execution.*
-
-### Phase 1: Consolidate the core operator loop
-
-**Core capabilities (task execution):**
-
-1. Add explicit local memory tools with manual writes only (no hidden ingestion).
-2. Add a planner/result contract that always returns:
-   - planned steps,
-   - executed tools,
-   - citations/evidence links,
-   - pending approvals or blocked actions.
-3. Add task checkpoints so a turn can pause/resume safely.
-
-**Identity layer (personality foundation):**
-
-4. Add personality system with pre-set templates:
-   - Fixed set of personality options (professional, friendly, terse, inquisitive)
-   - User-selectable via config or runtime command
-   - Personality injected at prompt assembly time
-   - Templates are bounded config space (explicit, not implicit)
-   - Starting point for evolution toward "Finch"-like companion
-
-5. Design internal knowledge system (distinct from external knowledge):
-   - **External knowledge:** Tools (Obsidian, web_search, Google, Slack, MCP servers)
-   - **Internal knowledge:** Co's learned context, patterns, user preferences
-   - Boundary: External = queried on demand, Internal = always available in context
-   - Storage: `.co-cli/knowledge/` directory for persistent learned knowledge
-   - Access: Agent SDK memory handling for session memory, file-based for cross-session
-
-Exit criteria:
-
-1. Users can run multi-step tasks with clear traceability and deterministic approval points.
-2. Memory behavior is explainable and auditable.
-3. Users can select personality that shapes co's interaction style.
-4. Internal knowledge persists across sessions without manual memory tool calls.
-
-### Phase 2: Ship MCP + background execution
-
-**Extensibility:**
-
-1. Implement MCP client Phase 1 (stdio) from `docs/TODO-mcp-client.md`.
-2. Add background job execution with:
-   - explicit start command,
-   - status inspection,
-   - cancellation,
-   - persisted logs/traces.
-3. Require approval policy inheritance for every MCP tool call.
-
-Exit criteria:
-
-1. Co can run long tasks without blocking the chat loop.
-2. External tools are extensible via MCP without weakening approvals.
-
-### Phase 3: Selective autonomy and richer I/O
-
-1. Add optional scheduling for approved recurring tasks.
-2. Pilot controlled computer-use style actions only in isolated environments.
-3. Add voice-to-voice round trip as an overlay on the text loop (see §4.1).
-
-Exit criteria:
-
-1. Unattended tasks are opt-in, bounded, and reversible.
-2. Voice/computer-use do not bypass approval or audit trails.
-
-### 4.1 Voice-to-Voice Round Trip (Phase 3)
-
-**Architecture**: Cascading pipeline (STT → LLM → TTS) as overlay on existing text loop. Voice feeds transcribed text to `run_turn()`, synthesizes text response to audio. No changes to agent, tools, or approval flow.
-
-**Components** (local-first): Silero VAD, faster-whisper (STT), Kokoro-82M (TTS), sounddevice (I/O). Total ~500MB models, <800ms latency target.
-
-**Activation**: Push-to-talk only (`co chat --voice` or `/voice`). Continuous listening deferred (requires echo cancellation).
-
-**Key Features**: Streaming at all stages, barge-in/interruption (<200ms), silence-based turn detection, OTel logging.
-
-**Boundaries**: No wake word, no voice cloning, no telephony, no speech-to-speech. Text remains primary — voice is convenience overlay.
-
-**Status**: Research complete, implementation deferred until Phase 2c ships. Design will be refreshed before execution to validate component choices against 2026+ frontier.
-
-**Full Design**: See `docs/TODO-voice.md` for detailed architecture, component rationale, latency analysis, and external research sources.
-
-## 5. Boundaries and Non-Goals (Near Term)
-
-1. No default-on autonomous background execution.
-2. No implicit sensitive-memory ingestion.
-3. No broad browser/desktop automation outside isolated, explicitly approved runs.
-4. No replacement of text UX as the primary control surface.
-
-## 6. Principle
-
-Adopt frontier patterns where they improve outcomes, but keep Co's design contract intact:
-
-1. Local-first data/control.
-2. Approval-first side effects.
-3. Tooling that remains composable, inspectable, and testable.
-
----
-
-# Part II: Tactical Execution
-
-## Phase Status Overview
-
-| Phase | Name | Status | Effort | Documentation | Priority |
-|-------|------|--------|--------|---------------|----------|
-| **1a** | Model Conditionals | ✅ COMPLETE | - | (archived) | - |
-| **1b** | Personality Templates | ✅ COMPLETE | - | (archived) | - |
-| **1c** | Memory System | ✅ COMPLETE | 8-10h | DESIGN-14-memory-lifecycle-system.md | - |
-| **1d** | Aspect Refactor | ✅ COMPLETE | 3-4h | DESIGN-16-prompt-design.md | - |
-| **1e** | Portable Identity | 📅 DEFERRED | 9h | (archived) | LOW |
-| **2a** | MCP Client (stdio) | ✅ COMPLETE | 6-8h | DESIGN-15-mcp-client.md | HIGH |
-| ~~**2b**~~ | ~~User Preferences~~ | ❌ CANCELLED | - | (redundant — covered by memory system + personality) | - |
-| **2c** | Background Execution | 📝 DOCUMENTED | 10-12h | TODO-background-execution.md | MEDIUM |
-| **2.5** | Shell Security (S0+S1) | 📅 DEFERRED | 6-9d | TODO-shell-security-and-tools.md | HIGH |
-| **2d** | File Tools (C1) | 📅 DEFERRED | 3-4h | TODO-shell-security-and-tools.md | LOW |
-
-**Total Remaining Work (Active)**: 10-12 hours (Phase 2c)
-**Deferred Work (Phase 2.5+ and follow-ons)**: 6-9 days + 12-13 hours
-
----
-
-## Architecture Review (2026-02-10): Deferral Decision
-
-Before proceeding with Phase 1e, we conducted a comprehensive architecture review to assess if shell security issues identified in `TODO-shell-security-and-tools.md` (Phase S0) represent fundamental architectural problems requiring large-scale refactoring.
-
-### Review Findings: ✅ **Architecture is Fundamentally Sound (9.9/10)**
-
-**Three-part deep dive**:
-1. **Tool Registration**: 9.9/10 - Centralized, zero global state, clear separation of side-effectful vs read-only
-2. **Approval System**: 9.8/10 - Unified system, no LLM bypass paths, robust interrupt handling
-3. **Tool Contracts**: 9.9/10 - Uniform signatures, consistent return types, minimal friction for new tools
-
-**Key Conclusions**:
-- ✅ No architectural debt found - system is production-ready
-- ✅ S0's concerns are **policy gaps**, not architecture flaws
-- ✅ The `!cmd` bypass is intentional (escape hatch), not a bug
-- ✅ Adding Phase 1e/2a tools poses no structural risk
-
-### Deferral Rationale
-
-**Why defer S0 (Shell Security) to Phase 2.5?**
-1. **No incidents** - `!` bypass hasn't caused problems in practice
-2. **Policy work** - S0 is policy refinement, not architecture repair
-3. **User value waiting** - Phase 2a (MCP Client) and 2c (Background Execution) deliver visible benefits
-4. **No compounding risk** - Tool architecture is solid, expansion is safe
-
-**Why defer Portable Identity?**
-1. **Not core logic** — Portability is polish (export/import/sync), not essential functionality
-2. **Let memory system stabilize** — Needs production validation first
-3. **Symlinks work today** — `ln -s ~/Dropbox/co-knowledge ~/.config/co-cli/knowledge`
-
-**When to execute Phase 2.5 (S0+S1)?**
-- After Phase 2c ships (background execution complete)
-- Before Phase 3 expansion (next major capability layer)
-- Immediately if incidents occur
-
-### Revised Sequence
+Soul-first layered composition:
 
 ```
-Prompt System Redesign (in progress)
-  ↓
-Phase 2a (MCP Client) ✅ → Phase 2c (Background Execution, 10-12h)
-  ↓
-Phase 2.5: Shell Security Hardening (S0+S1, 6-9 days)
-  ↓
-Phase 2d: File Tools (C1, 3-4h)
-  ↓
-Phase 3+: Advanced capabilities
-```
-
----
-
-## Documentation Summary
-
-### Phase 1 (Complete — archived)
-
-Phases 1a–1d are complete. Implementation guides were archived (deleted) as they described code patterns that no longer exist (monolithic `system.md`, `[IF provider]` conditionals, monolithic personality files). Current architecture is documented in:
-- **Memory system**: [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md)
-- **Prompt system**: [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) (active redesign)
-- **Personality system**: `co_cli/prompts/personalities/` (registry, composer, roles)
-
----
-
-### Phase 2a: MCP Client Integration
-**File**: `docs/TODO-mcp-client.md` (1,850 lines) ✅
-
-**Goal**: Integrate MCP servers as external tool sources via stdio transport.
-
-#### Why MCP? (Value Proposition Clarification)
-
-**Co already has excellent native tool coverage**: 21 tools across 6 platforms (Google Suite, Slack, Obsidian, Web, Memory, Shell).
-
-**MCP doesn't replace native tools — it extends them beyond what's practical to maintain natively.**
-
-| Category | Native Tools (Co Built-in) | MCP Unlocks |
-|----------|----------------------------|-------------|
-| **Communication** | Gmail, Slack | Discord, Teams, WhatsApp, Telegram, IRC, Matrix |
-| **Files** | Google Drive | Dropbox, OneDrive, Box, S3, MinIO, Azure Blob |
-| **Tasks** | None | Jira, Linear, Asana, Trello, GitHub Issues, GitLab Issues |
-| **Notes** | Obsidian | Notion, Roam, LogSeq, Evernote, Bear, Confluence |
-| **Data** | None | PostgreSQL, MySQL, MongoDB, Redis, Elasticsearch |
-| **Specialized** | None | Vector DBs, PDF processing, audio transcription, LSP servers |
-
-**Three key benefits**:
-1. **Long tail** — 100+ MCP servers exist, community-maintained
-2. **User-specific** — Company APIs, personal databases, custom workflows
-3. **Maintenance shift** — Co-cli maintainers don't write/maintain integration code
-
-**When to add native vs MCP**:
-- **Native**: Top 3 user requests, stable API, complex OAuth, tight integration with co's internal state
-- **MCP**: Long tail, niche, user-specific, evolving APIs, simple auth
-
-**Key Features**:
-- Config schema: `mcp_servers` in settings.json
-- Dynamic tool discovery via MCP protocol
-- Async lifecycle management (`async with agent`)
-- Automatic tool name collision handling (prefixing)
-- Approval inheritance (MCP tools = native tools)
-- 13+ functional tests
-
-**Success Criteria**: 25 checkboxes across functional, approval, config, status, testing, docs
-
----
-
-### ~~Phase 2b: User Preferences System~~ — CANCELLED
-
-**Reason**: Redundant with existing systems. The memory system (Phase 1c) already captures user preferences as tagged memories (`preference` signal type). The personality system (Phase 1b) already controls communication style via composable styles (terse/balanced/warm/educational). A separate structured preferences system would create dual state conflicts and add complexity without meaningful capability gain. The roadmap's own research note acknowledged this: "superseded by co's knowledge system approach." See TODO-slash-command-overrides.md for the one salvaged piece (runtime session toggles).
-
----
-
-### Phase 2c: Background Execution
-**File**: `docs/TODO-background-execution.md` (1,900 lines) ✅
-
-**Goal**: Long-running tasks run in background without blocking chat. User can start, check status, cancel, and view results asynchronously.
-
-**Use Cases**:
-- Long test runs (5+ minutes)
-- Large file processing (hundreds of files)
-- Research tasks (codebase analysis)
-- Batch operations (mass file updates)
-
-**Key Features**:
-- Task lifecycle: pending → running → completed/failed/cancelled
-- Storage: `.co-cli/tasks/{task-id}.json` (metadata) + `.co-cli/tasks/{task-id}.log` (output)
-- Slash commands: `/background`, `/tasks`, `/status`, `/cancel`
-- Three agent tools: `start_background_task`, `check_task_status`, `cancel_task`
-- Approval inheritance (pre-execution gate, no mid-execution prompts)
-- OTel integration (trace linking)
-- 25+ functional tests
-
-**Success Criteria**: Phase-specific completion gates for storage, execution, commands, tools, integration
-
----
-
-### Phase 2.5: Shell Security Hardening (S0+S1) 📅 DEFERRED
-**File**: `docs/TODO-shell-security-and-tools.md` (S0: Shell Boundary Hardening, S1: Policy Engine Upgrade)
-
-**Goal**: Harden shell/sandbox approval boundary and establish structured command-policy evaluation.
-
-**Key Work**:
-- **S0 (3-5 days)**: Remove policy mismatches, unify `!cmd` with approval system, define `sandbox_fallback` policy, tighten safe-command classification
-- **S1 (3-4 days)**: Introduce policy table for shell decisions, parser-assisted command evaluation, explicit deny patterns
-
-**Success Criteria**:
-- ✅ No approval bypass for shell execution
-- ✅ Fallback behavior explicit and tested
-- ✅ Shell policy decisions deterministic and tested
-- ✅ Unsandboxed risk state persistently visible
-
-**Deferral Reason**: Policy refinement work, not architectural blocker. Execute after Phase 2c, before Phase 3 expansion.
-
----
-
-### Phase 2d: File Tools (C1) 📅 DEFERRED
-**File**: `docs/TODO-shell-security-and-tools.md` (Phase C1)
-
-**Goal**: Stop overusing shell for standard read/write/edit/list operations.
-
-**Tools**: `list_directory`, `read_file`, `write_file`, `edit_file`
-
-**Security**: Path resolution bounded to workspace root, traversal/symlink escape blocked
-
-**Success Criteria**:
-- ✅ Default file workflows use file tools, not shell
-- ✅ No path escape in functional tests
-
-**Deferral Reason**: Not critical for current roadmap. Execute after Phase 2.5 (shell security) complete.
-
----
-
-## Documentation Lifecycle Pattern
-
-### Phase Completion Workflow
-
-**Standard pattern for completing implementation phases:**
-
-1. Execute work following TODO implementation guide
-2. Create `-COMPLETE.md` file documenting outcomes, test results, time tracking
-3. Delete TODO file once COMPLETE file is committed and verified
-4. Move on to next phase
-
-**Example (Phase 1a, 1b completed 2026-02-09):**
-```
-TODO-co-evolution-phase1a.md (66KB, 1,800 lines implementation guide)
-  ↓ (work completed)
-TODO-co-evolution-phase1a-COMPLETE.md (6KB, 200 lines summary)
-  ↓ (cleanup)
-DELETE TODO-co-evolution-phase1a.md (scaffolding no longer needed)
-```
-
-**File size impact:**
-- Phase 1a TODO: 66KB → COMPLETE: 6KB (90% reduction)
-- Phase 1b TODO: 13KB → COMPLETE: 10KB (23% reduction)
-- **Rationale**: COMPLETE files capture all essential outcomes (what was delivered, test results, lessons learned, time tracking). TODO files are verbose implementation scaffolding only needed during execution.
-
-**Exception**: If implementation guide has significant historical value (novel architecture, complex decisions), consider renaming to `IMPLEMENTATION-phase*.md` instead of deleting. Not typically needed for straightforward implementations.
-
-### Anti-Pattern Note
-
-**Observed naming issue**: Phase TODO files (1,500-2,000 lines) are actually full implementation guides with architecture, code specs, and tests — not just "work items" as CLAUDE.md convention suggests.
-
-**Better naming for future phases** (post-Phase 2c):
-- `SPEC-phase*.md` or `IMPLEMENTATION-phase*.md` (implementation guide)
-- `TODO-phase*-items.md` (just the checklist/work items)
-- `COMPLETE-phase*.md` (completion report)
-
-**Current approach**: Keep `TODO-phase*.md` naming for consistency with existing phases 1c-2c.
-
----
-
-## Implementation Sequence
-
-### Recommended Order (Updated 2026-02-12)
-
-1. ✅ **Phase 1** - COMPLETE (model conditionals, personalities, memory, aspect refactor)
-
-2. 🔄 **Prompt System Redesign** - IN PROGRESS
-   - Layered composition, instruction discovery, test governance
-   - See [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md)
-
-3. **Phase 2a** (6-8 hours) - ECOSYSTEM ENABLER ✅ COMPLETE
-   - MCP extensibility unlocks tool ecosystem
-
-4. **Phase 2c** (10-12 hours) - ADVANCED UX - NEXT
-   - Benefits from 2a completion (MCP tools in background)
-   - Independent core implementation
-
-5. **Phase 2.5** (6-9 days) - SHELL SECURITY HARDENING - DEFERRED
-   - S0 (3-5 days): Shell boundary hardening, approval unification
-   - S1 (3-4 days): Policy engine upgrade, parser-assisted evaluation
-   - Execute after Phase 2c, before Phase 3 expansion
-   - **Rationale**: Policy refinement, not architectural blocker
-
-6. **Phase 2d** (3-4 hours) - FILE TOOLS - DEFERRED
-   - Workspace file tools (list/read/write/edit)
-   - Execute after Phase 2.5 (shell security complete)
-   - Low priority for current roadmap
-
-7. **Portable Identity** (9 hours) - PORTABILITY - DEFERRED (NON-CORE)
-   - Identity separation (portable vs machine-local)
-   - Export/import/sync commands
-   - **Rationale**: Let memory system stabilize in production first
-   - Execute when users request portability features (Phase 3+ timeframe)
-   - Symlinks work today: `ln -s ~/Dropbox/co-knowledge ~/.config/co-cli/knowledge`
-
-### Parallel Workstreams
-
-If multiple implementers available:
-
-- **Stream A**: Prompt system redesign
-- **Stream B**: Phase 2c (background execution)
-
----
-
-## Future Work ROI Ranking
-
-Future enhancements beyond current Phase 1-2 roadmap, ranked by return on investment:
-
-| TODO | Effort | Impact | ROI | Status |
-| --- | --- | --- | --- | --- |
-| **Model Fallback Chain** | Medium | High (graceful degradation) | **Best** | Planned |
-| MCP Client Support — Phase 1 | Medium | High (extensibility + ecosystem) | **Best** | ✅ Phase 2a |
-| Critical Tools S0 (Shell Security) | Small-Medium | High (safety + trust) | **Best** | Phase 2.5 |
-| **Context Window Guard** | Small | Medium (prevents truncation) | **High** | Planned |
-| **Session Persistence** | Medium | Medium-High (resume, audit) | Medium-High | Planned |
-| **Skills System** | Small-Medium | High (zero-code extensibility) | Medium-High | Planned |
-| Slack Tooling — Phase 2/3 | Small-Medium | Medium | Medium-High | Planned |
-| Cross-Tool RAG | Large | High (at scale) | Low | Deferred |
-
-**Next priorities** (post-Phase 2c): Model Fallback Chain → Context Window Guard → Session Persistence
-
----
-
-## Prompt Assembly Order
-
-System prompt assembles via `assemble_prompt()` in `co_cli/prompts/__init__.py`:
-
-```
-Fixed (system prompt, every turn):
-  1. instructions.md       # bootstrap identity
-  2. rules/*.md            # 5 behavioral rules (01-05)
-  3. counter_steering      # model quirk text (optional)
+System prompt (fixed, every turn):
+  1. instructions.md       (bootstrap identity)
+  2. soul seed             (personality fingerprint, always-on)
+  3. rules/*.md 01-05      (behavioral policy)
+  4. counter-steering       (model quirk corrections)
 
 Dynamic (tool-loaded, on demand):
-  load_personality(pieces) # character + style
-  recall_memory(query)     # persistent memories
-  save_memory(content)     # persist knowledge
+  load_personality(pieces)  (character axis + style axis)
+  recall_memory(query)      (persistent memories)
+  save_memory(content)      (persist knowledge)
 ```
 
-All knowledge (memories, future articles) is dynamic — loaded via tools, never baked into the system prompt.
+### 3.3 Personality System
+
+5 presets with 4 composable aspect types:
+
+| Preset | Soul seed flavor | Character | Style |
+|--------|-----------------|-----------|-------|
+| finch | Patient, protective, pragmatic | finch | balanced |
+| jeff | Eager learner, curious, honest | jeff | warm |
+| friendly | Warm collaborator, "we" and "let's" | — | warm |
+| terse | Direct, minimal, fragments over sentences | — | terse |
+| inquisitive | Explores before acting, presents tradeoffs | — | balanced |
+
+### 3.4 Infrastructure
+
+- **OTel tracing** — SQLite span exporter with `co logs` (table) and `co traces` (nested HTML)
+- **Context governance** — sliding window compaction, LLM-driven summarization via `/compact`
+- **Slash commands** — `/help`, `/clear`, `/status`, `/tools`, `/history`, `/compact`, `/model`, `/forget`
+- **Config precedence** — env vars > project settings > user settings > defaults
+- **Approval system** — tool-level `requires_approval=True` with `DeferredToolRequests`, unified UX in the chat loop
+
+## 4. Design Principles
+
+Four non-negotiables:
+
+1. **Local-first** — data and control stay on the user's machine. No cloud dependency for core function.
+2. **Approval-first** — side-effectful actions require explicit consent. Never dilute for convenience.
+3. **Incremental delivery** — ship the smallest thing that solves the user problem. Use protocols/abstractions so enhancements require zero caller changes.
+4. **Single loop, no feature islands** — one observe-plan-execute-reflect cycle. No separate research mode, automation mode, or planning mode. Everything flows through the same agent loop.
 
 ---
 
-## Success Metrics
+# Part II: Strategic Evolution
 
-### Technical Metrics
+## 5. Frontier Context
 
-- **Test Coverage**: >90% for all new code
-- **Performance**: <100ms overhead per phase at session start
-- **Memory**: <10KB per phase (internal knowledge)
-- **Reliability**: No regressions in existing test suite
+The frontier is no longer single-turn tool calls. It is end-to-end agents with planning, tool orchestration, asynchronous execution, and explicit safety controls.
 
-### Behavioral Metrics
+**What the best systems converge on:**
 
-- **Companion Behavior**: Co remembers user context across sessions
-- **Adaptive Communication**: Personality + memory-based preferences adapt naturally
-- **Extensible Tooling**: MCP servers integrate seamlessly with native tools
-- **Async Capable**: Long tasks run in background without blocking interaction
+| Pattern | Adoption | Implication for Co |
+|---------|----------|-------------------|
+| ReAct agent loop | 4/4 agent systems | Validates co's existing loop. Invest in resilience, not replacement |
+| File tools as core | 4/5 peers | Critical gap. Reduces shell reliance. Read-only subset needs no security gate |
+| Context compaction | 3/5 peers | Already partially shipped (/compact). Needs auto-trigger and anti-injection |
+| Undo/revert | 3/5 peers | Needed once file write tools ship. Git-based simplest approach |
+| Skills/extensions | 3/5 peers | Zero-code extensibility. Consolidating around a single "skill" primitive |
+| Session persistence | 3/5 peers | Essential for the companion vision. Sessions must survive terminal closure |
+| Sub-agent delegation | 3/5 peers | Isolated contexts prevent pollution. Structured output enforces completion |
+| Shell safety | 4/5 peers (divergent approaches) | Approval-gated subprocess — no Docker. Approval is the security boundary (design principle #2). See `TODO-drop-docker-sandbox.md` |
+| MCP as extension protocol | 3/4 agent systems | Shipped. Universal standard for tool extensibility |
+| Background execution | 3/5 peers | Emerging pattern. Fire-and-forget tasks that survive terminal closure |
+| Doom loop detection | All systems address, none solve definitively | P0 safety. Hash-based repetition detection + hard turn limits |
 
-### Quality Metrics
+**What is NOT converging** (avoid premature investment):
+- Sandbox strictness (OS-level vs approval-based — no consensus; co chose approval-based, no Docker)
+- Compaction strategy (server-side vs client-side vs avoidance-through-large-context)
+- Multi-agent coordination models (each system fundamentally different)
+- Plugin distribution format (no standard marketplace)
 
-- **Peer Parity**: System prompt quality matches/exceeds Codex, Gemini CLI, Claude Code, Aider
-- **Testability**: All features have functional tests, no mocks
-- **Maintainability**: Clear documentation, explicit over implicit, simple over complex
+## 6. Evolution Phases
 
----
+Sequenced by peer convergence strength and dependency order. Security before autonomy. File tools before undo. Safety before delegation.
 
-## Risk Assessment
+### Phase A: Agentic Loop + Safety Foundations — HIGH
 
-### Phase 2a Risks
-- **Zombie MCP processes** → Mitigation: Proper async context manager
-- **Tool name collisions** → Mitigation: Automatic prefixing
-- **Approval bypass** → Mitigation: Strict inheritance of host approval model
+**Why first:** Every peer system has loop detection, turn limits, and injection protection. These are P0 safety — the absence is a correctness and cost risk, not a feature gap.
 
-### Phase 2c Risks
-- **Resource leaks** → Mitigation: Task cleanup policy, monitoring
-- **Silent failures** → Mitigation: Status tracking, error logging
-- **Approval gaps** → Mitigation: Inherit approval decisions, no mid-execution prompts
+**Scope:**
+- Doom loop detection (hash-based, threshold 3 — adopted from OpenCode/Gemini CLI)
+- Turn limit per user message (default 50, configurable — from all peers)
+- Anti-prompt-injection in summarization (security rule in compaction prompt)
+- Shell reflection loop (error output fed back, max 3 retries — from Aider)
+- Typed loop return values (`continue | stop | error | compact`)
+- Abort marker in history for interrupted turns
 
----
+**Prompt improvements (zero code cost):**
+- Intent classification: directive vs inquiry (from Gemini CLI)
+- Anti-sycophancy directive (from OpenCode/Gemini CLI)
+- Preamble messages before tool calls (from Codex)
+- Memory tool constraints (from Gemini CLI)
+- Handoff-style compaction prompt (from Codex)
 
-## Next Steps
+**Design doc:** `TODO-co-agentic-loop-and-prompting.md`
 
-### Immediate Actions
+### Phase B: File Tools — HIGH
 
-1. ✅ Phase 1 complete (model conditionals, personalities, memory system, aspect refactor)
-2. ✅ Architecture review complete (9.9/10 — no refactoring needed)
-3. 🔄 **IN PROGRESS**: Prompt system redesign (layered composition, instruction discovery, test governance)
-4. ⏳ **NEXT**: Phase 2a (MCP client)
+**Why:** 4/5 peers ship file tools as core. Reduces shell reliance for standard read/write/edit operations. Read-only subset (`list_directory`, `read_file`) needs no approval gate.
 
-**Sequence**: Prompt redesign → 2c (background) → 2.5 (shell security).
+**Scope:**
+- `list_directory` — workspace file listing with glob support
+- `read_file` — bounded file reading with line ranges
+- `write_file` — create/overwrite with approval
+- `edit_file` — surgical text replacement with approval
+- Path resolution bounded to workspace root, traversal/symlink escape blocked
 
-### Phase-Specific Next Steps
+**Sequencing:** Read-only tools can ship independently. Write tools depend on Phase C (shell hardening).
 
-**Prompt System Redesign** (IN PROGRESS):
-- See [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) for full plan
-- Layered PromptLayer composition with PromptManifest diagnostics
-- Scoped instruction discovery (global → project)
-- First-principles test governance for memory and personality
+### Phase C: Shell Security Hardening (S0) — HIGH
 
-**Phase 2c** (NEXT):
-- See [TODO-background-execution.md](TODO-background-execution.md)
+**Why:** Co-requisite with file write tools. Background execution (Phase E) without shell hardening means unsupervised loose policy. Every peer system addresses this, though approaches diverge.
+
+**Scope:**
+- Drop Docker sandbox — subprocess + approval becomes sole execution model (see `TODO-drop-docker-sandbox.md`)
+- Unify `!cmd` bypass with the approval system
+- Tighten safe-command classification — safe-prefix auto-approval active universally (no `isolation_level` gate)
+- Rename sandbox references → shell throughout codebase
+
+**Design docs:** `DESIGN-09-tool-shell.md` (architecture), `TODO-drop-docker-sandbox.md` (Docker removal)
+
+### Phase D: Context Compaction — HIGH
+
+**Why:** 3/5 peers have LLM-driven auto-compaction. Co has manual `/compact` but no auto-trigger. This is a correctness issue — without it, long sessions silently lose context.
+
+**Scope:**
+- Auto-trigger compaction at context threshold (85% of usable tokens — from OpenCode)
+- Anti-injection hardening in compaction prompt
+- First-person summarization framing ("I asked you..." — from Aider)
+- Background pre-compaction during user idle time (optimization)
+- Plans and key decisions persist across compaction events
+
+**Design doc:** `DESIGN-07-context-governance.md` (existing), `TODO-co-agentic-loop-and-prompting.md`
+
+### Phase E: Background Execution — MEDIUM
+
+**Why:** 3/5 peers support background tasks. Long-running operations (research, batch processing, test runs) should not block the conversation. Benefits from Phases A-D being solid first.
+
+**Scope:**
+- Task lifecycle: pending → running → completed/failed/cancelled
+- Persistent task state (survives terminal closure)
+- Slash commands: `/background`, `/tasks`, `/status`, `/cancel`
+- Agent tools: `start_background_task`, `check_task_status`, `cancel_task`
+- Approval inheritance (pre-execution gate, no mid-execution prompts)
+- OTel trace linking
+
+**Design doc:** `TODO-background-execution.md`
+
+### Phase F: Undo/Revert — MEDIUM
+
+**Why:** 3/5 peers have rollback. Linked to file tools — needed once write tools ship. Builds user trust for granting more autonomy.
+
+**Scope:**
+- `/rewind` command: revert conversation history + file changes (from Claude Code/Gemini CLI)
+- Git-based file snapshots (simplest reliable approach — from Aider)
+- Scoped to agentic changes only (don't touch user's manual edits)
+
+### Phase G: Skills System — MEDIUM
+
+**Why:** 3/5 peers have skills/extensions (Claude Code, Codex, Gemini CLI all consolidating around a "skill" primitive). Zero-code extensibility for users.
+
+**Scope:**
+- Skill definition format (markdown-based, like SKILL.md)
+- Skill discovery (project-local, user-global)
+- Skill invocation via slash commands
+- Bundling: instructions + tool hints + workflow steps
+
+### Phase H: Session Persistence — MEDIUM
+
+**Why:** 3/5 peers persist sessions. Essential for the companion vision — a companion that forgets every conversation is not a companion.
+
+**Scope:**
+- Auto-save conversation state (messages, tool calls, results)
+- Resume previous sessions
+- Session listing and management
+- Persistence survives terminal closure and system restarts
+
+### Phase I: Sub-Agent Delegation — MEDIUM
+
+**Why:** 3/5 peers have multi-agent capability. Already designed in `TODO-co-agentic-loop-and-prompting.md` as super-agent + sub-agents with structured output types.
+
+**Scope:**
+- Research sub-agent (search → fetch → synthesize, returns `ResearchResult`)
+- Analysis sub-agent (compare → evaluate, returns `AnalysisResult`)
+- Shared `CoDeps` and `UsageLimits` budget (sub-agent consumption counts toward parent)
+- Structured `output_type` enforces completion (prevents early-exit problem)
+
+**Gating:** Phase 1 prompt improvements may solve the early-exit problem without sub-agents. The TODO doc specifies a test gate: if 80%+ of research prompts complete full tool chains after prompt rewrite, sub-agents are deferred.
+
+### Phase J: Shell Policy Engine (S1) — LOW
+
+**Why:** Complete security hardening. Parser-assisted command evaluation, explicit deny patterns, deterministic policy decisions.
+
+**Scope:**
+- Policy table for shell decisions
+- Parser-assisted command evaluation
+- Explicit deny patterns
+- Execute after S0 (Phase C) ships and stabilizes
+
+### Phase K: Voice — LOW/DEFERRED
+
+**Why:** 0/5 peers implement voice. Wait for platform APIs to mature. Design exists but execution is premature.
+
+**Scope:** STT → LLM → TTS cascading pipeline as overlay on text loop. Push-to-talk only.
+
+**Design doc:** `TODO-voice.md`
+
+## 7. Parallel Workstreams
+
+Phases are sequenced by dependency, but some can run concurrently:
+
+```
+Stream 1 (Safety):     A ──────────────── C ── J
+                         \                 \
+Stream 2 (Capability):    B (read-only) ── B (write) ── F
+                                                          \
+Stream 3 (UX):            D ── E ── H                      G
+                                \
+Stream 4 (Intelligence):         I
+```
+
+- **A** (agentic loop safety) has no dependencies — start immediately
+- **B read-only** (list_directory, read_file) can start in parallel with A
+- **B write** (write_file, edit_file) depends on **C** (shell hardening)
+- **D** (compaction) can start after A ships (uses typed loop returns)
+- **F** (undo/revert) depends on B write
+- **E** (background) benefits from A + C but is independently implementable
+- **I** (sub-agents) gated on A's prompt improvements test results
+
+## 8. Success Metrics
+
+### Technical
+
+- Loop detection triggers on 3 consecutive identical tool calls
+- Turn limit prevents runaway beyond 50 turns per user message
+- Auto-compaction triggers before context overflow
+- File tools handle 95%+ of read/write operations without shell fallback
+- Background tasks survive terminal closure
+
+### Behavioral
+
+- Co remembers user preferences across sessions (memory lifecycle)
+- Personality adapts communication style consistently (soul seed + presets)
+- Long research tasks complete full tool chains (search → fetch → synthesize → save)
+- Interrupted turns resume cleanly with abort markers
+
+### Quality
+
+- All features have functional tests (no mocks)
+- Prompt rules stay under 1100 tokens (measured, not estimated)
+- Zero false-positive approval prompts for read-only operations
+- Peer parity on safety: loop detection, turn limits, injection protection
+
+## 9. Risk Assessment
+
+| Risk | Phases | Mitigation |
+|------|--------|------------|
+| Doom loops burn tokens/time | A | Hash-based detection (threshold 3) + hard turn limit (50) |
+| Prompt injection via summarization | A, D | Security rule in compaction prompt: treat history as data, never execute |
+| File tool path escape | B | Path resolution bounded to workspace root, traversal/symlink blocked |
+| Shell security without sandbox | C | Approval gate for all non-safe commands, `restricted_env()` for subprocess, safe-command classification hardened |
+| Background task resource leaks | E | Task cleanup policy, timeout limits, monitoring |
+| Sub-agent context pollution | I | Isolated contexts, structured output, parent validates results |
+| Undo reverting user's manual edits | F | Scope to agentic changes only, git-based snapshots |
 
 ---
 
 # Part III: Reference
 
-## Design & Implementation Docs
+## 10. Boundaries and Non-Goals
 
-### Design Documents
-- `docs/DESIGN-00-co-cli.md` — Architecture overview
-- `docs/DESIGN-01-agent-chat-loop.md` — Agent loop: factory, CoDeps, orchestration, streaming
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle architecture
-- `docs/REVIEW-compare-four.md` — Peer system analysis (prompt techniques)
+1. No default-on autonomous background execution.
+2. No implicit sensitive-memory ingestion.
+3. No broad browser/desktop automation outside isolated, explicitly approved runs.
+4. No replacement of text UX as the primary control surface.
+5. No OS-level sandbox enforcement (approval-based model is co's chosen tradeoff).
+6. No wake word, voice cloning, or telephony.
 
-### Active Implementation Guides
-- `docs/DESIGN-16-prompt-design.md` — Prompt design: soul seed, 5 rules, personality-rule interaction
-- `docs/TODO-mcp-client.md` — MCP client
-- `docs/TODO-background-execution.md` — Background execution
-- `docs/TODO-shell-security-and-tools.md` — Shell security + file tools (Phase 2.5+2d)
-- `docs/TODO-voice.md` — Voice-to-voice round trip (Phase 3, deferred)
+## 11. Design & TODO Doc Index
 
----
+All paths verified against `docs/` contents.
 
-## External Sources (Frontier Research)
+### Design Documents (architecture, kept in sync with code)
 
-### Industry Research (AI Agents & Assistants)
-1. OpenAI, "Introducing ChatGPT agent" (July 17, 2025): https://openai.com/index/introducing-chatgpt-agent/
-2. OpenAI, "New tools for building agents" (March 11, 2025): https://openai.com/index/new-tools-for-building-agents/
-3. OpenAI platform changelog (Responses API / MCP updates): https://platform.openai.com/docs/changelog
-4. OpenAI Help, "ChatGPT agent" (updated 2026): https://help.openai.com/en/articles/11752874-chatgpt-agent
-5. Anthropic, "Introducing Claude 4" (May 22, 2025): https://www.anthropic.com/news/claude-4
-6. Anthropic Claude docs, "Computer use tool": https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
-7. Anthropic release notes (2025-2026 API/tooling timeline): https://platform.claude.com/docs/en/release-notes/overview
-8. Google I/O 2025 updates (Agent Mode, Project Mariner, Jules, MCP/A2A): https://blog.google/technology/google-io/gemini-updates-io-2025/
-9. Google DeepMind, "Project Mariner": https://deepmind.google/models/project-mariner/
-10. Google Labs, "Jules now available" (July 23, 2025): https://blog.google/technology/google-labs/jules-now-available/
-11. Google Labs, "New ways to build with Jules" (October 2, 2025): https://blog.google/technology/google-labs/jules-tools-jules-api/
-12. Google Developers, "Jules proactive updates" (December 10, 2025): https://blog.google/technology/developers/jules-proactive-updates/
+| Doc | Description |
+|-----|-------------|
+| `DESIGN-00-co-cli.md` | Architecture overview, component index, cross-cutting concerns |
+| `DESIGN-01-agent-chat-loop.md` | Agent loop: factory, CoDeps, orchestration, streaming, approval |
+| `DESIGN-03-llm-models.md` | LLM model configuration (Gemini, Ollama) |
+| `DESIGN-04-streaming-event-ordering.md` | Streaming event ordering, boundary-safe rendering |
+| `DESIGN-05-otel-logging.md` | Telemetry architecture, SQLite schema, viewers |
+| `DESIGN-06-tail-viewer.md` | Real-time span tail viewer |
+| `DESIGN-07-context-governance.md` | Context governance: history processors, sliding window, summarization |
+| `DESIGN-08-theming-ascii.md` | Theming, ASCII art banner, display helpers |
+| `DESIGN-09-tool-shell.md` | Shell tool, approval-gated subprocess, security model |
+| `DESIGN-10-tool-obsidian.md` | Obsidian/notes tool design |
+| `DESIGN-11-tool-google.md` | Google tools: Drive, Gmail, Calendar, lazy auth |
+| `DESIGN-13-tool-web-search.md` | Web intelligence: web_search (Brave API) + web_fetch (HTML→markdown) |
+| `DESIGN-15-mcp-client.md` | MCP client: external tool servers via stdio transport |
+| `DESIGN-16-prompt-design.md` | Soul-first prompt design: soul seed, 5 rules, personality-rule interaction |
 
-### Voice & Audio Processing
-13. OpenAI, "Realtime API VAD guide": https://platform.openai.com/docs/guides/realtime-vad
-14. OpenAI, "Developer notes on the Realtime API": https://developers.openai.com/blog/realtime-api/
-15. Google, "Gemini Live API overview": https://ai.google.dev/gemini-api/docs/live
-16. Pipecat (Daily.co), voice AI framework: https://github.com/pipecat-ai/pipecat
-17. LiveKit Agents: https://github.com/livekit/agents
-18. Silero VAD: https://github.com/snakers4/silero-vad
-19. faster-whisper: https://github.com/SYSTRAN/faster-whisper
-20. Kokoro-82M (ONNX): https://github.com/thewh1teagle/kokoro-onnx
-21. Piper TTS: https://github.com/rhasspy/piper
-22. "Cracking the <1-second voice loop" (30+ stack benchmarks): https://dev.to/cloudx/cracking-the-1-second-voice-loop-what-we-learned-after-30-stack-benchmarks-427
-23. "Real-Time vs Turn-Based Voice Agent Architecture" (Softcery): https://softcery.com/lab/ai-voice-agents-real-time-vs-turn-based-tts-stt-architecture
-24. "The voice AI stack for building agents in 2026" (AssemblyAI): https://www.assemblyai.com/blog/the-voice-ai-stack-for-building-agents
+### TODO Documents (remaining work)
 
----
+| Doc | Description | Related Phase |
+|-----|-------------|---------------|
+| `TODO-co-agentic-loop-and-prompting.md` | Agentic loop + prompting: ReAct, doom loop, sub-agents, prompt composition | A, D, I |
+| `TODO-background-execution.md` | Background task execution for long-running operations | E |
+| `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
+| `TODO-voice.md` | Voice-to-voice round trip | K |
+| `TODO-cross-tool-rag.md` | Cross-tool RAG: SearchDB shared service | Future |
+| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | SQLite FTS5 + semantic search for memory/article files | Future |
 
-## Version History
+### Research & Review Documents
 
-- **2026-02-12**: Phase 2b (User Preferences) cancelled — redundant with memory system + personality system. TODO deleted, roadmap sequence updated to 2a → 2c → 2.5
-- **2026-02-11**: Prompt system redesign started — archived Phase 1 docs, deleted stale tests, first-principles test redesign
-- **2026-02-10**: Phase 1 complete (1a model conditionals, 1b personalities, 1c memory system, 1d aspect refactor)
-- **2026-02-10**: Architecture review complete — 9.9/10, no refactoring needed
-- **2026-02-09**: Phase 1a, 1b complete (model conditionals, personality templates)
+| Doc | Description |
+|-----|-------------|
+| `REVIEW-agent-loop-peer-systems.md` | Peer system agent loop analysis |
+| `REVIEW-prompts-peer-systems.md` | Peer system prompt architecture synthesis |
+| `REVIEW-prompts-aider.md` | Aider prompt architecture review |
+| `REVIEW-prompts-claude-code.md` | Claude Code prompt architecture review |
+| `REVIEW-prompts-codex.md` | Codex prompt architecture review |
+| `REVIEW-prompts-gemini.md` | Gemini CLI prompt architecture review |
+| `REVIEW-prompts-opencode.md` | OpenCode prompt architecture review |
+| `TAKEAWAY-converged-adoptions.md` | Converged adoption patterns across peers |
+| `TAKEAWAY-from-aider.md` | Key takeaways from Aider |
+| `TAKEAWAY-from-claude-code.md` | Key takeaways from Claude Code |
+| `TAKEAWAY-from-codex.md` | Key takeaways from Codex |
+| `TAKEAWAY-from-gemini-cli.md` | Key takeaways from Gemini CLI |
+| `TAKEAWAY-from-opencode.md` | Key takeaways from OpenCode |
+| `RESEARCH-cli-agent-tools-landscape-2026.md` | CLI agent tools landscape research |
+| `RESEARCH-obsidian-lakehouse-2026-best-practices.md` | Obsidian lakehouse best practices |
 
----
+## 12. Peer System Reference
 
-**Current Status**: Phase 1 complete ✅. Phase 2a (MCP) complete ✅. Prompt system redesign in progress 🔄. Next: Phase 2c (background execution). Phase 2.5 (shell security) deferred until after Phase 2c.
+Five peer systems studied for architecture patterns, convergent best practices, and anti-patterns:
+
+| System | Language | Key strengths relevant to co |
+|--------|----------|------------------------------|
+| **Claude Code** (Anthropic) | TypeScript | Deepest sub-agent architecture (3 built-in + custom), unified skills/hooks/plugins, /rewind with file snapshots, auto-compaction at 95%, background tasks via Ctrl+B |
+| **Codex CLI** (OpenAI) | Rust | Strongest sandboxing (Seatbelt/seccomp/Landlock), server-side compaction, AGENTS.md, CLI-as-MCP-server pattern |
+| **Gemini CLI** (Google) | TypeScript | Best rewind system (conversation + files), Agent Skills enabled by default, event-driven scheduler, 1M token context, /introspect for prompt debugging |
+| **Aider** | Python | Pioneer of repo-aware coding, Repository Map (tree-sitter AST + PageRank), proven reflection loop (35k+ users), simplest security model (confirm_ask for everything) |
+| **OpenCode** | Go | Clean typed loop returns, 90% compaction threshold, doom loop detection (threshold 3), multi-provider model switching |
+
+## 13. External Sources
+
+### Industry Research
+1. OpenAI, "Introducing ChatGPT agent" (July 2025)
+2. Anthropic, "Introducing Claude 4" (May 2025)
+3. Google I/O 2025 updates (Agent Mode, Project Mariner, Jules, MCP/A2A)
+
+### Peer System Documentation
+4. Claude Code: sub-agents, skills, compaction, background tasks — code.claude.com/docs
+5. Codex CLI: security, features, MCP, AGENTS.md — developers.openai.com/codex
+6. Gemini CLI: rewind, session management, sandboxing, sub-agents — geminicli.com/docs
+7. Aider: repository map, architect mode, git integration — aider.chat/docs
+
+### Voice (deferred)
+8. Silero VAD, faster-whisper, Kokoro-82M — see `TODO-voice.md` for full component list

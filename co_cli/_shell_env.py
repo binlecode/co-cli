@@ -1,4 +1,4 @@
-"""Shared sandbox infrastructure: environment sanitization and process management."""
+"""Shell infrastructure: environment sanitization and process management."""
 
 import asyncio
 import os
@@ -6,8 +6,7 @@ import signal
 
 
 # Allowlist: only these host env vars propagate to subprocess execution.
-# Tight by design — Docker users get full env via the container; subprocess
-# users get the minimum needed for basic shell commands.
+# Tight by design — only the minimum needed for basic shell commands.
 _SAFE_ENV_VARS = {
     "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL",
     "TERM", "SHELL", "TMPDIR", "XDG_RUNTIME_DIR",

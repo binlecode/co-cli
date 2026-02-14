@@ -32,7 +32,7 @@ from pydantic_ai.usage import UsageLimits
 from co_cli.agent import get_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps
-from co_cli.sandbox import SubprocessBackend
+from co_cli.shell_backend import ShellBackend
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +757,7 @@ async def run_eval(args: argparse.Namespace) -> int:
     has_selection = any(c.dim != "error_recovery" for c in cases)
 
     deps = CoDeps(
-        sandbox=SubprocessBackend(),
+        shell=ShellBackend(),
         obsidian_vault_path=None,
         google_credentials_path=None,
         shell_safe_commands=[],

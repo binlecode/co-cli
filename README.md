@@ -1,10 +1,10 @@
 # Co - The Production-Grade Personal Assistant CLI
 
-**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and a sandboxed "Body" for safe execution.
+**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and approval-gated shell execution for safe operation.
 
 Designed for developers who want a personal assistant that:
 1.  **Respects Privacy**: Runs on local models (Ollama) or cloud (Gemini).
-2.  **Is Safe**: Executes commands inside a Docker sandbox (with subprocess fallback).
+2.  **Is Safe**: Approval-first security model — side-effectful commands require explicit consent.
 3.  **Is Observable**: Traces every thought and tool call via OpenTelemetry.
 4.  **Is Useful**: Connects to your actual work context (Notes, Drive, Calendar).
 
@@ -23,10 +23,7 @@ Before you begin, ensure you have the following installed:
     ```
     *You can use other models by updating `~/.config/co-cli/settings.json`.*
 
-3.  **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** (recommended): For the sandboxed execution environment.
-    *   If Docker is unavailable, Co falls back to a subprocess backend with environment sanitization and mandatory approval for all commands.
-
-4.  **[uv](https://github.com/astral-sh/uv)**: Python package manager.
+3.  **[uv](https://github.com/astral-sh/uv)**: Python package manager.
     ```bash
     curl -LsSf https://astral.sh/uv/install.sh | sh
     ```
@@ -64,7 +61,6 @@ Before you begin, ensure you have the following installed:
       "gemini_model": "gemini-2.0-flash",
       "obsidian_vault_path": "/path/to/vault",
       "slack_bot_token": "xoxb-your-bot-token",
-      "docker_image": "co-cli-sandbox"
     }
     ```
 
@@ -126,7 +122,7 @@ uv run co chat
 > "Run `ls -la` to see what files are in this directory."
 
 #### `co status` — System Health Check
-Verify LLM provider, sandbox, and config health.
+Verify LLM provider, shell, and config health.
 ```bash
 uv run co status
 ```
@@ -195,23 +191,22 @@ All memory files are plain markdown — edit with any text editor, changes take 
 
 ## Security & Architecture
 
-### Sandbox (Docker + Subprocess Fallback)
+### Shell (Approval-Gated Subprocess)
 
-Co runs shell commands inside a sandboxed environment:
+Co runs shell commands as host subprocesses with approval as the security boundary:
 
-*   **Docker (default)**: `co-cli-sandbox` image with `cap_drop=ALL`, `no-new-privileges`, `pids_limit=256`, non-root user (`1000:1000`), configurable network isolation and resource limits.
-*   **Subprocess fallback**: When Docker is unavailable (`sandbox_backend=auto`), falls back to `SubprocessBackend` with allowlist-based environment sanitization. All commands require explicit approval in this mode.
+*   **Safe commands** (`ls`, `cat`, `git status`, etc.) are auto-approved via a configurable safe-prefix list.
+*   **Everything else** requires explicit `[y/n/a]` consent before execution.
+*   **Environment sanitization**: Allowlist-only env vars prevent pager/editor hijacking and shared-library injection.
 
-Your current working directory is mounted to `/workspace` inside the container.
+Use `/yolo` to toggle auto-approve for all tools.
 
 ### Human-in-the-Loop
 
 Side-effectful tools require explicit approval:
-*   Shell commands (auto-approved for read-only commands when Docker sandbox has full isolation)
+*   Shell commands (safe read-only commands auto-approved)
 *   Sending emails
 *   Posting to Slack
-
-A whitelist of 29 safe commands (`ls`, `cat`, `git status`, etc.) is auto-approved when running inside Docker. Use `/yolo` to toggle auto-approve for all tools.
 
 ### Automatic Context Governance
 
@@ -227,48 +222,12 @@ Two `history_processors` prevent context overflow:
 
 ---
 
-## Sandbox Configuration
-
-### Container Lifecycle
-
-| Event | Behavior |
-|-------|----------|
-| **First command** | Creates container `co-runner`, keeps it running |
-| **Subsequent commands** | Reuses existing container via `docker exec` |
-| **Session end** | Stops and removes the container |
-
-### Configuration
+## Shell Configuration
 
 | Setting | Default | Env Var | Description |
 |---------|---------|---------|-------------|
-| `docker_image` | `co-cli-sandbox` | `CO_CLI_DOCKER_IMAGE` | Docker image for the sandbox |
-| `sandbox_backend` | `auto` | `CO_CLI_SANDBOX_BACKEND` | `auto`, `docker`, or `subprocess` |
-| `sandbox_network` | `none` | `CO_CLI_SANDBOX_NETWORK` | `none` (isolated) or `bridge` (host network) |
-| `sandbox_mem_limit` | `1g` | `CO_CLI_SANDBOX_MEM_LIMIT` | Docker memory limit |
-| `sandbox_cpus` | `1` | `CO_CLI_SANDBOX_CPUS` | CPU limit (1–4) |
-| `sandbox_max_timeout` | `600` | `CO_CLI_SANDBOX_MAX_TIMEOUT` | Max command timeout in seconds |
-| `auto_confirm` | `false` | `CO_CLI_AUTO_CONFIRM` | Skip confirmation prompts |
-
-### Custom Docker Images
-
-Build a custom image with pre-installed tools:
-
-```dockerfile
-# Dockerfile.sandbox
-FROM python:3.12-slim
-RUN apt-get update && apt-get install -y curl git jq tree
-RUN pip install pandas numpy requests
-```
-
-```bash
-docker build -t co-cli-sandbox -f Dockerfile.sandbox .
-```
-
-### Troubleshooting
-
-**"Docker is not available"** — Co will fall back to subprocess mode with a warning. To use Docker: ensure Docker Desktop is running (`docker ps`).
-
-**Container conflicts** — If a stale `co-runner` container exists: `docker rm -f co-runner`
+| `shell_max_timeout` | `600` | `CO_CLI_SHELL_MAX_TIMEOUT` | Max command timeout in seconds |
+| `shell_safe_commands` | 29 safe prefixes | `CO_CLI_SHELL_SAFE_COMMANDS` | Auto-approved command prefixes (comma-separated in env) |
 
 ---
 
@@ -286,7 +245,7 @@ uv run pytest tests/test_history.py  # Single test file
 
 | Test Category | Required Setup |
 |---------------|----------------|
-| **Shell/Sandbox** | Docker running |
+| **Shell** | None (uses host subprocess) |
 | **Notes** | None (uses temp files) |
 | **Drive/Gmail/Calendar** | GCP credentials |
 | **Slack** | Slack bot token |
@@ -309,7 +268,7 @@ uv run pytest -v
 
 | Module | Description | Tools |
 | :--- | :--- | :--- |
-| **Shell** | Sandboxed command execution | `run_shell_command` |
+| **Shell** | Approval-gated command execution | `run_shell_command` |
 | **Notes** | RAG over local Obsidian vault | `search_notes`, `list_notes`, `read_note` |
 | **Drive** | Google Drive search and reading | `search_drive_files`, `read_drive_file` |
 | **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `create_email_draft` |

@@ -76,7 +76,6 @@ All knowledge is dynamic — loaded on-demand via tools, never baked into the sy
 - **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
 - Framework: `pytest` + `pytest-asyncio`
-- Docker must be running for shell/sandbox tests
 - Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` env var for LLM E2E tests
 
 ## Design Principles
@@ -118,7 +117,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-06-tail-viewer.md` — Real-time span tail viewer
 - `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
 - `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
-- `docs/DESIGN-09-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
+- `docs/DESIGN-09-tool-shell.md` — Shell tool, approval-gated subprocess, safe-prefix auto-approval, security model
 - `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
