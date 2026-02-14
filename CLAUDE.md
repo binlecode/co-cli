@@ -130,8 +130,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
-- `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
-- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search for memory/article files (informed by OpenClaw)
+- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

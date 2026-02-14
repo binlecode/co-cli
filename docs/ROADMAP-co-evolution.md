@@ -118,7 +118,7 @@ The frontier is no longer single-turn tool calls. It is end-to-end agents with p
 | Skills/extensions | 3/5 peers | Zero-code extensibility. Consolidating around a single "skill" primitive |
 | Session persistence | 3/5 peers | Essential for the companion vision. Sessions must survive terminal closure |
 | Sub-agent delegation | 3/5 peers | Isolated contexts prevent pollution. Structured output enforces completion |
-| Shell safety | 4/5 peers (divergent approaches) | Approval-gated subprocess — no Docker. Approval is the security boundary (design principle #2). See `TODO-drop-docker-sandbox.md` |
+| Shell safety | 4/5 peers (divergent approaches) | Approval-gated subprocess — no Docker. Approval is the security boundary (design principle #2) |
 | MCP as extension protocol | 3/4 agent systems | Shipped. Universal standard for tool extensibility |
 | Background execution | 3/5 peers | Emerging pattern. Fire-and-forget tasks that survive terminal closure |
 | Doom loop detection | All systems address, none solve definitively | P0 safety. Hash-based repetition detection + hard turn limits |
@@ -172,12 +172,11 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 **Why:** Co-requisite with file write tools. Background execution (Phase E) without shell hardening means unsupervised loose policy. Every peer system addresses this, though approaches diverge.
 
 **Scope:**
-- Drop Docker sandbox — subprocess + approval becomes sole execution model (see `TODO-drop-docker-sandbox.md`)
+- ~~Drop Docker sandbox~~ Done (`408d3ff`) — subprocess + approval is the sole execution model
 - Unify `!cmd` bypass with the approval system
 - Tighten safe-command classification — safe-prefix auto-approval active universally (no `isolation_level` gate)
-- Rename sandbox references → shell throughout codebase
 
-**Design docs:** `DESIGN-09-tool-shell.md` (architecture), `TODO-drop-docker-sandbox.md` (Docker removal)
+**Design docs:** `DESIGN-09-tool-shell.md`
 
 ### Phase D: Context Compaction — HIGH
 
@@ -367,8 +366,7 @@ All paths verified against `docs/` contents.
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
 | `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
-| `TODO-cross-tool-rag.md` | Cross-tool RAG: SearchDB shared service | Future |
-| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | SQLite FTS5 + semantic search for memory/article files | Future |
+| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | SQLite FTS5 + semantic search: unified index for all text sources | Future |
 
 ### Research & Review Documents
 

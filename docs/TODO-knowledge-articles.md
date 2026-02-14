@@ -39,7 +39,7 @@ When memory count exceeds grep performance (~200+ files):
 
 - SQLite FTS5 index alongside markdown files (index is derived, files remain source of truth)
 - Unified search across memories + articles
-- See also: `TODO-cross-tool-rag.md` for cross-source search
+- See also: `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` for unified search index
 
 ### 4. Multimodal Assets
 

@@ -1,28 +1,23 @@
-# TODO: SQLite FTS + Semantic Search for Knowledge Files
+# TODO: SQLite FTS + Semantic Search
 
 **Status:** Backlog
-**Scope:** Memory files (`.co-cli/knowledge/memories/*.md`) and future article files (`.co-cli/knowledge/articles/*.md`)
-**Reference:** [OpenClaw memory system](~/workspace_genai/openclaw/src/memory/), [TODO-cross-tool-rag.md](TODO-cross-tool-rag.md), [TODO-knowledge-articles.md](TODO-knowledge-articles.md)
+**Scope:** All text sources co-cli touches — knowledge files (memories, articles), Obsidian notes, Google Drive docs
+**Reference:** [OpenClaw memory system](~/workspace_genai/openclaw/src/memory/), [TODO-knowledge-articles.md](TODO-knowledge-articles.md)
 
 ## Problem
 
-`recall_memory()` uses grep-based substring search with recency-only sorting. No relevance ranking, no semantic understanding. "Find notes about productivity" fails unless the exact word "productivity" appears in the content. This works for <200 memories but provides poor retrieval quality at any scale.
+Every search in co-cli is naive. `recall_memory()` uses grep with recency-only sorting. `search_notes()` walks the filesystem with regex. `search_drive_files()` relies on the API's `fullText` query. None of them rank results by relevance, and there's no way to search across sources.
 
-Future articles will have the same problem — grep can't rank, can't handle synonyms, can't match intent.
+## Design Principle
 
-## Relationship to Cross-Tool RAG
+`KnowledgeIndex` is a single SQLite-backed search index (`search.db`) that any source can write to. The `source` column (`'memory'`, `'article'`, `'obsidian'`, `'drive'`) distinguishes origin. Tools index text opportunistically — you can only index what you have. External sources (Drive docs, Obsidian notes) get indexed when tools read them; there is no background crawler.
 
-`TODO-cross-tool-rag.md` defines `SearchDB` as a shared service for **external sources** (Obsidian, Drive). This TODO covers the **internal knowledge tier** — memories and articles that co-cli owns. The two share the same phased FTS5 → hybrid → reranker trajectory but differ in:
-
-| Concern | Knowledge files (this TODO) | Cross-tool RAG |
-|---------|---------------------------|----------------|
-| Source of truth | Markdown files co-cli writes | External services |
-| Index trigger | On `save_memory()` / `save_article()` + startup sync | On first tool search + mtime check |
-| Chunking | Whole-file (memories are small) | Overlap-based (notes/docs are large) |
-| Frontmatter | Indexed as structured fields (tags, source, category) | Minimal (title, path, mtime) |
-| Dedup | rapidfuzz similarity on save | Not needed (external owns dedup) |
-
-**Decision:** Knowledge files get their own index tables inside the same `search.db` database that `SearchDB` uses. Memories and articles are registered as sources (`source='memory'`, `source='article'`) in the shared schema — so `SearchDB.search(query)` can optionally span all sources including knowledge files.
+| Source | Index trigger | Chunking | Notes |
+|--------|--------------|----------|-------|
+| Memory | `save_memory()` + startup sync | Whole-file (small) | Frontmatter indexed (tags, category) |
+| Article | `save_article()` + startup sync | Whole-file or section | Frontmatter indexed |
+| Obsidian | On `search_notes()` first call, mtime-based incremental | Whole-file | Local markdown, high benefit |
+| Drive | On `search_drive_files()` when doc text is fetched | Whole-file | Cached locally, re-sync if stale |
 
 ---
 
@@ -59,35 +54,29 @@ OpenClaw's memory system (`openclaw/src/memory/`) is a production-grade hybrid s
 ## Architecture
 
 ```
-recall_memory(query)  /  recall_article(query)  /  search_knowledge(query)
+recall_memory(query)  /  search_notes(query)  /  search_knowledge(query)
        │                         │                         │
        ▼                         ▼                         ▼
-  KnowledgeIndex.search(query, source="memory"|"article"|None, tags?, limit)
+  KnowledgeIndex.search(query, source="memory"|"obsidian"|None, tags?, limit)
        │
        ├── Phase 1: FTS5 MATCH + bm25() → ranked results
        │
        ├── Phase 2: + vec0 cosine similarity → hybrid merge
        │
-       └── (Phase 3: + cross-encoder rerank — shared with SearchDB)
+       └── (Phase 3: + cross-encoder rerank)
        │
   ┌────┴────┐
-  │ search.db │  ~/.local/share/co-cli/search.db (shared with SearchDB)
+  │ search.db │  ~/.local/share/co-cli/search.db
   └─────────┘
 ```
 
-**`KnowledgeIndex`** is a focused class for the knowledge tier. It writes to the same `search.db` as `SearchDB` but owns knowledge-specific logic (frontmatter indexing, whole-file indexing, dedup coordination). `SearchDB.search(query)` can read knowledge rows via the shared `source` column.
+**`KnowledgeIndex`** is the single search class. All sources write to the same `docs` table via `index()`. Source-specific tools (`recall_memory`, `search_notes`, `search_drive_files`) pass `source=` to scope queries. `search_knowledge(query)` searches all sources.
 
 ---
 
 ## Schema
 
-Reuses the `docs` + `docs_fts` schema from `TODO-cross-tool-rag.md` with additional columns for frontmatter metadata:
-
 ```sql
--- Extends the docs table from SearchDB (same search.db file)
--- source='memory' or source='article' rows
-
--- The docs table (shared with SearchDB)
 CREATE TABLE IF NOT EXISTS docs (
     source  TEXT NOT NULL,           -- 'memory', 'article', 'obsidian', 'drive', ...
     path    TEXT NOT NULL,           -- relative path within .co-cli/knowledge/
@@ -95,9 +84,8 @@ CREATE TABLE IF NOT EXISTS docs (
     content TEXT,                    -- full markdown body (no frontmatter)
     mtime   REAL,                    -- file mtime for change detection
     hash    TEXT,                    -- SHA256 of file content for dedup
-    -- knowledge-specific metadata (NULL for non-knowledge sources)
-    tags    TEXT,                    -- space-separated tags for FTS5
-    category TEXT,                   -- auto_category from frontmatter
+    tags    TEXT,                    -- space-separated tags for FTS5 (knowledge sources)
+    category TEXT,                   -- auto_category from frontmatter (knowledge sources)
     PRIMARY KEY (source, path)
 );
 
@@ -145,9 +133,9 @@ SELECT d.source, d.path, d.title, d.tags, d.category,
 
 ## Phased Implementation
 
-### Phase 1: FTS5 for Knowledge Files
+### Phase 1: FTS5 (BM25)
 
-**Goal:** Replace grep search with BM25-ranked full-text search. Markdown files remain source of truth.
+**Goal:** Ranked keyword search via persistent index. Memory files as first consumer, Obsidian as second.
 
 **Dependency:** None (SQLite FTS5 is built-in)
 
@@ -155,15 +143,18 @@ SELECT d.source, d.path, d.title, d.tags, d.category,
 
 ```
 class KnowledgeIndex:
-    """FTS5 index for memory and article markdown files."""
+    """FTS5 search index for all text sources."""
 
-    def __init__(self, db_path: Path, knowledge_dir: Path)
-    def sync(self, source: str) -> int
-        """Sync index from markdown files. Hash-based change detection. Returns count indexed."""
-    def index_file(self, source: str, path: Path) -> None
-        """Parse frontmatter + body, upsert into docs + docs_fts."""
-    def search(self, query: str, source: str | None, tags: list[str] | None, limit: int) -> list[KnowledgeResult]
+    def __init__(self, db_path: Path)
+    def index(self, source: str, path: str, title: str, content: str, mtime: float,
+              tags: str | None = None, category: str | None = None) -> None
+        """Upsert a document into the index."""
+    def search(self, query: str, source: str | None, tags: list[str] | None, limit: int) -> list[SearchResult]
         """BM25-ranked search with optional source and tag filtering."""
+    def sync_dir(self, source: str, directory: Path, glob: str = "*.md") -> int
+        """Sync index from files on disk. Hash-based change detection. Returns count indexed."""
+    def needs_reindex(self, source: str, path: str, mtime: float) -> bool
+        """Check if a document needs re-indexing based on mtime."""
     def remove_stale(self, source: str, current_paths: set[str]) -> int
         """Remove indexed docs whose files no longer exist."""
 ```
@@ -172,8 +163,10 @@ class KnowledgeIndex:
 
 - Add `knowledge_index: KnowledgeIndex` to `CoDeps`, initialized in `main.py`
 - `recall_memory()` delegates to `knowledge_index.search(query, source="memory")`
-- `save_memory()` calls `knowledge_index.index_file()` after writing the markdown file
-- On agent startup: `knowledge_index.sync("memory")` to catch external edits
+- `save_memory()` calls `knowledge_index.index()` after writing the markdown file
+- `search_notes()` delegates to `knowledge_index.search(query, source="obsidian")` with folder/tag post-filtering
+- On agent startup: `knowledge_index.sync_dir("memory", knowledge_dir / "memories")` to catch external edits
+- Obsidian connector: `sync_dir("obsidian", vault_path)` lazily on first `search_notes()` call, mtime-based incremental
 - FTS5 query built from raw input using OpenClaw's pattern: tokenize → quote → AND-join
 
 **Tag search:** Tags stored as space-separated string in `tags` column. FTS5 naturally matches tag tokens. For exact tag filtering, post-filter with SQL `LIKE` or `INSTR`.
@@ -184,7 +177,9 @@ class KnowledgeIndex:
 - [ ] `knowledge_index` field on `CoDeps`
 - [ ] Hash-based sync from markdown files (startup + after save)
 - [ ] `recall_memory()` returns BM25-ranked results with snippets
+- [ ] `search_notes()` returns BM25-ranked results with FTS5 snippets
 - [ ] Tag and category filtering works
+- [ ] Source filtering: `search(query, source="memory")` vs `search(query)` (all sources)
 - [ ] Markdown files remain source of truth — deleting `search.db` and restarting rebuilds the index
 - [ ] Existing `save_memory` dedup (rapidfuzz) continues to work — FTS5 is for retrieval, not dedup
 
@@ -241,21 +236,43 @@ def _hybrid_merge(self, fts, vec, vector_weight=0.7, text_weight=0.3):
 
 ### Phase 3: Cross-Encoder Reranking
 
-Shared with `TODO-cross-tool-rag.md` Phase 3. Only if Phase 2 quality is insufficient. Not knowledge-specific — applies to all `SearchDB` results.
+**When:** Only if Phase 2 quality is insufficient for multi-source queries.
+
+Use a small cross-encoder GGUF (~640MB), not a full LLM call. QMD uses a dedicated reranker; Sonar uses BGE Reranker v2-m3. Both are 10-100x cheaper than an LLM call and purpose-built for relevance scoring.
+
+**Acceptance Criteria:**
+
+- [ ] `llama-cpp-python` dependency (or Ollama if reranker model available)
+- [ ] Reranker GGUF downloaded and cached on first use
+- [ ] Benchmark: reranked > hybrid-only for ambiguous cross-source queries
 
 ---
 
 ## Migration Path
 
-| Phase | recall_memory | save_memory | New deps | Quality |
-|-------|--------------|-------------|----------|---------|
-| Current | grep + recency sort | write file | None | Substring match only |
-| Phase 1 | FTS5 BM25 ranking | write file + index | None | Keyword ranked |
-| Phase 2 | Hybrid FTS5 + vector | write file + index + embed | sqlite-vec | Semantic + keyword |
+| Phase | Search quality | Speed | New deps |
+|-------|---------------|-------|----------|
+| Current | Grep / filesystem walk (no ranking) | Fast | None |
+| Phase 1 (FTS5) | BM25 ranking, persistent index | Fast | None |
+| Phase 2 (Hybrid) | Semantic + keyword | Medium | sqlite-vec |
+| Phase 3 (Reranker) | Cross-encoder scoring | Medium | llama-cpp-python |
 
 **Trigger for Phase 1:** Immediately beneficial — even 10 memories benefit from BM25 ranking over grep.
 
 **Trigger for Phase 2:** When users need semantic search (synonym matching, intent-based recall).
+
+**Trigger for Phase 3:** Multi-source ranking quality insufficient.
+
+---
+
+## Tool Surface
+
+| Tool | Backed by | Notes |
+|------|-----------|-------|
+| `recall_memory(query, tags?)` | `search(query, source="memory")` | Existing tool, updated |
+| `search_notes(query, folder?, tag?)` | `search(query, source="obsidian")` + post-filter | Existing tool, updated |
+| `search_drive_files(query)` | `search(query, source="drive")` | Existing tool, updated when Drive docs are cached |
+| `search_knowledge(query)` | `search(query)` | New tool — cross-source, Phase 1+ |
 
 ---
 
@@ -275,8 +292,19 @@ Shared with `TODO-cross-tool-rag.md` Phase 3. Only if Phase 2 quality is insuffi
 |------|---------|
 | `co_cli/knowledge_index.py` | KnowledgeIndex class (FTS5 + vector) |
 | `co_cli/tools/memory.py` | Updated to delegate search to KnowledgeIndex |
+| `co_cli/tools/obsidian.py` | Updated to delegate search to KnowledgeIndex |
 | Future: `co_cli/tools/articles.py` | Article tools using same KnowledgeIndex |
-| `~/.local/share/co-cli/search.db` | Shared SQLite database (with SearchDB) |
+| `~/.local/share/co-cli/search.db` | SQLite database for all sources |
+
+## 2026 Landscape
+
+The FTS5 → Vector → Reranker stack is the established pattern:
+
+| Project | Stack | Notes |
+|---------|-------|-------|
+| [QMD](https://github.com/tobi/qmd) | FTS5 + sqlite-vec + GGUF reranker | MCP server, position-aware RRF, EmbeddingGemma-300M |
+| [Sonar](https://forum.obsidian.md/t/ann-sonar-offline-semantic-search-and-agentic-ai-chat-for-obsidian-powered-by-llama-cpp/110765) | BM25 + BGE-M3 + cross-encoder | llama.cpp, fully local, 32GB+ RAM |
+| [llama-stack](https://github.com/llamastack/llama-stack/issues/1158) | FTS5 + sqlite-vec | Adopting same hybrid API |
 
 ## References
 
@@ -285,3 +313,7 @@ Shared with `TODO-cross-tool-rag.md` Phase 3. Only if Phase 2 quality is insuffi
 - [sqlite-vec](https://github.com/asg017/sqlite-vec) — vector similarity extension
 - [EmbeddingGemma-300M](https://ai.google.dev/gemma/docs/embeddinggemma/model_card) — sub-200MB embedding model
 - [QMD](https://github.com/tobi/qmd) — FTS5 + sqlite-vec + reranker reference implementation
+- [sqlite-vec Hybrid Search](https://alexgarcia.xyz/blog/2024/sqlite-vec-hybrid-search/index.html)
+- [SQLite RAG](https://blog.sqlite.ai/building-a-rag-on-sqlite)
+- [EmbeddingGemma + SQLite tutorial](https://exploringartificialintelligence.substack.com/p/create-your-own-search-system-with)
+- [llama-stack Hybrid Search](https://github.com/llamastack/llama-stack/issues/1158)

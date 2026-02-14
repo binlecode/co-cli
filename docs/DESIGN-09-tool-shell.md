@@ -146,7 +146,7 @@ Uses `start_new_session=True` on the subprocess so `os.killpg()` can kill the en
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**What is NOT protected:** The subprocess runs as the user, in the user's working directory, with read-write access to local files. This is a deliberate tradeoff — co is a single-user CLI companion, not a CI pipeline. Approval is the security boundary (design principle #2). See `TODO-drop-docker-sandbox.md` for the rationale.
+**What is NOT protected:** The subprocess runs as the user, in the user's working directory, with read-write access to local files. This is a deliberate tradeoff — co is a single-user CLI companion, not a CI pipeline. Approval is the security boundary (design principle #2).
 
 ### Timeout Control
 

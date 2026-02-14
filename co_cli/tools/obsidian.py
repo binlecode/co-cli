@@ -94,7 +94,7 @@ def search_notes(
     # Determine search root
     search_root = vault / folder if folder else vault
 
-    # TODO: Replace early exit with SearchDB (see docs/TODO-cross-tool-rag.md)
+    # TODO: Replace with KnowledgeIndex (see docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md)
     results = []
     has_more = False
     for note in search_root.rglob("*.md"):

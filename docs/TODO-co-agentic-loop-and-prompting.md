@@ -100,7 +100,7 @@ When `agent.run_stream_events()` returns `DeferredToolRequests` (because a tool 
 ```
 while result.output is DeferredToolRequests:
     for each deferred tool call:
-        auto-approve if safe (sandboxed shell + safe command list)
+        auto-approve if safe (safe command list)
         otherwise prompt user → y/n
         collect decisions into DeferredToolResults (approved or ToolDenied)
     resume: agent.run_stream_events(
@@ -642,7 +642,7 @@ PROMPT ASSEMBLY ORDER:
 3. CAPABILITY CONTEXT  — what co can do right now
      Source: generated at assembly time from runtime state
      Conditional blocks based on:
-       - has_shell_tool (sandbox mode info)
+       - has_shell_tool (shell guidance)
        - has_memory (memory tool guidance)
        - has_web (web search/fetch guidance)
        - has_mcp_tools (list of available MCP tools)
@@ -684,9 +684,7 @@ def assemble_prompt(personality: str, model_id: str) -> str:
 # Conditional layers — runtime-gated via decorator
 @agent.system_prompt
 def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
-    if ctx.deps.sandbox_mode:
-        return "When running shell commands..."
-    return ""
+    return "Shell runs as subprocess with approval. Read-only commands are auto-approved."
 
 @agent.system_prompt
 def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
