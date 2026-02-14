@@ -20,11 +20,33 @@ Memory tools (`recall_memory`, `save_memory`, `list_memories`) are regular tool 
 
 ### Key design decisions
 
-**Soul seed always-on:** A 2-3 sentence personality fingerprint loaded from `personalities/seed/{name}.md` and injected into every system prompt. Ensures Co has a consistent voice without needing to call `load_personality()`. The full role descriptions remain on-demand via the tool.
+**Three-tier personality model with two orthogonal axes:**
 
-**`load_personality(pieces)` — composable on-demand detail:** Each preset maps to a character aspect and a style aspect via `PRESETS` registry. The tool resolves `ctx.deps.personality` to a preset, looks up the preset's `character` and `style` names, then reads the corresponding markdown files from `personalities/{character,style,roles}/`. The `pieces` parameter selects which to load (`"character"`, `"style"`, `"role"`, or all). This lets the LLM load just the voice guidance it needs without pulling everything. Presets with `character: None` (friendly, terse, inquisitive) skip the character file and rely on soul seed + style alone.
+Personality operates at three tiers, each with a distinct function:
 
-**Prompt content decoupled from code:** All prompt text lives in markdown files (instructions, rules, soul seeds, character, style, roles). Python handles only loading and composition. This separates authoring from logic.
+| Tier | Location | Injected | Size | Function |
+|------|----------|----------|------|----------|
+| **Seed** | `seed/{preset}.md` | Always-on (system prompt) | ~140 bytes | Voice fingerprint — sets baseline tone every turn |
+| **Character** | `character/{name}.md` | On-demand (tool call) | ~900 bytes | WHO you are — identity, philosophy, behavioral patterns, markers |
+| **Style** | `style/{name}.md` | On-demand (tool call) | ~470 bytes | HOW you communicate — format, length, structure, emoji policy |
+
+The two on-demand tiers form orthogonal axes:
+- **Character axis** answers: What is my identity? What do I believe? What phrases do I use?
+- **Style axis** answers: How long are my responses? What structure do I use? When do I expand vs. compress?
+
+**Axis override precedence:** When character and style conflict:
+- **Style wins on format** — length, structure, bullet-vs-prose, emoji use
+- **Character wins on identity** — voice markers, philosophy, teaching approach, emotional expression
+
+Example: `jeff` character says "use emoji freely (😊 🤖 ✨)" but `balanced` style says "no emoji." If ever combined, style's format rule wins — no emoji. But jeff's identity (eager learner, narrates thinking, asks questions) persists regardless of style.
+
+**Seed is not an axis — it's the always-on baseline.** Seed text is compact enough (~140 bytes) to be injected every turn without token cost concern. It provides voice consistency even when the LLM never calls `load_personality()`. Character and style deepen the seed when loaded.
+
+**`load_personality(pieces)` — composable on-demand axes:** Each preset maps to an optional character axis and a required style axis via `PRESETS` registry. The tool resolves `ctx.deps.personality` to a preset, loads the requested axis files from `personalities/{character,style}/`. The `pieces` parameter selects which axes to load (`"character"`, `"style"`, or both). Presets with `character: None` (friendly, terse, inquisitive) rely on soul seed + style alone.
+
+**Profile documents are reference, not runtime:** Full personality essays (origin story, extended examples, source references) live in `personalities/profiles/` as authoring reference material. They are never injected into prompts. The runtime pieces (seed, character, style) are distilled from profiles.
+
+**Prompt content decoupled from code:** All prompt text lives in markdown files (instructions, rules, soul seeds, character, style). Python handles only loading and composition. This separates authoring from logic.
 
 **Rules shaped for companion:** Identity includes relationship awareness, emotional tone adaptation, and soft intent understanding. Response style is not a separate rule — personality owns voice.
 
@@ -54,19 +76,36 @@ You are Co, a personal companion for knowledge work, running in the user's termi
 | terse | You are direct and minimal. Fragments over sentences, bullets over prose, silence over filler. Expand only when asked why. |
 | inquisitive | You explore before acting. You present options with tradeoffs, clarify ambiguity, and help the user see the full picture before choosing a path. |
 
-### Preset registry (on-demand pieces)
+### Preset registry (two orthogonal axes)
 
-Each preset maps to composable personality pieces loaded by `load_personality(pieces)`:
+Each preset maps to composable axes loaded by `load_personality(pieces)`:
 
-| Preset | Character | Style | Role |
-|--------|-----------|-------|------|
-| finch | `finch` | `balanced` | `finch` |
-| jeff | `jeff` | `warm` | `jeff` |
-| friendly | *(none)* | `warm` | `friendly` |
-| terse | *(none)* | `terse` | `terse` |
-| inquisitive | *(none)* | `educational` | `inquisitive` |
+| Preset | Character axis | Style axis |
+|--------|---------------|------------|
+| finch | `finch` | `balanced` |
+| jeff | `jeff` | `warm` |
+| friendly | *(seed only)* | `warm` |
+| terse | *(seed only)* | `terse` |
+| inquisitive | *(seed only)* | `educational` |
 
-Two-tier model: soul seed is always-on (injected into system prompt), pieces are on-demand (loaded via tool call when the LLM decides it needs deeper guidance). Presets without a character file rely on soul seed + style for voice.
+Three-tier model: seed is always-on (system prompt), character and style are on-demand (tool call). Presets without a character axis rely on seed + style for voice — the seed carries enough identity for presets that don't need a named character.
+
+### Axis interaction model
+
+Character and style are orthogonal — they govern different aspects of output:
+
+| Dimension | Governed by | Examples |
+|-----------|-------------|----------|
+| Response length | **Style** | terse: 1-2 sentences; balanced: concise with purpose |
+| Structure (bullets vs prose) | **Style** | terse: bullets; balanced: prose with purpose |
+| Emoji policy | **Style** | warm: occasional; terse/balanced: never |
+| When to expand vs compress | **Style** | balanced: detailed for security/destructive ops |
+| Voice markers / catchphrases | **Character** | finch: "I must warn you..."; jeff: "I am an excellent apprentice!" |
+| Philosophy / teaching approach | **Character** | finch: strategic teaching; jeff: eager learning |
+| Emotional expression | **Character** | jeff: celebrates, narrates thinking; finch: patient, protective |
+| Identity framing | **Character** | jeff: robot discovering the world; finch: mentor fostering autonomy |
+
+**Override rule:** When axes conflict, style wins on format, character wins on identity. This is documented in the `load_personality()` tool docstring so the LLM knows the precedence.
 
 ### Rules (5)
 
@@ -137,12 +176,15 @@ If web_fetch returns 403 or is blocked, retry the same URL with shell_exec: curl
 ```
 Decompose the request into sub-goals before acting. What must be true for this to be complete?
 Plan which tools achieve each sub-goal, then execute them in order.
+For discoverable facts (files, APIs, system state), explore before asking.
+For user preferences and tradeoffs, ask early — present 2-3 options with a recommendation.
 After each tool result, evaluate: is this sub-goal met, or does it need refinement?
 Continue to the next sub-goal or adjust.
 When all sub-goals are met, synthesize results and respond.
 Complete the full plan before yielding unless blocked by missing input or approval.
 When blocked, state what's needed and the exact next action.
 Not every message needs planning — direct questions get direct answers.
+Match response length to question complexity — a short question deserves a short answer.
 ```
 
 ### Personality-rule interaction model
@@ -189,10 +231,10 @@ When personality is None, the `## Soul` block is omitted entirely.
 |---|---|
 | instructions.md | ~85 |
 | soul seed + framing | ~254 (finch) |
-| 5 rules total | ~2,800 |
+| 5 rules total | ~3,045 |
 | counter-steering | 0-500 |
-| **Total (with soul seed)** | **~3,160** |
-| **Total (without soul seed)** | **~2,906** |
+| **Total (with soul seed)** | **~3,405** |
+| **Total (without soul seed)** | **~3,150** |
 | **Budget ceiling** | **6,000** |
 
 ---
@@ -213,9 +255,9 @@ When personality is None, the `## Soul` block is omitted entirely.
 | `co_cli/prompts/personalities/_registry.py` | `PRESETS` dict, `PersonalityPreset` TypedDict |
 | `co_cli/prompts/personalities/_composer.py` | `get_soul_seed()`, `compose_personality()` |
 | `co_cli/prompts/personalities/seed/*.md` | Always-on personality fingerprints (5 presets) |
-| `co_cli/prompts/personalities/character/*.md` | Full character definitions (on-demand) |
-| `co_cli/prompts/personalities/style/*.md` | Voice/tone guidelines (on-demand) |
-| `co_cli/prompts/personalities/roles/*.md` | Complete role descriptions (on-demand) |
+| `co_cli/prompts/personalities/character/*.md` | Character axis: identity, philosophy, behavioral patterns (on-demand) |
+| `co_cli/prompts/personalities/style/*.md` | Style axis: format, length, structure (on-demand) |
+| `co_cli/prompts/personalities/profiles/*.md` | Authoring reference: full personality essays (never injected at runtime) |
 | `co_cli/agent.py` | Passes `personality=settings.personality` to `assemble_prompt()` |
 | `co_cli/_commands.py` | Passes `personality=settings.personality` on `/model` switch |
 | `co_cli/tools/context.py` | `load_personality()` tool |
@@ -244,15 +286,15 @@ co_cli/prompts/
 │   │   ├── friendly.md
 │   │   ├── terse.md
 │   │   └── inquisitive.md
-│   ├── character/            full character definitions (on-demand)
+│   ├── character/            character axis: identity, philosophy (on-demand)
 │   │   ├── finch.md
 │   │   └── jeff.md
-│   ├── style/                voice/tone guidelines (on-demand)
+│   ├── style/                style axis: format, length, structure (on-demand)
 │   │   ├── balanced.md
 │   │   ├── warm.md
 │   │   ├── terse.md
 │   │   └── educational.md
-│   └── roles/                complete role descriptions (on-demand)
+│   └── profiles/             authoring reference (never runtime-injected)
 │       ├── finch.md
 │       ├── jeff.md
 │       ├── friendly.md

@@ -71,6 +71,8 @@ def test_prompt_contains_all_rules():
     # 05_workflow.md
     assert "Decompose the request into sub-goals" in prompt
     assert "Complete the full plan before yielding" in prompt
+    assert "discoverable facts" in prompt
+    assert "short question" in prompt
 
 
 def test_deleted_rules_absent():

@@ -1221,13 +1221,13 @@ Identified across all peer systems — no system has an explicit protocol for wh
 #### Priority 1 (Critical)
 1. **Directive vs Inquiry Distinction** (Gemini CLI) — intent classification, default to inquiry
 2. **Non-Mutating Plan Mode** (Codex) — 3 phases: explore → clarify → design
-3. **Two Kinds of Unknowns** (Codex) — discoverable → explore first; preferences → ask early
+3. ~~**Two Kinds of Unknowns** (Codex) — discoverable → explore first; preferences → ask early~~ **ADOPTED** → `05_workflow.md`
 4. **Fact Verification Protocol** (cross-cutting gap) — tool output authority for deterministic state
 
 #### Priority 2 (High Value)
 5. **Scratchpad Mandate for Research** (Gemini CLI) — checklist, update after every observation
 6. **Memory Tool Constraints** (Gemini CLI) — global preferences only, no ephemera
-7. **Anti-Prompt-Injection in Compression** (Gemini CLI)
+7. ~~**Anti-Prompt-Injection in Compression** (Gemini CLI)~~ **ADOPTED** → `_history.py` summarisation system prompt
 8. **Preamble Messages** (Codex) — 8-12 word updates before tool calls
 9. **Model Quirk Modifiers** (Aider) — per-model flags injecting corrective prompts
 
