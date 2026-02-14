@@ -4,26 +4,9 @@
 **Scope**: Core agent loop + prompt system — the two pillars everything else builds on
 **Approach**: First-principles design informed by 5 peer systems, aligned with co evolution roadmap
 
+> Revised 2026-02-14: replaced dual-loop + goal system with super-agent + sub-agents (pydantic-ai agent delegation).
+
 This document designs co's agentic loop and prompting architecture from scratch. It ignores current implementation details and focuses on the target architecture that serves co's ultimate vision: a personal companion for knowledge work (the "Finch" vision) that is local-first, approval-first, and grows with its user.
-
-### Review Resolution (2026-02-14)
-
-Critique review (`TODO-co-agentic-loop-and-prompting-critique.md`) identified 7 issues where the design over-engineered or deviated from MVP principles. Resolution:
-
-| # | Issue | Severity | Verdict | Resolution |
-|---|---|---|---|---|
-| 1 | Phase 1 test gate should block later phases | High | **Accepted** | Phases 2-5 made conditional on Phase 1 results. Safety (Phase 2) remains always-ship per user decision |
-| 2 | Conditional composition is premature | High | **Accepted** | PromptFlags/frontmatter removed. Use pydantic-ai `@agent.system_prompt` for conditional content (§9.1) |
-| 3 | Goal system should be conditional | High | **Partially accepted** | Goal system kept as Phase 3b, conditional on Phase 3a (system nudge) results. Tool-based escalation (not heuristic) per user decision |
-| 4 | Instruction discovery solves no current problem | High | **Accepted** | Simplified to single file: `.co-cli/instructions.md` (§9.2) |
-| 5 | Phase 3 is an unshippable monolith | Medium | **Accepted** | Decomposed into Phase 3a (system nudge) and Phase 3b (goal tools) |
-| 6 | TurnOutcome refactor blocks critical path | Medium | **Accepted** | Deferred to Phase 5 polish (§4.1) |
-| 7 | Personality matrix adds no new value | Medium | **Partially accepted** | §11 rewritten: role files kept as reference docs, derive personality axes for token-efficient targeted injection instead of essay dumping |
-
-**User decisions (2026-02-14):**
-1. **Tool-based goal escalation** — If the goal system is needed (Phase 3b), use `set_goal`/`complete_goal` tools, not orchestration-layer heuristics. The LLM should declare its own goals explicitly
-2. **Always-ship safety** — Phase 2 (doom loop, turn limits) ships regardless of Phase 1 results. Safety is not conditional
-3. **Full rule rewrite** — Phase 1 includes a complete rewrite of all 5 companion rules (§10.1-10.5), not incremental patches
 
 ---
 
@@ -48,7 +31,6 @@ Five mature CLI agents were studied. The patterns that matter most:
 | Two kinds of unknowns | Codex | Explore discoverable facts; only ask about preferences |
 | Doom loop detection | OpenCode + Gemini CLI | Safety net against stuck agents |
 | Turn limits | OpenCode + Gemini CLI | Hard cap prevents cost/time runaway |
-| Typed loop return values | OpenCode | Testable, composable control flow |
 | Anti-sycophancy / professional objectivity | OpenCode + Gemini CLI | Accuracy over agreement |
 | Conditional prompt composition | Gemini CLI | Tight prompts, no capability hallucination |
 | Personality as swappable module | Codex | Tone separated from behavior |
@@ -58,107 +40,52 @@ Five mature CLI agents were studied. The patterns that matter most:
 | Handoff-style compaction | Codex | Actionable summaries for continuation |
 | Reflection loop for shell errors | Aider | Self-correction without user intervention |
 | Memory tool constraints | Gemini CLI | Prevents memory pollution |
-| Goal-visible execution | Gemini CLI scratchpad + Codex plan | Keeps the agent accountable to its own plan |
+| Structured delegation output | Claude Code Task + pydantic-ai | Keeps agent accountable via typed return values |
 | Abort marker in history | Codex | Model knows when a turn was interrupted |
-| Grace period recovery | Gemini CLI | Salvage partial results on timeout |
 | Confidence-scored outputs | Claude Code | Filter low-quality results |
-
-### 3. What Not to Build
-
-Patterns studied and deliberately excluded:
-
-| Pattern | Source | Why skip |
-|---------|--------|----------|
-| Sub-agent orchestration | Codex, Claude Code, OpenCode | pydantic-ai single-agent is sufficient for MVP; adds coordination complexity |
-| Per-model prompt files | OpenCode | co supports 2 providers; single prompt + quirks is enough |
-| RwLock parallel tool execution | Codex | pydantic-ai handles tools; marginal gain in Python |
-| Channel-based event loop | Codex | One frontend (terminal); direct calls are simpler |
-| Plugin marketplace | Claude Code | Single-user tool; code-first registration has better type safety |
-| PTY process pool | Codex | Docker-first sandbox; persistent containers achieve the same |
-| LLM-based loop detection (tier 3) | Gemini CLI | Hash-based tier 1 catches 95% of loops; LLM tier is expensive |
-| Full hook lifecycle system | Claude Code | Approval-first + history processors cover the need |
-| Edit format abstraction | Aider | co uses tools for structured I/O, not parsed diffs |
-| Autonomous overnight loops | Claude Code Ralph | Violates approval-first principle |
 
 ---
 
 ## Part II: Agent Loop Architecture
 
-### 4. Loop Topology: Dual-Loop with Typed Returns
+### 4. Loop Topology: Single Loop with Agent Delegation
 
-The agent loop has two nested loops with clear separation of concerns.
+co has ONE loop: pre-checks → `agent.run_stream_events()` → post-checks → return. pydantic-ai manages the tool-call → result → next-LLM-request cycle internally within that call. Tool dispatch, approval gates, streaming, and sub-agent delegation all happen inside the pydantic-ai event stream, not in co's loop code.
 
-**pydantic-ai mapping:** Each "inner loop iteration" is one `agent.run_stream_events()` invocation. pydantic-ai manages the tool-call → result → next-LLM-request cycle internally within that call. The inner loop boundary sits *outside* `agent.run_stream_events()` — the outer loop decides whether to re-enter based on the `TurnOutcome`. Tool dispatch, approval gates, and streaming all happen inside the pydantic-ai event stream, not in co's loop code.
+There is no outer/inner distinction. No re-entry for nudges. The only re-entry case is compaction (context overflow), handled inline before calling `agent.run_stream_events()` again.
 
 ```
 User Input
     |
     v
-OUTER LOOP (orchestration) ─── one iteration per user message
+AGENT LOOP (co super-agent) ─── one iteration per user message
     |
     ├── Pre-turn checks:
     |     - turn limit guard (remaining UsageLimits budget)
     |     - context overflow → trigger compaction
     |     - active background tasks → status injection
     |
-    ├── INNER LOOP (execution) ─── one agent.run_stream_events() call
+    ├── agent.run_stream_events() ─── single call
     |     |
     |     ├── History processors run (pydantic-ai calls them before each LLM request)
     |     ├── pydantic-ai internal cycle:
     |     |     ├── LLM request with streaming
     |     |     ├── Text delta → render to terminal
     |     |     ├── Tool call → approval gate → execute → result → next LLM request
+    |     |     ├── Sub-agent delegation → await sub_agent.run() inside tool → structured output back
     |     |     └── Repeat until model produces text or hits UsageLimits
     |     |
-    |     └── Determine TurnOutcome from result:
-    |           "respond"   → model produced final text
-    |           "compact"   → context overflow detected mid-turn
-    |           "error"     → unrecoverable error (API down after retries)
+    |     └── Result:
+    |           respond → model produced final text
+    |           compact → context overflow, trigger compaction + re-enter
+    |           error   → unrecoverable (API down after retries)
     |
     ├── Post-turn checks:
-    |     - goal still active? → continuation nudge → re-enter inner loop
     |     - finish reason = length? → warn user
     |     - history growing? → schedule background compaction
     |
-    └── Return: TurnResult
-          output, interrupted, streamed_text, messages, usage, goal_status
+    └── Return output, usage, interrupted flag to chat loop
 ```
-
-The `"continue"` outcome from the original OpenCode pattern maps to the outer loop deciding to re-enter `agent.run_stream_events()` (e.g., after a continuation nudge or compaction), not to an iteration within one call.
-
-#### 4.1 TurnOutcome (inner loop return type)
-
-**Phasing note:** TurnOutcome is deferred to Phase 5 (polish). The existing `while True` loop in `_orchestrate.py` handles all cases. The nudge re-entry (Phase 3a/3b) works as a conditional in the existing loop — it doesn't require typed outcomes. This section describes the target refactor, not a prerequisite.
-
-```python
-TurnOutcome = Literal["respond", "compact", "error"]
-```
-
-The inner loop returns a typed value. The outer loop pattern-matches:
-- `"respond"` — model produced a text response, exit inner loop
-- `"compact"` — context overflow detected mid-turn, trigger compaction, then re-enter
-- `"error"` — unrecoverable error (API down after retries), exit with error display
-
-Re-entry (after nudge or compaction) is an outer-loop decision, not an inner-loop outcome. This keeps the inner loop simple: one `agent.run_stream_events()` call, one outcome.
-
-Directly adopted from OpenCode's `"stop" | "continue" | "compact"` pattern, adapted to pydantic-ai's execution model.
-
-#### 4.2 TurnResult (outer loop return type)
-
-```python
-@dataclass
-class TurnResult:
-    output: str | None           # final text response (None if interrupted)
-    interrupted: bool            # True if user cancelled mid-turn
-    streamed_text: bool          # True if text was already streamed to terminal
-    messages: list[ModelMessage] # accumulated message history
-    usage: UsageInfo             # token usage for this turn
-    goal_status: str | None      # "completed" | "best_effort" | None
-```
-
-The `streamed_text` flag tells the chat loop whether text was already emitted via `on_text_delta()` during streaming. When `True`, the loop must not call `on_final_output()` again — that would duplicate the output. When `False` (pure tool-call turns that produced no text), the loop can display `output` directly.
-
-The chat loop (REPL) receives `TurnResult` and decides what to do next: display output, prompt for input, show usage, etc. The REPL owns display; the loop owns execution.
 
 ### 5. Safety Layer
 
@@ -175,9 +102,9 @@ Injected into CoDeps as flat scalar.
 pydantic-ai mapping:
   max_turns_per_prompt maps to UsageLimits(request_limit=N).
   A single UsageLimits instance is created per user message and shared
-  across all agent.run_stream_events() invocations (including nudge
-  re-entries and approval continuations). pydantic-ai accumulates usage
-  internally, so the remaining budget decreases across re-entries.
+  across all agent.run_stream_events() invocations (including compaction
+  re-entries and sub-agent delegations). pydantic-ai accumulates usage
+  internally, so the remaining budget decreases across calls.
   This makes max_turns_per_prompt and UsageLimits one unified mechanism.
 
 When exceeded:
@@ -206,22 +133,24 @@ Setting: doom_loop_threshold (default: 3)
 
 Converged pattern from OpenCode (threshold 3, permission gate) and Gemini CLI (threshold 5, immediate termination). Threshold 3 is more conservative — better for a companion that should never waste the user's time.
 
-#### 5.3 Reflection Loop (Shell Errors)
+#### 5.3 Reflection on Shell Errors
 
-When a shell command fails (non-zero exit), feed the error back automatically instead of requiring the user to copy-paste it.
+When a shell command fails (non-zero exit), the error is returned as the tool result. pydantic-ai's internal tool loop naturally feeds it back to the LLM, which sees the error and can attempt a fix — no orchestration-layer re-entry needed.
 
 ```
 Mechanism:
-  After run_shell_command returns non-zero exit:
-    Inject error output as system context for next LLM call
-    LLM sees the error and can attempt a fix
-    Cap at max_reflections (default: 3) per turn
-    Each reflection is one LLM call
+  Shell tool returns error output as structured result:
+    {"display": ..., "exit_code": N, "error": True}
+  pydantic-ai sends result to LLM → LLM sees error → tries fix → calls shell again
+  Cap at max_reflections (default: 3) consecutive shell errors per turn
+    (enforced by counter in CoDeps, checked by shell tool)
+  After cap: shell tool returns error with "reflection limit reached" note
+    instead of allowing another attempt
 
 Setting: max_reflections (default: 3)
 ```
 
-**Interaction with pydantic-ai's ModelRetry:** Reflection *replaces* `ModelRetry` for shell command errors. The shell tool returns error output as a structured result (`{"display": ..., "exit_code": N, "error": True}`) instead of raising `ModelRetry`. The orchestration layer inspects the tool result and decides whether to inject it as reflection context for the next `agent.run_stream_events()` call. `ModelRetry` remains in use for other tools' transient failures (malformed args, network timeouts, validation errors) where pydantic-ai's built-in retry is the right mechanism. This separation keeps shell errors visible to the orchestration layer (for reflection cap enforcement and telemetry) while leaving non-shell retries to the framework.
+This is just normal pydantic-ai tool-loop behavior with a counter cap. `ModelRetry` remains in use for other tools' transient failures (malformed args, network timeouts) where pydantic-ai's built-in retry is the right mechanism.
 
 Adopted from Aider, which proves this across 35k+ users. The 3-round cap prevents infinite loops. Reflection only fires for shell commands (deterministic errors), not for network-dependent tool failures (which may be transient).
 
@@ -237,7 +166,7 @@ Mechanism:
     Display countdown: "Retrying in Xs... (attempt 2/3)"
     Use asyncio.sleep() with cancellation support (user can Ctrl-C)
   On non-retryable errors:
-    Surface error immediately, return TurnOutcome("error")
+    Surface error immediately, exit turn
 ```
 
 Adopted from OpenCode (Retry-After header parsing, AbortSignal-aware sleep, status events for UI) and Codex (multi-layer retry with user notification).
@@ -271,11 +200,9 @@ Mechanism:
 
 Adopted from Codex (`<turn_aborted>` marker insertion after cancellation). Without this marker, the model on the next turn doesn't know the previous turn was interrupted and may repeat work or miss partial state.
 
-### 7. Goal-Driven Execution
+### 7. Sub-Agent Architecture
 
-**Phasing note:** This section describes the Phase 3b escalation path — built only if Phase 1 (prompt + docstrings) and Phase 3a (system-level nudge without tools) prove insufficient. See §20 for conditional gating. Phase 3a is a lighter approach: the orchestration layer detects premature exit (text response while tool chain appears incomplete) and re-enters `agent.run_stream_events()` with a continuation nudge via history processor — no `set_goal`/`complete_goal` tools needed. If Phase 3a solves the problem, this section is deferred.
-
-For multi-step tasks, the agent sets a goal with completion criteria and works until all criteria are met. This is the structural defense against the "good enough" early exit problem.
+For multi-step tasks, co delegates work to focused sub-agents that run to completion and return structured output. This is the structural defense against the "good enough" early exit problem — sub-agents can't exit early because their `output_type` enforces completeness.
 
 #### 7.0 Empirical Motivation
 
@@ -308,144 +235,122 @@ The model planned `web_fetch` but decided search snippets were "good enough." No
 | Reduce rules from 6 to 5 (remove redundant context rule) | Same behavior |
 | Clean tool protocol (remove tool-specific instructions) | Same behavior |
 
-Prompt rules create the right **thought pattern** (the THINKING shows planning) but cannot enforce **execution completion**. The model can always exit by producing text. This is why structural enforcement (the goal system below) is necessary.
+Prompt rules create the right **thought pattern** (the THINKING shows planning) but cannot enforce **execution completion**. The model can always exit by producing text. This is why structural enforcement (agent delegation below) is necessary.
 
-#### 7.1 Architecture
+#### 7.1 Why Sub-Agents Solve the Early-Exit Problem
+
+Three structural properties of pydantic-ai agent delegation eliminate the early-exit problem:
+
+1. **Structured `output_type` enforces completion.** A sub-agent with `output_type=ResearchResult` (pydantic model with required fields like `full_content`, `sources`, `summary`) cannot return until all required fields are populated. The LLM must do the work to fill them — it can't shortcut with a text response.
+
+2. **Focused instructions prevent distraction.** The sub-agent's system prompt is task-specific ("You are a research agent. Fetch full page content, not just snippets."), not the full companion persona. No personality, no memory recall, no helpfulness bias competing with the task.
+
+3. **Parent validates output.** co (the super-agent) receives the structured `ResearchResult` back from the tool call and can inspect it before responding to the user. The parent decides whether the output is sufficient — the sub-agent doesn't self-assess.
+
+#### 7.2 Architecture
 
 ```
 Components:
-  1. set_goal tool      — LLM declares objective + criteria, stored in CoDeps
-  2. complete_goal tool  — LLM signals done (completed or best_effort)
-  3. inject_active_goal  — history processor re-injects goal at end of every context
-  4. continuation nudge  — system-level nudge if LLM responds without completing goal
-  5. grace period        — one final turn before force-clearing on budget exhaustion
+  1. co (super-agent)  — the main companion agent, owns the conversation
+  2. sub-agents        — focused worker agents called from co's tools
+     Each sub-agent is a pydantic-ai Agent instance with:
+       - Focused instructions (task-specific, not companion)
+       - Minimal tools (only what the task needs)
+       - Structured output_type (pydantic model enforces completeness)
+     Called via: await sub_agent.run(prompt, deps=ctx.deps, usage=ctx.usage)
+     Shared deps  → sub-agent accesses the same CoDeps (API keys, settings)
+     Shared usage → sub-agent's token/request usage counts toward parent's budget
 ```
 
-#### 7.2 set_goal Tool
+#### 7.3 Research Sub-Agent (Concrete Example)
+
+The research sub-agent solves the Finch scenario: search → fetch → synthesize.
 
 ```python
-set_goal(ctx, objective: str, criteria: list[str]) -> dict[str, Any]
-    """Set or adjust the goal for a multi-step task.
-    Call before starting a task that requires 2+ tool calls.
-    May be called again mid-task to refine criteria (non-weakening).
-    Criteria may be tightened or replaced with equivalents, never dropped."""
+# Output type — required fields enforce completion
+class ResearchResult(BaseModel):
+    """Structured output from the research sub-agent."""
+    topic: str                    # what was researched
+    summary: str                  # 2-3 paragraph synthesis
+    full_content: str             # deep content from fetched pages (not just snippets)
+    sources: list[str]            # URLs actually fetched
+    key_facts: list[str]          # extractable facts for memory
 
-    # Auto-approved — no side effects beyond setting state
-    # Stores {"objective": objective, "criteria": criteria} in ctx.deps.active_goal
-    # Returns confirmation with rendered goal
+# Sub-agent definition (stateless, global)
+research_agent = Agent(
+    'google-gla:gemini-2.5-flash',
+    output_type=ResearchResult,
+    instructions=(
+        'You are a research agent. Given a topic, search for it, then fetch '
+        'full page content from the best sources. Do not stop at search snippets — '
+        'always call web_fetch on at least one URL to get deep content. '
+        'Synthesize findings into the required output fields.'
+    ),
+)
+
+# Register web_search and web_fetch on the sub-agent
+# (same tool implementations, different agent registration)
+
+# Delegation tool on co (the super-agent)
+@agent.tool
+async def deep_research(ctx: RunContext[CoDeps], topic: str) -> dict[str, Any]:
+    """Research a topic in depth: search, fetch full content, synthesize.
+    Use for Directives that need thorough research beyond search snippets.
+    Returns structured findings that can be presented or saved to memory."""
+    result = await research_agent.run(
+        f'Research this topic thoroughly: {topic}',
+        deps=ctx.deps,
+        usage=ctx.usage,
+    )
+    research = result.output
+    return {
+        "display": research.summary,
+        "sources": research.sources,
+        "key_facts": research.key_facts,
+        "full_content": research.full_content,
+    }
 ```
 
-#### 7.3 complete_goal Tool
+With this, the Finch scenario becomes: co calls `deep_research("the movie Finch")` → research sub-agent searches, fetches, synthesizes → co gets `ResearchResult` back → co calls `save_memory` with key facts → co responds to user with the summary. The sub-agent cannot shortcut because `full_content` and `sources` are required fields.
 
-```python
-complete_goal(ctx, status: str = "completed") -> dict[str, Any]
-    """Signal that you are done working on the active goal.
-    status='completed'   — all criteria met
-    status='best_effort' — some criteria unmet after exhausting alternatives"""
+#### 7.4 Sub-Agent Design Principles
 
-    # Auto-approved — no side effects
-    # Echoes criteria in return value for final LLM check
-    # Clears ctx.deps.active_goal
-```
+| Principle | Rationale |
+|-----------|-----------|
+| **Focused instructions** | Task-specific system prompt, not companion persona. Sub-agents are workers, not personalities |
+| **Minimal tools** | Only register tools the sub-agent needs. Research sub-agent gets `web_search` + `web_fetch`, not `save_memory` or `shell` |
+| **Structured output** | Pydantic model with required fields enforces completeness. The sub-agent must populate all fields to return |
+| **Shared budget** | Pass `usage=ctx.usage` so sub-agent token/request usage counts toward parent's `UsageLimits`. No separate budget to manage |
+| **Shared deps** | Pass `deps=ctx.deps` so sub-agent accesses the same API keys and settings. No dependency duplication |
+| **No personality** | Sub-agents are workers. No soul seed, no personality axes, no relationship dynamics |
+| **Stateless + global** | Sub-agents are defined as module-level globals (pydantic-ai convention). No per-request instantiation |
 
-The return value echoes criteria so the LLM has one final check before generating its response. Informed by Gemini CLI's completion revocation pattern.
+#### 7.5 When to Delegate vs Act Directly
 
-#### 7.4 Goal Injection History Processor
-
-```
-Runs before every LLM call (including internal tool loops).
-Reads ctx.deps.active_goal. If set:
-  Appends SystemPromptPart at END of message list with:
-    - Objective and criteria
-    - Check prompt: "Are all criteria met? If yes → complete_goal. If no → next action."
-    - If nudge active: "You responded without completing. Check criteria and continue."
-
-Why end-of-context:
-  Transformer attention is strongest at beginning and end.
-  Goal at the end competes with recency bias — exactly where it prevents early exit.
-
-Survives compaction:
-  Goal lives in CoDeps, not in message history.
-  When sliding window drops old messages, injection still reads from CoDeps.
-```
-
-#### 7.5 Continuation Nudge (System-Level)
-
-When the LLM produces a text response while a goal is still active (skipped `complete_goal`), the system nudges it back to work. Critically, this is NOT a synthetic user message — it's a system-level injection via the history processor.
+Not every message needs delegation. The prompt rule distinguishes:
 
 ```
-Mechanism:
-  After inner loop returns "respond" while deps.active_goal is not None:
-    Increment deps.goal_nudge_count
-    If nudge_count <= max_continuations (default 3):
-      Re-enter inner loop — goal injection processor adds nudge text
-    If nudge_count > max_continuations:
-      Grace period: one final turn with "call complete_goal('best_effort') now"
-      If still no complete_goal: force-clear active_goal, let response through
-```
-
-**Cost model:** Each nudge is a full `agent.run_stream_events()` re-entry — not a lightweight injection. This means one complete LLM round-trip per nudge (token cost + latency), and pydantic-ai re-runs all history processors on re-entry. With `max_continuations = 3`, worst case is 4 `agent.run_stream_events()` invocations per user message (1 original + 3 nudges), each potentially containing multiple internal LLM requests for tool calls. The shared `UsageLimits` instance (§5.1) ensures the total request budget is cumulative across all re-entries — a nudge-heavy turn cannot exceed `max_turns_per_prompt` total requests.
-
-Peer evidence against synthetic user messages is strong — 4/5 systems use system-level injection. OpenCode's `<system-reminder>` pattern and Gemini CLI's grace period instruction are both system-level.
-
-**Five exit paths from the ReAct loop:**
-
-| Path | How it works | Cost |
-|------|-------------|------|
-| **Completed** | LLM meets all criteria → calls `complete_goal("completed")` → responds with findings | Zero extra `run_stream_events()` calls |
-| **Best effort** | LLM is stuck after exhausting alternatives → calls `complete_goal("best_effort")` → responds with what it has, explains gaps | Zero extra `run_stream_events()` calls |
-| **Nudge-and-recover** | LLM produces text without calling `complete_goal` → nudge fires → LLM continues or calls `complete_goal` | 1-2 full `run_stream_events()` re-entries |
-| **Grace period** | LLM never calls `complete_goal` despite nudges → `max_continuations` exhausted → bail-out instruction → LLM calls `complete_goal("best_effort")` | `max_continuations` + 1 re-entries |
-| **Hard stop** | LLM ignores even the grace period bail-out instruction → goal force-cleared → response goes through | `max_continuations` + 1 re-entries |
-
-The first two paths should cover nearly all cases. The nudge catches cases where the LLM forgets to signal. The grace period salvages partial results. The hard stop is the last resort for truly confused states.
-
-#### 7.6 When NOT to Set a Goal
-
-Not every message needs a goal. The prompt rule distinguishes:
-
-```
-SET A GOAL when:
-  - Request needs 2+ tool calls AND expects persistent action
-  - Examples: "research X and save it", "build and test Y", "compare A and B with evidence"
+DELEGATE TO A SUB-AGENT when:
+  - Request needs deep research (search + fetch + synthesize)
+  - Request needs multi-step work with verifiable output
+  - Examples: "research X and save it", "compare A and B with evidence"
 
 ACT DIRECTLY when:
   - Simple questions, greetings, single-tool lookups
   - Inquiries (questions, analysis, advice) — even multi-tool ones
+  - Tasks where co's own tools are sufficient without depth enforcement
   - Examples: "what's the weather?", "how would I deploy this?", "explain this code"
 ```
 
-This integrates Gemini CLI's Directive/Inquiry distinction with the goal-setting decision. The LLM classifies intent as part of deciding whether to set a goal.
+This integrates Gemini CLI's Directive/Inquiry distinction with the delegation decision. co classifies intent as part of deciding whether to delegate.
 
-#### 7.7 Observability: Fox/Henhouse Monitoring
+#### 7.6 Observability
 
-The LLM self-assesses at three points: generates criteria, evaluates criteria, signals completion. The system never independently verifies any assessment. This is a deliberate trade-off — programmatic comparison of free-text criteria is fragile and not worth the complexity.
+**Parent validates structured output (not fox/henhouse).** Unlike the self-assessment problem with goal tools, the parent agent receives a typed `ResearchResult` and can inspect it. If `sources` is empty or `full_content` is suspiciously short, co can re-delegate or inform the user. The sub-agent doesn't grade its own work.
 
-**Active guard:** `complete_goal()` includes a zero-tool-call check. If `complete_goal("completed")` is called with zero tool calls since `set_goal()`, the tool returns a warning and does NOT clear the goal:
+**Usage tracking via `ctx.usage` forwarding.** Sub-agent token and request usage is cumulative with the parent's budget. `result.usage()` on the parent includes all sub-agent usage. `UsageLimits` (§5.1) caps the total across parent + sub-agents.
 
-```
-When complete_goal("completed") is called:
-  tool_count = distinct tool calls since set_goal()
-  if tool_count == 0:
-    Return: "No tool calls made since goal was set. Verify all criteria
-    are truly met. If work is genuinely complete, call complete_goal again.
-    Otherwise, continue working or call complete_goal('best_effort')."
-    Do NOT clear active_goal — force the model to re-assess.
-  else:
-    Normal completion — clear goal, echo criteria.
-```
-
-This catches the most common gaming mode (immediate completion without doing work). It's ~10 lines, zero LLM cost. A 1:1 mapping between criteria count and tool calls is not assumed — a single tool call can satisfy multiple criteria. The guard only catches the degenerate zero-work case.
-
-**Passive telemetry:** Log the tool-call count alongside goal status in OTEL spans. This is cheap (one counter + one span attribute) and provides a data-driven signal for when to tighten criteria guidance or add more sophisticated heuristics.
-
-If telemetry reveals systematic self-assessment failures beyond the zero-call case, lightweight programmatic checks can be added (scan tool call history for tool names implied by criteria) without changing the architecture.
-
-#### 7.8 Interaction with Existing Systems
-
-**Approval flow:** If a continuation triggers a tool call requiring approval (e.g., `save_memory`), the existing approval loop in `run_turn` handles it normally. The continuation nudge wraps the outer level — approval happens inside `_stream_events`.
-
-**Turn limits:** The turn limit safety net (max turns per prompt, §5.1) acts as an outer guard independent of the goal system. If the model hits the turn limit mid-goal, the goal is force-cleared the same way as the hard stop. The turn limit is a broader safety mechanism; the goal system's `max_continuations` handles goal-specific runaway within that outer bound.
+**OTEL spans show parent→sub-agent delegation.** pydantic-ai's OpenTelemetry instrumentation automatically creates nested spans for delegated runs. The trace shows: parent tool call → sub-agent run → sub-agent tool calls → sub-agent output → parent continues. No custom instrumentation needed.
 
 ### 8. Context Management
 
@@ -497,7 +402,7 @@ Include:
   - Remaining work and next steps
   - Critical file paths, URLs, and tool results still needed
   - User constraints, preferences, and stated requirements
-  - Active goal and its criteria (if any)
+  - Any delegated work in progress and its status
 
 Keep the summary under {max_tokens} tokens. Prioritize recent actions and
 unfinished work over completed early steps.
@@ -543,7 +448,6 @@ DYNAMIC (tool-loaded, not in system prompt):
   - Personality depth (beyond soul seed + axes)  — via load_personality tool
   - Memories                                 — via recall_memory tool
   - Knowledge articles                       — via recall_article tool (future)
-  - Active goal                              — via inject_active_goal history processor
 ```
 
 #### 9.1 Conditional Composition
@@ -595,14 +499,14 @@ No directory walking, no precedence hierarchy, no compatibility filenames. Co is
 
 Five rules define co's behavior. Each rule is a focused markdown file, loaded in order. Rules contain cross-cutting principles — never tool-specific instructions.
 
-**Token budget:** Every token in the system prompt is paid on every LLM request. The rule text shown below is the *content intent* — the actual rule files should be compressed to the minimum wording that achieves the behavioral goal. Target: <1000 tokens total for all 5 rules. The goal-setting procedure (§10.5) should be the most compressed, since it fires on every request but is only relevant for directive messages. Capability-specific guidance (shell, git) lives in `@agent.system_prompt` decorators (§9.1), not in the rules.
+**Token budget:** Every token in the system prompt is paid on every LLM request. The rule text shown below is the *content intent* — the actual rule files should be compressed to the minimum wording that achieves the behavioral goal. Target: <1000 tokens total for all 5 rules. The delegation guidance (§10.5) should be the most compressed, since it fires on every request but is only relevant for directive messages. Capability-specific guidance (shell, git) lives in `@agent.system_prompt` decorators (§9.1), not in the rules.
 
 ```
 01_identity.md    — Who co is, core traits, relationship with user
 02_safety.md      — Security, credential protection, approval philosophy
 03_reasoning.md   — Truthfulness, verification, fact vs opinion
 04_tools.md       — Cross-cutting tool strategy (not tool-specific)
-05_workflow.md    — Goal-setting, task execution, intent classification
+05_workflow.md    — Delegation, task execution, intent classification
 ```
 
 #### 10.1 Rule 01: Identity
@@ -634,7 +538,7 @@ answer that skimmed the surface. Do not settle for "good enough" when your
 tools can get you to "actually good."
 ```
 
-Integrates: OpenCode's professional objectivity, Gemini CLI's persistence rule, the anti-helpfulness-bias directive from the goal critique, and co's Finch identity.
+Integrates: OpenCode's professional objectivity, Gemini CLI's persistence rule, the anti-helpfulness-bias directive from the early-exit analysis (§7.0), and co's Finch identity.
 
 #### 10.2 Rule 02: Safety
 
@@ -726,7 +630,7 @@ Integrates: Codex's preamble messages spec (with examples), the tool-strategy pr
 
 #### 10.5 Rule 05: Workflow
 
-The goal-setting and intent-classification rule. This is the behavioral core of the goal-driven execution system.
+The intent-classification and delegation rule.
 
 ```markdown
 # Workflow
@@ -738,45 +642,20 @@ Classify each user message:
 Default to Inquiry. For Inquiries, limit yourself to research and explanation —
 do not modify files or persist state until an explicit Directive is issued.
 
-## Goal-setting
-When a Directive needs 2+ tool calls AND expects persistent action, build a
-goal before acting.
+## Delegation
+When a Directive needs deep research or multi-step work, delegate to a
+sub-agent. You decide what to delegate and validate what comes back.
 
-### Building the goal
-Read the user's request and full conversation history. Ask:
-  1. What is the user actually trying to accomplish?
-  2. What must be true when I'm done? (observable outcomes, not steps)
-  3. What would make the user say "that's incomplete"?
+Use deep_research for topics that need full page content, not just snippets.
+After receiving structured results, decide what to save and how to present it.
 
-Construct:
-  - Objective: one sentence capturing the user's need
-  - Criteria: 2-4 concrete, checkable completion conditions
-    State criteria as outcomes ("retrieved full article content"),
-    not process ("called web_fetch")
-    Keep criteria abstract enough for strategy flexibility
-    ("from at least one source", not "from Wikipedia")
-
-Call set_goal(objective, criteria) to commit.
-
-### Executing the goal
-After each action, check: are all criteria met?
-- If no: execute the next step. Do not respond yet.
-- If yes: call complete_goal("completed"), then respond.
-- If stuck after exhausting alternatives: call complete_goal("best_effort"),
-  respond with what you have, name which criteria you could not meet and why.
-
-### Refining the goal
-After each tool result, evaluate whether criteria still fit what you've
-learned. If criteria need adjustment, call set_goal again. The bar for "done"
-only holds or rises — never weaken or drop criteria.
-
-## When NOT to set a goal
+## When NOT to delegate
 Simple questions, greetings, single-tool lookups, and Inquiries — act directly.
-Not every task needs a formal goal. The goal system is for multi-step
-Directives, not for conversation.
+Not every task needs delegation. Sub-agents are for multi-step Directives
+that need depth enforcement, not for conversation.
 ```
 
-Integrates: Gemini CLI's directive/inquiry distinction, the goal-driven ReAct loop design, Codex's "decision complete" finalization rule.
+Integrates: Gemini CLI's directive/inquiry distinction, pydantic-ai agent delegation, Codex's "decision complete" finalization rule.
 
 ### 11. Personality System
 
@@ -879,7 +758,7 @@ Every tool follows these conventions:
 
 ### 14. Tool Docstring as Chain Hint
 
-Tool-specific guidance lives in tool docstrings, not in prompt rules. The LLM reads docstrings when deciding which tool to call. Chains emerge from tool descriptions + goal criteria.
+Tool-specific guidance lives in tool docstrings, not in prompt rules. The LLM reads docstrings when deciding which tool to call. Chains emerge from tool descriptions + delegation context.
 
 ```
 KEY DOCSTRING PATTERNS:
@@ -940,13 +819,7 @@ PROCESSOR CHAIN (execution order):
    - Handoff-style + first-person + anti-injection summarization
    - Replaces old messages with summary
 
-3. inject_active_goal (sync)
-   - Reads CoDeps.active_goal
-   - If set: appends goal block at END of messages
-   - If nudge active: adds nudge text to goal block
-   - If goal is None: no-op
-
-4. inject_context_signals (sync) [future]
+3. inject_context_signals (sync) [future]
    - Injects relevant memories at conversation start
    - Injects background task status if tasks are running
    - Injects instruction file contents if discovered
@@ -956,97 +829,24 @@ Each processor is a pure function: messages in, messages out. No side effects. T
 
 ---
 
-## Part VI: Integration Points
+## Part VI: Integration Notes
 
 ### 17. CoDeps Additions
 
-New flat scalar fields added to CoDeps for the architecture described above:
+New flat scalar fields for CoDeps (consistent with "CoDeps is flat scalars only" principle):
 
-```python
-@dataclass
-class CoDeps:
-    # ... existing fields ...
+- `max_turns_per_prompt` (default 50) — maps to `UsageLimits(request_limit=N)`, shared across parent + sub-agent calls
+- `doom_loop_threshold` (default 3) — consecutive identical tool call hashes before intervention
+- `max_reflections` (default 3) — consecutive shell error cap
+- `recent_tool_hashes: list[str]` — rolling window for doom loop detection, reset per turn
 
-    # Goal system
-    active_goal: dict | None = None       # {"objective": str, "criteria": list[str]}
-    max_continuations: int = 3            # nudge budget per turn
-    goal_nudge_count: int = 0             # current nudge count (reset per turn)
-    goal_tool_count: int = 0             # tool calls since set_goal (for §7.7 guard)
+### 18. Prompt Assembly
 
-    # Safety
-    max_turns_per_prompt: int = 50        # hard cap — maps to UsageLimits(request_limit=N)
-    doom_loop_threshold: int = 3          # identical calls before intervention
-    max_reflections: int = 3              # shell error reflection rounds
+Static layers (identity seed, rules, model quirks) assembled by `assemble_prompt()`. Conditional layers via `@agent.system_prompt` decorators (§9.1). History processors: `truncate_tool_returns` + `truncate_history_window`.
 
-    # Loop state (reset per turn)
-    turn_count: int = 0                   # tool-call turns this prompt
-    recent_tool_hashes: list[str] = field(default_factory=list)  # for doom loop
-```
+### 19. Chat Loop
 
-All flat scalars or simple containers. No config objects, no nested structures. Consistent with CLAUDE.md's "CoDeps is flat scalars only" principle.
-
-### 18. Prompt Assembly Integration
-
-```python
-# In agent.py or equivalent:
-
-def create_agent(deps: CoDeps) -> Agent:
-    # Static layers: identity seed + rules + model quirks
-    system_prompt = assemble_prompt(deps.personality, deps.model_id)
-
-    agent = Agent(
-        model=deps.model,
-        system_prompt=system_prompt,
-        deps_type=CoDeps,
-        history_processors=[
-            truncate_tool_returns,
-            truncate_history_window,
-            inject_active_goal,
-        ],
-    )
-
-    # Conditional layers via @agent.system_prompt decorators (§9.1)
-    # e.g., shell guidance, project instructions
-
-    # Register tools...
-    return agent
-```
-
-### 19. Chat Loop Integration
-
-```python
-# Simplified REPL loop showing integration points:
-
-async def chat_loop(agent, deps):
-    while True:
-        user_input = await get_user_input()
-
-        # Reset per-turn state
-        deps.turn_count = 0
-        deps.goal_nudge_count = 0
-        deps.goal_tool_count = 0
-        deps.recent_tool_hashes.clear()
-
-        # Single UsageLimits shared across all run_stream_events() calls
-        # (including nudge re-entries). Budget is cumulative.
-        turn_limits = UsageLimits(request_limit=deps.max_turns_per_prompt)
-
-        result = await run_turn(agent, deps, user_input, turn_limits)
-
-        match result:
-            case TurnResult(interrupted=True):
-                display("Interrupted.")
-            case TurnResult(streamed_text=True):
-                pass  # text already emitted via on_text_delta()
-            case TurnResult(goal_status="completed", output=text) if text:
-                display(text)
-            case TurnResult(goal_status="best_effort", output=text) if text:
-                display(text)  # includes gap explanation
-            case TurnResult(output=text) if text:
-                display(text)
-            case TurnResult(output=None):
-                display("No response generated.")
-```
+Per turn: reset doom loop state → create `UsageLimits` → call `run_turn()` → display output. The REPL owns display; the loop owns execution. Streaming text is emitted via `on_text_delta()` during the run — the chat loop checks whether text was already streamed to avoid duplication.
 
 ---
 
@@ -1065,7 +865,7 @@ Phase 1: Prompt + Docstrings (1-2 days)  [ALWAYS DO]
   └── TEST GATE: 5 research prompts across 2 models
       Pass criterion: 80%+ complete full tool chains without code changes
       → Pass (≥80%): Phase 3 deferred. Proceed to Phase 2 + 4.
-      → Fail (<80%): Proceed to Phase 3a after Phase 2.
+      → Fail (<80%): Proceed to Phase 3 after Phase 2.
 
 Phase 2: Safety (1 day)  [ALWAYS DO]
   ├── 2a. Doom loop detection (§5.2) — ~30 lines
@@ -1073,19 +873,12 @@ Phase 2: Safety (1 day)  [ALWAYS DO]
   │       (Turn limit already exists: max_request_limit=25 via UsageLimits)
   └── TEST GATE: safety mechanisms trigger correctly in synthetic scenarios
 
-Phase 3a: System-Level Nudge (1 day)  [ONLY IF Phase 1 < 80%]
-  ├── Continuation nudge via history processor, no new tools
-  │   Orchestration detects premature exit (text response while tool chain
-  │   appears incomplete), re-enters agent.run_stream_events() with nudge
-  └── TEST GATE: Finch scenario + 3 multi-step prompts
-      → Pass: Ship. Goal tools deferred.
-      → Fail: Proceed to Phase 3b.
-
-Phase 3b: Goal Tools (2 days)  [ONLY IF Phase 3a insufficient]
-  ├── set_goal / complete_goal tools (§7.2-7.3)
-  ├── inject_active_goal history processor (§7.4)
-  ├── Grace period + zero-call guard (§7.5, §7.7)
-  └── TEST GATE: Finch scenario + 3 multi-step prompts succeed
+Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80%]
+  ├── Research sub-agent with structured output_type (§7.3)
+  ├── deep_research delegation tool on co (§7.3)
+  ├── Workflow rule update for delegation guidance (§10.5)
+  └── TEST GATE: Finch scenario succeeds via sub-agent delegation
+      (search → fetch → structured output → save_memory)
 
 Phase 4: Resilience (1-2 days)  [ALWAYS DO]
   ├── 4a. Shell reflection loop (§5.3) — ~40 lines
@@ -1093,10 +886,9 @@ Phase 4: Resilience (1-2 days)  [ALWAYS DO]
   └── TEST GATE: reflection fixes a failing test command
 
 Phase 5: Polish  [AS NEEDED]
-  ├── 5a. TurnOutcome refactor (§4.1) — code quality, not functional
-  ├── 5b. Expand model quirk database (§12.1)
-  ├── 5c. Background compaction (§8.1 Layer 3)
-  ├── 5d. Confidence-scored tool outputs (§15) — if needed
+  ├── 5a. Expand model quirk database (§12.1)
+  ├── 5b. Background compaction (§8.1 Layer 3)
+  ├── 5c. Confidence-scored tool outputs (§15) — if needed
   └── SHIP
 ```
 
@@ -1105,9 +897,8 @@ Phase 5: Polish  [AS NEEDED]
 ```
 Phase 1 has no dependencies — pure prompt/docstring work + abort marker
 Phase 2 has no dependencies — safety is independent of prompt content
-Phase 3a depends on Phase 1 results (conditional: only if Phase 1 < 80%)
-Phase 3b depends on Phase 3a results (conditional: only if Phase 3a insufficient)
-Phase 4 is independent — resilience features work with any prompt/goal configuration
+Phase 3 depends on Phase 1 results (conditional: only if Phase 1 < 80%)
+Phase 4 is independent — resilience features work with any prompt/delegation configuration
 Phase 5 is independent (can run anytime after Phase 1)
 ```
 
@@ -1119,8 +910,8 @@ FUNCTIONAL:
   - Doom loop detection catches 3+ identical tool calls
   - Turn limit prevents runaway execution
   - Compaction produces actionable handoff summaries
-  - Goal system prevents premature exit on directive tasks
-  - Inquiry tasks work without goal overhead
+  - Sub-agent delegation prevents premature exit on directive tasks
+  - Inquiry tasks work without delegation overhead
 
 BEHAVIORAL:
   - co remembers user context across sessions
@@ -1131,7 +922,7 @@ BEHAVIORAL:
 
 PERFORMANCE:
   - < 100ms overhead from prompt assembly
-  - < 200 tokens overhead from goal injection per turn
+  - Sub-agent delegation adds zero overhead to non-delegated turns
   - Turn limit + doom loop add zero latency to normal operation
   - Compaction runs in < 5s (background target: hidden behind user idle)
 
@@ -1154,20 +945,20 @@ SAFETY:
        │                                                  │
        ▼                                                  │
 ┌──────────────────────────────────────────────────────────────────┐
-│  OUTER LOOP (orchestration)                                      │
+│  AGENT LOOP (co super-agent)                                     │
 │                                                                  │
-│  ┌─── Pre-turn ───┐     ┌─── Inner Loop ───┐    ┌─ Post-turn ─┐│
-│  │ turn limit?    │     │                   │    │ goal check  ││
-│  │ overflow?      │────>│ assemble prompt   │───>│ reflection? ││
-│  │ bg tasks?      │     │ history procs     │    │ truncation? ││
-│  └────────────────┘     │ doom loop check   │    │ bg compact? ││
-│                         │ LLM stream        │    └─────────────┘│
-│                         │ tool dispatch     │                    │
-│                         │ approval gate     │                    │
-│                         │ → TurnOutcome     │                    │
-│                         └───────────────────┘                    │
+│  ┌─── Pre-turn ───┐     ┌─── run_stream ────┐   ┌─ Post-turn ─┐│
+│  │ turn limit?    │     │                    │   │ reflection? ││
+│  │ overflow?      │────>│ assemble prompt    │──>│ truncation? ││
+│  │ bg tasks?      │     │ history procs      │   │ bg compact? ││
+│  └────────────────┘     │ doom loop check    │   └─────────────┘│
+│                         │ LLM stream         │                   │
+│                         │ tool dispatch      │                   │
+│                         │ approval gate      │                   │
+│                         │ sub-agent delegate │                   │
+│                         └────────────────────┘                   │
 │                                                                  │
-│  → TurnResult (output, interrupted, streamed_text, messages, ...) │
+│  → output, usage, interrupted flag                                │
 └──────────────────────────────────────────────────────────────────┘
        │                              ▲
        ▼                              │
@@ -1176,15 +967,14 @@ SAFETY:
 │                   │    │                          │
 │  Identity seed    │    │  1. truncate_tool_returns│
 │  Companion rules  │    │  2. truncate_history     │
-│  Capability ctx   │    │  3. inject_active_goal   │
-│  Model quirks     │    │  4. inject_context [fut] │
-│  Project instrs   │    └─────────────────────────┘
-│                   │
-│  (conditional via  │    ┌─────────────────────────┐
-│   @system_prompt  │    │  TOOL LAYER              │
-│   decorators)     │    │                          │
-└──────────────────┘    │  set_goal / complete_goal│
-                        │  web_search / web_fetch   │
+│  Capability ctx   │    │  3. inject_context [fut] │
+│  Model quirks     │    └─────────────────────────┘
+│  Project instrs   │
+│                   │    ┌─────────────────────────┐
+│  (conditional via  │    │  TOOL LAYER              │
+│   @system_prompt  │    │                          │
+│   decorators)     │    │  deep_research (delegate)│
+└──────────────────┘    │  web_search / web_fetch   │
                         │  save_memory / recall     │
                         │  shell / google / obsidian│
                         │  MCP tools (dynamic)      │
@@ -1192,6 +982,17 @@ SAFETY:
                         │  (approval via            │
                         │   requires_approval flag) │
                         └─────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│  SUB-AGENTS (called from tools via agent delegation)             │
+│                                                                  │
+│  ┌──────────────────┐                                            │
+│  │ research_agent   │  output_type=ResearchResult                │
+│  │ (web_search,     │  deps=ctx.deps, usage=ctx.usage            │
+│  │  web_fetch)      │  focused instructions, no personality      │
+│  └──────────────────┘                                            │
+│                        (future sub-agents added here)            │
+└──────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
 │  SAFETY LAYER (independent guards, any can stop the agent)       │
@@ -1211,11 +1012,11 @@ How each component traces back to peer system evidence:
 
 | Component | Primary Source | Secondary Source | co Innovation |
 |-----------|---------------|-----------------|---------------|
-| Dual-loop topology | OpenCode | Codex | Typed TurnOutcome |
+| Agent delegation | Claude Code Task | pydantic-ai docs | Structured output_type enforces completion; shared deps + usage |
 | Doom loop detection | OpenCode (3x) | Gemini CLI (5x) | Threshold 3 (conservative) |
 | Turn limit | Gemini CLI (100) | OpenCode (steps) | /continue to resume |
-| Goal injection | Gemini CLI scratchpad | Claude Code TodoWrite | History processor, survives compaction |
-| Directive/Inquiry | Gemini CLI | — | Integrated with goal-setting decision |
+| Sub-agent structured output | pydantic-ai delegation | Claude Code Task | Pydantic model with required fields replaces goal self-assessment |
+| Directive/Inquiry | Gemini CLI | — | Integrated with delegation decision |
 | Two unknowns | Codex | Gemini CLI | In reasoning rule |
 | Preamble messages | Codex | — | In tools rule with examples |
 | Anti-sycophancy | OpenCode | Gemini CLI | In identity rule |
@@ -1232,7 +1033,6 @@ How each component traces back to peer system evidence:
 | Memory constraints | Gemini CLI | — | In safety rule |
 | Confidence scoring | Claude Code | — | Deferred to Phase 5 |
 | Instruction discovery | OpenCode | Gemini CLI | Single file: `.co-cli/instructions.md` |
-| Grace period | Gemini CLI | — | One final turn before force-clear |
 
 ---
 
@@ -1242,13 +1042,13 @@ This design supersedes or consolidates:
 
 | Existing Document | Disposition |
 |---|---|
-| `TODO-agent-loop-prompt-refactor.md` | Merged — diagnostic evidence (§7.0), exit paths table (§7.5), fox/henhouse monitoring (§7.7), system interaction notes (§7.8) incorporated; file deleted |
-| `TODO-agent-loop-architecture.md` | Subsumed — goal system design incorporated here (§7) with critique refinements |
+| `TODO-agent-loop-prompt-refactor.md` | Merged — diagnostic evidence (§7.0) incorporated; file deleted |
+| `TODO-agent-loop-architecture.md` | Subsumed — replaced by sub-agent architecture (§7) |
 | `TODO-agent-loop-architecture-critique.md` | Subsumed — all 10 refinements incorporated |
 | `TODO-prompt-refactor.md` | Subsumed — tool/rule separation principle adopted (§14) |
-| `TODO-co-agentic-loop-and-prompting-critique.md` | Incorporated — 5/7 accepted, 2/7 partially accepted; resolutions in Review Resolution section |
-| `DESIGN-01-agent-chat-loop.md` | Will need update after implementation to reflect new loop topology |
-| `DESIGN-07-context-governance.md` | Will need update for new compaction prompt and goal injection |
+| `TODO-co-agentic-loop-and-prompting-critique.md` | Incorporated — critique resolutions folded into revised design |
+| `DESIGN-01-agent-chat-loop.md` | Will need update after implementation to reflect single-loop + delegation topology |
+| `DESIGN-07-context-governance.md` | Will need update for new compaction prompt |
 | `DESIGN-16-prompt-design.md` | Will need update for rule redesign and personality axis architecture |
 | `REVIEW-agent-loop-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
 | `REVIEW-prompts-peer-systems.md` | Reference — all key adoptions traced in Appendix A |
@@ -1262,13 +1062,13 @@ Items from `TAKEAWAY-converged-adoptions.md` not addressed in this design, with 
 |---|---|
 | 3.1 Display-only plan tool | Post-MVP enhancement; no dependency on loop/prompt architecture |
 | 3.7 Conversation-driven rule generation | Meta-learning capability; requires stable rule system first (this design) |
-| 3.8 Multi-phase workflow commands | Compound workflow orchestration; post-MVP after goal system proves out |
+| 3.8 Multi-phase workflow commands | Compound workflow orchestration; post-MVP after sub-agent delegation proves out |
 
 These items are compatible with this architecture and can be added incrementally. None require architectural changes to what's designed here.
 
 ---
 
-**Design completed**: 2026-02-13, **revised**: 2026-02-14 (critique resolutions)
+**Design completed**: 2026-02-13, **revised**: 2026-02-14 (super-agent + sub-agents replace dual-loop + goal system)
 **Peer systems referenced**: Codex, Claude Code, OpenCode, Gemini CLI, Aider
-**Estimated total effort**: 4-9 days (conditional gating; 1-2 days if Phase 1 passes)
-**Critical path**: Phase 1 (prompt + docstrings) — if it passes at 80%+, goal system is deferred
+**Estimated total effort**: 4-7 days (conditional gating; 1-2 days if Phase 1 passes)
+**Critical path**: Phase 1 (prompt + docstrings) — if it passes at 80%+, sub-agent delegation is deferred
