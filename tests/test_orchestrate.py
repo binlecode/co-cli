@@ -9,21 +9,16 @@ from typing import Any
 import pytest
 from pydantic_ai import FinalResultEvent
 
-from co_cli._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events
+from co_cli._orchestrate import FrontendProtocol, _stream_events
 from co_cli.deps import CoDeps
 from co_cli.sandbox import SubprocessBackend
 from pydantic_ai.messages import (
-    ModelRequest,
-    ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
-    ToolCallPart,
-    ToolReturnPart,
-    UserPromptPart,
 )
 from pydantic_ai.usage import UsageLimits
 
@@ -36,7 +31,7 @@ from pydantic_ai.usage import UsageLimits
 class RecordingFrontend:
     """Records all frontend events as (event_type, payload) tuples.
 
-    Configurable approval_policy: "approve" | "deny" | "yolo".
+    Configurable approval_policy: "approve" | "deny".
     """
 
     def __init__(self, approval_policy: str = "approve") -> None:
@@ -69,8 +64,6 @@ class RecordingFrontend:
 
     def prompt_approval(self, description: str) -> str:
         self.events.append(("prompt_approval", description))
-        if self.approval_policy == "yolo":
-            return "a"
         if self.approval_policy == "approve":
             return "y"
         return "n"
@@ -97,88 +90,6 @@ class StaticEventAgent:
 
 # ---------------------------------------------------------------------------
 # Protocol compliance
-# ---------------------------------------------------------------------------
-
-
-def test_recording_frontend_is_protocol_compliant():
-    """RecordingFrontend satisfies FrontendProtocol at runtime."""
-    frontend = RecordingFrontend()
-    assert isinstance(frontend, FrontendProtocol)
-
-
-# ---------------------------------------------------------------------------
-# _patch_dangling_tool_calls import from new location
-# ---------------------------------------------------------------------------
-
-
-def test_patch_dangling_tool_calls_importable():
-    """_patch_dangling_tool_calls is importable from _orchestrate."""
-    assert callable(_patch_dangling_tool_calls)
-
-
-def test_patch_dangling_tool_calls_basic():
-    """Basic functionality works from the new module location."""
-    response = ModelResponse(parts=[
-        ToolCallPart(tool_name="run_shell_command", args='{"cmd":"ls"}', tool_call_id="c1"),
-    ])
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="list files")]),
-        response,
-    ]
-    result = _patch_dangling_tool_calls(msgs)
-    assert len(result) == 3
-    patch = result[2]
-    assert isinstance(patch.parts[0], ToolReturnPart)
-    assert patch.parts[0].tool_call_id == "c1"
-
-
-# ---------------------------------------------------------------------------
-# RecordingFrontend event recording
-# ---------------------------------------------------------------------------
-
-
-def test_recording_frontend_records_events():
-    """Events are recorded in order."""
-    f = RecordingFrontend()
-    f.on_status("thinking")
-    f.on_text_delta("Hello")
-    f.on_text_commit("Hello world")
-    f.on_tool_call("run_shell_command", "ls")
-    f.on_tool_result("ls", "file.txt")
-    f.on_final_output("done")
-    f.cleanup()
-
-    assert len(f.events) == 7
-    assert f.events[0] == ("status", "thinking")
-    assert f.events[1] == ("text_delta", "Hello")
-    assert f.events[2] == ("text_commit", "Hello world")
-    assert f.events[3] == ("tool_call", ("run_shell_command", "ls"))
-    assert f.events[4] == ("tool_result", ("ls", "file.txt"))
-    assert f.events[5] == ("final_output", "done")
-    assert f.events[6] == ("cleanup", None)
-
-
-def test_recording_frontend_approval_approve():
-    """approve policy returns 'y'."""
-    f = RecordingFrontend(approval_policy="approve")
-    assert f.prompt_approval("run_shell_command(ls)") == "y"
-    assert f.events[-1] == ("prompt_approval", "run_shell_command(ls)")
-
-
-def test_recording_frontend_approval_deny():
-    """deny policy returns 'n'."""
-    f = RecordingFrontend(approval_policy="deny")
-    assert f.prompt_approval("run_shell_command(rm -rf /)") == "n"
-
-
-def test_recording_frontend_approval_yolo():
-    """yolo policy returns 'a'."""
-    f = RecordingFrontend(approval_policy="yolo")
-    assert f.prompt_approval("anything") == "a"
-
-
-# ---------------------------------------------------------------------------
-# TerminalFrontend protocol compliance (import check)
 # ---------------------------------------------------------------------------
 
 

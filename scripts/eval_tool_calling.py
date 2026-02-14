@@ -760,7 +760,6 @@ async def run_eval(args: argparse.Namespace) -> int:
         sandbox=SubprocessBackend(),
         obsidian_vault_path=None,
         google_credentials_path=None,
-        slack_client=None,
         shell_safe_commands=[],
     )
 

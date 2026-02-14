@@ -19,10 +19,9 @@ class Context:
     deps: CoDeps
 
 
-def _make_ctx(auto_confirm: bool = True) -> Context:
+def _make_ctx() -> Context:
     return Context(deps=CoDeps(
         sandbox=Sandbox(container_name="test"),
-        auto_confirm=auto_confirm,
         session_id="test",
         google_credentials_path=settings.google_credentials_path,
     ))
@@ -145,7 +144,7 @@ def test_gmail_draft_functional():
     """Test real Gmail draft creation.
     Requires google_credentials_path in settings.
     """
-    ctx = _make_ctx(auto_confirm=True)
+    ctx = _make_ctx()
 
     result = create_email_draft(ctx, "test@example.com", "Test Subject", "Test Body")
     assert "Draft created" in result

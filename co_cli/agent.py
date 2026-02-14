@@ -14,16 +14,8 @@ from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
-from co_cli.tools.slack import (
-    send_slack_message,
-    list_slack_channels,
-    list_slack_messages,
-    list_slack_replies,
-    list_slack_users,
-)
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
-from co_cli.tools.context import load_aspect, load_personality
 
 
 def get_agent(
@@ -135,12 +127,7 @@ def get_agent(
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
-    agent.tool(send_slack_message, requires_approval=True)
     agent.tool(save_memory, requires_approval=True)
-
-    # Context tools — read-only, no approval needed
-    agent.tool(load_aspect, requires_approval=all_approval)
-    agent.tool(load_personality, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
     agent.tool(recall_memory, requires_approval=all_approval)
@@ -154,10 +141,6 @@ def get_agent(
     agent.tool(search_emails, requires_approval=all_approval)
     agent.tool(list_calendar_events, requires_approval=all_approval)
     agent.tool(search_calendar_events, requires_approval=all_approval)
-    agent.tool(list_slack_channels, requires_approval=all_approval)
-    agent.tool(list_slack_messages, requires_approval=all_approval)
-    agent.tool(list_slack_replies, requires_approval=all_approval)
-    agent.tool(list_slack_users, requires_approval=all_approval)
     policy = web_policy or settings.web_policy
     search_approval = all_approval or (policy.search == "ask")
     fetch_approval = all_approval or (policy.fetch == "ask")

@@ -15,7 +15,6 @@ class CoDeps:
     """
 
     sandbox: SandboxProtocol
-    auto_confirm: bool = False  # Session-yolo: set True when user picks "a" in approval prompt
     session_id: str = ""
     obsidian_vault_path: Path | None = None  # Batch 2: Obsidian vault
 
@@ -32,9 +31,6 @@ class CoDeps:
 
     # Sandbox limits
     sandbox_max_timeout: int = 600  # Hard ceiling for per-command timeout (seconds)
-
-    # Batch 4: Slack client
-    slack_client: Any | None = None  # slack_sdk.WebClient at runtime
 
     # Batch 5: Web intelligence
     brave_search_api_key: str | None = None

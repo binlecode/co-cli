@@ -286,7 +286,7 @@ Phase 3+: Advanced capabilities
 Phases 1a–1d are complete. Implementation guides were archived (deleted) as they described code patterns that no longer exist (monolithic `system.md`, `[IF provider]` conditionals, monolithic personality files). Current architecture is documented in:
 - **Memory system**: [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md)
 - **Prompt system**: [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) (active redesign)
-- **Personality system**: `co_cli/prompts/personalities/` (registry, composer, aspects, roles)
+- **Personality system**: `co_cli/prompts/personalities/` (registry, composer, roles)
 
 ---
 
@@ -507,11 +507,10 @@ System prompt assembles via `assemble_prompt()` in `co_cli/prompts/__init__.py`:
 ```
 Fixed (system prompt, every turn):
   1. instructions.md       # bootstrap identity
-  2. rules/*.md            # 8 behavioral rules (01-08)
+  2. rules/*.md            # 5 behavioral rules (01-05)
   3. counter_steering      # model quirk text (optional)
 
 Dynamic (tool-loaded, on demand):
-  load_aspect(names)       # situational guidance
   load_personality(pieces) # character + style
   recall_memory(query)     # persistent memories
   save_memory(content)     # persist knowledge
@@ -594,7 +593,7 @@ All knowledge (memories, future articles) is dynamic — loaded via tools, never
 - `docs/REVIEW-compare-four.md` — Peer system analysis (prompt techniques)
 
 ### Active Implementation Guides
-- `docs/DESIGN-16-prompt-design.md` — Prompt design: rules/aspects split, context tools, test governance
+- `docs/DESIGN-16-prompt-design.md` — Prompt design: soul seed, 5 rules, personality-rule interaction
 - `docs/TODO-mcp-client.md` — MCP client
 - `docs/TODO-background-execution.md` — Background execution
 - `docs/TODO-shell-security-and-tools.md` — Shell security + file tools (Phase 2.5+2d)

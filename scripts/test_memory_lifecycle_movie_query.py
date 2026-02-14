@@ -46,6 +46,7 @@ from pydantic_ai.messages import (  # noqa: E402
     ModelResponse,
     RetryPromptPart,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
 )
@@ -97,6 +98,9 @@ def print_trace(messages: list, lines: list[str] | None = None) -> None:
                     _out(f"\n  [{i}] TOOL_CALL: {part.tool_name}")
                     for line in preview.split("\n"):
                         _out(f"       {line}")
+                elif isinstance(part, ThinkingPart):
+                    preview = part.content[:800] if part.content else "(empty)"
+                    _out(f"\n  [{i}] THINKING: {preview}")
                 elif isinstance(part, TextPart):
                     _out(f"\n  [{i}] TEXT: {part.content[:500]}")
 
@@ -191,14 +195,14 @@ def write_report(
     has_fetch = any("web_fetch" in t for t in tool_sequence)
     has_save = any("save_memory" in t for t in tool_sequence)
     has_recall = any("recall_memory" in t for t in tool_sequence)
-    has_personality = any("load_personality" in t or "load_aspect" in t for t in tool_sequence)
+    has_personality = any("load_personality" in t for t in tool_sequence)
 
     stages = [
         ("Web research (web_search)", has_search),
         ("Content retrieval (web_fetch)", has_fetch),
         ("Memory recall (recall_memory)", has_recall),
         ("Proactive memory save (save_memory)", has_save),
-        ("Context loading (load_personality/load_aspect)", has_personality),
+        ("Context loading (load_personality)", has_personality),
     ]
     for label, present in stages:
         status = "PASS" if present else "SKIP"

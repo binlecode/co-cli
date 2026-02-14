@@ -26,7 +26,6 @@ class Context:
 def _make_ctx(sandbox: SandboxProtocol, **overrides) -> Context:
     return Context(deps=CoDeps(
         sandbox=sandbox,
-        auto_confirm=True,
         session_id="test",
         **overrides,
     ))

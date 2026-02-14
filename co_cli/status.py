@@ -26,7 +26,6 @@ class StatusInfo:
     google: str  # "configured" | "adc" | "not found"
     google_detail: str
     obsidian: str  # "configured" | "not found"
-    slack: str  # "configured" | "not configured"
     web_search: str  # "configured" | "not configured"
     mcp_servers: list[tuple[str, str]]  # [(name, "configured"), ...]
     tool_count: int
@@ -110,9 +109,6 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         else "not found"
     )
 
-    # -- slack --
-    slack = "configured" if settings.slack_bot_token else "not configured"
-
     # -- web search --
     web_search = "configured" if settings.brave_search_api_key else "not configured"
 
@@ -138,7 +134,6 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         google=google,
         google_detail=google_detail,
         obsidian=obsidian,
-        slack=slack,
         web_search=web_search,
         mcp_servers=mcp_status,
         tool_count=tool_count,
@@ -159,7 +154,6 @@ def render_status_table(info: StatusInfo) -> Table:
     table.add_row("Sandbox", sandbox_status, info.sandbox)
     table.add_row("Google", info.google.title(), info.google_detail)
     table.add_row("Obsidian", info.obsidian.title(), settings.obsidian_vault_path or "None")
-    table.add_row("Slack", info.slack.title(), "Bot token" if info.slack == "configured" else "—")
     table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")
     if info.mcp_servers:
         ready = sum(1 for _, s in info.mcp_servers if s == "ready")

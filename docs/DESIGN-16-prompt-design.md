@@ -1,6 +1,6 @@
 # DESIGN-16: Soul-First Prompt Design
 
-Soul seed (always-on personality fingerprint) + 6 companion rules. A personal companion model aligned to the Finch vision.
+Soul seed (always-on personality fingerprint) + 5 companion rules. A personal companion model aligned to the Finch vision.
 
 ---
 
@@ -11,25 +11,20 @@ System prompt (fixed, every turn):
   ┌───────────────────────────────────────────────┐
   │ 1. instructions.md    (bootstrap identity)    │
   │ 2. soul seed          (personality fingerprint)│
-  │ 3. rules/*.md 01-06   (behavioral policy)     │
+  │ 3. rules/*.md 01-05   (behavioral policy)     │
   │ 4. counter-steering    (model quirks)          │
-  └───────────────────────────────────────────────┘
-
-Tools (Co decides when to call):
-  ┌───────────────────────────────────────────────┐
-  │ load_personality(pieces) → full role detail   │
-  │ load_aspect(names)       → task methodology   │
-  │ recall_memory(query)     → persistent memory  │
-  │ save_memory(...)         → persist learnings  │
-  │ list_memories()          → memory index       │
   └───────────────────────────────────────────────┘
 ```
 
+Memory tools (`recall_memory`, `save_memory`, `list_memories`) are regular tool calls — the LLM decides when to invoke them based on their docstrings, not prompt rules.
+
 ### Key design decisions
 
-**Soul seed always-on:** A 2-3 sentence personality fingerprint loaded from `personalities/seed/{name}.md` and injected into every system prompt. Ensures Co has a consistent voice without needing to call `load_personality()`. The full role descriptions (169-204 lines) remain on-demand via the tool.
+**Soul seed always-on:** A 2-3 sentence personality fingerprint loaded from `personalities/seed/{name}.md` and injected into every system prompt. Ensures Co has a consistent voice without needing to call `load_personality()`. The full role descriptions remain on-demand via the tool.
 
-**Prompt content decoupled from code:** All prompt text lives in markdown files (instructions, rules, soul seeds, character, style, roles, aspects). Python handles only loading and composition. This separates authoring from logic.
+**`load_personality(pieces)` — composable on-demand detail:** Each preset maps to a character aspect and a style aspect via `PRESETS` registry. The tool resolves `ctx.deps.personality` to a preset, looks up the preset's `character` and `style` names, then reads the corresponding markdown files from `personalities/{character,style,roles}/`. The `pieces` parameter selects which to load (`"character"`, `"style"`, `"role"`, or all). This lets the LLM load just the voice guidance it needs without pulling everything. Presets with `character: None` (friendly, terse, inquisitive) skip the character file and rely on soul seed + style alone.
+
+**Prompt content decoupled from code:** All prompt text lives in markdown files (instructions, rules, soul seeds, character, style, roles). Python handles only loading and composition. This separates authoring from logic.
 
 **Rules shaped for companion:** Identity includes relationship awareness, emotional tone adaptation, and soft intent understanding. Response style is not a separate rule — personality owns voice.
 
@@ -59,7 +54,21 @@ You are Co, a personal companion for knowledge work, running in the user's termi
 | terse | You are direct and minimal. Fragments over sentences, bullets over prose, silence over filler. Expand only when asked why. |
 | inquisitive | You explore before acting. You present options with tradeoffs, clarify ambiguity, and help the user see the full picture before choosing a path. |
 
-### Rules (6)
+### Preset registry (on-demand pieces)
+
+Each preset maps to composable personality pieces loaded by `load_personality(pieces)`:
+
+| Preset | Character | Style | Role |
+|--------|-----------|-------|------|
+| finch | `finch` | `balanced` | `finch` |
+| jeff | `jeff` | `warm` | `jeff` |
+| friendly | *(none)* | `warm` | `friendly` |
+| terse | *(none)* | `terse` | `terse` |
+| inquisitive | *(none)* | `educational` | `inquisitive` |
+
+Two-tier model: soul seed is always-on (injected into system prompt), pieces are on-demand (loaded via tool call when the LLM decides it needs deeper guidance). Presets without a character file rely on soul seed + style for voice.
+
+### Rules (5)
 
 **01_identity.md** — Identity & Relationship
 
@@ -68,6 +77,7 @@ Local-first: data stays on the user's machine.
 Approval-first: side effects require permission.
 
 You know this user across sessions — build on shared history, remember their preferences.
+At the start of a conversation, recall memories relevant to the user's topic.
 
 Understand what the user needs: questions and observations get reasoning, explicit action
 verbs get execution, ambiguity gets a focused clarification question.
@@ -122,30 +132,17 @@ Do not guess URLs.
 If web_fetch returns 403 or is blocked, retry the same URL with shell_exec: curl -sL <url>.
 ```
 
-**05_context.md** — Context & Memory
+**05_workflow.md** — Execution Workflow
 
 ```
-At the start of a conversation, recall memories relevant to the user's greeting or topic.
-When the user references past decisions, preferences, or project context, recall before answering.
-When you learn something the user would value later — a preference, decision, correction,
-or useful fact — save it to memory.
-Load aspects (debugging, planning, code_review) when entering a task mode that benefits
-from deeper methodology.
-Load your full role description when extended character expression benefits the conversation.
-```
-
-**06_workflow.md** — Execution Workflow
-
-```
-For multi-step work:
-1. Understand goal and constraints.
-2. Gather required context.
-3. Execute the smallest correct set of actions.
-4. Verify results and report what changed.
-Complete the requested outcome before yielding unless blocked by missing input or approval.
-When blocked, state the blocker and the exact next action needed.
-Not every interaction is a task — casual questions, brainstorming, and check-ins need no
-execution loop.
+Decompose the request into sub-goals before acting. What must be true for this to be complete?
+Plan which tools achieve each sub-goal, then execute them in order.
+After each tool result, evaluate: is this sub-goal met, or does it need refinement?
+Continue to the next sub-goal or adjust.
+When all sub-goals are met, synthesize results and respond.
+Complete the full plan before yielding unless blocked by missing input or approval.
+When blocked, state what's needed and the exact next action.
+Not every message needs planning — direct questions get direct answers.
 ```
 
 ### Personality-rule interaction model
@@ -156,8 +153,7 @@ execution loop.
 | 02_safety | **NEVER** | Approval gates, credential protection are absolute. Jeff still requires approval — just says it differently |
 | 03_reasoning | **NEVER** | Facts are facts regardless of personality. Jeff doesn't agree with wrong claims |
 | 04_tool_protocol | **MODULATES** | Depth guidance adapts: Finch is more detailed in explanations; Terse shows less |
-| 05_context | **MODULATES** | Inquisitive loads more context proactively; Terse loads less |
-| 06_workflow | **MODULATES** | Finch explains each step; Jeff narrates thinking; Terse reports result only |
+| 05_workflow | **MODULATES** | Finch explains each step; Jeff narrates thinking; Terse reports result only |
 
 Soul seed framing: "Your personality shapes how you follow the rules below. It never overrides safety or factual accuracy."
 
@@ -180,8 +176,6 @@ Your personality shapes how you follow the rules below. It never overrides safet
 
 ...
 
-{rule_06 content}
-
 ## Model-Specific Guidance    ← only if model has known quirks
 
 {counter-steering text}
@@ -195,10 +189,10 @@ When personality is None, the `## Soul` block is omitted entirely.
 |---|---|
 | instructions.md | ~85 |
 | soul seed + framing | ~254 (finch) |
-| 6 rules total | ~3,400 |
+| 5 rules total | ~2,800 |
 | counter-steering | 0-500 |
-| **Total (with soul seed)** | **~3,761** |
-| **Total (without soul seed)** | **~3,507** |
+| **Total (with soul seed)** | **~3,160** |
+| **Total (without soul seed)** | **~2,906** |
 | **Budget ceiling** | **6,000** |
 
 ---
@@ -215,19 +209,17 @@ When personality is None, the `## Soul` block is omitted entirely.
 | `co_cli/prompts/rules/02_safety.md` | Approval gates, credential protection |
 | `co_cli/prompts/rules/03_reasoning.md` | Factual integrity, evidence handling |
 | `co_cli/prompts/rules/04_tool_protocol.md` | Display contract, depth guidance, web research flow |
-| `co_cli/prompts/rules/05_context.md` | Proactive memory, aspect loading |
-| `co_cli/prompts/rules/06_workflow.md` | Execution loop, non-task awareness |
+| `co_cli/prompts/rules/05_workflow.md` | Execution methodology, sub-goal decomposition |
 | `co_cli/prompts/personalities/_registry.py` | `PRESETS` dict, `PersonalityPreset` TypedDict |
 | `co_cli/prompts/personalities/_composer.py` | `get_soul_seed()`, `compose_personality()` |
 | `co_cli/prompts/personalities/seed/*.md` | Always-on personality fingerprints (5 presets) |
 | `co_cli/prompts/personalities/character/*.md` | Full character definitions (on-demand) |
 | `co_cli/prompts/personalities/style/*.md` | Voice/tone guidelines (on-demand) |
 | `co_cli/prompts/personalities/roles/*.md` | Complete role descriptions (on-demand) |
-| `co_cli/prompts/aspects/*.md` | Task methodology: debugging, planning, code_review (on-demand) |
 | `co_cli/agent.py` | Passes `personality=settings.personality` to `assemble_prompt()` |
 | `co_cli/_commands.py` | Passes `personality=settings.personality` on `/model` switch |
-| `co_cli/tools/context.py` | `load_personality()`, `load_aspect()` tools |
-| `tests/test_prompt_assembly.py` | 17 tests for rules, soul seed, manifest |
+| `co_cli/tools/context.py` | `load_personality()` tool |
+| `tests/test_prompt_assembly.py` | Tests for rules, soul seed, manifest |
 
 ### Directory layout
 
@@ -242,8 +234,7 @@ co_cli/prompts/
 │   ├── 02_safety.md         approval gates, credential protection
 │   ├── 03_reasoning.md      factual integrity, evidence handling
 │   ├── 04_tool_protocol.md  display contract, depth guidance
-│   ├── 05_context.md        proactive memory, aspect loading
-│   └── 06_workflow.md       execution loop, non-task awareness
+│   └── 05_workflow.md       execution methodology, sub-goal decomposition
 ├── personalities/
 │   ├── _registry.py         PRESETS dict, PersonalityPreset TypedDict
 │   ├── _composer.py          get_soul_seed(), compose_personality()
@@ -267,8 +258,4 @@ co_cli/prompts/
 │       ├── friendly.md
 │       ├── terse.md
 │       └── inquisitive.md
-└── aspects/                  task methodology (on-demand)
-    ├── debugging.md
-    ├── planning.md
-    └── code_review.md
 ```

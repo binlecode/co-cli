@@ -7,7 +7,6 @@
 
   "obsidian_vault_path": "",
   "google_credentials_path": "",
-  "slack_bot_token": "",
   "brave_search_api_key": "",
   "web_fetch_allowed_domains": [],
   "web_fetch_blocked_domains": [],
@@ -20,7 +19,6 @@
     "fetch": "allow"
   },
 
-  "auto_confirm": false,
   "docker_image": "co-cli-sandbox",
   "theme": "light",
   "tool_retries": 3,

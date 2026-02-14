@@ -1,8 +1,8 @@
-# Phase 3: Voice-to-Voice Round Trip
+# TODO: Voice-to-Voice Round Trip
 
-**Status**: 📅 DEFERRED (Post-Phase 2c)
+**Status**: Deferred
 **Effort**: TBD (research to be refreshed before implementation)
-**Priority**: MEDIUM (Phase 3 capability)
+**Priority**: Medium
 
 ---
 

@@ -122,16 +122,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
         return None
 
 
-async def _cmd_yolo(ctx: CommandContext, args: str) -> None:
-    """Toggle auto-approve mode."""
-    ctx.deps.auto_confirm = not ctx.deps.auto_confirm
-    if ctx.deps.auto_confirm:
-        console.print("[yolo]YOLO mode enabled — auto-approving all tool calls.[/yolo]")
-    else:
-        console.print("[info]YOLO mode disabled — tool calls require approval.[/info]")
-    return None
-
-
 def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:
     """Build a new OpenAIChatModel, system prompt, and ModelSettings for agent.
 
@@ -263,7 +253,6 @@ COMMANDS: dict[str, SlashCommand] = {
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
-    "yolo": SlashCommand("yolo", "Toggle auto-approve mode", _cmd_yolo),
     "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
 }

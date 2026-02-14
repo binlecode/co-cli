@@ -54,7 +54,7 @@ def test_soul_seed_swaps_with_personality():
 
 
 def test_prompt_contains_all_rules():
-    """Assembled prompt includes content from all 6 rule files."""
+    """Assembled prompt includes content from all 5 rule files."""
     prompt, manifest = assemble_prompt("gemini", personality="finch")
     # 01_identity.md
     assert "Local-first" in prompt
@@ -68,12 +68,9 @@ def test_prompt_contains_all_rules():
     # 04_tool_protocol.md
     assert "display" in prompt.lower()
     assert "Match explanation depth" in prompt
-    # 05_context.md
-    assert "recall memories" in prompt.lower()
-    assert "save it to memory" in prompt
-    # 06_workflow.md
-    assert "Understand goal and constraints" in prompt
-    assert "Complete the requested outcome" in prompt
+    # 05_workflow.md
+    assert "Decompose the request into sub-goals" in prompt
+    assert "Complete the full plan before yielding" in prompt
 
 
 def test_deleted_rules_absent():
@@ -83,6 +80,9 @@ def test_deleted_rules_absent():
     assert "Default to inquiry" not in prompt
     assert "Inquiry:" not in prompt
     assert "Directive:" not in prompt
+    # Old 05_context — tool-calling instructions removed (behavioral cue kept in 01_identity)
+    assert "load aspects" not in prompt.lower()
+    assert "save it to memory" not in prompt.lower()
     # Old 07_response_style — conflicts with personality
     assert "high-signal" not in prompt
     assert "technically precise" not in prompt
@@ -126,7 +126,6 @@ def test_manifest_parts_match():
     assert "safety" in manifest.parts_loaded
     assert "reasoning" in manifest.parts_loaded
     assert "tool_protocol" in manifest.parts_loaded
-    assert "context" in manifest.parts_loaded
     assert "workflow" in manifest.parts_loaded
 
 

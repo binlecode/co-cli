@@ -19,7 +19,6 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "pydantic-ai>=1.52.0",
     "rich>=14.3.2",
-    "slack-sdk>=3.39.0",
     "typer>=0.21.1",
     "datasette-pretty-json>=0.3",
     "httpx>=0.28.1",

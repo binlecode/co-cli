@@ -83,12 +83,10 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
 class Settings(BaseModel):
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
-    slack_bot_token: Optional[str] = Field(default=None)
     brave_search_api_key: Optional[str] = Field(default=None)
     google_credentials_path: Optional[str] = Field(default=None)
     
     # Behavior
-    auto_confirm: bool = Field(default=False)
     docker_image: str = Field(default="co-cli-sandbox")
     theme: str = Field(default="light")
     personality: str = Field(default="finch")
@@ -192,10 +190,8 @@ class Settings(BaseModel):
         """Env vars override all file-based values (highest precedence layer)."""
         env_map = {
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
-            "slack_bot_token": "SLACK_BOT_TOKEN",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
-            "auto_confirm": "CO_CLI_AUTO_CONFIRM",
             "docker_image": "CO_CLI_DOCKER_IMAGE",
             "theme": "CO_CLI_THEME",
             "personality": "CO_CLI_PERSONALITY",

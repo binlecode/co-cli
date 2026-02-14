@@ -6,7 +6,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import typer
-from rich.panel import Panel
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -100,21 +99,13 @@ def create_deps() -> CoDeps:
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
-    # Build Slack client
-    slack_client = None
-    if settings.slack_bot_token:
-        from slack_sdk import WebClient
-        slack_client = WebClient(token=settings.slack_bot_token)
-
     return CoDeps(
         sandbox=_create_sandbox(session_id),
-        auto_confirm=settings.auto_confirm,
         session_id=session_id,
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
         sandbox_max_timeout=settings.sandbox_max_timeout,
         shell_safe_commands=settings.shell_safe_commands,
-        slack_client=slack_client,
         brave_search_api_key=settings.brave_search_api_key,
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
         web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
@@ -215,22 +206,6 @@ async def chat_loop(verbose: bool = False):
                 if user_input.lower() in ["exit", "quit"]:
                     break
                 if not user_input.strip():
-                    continue
-
-                # !command — run directly in sandbox, no LLM
-                if user_input.startswith("!"):
-                    cmd = user_input[1:].strip()
-                    if cmd:
-                        try:
-                            output = await deps.sandbox.run_command(
-                                cmd, timeout=deps.sandbox_max_timeout,
-                            )
-                            if output.strip():
-                                console.print(Panel(
-                                    output.rstrip(), title=f"$ {cmd}", border_style="shell",
-                                ))
-                        except Exception as e:
-                            console.print(f"[bold red]Error:[/bold red] {e}")
                     continue
 
                 # /command — slash commands, no LLM

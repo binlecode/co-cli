@@ -159,5 +159,4 @@ Content exceeding `_MAX_FETCH_BYTES` is truncated at the byte level before decod
 | `co_cli/main.py` | Wires web settings in `create_deps()`, passes `web_policy` to `get_agent()` |
 | `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on `web_policy.search/fetch` |
 | `co_cli/status.py` | Web tools status row |
-| `tests/test_web.py` | Validation, functional, and Cloudflare detection tests |
-| `tests/test_web_retry_policy.py` | Retry classifier, backoff, and Retry-After parsing tests |
+| `tests/test_web.py` | Functional tests: search, fetch, SSRF, policy gates, error handling |

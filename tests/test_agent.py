@@ -9,10 +9,7 @@ EXPECTED_TOOLS = {
     # Side-effectful (requires_approval=True)
     "run_shell_command",
     "create_email_draft",
-    "send_slack_message",
     "save_memory",
-    # Context tools (read-only)
-    "load_personality",
     # Read-only
     "recall_memory",
     "list_memories",
@@ -25,10 +22,6 @@ EXPECTED_TOOLS = {
     "search_emails",
     "list_calendar_events",
     "search_calendar_events",
-    "list_slack_channels",
-    "list_slack_messages",
-    "list_slack_replies",
-    "list_slack_users",
     "web_search",
     "web_fetch",
 }
@@ -36,7 +29,6 @@ EXPECTED_TOOLS = {
 EXPECTED_APPROVAL_TOOLS = {
     "run_shell_command",
     "create_email_draft",
-    "send_slack_message",
     "save_memory",
 }
 

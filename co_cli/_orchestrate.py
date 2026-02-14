@@ -71,7 +71,7 @@ class FrontendProtocol(Protocol):
         ...
 
     def prompt_approval(self, description: str) -> str:
-        """Prompt user for approval. Returns 'y', 'n', or 'a' (yolo)."""
+        """Prompt user for approval. Returns 'y' or 'n'."""
         ...
 
     def cleanup(self) -> None:
@@ -353,7 +353,7 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
                             model_settings: dict, usage_limits: UsageLimits,
                             usage=None, verbose: bool = False,
                             frontend: FrontendProtocol | None = None):
-    """Prompt user [y/n/a(yolo)] for each pending tool call, then resume."""
+    """Prompt user [y/n] for each pending tool call, then resume."""
     approvals = DeferredToolResults()
 
     for call in result.output.approvals:
@@ -363,10 +363,6 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         args = args or {}
         args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
         desc = f"{call.tool_name}({args_str})"
-
-        if deps.auto_confirm:
-            approvals.approvals[call.tool_call_id] = True
-            continue
 
         # Auto-approve safe shell commands only when sandbox provides isolation.
         if call.tool_name == "run_shell_command":
@@ -383,10 +379,7 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         else:
             choice = "n"
 
-        if choice == "a":
-            deps.auto_confirm = True
-            approvals.approvals[call.tool_call_id] = True
-        elif choice == "y":
+        if choice == "y":
             approvals.approvals[call.tool_call_id] = True
         else:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")

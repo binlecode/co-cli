@@ -15,14 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`docs/GUIDE-ollama-local-setup.md`**: Comprehensive guide for configuring Ollama as a local LLM backend for agentic systems — Modelfile configuration, client-level settings, RAM-to-context sizing guide, model recommendations with tool-calling verification, server tuning (flash attention, keep-alive, memory management), Apple Silicon specifics.
 - **`ollama_num_ctx` config setting**: Client-side context window override (default 202752) with `OLLAMA_NUM_CTX` env var. Sent with every Ollama request as a consistency guarantee alongside server-level Modelfile config.
 - **Model inference database** (`model_quirks.py`): Per-model inference parameters sourced from official profiles — GLM-4.7-Flash Terminal/SWE-Bench profile (temp 0.7, top_p 1.0, num_ctx 202752), Qwen3 thinking profile (temp 0.6, top_p 0.95, top_k 20, num_ctx 262144). Agent factory reads params from quirk DB at call time.
-- **Aspect-based prompt assembly** (`co_cli/prompts/aspects/`): Externalized prompt fragments into individual markdown files (identity, inquiry, fact_verify, multi_turn, response_style, approval, tool_output). Tier-based assembly loads only relevant aspects per model capability.
+- **Soul-first prompt assembly** (`co_cli/prompts/`): Soul seed + 5 behavioral rules composed into system prompt. Personality modulates voice, never overrides safety or reasoning.
 - **Memory lifecycle system** (`DESIGN-14`): Persistent knowledge across sessions via markdown files with YAML frontmatter. `save_memory`, `recall_memory`, `list_memories` tools. Proactive signal detection, dedup-on-write, size-based decay.
-- **Personality system**: Finch & Jeff personalities from 2021 film, plus 3 base personalities. Composer assembles personality + aspects + counter-steering.
+- **Personality system**: Finch & Jeff personalities from 2021 film, plus 3 base personalities. Composer assembles personality + counter-steering.
 
 ### Changed
 - **DESIGN-07 renamed** from "Conversation Memory" to "Context Governance" — aligns with peer system terminology (Claude Code, Codex, Gemini CLI) where "memory" means persistent cross-session knowledge and "context/history" means conversation management.
 - **Agent factory refactored**: Inference parameters pulled from quirk database per model instead of hardcoded values. `/model` command returns `ModelSettings` for switched models.
-- **Prompt assembly**: Replaced monolithic `system.md` with tier-based aspect composition. Model quirks control which aspects are loaded (tier 1=minimal, 2=standard, 3=full).
+- **Prompt assembly**: Replaced monolithic `system.md` with rule-based composition. Model quirks add counter-steering for known model issues.
 
 ### Fixed
 - **Ollama silent context truncation**: Default `num_ctx` of 4096 caused Ollama to silently drop input prompts. Now sends native context length (202752 for GLM-4.7-Flash, 262144 for Qwen3) via both Modelfile and client-side override.

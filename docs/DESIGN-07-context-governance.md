@@ -151,7 +151,7 @@ Approval-gated tool calls (`DeferredToolRequests`) interact with conversation hi
 Model behavioural quirks (defined in `prompts/model_quirks.py`) interact with conversation history management:
 
 - **Overeager tool calling (GLM):** GLM models trigger spurious tool calls on conversational prompts (e.g. calling `run_shell_command` when asked a factual question). This pollutes history with unnecessary `ToolCallPart`/`ToolReturnPart` pairs and can cause `DeferredToolRequests` on scored/final turns. Counter-steering in `model_quirks.py` duplicates `multi_turn.md` guidance to emphasise conversation context awareness
-- **Tier system:** Controls prompt volume — tier 1 (minimal) loads only `identity` + `multi_turn` aspects to reduce confusion for models prone to overeager behaviour. Fewer instructions = less surface area for misinterpretation
+- **Rule count:** The system prompt contains 5 compact behavioral rules. Fewer instructions = less surface area for misinterpretation by models prone to overeager behaviour
 - **Eval implications:** The eval harness (`scripts/eval_conversation_history.py`) must handle `DeferredToolRequests` as output — extract text parts from the message history or mark as `[model returned tool call instead of text]` for scoring
 
 ### Summarisation Model Rationale

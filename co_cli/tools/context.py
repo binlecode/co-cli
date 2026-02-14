@@ -1,4 +1,4 @@
-"""Context-loading tools — aspects and personality pieces."""
+"""Context-loading tools — personality pieces."""
 
 import logging
 from pathlib import Path
@@ -105,84 +105,5 @@ async def load_personality(
         "display": combined,
         "role": role_name,
         "pieces_loaded": loaded,
-    }
-
-
-_ASPECTS_DIR = Path(__file__).parent.parent / "prompts" / "aspects"
-
-
-async def load_aspect(
-    ctx: RunContext[CoDeps],
-    names: list[str] | None = None,
-) -> dict[str, Any]:
-    """Load on-demand behavioral guidance that goes deeper than the always-present rules.
-
-    Rules are short imperatives always in your system prompt. Aspects extend
-    them with detailed methodology for specific situations. Load an aspect
-    when the conversation enters a mode where the extra depth helps.
-
-    Three categories of aspects exist:
-    1. Extended rule depth — fuller protocols for topics a rule covers in
-       one line (e.g. how to present corrections, handle user pushback).
-    2. Situational modes — guidance relevant only for certain tasks
-       (debugging methodology, multi-step planning).
-    3. Task-specific protocols — step-by-step checklists for operations
-       like code review, git workflow, or security-sensitive changes.
-
-    Load selectively: pick the aspect that matches the current task.
-    Call with no names only if you need all available guidance at once.
-
-    Args:
-        ctx: Agent runtime context.
-        names: Aspect names to load. None loads all available aspects.
-
-    Returns:
-        dict with display (aspect text), aspects_loaded list, and count.
-    """
-    if not _ASPECTS_DIR.is_dir():
-        return {
-            "display": "No aspects available.",
-            "aspects_loaded": [],
-            "count": 0,
-        }
-
-    available: dict[str, Path] = {}
-    for path in sorted(_ASPECTS_DIR.glob("*.md")):
-        available[path.stem] = path
-
-    if not available:
-        return {
-            "display": "No aspects available.",
-            "aspects_loaded": [],
-            "count": 0,
-        }
-
-    if names is None:
-        names = list(available.keys())
-
-    invalid = [n for n in names if n not in available]
-    if invalid:
-        return {
-            "display": (
-                f"Unknown aspect(s): {', '.join(invalid)}. "
-                f"Available: {', '.join(available.keys())}"
-            ),
-            "aspects_loaded": [],
-            "count": 0,
-        }
-
-    parts: list[str] = []
-    loaded: list[str] = []
-    for name in names:
-        content = available[name].read_text(encoding="utf-8").strip()
-        if content:
-            parts.append(f"### {name}\n\n{content}")
-            loaded.append(name)
-
-    combined = "\n\n".join(parts)
-    return {
-        "display": combined,
-        "aspects_loaded": loaded,
-        "count": len(loaded),
     }
 

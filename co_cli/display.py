@@ -16,8 +16,8 @@ from co_cli.config import settings
 # -- Theme palettes (keyed by theme name) ------------------------------------
 
 _THEMES: dict[str, dict[str, str]] = {
-    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
-    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "yolo": "bold orange3", "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
+    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
+    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
 }
 
 # -- Console (single instance, themed) --------------------------------------
@@ -137,7 +137,7 @@ def prompt_selection(
 
 # -- TerminalFrontend (FrontendProtocol implementation) --------------------
 
-_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[bold orange3]a[/bold orange3](yolo)]"
+_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]]"
 
 
 class TerminalFrontend:
@@ -209,21 +209,19 @@ class TerminalFrontend:
         console.print(Markdown(text))
 
     def prompt_approval(self, description: str) -> str:
-        """Prompt user for y/n/a with SIGINT handler swap for blocking input."""
+        """Prompt user for y/n with SIGINT handler swap for blocking input."""
         console.print(f"Approve [bold]{description}[/bold]?" + _CHOICES_HINT, end=" ")
 
         prev_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, signal.default_int_handler)
         try:
             choice = Prompt.ask(
-                "", choices=["y", "n", "a"], default="n",
+                "", choices=["y", "n"], default="n",
                 show_choices=False, show_default=False, console=console,
             )
         finally:
             signal.signal(signal.SIGINT, prev_handler)
 
-        if choice == "a":
-            console.print("[bold orange3]YOLO mode enabled — auto-approving for this session[/bold orange3]")
         return choice
 
     def cleanup(self) -> None:

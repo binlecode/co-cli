@@ -73,7 +73,7 @@ All knowledge is dynamic — loaded on-demand via tools, never baked into the sy
 
 - **Only pytest files in tests/** — All files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts (demos, evaluations, utilities) go in `scripts/`.
 - **Functional tests only** — no mocks or stubs. Tests hit real services.
-- **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search, Slack) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
+- **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
 - Framework: `pytest` + `pytest-asyncio`
 - Docker must be running for shell/sandbox tests
@@ -121,22 +121,18 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-09-tool-shell.md` — Shell tool, sandbox backends (Docker primary, subprocess fallback), security model
 - `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
-- `docs/DESIGN-12-tool-slack.md` — Slack tool design
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
-- `docs/DESIGN-16-prompt-design.md` — Soul-first prompt design: soul seed, 6 companion rules, personality-rule interaction
+- `docs/DESIGN-16-prompt-design.md` — Soul-first prompt design: soul seed, 5 companion rules, personality-rule interaction
 
 ### TODO (remaining work items only — no design content, no status tracking)
-- `docs/TODO-3-tier-context-model.md` — 3-tier context model: Instructions / Memory / Knowledge tier definitions, naming conventions, peer evidence
-- `docs/TODO-slash-command-overrides.md` — Runtime session-scoped slash command overrides (/verbose, /terse, /yolo)
+- `docs/TODO-co-agentic-loop-and-prompting.md` — Ground-up agentic loop + prompting architecture design (goal-driven ReAct, doom loop detection, prompt composition)
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
-- `docs/TODO-shell-security-and-tools.md` — Shell security hardening + file/todo tools
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-cross-tool-rag.md` — Cross-tool RAG: SearchDB shared service (FTS5 → hybrid → reranker)
-- `docs/TODO-slack-tooling.md` — Slack tool enhancements
-- `docs/TODO-approval-interrupt-tests.md` — Regression tests for approval flow, interrupt patching, safe-command checks
+- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search for memory/article files (informed by OpenClaw)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
@@ -153,3 +149,4 @@ Peer CLI tools cloned in `~/workspace_genai/` for studying shell safety, approva
 | `opencode` | Go | Multi-provider, flexible model switching |
 | `claude-code` | TypeScript | `packages/core/src/scheduler/policy.ts` — hook-based permission engine; `packages/cli/src/config/settings.ts` — allow/deny rules (post-CVE-2025-66032); `packages/core/src/utils/sandbox.ts` |
 | `aider` | Python | Simplest model — no sandbox, `io.confirm_ask()` for everything; proves you can ship without a sandbox if approval gate is strict |
+| `openclaw` | TypeScript | `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap |

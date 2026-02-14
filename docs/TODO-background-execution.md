@@ -1,4 +1,4 @@
-# TODO: Background Execution (Phase 2c)
+# TODO: Background Execution
 
 **Goal**: Enable long-running tasks to execute in background without blocking interactive chat.
 

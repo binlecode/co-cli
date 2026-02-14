@@ -2,11 +2,14 @@
 
 Verbatim prompts extracted from 6 peer repos for review, learning, and borrowing.
 
+**Related review:** [`REVIEW-agent-loop-peer-systems.md`](REVIEW-agent-loop-peer-systems.md) — agent loop architectures (orchestration, concurrency, retry, loop detection)
+
 **Deep-dive architecture reviews** (prompt composition, directory structure, innovations):
 - [`REVIEW-prompts-codex.md`](REVIEW-prompts-codex.md) — Layered composition (5 axes, 360 configs, 24 files)
 - [`REVIEW-prompts-gemini.md`](REVIEW-prompts-gemini.md) — Conditional blocks (single generator, 384+ configs)
 - [`REVIEW-prompts-aider.md`](REVIEW-prompts-aider.md) — Class inheritance (14 coders, 8 edit formats, model quirks)
 - [`REVIEW-prompts-claude-code.md`](REVIEW-prompts-claude-code.md) — Plugin-based events (3 primitives, 5 hooks, 79 files)
+- [`REVIEW-prompts-opencode.md`](REVIEW-prompts-opencode.md) — Per-model routing (8 prompt variants, 6 agents, 35 sources)
 
 ---
 
@@ -1255,3 +1258,5 @@ Identified across all peer systems — no system has an explicit protocol for wh
 - [Gemini CLI](REVIEW-prompts-gemini.md) — conditional blocks, directive/inquiry, anti-injection, scratchpad
 - [Aider](REVIEW-prompts-aider.md) — class inheritance, edit formats, model quirks, first-person summarization
 - [Claude Code](REVIEW-prompts-claude-code.md) — plugin events, three primitives, confidence scoring, hooks
+- [OpenCode](REVIEW-prompts-opencode.md) — per-model routing, professional objectivity, agent-as-mode, synthetic injections
+- [Agent Loop Architectures](REVIEW-agent-loop-peer-systems.md) — orchestration, concurrency, retry, loop detection

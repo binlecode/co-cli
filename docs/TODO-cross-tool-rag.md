@@ -63,7 +63,6 @@ Key choices validated by the ecosystem:
 | Google Drive | API `fullText` query | **High** — cache docs locally, ranked offline search |
 | Gmail | API `q` parameter | **Low** — structured metadata, API search sufficient |
 | Calendar | API `q` parameter | **None** — structured data, filtering not retrieval |
-| Slack | N/A | **Medium** — channel history indexing for context |
 
 ### Search Flow
 
@@ -278,7 +277,6 @@ class Connector(Protocol):
 | Obsidian | `rglob("*.md")` + `read_text()` | Lazy on first search, mtime-based incremental |
 | Google Drive | API list + export to text | Cache locally, re-sync if stale (TTL-based) |
 | Gmail | API search + message get | Index recent threads, append-only |
-| Slack | `conversations.history` | Index channel history, append-only |
 
 **Design rules:**
 - Connectors registered in `CoDeps` setup, not hardcoded in `SearchDB`

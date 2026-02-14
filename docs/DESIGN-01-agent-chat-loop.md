@@ -328,11 +328,10 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 
 Composed by `get_system_prompt(provider, personality, model_name)` in `prompts/__init__.py`:
 
-1. **Behavioral aspects** — tier-selected subset from `prompts/aspects/`
-2. **Model counter-steering** — quirk corrections from `prompts/model_quirks.py`
-3. **Personality** — tier-dependent: Tier 1 skips, Tier 2 style-only, Tier 3+ full character
-4. **Internal knowledge** — from `~/.config/co-cli/knowledge/` and `.co-cli/knowledge/`
-5. **Project instructions** — from `.co-cli/instructions.md`
+1. **Instructions** — bootstrap identity from `prompts/instructions.md`
+2. **Soul seed** — personality fingerprint from `prompts/personalities/seed/`
+3. **Behavioral rules** — 5 rules from `prompts/rules/01-05`
+4. **Model counter-steering** — quirk corrections from `prompts/model_quirks.py`
 
 See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) for knowledge loading details.
 
@@ -389,6 +388,6 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/_commands.py` | Slash command registry, handlers, `dispatch()` |
 | `co_cli/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `co_cli/_history.py` | `truncate_tool_returns`, `truncate_history_window`, `summarize_messages` |
-| `co_cli/prompts/__init__.py` | `get_system_prompt()` — personality, aspects, counter-steering, knowledge |
+| `co_cli/prompts/__init__.py` | `assemble_prompt()` — instructions, soul seed, rules, counter-steering |
 | `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `scripts/eval_tool_calling.py` | Eval runner — golden case scoring, model tagging, baseline comparison |

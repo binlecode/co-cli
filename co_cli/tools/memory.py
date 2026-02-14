@@ -531,9 +531,12 @@ async def save_memory(
     Creates a markdown file with YAML frontmatter in .co-cli/knowledge/memories/
     Filename format: {id:03d}-{slug}.md where slug is derived from content.
 
+    Write content in third person: "User prefers pytest over unittest",
+    not "I prefer pytest". This keeps memories unambiguous when recalled later.
+
     Args:
         ctx: Agent runtime context
-        content: Memory content (markdown, < 500 chars recommended)
+        content: Memory content in third person (markdown, < 500 chars recommended)
         tags: Optional tags for categorization. Use signal type as first tag:
               ["preference", ...], ["correction", ...], ["decision", ...], etc.
 
@@ -543,11 +546,6 @@ async def save_memory(
             - path: File path where memory was saved
             - memory_id: Assigned memory ID
             - action: "saved" or "consolidated" (indicates if dedup occurred)
-
-    Example:
-        User: "I prefer pytest over unittest"
-        Call: save_memory(ctx, "User prefers pytest over unittest",
-                          tags=["preference", "testing", "python"])
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memory_dir.mkdir(parents=True, exist_ok=True)
