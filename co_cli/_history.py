@@ -151,6 +151,14 @@ _SUMMARIZE_PROMPT = (
     "Be concise — this replaces the original messages to save context space."
 )
 
+_PERSONALITY_COMPACTION_ADDENDUM = (
+    "\n\nAdditionally, preserve:\n"
+    "- Personality-reinforcing moments (emotional exchanges, humor, "
+    "relationship dynamics)\n"
+    "- User reactions that shaped the assistant's tone or communication style\n"
+    "- Any explicit personality preferences or corrections from the user"
+)
+
 _SUMMARIZER_SYSTEM_PROMPT = (
     "You are a specialized system component distilling conversation history "
     "into a handoff summary for another LLM that will resume this conversation.\n\n"
@@ -165,12 +173,15 @@ async def summarize_messages(
     messages: list[ModelMessage],
     model: str | Any,
     prompt: str = _SUMMARIZE_PROMPT,
+    personality_active: bool = False,
 ) -> str:
     """Summarise *messages* via a disposable Agent (no tools).
 
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
+    if personality_active:
+        prompt = prompt + _PERSONALITY_COMPACTION_ADDENDUM
     summariser: Agent[None, str] = Agent(
         model,
         output_type=str,
@@ -261,7 +272,10 @@ async def truncate_history_window(
     try:
         # Resolve summarisation model
         model = ctx.deps.summarization_model or ctx.model
-        summary_text = await summarize_messages(dropped, model)
+        summary_text = await summarize_messages(
+            dropped, model,
+            personality_active=bool(ctx.deps.personality),
+        )
         summary_marker = ModelRequest(parts=[
             UserPromptPart(
                 content=(

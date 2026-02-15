@@ -71,7 +71,8 @@ All knowledge is dynamic — loaded on-demand via tools, never baked into the sy
 ## Testing Policy
 
 - **Only pytest files in tests/** — All files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts (demos, evaluations, utilities) go in `scripts/`.
-- **Functional tests only** — no mocks or stubs. Tests hit real services.
+- **Functional tests only** — no mocks or stubs. Tests hit real services. No unit tests: never test string constants, internal helpers in isolation, or assert on implementation details. Every test must exercise a real code path that a user or the agent would trigger.
+- **Critical functionality focus** — each test must validate behavior that matters: a tool returning correct results, a pipeline producing expected output, a safety invariant holding. Do not write tests for trivial paths (empty input → empty output), negative edge cases with no real-world trigger, or assertions that merely restate what the code does. Ask: "if this test were deleted, would a real regression go undetected?" If no, don't write it.
 - **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
 - Framework: `pytest` + `pytest-asyncio`
@@ -87,7 +88,7 @@ All knowledge is dynamic — loaded on-demand via tools, never baked into the sy
 - Do not import `settings` directly in tool files — use `ctx.deps`
 - Do not pass `Settings` objects into `CoDeps` — flatten to scalar fields. One access pattern, no divergence traps
 - Do not put approval prompts inside tools — use `requires_approval=True` and handle in the chat loop
-- Do not use mocks in tests
+- Do not use mocks in tests — and do not write unit tests (asserting on constants, testing helpers in isolation, checking string concatenation). Every test must exercise a real functional path
 - Do not use `.env` files — use `settings.json` or env vars
 
 ## Docs
@@ -130,6 +131,9 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
+- `docs/TODO-tool-docstring-template.md` — 4-dimension template for tool docstrings: what it does, what it returns, when/how to use, caveats
+- `docs/TODO-co-personality-enhancements.md` — Personality system enhancements: calibration examples, override mandate, memory-informed personality, compaction addendum (H1-H5 done, M1-M4 future)
+- `docs/TODO-personality-impl-sequence.md` — Implementation sequence for personality H-items with rationale and Phase 1 test gate integration (all done)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

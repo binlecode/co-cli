@@ -7,6 +7,7 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
+from co_cli.tools.memory import _load_all_memories
 
 logger = logging.getLogger(__name__)
 
@@ -15,25 +16,31 @@ async def load_personality(
     ctx: RunContext[CoDeps],
     pieces: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Load personality pieces for your current preset.
+    """Load personality configuration for your current preset. Call at
+    conversation start to establish voice and formatting rules.
 
-    Each preset maps to two orthogonal axes:
+    Each preset has two orthogonal axes:
     - character: WHO you are — identity, philosophy, behavioral patterns
     - style: HOW you communicate — format, length, structure
 
     When axes conflict, style wins on format (length, structure, emoji),
     character wins on identity (voice, markers, philosophy).
 
-    Call with no pieces to load all available pieces for your preset.
-    Call with specific pieces when only certain guidance is relevant
-    (e.g. just "style" for format rules, just "character" for voice).
+    Call with no pieces argument to load all axes. Call with specific pieces
+    when only certain guidance is relevant (e.g. ["style"] for format rules
+    only, ["character"] for voice only).
+
+    Returns a dict with:
+    - display: personality prompt text — internalize this, do not show to user
+    - preset: active preset name
+    - pieces_loaded: list of axes loaded (e.g. ["character", "style"])
+
+    Caveats:
+    - Returns empty if no personality preset is configured in settings
+    - Unknown preset names return an error with available presets listed
 
     Args:
-        ctx: Agent runtime context.
-        pieces: Axis types to load: "character", "style". None loads all.
-
-    Returns:
-        dict with display (personality text), preset name, and pieces_loaded list.
+        pieces: Axes to load: "character", "style". None loads all available.
     """
     preset_name = ctx.deps.personality
     if not preset_name:
@@ -93,6 +100,33 @@ async def load_personality(
         loaded.append(piece_name)
 
     combined = "\n\n".join(parts)
+
+    if len(loaded) == 2:
+        combined += (
+            "\n\n---\n"
+            "Override precedence: style wins on format (length, structure, emoji), "
+            "character wins on identity (voice, markers, philosophy)."
+        )
+
+    # Scan for personality-context memories
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    if memory_dir.exists():
+        all_memories = _load_all_memories(memory_dir)
+        personality_memories = [
+            m for m in all_memories
+            if "personality-context" in m.tags
+        ]
+        if personality_memories:
+            personality_memories.sort(
+                key=lambda m: m.updated or m.created,
+                reverse=True,
+            )
+            personality_memories = personality_memories[:5]
+            lines = ["## Learned Context", ""]
+            for m in personality_memories:
+                lines.append(f"- {m.content}")
+            combined += "\n\n" + "\n".join(lines)
+
     return {
         "display": combined,
         "preset": preset_name,

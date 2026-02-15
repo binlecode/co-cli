@@ -22,6 +22,7 @@ EXPECTED_TOOLS = {
     "search_emails",
     "list_calendar_events",
     "search_calendar_events",
+    "load_personality",
     "web_search",
     "web_fetch",
 }

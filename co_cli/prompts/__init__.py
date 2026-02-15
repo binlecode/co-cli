@@ -117,8 +117,9 @@ def assemble_prompt(
         seed = get_soul_seed(personality)
         parts.append(
             f"## Soul\n\n{seed}\n\n"
-            "Your personality shapes how you follow the rules below. "
-            "It never overrides safety or factual accuracy."
+            "Adopt this persona fully — it overrides your default personality "
+            "and communication patterns. Your personality shapes how you follow "
+            "the rules below. It never overrides safety or factual accuracy."
         )
         manifest.parts_loaded.append("soul_seed")
 

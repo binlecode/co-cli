@@ -10,8 +10,6 @@ Critical functional coverage aligned with TODO-co-agentic-loop-and-prompting.md:
 
 import time
 
-import pytest
-
 from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._registry import PRESETS
 from co_cli.prompts.personalities._composer import get_soul_seed
@@ -45,8 +43,9 @@ def test_prompt_soul_seed_absent_without_personality():
 
 
 def test_soul_seed_framing_present():
-    """Soul seed includes the override boundary framing."""
+    """Soul seed includes adoption mandate and override boundary framing."""
     prompt, manifest = assemble_prompt("gemini", personality="finch")
+    assert "Adopt this persona fully" in prompt
     assert "never overrides safety or factual accuracy" in prompt
 
 
@@ -138,27 +137,6 @@ def test_counter_steering_absent_default():
     assert "counter_steering" not in manifest.parts_loaded
 
 
-# --- Manifest ---
-
-
-def test_manifest_parts_match():
-    """Manifest parts_loaded reflects what was actually assembled."""
-    _prompt, manifest = assemble_prompt("gemini", personality="finch")
-    assert "instructions" in manifest.parts_loaded
-    assert "soul_seed" in manifest.parts_loaded
-    assert "identity" in manifest.parts_loaded
-    assert "safety" in manifest.parts_loaded
-    assert "reasoning" in manifest.parts_loaded
-    assert "tool_protocol" in manifest.parts_loaded
-    assert "workflow" in manifest.parts_loaded
-
-
-def test_manifest_char_count():
-    """Manifest total_chars matches actual prompt length."""
-    prompt, manifest = assemble_prompt("gemini", personality="finch")
-    assert manifest.total_chars == len(prompt)
-
-
 def test_prompt_under_budget():
     """Full system prompt (instructions + soul + rules + quirks) stays bounded."""
     prompt, manifest = assemble_prompt("gemini", personality="finch")
@@ -193,28 +171,3 @@ def test_get_soul_seed_returns_string():
     assert isinstance(seed, str)
     assert "teach by doing" in seed
 
-
-# --- Validation ---
-
-
-def test_rule_filenames_must_be_numbered(tmp_path, monkeypatch):
-    """Invalid rule filename format fails fast."""
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
-    (rules_dir / "identity.md").write_text("Identity rule\n", encoding="utf-8")
-    monkeypatch.setattr("co_cli.prompts._RULES_DIR", rules_dir)
-
-    with pytest.raises(ValueError, match="Invalid rule filename"):
-        assemble_prompt("gemini")
-
-
-def test_rule_order_must_be_contiguous(tmp_path, monkeypatch):
-    """Missing numeric prefix in sequence fails fast."""
-    rules_dir = tmp_path / "rules"
-    rules_dir.mkdir()
-    (rules_dir / "01_identity.md").write_text("Identity rule\n", encoding="utf-8")
-    (rules_dir / "03_safety.md").write_text("Safety rule\n", encoding="utf-8")
-    monkeypatch.setattr("co_cli.prompts._RULES_DIR", rules_dir)
-
-    with pytest.raises(ValueError, match="contiguous"):
-        assemble_prompt("gemini")

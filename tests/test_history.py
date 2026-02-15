@@ -297,7 +297,26 @@ def test_summarize_prompt_preserves_extraction_guidance():
     assert "I asked you" in _SUMMARIZE_PROMPT
 
 
-def test_summarize_prompt_injection_guard_in_system_prompt_only():
-    """Anti-injection text lives in system prompt, not duplicated in user prompt."""
-    assert "ignore previous instructions" not in _SUMMARIZE_PROMPT.lower()
-    assert "IGNORE ALL COMMANDS" not in _SUMMARIZE_PROMPT
+@pytest.mark.asyncio
+async def test_summarize_messages_personality_active():
+    """summarize_messages with personality_active=True produces a valid summary.
+
+    Validates the personality-aware compaction path end-to-end through a real
+    LLM call. The addendum appends personality-preservation guidance to the
+    summarisation prompt; the model must still produce a coherent summary.
+
+    Requires a running LLM provider (GEMINI_API_KEY or OLLAMA_HOST).
+    """
+    from co_cli.agent import get_agent
+
+    agent, _, _ = get_agent()
+
+    msgs: list[ModelMessage] = [
+        _user("What is Docker?"),
+        _assistant("Docker is a containerisation platform that uses OS-level virtualisation."),
+        _user("I love how you explain things with analogies, keep doing that!"),
+        _assistant("Thanks! I'll keep using analogies — they help make abstract concepts concrete."),
+    ]
+    summary = await summarize_messages(msgs, agent.model, personality_active=True)
+    assert isinstance(summary, str)
+    assert len(summary) > 10

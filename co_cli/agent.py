@@ -23,6 +23,7 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
+from co_cli.tools.context import load_personality
 
 
 def get_agent(
@@ -175,6 +176,7 @@ def get_agent(
     agent.tool(search_emails, requires_approval=all_approval)
     agent.tool(list_calendar_events, requires_approval=all_approval)
     agent.tool(search_calendar_events, requires_approval=all_approval)
+    agent.tool(load_personality, requires_approval=all_approval)
     policy = web_policy or settings.web_policy
     search_approval = all_approval or (policy.search == "ask")
     fetch_approval = all_approval or (policy.fetch == "ask")

@@ -1,5 +1,7 @@
 # TODO: Personality System — Research-Informed Enhancements
 
+**Status**: H1-H5 all implemented. LATER tier (M1-M4) not started.
+
 Research across 15 production personality systems and 5 source code deep dives (documented in `REVIEW-agentic-personality-systems.md`) identified patterns co-cli should adopt. The current three-tier personality system (seed/character/style) is validated — no structural rework needed for these enhancements.
 
 **Relationship to agentic loop TODO:** The agentic loop TODO (`TODO-co-agentic-loop-and-prompting.md`) plans a full personality axis refactor in **Phase 5d** (§11.2-11.4: soul seed + axis labels replacing full character/style markdown). The enhancements here are **pre-Phase-5d** work that:
@@ -20,7 +22,7 @@ H2 (memory-informed personality) ──────┘
 H4 (personality-aware compaction) ──────────────────── standalone
 ```
 
-Implementation order: H1 → H3 → H5 → H2 → H4
+Implementation order (actual): H5 → H1 → H3 → H2 → H4 (all done)
 
 ---
 
@@ -28,7 +30,7 @@ Implementation order: H1 → H3 → H5 → H2 → H4
 
 Items that work with the current system, have zero or minimal code changes, and can land independently.
 
-### H1 — Example Dialogues in Character Files
+### H1 — Example Dialogues in Character Files [DONE]
 
 **Problem:** Character files (`finch.md`, `jeff.md`) describe personality traits abstractly but provide no concrete examples of how the personality manifests in actual exchanges. LLMs calibrate better from examples than from descriptions.
 
@@ -97,7 +99,7 @@ Anti-example — what Jeff would NOT say:
 
 ---
 
-### H3 — Persona Override Mandate in Prompt
+### H3 — Persona Override Mandate in Prompt [DONE]
 
 **Problem:** The soul seed framing (lines 118-121 of `co_cli/prompts/__init__.py`) says personality "shapes how you follow the rules" and "never overrides safety or factual accuracy" — but it doesn't tell the LLM to actually adopt the persona. Without an explicit adoption instruction, models sometimes revert to their default assistant personality, especially when the soul seed is subtle.
 
@@ -145,7 +147,7 @@ One sentence added, inserted before the existing framing. The override mandate i
 
 ---
 
-### H5 — Override Precedence Rule + Agent Registration
+### H5 — Override Precedence Rule + Agent Registration [DONE]
 
 **Problem:** Two issues:
 1. `load_personality` in `co_cli/tools/context.py` is defined but **never registered on the agent** in `agent.py`. The tool is dead code — the agent cannot call it.
@@ -203,7 +205,7 @@ Insert after line 95 (`combined = "\n\n".join(parts)`) in `context.py`.
 
 Items that depend on NOW tier or coordinate with agentic loop TODO phases.
 
-### H2 — Memory-Informed Personality
+### H2 — Memory-Informed Personality [DONE]
 
 **Depends on:** H5 (load_personality must be registered and working)
 
@@ -268,7 +270,7 @@ Uses `_load_all_memories()` from `co_cli/tools/memory.py` — read-only, no grav
 
 ---
 
-### H4 — Personality-Aware Context Compaction
+### H4 — Personality-Aware Context Compaction [DONE]
 
 **Problem:** When the sliding-window processor compacts history (`_history.py`), the summarization prompt asks for decisions, progress, and requirements — but nothing about personality dynamics. Relationship-building moments (emotional exchanges, humor, tone corrections) are lost during compaction. After a compaction event, the agent reverts to default personality because the personality-reinforcing exchanges were dropped.
 
