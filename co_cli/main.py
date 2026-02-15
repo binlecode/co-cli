@@ -17,6 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
+from co_cli._history import OpeningContextState, SafetyState
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
@@ -76,7 +77,7 @@ def create_deps() -> CoDeps:
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
-    return CoDeps(
+    deps = CoDeps(
         shell=ShellBackend(),
         session_id=session_id,
         obsidian_vault_path=vault_path,
@@ -100,7 +101,13 @@ def create_deps() -> CoDeps:
         max_history_messages=settings.max_history_messages,
         tool_output_trim_chars=settings.tool_output_trim_chars,
         summarization_model=settings.summarization_model,
+        doom_loop_threshold=settings.doom_loop_threshold,
+        max_reflections=settings.max_reflections,
     )
+    # Initialize session-scoped processor state
+    deps._opening_ctx_state = OpeningContextState()
+    deps._safety_state = SafetyState()
+    return deps
 
 
 async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list[str]:
@@ -215,6 +222,12 @@ async def chat_loop(verbose: bool = False):
                     frontend=frontend,
                 )
                 message_history = turn_result.messages
+
+                # Pattern-match on TurnOutcome
+                if turn_result.outcome == "error":
+                    console.print("[error]An error occurred during this turn.[/error]")
+                elif turn_result.outcome == "stop":
+                    break
 
             except EOFError:
                 break

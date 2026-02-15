@@ -41,6 +41,7 @@ class MemoryEntry:
     created: str  # ISO8601
     updated: str | None = None
     decay_protected: bool = False
+    related: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +79,7 @@ def _load_all_memories(memory_dir: Path) -> list[MemoryEntry]:
                     created=fm["created"],
                     updated=fm.get("updated"),
                     decay_protected=fm.get("decay_protected", False),
+                    related=fm.get("related"),
                 )
             )
         except Exception as e:
@@ -505,31 +507,15 @@ async def save_memory(
     ctx: RunContext[CoDeps],
     content: str,
     tags: list[str] | None = None,
+    related: list[str] | None = None,
 ) -> dict[str, Any]:
     """Save a memory for cross-session persistence.
 
-    Use this when the user shares important, actionable information that should
-    persist across sessions:
-    - Preferences: "I prefer X" → tags=["preference", domain]
-    - Corrections: "Actually, we use Y" → tags=["correction", domain]
-    - Decisions: "We chose Z" → tags=["decision", domain]
-    - Context: "Our team has N people" → tags=["context"]
-    - Patterns: "We always do X" → tags=["pattern", domain]
-
-    Do NOT save:
-    - Speculation or hypotheticals ("Maybe", "I think")
-    - Transient conversation details
-    - Information already in context files
-    - Questions ("Should we?")
-
-    Memory lifecycle (notes with gravity):
-    - Checks recent memories for duplicates using string similarity
-    - If duplicate found (>85% similar), updates existing memory (consolidation)
-    - If unique, appends new memory to sequence
-    - When limit reached (200 by default), oldest memories decay automatically
-
-    Creates a markdown file with YAML frontmatter in .co-cli/knowledge/memories/
-    Filename format: {id:03d}-{slug}.md where slug is derived from content.
+    Save user preferences, personal facts, or cross-session knowledge.
+    Also call after researching something the user asked about — persist
+    findings without being asked. Never save workspace paths or transient
+    errors. Before saving, call recall_memory to check for related memories.
+    If related memories exist, include their slugs in the related field.
 
     Write content in third person: "User prefers pytest over unittest",
     not "I prefer pytest". This keeps memories unambiguous when recalled later.
@@ -539,6 +525,7 @@ async def save_memory(
         content: Memory content in third person (markdown, < 500 chars recommended)
         tags: Optional tags for categorization. Use signal type as first tag:
               ["preference", ...], ["correction", ...], ["decision", ...], etc.
+        related: Optional list of related memory slugs for knowledge linking.
 
     Returns:
         dict with keys:
@@ -583,13 +570,15 @@ async def save_memory(
     slug = _slugify(content[:50])
     filename = f"{memory_id:03d}-{slug}.md"
 
-    frontmatter = {
+    frontmatter: dict[str, Any] = {
         "id": memory_id,
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tags or [],
         "source": _detect_source(tags),
         "auto_category": _detect_category(tags),
     }
+    if related:
+        frontmatter["related"] = related
 
     md_content = (
         f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
@@ -641,15 +630,9 @@ async def recall_memory(
     query: str,
     max_results: int = 5,
 ) -> dict[str, Any]:
-    """Search memories using keyword search.
-
-    Use this proactively when:
-    - User mentions a preference/decision from past conversations
-    - Starting work where prior context would be helpful
-    - User explicitly asks about past information
-
-    Searches memory content and tags for matches. Uses case-insensitive
-    grep-style matching. Returns most recent matches first.
+    """Search memories by query. Call proactively at conversation start to
+    load context relevant to the user's topic. Results include one-hop
+    related memories — connected knowledge surfaces automatically.
 
     Args:
         ctx: Agent runtime context
@@ -661,12 +644,6 @@ async def recall_memory(
             - display: Pre-formatted markdown string for user
             - count: Number of results found
             - results: List of matching memory dicts with id, content, tags, created
-
-    Example:
-        User: "Write tests for the API"
-        Call: recall_memory(ctx, "testing python", max_results=3)
-        → Finds: "User prefers pytest over unittest"
-        → Use this to write pytest tests
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memories = _load_all_memories(memory_dir)
@@ -697,6 +674,27 @@ async def recall_memory(
     # Gravity: dedup collisions among pulled results
     matches = _dedup_pulled(matches, threshold=ctx.deps.memory_dedup_threshold)
 
+    # One-hop traversal: surface related memories (§14.1)
+    match_ids = {m.id for m in matches}
+    all_by_slug: dict[str, MemoryEntry] = {}
+    for m in memories:
+        slug = m.path.stem  # e.g. "003-user-prefers-pytest"
+        all_by_slug[slug] = m
+
+    related_entries: list[MemoryEntry] = []
+    for m in matches:
+        if not m.related:
+            continue
+        for slug in m.related:
+            linked = all_by_slug.get(slug)
+            if linked and linked.id not in match_ids:
+                related_entries.append(linked)
+                match_ids.add(linked.id)
+            if len(related_entries) >= 5:
+                break
+        if len(related_entries) >= 5:
+            break
+
     # Gravity: touch pulled memories (refresh updated timestamp)
     for match in matches:
         _touch_memory(match)
@@ -722,9 +720,28 @@ async def recall_memory(
             }
         )
 
+    # Append related memories section
+    if related_entries:
+        lines.append("**Related memories:**\n")
+        for r in related_entries:
+            lines.append(f"**Memory {r.id}** (created {r.created[:10]})")
+            if r.tags:
+                lines.append(f"Tags: {', '.join(r.tags)}")
+            lines.append(f"{r.content}\n")
+            result_dicts.append(
+                {
+                    "id": r.id,
+                    "path": str(r.path),
+                    "content": r.content,
+                    "tags": r.tags,
+                    "created": r.created,
+                    "related_hop": True,
+                }
+            )
+
     return {
         "display": "\n".join(lines),
-        "count": len(matches),
+        "count": len(matches) + len(related_entries),
         "results": result_dicts,
     }
 

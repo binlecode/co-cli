@@ -56,14 +56,12 @@ def test_approval_tools_flagged():
 
 
 def test_history_processors_attached():
-    """Agent has history processors for context governance (§16).
-
-    Current: truncate_tool_returns (Layer 1) + truncate_history_window (Layer 2).
-    TODO adds: inject_opening_context (Phase 1) + detect_safety_issues (Phase 2).
-    """
+    """Agent has all four history processors for context governance (§16)."""
     agent, _model_settings, _tool_names = get_agent()
     processor_names = [p.__name__ for p in agent.history_processors]
+    assert "inject_opening_context" in processor_names
     assert "truncate_tool_returns" in processor_names
+    assert "detect_safety_issues" in processor_names
     assert "truncate_history_window" in processor_names
 
 

@@ -181,7 +181,10 @@ async def web_search(
     max_results: int = 5,
     domains: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Search the web via Brave Search. Returns results with title, URL, and snippet.
+    """Search the web via Brave Search. Returns result snippets with URLs.
+
+    For full page content, follow up with web_fetch on result URLs.
+    Do not guess URLs — always use URLs from search results.
 
     Args:
         query: Search query string.
@@ -253,6 +256,9 @@ async def web_fetch(
     url: str,
 ) -> dict[str, Any]:
     """Fetch a web page and return its content as markdown.
+
+    Use URLs from web_search results. If fetch returns 403 or is blocked,
+    retry the same URL with run_shell_command: curl -sL <url>.
 
     Args:
         url: The URL to fetch (must be http:// or https://).

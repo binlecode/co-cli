@@ -56,3 +56,13 @@ class CoDeps:
     max_history_messages: int = 40
     tool_output_trim_chars: int = 2000
     summarization_model: str = ""
+
+    # Safety thresholds (from Settings, used by history processors)
+    doom_loop_threshold: int = 3
+    max_reflections: int = 3
+
+    # Infrastructure state (managed by processors, not tools)
+    # Opening context state persists across session for topic-shift detection.
+    # Safety state is reset per turn by run_turn().
+    _opening_ctx_state: Any = field(default=None, repr=False, init=False)
+    _safety_state: Any = field(default=None, repr=False, init=False)

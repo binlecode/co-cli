@@ -90,7 +90,11 @@ class Settings(BaseModel):
     personality: str = Field(default="finch")
     tool_retries: int = Field(default=3)
     model_http_retries: int = Field(default=2)
-    max_request_limit: int = Field(default=25)
+    max_request_limit: int = Field(default=50)
+
+    # Safety
+    doom_loop_threshold: int = Field(default=3, ge=2, le=10)
+    max_reflections: int = Field(default=3, ge=1, le=10)
 
     # Conversation memory
     tool_output_trim_chars: int = Field(default=2000)
@@ -184,6 +188,8 @@ class Settings(BaseModel):
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
             "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
+            "doom_loop_threshold": "CO_CLI_DOOM_LOOP_THRESHOLD",
+            "max_reflections": "CO_CLI_MAX_REFLECTIONS",
             "shell_max_timeout": "CO_CLI_SHELL_MAX_TIMEOUT",
             "shell_safe_commands": "CO_CLI_SHELL_SAFE_COMMANDS",
             "web_fetch_allowed_domains": "CO_CLI_WEB_FETCH_ALLOWED_DOMAINS",

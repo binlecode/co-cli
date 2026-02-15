@@ -8,10 +8,10 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
     ModelRequest, ModelResponse, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
@@ -20,6 +20,9 @@ from pydantic_ai.messages import (
     ToolCallPart, ToolReturnPart, UserPromptPart,
 )
 from pydantic_ai.usage import UsageLimits
+
+# Typed return value from run_turn() to chat loop
+TurnOutcome = Literal["continue", "stop", "error", "compact"]
 
 from co_cli._approval import _is_safe_command
 from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
@@ -91,6 +94,7 @@ class TurnResult:
     usage: Any = None
     interrupted: bool = False
     streamed_text: bool = False
+    outcome: TurnOutcome = "continue"
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +408,7 @@ async def run_turn(
     deps: CoDeps,
     message_history: list,
     model_settings: dict,
-    max_request_limit: int = 25,
+    max_request_limit: int = 50,
     http_retries: int = 2,
     verbose: bool = False,
     frontend: FrontendProtocol,
@@ -413,7 +417,16 @@ async def run_turn(
 
     Contains the inner retry loop for HTTP errors and the approval loop
     for deferred tool requests. Delegates all display to the frontend.
+
+    Returns TurnResult with outcome field for chat loop pattern-matching:
+      "continue" — normal completion, prompt for next input
+      "error"    — unrecoverable error, display and prompt
+      "compact"  — reserved for compaction triggers
     """
+    # Reset turn-scoped safety state (doom loop + shell reflection tracking)
+    from co_cli._history import SafetyState
+    deps._safety_state = SafetyState()
+
     result = None
     streamed_text = False
     http_retries_left = http_retries
@@ -445,13 +458,73 @@ async def run_turn(
             if not streamed_text and isinstance(result.output, str):
                 frontend.on_final_output(result.output)
 
+            # Finish reason detection: warn if response appears truncated.
+            # Heuristic: output tokens >= 95% of max_tokens suggests truncation.
+            if turn_usage and isinstance(result.output, str):
+                max_tokens = (model_settings or {}).get("max_tokens", 0)
+                output_tokens = getattr(turn_usage, "response_tokens", 0) or 0
+                if max_tokens and output_tokens >= int(max_tokens * 0.95):
+                    frontend.on_status(
+                        "Response may be truncated (hit output token limit). "
+                        "Use /continue to extend."
+                    )
+
             return TurnResult(
                 messages=message_history,
                 output=result.output,
                 usage=turn_usage,
                 interrupted=False,
                 streamed_text=streamed_text,
+                outcome="continue",
             )
+
+        except UsageLimitExceeded:
+            # Grace turn: ask the model to summarize progress
+            frontend.on_status(
+                f"Turn limit reached ({max_request_limit} requests). "
+                "Asking for a progress summary..."
+            )
+            msgs = result.all_messages() if result else message_history
+            msgs = _patch_dangling_tool_calls(msgs)
+            grace_msg = ModelRequest(parts=[UserPromptPart(
+                content=(
+                    "Turn limit reached. Summarize your progress so far "
+                    "and what remains to be done. The user can /continue "
+                    "to resume with a fresh budget."
+                ),
+            )])
+            try:
+                grace_result, grace_streamed = await _stream_events(
+                    agent, user_input=None, deps=deps,
+                    message_history=msgs + [grace_msg],
+                    model_settings=model_settings,
+                    usage_limits=UsageLimits(request_limit=1),
+                    verbose=verbose, frontend=frontend,
+                )
+                message_history = grace_result.all_messages()
+                if not grace_streamed and isinstance(grace_result.output, str):
+                    frontend.on_final_output(grace_result.output)
+                return TurnResult(
+                    messages=message_history,
+                    output=grace_result.output,
+                    usage=turn_usage,
+                    interrupted=False,
+                    streamed_text=grace_streamed,
+                    outcome="continue",
+                )
+            except Exception:
+                # Grace turn itself failed — return what we have
+                frontend.on_status(
+                    "Turn limit reached. Use /continue to resume."
+                )
+                return TurnResult(
+                    messages=msgs,
+                    output=None,
+                    usage=turn_usage,
+                    interrupted=False,
+                    streamed_text=streamed_text,
+                    outcome="continue",
+                )
 
         except ModelHTTPError as e:
             action, msg, delay = classify_provider_error(e)
@@ -495,6 +568,7 @@ async def run_turn(
                 usage=turn_usage,
                 interrupted=False,
                 streamed_text=streamed_text,
+                outcome="error",
             )
 
         except ModelAPIError as e:
@@ -519,11 +593,21 @@ async def run_turn(
                 usage=turn_usage,
                 interrupted=False,
                 streamed_text=streamed_text,
+                outcome="error",
             )
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             msgs = result.all_messages() if result else message_history
             message_history = _patch_dangling_tool_calls(msgs)
+            # Abort marker — model sees this on the next turn so it knows
+            # the previous turn was interrupted and can verify state.
+            abort_marker = ModelRequest(parts=[UserPromptPart(
+                content=(
+                    "The user interrupted the previous turn. Some actions "
+                    "may be incomplete. Verify current state before continuing."
+                ),
+            )])
+            message_history = message_history + [abort_marker]
             frontend.on_status("Interrupted.")
             return TurnResult(
                 messages=message_history,
@@ -531,4 +615,5 @@ async def run_turn(
                 usage=turn_usage,
                 interrupted=True,
                 streamed_text=streamed_text,
+                outcome="continue",
             )

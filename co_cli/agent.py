@@ -1,13 +1,19 @@
 import os
+from pathlib import Path
 
-from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import settings, WebPolicy, MCPServerConfig
 from co_cli.deps import CoDeps
-from co_cli._history import truncate_tool_returns, truncate_history_window
+from co_cli._history import (
+    inject_opening_context,
+    truncate_tool_returns,
+    detect_safety_issues,
+    truncate_history_window,
+)
 from co_cli.prompts import assemble_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
@@ -120,9 +126,31 @@ def get_agent(
         system_prompt=system_prompt,
         retries=settings.tool_retries,
         output_type=[str, DeferredToolRequests],
-        history_processors=[truncate_tool_returns, truncate_history_window],
+        history_processors=[
+            inject_opening_context,
+            truncate_tool_returns,
+            detect_safety_issues,
+            truncate_history_window,
+        ],
         toolsets=mcp_toolsets if mcp_toolsets else None,
     )
+
+    # Conditional system prompt layers — runtime-gated via @agent.system_prompt
+    @agent.system_prompt
+    def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
+        """Inject shell tool guidance when shell is available."""
+        return (
+            "Shell runs as subprocess with approval. "
+            "Read-only commands matching the safe-command allowlist are auto-approved."
+        )
+
+    @agent.system_prompt
+    def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
+        """Inject project-level instructions from .co-cli/instructions.md."""
+        instructions_path = Path.cwd() / ".co-cli" / "instructions.md"
+        if instructions_path.is_file():
+            return instructions_path.read_text(encoding="utf-8").strip()
+        return ""
 
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)

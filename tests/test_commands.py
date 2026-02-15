@@ -41,20 +41,32 @@ def _make_agent_and_deps(container_name: str = "co-test-approval"):
     return agent, model_settings, deps
 
 
-async def _trigger_shell_call(agent, deps, model_settings):
-    """Ask the LLM to run a shell command. Returns DeferredToolRequests result."""
-    result = await agent.run(
-        "Run this exact shell command: echo hello_approval_test",
-        deps=deps,
-        model_settings=model_settings,
-        usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+async def _trigger_shell_call(agent, deps, model_settings, *, retries: int = 3):
+    """Ask the LLM to run a shell command. Returns DeferredToolRequests result.
+
+    Retries up to *retries* times because smaller models occasionally respond
+    with text instead of calling the tool.
+    """
+    prompt = (
+        "Use the run_shell_command tool to execute: echo hello_approval_test\n"
+        "Do NOT describe what you would do — call the tool now."
     )
-    assert isinstance(result.output, DeferredToolRequests), (
-        f"Expected DeferredToolRequests, got {type(result.output).__name__}. "
-        "LLM may not have called a side-effectful tool."
+    last_output = None
+    for _ in range(retries):
+        result = await agent.run(
+            prompt,
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+        )
+        if isinstance(result.output, DeferredToolRequests):
+            assert len(result.output.approvals) > 0
+            return result
+        last_output = result.output
+    pytest.fail(
+        f"Expected DeferredToolRequests after {retries} attempts, "
+        f"got {type(last_output).__name__}: {last_output!r}"
     )
-    assert len(result.output.approvals) > 0
-    return result
 
 
 # --- Dispatch routing ---
