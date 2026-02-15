@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-02-14
+
+### Added
+- **Agentic loop & prompting architecture** (Phases 1, 2, 4 from `TODO-co-agentic-loop-and-prompting.md`): Ground-up redesign of the orchestration layer, history processors, prompt composition, and safety guardrails. Peer-system research across Claude Code, Codex, Aider, Gemini CLI, and OpenCode informed every design decision.
+- **Doom loop detection** (`_history.py`): Hash-based consecutive identical `ToolCallPart` detection. When the model repeats the same tool call N times (configurable `doom_loop_threshold`, default 3), a `SystemPromptPart` is injected telling it to try a different approach. Once per turn — `SafetyState.doom_loop_injected` flag prevents re-injection.
+- **Shell reflection cap** (`_history.py`): Counts consecutive `run_shell_command` errors. At `max_reflections` (default 3), injects a system message telling the model to ask the user for help. Success resets the counter. Non-shell tool errors are ignored.
+- **Opening context injection** (`_history.py`): Async processor that recalls relevant memories at conversation start and on topic shifts. Keyword overlap ratio < 0.3 triggers re-recall. Debounced to at most once per 5 model requests. Session-scoped `OpeningContextState` tracks `recall_count`, `last_recall_topic`, `model_request_count`.
+- **Abort marker on Ctrl-C** (`_orchestrate.py`): When `KeyboardInterrupt`/`CancelledError` interrupts a turn, an abort marker (`"The user interrupted the previous turn..."`) is injected into message history so the next turn has awareness of the interruption. `TurnResult.interrupted = True`.
+- **Grace turn on usage limit** (`_orchestrate.py`): When `UsageLimitExceeded` fires, instead of crashing, the orchestrator runs one final "grace" request asking the model to summarize progress and suggest `/continue`. Status message: `"Turn limit reached — summarising progress..."`.
+- **Finish reason detection** (`_orchestrate.py`): Heuristic check after each response — if `output_tokens >= 95% of max_tokens`, a status warning fires: `"Response may be truncated (hit output token limit). Use /continue to extend."`.
+- **Auto-compaction token trigger** (`_history.py`): `truncate_history_window` now triggers on EITHER message count exceeding `max_history_messages` OR estimated token count exceeding 85% of 100k budget (4 chars/token heuristic). Dual trigger prevents silent context overflow for long conversations with short message counts.
+- **Typed turn outcomes** (`_orchestrate.py`): `TurnOutcome = Literal["continue", "stop", "error", "compact"]` replaces ad-hoc string returns. `TurnResult` dataclass with `outcome`, `output`, `messages`, `interrupted` fields.
+- **Current date in system prompt** (`agent.py`): `@agent.system_prompt` decorator injects `"Today is {date}."` so the model can reason about time correctly.
+- **Per-tool auto-approve** (`_orchestrate.py`, `deps.py`, `display.py`): The "a" (auto-approve) choice now tracks per tool name (`deps.auto_approved_tools: set[str]`) instead of blanket `auto_confirm`. Approval prompt shows `[y/n/a]` hint.
+- **5 companion rules rewritten** (`prompts/rules/01-05`): Identity (core traits, anti-sycophancy, thoroughness), Safety (credentials, source control, approval, memory constraints), Reasoning (verification, fact authority, two kinds of unknowns), Tools (preamble messages, strategy), Workflow (three-way intent classification, execution, when NOT to over-plan). All aligned with §10.1-10.5 of the agentic loop design.
+- **Memory linking** (`tools/memory.py`): `MemoryEntry.related` field (list of slugs). `save_memory()` accepts `related` parameter. `recall_memory()` performs one-hop traversal — surfaces linked memories in a "Related memories" section even if they don't match the query directly.
+- **9 E2E eval scripts** (`scripts/eval_e2e_*.py`): One script per Tier 2 verification flow — doom loop (4 deterministic tests), shell reflection (4 deterministic tests), abort marker, memory linking, compaction prompt quality, project instructions, opening context, grace turn, finish reason. All verified passing.
+- **Personality enhancement TODO** (`docs/TODO-co-personality-enhancements.md`): Future work for personality system improvements.
+- **Seed memory files** (`.co-cli/knowledge/memories/`): Initial memory entries.
+
+### Changed
+- **`max_request_limit` default raised** from 25 to 50 — aligns with agentic loop requirements for multi-step tool chains.
+- **4 history processors** registered on agent (was 2): `inject_opening_context`, `truncate_tool_returns`, `detect_safety_issues`, `truncate_history_window`. Order matters — opening context first (cheapest), safety last before window trim.
+- **`SafetyState` is turn-scoped**: Created fresh per turn by `run_turn()`, stored on `CoDeps._safety_state`. Prevents stale doom loop / reflection flags from prior turns.
+- **`OpeningContextState` is session-scoped**: Initialized once per session in `create_deps()`, stored on `CoDeps._opening_ctx_state`. Persists across turns for topic-shift detection.
+- **Compaction prompt improved**: Handoff-style, first-person voice (`"I asked you..."`). Anti-injection security rule for summarizer. Both `truncate_history_window` and `/compact` use shared `summarize_messages()`.
+- **Web tool docstrings**: Chain hints added to `web_search` and `web_fetch` for better model tool sequencing.
+- **Drive `search_drive_files` docstring**: Explicit pagination guidance so the model knows to paginate when complete results are needed.
+- **Shell tool DESIGN-09 doc**: Fully rewritten to match current `ShellBackend` implementation (Docker sandbox dropped).
+
+### Removed
+- **Docker sandbox**: Dropped `DockerSandbox`, `SandboxProtocol`, `Dockerfile.sandbox`, `_sandbox_env.py`. `ShellBackend` (approval-gated subprocess) is the sole execution model. Simplifies architecture — approval gate is the security layer.
+- **`eval_e2e_streaming.py`**: Superseded by test suite coverage.
+- **`auto_confirm` field on CoDeps**: Replaced by `auto_approved_tools: set[str]` for per-tool granularity.
+
+### Fixed
+- **Model lacks date awareness**: Agent said January 2026 dates were "future" on February 14. Fixed by injecting current date into system prompt via `@agent.system_prompt`.
+- **Flaky `test_approval_approve`**: Ollama model sometimes returned text instead of calling the shell tool. Fixed with directive prompt ("Do NOT describe what you would do — call the tool now") and retry loop (up to 3 attempts).
+
+---
+
 ## [0.3.10] - 2026-02-11
 
 ### Fixed
