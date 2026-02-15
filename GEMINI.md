@@ -4,7 +4,7 @@ This file provides guidance to the Gemini agent when working with code in this r
 
 ## Project Overview
 
-**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and approval-gated shell execution for safe operation.
+**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Gmail, Calendar) using a local LLM "Brain" and approval-gated shell execution for safe operation.
 
 ## Project Structure
 
@@ -20,7 +20,7 @@ co-cli/
 │       ├── shell.py        # run_shell_command (approval-gated subprocess)
 │       ├── notes.py        # list_notes, read_note (Obsidian)
 │       ├── drive.py        # search_drive, read_drive_file (Google Drive)
-│       └── comm.py         # Slack, Gmail, Calendar tools
+│       └── google_*.py     # Google Drive, Gmail, Calendar tools
 ├── tests/                  # Functional test suite
 ├── docs/                   # Documentation & Specs
 │   ├── SPEC-CO-CLI.md      # Architecture & testing policy
@@ -58,7 +58,6 @@ uv run pytest                        # Run functional tests
   "ollama_host": "http://localhost:11434",
   "ollama_model": "llama3",
   "obsidian_vault_path": "...",
-  "slack_bot_token": "...",
   "google_credentials_path": "..."
 }
 ```
@@ -67,6 +66,6 @@ uv run pytest                        # Run functional tests
 
 1. **Privacy First**: Local LLM (Ollama) preferred; logs stored locally.
 2. **Safe Execution**: Shell commands require explicit approval; safe read-only commands are auto-approved.
-3. **Human-in-the-Loop**: Confirmations required for high-risk tools (shell, Slack, email).
+3. **Human-in-the-Loop**: Confirmations required for high-risk tools (shell, email).
 4. **Functional Testing**: No mocks. Tests must verify real side effects.
 5. **Stability**: Python 3.12+ — mature stdlib, type hints, performance.

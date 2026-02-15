@@ -173,7 +173,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 **Scope:**
 - ~~Drop Docker sandbox~~ Done (`408d3ff`) — subprocess + approval is the sole execution model
-- Unify `!cmd` bypass with the approval system
+- ~~Unify `!cmd` bypass with the approval system~~ Done — chat loop no longer has a `!cmd` bypass path
 - Tighten safe-command classification — safe-prefix auto-approval active universally (no `isolation_level` gate)
 
 **Design docs:** `DESIGN-09-tool-shell.md`

@@ -181,15 +181,30 @@ async def web_search(
     max_results: int = 5,
     domains: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Search the web via Brave Search. Returns result snippets with URLs.
+    """Search the web via Brave Search. Returns ranked result snippets with
+    titles and URLs. Each result includes a short text preview.
 
-    For full page content, follow up with web_fetch on result URLs.
-    Do not guess URLs — always use URLs from search results.
+    For full page content, pass a result URL to web_fetch. Do not guess or
+    fabricate URLs — always use URLs from these search results.
+
+    Scope searches to specific sites with the domains parameter (e.g.
+    domains=["docs.python.org"] to search only Python docs).
+
+    Returns a dict with:
+    - display: numbered results with title, snippet, and URL — show directly
+      to the user
+    - results: list of {title, url, snippet} dicts
+    - count: number of results returned
+
+    Caveats:
+    - Max 8 results per call (capped regardless of max_results value)
+    - Requires BRAVE_SEARCH_API_KEY to be configured
 
     Args:
-        query: Search query string.
+        query: Search query string (e.g. "python asyncio tutorial",
+               "latest pydantic-ai release notes").
         max_results: Number of results to return (default 5, max 8).
-        domains: Optional list of domains to scope the search to (adds site: operators).
+        domains: Restrict to these domains (e.g. ["github.com", "stackoverflow.com"]).
     """
     if ctx.deps.web_policy.search == "deny":
         raise ModelRetry("web_search: web access disabled by policy.")
@@ -255,13 +270,28 @@ async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
 ) -> dict[str, Any]:
-    """Fetch a web page and return its content as markdown.
+    """Fetch a web page and return its content converted to readable markdown.
+    HTML pages are converted to markdown; JSON and XML are returned as-is.
 
-    Use URLs from web_search results. If fetch returns 403 or is blocked,
-    retry the same URL with run_shell_command: curl -sL <url>.
+    Use URLs from web_search results. Do not guess or fabricate URLs.
+    If fetch returns 403 or is blocked by Cloudflare, retry the same URL
+    with run_shell_command: curl -sL <url>.
+
+    Returns a dict with:
+    - display: page content as markdown text — show directly to the user
+    - url: final URL after redirects
+    - content_type: the response Content-Type
+    - truncated: true if content was cut to fit size limits
+
+    Caveats:
+    - Only fetches text-based content (HTML, JSON, XML, plain text). Binary
+      formats (images, PDFs, zip) are rejected
+    - Content is truncated at ~100K characters
+    - Some sites block automated fetches — use curl fallback via shell if needed
+    - Domain allow/block lists from settings are enforced
 
     Args:
-        url: The URL to fetch (must be http:// or https://).
+        url: Full URL to fetch (must start with http:// or https://).
     """
     if ctx.deps.web_policy.fetch == "deny":
         raise ModelRetry("web_fetch: web access disabled by policy.")

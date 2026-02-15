@@ -36,20 +36,30 @@ def _handle_drive_error(e: Exception) -> dict[str, Any]:
 
 
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
-    """Search for files in Google Drive. Returns up to 10 results per page.
+    """Search files in Google Drive by name or content. Returns up to 10
+    results per page. Matches files whose name contains the query OR whose
+    full text body contains the query.
 
     Pagination: When has_more is true, call again with page + 1 to get the
     next batch. Keep paginating until has_more is false when the task requires
-    complete results (counts, summaries, exhaustive listings).
+    complete results (counts, summaries, exhaustive listings). Pages must be
+    requested sequentially — you cannot skip to page 3 without fetching page 2.
+
+    To read a file's content, pass its id to read_drive_file.
 
     Returns a dict with:
-    - display: pre-formatted results with clickable URLs — show this directly to the user
+    - display: pre-formatted results with clickable URLs — show directly to user
     - page: current page number
-    - has_more: whether more results are available (paginate if you need complete data)
+    - has_more: whether more results exist (paginate if you need complete data)
+
+    Caveats:
+    - fullText search only works on Google Workspace docs and indexed text files,
+      not PDFs or binary formats
+    - Results are unordered by default (Drive API relevance ranking)
 
     Args:
-        query: Search keywords or metadata query.
-        page: Page number (1-based). Use 1 for first page, 2 for second, etc.
+        query: Search keywords (e.g. "weekly meeting", "Q4 budget report").
+        page: Page number (1-based). Use 1 for first page, 2 for next, etc.
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
@@ -114,10 +124,20 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
 
 
 def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, Any]:
-    """Fetch the content of a text-based file from Google Drive.
+    """Fetch the content of a file from Google Drive and return it as text.
+
+    Google Workspace documents (Docs, Sheets, Slides) are exported as plain
+    text. Other files are downloaded as-is and decoded as UTF-8.
+
+    Use file IDs from search_drive_files results. Do not guess file IDs.
+
+    Caveats:
+    - Binary files (images, videos, zip) will fail or produce garbled output
+    - Large files may be slow or truncated by API limits
 
     Args:
-        file_id: The Google Drive file ID (from search_drive_files results).
+        file_id: The Google Drive file ID (from search_drive_files results,
+                 e.g. "1e2ijrBd74oruWB0b-xGTiQvSwxGO6KK9HPTGaXnmOtI").
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:

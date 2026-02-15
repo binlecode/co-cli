@@ -14,6 +14,7 @@ from co_cli.tools.memory import (
     _load_all_memories,
     MemoryEntry,
     recall_memory,
+    list_memories,
 )
 
 
@@ -152,6 +153,50 @@ def test_recall_touches_pulled_memories(tmp_path: Path, monkeypatch):
     touched = [m for m in reloaded if "dark" in m.content.lower()]
     assert len(touched) == 1
     assert touched[0].updated is not None
+
+
+# ---------------------------------------------------------------------------
+# list_memories pagination
+# ---------------------------------------------------------------------------
+
+
+def test_list_memories_pagination(tmp_path: Path, monkeypatch):
+    """list_memories returns correct pages with offset/limit."""
+    memory_dir = tmp_path / ".co-cli" / "knowledge" / "memories"
+    for i in range(1, 6):
+        _write_memory(memory_dir, i, f"Memory content number {i}",
+                      tags=["test"])
+
+    monkeypatch.chdir(tmp_path)
+
+    # Page 1: offset=0, limit=2
+    r1 = asyncio.get_event_loop().run_until_complete(
+        list_memories(_ctx(), offset=0, limit=2)
+    )
+    assert r1["count"] == 2
+    assert r1["total"] == 5
+    assert r1["offset"] == 0
+    assert r1["limit"] == 2
+    assert r1["has_more"] is True
+    assert "capacity" in r1
+    assert r1["memories"][0]["id"] == 1
+    assert r1["memories"][1]["id"] == 2
+
+    # Page 2: offset=2, limit=2
+    r2 = asyncio.get_event_loop().run_until_complete(
+        list_memories(_ctx(), offset=2, limit=2)
+    )
+    assert r2["count"] == 2
+    assert r2["total"] == 5
+    assert r2["has_more"] is True
+
+    # Page 3: offset=4, limit=2 — partial last page
+    r3 = asyncio.get_event_loop().run_until_complete(
+        list_memories(_ctx(), offset=4, limit=2)
+    )
+    assert r3["count"] == 1
+    assert r3["total"] == 5
+    assert r3["has_more"] is False
 
 
 def test_gravity_affects_recency_order(tmp_path: Path, monkeypatch):

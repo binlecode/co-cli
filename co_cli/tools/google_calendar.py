@@ -118,16 +118,26 @@ def list_calendar_events(
     days_ahead: int = 1,
     max_results: int = 25,
 ) -> dict[str, Any]:
-    """List calendar events in a time window around today.
+    """List calendar events in a time window around today. Auto-paginates
+    internally — all matching events up to max_results are returned in one call.
+
+    Use this for schedule overviews (today, this week). For keyword search
+    across events, use search_calendar_events instead.
 
     Returns a dict with:
-    - display: pre-formatted event list with clickable links — show this directly to the user
+    - display: pre-formatted event list with times, title, location, attendees,
+      Calendar link, and Meet link — show directly to the user
     - count: number of events returned
 
+    Caveats:
+    - Reads primary calendar only (not shared or subscribed calendars)
+    - Recurring events are expanded into individual occurrences
+
     Args:
-        days_back: How many days in the past to include (default 0 = today onward).
-        days_ahead: How many days ahead to include (default 1 = today only).
-        max_results: Maximum number of events to return (default 25).
+        days_back: Days in the past to include (default 0 = today onward).
+        days_ahead: Days ahead to include (default 1 = today only).
+                    Use 7 for a week, 30 for a month.
+        max_results: Max events to return (default 25, max 250).
     """
     service, err = _get_calendar_service(ctx)
     if err:
@@ -172,17 +182,28 @@ def search_calendar_events(
     days_ahead: int = 30,
     max_results: int = 25,
 ) -> dict[str, Any]:
-    """Search calendar events by keyword.
+    """Search calendar events by keyword in titles, descriptions, and locations.
+    Auto-paginates internally — all matching events up to max_results are
+    returned in one call.
+
+    Use this when looking for specific meetings or topics. For a general
+    schedule overview, use list_calendar_events instead.
 
     Returns a dict with:
-    - display: pre-formatted event list with clickable links — show this directly to the user
+    - display: pre-formatted event list with times, title, location, attendees,
+      Calendar link, and Meet link — show directly to the user
     - count: number of events returned
 
+    Caveats:
+    - Searches primary calendar only
+    - To find events in the past, increase days_back (default is 0 = today onward)
+
     Args:
-        query: Text to search for in event summaries, descriptions, and locations.
-        days_back: How many days in the past to search (default 0 = today onward).
-        days_ahead: How many days ahead to search (default 30).
-        max_results: Maximum number of events to return (default 25).
+        query: Keywords to match (e.g. "standup", "1:1 with Alice", "sprint review").
+        days_back: Days in the past to search (default 0 = today onward).
+                   Use 365 for a full year of history.
+        days_ahead: Days ahead to search (default 30).
+        max_results: Max events to return (default 25, max 250).
     """
     service, err = _get_calendar_service(ctx)
     if err:

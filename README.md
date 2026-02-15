@@ -1,6 +1,6 @@
 # Co - The Production-Grade Personal Assistant CLI
 
-**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Slack, Gmail) using a local LLM "Brain" and approval-gated shell execution for safe operation.
+**Co** is an opinionated, privacy-first AI agent that lives in your terminal. It connects your local tools (Obsidian, Shell) with cloud services (Google Drive, Gmail, Calendar) using a local LLM "Brain" and approval-gated shell execution for safe operation.
 
 Designed for developers who want a personal assistant that:
 1.  **Respects Privacy**: Runs on local models (Ollama) or cloud (Gemini).
@@ -59,8 +59,7 @@ Before you begin, ensure you have the following installed:
       "llm_provider": "gemini",
       "gemini_api_key": "AIza...",
       "gemini_model": "gemini-2.0-flash",
-      "obsidian_vault_path": "/path/to/vault",
-      "slack_bot_token": "xoxb-your-bot-token",
+      "obsidian_vault_path": "/path/to/vault"
     }
     ```
 
@@ -85,17 +84,6 @@ Just run `uv run co chat`. On first use, Co will:
 **Prerequisite:** Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
 
 > **Advanced:** Set `google_credentials_path` in `settings.json` to use a custom credentials file. This takes priority over the auto-setup flow.
-
-## Slack Configuration (Optional)
-
-To enable Slack messaging:
-1.  Create a Slack App at [api.slack.com/apps](https://api.slack.com/apps).
-2.  Navigate to **OAuth & Permissions** and add Bot Token Scopes:
-    *   `chat:write`, `channels:read`, `channels:history`, `users:read`
-3.  **Install to Workspace** and copy the **Bot User OAuth Token** (`xoxb-...`).
-4.  Add the token to your `settings.json`.
-
----
 
 ## Usage
 
@@ -206,7 +194,6 @@ Use `/yolo` to toggle auto-approve for all tools.
 Side-effectful tools require explicit approval:
 *   Shell commands (safe read-only commands auto-approved)
 *   Sending emails
-*   Posting to Slack
 
 ### Automatic Context Governance
 
@@ -248,7 +235,6 @@ uv run pytest tests/test_history.py  # Single test file
 | **Shell** | None (uses host subprocess) |
 | **Notes** | None (uses temp files) |
 | **Drive/Gmail/Calendar** | GCP credentials |
-| **Slack** | Slack bot token |
 | **History/Memory** | LLM provider (Gemini or Ollama) |
 | **LLM E2E** | `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` |
 
@@ -258,7 +244,6 @@ uv run pytest tests/test_history.py  # Single test file
 export GEMINI_API_KEY="your-key"
 export LLM_PROVIDER="gemini"
 export CO_CLI_AUTO_CONFIRM="true"
-export SLACK_BOT_TOKEN="xoxb-..."
 uv run pytest -v
 ```
 
@@ -273,7 +258,6 @@ uv run pytest -v
 | **Drive** | Google Drive search and reading | `search_drive_files`, `read_drive_file` |
 | **Gmail** | Inbox, search, and draft | `list_emails`, `search_emails`, `create_email_draft` |
 | **Calendar** | List and search events | `list_calendar_events`, `search_calendar_events` |
-| **Slack** | Channels, threads, users, posting | `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users`, `send_slack_message` |
 | **Web** | Web search and URL fetch | `web_search`, `web_fetch` |
 
 ---

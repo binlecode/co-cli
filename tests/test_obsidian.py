@@ -137,6 +137,37 @@ def test_search_notes_snippet_word_boundaries(tmp_path):
     assert not inner[0].isalpha() or inner.startswith(" ") or inner[0].isupper()
 
 
+def test_list_notes_pagination(tmp_path):
+    """list_notes returns correct pages with offset/limit."""
+    for i in range(1, 6):
+        (tmp_path / f"note-{i:02d}.md").write_text(f"# Note {i}\nContent {i}")
+
+    ctx = Context(deps=CoDeps(
+        shell=ShellBackend(),
+        obsidian_vault_path=tmp_path,
+        session_id="test",
+    ))
+
+    # Page 1: offset=0, limit=2
+    r1 = list_notes(ctx, offset=0, limit=2)
+    assert r1["count"] == 2
+    assert r1["total"] == 5
+    assert r1["offset"] == 0
+    assert r1["limit"] == 2
+    assert r1["has_more"] is True
+
+    # Verify sorted order is stable
+    assert "note-01.md" in r1["display"]
+    assert "note-02.md" in r1["display"]
+    assert "note-03.md" not in r1["display"]
+
+    # Page 3: offset=4, limit=2 — partial last page
+    r3 = list_notes(ctx, offset=4, limit=2)
+    assert r3["count"] == 1
+    assert r3["total"] == 5
+    assert r3["has_more"] is False
+
+
 def test_obsidian_list_and_read(tmp_path):
     """Test Obsidian tools with real file system."""
     # Setup: create real files

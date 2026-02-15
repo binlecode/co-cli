@@ -47,7 +47,6 @@ graph LR
 
     Input --> Dispatch
     Dispatch -->|text| RunTurn
-    Dispatch -->|!cmd| Shell[Shell]
     Dispatch -->|/cmd| SlashCmd[_commands.py]
     RunTurn --> Stream
     Stream --> PydanticAgent
@@ -84,7 +83,7 @@ get_agent(all_approval, web_policy, mcp_servers) → (agent, model_settings, too
 
 | Category | Approval | Notes |
 |----------|----------|-------|
-| Side-effectful | Always deferred | `run_shell_command`, `create_email_draft`, `send_slack_message`, `save_memory` |
+| Side-effectful | Always deferred | `run_shell_command`, `create_email_draft`, `save_memory` |
 | Read-only | Auto-execute | `all_approval=True` forces deferred (for eval harness) |
 | Web tools | Policy-driven | `web_policy.search` / `web_policy.fetch`: `"allow"` or `"ask"` |
 | MCP tools | Per-server config | `"auto"` → deferred; `"never"` → trusted |
@@ -97,7 +96,7 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 
 | Group | Fields |
 |-------|--------|
-| **Runtime resources** | `shell` (ShellBackend), `auto_confirm` (session yolo), `session_id` (uuid4), `slack_client`, `google_creds` (lazy-resolved) |
+| **Runtime resources** | `shell` (ShellBackend), `auto_confirm` (session yolo), `session_id` (uuid4), `google_creds` (lazy-resolved) |
 | **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
 | **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2) |
 | **History governance** | `max_history_messages` (40), `tool_output_trim_chars` (2000), `summarization_model` (empty = primary model) |
@@ -129,7 +128,6 @@ chat_loop():
             dispatch:
                 "exit"/"quit"  → break
                 empty/blank    → continue
-                "!cmd"         → shell.run_command(cmd), no LLM
                 "/command"     → dispatch_command(), no LLM
                 anything else  → run_turn()
 

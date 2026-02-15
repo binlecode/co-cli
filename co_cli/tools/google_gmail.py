@@ -78,14 +78,18 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
 
 
 def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]:
-    """List recent emails from the user's Gmail inbox.
+    """List the most recent emails from the user's Gmail inbox.
+
+    Use this for a quick inbox overview. For targeted queries (by sender,
+    date range, subject, read status), use search_emails instead.
 
     Returns a dict with:
-    - display: pre-formatted email list with clickable links — show this directly to the user
+    - display: pre-formatted email list with sender, subject, date, preview,
+      and clickable Gmail links — show directly to the user
     - count: number of emails returned
 
     Args:
-        max_results: Maximum number of emails to return (default 5).
+        max_results: Number of emails to return (default 5, max ~100).
     """
     service, err = _get_gmail_service(ctx)
     if err:
@@ -112,13 +116,23 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
 def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
     """Search emails in Gmail using Gmail search syntax.
 
+    Supports the full Gmail query language. Common operators:
+    - from:alice, to:bob — sender/recipient
+    - subject:invoice — subject line
+    - is:unread, is:starred — status flags
+    - newer_than:2d, older_than:1w — relative dates
+    - has:attachment — attachment filter
+    - label:work — label filter
+    Combine with spaces for AND logic: "from:alice subject:invoice newer_than:7d"
+
     Returns a dict with:
-    - display: pre-formatted search results with clickable links — show this directly to the user
+    - display: pre-formatted results with sender, subject, date, preview,
+      and clickable Gmail links — show directly to the user
     - count: number of emails returned
 
     Args:
-        query: Gmail search query (e.g. "from:alice subject:invoice", "is:unread", "newer_than:2d").
-        max_results: Maximum number of emails to return (default 5).
+        query: Gmail search query (e.g. "from:alice subject:invoice newer_than:7d").
+        max_results: Number of emails to return (default 5, max ~100).
     """
     service, err = _get_gmail_service(ctx)
     if err:
@@ -143,12 +157,18 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
 
 
 def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str | dict[str, Any]:
-    """Create a draft email in Gmail.
+    """Create a draft email in Gmail. Does NOT send — the user reviews and
+    sends manually from Gmail.
+
+    Creates a plain-text draft. For rich formatting, the user can edit the
+    draft in Gmail before sending.
+
+    Returns a confirmation string with the recipient, subject, and draft ID.
 
     Args:
-        to: Recipient email address.
+        to: Recipient email address (e.g. "alice@example.com").
         subject: Email subject line.
-        body: Email body text.
+        body: Email body as plain text.
     """
     service, err = _get_gmail_service(ctx)
     if err:

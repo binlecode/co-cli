@@ -8,7 +8,7 @@ nav_order: 7
 
 ## 1. What & How
 
-The MCP client integrates external tool servers via the Model Context Protocol, letting users extend co-cli with community-maintained or custom tools without writing Python code. Native tools remain first-class for core platforms (Google, Slack, Obsidian, Web, Memory, Shell); MCP unlocks the long tail (Jira, Notion, databases, company APIs, etc.).
+The MCP client integrates external tool servers via the Model Context Protocol, letting users extend co-cli with community-maintained or custom tools without writing Python code. Native tools remain first-class for core platforms (Google, Obsidian, Web, Memory, Shell); MCP unlocks the long tail (Jira, Notion, databases, company APIs, etc.).
 
 Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local subprocess servers. Servers are declared in `settings.json`, launched at session start, and their tools are discovered dynamically. Three default servers ship out-of-the-box: `github` (approval required), `thinking` (sequential-thinking, auto-execute), and `context7` (documentation lookup, auto-execute).
 

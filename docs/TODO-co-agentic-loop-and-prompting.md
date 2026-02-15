@@ -1,6 +1,6 @@
 # TODO: Co Agentic Loop & Prompting Architecture (Ground-Up Design)
 
-**Status**: Design proposal
+**Status**: Phases 1, 2, 4 implemented. Phase 3 (sub-agents) gated on test. Phase 5 (polish) not started.
 **Scope**: Core agent loop + prompt system — the two pillars everything else builds on
 **Approach**: First-principles design informed by 5 peer systems, aligned with co evolution roadmap
 
@@ -1164,32 +1164,41 @@ These features already exist in the codebase. Listed here to prevent duplicate w
 | Feature | Location | Status |
 |---------|----------|--------|
 | Token pruning (§8.1 Layer 1) | `_history.py`: `truncate_tool_returns` processor | Shipped. Registered on agent. |
-| Anti-injection in summarization | `_history.py`: `_SUMMARIZER_SYSTEM_PROMPT` | Shipped. Needs prompt text update (Phase 1c). |
-| Turn limit via UsageLimits | `_orchestrate.py`: `UsageLimits(request_limit=25)` | Shipped. Default needs increase to 50 (Phase 2c). |
-| HTTP retry for web tools | `_http_retry.py`: backoff + jitter | Shipped. Web-layer only; LLM-layer retry is Phase 4c. |
-| Dangling tool call patch on interrupt | `_orchestrate.py`: `_patch_dangling_tool_calls()` | Shipped. Needs abort marker addition (Phase 1d). |
-| Approval re-entry loop | `_orchestrate.py`: `_handle_approvals()` | Shipped. Verify budget sharing (Phase 2c). |
+| Anti-injection in summarization | `_history.py`: `_SUMMARIZER_SYSTEM_PROMPT` | Shipped. Updated with full anti-injection + first-person + handoff (Phase 1c). |
+| Turn limit via UsageLimits | `_orchestrate.py`: `UsageLimits(request_limit=50)` | Shipped. Default increased to 50, grace turn implemented (Phase 2c). |
+| HTTP retry for web tools | `_http_retry.py`: backoff + jitter | Shipped. LLM-layer retry also shipped (Phase 4c). |
+| Dangling tool call patch on interrupt | `_orchestrate.py`: `_patch_dangling_tool_calls()` | Shipped. Abort marker added (Phase 1d). |
+| Approval re-entry loop | `_orchestrate.py`: `_handle_approvals()` | Shipped. Budget sharing verified (Phase 2c). |
 | Personality system (soul seed + presets) | `prompts/personalities/` + `_registry.py` | Shipped. Sufficient for MVP. Axes refactor deferred to Phase 5d. |
 
 ```
-Phase 1: Prompt Foundation (1-2 days)  [ALWAYS DO]
-  ├── 1a. Full rewrite of 5 companion rules (§10.1-10.5), compressed to <1100 tokens
+Phase 1: Prompt Foundation (1-2 days)  [DONE]
+  ├── 1a. [DONE] Full rewrite of 5 companion rules (§10.1-10.5), compressed to <1100 tokens
   │       Includes conditional prompt composition (§9.1): assemble_prompt() for
   │       static layers + @agent.system_prompt decorators for runtime-gated layers
   │       (shell guidance, project instructions). This is the assembly machinery
   │       that the rules plug into — not a separate deliverable.
   │       Files: co_cli/prompts/rules/01_identity.md through 05_workflow.md,
   │              co_cli/prompts/__init__.py (assemble_prompt), co_cli/agent.py
-  ├── 1b. Optimize tool docstrings with chain hints (§14)
-  │       Files: co_cli/tools/tool_web.py, co_cli/tools/memory.py,
+  │       Impl: 5 rule files in prompts/rules/, assemble_prompt() loads in order,
+  │              @agent.system_prompt for add_current_date, add_shell_guidance,
+  │              add_project_instructions
+  ├── 1b. [DONE] Optimize tool docstrings with chain hints (§14)
+  │       Files: co_cli/tools/web.py, co_cli/tools/memory.py,
   │              co_cli/tools/shell.py
-  ├── 1c. Improve compaction prompt: anti-injection + first-person + handoff (§8.2)
+  │       Impl: web_search→web_fetch hint, web_fetch→curl fallback hint,
+  │              save_memory→recall_memory hint, recall_memory proactive hint,
+  │              shell→prefer-dedicated-tools hints
+  ├── 1c. [DONE] Improve compaction prompt: anti-injection + first-person + handoff (§8.2)
   │       Note: first-person framing is ROADMAP Phase D scope, pulled forward here
   │       because all three compaction prompt improvements are a single string edit.
   │       File: co_cli/_history.py (_SUMMARIZE_PROMPT + _SUMMARIZER_SYSTEM_PROMPT)
-  ├── 1d. Abort marker in history (§6.3) — ~5 lines
+  │       Impl: _SUMMARIZE_PROMPT has first-person ("I asked you...") + handoff framing,
+  │              _SUMMARIZER_SYSTEM_PROMPT has anti-injection security rule
+  ├── 1d. [DONE] Abort marker in history (§6.3) — ~5 lines
   │       File: co_cli/_orchestrate.py (KeyboardInterrupt handler)
-  ├── 1e. inject_opening_context processor + memory linking (§16 item 1, §14.1)
+  │       Impl: Injects UserPromptPart abort marker on interrupt (lines 604-624)
+  ├── 1e. [DONE] inject_opening_context processor + memory linking (§16 item 1, §14.1)
   │       Two related memory improvements bundled together:
   │       (a) inject_opening_context processor (~40 lines): structurally enforces
   │           memory recall at conversation start and on mid-session topic shifts.
@@ -1203,6 +1212,10 @@ Phase 1: Prompt Foundation (1-2 days)  [ALWAYS DO]
   │       continuity) and the test gate result is meaningless without it.
   │       Files: co_cli/_history.py (new processor), co_cli/tools/memory.py
   │              (related field + one-hop traversal), co_cli/agent.py (register)
+  │       Impl: inject_opening_context processor with keyword overlap topic-shift
+  │              detection (threshold 0.3), debounce (1 per 5 requests), stopword
+  │              filtering. Memory linking via `related` frontmatter field + one-hop
+  │              traversal in recall_memory (capped at 5 related items).
   └── TEST GATE: 5 research prompts across 2 models
       Pass criterion: 80%+ complete full tool chains
       (Tests prompt changes + structural memory recall together.
@@ -1211,33 +1224,45 @@ Phase 1: Prompt Foundation (1-2 days)  [ALWAYS DO]
       → Pass (≥80%): Phase 3 deferred. Proceed to Phase 2 + 4.
       → Fail (<80%): Proceed to Phase 3 after Phase 2.
 
-Phase 2: Safety + Loop Returns (1-2 days)  [ALWAYS DO]
-  ├── 2a. Doom loop detection (§5.2) — ~30 lines
+Phase 2: Safety + Loop Returns (1-2 days)  [DONE]
+  ├── 2a. [DONE] Doom loop detection (§5.2) — ~30 lines
   │       New history processor: hash consecutive ToolCallParts, inject system
   │       message after 3 identical. Processor-local state, reset per turn.
   │       Files: co_cli/_history.py (new processor), co_cli/agent.py (register)
-  ├── 2b. Typed loop return values (§4.2) — ~20 lines
+  │       Impl: detect_safety_issues() processor with MD5 hash of
+  │              tool_name:args_dict. SafetyState dataclass reset per turn.
+  │              Registered as 3rd processor in agent.py.
+  ├── 2b. [DONE] Typed loop return values (§4.2) — ~20 lines
   │       run_turn() returns TurnOutcome; chat loop pattern-matches.
   │       Files: co_cli/_orchestrate.py (return type), co_cli/main.py (match)
-  ├── 2c. Turn limit: increase default from 25 to 50, add grace turn
+  │       Impl: TurnOutcome = Literal["continue", "stop", "error", "compact"],
+  │              TurnResult dataclass with outcome field, main.py matches on it.
+  ├── 2c. [DONE] Turn limit: increase default from 25 to 50, add grace turn
   │       (Turn limit already exists: max_request_limit via UsageLimits.
   │        Increase default, add grace turn on UsageLimitExceeded: inject
   │        "Turn limit reached. Summarize progress." + one more call with
   │        request_limit=1. Verify shared budget caps approval re-entries.)
   │       Files: co_cli/config.py (default), co_cli/_orchestrate.py (grace turn)
-  ├── 2d. Auto-trigger compaction threshold (§8.1 Layer 2) — ~20 lines
+  │       Impl: max_request_limit=50 in config.py. Grace turn catches
+  │              UsageLimitExceeded, injects summary request, runs one more
+  │              call with request_limit=1.
+  ├── 2d. [DONE] Auto-trigger compaction threshold (§8.1 Layer 2) — ~20 lines
   │       Upgrade truncate_history_window to trigger on token count (85% of
   │       usable_input_tokens) instead of message count only. Pairs with
   │       TurnOutcome — prevents silent context loss in long sessions.
   │       File: co_cli/_history.py (truncate_history_window threshold logic)
-  ├── 2e. New Settings fields: doom_loop_threshold (3), max_turns_per_prompt (50)
+  │       Impl: _estimate_message_tokens() + 85% of _DEFAULT_TOKEN_BUDGET
+  │              threshold. Triggers on either message count or token estimate.
+  ├── 2e. [DONE] New Settings fields: doom_loop_threshold (3), max_turns_per_prompt (50)
   │       File: co_cli/config.py
+  │       Impl: doom_loop_threshold: int = Field(default=3, ge=2, le=10),
+  │              max_reflections: int = Field(default=3, ge=1, le=10)
   └── TEST GATE: safety mechanisms trigger correctly in synthetic scenarios
       - Doom loop injects system message after 3 identical tool calls
       - Grace turn fires on UsageLimitExceeded
       - Auto-compaction triggers at token threshold
 
-Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80%]
+Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80% — NOT STARTED, gated on test]
   ├── Research sub-agent with structured output_type (§7.3)
   ├── Analysis sub-agent with structured output_type (§7.8)
   ├── deep_research + deep_analysis delegation tools on co (§7.3, §7.8)
@@ -1252,8 +1277,8 @@ Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80%]
       If multi-delegation fails despite continuation signals (§7.7):
         Add planning sub-agent as Phase 3 extension (not Phase 5)
 
-Phase 4: Resilience (1-2 days)  [ALWAYS DO]
-  ├── 4a. Shell reflection loop (§5.3) — ~40 lines
+Phase 4: Resilience (1-2 days)  [DONE]
+  ├── 4a. [DONE] Shell reflection loop (§5.3) — ~40 lines
   │       Cap consecutive shell errors at 3 via safety history processor.
   │       Extends doom loop processor (Phase 2a) with error counting.
   │       ROADMAP alignment: ROADMAP places this in Phase A; kept here in
@@ -1262,23 +1287,34 @@ Phase 4: Resilience (1-2 days)  [ALWAYS DO]
   │       is fully delivered by TODO Phases 1 + 2 + 4 combined.
   │       Files: co_cli/_history.py (extend safety processor),
   │              co_cli/config.py (max_reflections setting)
-  ├── 4b. Instruction file (one file, §9.2) — ~5 lines
+  │       Impl: Shell error counting in detect_safety_issues() processor.
+  │              Counts consecutive ToolReturnParts with error=True for
+  │              run_shell_command. Injects "try a different approach" message
+  │              after max_reflections (default 3) consecutive errors.
+  ├── 4b. [DONE] Instruction file (one file, §9.2) — ~5 lines
   │       Note: not in ROADMAP Phase A-K; added here as a natural fit with
   │       the @agent.system_prompt decorator pattern established in Phase 1a.
   │       File: co_cli/agent.py (new @agent.system_prompt decorator)
-  ├── 4c. LLM call retry with backoff (§6.1) — ~30 lines
+  │       Impl: add_project_instructions() loads .co-cli/instructions.md
+  │              via @agent.system_prompt decorator. No-op if file absent.
+  ├── 4c. [DONE] LLM call retry with backoff (§6.1) — ~30 lines
   │       Wrap LLM streaming call in retry loop (max 3 attempts).
   │       Parse Retry-After headers, display countdown, abortable sleep.
   │       Web-layer retry already exists (_http_retry.py); this is LLM-layer.
   │       File: co_cli/_orchestrate.py (around agent.run_stream_events)
-  ├── 4d. Finish reason detection (§6.2) — ~15 lines
+  │       Impl: Catches ModelHTTPError, classifies via classify_provider_error(),
+  │              backoff with exponential delay (capped at 30s), status display.
+  │              Also handles ModelAPIError for network/timeout retries.
+  ├── 4d. [DONE] Finish reason detection (§6.2) — ~15 lines
   │       After streaming completes, detect truncation (output token limit hit).
   │       Display: "Response was truncated. Use /continue to extend."
   │       File: co_cli/_orchestrate.py (post-stream check)
+  │       Impl: Heuristic: output_tokens >= 95% of max_tokens → truncation
+  │              warning with /continue guidance.
   └── TEST GATE: reflection fixes a failing test command + retry
       survives a simulated 429 response
 
-Phase 5: Polish  [AS NEEDED]
+Phase 5: Polish  [AS NEEDED — NOT STARTED]
   ├── 5a. Expand model quirk database (§12.1)
   ├── 5b. Background compaction (§8.1 Layer 3)
   ├── 5c. Confidence-scored tool outputs (§15) — if needed
@@ -1292,14 +1328,13 @@ Phase 5: Polish  [AS NEEDED]
 ### 21. Dependencies
 
 ```
-Phase 1 has no dependencies — prompt foundation + memory recall + memory linking + abort marker
-Phase 2 has no dependencies — safety + typed returns + auto-compaction are independent of prompt content
-Phase 3 depends on Phase 1 results (conditional: only if Phase 1 < 80%)
-Phase 4 depends on Phase 2a (shell reflection extends doom loop processor)
-Phase 5 is independent (can run anytime after Phase 1)
+Phase 1 [DONE] — prompt foundation + memory recall + memory linking + abort marker
+Phase 2 [DONE] — safety + typed returns + auto-compaction
+Phase 3 depends on Phase 1 test gate results (conditional: only if Phase 1 < 80%)
+Phase 4 [DONE] — resilience (shell reflection, instruction file, LLM retry, finish reason)
+Phase 5 is independent (can run anytime)
 
-ROADMAP Phase A delivery: Phases 1 + 2 + 4 combined deliver all ROADMAP Phase A items.
-Phases 1 and 2 can run in parallel (no dependencies). Phase 4 follows Phase 2.
+ROADMAP Phase A delivery: Phases 1 + 2 + 4 combined deliver all ROADMAP Phase A items. [DONE]
 ```
 
 ### 22. Success Criteria
@@ -1307,41 +1342,41 @@ Phases 1 and 2 can run in parallel (no dependencies). Phase 4 follows Phase 2.
 Every criterion traces to a delivering phase. Criteria marked [conditional] only apply if Phase 3 ships.
 
 ```
-FUNCTIONAL:                                                          PHASE
-  - Multi-step research tasks complete full tool chains               P1 test gate
-  - Doom loop detection catches 3+ identical tool calls               P2a
-  - Turn limit prevents runaway execution (grace turn fires)          P2c
-  - run_turn() returns typed TurnOutcome to chat loop                 P2b
-  - Auto-compaction triggers at token threshold                       P2d
-  - Compaction produces actionable handoff summaries                  P1c
-  - Sub-agent delegation prevents premature exit [conditional]        P3
-  - Shallow Inquiry tasks work without delegation overhead            P1a (rules)
-  - Deep Inquiry tasks delegate but don't persist state [conditional] P3
-  - Multi-delegation sequences complete [conditional]                 P3
-  - Memory linking surfaces related memories via one-hop traversal    P1e
-  - Mid-session topic shifts trigger fresh memory recall              P1e
-  - Shell errors self-correct up to 3 times                           P4a
-  - LLM retries with backoff on 429/503/529                           P4c
-  - Truncated responses detected with /continue guidance              P4d
+FUNCTIONAL:                                                          PHASE    STATUS
+  - Multi-step research tasks complete full tool chains               P1       [DONE]
+  - Doom loop detection catches 3+ identical tool calls               P2a      [DONE]
+  - Turn limit prevents runaway execution (grace turn fires)          P2c      [DONE]
+  - run_turn() returns typed TurnOutcome to chat loop                 P2b      [DONE]
+  - Auto-compaction triggers at token threshold                       P2d      [DONE]
+  - Compaction produces actionable handoff summaries                  P1c      [DONE]
+  - Sub-agent delegation prevents premature exit [conditional]        P3       [NOT STARTED]
+  - Shallow Inquiry tasks work without delegation overhead            P1a      [DONE]
+  - Deep Inquiry tasks delegate but don't persist state [conditional] P3       [NOT STARTED]
+  - Multi-delegation sequences complete [conditional]                 P3       [NOT STARTED]
+  - Memory linking surfaces related memories via one-hop traversal    P1e      [DONE]
+  - Mid-session topic shifts trigger fresh memory recall              P1e      [DONE]
+  - Shell errors self-correct up to 3 times                           P4a      [DONE]
+  - LLM retries with backoff on 429/503/529                           P4c      [DONE]
+  - Truncated responses detected with /continue guidance              P4d      [DONE]
 
-BEHAVIORAL:                                                          PHASE
-  - co remembers user context across sessions                         P1e (structural)
-  - co adapts tone via personality system                             Existing (MVP)
-  - co asks about preferences, discovers facts autonomously           P1a (Rule 03)
-  - co provides preamble messages during multi-tool sequences         P1a (Rule 04)
-  - co corrects user assumptions respectfully                         P1a (Rule 01)
+BEHAVIORAL:                                                          PHASE    STATUS
+  - co remembers user context across sessions                         P1e      [DONE]
+  - co adapts tone via personality system                             Existing [DONE]
+  - co asks about preferences, discovers facts autonomously           P1a      [DONE]
+  - co provides preamble messages during multi-tool sequences         P1a      [DONE]
+  - co corrects user assumptions respectfully                         P1a      [DONE]
 
-PERFORMANCE:                                                         PHASE
-  - < 100ms overhead from prompt assembly                             P1a (by design)
-  - Sub-agent delegation adds zero overhead to non-delegated turns    P3 (by design)
-  - Turn limit + doom loop add zero latency to normal operation       P2 (by design)
-  - Compaction runs in < 5s (background target: hidden behind user idle)
+PERFORMANCE:                                                         PHASE    STATUS
+  - < 100ms overhead from prompt assembly                             P1a      [DONE]
+  - Sub-agent delegation adds zero overhead to non-delegated turns    P3       [NOT STARTED]
+  - Turn limit + doom loop add zero latency to normal operation       P2       [DONE]
+  - Compaction runs in < 5s (background target: hidden behind user idle)       [NOT STARTED]
 
-SAFETY:                                                              PHASE
-  - No prompt injection via compaction                                P1c
-  - No capability hallucination (conditional composition)             P1a
-  - No infinite loops (doom detection + turn limit)                   P2a + P2c
-  - Side effects always gated by approval                             Existing
+SAFETY:                                                              PHASE    STATUS
+  - No prompt injection via compaction                                P1c      [DONE]
+  - No capability hallucination (conditional composition)             P1a      [DONE]
+  - No infinite loops (doom detection + turn limit)                   P2a+P2c  [DONE]
+  - Side effects always gated by approval                             Existing [DONE]
 ```
 
 ---
@@ -1506,6 +1541,6 @@ Items from `TAKEAWAY-converged-adoptions.md` deliberately excluded, with rationa
 ---
 
 **Design completed**: 2026-02-13, **revised**: 2026-02-14 (super-agent + sub-agents; model inheritance, memory recall enforcement, budget arithmetic, multi-delegation sequencing, token verification, processor-layer alignment, knowledge linking, three-way intent classification, analysis sub-agent, mid-session recall, typed loop return values, TAKEAWAY accounting fix), **impl-ready revision**: 2026-02-14 (closed 7 design orphans, added ROADMAP alignment notes, existing-impl inventory, all §22 criteria traced to phases)
+**Implementation audit**: 2026-02-14 — Phases 1, 2, 4 fully implemented. 12/15 functional criteria done, 5/5 behavioral done, 2/4 performance done, 4/4 safety done. Remaining: Phase 3 (sub-agents, conditional on test gate), Phase 5 (polish).
 **Peer systems referenced**: Codex, Claude Code, OpenCode, Gemini CLI, Aider
-**Estimated total effort**: 4-7 days (conditional gating; 1-2 days if Phase 1 passes)
-**Critical path**: Phase 1 (prompt foundation) — if it passes at 80%+, sub-agent delegation is deferred
+**Critical path**: Phase 1 test gate — if it passes at 80%+, sub-agent delegation (Phase 3) is deferred

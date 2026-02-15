@@ -31,7 +31,6 @@ graph TB
         ToolDrive[Drive Tool]
         ToolGmail[Gmail Tool]
         ToolCalendar[Calendar Tool]
-        ToolSlack[Slack Tool]
         ToolWeb[Web Tools]
         MCP[MCP Toolsets]
     end
@@ -39,7 +38,6 @@ graph TB
     subgraph External Services
         ObsVault[Obsidian Vault]
         GDrive[Google Drive API]
-        SlackAPI[Slack API]
         GmailAPI[Gmail API]
         GCal[Calendar API]
         BraveAPI[Brave Search API]
@@ -64,14 +62,12 @@ graph TB
     Agent --> ToolDrive
     Agent --> ToolGmail
     Agent --> ToolCalendar
-    Agent --> ToolSlack
     Agent --> ToolWeb
 
     ToolObsidian --> ObsVault
     ToolDrive --> GDrive
     ToolGmail --> GmailAPI
     ToolCalendar --> GCal
-    ToolSlack --> SlackAPI
     ToolWeb --> BraveAPI
     ToolWeb --> HTTP
     MCP --> MCPServers
@@ -96,7 +92,6 @@ graph TB
 | Shell Tool | [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md) | Approval-gated subprocess, safe-prefix auto-approval |
 | Obsidian Tool | [DESIGN-10-tool-obsidian.md](DESIGN-10-tool-obsidian.md) | Vault search, path traversal protection |
 | Google Tools | [DESIGN-11-tool-google.md](DESIGN-11-tool-google.md) | Drive, Gmail, Calendar — lazy auth, structured output |
-| Slack Tool | [DESIGN-12-tool-slack.md](DESIGN-12-tool-slack.md) | Channel/message/user tools, send with approval |
 | Web Tools | [DESIGN-13-tool-web-search.md](DESIGN-13-tool-web-search.md) | Brave Search + URL fetch, read-only |
 | MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
 
@@ -136,15 +131,12 @@ Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` r
 | `list_notes` | `dict` | Yes | `count` |
 | `read_note` | `str` | No | — |
 | `run_shell_command` | `str` | No | — |
-| `send_slack_message` | `dict` | Yes | `channel`, `ts` |
-| `list_slack_channels` / `list_slack_messages` | `dict` | Yes | `count`, `has_more` |
-| `list_slack_replies` / `list_slack_users` | `dict` | Yes | `count`, `has_more` |
 | `web_search` | `dict` | Yes | `results`, `count` |
 | `web_fetch` | `dict` | Yes | `url`, `content_type`, `truncated` |
 
 **Naming convention:** `verb_noun` with converged verb set: `read`, `list`, `search`, `create`, `send`, `run`. `web_search` and `web_fetch` use `web_` prefix to namespace web tools.
 
-**Error classification:** Tool errors are classified into `ToolErrorKind` (TERMINAL, TRANSIENT, MISUSE) via `classify_google_error()` / `_classify_slack_error()` and dispatched through `handle_tool_error()`. TERMINAL returns `{"display": ..., "error": True}` (model picks alternative). TRANSIENT/MISUSE raise `ModelRetry` (model self-corrects). See `tools/_errors.py`.
+**Error classification:** Tool errors are classified into `ToolErrorKind` (TERMINAL, TRANSIENT, MISUSE) via `classify_google_error()` and dispatched through `handle_tool_error()`. TERMINAL returns `{"display": ..., "error": True}` (model picks alternative). TRANSIENT/MISUSE raise `ModelRetry` (model self-corrects). See `tools/_errors.py`.
 
 **ModelRetry convention:** `ModelRetry` = "you called this wrong, fix your parameters" (LLM can self-correct). Empty result = "query was fine, nothing matched" (return `{"count": 0}`). **Terminal config errors** (missing credentials, API not enabled) use `terminal_error()` which returns `{"display": "...", "error": True}` instead of `ModelRetry` — this stops the retry loop and lets the model route to an alternative tool.
 
@@ -162,7 +154,6 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 |------|----------|-----------|
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
-| `send_slack_message` | Yes | Sends message visible to others |
 | MCP tools (approval=auto) | Yes | External tools default to requiring approval |
 | MCP tools (approval=never) | No | Explicitly trusted by user config |
 | All other native tools | No | Read-only operations |
@@ -172,9 +163,9 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 Four defense layers:
 
 1. **Configuration** — Secrets in `settings.json` or env vars, no hardcoded keys, env vars override file values
-2. **Confirmation** — Human-in-the-loop approval for shell commands, Slack messages, email drafts (see approval flow above)
+2. **Confirmation** — Human-in-the-loop approval for shell commands and email drafts (see approval flow above)
 3. **Environment sanitization** — Allowlist-only env vars, forced safe pagers, process-group cleanup on timeout (see [DESIGN-09-tool-shell.md](DESIGN-09-tool-shell.md))
-4. **Input validation** — Path traversal protection in Obsidian tools, API scoping in Google/Slack tools
+4. **Input validation** — Path traversal protection in Obsidian tools, API scoping in Google tools
 
 ### Concurrency
 
@@ -226,7 +217,6 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
-| `tools/slack.py` | `send_slack_message`, `list_slack_channels`, `list_slack_messages`, `list_slack_replies`, `list_slack_users` |
 | `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
 | `scripts/eval_tool_calling.py` | Eval framework — golden case scoring, model tagging, multi-baseline comparison |
 
@@ -244,7 +234,6 @@ Functional tests only — no mocks or stubs. Tests must interact with real servi
 | `google-api-python-client` | ^2.189.0 | Drive/Gmail/Calendar |
 | `google-auth-httplib2` | ^0.3.0 | Google auth transport adapter |
 | `google-auth-oauthlib` | ^1.2.4 | OAuth2 |
-| `slack-sdk` | ^3.39.0 | Slack API |
 | `opentelemetry-sdk` | ^1.39.1 | Tracing |
 | `httpx` | ^0.28.1 | HTTP client (web tools) |
 | `html2text` | ^2025.4.15 | HTML→markdown conversion (web_fetch) |

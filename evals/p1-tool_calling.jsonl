@@ -1,0 +1,19 @@
+{"id": "p1-sel-memory-recall", "dim": "tool_selection", "prompt": "What preferences have I saved about testing frameworks?", "expect_tool": "recall_memory", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-memory-save", "dim": "tool_selection", "prompt": "Remember that I prefer dark mode in all my editors.", "expect_tool": "save_memory", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-shell", "dim": "tool_selection", "prompt": "Show me the disk usage of the current directory.", "expect_tool": "run_shell_command", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-web-search", "dim": "tool_selection", "prompt": "Search the web for Python 3.13 new features.", "expect_tool": "web_search", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-web-fetch", "dim": "tool_selection", "prompt": "Fetch and summarize the content at https://example.com", "expect_tool": "web_fetch", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-calendar", "dim": "tool_selection", "prompt": "What meetings do I have scheduled for today?", "expect_tool": "list_calendar_events", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-email", "dim": "tool_selection", "prompt": "Find my recent emails about the quarterly report.", "expect_tool": "search_emails", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-notes", "dim": "tool_selection", "prompt": "Search my notes for anything about Kubernetes deployment.", "expect_tool": "search_notes", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-drive", "dim": "tool_selection", "prompt": "Find documents in my Google Drive about the API design spec.", "expect_tool": "search_drive_files", "expect_args": null, "arg_match": null}
+{"id": "p1-sel-personality", "dim": "tool_selection", "prompt": "Load your personality configuration.", "expect_tool": "load_personality", "expect_args": null, "arg_match": null}
+{"id": "p1-arg-recall", "dim": "arg_extraction", "prompt": "Do I have any memories about database preferences?", "expect_tool": "recall_memory", "expect_args": {"query": "database preferences"}, "arg_match": "subset"}
+{"id": "p1-arg-shell", "dim": "arg_extraction", "prompt": "Run git status to see what files have changed.", "expect_tool": "run_shell_command", "expect_args": {"cmd": "git status"}, "arg_match": "subset"}
+{"id": "p1-arg-web-search", "dim": "arg_extraction", "prompt": "Search the web for FastAPI authentication tutorial.", "expect_tool": "web_search", "expect_args": {"query": "FastAPI authentication tutorial"}, "arg_match": "subset"}
+{"id": "p1-arg-email", "dim": "arg_extraction", "prompt": "Search my emails for messages from Alice about budget.", "expect_tool": "search_emails", "expect_args": {"query": "from:Alice budget"}, "arg_match": "subset"}
+{"id": "p1-ref-math", "dim": "refusal", "prompt": "What is 17 times 23?", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-ref-explain", "dim": "refusal", "prompt": "Explain the difference between TCP and UDP.", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-ref-greeting", "dim": "refusal", "prompt": "Hello, how are you today?", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-rec-notes", "dim": "error_recovery", "prompt": "Search my Obsidian notes for meeting minutes from last week.", "expect_tool": "search_notes", "expect_args": null, "arg_match": null}
+{"id": "p1-rec-drive", "dim": "error_recovery", "prompt": "Find the project roadmap document in my Google Drive.", "expect_tool": "search_drive_files", "expect_args": null, "arg_match": null}

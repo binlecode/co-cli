@@ -16,12 +16,12 @@ _DEFAULT_SAFE_COMMANDS: list[str] = [
     # Search
     "grep", "rg", "ag",
     # Text processing (read-only)
-    "wc", "sort", "uniq", "cut", "jq",
+    "wc", "sort", "uniq", "cut", "tr", "jq",
     # Output
     "echo", "printf",
     # System info
     "pwd", "whoami", "hostname", "uname", "date",
-    "env", "which", "file", "id", "du", "df",
+    "env", "which", "file", "stat", "id", "du", "df",
     # Git read-only (prefix match: "git status", "git diff", etc.)
     "git status", "git diff", "git log", "git show",
     "git branch", "git tag", "git blame",
@@ -162,7 +162,7 @@ class Settings(BaseModel):
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
-    llm_provider: str = Field(default="gemini")
+    llm_provider: str = Field(default="ollama")
     ollama_host: str = Field(default="http://localhost:11434")
     # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
     # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST

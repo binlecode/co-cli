@@ -509,30 +509,34 @@ async def save_memory(
     tags: list[str] | None = None,
     related: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Save a memory for cross-session persistence.
+    """Save a memory for cross-session persistence. Duplicates are
+    auto-detected and consolidated — safe to call without checking first.
 
-    Save user preferences, personal facts, or cross-session knowledge.
-    Also call after researching something the user asked about — persist
-    findings without being asked. Never save workspace paths or transient
-    errors. Before saving, call recall_memory to check for related memories.
-    If related memories exist, include their slugs in the related field.
+    When to save:
+    - User preferences: "User prefers dark mode", "User prefers pytest"
+    - Corrections: "Project uses Poetry, not pip"
+    - Decisions: "Team chose PostgreSQL over MySQL for the new service"
+    - Research findings: persist results after investigating something
+
+    Do NOT save: workspace paths, transient errors, or session-only context.
+
+    Before saving, call recall_memory to find related memories. If found,
+    include their slugs in the related field for knowledge linking.
 
     Write content in third person: "User prefers pytest over unittest",
-    not "I prefer pytest". This keeps memories unambiguous when recalled later.
+    not "I prefer pytest". Keeps memories unambiguous when recalled later.
+
+    Returns a dict with:
+    - display: confirmation message — show directly to the user
+    - memory_id: assigned ID
+    - action: "saved" (new) or "consolidated" (merged with existing duplicate)
 
     Args:
-        ctx: Agent runtime context
-        content: Memory content in third person (markdown, < 500 chars recommended)
-        tags: Optional tags for categorization. Use signal type as first tag:
-              ["preference", ...], ["correction", ...], ["decision", ...], etc.
-        related: Optional list of related memory slugs for knowledge linking.
-
-    Returns:
-        dict with keys:
-            - display: Pre-formatted string for user
-            - path: File path where memory was saved
-            - memory_id: Assigned memory ID
-            - action: "saved" or "consolidated" (indicates if dedup occurred)
+        content: Memory text in third person (markdown, < 500 chars recommended).
+        tags: Categorization tags. Use signal type as first tag:
+              ["preference", ...], ["correction", ...], ["decision", ...].
+        related: Slugs of related memories for knowledge linking
+                 (e.g. ["003-user-prefers-pytest"]).
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -630,20 +634,35 @@ async def recall_memory(
     query: str,
     max_results: int = 5,
 ) -> dict[str, Any]:
-    """Search memories by query. Call proactively at conversation start to
-    load context relevant to the user's topic. Results include one-hop
-    related memories — connected knowledge surfaces automatically.
+    """Search the internal memory system by keyword. Memories hold cross-session
+    knowledge: preferences, decisions, corrections, and research findings.
+    Call proactively at conversation start to load context relevant to the
+    user's topic. Results include one-hop related memories — connected
+    knowledge surfaces automatically.
+
+    For personal notes in the Obsidian vault, use search_notes instead.
+    For cloud documents, use search_drive_files.
+
+    Matches against memory content and tags (case-insensitive substring).
+    Results are sorted by recency (most recently updated first).
+
+    Call before save_memory to check for existing knowledge and avoid
+    duplicates. Also call at the start of a new topic to load relevant
+    context from prior conversations.
+
+    Use short keyword queries for best results ("python", "database preference").
+    Long phrases may miss matches — the search is substring-based, not semantic.
+    If no results are returned, try broader or alternative keywords.
+
+    Returns a dict with:
+    - display: formatted memory list — show directly to the user
+    - count: number of memories found (including related hops)
+    - results: list of {id, content, tags, created} dicts
 
     Args:
-        ctx: Agent runtime context
-        query: Search query string (keywords like "python testing" or "database")
-        max_results: Maximum number of results to return (default 5)
-
-    Returns:
-        dict with keys:
-            - display: Pre-formatted markdown string for user
-            - count: Number of results found
-            - results: List of matching memory dicts with id, content, tags, created
+        query: Keywords to search (e.g. "python testing", "database", "preference").
+        max_results: Max direct matches to return (default 5). Related memories
+                     are appended beyond this limit.
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memories = _load_all_memories(memory_dir)
@@ -748,21 +767,34 @@ async def recall_memory(
 
 async def list_memories(
     ctx: RunContext[CoDeps],
+    offset: int = 0,
+    limit: int = 20,
 ) -> dict[str, Any]:
-    """List all memories with IDs and metadata.
+    """List saved memories with IDs, dates, tags, and one-line summaries.
+    Returns one page at a time (default 20 per page).
 
-    Returns all memories sorted by ID with first line as summary.
-    Shows consolidation indicators and memory limit status.
+    Memories are cross-session knowledge: preferences, decisions, corrections,
+    and research findings. For targeted lookup by keyword, use recall_memory.
+    For personal notes, use list_notes. For cloud documents, use
+    search_drive_files.
+
+    Use this for a full inventory or capacity check. Keep paginating until
+    has_more is false when you need a complete listing.
+
+    Returns a dict with:
+    - display: formatted memory inventory — show directly to the user
+    - count: number of memories in this page
+    - total: total number of memories across all pages
+    - offset: starting position of this page
+    - limit: page size requested
+    - has_more: true if more pages exist beyond this one
+    - capacity: configured memory capacity limit
+    - memories: list of summary dicts with id, created, tags, summary
 
     Args:
-        ctx: Agent runtime context
-
-    Returns:
-        dict with keys:
-            - display: Pre-formatted markdown string for user
-            - count: Total number of memories
-            - limit: Memory limit from settings
-            - memories: List of memory summary dicts
+        offset: Starting position (0-based). Example: offset=20 skips the
+                first 20 memories.
+        limit: Max memories per page (default 20).
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     memories = _load_all_memories(memory_dir)
@@ -773,16 +805,24 @@ async def list_memories(
         return {
             "display": msg,
             "count": 0,
-            "limit": ctx.deps.memory_max_count,
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+            "capacity": ctx.deps.memory_max_count,
             "memories": [],
         }
 
     # Sort by ID
     memories.sort(key=lambda m: m.id)
+    total = len(memories)
+
+    # Paginate
+    page = memories[offset:offset + limit]
 
     # Build summary dicts
     memory_dicts: list[dict[str, Any]] = []
-    for m in memories:
+    for m in page:
         body_lines = m.content.split("\n")
         summary = body_lines[0] if body_lines else "(empty)"
         if len(summary) > 80:
@@ -800,8 +840,10 @@ async def list_memories(
             }
         )
 
+    has_more = offset + limit < total
+
     # Format as markdown list with lifecycle indicators
-    lines = [f"Total memories: {len(memories)}/{ctx.deps.memory_max_count}\n"]
+    lines = [f"Total memories: {total}/{ctx.deps.memory_max_count}\n"]
 
     for md in memory_dicts:
         # Format dates
@@ -825,9 +867,19 @@ async def list_memories(
             f": {md['summary']}"
         )
 
+    if has_more:
+        lines.append(
+            f"\nShowing {offset + 1}\u2013{offset + len(page)} of {total}. "
+            f"More available \u2014 call with offset={offset + limit}."
+        )
+
     return {
         "display": "\n".join(lines),
-        "count": len(memories),
-        "limit": ctx.deps.memory_max_count,
+        "count": len(page),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
+        "capacity": ctx.deps.memory_max_count,
         "memories": memory_dicts,
     }

@@ -5,8 +5,8 @@ and scores them against expected values. Supports majority-vote scoring,
 absolute/relative gates, model tagging, and multi-baseline comparison.
 
 Prerequisites:
-  - LLM provider configured (gemini_api_key or ollama running)
-  - Set LLM_PROVIDER env var if not using the default (gemini)
+  - LLM provider configured (ollama running, or gemini_api_key set)
+  - Set LLM_PROVIDER env var if not using the default (ollama)
 
 Usage:
     uv run python scripts/eval_tool_calling.py
@@ -735,7 +735,7 @@ async def run_eval(args: argparse.Namespace) -> int:
     model_tag = args.model_tag or detect_model_tag()
 
     # Load cases
-    jsonl_path = Path(__file__).parent.parent / "evals" / "tool_calling.jsonl"
+    jsonl_path = Path(args.cases)
     cases = load_cases(jsonl_path)
     print(f"Loaded {len(cases)} eval cases from {jsonl_path}")
     print(f"Model: {model_tag}\n")
@@ -844,12 +844,16 @@ async def run_eval(args: argparse.Namespace) -> int:
         _print_model_comparison(stats, model_tag, baselines)
 
     # Auto-save markdown report + JSON data
+    # Derive output filenames from the cases filename stem
     print()
-    save_path = Path(args.save) if args.save else None
+    cases_stem = jsonl_path.stem  # e.g. "p1-tool_calling"
+    save_path = Path(args.save) if args.save else _OUTPUT_DIR / f"{cases_stem}-data.json"
+    report_path = _OUTPUT_DIR / f"{cases_stem}-result.md"
     json_path = save_data_json(results, stats, args, model_tag, path=save_path)
     md_path = save_result_md(
         results, stats, args, exit_code, elapsed, model_tag,
         baselines=baselines,
+        path=report_path,
     )
     print(f"Report saved to {md_path}")
     print(f"Data saved to   {json_path}")
@@ -898,6 +902,11 @@ def _print_model_comparison(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Eval framework for tool-calling quality"
+    )
+    parser.add_argument(
+        "--cases", type=str,
+        default=str(Path(__file__).parent.parent / "evals" / "tool_calling.jsonl"),
+        help="Path to eval cases JSONL (default: evals/tool_calling.jsonl)",
     )
     parser.add_argument(
         "--runs", type=int, default=3,

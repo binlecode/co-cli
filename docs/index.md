@@ -26,5 +26,4 @@ Start with the [System Design](DESIGN-00-co-cli.md) overview, then explore compo
 - [09 — Shell Tool](DESIGN-09-tool-shell.md) — Approval-gated subprocess, safe-command auto-approval
 - [10 — Obsidian Vault Tools](DESIGN-10-tool-obsidian.md) — Vault search, path traversal protection
 - [11 — Google Tools](DESIGN-11-tool-google.md) — Drive, Gmail, Calendar
-- [12 — Slack Tool](DESIGN-12-tool-slack.md) — Channel/message/user tools
 - [13 — Web Tools](DESIGN-13-tool-web-search.md) — Brave Search + URL fetch

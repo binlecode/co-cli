@@ -60,17 +60,35 @@ def search_notes(
     folder: str | None = None,
     tag: str | None = None,
 ) -> dict[str, Any]:
-    """Search note contents for keywords.
+    """Search Obsidian vault notes by keyword. All keywords must match
+    (AND logic, whole words, case-insensitive). Returns matching filenames
+    with text snippets around the first match.
+
+    To read the full content of a matched note, pass its filename to read_note.
+
+    Narrow results with folder or tag filters when the vault is large or the
+    query is broad.
+
+    This tool searches the user's Obsidian note vault (local markdown files).
+    For stored preferences and decisions, use recall_memory instead. For cloud
+    documents, use search_drive_files.
+
+    Returns a dict with:
+    - display: pre-formatted results with filenames and snippets — show
+      directly to the user
+    - count: number of notes matched
+    - has_more: true if more results exist beyond the limit
+
+    Caveats:
+    - Only searches .md files in the vault
+    - Whole-word matching: "test" will not match "testing" or "tests"
 
     Args:
         query: Space-separated keywords (AND logic, whole words, case-insensitive).
                Example: "project timeline" finds notes containing both words.
-        limit: Maximum results to return (default 10).
-        folder: Optional subfolder to restrict search (e.g. 'Work/' or 'Projects/2026').
-        tag: Optional tag to filter by (e.g. '#project'). Checks YAML frontmatter tags.
-
-    Returns:
-        Dict with ``display`` (pre-formatted), ``count``, and ``has_more``.
+        limit: Max results to return (default 10).
+        folder: Subfolder to restrict search (e.g. "Work/" or "Projects/2026").
+        tag: Tag to filter by (e.g. "#project"). Checks YAML frontmatter tags.
     """
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
@@ -147,14 +165,34 @@ def search_notes(
     }
 
 
-def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> dict[str, Any]:
-    """List all markdown notes in the Obsidian vault.
+def list_notes(
+    ctx: RunContext[CoDeps],
+    tag: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """List markdown note filenames in the Obsidian vault. Returns one page
+    at a time (default 20 per page).
+
+    Use this for a directory overview or to discover note paths before calling
+    read_note. For keyword search within note content, use search_notes
+    instead. For stored preferences and decisions, use list_memories.
+
+    Keep paginating until has_more is false when you need a complete listing.
+
+    Returns a dict with:
+    - display: bullet list of relative file paths — show directly to the user
+    - count: number of notes in this page
+    - total: total number of notes across all pages
+    - offset: starting position of this page
+    - limit: page size requested
+    - has_more: true if more pages exist beyond this one
 
     Args:
-        tag: Optional tag to filter by (e.g. '#project').
-
-    Returns:
-        Dict with ``display`` (pre-formatted) and ``count``.
+        tag: Filter to notes containing this tag (e.g. "#project").
+        offset: Starting position (0-based). Example: offset=20 skips the
+                first 20 notes.
+        limit: Max notes per page (default 20).
     """
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
@@ -182,20 +220,52 @@ def list_notes(ctx: RunContext[CoDeps], tag: str | None = None) -> dict[str, Any
         return {
             "display": f"No notes found{label}.",
             "count": 0,
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
         }
 
-    display = "\n".join(f"- {p}" for p in note_paths)
+    # Stable sort for consistent pagination
+    note_paths.sort()
+    total = len(note_paths)
+
+    # Paginate
+    page = note_paths[offset:offset + limit]
+    has_more = offset + limit < total
+
+    lines = [f"- {p}" for p in page]
+    if has_more:
+        lines.append(
+            f"\nShowing {offset + 1}\u2013{offset + len(page)} of {total}. "
+            f"More available \u2014 call with offset={offset + limit}."
+        )
+
     return {
-        "display": display,
-        "count": len(note_paths),
+        "display": "\n".join(lines),
+        "count": len(page),
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": has_more,
     }
 
 
 def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
-    """Read the content of a specific note from the Obsidian vault.
+    """Read the full markdown content of a note from the Obsidian vault.
+
+    Use filenames from search_notes or list_notes results. Do not guess paths.
+
+    Returns the raw markdown text including any YAML frontmatter.
+
+    Caveats:
+    - Only reads files inside the configured vault directory (path traversal
+      is blocked)
+    - If the note is not found, the error message lists available notes
 
     Args:
-        filename: Relative path to the note (e.g. 'Work/Project X.md').
+        filename: Relative path within the vault (e.g. "Work/Project X.md").
+                  Use exact paths from search_notes or list_notes.
     """
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
