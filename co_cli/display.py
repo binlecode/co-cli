@@ -137,7 +137,7 @@ def prompt_selection(
 
 # -- TerminalFrontend (FrontendProtocol implementation) --------------------
 
-_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]]"
+_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[yellow]a[/yellow]]"
 
 
 class TerminalFrontend:
@@ -216,7 +216,7 @@ class TerminalFrontend:
         signal.signal(signal.SIGINT, signal.default_int_handler)
         try:
             choice = Prompt.ask(
-                "", choices=["y", "n"], default="n",
+                "", choices=["y", "n", "a"], default="n",
                 show_choices=False, show_default=False, console=console,
             )
         finally:

@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from pathlib import Path
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
@@ -136,6 +137,11 @@ def get_agent(
     )
 
     # Conditional system prompt layers — runtime-gated via @agent.system_prompt
+    @agent.system_prompt
+    def add_current_date(ctx: RunContext[CoDeps]) -> str:
+        """Inject the current date so the model can reason about time."""
+        return f"Today is {date.today().isoformat()}."
+
     @agent.system_prompt
     def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
         """Inject shell tool guidance when shell is available."""

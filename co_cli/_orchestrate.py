@@ -375,6 +375,11 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
                 approvals.approvals[call.tool_call_id] = True
                 continue
 
+        # Per-tool session auto-approve: skip prompt if user previously chose "a"
+        if call.tool_name in deps.auto_approved_tools:
+            approvals.approvals[call.tool_call_id] = True
+            continue
+
         if frontend is not None:
             choice = frontend.prompt_approval(desc)
         else:
@@ -383,7 +388,7 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
         if choice in ("y", "a"):
             approvals.approvals[call.tool_call_id] = True
             if choice == "a":
-                deps.auto_confirm = True
+                deps.auto_approved_tools.add(call.tool_name)
         else:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 

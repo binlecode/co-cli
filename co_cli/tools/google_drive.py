@@ -36,14 +36,16 @@ def _handle_drive_error(e: Exception) -> dict[str, Any]:
 
 
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
-    """Search for files in Google Drive. Returns 10 results per page.
+    """Search for files in Google Drive. Returns up to 10 results per page.
+
+    Pagination: When has_more is true, call again with page + 1 to get the
+    next batch. Keep paginating until has_more is false when the task requires
+    complete results (counts, summaries, exhaustive listings).
 
     Returns a dict with:
     - display: pre-formatted results with clickable URLs — show this directly to the user
     - page: current page number
-    - has_more: whether more results are available
-
-    When the user asks for "more" or "next", call search_drive_files with the same query and page + 1.
+    - has_more: whether more results are available (paginate if you need complete data)
 
     Args:
         query: Search keywords or metadata query.

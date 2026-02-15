@@ -19,7 +19,6 @@ uv run pytest --cov=co_cli                   # With coverage
 
 # Demo & Evaluation Scripts
 uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle test
-uv run python scripts/eval_e2e_streaming.py           # Streaming output eval
 uv run python scripts/eval_tool_calling.py            # Tool calling eval
 ```
 

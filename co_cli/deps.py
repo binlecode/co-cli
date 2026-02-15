@@ -27,6 +27,7 @@ class CoDeps:
     shell_safe_commands: list[str] = field(default_factory=list)
 
     # Mutable per-session state
+    auto_approved_tools: set[str] = field(default_factory=set)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
 
     # Shell limits
