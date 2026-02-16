@@ -91,35 +91,39 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
     """Summarize conversation via LLM to reduce context."""
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli._history import summarize_messages
+    from co_cli._history import _run_summarization_with_policy
+    from co_cli.config import settings
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    try:
-        # Use the agent's model for /compact (user-initiated, quality matters)
-        model = ctx.agent.model
-        summary = await summarize_messages(ctx.message_history, model)
+    # Use the agent's model for /compact (user-initiated, quality matters)
+    model = ctx.agent.model
+    summary = await _run_summarization_with_policy(
+        ctx.message_history, model,
+        max_retries=settings.model_http_retries,
+    )
 
-        # Build a minimal 2-message history: summary request + ack response
-        new_history: list[Any] = [
-            ModelRequest(parts=[
-                UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
-            ]),
-            ModelResponse(parts=[
-                _TextPart(content="Understood. I have the conversation context."),
-            ]),
-        ]
-        old_len = len(ctx.message_history)
-        console.print(
-            f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
-        )
-        return new_history
-    except Exception as e:
-        console.print(f"[bold red]Compact failed:[/bold red] {e}")
+    if summary is None:
+        console.print("[bold red]Compact failed:[/bold red] provider error (see logs)")
         return None
+
+    # Build a minimal 2-message history: summary request + ack response
+    new_history: list[Any] = [
+        ModelRequest(parts=[
+            UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
+        ]),
+        ModelResponse(parts=[
+            _TextPart(content="Understood. I have the conversation context."),
+        ]),
+    ]
+    old_len = len(ctx.message_history)
+    console.print(
+        f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
+    )
+    return new_history
 
 
 def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:

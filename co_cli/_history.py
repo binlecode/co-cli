@@ -21,7 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import asyncio
+
 from pydantic_ai import Agent, RunContext
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -194,6 +197,59 @@ async def summarize_messages(
     return result.output
 
 
+async def _run_summarization_with_policy(
+    messages: list[ModelMessage],
+    model: str | Any,
+    *,
+    max_retries: int = 2,
+    personality_active: bool = False,
+) -> str | None:
+    """Run summarization with provider error classification and retry policy.
+
+    Wraps ``summarize_messages()`` with the same error policy used by
+    ``run_turn()`` in the main orchestration loop:
+
+    - 400 (REFLECT) → treated as retryable (no tools to reformulate).
+    - 429/5xx/network (BACKOFF_RETRY) → exponential backoff retry.
+    - 401/403/404 (ABORT) → immediate failure.
+
+    Returns summary text on success, ``None`` on terminal/exhausted failure.
+    Logs classified error details internally so callers can branch on
+    ``None`` without string parsing.
+    """
+    from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
+
+    retries_left = max_retries
+    backoff_base = 1.0
+
+    while True:
+        try:
+            return await summarize_messages(
+                messages, model, personality_active=personality_active,
+            )
+        except (ModelHTTPError, ModelAPIError) as e:
+            action, msg, delay = classify_provider_error(e)
+
+            # REFLECT has no meaning for a tool-less summarizer — treat as
+            # retryable with the same backoff path as 429/5xx.
+            if action in (ProviderErrorAction.REFLECT, ProviderErrorAction.BACKOFF_RETRY):
+                if retries_left > 0:
+                    retries_left -= 1
+                    attempt = max_retries - retries_left
+                    wait = min(delay * (backoff_base ** attempt), 30.0)
+                    log.warning(
+                        "Summarization %s (attempt %d/%d), retrying in %.1fs: %s",
+                        action.value, attempt, max_retries, wait, msg,
+                    )
+                    await asyncio.sleep(wait)
+                    backoff_base *= 1.5
+                    continue
+
+            # ABORT or retries exhausted
+            log.warning("Summarization failed (%s): %s", action.value, msg)
+            return None
+
+
 # ---------------------------------------------------------------------------
 # 3. Sliding-window processor (async — LLM call)
 # ---------------------------------------------------------------------------
@@ -267,15 +323,17 @@ async def truncate_history_window(
     dropped = messages[head_end:tail_start]
     dropped_count = len(dropped)
 
-    # Try LLM summarisation
-    summary_marker: ModelRequest
-    try:
-        # Resolve summarisation model
-        model = ctx.deps.summarization_model or ctx.model
-        summary_text = await summarize_messages(
-            dropped, model,
-            personality_active=bool(ctx.deps.personality),
-        )
+    # Resolve summarisation model and retry budget
+    from co_cli.config import settings as _settings
+
+    model = ctx.deps.summarization_model or ctx.model
+    summary_text = await _run_summarization_with_policy(
+        dropped, model,
+        max_retries=_settings.model_http_retries,
+        personality_active=bool(ctx.deps.personality),
+    )
+
+    if summary_text is not None:
         summary_marker = ModelRequest(parts=[
             UserPromptPart(
                 content=(
@@ -284,11 +342,8 @@ async def truncate_history_window(
             ),
         ])
         log.info("Sliding window: summarised %d messages", dropped_count)
-    except Exception:
-        log.warning(
-            "Sliding window: summarisation failed, using static marker",
-            exc_info=True,
-        )
+    else:
+        log.warning("Sliding window: summarisation failed, using static marker")
         summary_marker = _static_marker(dropped_count)
 
     return messages[:head_end] + [summary_marker] + messages[tail_start:]

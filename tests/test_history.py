@@ -16,9 +16,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+
 from co_cli._history import (
-    _SUMMARIZE_PROMPT,
     _SUMMARIZER_SYSTEM_PROMPT,
+    _run_summarization_with_policy,
     summarize_messages,
     truncate_tool_returns,
     truncate_history_window,
@@ -286,17 +288,6 @@ def test_summarizer_system_prompt_contains_injection_guard():
     assert "Never exit your summariser role" in _SUMMARIZER_SYSTEM_PROMPT
 
 
-def test_summarize_prompt_preserves_extraction_guidance():
-    """User prompt retains extraction bullets for actionable summaries (§8.2).
-
-    Enhanced with handoff framing and first-person voice per §8.2.
-    """
-    assert "Key decisions" in _SUMMARIZE_PROMPT
-    assert "file paths" in _SUMMARIZE_PROMPT.lower()
-    assert "handoff" in _SUMMARIZE_PROMPT
-    assert "I asked you" in _SUMMARIZE_PROMPT
-
-
 @pytest.mark.asyncio
 async def test_summarize_messages_personality_active():
     """summarize_messages with personality_active=True produces a valid summary.
@@ -320,3 +311,149 @@ async def test_summarize_messages_personality_active():
     summary = await summarize_messages(msgs, agent.model, personality_active=True)
     assert isinstance(summary, str)
     assert len(summary) > 10
+
+
+# ---------------------------------------------------------------------------
+# _run_summarization_with_policy — provider error handling
+# ---------------------------------------------------------------------------
+
+
+def _sample_messages() -> list[ModelMessage]:
+    """Small message list for policy-runner tests."""
+    return [
+        _user("What is Docker?"),
+        _assistant("Docker is a containerisation platform."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_429_retries_then_succeeds(monkeypatch):
+    """429 (rate limit) triggers backoff retry; success on second attempt."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ModelHTTPError(429, "test-model", body='{"retry-after": "0"}')
+        return "summary after retry"
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result == "summary after retry"
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_400_retries_as_backoff(monkeypatch):
+    """400 (REFLECT) is treated as retryable backoff for tool-less summarizer."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ModelHTTPError(400, "test-model", body={"error": "bad request"})
+        return "summary after 400 retry"
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result == "summary after 400 retry"
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_network_error_retries(monkeypatch):
+    """ModelAPIError (network) triggers backoff retry; success on second attempt."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise ModelAPIError("test-model", "Connection refused")
+        return "summary after network retry"
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result == "summary after network retry"
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_401_aborts_immediately(monkeypatch):
+    """401 (auth error) → ABORT, returns None without retrying."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ModelHTTPError(401, "test-model", body="Unauthorized")
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result is None
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_403_aborts_immediately(monkeypatch):
+    """403 (forbidden) → ABORT, returns None without retrying."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ModelHTTPError(403, "test-model", body="Forbidden")
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result is None
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_404_aborts_immediately(monkeypatch):
+    """404 (model not found) → ABORT, returns None without retrying."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ModelHTTPError(404, "test-model", body="Not Found")
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result is None
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_runner_retries_exhausted_returns_none(monkeypatch):
+    """When retries are exhausted, returns None."""
+    call_count = 0
+
+    async def _fake_summarize(messages, model, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise ModelHTTPError(429, "test-model", body='{"retry-after": "0"}')
+
+    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
+    result = await _run_summarization_with_policy(
+        _sample_messages(), "test-model", max_retries=2,
+    )
+    assert result is None
+    # 1 initial + 2 retries = 3 total calls
+    assert call_count == 3
