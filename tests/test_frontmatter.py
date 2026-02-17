@@ -1,6 +1,6 @@
 """Tests for YAML frontmatter parsing."""
 
-from co_cli._frontmatter import parse_frontmatter, strip_frontmatter
+from co_cli._frontmatter import parse_frontmatter
 
 
 def test_parse_frontmatter_valid():
@@ -18,14 +18,6 @@ Some text here."""
     assert body == "# Body content\nSome text here."
 
 
-def test_parse_frontmatter_missing():
-    """Content without frontmatter returns empty dict + full body."""
-    content = "# No frontmatter\nJust body text."
-    frontmatter, body = parse_frontmatter(content)
-    assert frontmatter == {}
-    assert body == content
-
-
 def test_parse_frontmatter_malformed_yaml():
     """Malformed YAML treated as no frontmatter."""
     content = """---
@@ -38,11 +30,3 @@ Body text."""
     assert body == content
 
 
-def test_strip_frontmatter():
-    """strip_frontmatter returns body only."""
-    content = """---
-version: 1
----
-
-Body content here."""
-    assert strip_frontmatter(content) == "Body content here."

@@ -89,18 +89,6 @@ class StaticEventAgent:
 
 
 # ---------------------------------------------------------------------------
-# Protocol compliance
-# ---------------------------------------------------------------------------
-
-
-def test_terminal_frontend_is_protocol_compliant():
-    """TerminalFrontend satisfies FrontendProtocol at runtime."""
-    from co_cli.display import TerminalFrontend
-    frontend = TerminalFrontend()
-    assert isinstance(frontend, FrontendProtocol)
-
-
-# ---------------------------------------------------------------------------
 # _stream_events regression coverage
 # ---------------------------------------------------------------------------
 

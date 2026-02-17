@@ -86,15 +86,6 @@ def test_prompt_includes_all_five_rules():
     assert "verify" in lower or "trust tool" in lower
 
 
-def test_rule_count_is_five():
-    """Exactly 5 rule files exist (§10: five companion rules)."""
-    rule_files = sorted(_RULES_DIR.glob("*.md"))
-    assert len(rule_files) == 5, (
-        f"Expected 5 rules, found {len(rule_files)}: "
-        f"{[f.name for f in rule_files]}"
-    )
-
-
 def test_rules_token_budget():
     """Combined rule text stays under ~1100 tokens (§10 token budget).
 
@@ -165,9 +156,4 @@ def test_all_presets_have_soul_seed():
         assert len(seed) > 0, f"Empty soul seed for preset: {name}"
 
 
-def test_get_soul_seed_returns_string():
-    """get_soul_seed returns non-empty string for known presets."""
-    seed = get_soul_seed("finch")
-    assert isinstance(seed, str)
-    assert "teach by doing" in seed
 

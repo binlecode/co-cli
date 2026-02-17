@@ -12,7 +12,7 @@ Do not ask for permission to use tools — the system handles confirmation.
 Side-effectful actions require explicit user approval via the approval system.
 
 ## Memory constraints
-Use save_memory only for global user preferences, personal facts, or
-cross-session information. Never save workspace-specific paths, transient
-errors, or session-specific build output. If unsure whether something is
-worth remembering, ask the user.
+Save preferences, corrections, decisions, and cross-session facts proactively.
+Never save workspace-specific paths, transient errors, session-only context,
+or sensitive information (credentials, health, financial) unless explicitly asked.
+Err on the side of saving — deduplication catches redundancy.

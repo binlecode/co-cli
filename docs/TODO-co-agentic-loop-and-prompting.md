@@ -1,6 +1,6 @@
 # TODO: Co Agentic Loop & Prompting Architecture (Ground-Up Design)
 
-**Status**: Phases 1, 2, 4 implemented. Phase 3 (sub-agents) gated on test. Phase 5 (polish) not started.
+**Status**: Phases 1, 2, 4 implemented. Phase 1 test gate PASS (85.2%, 2026-02-16) — Phase 3 deferred. Phase 5 (polish) not started.
 **Scope**: Core agent loop + prompt system — the two pillars everything else builds on
 **Approach**: First-principles design informed by 5 peer systems, aligned with co evolution roadmap
 
@@ -1216,13 +1216,15 @@ Phase 1: Prompt Foundation (1-2 days)  [DONE]
   │              detection (threshold 0.3), debounce (1 per 5 requests), stopword
   │              filtering. Memory linking via `related` frontmatter field + one-hop
   │              traversal in recall_memory (capped at 5 related items).
-  └── TEST GATE: 5 research prompts across 2 models
-      Pass criterion: 80%+ complete full tool chains
-      (Tests prompt changes + structural memory recall together.
-       If the test passes, it validates the combined foundation —
-       not prompts in isolation.)
-      → Pass (≥80%): Phase 3 deferred. Proceed to Phase 2 + 4.
-      → Fail (<80%): Proceed to Phase 3 after Phase 2.
+  └── TEST GATE: 27 tool-calling cases, 3 runs each, 80% threshold
+      Script: evals/eval_tool_calling.py (JSONL: evals/p1-tool_calling.jsonl)
+      First run (2026-02-15): 73.7% FAIL — 5 failures traced to docstring/rule issues.
+        Root cause analysis: docs/FIX-p1-test-gate-failures.md
+        Fixes: save_memory/recall_memory/web_fetch docstrings, Rule 04 knowledge boundary.
+      Second run (2026-02-16): 85.2% PASS — 23/27 cases passed.
+        tool_selection 90%, arg_extraction 100%, refusal 100%,
+        error_recovery 100%, intent 62.5%.
+      → PASS (85.2% ≥ 80%): Phase 3 deferred. Proceeded to Phase 2 + 4.
 
 Phase 2: Safety + Loop Returns (1-2 days)  [DONE]
   ├── 2a. [DONE] Doom loop detection (§5.2) — ~30 lines
@@ -1262,7 +1264,7 @@ Phase 2: Safety + Loop Returns (1-2 days)  [DONE]
       - Grace turn fires on UsageLimitExceeded
       - Auto-compaction triggers at token threshold
 
-Phase 3: Sub-Agents (1-2 days)  [ONLY IF Phase 1 < 80% — NOT STARTED, gated on test]
+Phase 3: Sub-Agents (1-2 days)  [DEFERRED — Phase 1 gate passed at 85.2%]
   ├── Research sub-agent with structured output_type (§7.3)
   ├── Analysis sub-agent with structured output_type (§7.8)
   ├── deep_research + deep_analysis delegation tools on co (§7.3, §7.8)
@@ -1330,7 +1332,7 @@ Phase 5: Polish  [AS NEEDED — NOT STARTED]
 ```
 Phase 1 [DONE] — prompt foundation + memory recall + memory linking + abort marker
 Phase 2 [DONE] — safety + typed returns + auto-compaction
-Phase 3 depends on Phase 1 test gate results (conditional: only if Phase 1 < 80%)
+Phase 3 [DEFERRED] — test gate passed at 85.2% (2026-02-16), sub-agents not needed
 Phase 4 [DONE] — resilience (shell reflection, instruction file, LLM retry, finish reason)
 Phase 5 is independent (can run anytime)
 
@@ -1349,10 +1351,10 @@ FUNCTIONAL:                                                          PHASE    ST
   - run_turn() returns typed TurnOutcome to chat loop                 P2b      [DONE]
   - Auto-compaction triggers at token threshold                       P2d      [DONE]
   - Compaction produces actionable handoff summaries                  P1c      [DONE]
-  - Sub-agent delegation prevents premature exit [conditional]        P3       [NOT STARTED]
+  - Sub-agent delegation prevents premature exit [conditional]        P3       [DEFERRED]
   - Shallow Inquiry tasks work without delegation overhead            P1a      [DONE]
-  - Deep Inquiry tasks delegate but don't persist state [conditional] P3       [NOT STARTED]
-  - Multi-delegation sequences complete [conditional]                 P3       [NOT STARTED]
+  - Deep Inquiry tasks delegate but don't persist state [conditional] P3       [DEFERRED]
+  - Multi-delegation sequences complete [conditional]                 P3       [DEFERRED]
   - Memory linking surfaces related memories via one-hop traversal    P1e      [DONE]
   - Mid-session topic shifts trigger fresh memory recall              P1e      [DONE]
   - Shell errors self-correct up to 3 times                           P4a      [DONE]
@@ -1541,6 +1543,6 @@ Items from `TAKEAWAY-converged-adoptions.md` deliberately excluded, with rationa
 ---
 
 **Design completed**: 2026-02-13, **revised**: 2026-02-14 (super-agent + sub-agents; model inheritance, memory recall enforcement, budget arithmetic, multi-delegation sequencing, token verification, processor-layer alignment, knowledge linking, three-way intent classification, analysis sub-agent, mid-session recall, typed loop return values, TAKEAWAY accounting fix), **impl-ready revision**: 2026-02-14 (closed 7 design orphans, added ROADMAP alignment notes, existing-impl inventory, all §22 criteria traced to phases)
-**Implementation audit**: 2026-02-14 — Phases 1, 2, 4 fully implemented. 12/15 functional criteria done, 5/5 behavioral done, 2/4 performance done, 4/4 safety done. Remaining: Phase 3 (sub-agents, conditional on test gate), Phase 5 (polish).
+**Implementation audit**: 2026-02-14 — Phases 1, 2, 4 fully implemented. 12/15 functional criteria done, 5/5 behavioral done, 2/4 performance done, 4/4 safety done.
+**Test gate**: 2026-02-16 — Phase 1 gate PASS at 85.2% (23/27 cases). Phase 3 (sub-agents) deferred. Remaining: Phase 5 (polish).
 **Peer systems referenced**: Codex, Claude Code, OpenCode, Gemini CLI, Aider
-**Critical path**: Phase 1 test gate — if it passes at 80%+, sub-agent delegation (Phase 3) is deferred

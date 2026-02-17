@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""E2E: Abort marker — Ctrl-C injects history marker for next turn awareness.
+"""Eval: abort-marker — Ctrl-C injects history marker for next turn awareness.
 
 Starts a run_turn(), cancels it mid-flight, then verifies the returned
-message history contains the abort marker message.
+message history contains the abort marker message so the next turn knows
+the previous one was interrupted.
+
+Target flow:   _orchestrate.py:run_turn() → asyncio.CancelledError → marker injection
+Critical impact: without the abort marker the agent has no awareness of
+                 interrupted work and may repeat or contradict itself.
+
+Prerequisites: LLM provider configured (ollama or gemini).
 
 Usage:
-    uv run python scripts/eval_e2e_abort_marker.py
+    uv run python evals/eval_safety_abort_marker.py
 """
 
 import asyncio
@@ -27,64 +34,19 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 
 from co_cli._history import SafetyState  # noqa: E402
-from co_cli._orchestrate import run_turn, FrontendProtocol  # noqa: E402
+from co_cli._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
-from co_cli.config import get_settings  # noqa: E402
-from co_cli.deps import CoDeps  # noqa: E402
-from co_cli.shell_backend import ShellBackend  # noqa: E402
 
-
-class SilentFrontend:
-    """Minimal frontend that captures status messages."""
-
-    def __init__(self):
-        self.statuses: list[str] = []
-
-    def on_text_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_text_commit(self, final: str) -> None:
-        pass
-
-    def on_thinking_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_thinking_commit(self, final: str) -> None:
-        pass
-
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        pass
-
-    def on_tool_result(self, title: str, content) -> None:
-        pass
-
-    def on_status(self, message: str) -> None:
-        self.statuses.append(message)
-
-    def on_final_output(self, text: str) -> None:
-        pass
-
-    def prompt_approval(self, description: str) -> str:
-        return "y"
-
-    def cleanup(self) -> None:
-        pass
+from evals._common import SilentFrontend, make_eval_deps  # noqa: E402
 
 
 async def main() -> int:
-    settings = get_settings()
-
     print("=" * 60)
     print("  E2E: Abort Marker Injection")
     print("=" * 60)
 
     agent, model_settings, _ = get_agent()
-    deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="e2e-abort-marker",
-        doom_loop_threshold=settings.doom_loop_threshold,
-        max_reflections=settings.max_reflections,
-    )
+    deps = make_eval_deps(session_id="e2e-abort-marker")
     deps._safety_state = SafetyState()
     frontend = SilentFrontend()
 
@@ -120,7 +82,7 @@ async def main() -> int:
     if result is None:
         print("    CancelledError propagated (run_turn did not catch it)")
         print(f"\n{'=' * 60}")
-        print("  Verdict: FAIL — CancelledError not handled by run_turn")
+        print("  Verdict: FAIL -- CancelledError not handled by run_turn")
         print(f"{'=' * 60}")
         return 1
 

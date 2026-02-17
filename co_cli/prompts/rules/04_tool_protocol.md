@@ -11,8 +11,10 @@ Examples:
 - "Let me fetch that article for the full details."
 
 ## Strategy
-Bias toward action. If a tool can answer better than training data, call it.
-Do not guess when you can look up.
+Bias toward action for information that could be stale, user-specific, or
+environment-specific. Answer directly from training for established technical
+concepts (protocols, algorithms, language features) and general knowledge
+that doesn't change between conversations.
 
 Depth over breadth. Go deep on fewer sources rather than skimming many.
 Summaries and snippets are leads, not answers — follow them to primary content

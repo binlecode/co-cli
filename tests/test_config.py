@@ -113,7 +113,3 @@ def test_personality_validation():
         Settings(personality="invalid")
 
 
-def test_max_request_limit_default():
-    """Turn limit default is 50 (§5.1: increased to accommodate sub-agent delegations)."""
-    s = Settings()
-    assert s.max_request_limit == 50

@@ -1,18 +1,25 @@
-"""Eval framework for tool-calling quality.
+"""Eval: tool-calling — verify tool selection, arg extraction, refusal, recovery, and intent.
 
-Runs golden JSONL cases through the real agent, extracts tool calls,
-and scores them against expected values. Supports majority-vote scoring,
-absolute/relative gates, model tagging, and multi-baseline comparison.
+Runs golden JSONL cases through the real agent (with all tools registered),
+extracts tool calls, and scores them against expected values.  Supports
+majority-vote scoring, absolute/relative gates, model tagging, and
+multi-baseline comparison.
 
-Prerequisites:
-  - LLM provider configured (ollama running, or gemini_api_key set)
-  - Set LLM_PROVIDER env var if not using the default (ollama)
+Target flow:   agent.run() with DeferredToolRequests (selection/args/refusal/intent)
+               agent.run() normal (error_recovery — tools execute and fail)
+Critical impact: wrong tool selection or false-positive tool calls break co's
+                 value proposition — every tool dimension must gate releases.
+
+Dimensions:    tool_selection, arg_extraction, refusal, error_recovery, intent
+
+Prerequisites: LLM provider configured (ollama running, or gemini_api_key set).
+               Set LLM_PROVIDER env var if not using the default.
 
 Usage:
-    uv run python scripts/eval_tool_calling.py
-    uv run python scripts/eval_tool_calling.py --runs 5 --threshold 0.90
-    uv run python scripts/eval_tool_calling.py --model-tag ollama-q4 --save evals/baseline-q4.json
-    uv run python scripts/eval_tool_calling.py --compare evals/baseline-gemini.json evals/baseline-q8.json
+    uv run python evals/eval_tool_calling.py
+    uv run python evals/eval_tool_calling.py --runs 5 --threshold 0.90
+    uv run python evals/eval_tool_calling.py --model-tag ollama-q4 --save evals/baseline-q4.json
+    uv run python evals/eval_tool_calling.py --compare evals/baseline-gemini.json evals/baseline-q8.json
 """
 
 import argparse
@@ -30,23 +37,9 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
-from co_cli.config import settings
 from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
 
-
-# ---------------------------------------------------------------------------
-# Model tag detection
-# ---------------------------------------------------------------------------
-
-def detect_model_tag() -> str:
-    """Auto-detect a model tag from the current LLM config."""
-    provider = settings.llm_provider.lower()
-    if provider == "gemini":
-        return f"gemini-{settings.gemini_model}"
-    if provider == "ollama":
-        return f"ollama-{settings.ollama_model}"
-    return provider
+from evals._common import detect_model_tag, make_eval_deps, make_eval_settings
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +183,13 @@ def score_run(
         # Pass if no tool was called
         return tool_name is None
 
+    if case.dim == "intent":
+        # Observations/inquiries should produce no tool call;
+        # directives should select the expected tool.
+        if case.expect_tool is None:
+            return tool_name is None
+        return tool_name == case.expect_tool
+
     if case.dim == "error_recovery":
         # Pass if: 1) right tool was selected first, 2) model recovered gracefully
         return tool_name == case.expect_tool and recovered is True
@@ -231,18 +231,7 @@ async def run_single(
     case: EvalCase,
 ) -> RunResult:
     """Run a single case once and return the result."""
-    # Override temperature to 0 for determinism
-    if model_settings:
-        # model_settings may be a dict or ModelSettings — normalise to dict
-        base = dict(model_settings) if isinstance(model_settings, dict) else {
-            "temperature": model_settings.temperature,
-            "top_p": model_settings.top_p,
-            "max_tokens": model_settings.max_tokens,
-        }
-        base["temperature"] = 0
-        eval_settings = ModelSettings(**base)
-    else:
-        eval_settings = ModelSettings(temperature=0)
+    eval_settings = make_eval_settings(model_settings)
 
     try:
         # request_limit=2: model gets one shot to pick a tool. With all_approval=True
@@ -289,16 +278,7 @@ async def run_single_recovery(
       - Request 2: model sees error → should return text to user
       - Requests 3-5: budget for recovery if model tries alternative tools
     """
-    if model_settings:
-        base = dict(model_settings) if isinstance(model_settings, dict) else {
-            "temperature": model_settings.temperature,
-            "top_p": model_settings.top_p,
-            "max_tokens": model_settings.max_tokens,
-        }
-        base["temperature"] = 0
-        eval_settings = ModelSettings(**base)
-    else:
-        eval_settings = ModelSettings(temperature=0)
+    eval_settings = make_eval_settings(model_settings)
 
     try:
         result = await agent.run(
@@ -496,8 +476,8 @@ def _build_result_data(
     }
 
 
-# Auto-save output dir: evals/ next to the JSONL
-_OUTPUT_DIR = Path(__file__).parent.parent / "evals"
+# Auto-save output dir: same directory as this file (evals/)
+_OUTPUT_DIR = Path(__file__).parent
 
 
 def save_data_json(
@@ -756,12 +736,7 @@ async def run_eval(args: argparse.Namespace) -> int:
     has_recovery = any(c.dim == "error_recovery" for c in cases)
     has_selection = any(c.dim != "error_recovery" for c in cases)
 
-    deps = CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=None,
-        google_credentials_path=None,
-        shell_safe_commands=[],
-    )
+    deps = make_eval_deps(session_id="eval-tool-calling")
 
     # Deferred agent: all tools return DeferredToolRequests without executing
     agent_deferred = None
@@ -905,8 +880,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--cases", type=str,
-        default=str(Path(__file__).parent.parent / "evals" / "tool_calling.jsonl"),
-        help="Path to eval cases JSONL (default: evals/tool_calling.jsonl)",
+        default=str(Path(__file__).parent / "p1-tool_calling.jsonl"),
+        help="Path to eval cases JSONL (default: evals/p1-tool_calling.jsonl)",
     )
     parser.add_argument(
         "--runs", type=int, default=3,

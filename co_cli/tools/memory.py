@@ -512,16 +512,23 @@ async def save_memory(
     """Save a memory for cross-session persistence. Duplicates are
     auto-detected and consolidated — safe to call without checking first.
 
-    When to save:
-    - User preferences: "User prefers dark mode", "User prefers pytest"
-    - Corrections: "Project uses Poetry, not pip"
-    - Decisions: "Team chose PostgreSQL over MySQL for the new service"
-    - Research findings: persist results after investigating something
+    When to save — detect these signals proactively:
+    - Preference: "I always use 4-space indentation", "I prefer dark themes"
+    - Correction: "Actually we switched from Flask to FastAPI last month"
+    - Decision: "We've decided to use Kubernetes for production"
+    - Pattern: "We always review PRs before merging"
+    - Research finding: persist results after investigating something
 
-    Do NOT save: workspace paths, transient errors, or session-only context.
+    Save when you detect the signal — do not wait for "remember this."
+    Duplicates and near-matches are auto-consolidated, so saving liberally
+    is safe.
 
-    Before saving, call recall_memory to find related memories. If found,
-    include their slugs in the related field for knowledge linking.
+    Do NOT save: workspace paths, transient errors, session-only context,
+    or sensitive information (credentials, health, financial).
+
+    Optionally include related memory slugs for knowledge linking (see
+    recall_memory). Not required — save directly when the user asks you
+    to remember something.
 
     Write content in third person: "User prefers pytest over unittest",
     not "I prefer pytest". Keeps memories unambiguous when recalled later.
@@ -646,11 +653,12 @@ async def recall_memory(
     Matches against memory content and tags (case-insensitive substring).
     Results are sorted by recency (most recently updated first).
 
-    Call before save_memory to check for existing knowledge and avoid
-    duplicates. Also call at the start of a new topic to load relevant
-    context from prior conversations.
+    Also useful before saving new memories, to discover related knowledge
+    for linking. Call at the start of a new topic to load relevant context
+    from prior conversations.
 
-    Use short keyword queries for best results ("python", "database preference").
+    Use short keyword queries for best results (e.g. "python testing",
+    "database", "dark mode").
     Long phrases may miss matches — the search is substring-based, not semantic.
     If no results are returned, try broader or alternative keywords.
 

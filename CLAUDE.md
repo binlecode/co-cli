@@ -17,9 +17,19 @@ uv run pytest tests/test_tools.py            # Single test file
 uv run pytest tests/test_tools.py::test_name # Single test function
 uv run pytest --cov=co_cli                   # With coverage
 
-# Demo & Evaluation Scripts
-uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle test
-uv run python scripts/eval_tool_calling.py            # Tool calling eval
+# Demo Scripts
+uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle demo
+
+# Evaluation Suite (evals/)
+uv run python evals/eval_tool_calling.py              # Tool selection + intent (JSONL scored)
+uv run python evals/eval_tool_chains.py               # Multi-step chain completion
+uv run python evals/eval_conversation_history.py      # Multi-turn context retention
+uv run python evals/eval_safety_doom_loop.py           # Doom loop detection (deterministic)
+uv run python evals/eval_safety_abort_marker.py       # Ctrl-C abort marker injection
+uv run python evals/eval_safety_grace_turn.py         # Budget exhaustion grace turn
+uv run python evals/eval_memory_proactive_recall.py   # Proactive memory injection (W1)
+uv run python evals/eval_memory_signal_detection.py   # Signal detection + contradiction (W2/W6)
+uv run python evals/eval_memory_decay.py              # Decay lifecycle (deterministic, W7)
 ```
 
 ## Architecture
@@ -133,7 +143,8 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
 - `docs/TODO-tool-docstring-template.md` — 4-dimension template for tool docstrings: what it does, what it returns, when/how to use, caveats
 - `docs/TODO-co-personality-enhancements.md` — Personality system enhancements: calibration examples, override mandate, memory-informed personality, compaction addendum (H1-H5 done, M1-M4 future)
-- `docs/TODO-personality-impl-sequence.md` — Implementation sequence for personality H-items with rationale and Phase 1 test gate integration (all done)
+- `docs/TODO-loop-prompt-personality-impl-sequence.md` — Execution tracker for remaining loop, prompt, and personality work (Phases 5, M1-M4) with test gate history and dependency graph
+- `docs/TODO-eval-mission-critical-workflows.md` — Eval suite roadmap: 10 mission-critical workflows, coverage matrix, P0 gaps (proactive recall, signal detection, contradiction resolution)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

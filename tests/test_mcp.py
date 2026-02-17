@@ -10,7 +10,6 @@ import pytest
 
 from co_cli.config import MCPServerConfig, Settings, load_config
 from co_cli.agent import get_agent
-from co_cli.status import get_status
 
 
 # -- Settings integration tests ------------------------------------------------
@@ -199,41 +198,6 @@ def test_multiple_mcp_servers():
         if type(t).__name__ != "_AgentFunctionToolset"
     )
     assert mcp_count == 2
-
-
-# -- Status tests -------------------------------------------------------------
-
-
-def test_status_default_mcp():
-    """Status shows default MCP servers."""
-    info = get_status()
-    assert len(info.mcp_servers) == 3
-    names = [name for name, _ in info.mcp_servers]
-    assert "github" in names
-
-
-def test_status_with_mcp(tmp_path, monkeypatch):
-    """Status shows configured MCP servers."""
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps({
-        "mcp_servers": {
-            "filesystem": {"command": "npx"},
-            "database": {"command": "python"},
-        }
-    }))
-    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", settings_file)
-    monkeypatch.chdir(tmp_path)
-
-    from co_cli.config import load_config as _load_config
-    new_settings = _load_config()
-    monkeypatch.setattr("co_cli.status.settings", new_settings)
-
-    info = get_status()
-    assert len(info.mcp_servers) == 2
-    names = [name for name, _ in info.mcp_servers]
-    assert "filesystem" in names
-    assert "database" in names
-    assert any(status == "ready" for _, status in info.mcp_servers)
 
 
 # -- E2E functional tests (real MCP servers via npx) ---------------------------

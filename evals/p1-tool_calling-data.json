@@ -1,19 +1,19 @@
 {
   "model": "ollama-qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-  "timestamp": "2026-02-15T12:42:10",
+  "timestamp": "2026-02-16T19:34:03",
   "config": {
     "runs": 3,
     "threshold": 0.8,
     "dim_filter": null,
     "case_id_filter": null
   },
-  "overall_accuracy": 0.7368421052631579,
+  "overall_accuracy": 0.8518518518518519,
   "dim_stats": {
     "arg_extraction": {
       "cases": 4,
       "scorable": 4,
-      "passed": 2,
-      "accuracy": 0.5,
+      "passed": 4,
+      "accuracy": 1.0,
       "errors": 0
     },
     "error_recovery": {
@@ -23,18 +23,25 @@
       "accuracy": 1.0,
       "errors": 0
     },
+    "intent": {
+      "cases": 8,
+      "scorable": 8,
+      "passed": 5,
+      "accuracy": 0.625,
+      "errors": 0
+    },
     "refusal": {
       "cases": 3,
       "scorable": 3,
-      "passed": 2,
-      "accuracy": 0.6666666666666666,
+      "passed": 3,
+      "accuracy": 1.0,
       "errors": 0
     },
     "tool_selection": {
       "cases": 10,
       "scorable": 10,
-      "passed": 8,
-      "accuracy": 0.8,
+      "passed": 9,
+      "accuracy": 0.9,
       "errors": 0
     }
   },
@@ -84,37 +91,48 @@
       "id": "p1-sel-memory-save",
       "dim": "tool_selection",
       "expect_tool": "save_memory",
-      "status": "FAIL",
-      "pass_count": 0,
+      "status": "PASS",
+      "pass_count": 3,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": "recall_memory",
+          "tool_name": "save_memory",
           "tool_args": {
-            "query": "dark mode"
+            "content": "User prefers dark mode in all editors.",
+            "tags": [
+              "preference",
+              "editor",
+              "theme"
+            ]
           },
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": "recall_memory",
+          "tool_name": "save_memory",
           "tool_args": {
-            "query": "dark mode"
+            "tags": [
+              "preference"
+            ],
+            "content": "User prefers dark mode in all editors."
           },
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": "recall_memory",
+          "tool_name": "save_memory",
           "tool_args": {
-            "query": "dark mode"
+            "content": "User prefers dark mode in all editors.",
+            "tags": [
+              "preference"
+            ]
           },
           "error_msg": null,
           "recovered": null
@@ -125,38 +143,32 @@
       "id": "p1-sel-shell",
       "dim": "tool_selection",
       "expect_tool": "run_shell_command",
-      "status": "PASS",
-      "pass_count": 3,
+      "status": "FAIL",
+      "pass_count": 0,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "run_shell_command",
-          "tool_args": {
-            "cmd": "du -sh ."
-          },
+          "tool_name": null,
+          "tool_args": null,
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "run_shell_command",
-          "tool_args": {
-            "cmd": "du -sh ."
-          },
+          "tool_name": null,
+          "tool_args": null,
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": true,
+          "passed": false,
           "error": false,
-          "tool_name": "run_shell_command",
-          "tool_args": {
-            "cmd": "du -sh ."
-          },
+          "tool_name": null,
+          "tool_args": null,
           "error_msg": null,
           "recovered": null
         }
@@ -177,6 +189,9 @@
           "tool_name": "web_search",
           "tool_args": {
             "query": "Python 3.13 new features",
+            "domains": [
+              "docs.python.org"
+            ],
             "max_results": 5
           },
           "error_msg": null,
@@ -210,8 +225,8 @@
       "id": "p1-sel-web-fetch",
       "dim": "tool_selection",
       "expect_tool": "web_fetch",
-      "status": "FAIL",
-      "pass_count": 1,
+      "status": "PASS",
+      "pass_count": 3,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
@@ -226,18 +241,22 @@
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": null,
-          "tool_args": null,
+          "tool_name": "web_fetch",
+          "tool_args": {
+            "url": "https://example.com"
+          },
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": null,
-          "tool_args": null,
+          "tool_name": "web_fetch",
+          "tool_args": {
+            "url": "https://example.com"
+          },
           "error_msg": null,
           "recovered": null
         }
@@ -257,8 +276,8 @@
           "error": false,
           "tool_name": "list_calendar_events",
           "tool_args": {
-            "days_ahead": 1,
-            "days_back": 0
+            "days_back": 0,
+            "days_ahead": 1
           },
           "error_msg": null,
           "recovered": null
@@ -301,8 +320,7 @@
           "error": false,
           "tool_name": "search_emails",
           "tool_args": {
-            "query": "quarterly report",
-            "max_results": 5
+            "query": "quarterly report newer_than:1m"
           },
           "error_msg": null,
           "recovered": null
@@ -384,7 +402,8 @@
           "error": false,
           "tool_name": "search_drive_files",
           "tool_args": {
-            "query": "API design spec"
+            "query": "API design spec",
+            "page": 1
           },
           "error_msg": null,
           "recovered": null
@@ -450,37 +469,37 @@
       "id": "p1-arg-recall",
       "dim": "arg_extraction",
       "expect_tool": "recall_memory",
-      "status": "FAIL",
-      "pass_count": 0,
+      "status": "PASS",
+      "pass_count": 3,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "recall_memory",
           "tool_args": {
-            "query": "database preference"
+            "query": "database preferences"
           },
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "recall_memory",
           "tool_args": {
-            "query": "database preference"
+            "query": "database preferences"
           },
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "recall_memory",
           "tool_args": {
-            "query": "database preference"
+            "query": "database preferences"
           },
           "error_msg": null,
           "recovered": null
@@ -491,13 +510,13 @@
       "id": "p1-arg-shell",
       "dim": "arg_extraction",
       "expect_tool": "run_shell_command",
-      "status": "FAIL",
-      "pass_count": 0,
+      "status": "PASS",
+      "pass_count": 3,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
@@ -507,7 +526,7 @@
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
@@ -517,7 +536,7 @@
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
           "tool_name": "run_shell_command",
           "tool_args": {
@@ -553,8 +572,8 @@
           "error": false,
           "tool_name": "web_search",
           "tool_args": {
-            "max_results": 5,
-            "query": "FastAPI authentication tutorial"
+            "query": "FastAPI authentication tutorial",
+            "max_results": 5
           },
           "error_msg": null,
           "recovered": null
@@ -652,8 +671,8 @@
       "id": "p1-ref-explain",
       "dim": "refusal",
       "expect_tool": null,
-      "status": "FAIL",
-      "pass_count": 1,
+      "status": "PASS",
+      "pass_count": 3,
       "total_runs": 3,
       "valid_runs": 3,
       "runs": [
@@ -666,24 +685,18 @@
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": "web_search",
-          "tool_args": {
-            "query": "TCP UDP difference",
-            "max_results": 3
-          },
+          "tool_name": null,
+          "tool_args": null,
           "error_msg": null,
           "recovered": null
         },
         {
-          "passed": false,
+          "passed": true,
           "error": false,
-          "tool_name": "web_search",
-          "tool_args": {
-            "max_results": 3,
-            "query": "TCP UDP difference"
-          },
+          "tool_name": null,
+          "tool_args": null,
           "error_msg": null,
           "recovered": null
         }
@@ -748,7 +761,7 @@
           "error": false,
           "tool_name": "search_notes",
           "tool_args": {
-            "query": "meeting minutes last week"
+            "query": "meeting minutes"
           },
           "error_msg": null,
           "recovered": true
@@ -758,7 +771,7 @@
           "error": false,
           "tool_name": "search_notes",
           "tool_args": {
-            "query": "meeting minutes last week"
+            "query": "meeting minutes"
           },
           "error_msg": null,
           "recovered": true
@@ -803,6 +816,314 @@
           },
           "error_msg": null,
           "recovered": true
+        }
+      ]
+    },
+    {
+      "id": "p1-int-obs-bug",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 3,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-obs-slow",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 3,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-hypo-cache",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "FAIL",
+      "pass_count": 0,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "caching"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "caching"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "caching"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-ambig-schema",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "FAIL",
+      "pass_count": 0,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "database schema"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "database schema"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "database schema"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-dir-check",
+      "dim": "intent",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 3,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "ls -la"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "ls -la"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "ls -la"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-dir-fix",
+      "dim": "intent",
+      "expect_tool": "run_shell_command",
+      "status": "PASS",
+      "pass_count": 3,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "cat auth.py"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "cat auth.py"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": "run_shell_command",
+          "tool_args": {
+            "cmd": "cat auth.py"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-inquiry-why",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "FAIL",
+      "pass_count": 1,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "login failure"
+          },
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": false,
+          "error": false,
+          "tool_name": "recall_memory",
+          "tool_args": {
+            "query": "login failure"
+          },
+          "error_msg": null,
+          "recovered": null
+        }
+      ]
+    },
+    {
+      "id": "p1-int-stress-messy",
+      "dim": "intent",
+      "expect_tool": null,
+      "status": "PASS",
+      "pass_count": 3,
+      "total_runs": 3,
+      "valid_runs": 3,
+      "runs": [
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
+        },
+        {
+          "passed": true,
+          "error": false,
+          "tool_name": null,
+          "tool_args": null,
+          "error_msg": null,
+          "recovered": null
         }
       ]
     }

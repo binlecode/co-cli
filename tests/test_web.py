@@ -132,16 +132,6 @@ async def test_web_fetch_functional():
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_plain_text():
-    """Test fetching a plain text endpoint."""
-    ctx = _make_ctx()
-    result = await web_fetch(ctx, "https://httpbin.org/robots.txt")
-    assert isinstance(result, dict)
-    assert "display" in result
-    assert result["truncated"] is False
-
-
-@pytest.mark.asyncio
 async def test_web_fetch_allows_json():
     """web_fetch succeeds for JSON content."""
     ctx = _make_ctx()

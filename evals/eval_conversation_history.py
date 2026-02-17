@@ -1,15 +1,23 @@
-"""Eval: multi-turn conversation history stress test across Ollama models.
+"""Eval: conversation-history — multi-turn context retention stress test.
 
 Three tiers of conversation history reasoning:
-
   Tier 1 — Basic back-reference (2 turns, text only)
   Tier 2 — Deep history (3+ turns, distraction in between, corrections)
   Tier 3 — Tool output in history (synthetic ToolCallPart/ToolReturnPart)
 
-Cross-model validation isolates behavioral quirks from system-level bugs.
+With Ollama, cross-model validation isolates behavioral quirks from
+system-level bugs.  With other providers, runs the single configured model.
+
+Target flow:   agent.run() with message_history across multiple turns
+Critical impact: broken history = agent loses context every turn,
+                 destroying multi-turn conversations.
+
+Prerequisites: LLM provider configured.  Ollama tests multiple models;
+               other providers test the single configured model.
 
 Usage:
-    LLM_PROVIDER=ollama uv run python scripts/eval_conversation_history.py
+    LLM_PROVIDER=ollama uv run python evals/eval_conversation_history.py
+    LLM_PROVIDER=gemini uv run python evals/eval_conversation_history.py
 """
 
 import asyncio
@@ -31,8 +39,8 @@ from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+
+from evals._common import make_eval_deps, make_eval_settings
 
 
 # ---------------------------------------------------------------------------
@@ -290,17 +298,7 @@ def _build_synthetic_history(entries: list) -> list:
 
 def _make_eval_settings(model_settings):
     """Build deterministic eval settings (temp=0) from model settings."""
-    eval_settings = ModelSettings(temperature=0)
-    if model_settings:
-        base = {
-            "temperature": 0,
-            "top_p": getattr(model_settings, "top_p", None),
-            "max_tokens": getattr(model_settings, "max_tokens", None),
-        }
-        if hasattr(model_settings, "extra_body") and model_settings.extra_body:
-            base["extra_body"] = model_settings.extra_body
-        eval_settings = ModelSettings(**{k: v for k, v in base.items() if v is not None})
-    return eval_settings
+    return make_eval_settings(model_settings)
 
 
 # ---------------------------------------------------------------------------
@@ -463,10 +461,14 @@ async def main():
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     provider = settings.llm_provider.lower()
-    if provider != "ollama":
-        print(f"ERROR: This eval requires LLM_PROVIDER=ollama (got: {provider})")
-        print("Usage: LLM_PROVIDER=ollama uv run python scripts/eval_conversation_history.py")
-        return 1
+    is_ollama = provider == "ollama"
+
+    # For Ollama: multi-model matrix.  For other providers: single configured model.
+    if is_ollama:
+        models_to_test = MODELS_TO_TEST
+    else:
+        model_label = f"{provider}-{getattr(settings, f'{provider}_model', 'default')}"
+        models_to_test = [model_label]
 
     tier_counts = {}
     for c in CASES:
@@ -475,35 +477,27 @@ async def main():
     print("=" * 70)
     print("Cross-Model Conversation History Stress Test")
     print(f"Provider: {provider}")
-    print(f"Models:   {len(MODELS_TO_TEST)}")
+    print(f"Models:   {len(models_to_test)}")
     print(f"Cases:    {len(CASES)} total — "
           + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items())))
     print("=" * 70)
 
-    agent, _, _ = get_agent()
-    deps = CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=None,
-        google_credentials_path=None,
-        shell_safe_commands=[],
-        memory_max_count=settings.memory_max_count,
-        memory_dedup_window_days=settings.memory_dedup_window_days,
-        memory_dedup_threshold=settings.memory_dedup_threshold,
-        memory_decay_strategy=settings.memory_decay_strategy,
-        memory_decay_percentage=settings.memory_decay_percentage,
-        max_history_messages=settings.max_history_messages,
-        tool_output_trim_chars=settings.tool_output_trim_chars,
-        summarization_model=settings.summarization_model,
-    )
+    agent, base_model_settings, _ = get_agent()
+    deps = make_eval_deps(session_id="eval-conversation-history")
 
     all_results: list[dict] = []
 
-    for model_name in MODELS_TO_TEST:
+    for model_name in models_to_test:
         print(f"\n{'─' * 60}")
         print(f"MODEL: {model_name}")
         print(f"{'─' * 60}")
 
-        model_settings = _switch_model(agent, model_name)
+        # Ollama: switch model via _switch_model; others: use the base settings
+        if is_ollama:
+            model_settings = _switch_model(agent, model_name)
+        else:
+            model_settings = base_model_settings
+
         t0 = time.monotonic()
 
         for case in CASES:
@@ -538,7 +532,7 @@ async def main():
     print("SUMMARY")
     print("=" * 70)
 
-    for model_name in MODELS_TO_TEST:
+    for model_name in models_to_test:
         model_results = [r for r in all_results if r["model"] == model_name]
         passed = sum(1 for r in model_results if r["passed"])
         total = len(model_results)

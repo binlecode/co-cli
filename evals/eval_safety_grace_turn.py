@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""E2E: Grace turn on usage limit — model summarizes progress when budget exhausted.
+"""Eval: grace-turn — model summarizes progress when budget is exhausted.
 
-Sets a very low request limit (3), gives a multi-step prompt, and verifies
-that run_turn() fires the grace turn instead of crashing.
+Sets a very low request limit (2) with a multi-step prompt that cannot
+complete in budget, then verifies run_turn() fires the grace turn
+(status message + /continue hint) instead of crashing.
+
+Target flow:   _orchestrate.py:run_turn() → UsageLimitExceeded → grace turn
+Critical impact: without a grace turn the user sees a raw exception or
+                 loses all progress from the turn.
+
+Prerequisites: LLM provider configured (ollama or gemini).
 
 Usage:
-    uv run python scripts/eval_e2e_grace_turn.py
+    uv run python evals/eval_safety_grace_turn.py
 """
 
 import asyncio
@@ -23,78 +30,34 @@ for _k, _v in _ENV_DEFAULTS.items():
         os.environ[_k] = _v
 
 from co_cli._history import SafetyState  # noqa: E402
-from co_cli._orchestrate import run_turn, FrontendProtocol  # noqa: E402
+from co_cli._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
-from co_cli.config import get_settings  # noqa: E402
-from co_cli.deps import CoDeps  # noqa: E402
-from co_cli.shell_backend import ShellBackend  # noqa: E402
+
+from evals._common import SilentFrontend, make_eval_deps  # noqa: E402
 
 
-class CapturingFrontend:
-    """Frontend that captures all status messages and output."""
-
-    def __init__(self):
-        self.statuses: list[str] = []
-        self.text_chunks: list[str] = []
-        self.final_output: str | None = None
-
-    def on_text_delta(self, accumulated: str) -> None:
-        self.text_chunks.append(accumulated)
-
-    def on_text_commit(self, final: str) -> None:
-        pass
-
-    def on_thinking_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_thinking_commit(self, final: str) -> None:
-        pass
-
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        pass
-
-    def on_tool_result(self, title: str, content) -> None:
-        pass
+class _CapturingFrontend(SilentFrontend):
+    """Extends SilentFrontend with status printing for diagnostics."""
 
     def on_status(self, message: str) -> None:
-        self.statuses.append(message)
+        super().on_status(message)
         print(f"    STATUS: {message}")
-
-    def on_final_output(self, text: str) -> None:
-        self.final_output = text
-
-    def prompt_approval(self, description: str) -> str:
-        return "y"
-
-    def cleanup(self) -> None:
-        pass
 
 
 async def main() -> int:
-    settings = get_settings()
-
     print("=" * 60)
     print("  E2E: Grace Turn on Usage Limit")
     print("=" * 60)
 
     agent, model_settings, _ = get_agent()
-    deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="e2e-grace-turn",
-        brave_search_api_key=settings.brave_search_api_key,
-        web_policy=settings.web_policy,
-        web_http_max_retries=settings.web_http_max_retries,
-        web_http_backoff_base_seconds=settings.web_http_backoff_base_seconds,
-        web_http_backoff_max_seconds=settings.web_http_backoff_max_seconds,
-        web_http_jitter_ratio=settings.web_http_jitter_ratio,
-        doom_loop_threshold=settings.doom_loop_threshold,
-        max_reflections=settings.max_reflections,
-    )
+    deps = make_eval_deps(session_id="e2e-grace-turn")
     deps._safety_state = SafetyState()
-    frontend = CapturingFrontend()
+    frontend = _CapturingFrontend()
 
-    # Very low limit to force UsageLimitExceeded
-    low_limit = 3
+    # Limit of 2: model gets one request to start + one tool call.
+    # The multi-step prompt guarantees the model cannot finish in 2 requests,
+    # so the grace turn MUST fire.
+    low_limit = 2
     prompt = (
         "Search the web for 'Python 3.13 new features', then fetch the top result, "
         "then summarize what you found. Do all three steps."
@@ -127,13 +90,15 @@ async def main() -> int:
     print("\n[3] Checking grace turn behavior...")
 
     has_limit_status = any("Turn limit reached" in s for s in frontend.statuses)
-    has_resume_hint = any("/continue" in s for s in frontend.statuses)
+    has_resume_hint = any(
+        "/continue" in s for s in frontend.statuses
+    ) or (isinstance(result.output, str) and "/continue" in result.output)
     did_not_crash = result.outcome in ("continue", "error")
     has_output = result.output is not None
 
     checks = {
         "Status: 'Turn limit reached' message": has_limit_status,
-        "Status mentions /continue": has_resume_hint or (isinstance(result.output, str) and "/continue" in result.output),
+        "Status mentions /continue": has_resume_hint,
         "Did not crash (outcome is continue or error)": did_not_crash,
         "Produced some output": has_output,
     }
@@ -144,13 +109,6 @@ async def main() -> int:
         print(f"    {status}: {check}")
         if not passed:
             all_pass = False
-
-    # The grace turn may not always fire (model might finish in 3 requests).
-    # If it finished normally, that's still OK — just no grace turn to verify.
-    if not has_limit_status:
-        print("\n    NOTE: Model completed within budget — grace turn not triggered.")
-        print("    This is acceptable. To force the grace turn, lower the limit further.")
-        all_pass = True  # Not a failure, just means model was efficient
 
     verdict = "PASS" if all_pass else "FAIL"
     print(f"\n{'=' * 60}")

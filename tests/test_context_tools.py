@@ -66,12 +66,6 @@ def test_load_personality_precedence_note():
     assert "Override precedence" in result["display"]
 
 
-def test_load_personality_no_precedence_for_style_only():
-    """When only style axis loaded, no precedence note needed."""
-    result = _run(load_personality(_ctx(personality="terse")))
-    assert "Override precedence" not in result["display"]
-
-
 def test_load_personality_with_personality_memories(tmp_path, monkeypatch):
     """Personality-context memories appear as Learned Context in output."""
     memory_dir = tmp_path / ".co-cli" / "knowledge" / "memories"

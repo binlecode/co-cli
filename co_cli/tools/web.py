@@ -273,7 +273,8 @@ async def web_fetch(
     """Fetch a web page and return its content converted to readable markdown.
     HTML pages are converted to markdown; JSON and XML are returned as-is.
 
-    Use URLs from web_search results. Do not guess or fabricate URLs.
+    Accepts any URL — from the user's message, from web_search results, or
+    from tool output. Never guess or fabricate URLs yourself.
     If fetch returns 403 or is blocked by Cloudflare, retry the same URL
     with run_shell_command: curl -sL <url>.
 

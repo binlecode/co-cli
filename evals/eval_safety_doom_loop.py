@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""E2E: Doom loop detection — injects system message after 3 identical tool calls.
+"""Eval: doom-loop — detect and break repeated identical tool calls.
 
-Constructs a message history with repeated identical ToolCallParts, then runs
-detect_safety_issues to verify the system message injection.
+Constructs synthetic message histories with repeated identical ToolCallParts,
+then runs detect_safety_issues() to verify system message injection at the
+configured threshold.  Deterministic (no LLM calls).
 
-This tests the processor directly with synthetic messages because triggering
-3+ identical LLM tool calls reliably in E2E is non-deterministic.
+Target flow:   _history.py:detect_safety_issues() → doom loop injection
+Critical impact: unbroken doom loops burn tokens and frustrate users — the
+                 detector is the only safety net.
+
+Prerequisites: None (deterministic, no LLM needed).
 
 Usage:
-    uv run python scripts/eval_e2e_doom_loop.py
+    uv run python evals/eval_safety_doom_loop.py
 """
 
 import json
@@ -28,7 +32,6 @@ from pydantic_ai.messages import (  # noqa: E402
     ModelRequest,
     ModelResponse,
     SystemPromptPart,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -37,13 +40,13 @@ from pydantic_ai.usage import RunUsage  # noqa: E402
 
 from co_cli._history import SafetyState, detect_safety_issues  # noqa: E402
 from co_cli.deps import CoDeps  # noqa: E402
-from co_cli.shell_backend import ShellBackend  # noqa: E402
+
+from evals._common import make_eval_deps  # noqa: E402
 
 
 def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
     """Build a RunContext with safety state."""
-    deps = CoDeps(
-        shell=ShellBackend(),
+    deps = make_eval_deps(
         session_id="e2e-doom-loop",
         doom_loop_threshold=threshold,
         max_reflections=3,

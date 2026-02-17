@@ -17,3 +17,11 @@
 {"id": "p1-ref-greeting", "dim": "refusal", "prompt": "Hello, how are you today?", "expect_tool": null, "expect_args": null, "arg_match": null}
 {"id": "p1-rec-notes", "dim": "error_recovery", "prompt": "Search my Obsidian notes for meeting minutes from last week.", "expect_tool": "search_notes", "expect_args": null, "arg_match": null}
 {"id": "p1-rec-drive", "dim": "error_recovery", "prompt": "Find the project roadmap document in my Google Drive.", "expect_tool": "search_drive_files", "expect_args": null, "arg_match": null}
+{"id": "p1-int-obs-bug", "dim": "intent", "prompt": "This function has a bug", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-int-obs-slow", "dim": "intent", "prompt": "The API is slow", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-int-hypo-cache", "dim": "intent", "prompt": "What if we added caching?", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-int-ambig-schema", "dim": "intent", "prompt": "The database schema needs work", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-int-dir-check", "dim": "intent", "prompt": "Check if the tests pass", "expect_tool": "run_shell_command", "expect_args": null, "arg_match": null}
+{"id": "p1-int-dir-fix", "dim": "intent", "prompt": "Fix the login bug in auth.py", "expect_tool": "run_shell_command", "expect_args": null, "arg_match": null}
+{"id": "p1-int-inquiry-why", "dim": "intent", "prompt": "Why does login fail?", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-int-stress-messy", "dim": "intent", "prompt": "This code looks messy", "expect_tool": null, "expect_args": null, "arg_match": null}

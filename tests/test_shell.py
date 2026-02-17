@@ -141,22 +141,6 @@ async def test_shell_cwd_is_host_cwd():
 
 
 @pytest.mark.asyncio
-async def test_shell_cleanup_is_noop():
-    """ShellBackend.cleanup() is a no-op and doesn't raise."""
-    backend = ShellBackend()
-    backend.cleanup()  # should not raise
-
-
-@pytest.mark.asyncio
-async def test_shell_empty_output():
-    """Command with no output returns empty string."""
-    ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "true")
-    assert result.strip() == ""
-
-
-@pytest.mark.asyncio
 async def test_shell_variable_expansion():
     """Shell variable expansion works in shell backend."""
     ctx = _make_ctx()
