@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
-from co_cli._history import OpeningContextState, SafetyState
+from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
@@ -175,6 +175,7 @@ async def chat_loop(verbose: bool = False):
 
     message_history = []
     last_interrupt_time = 0.0
+    bg_compaction_task: asyncio.Task | None = None
     try:
         # MCP tools discovered after context entry — update tool_names
         if mcp_servers:
@@ -208,6 +209,15 @@ async def chat_loop(verbose: bool = False):
                             model_settings = cmd_ctx.model_settings
                         continue
 
+                # Join background compaction if it completed while user was typing
+                if bg_compaction_task is not None:
+                    try:
+                        result = await bg_compaction_task
+                        deps.precomputed_compaction = result
+                    except Exception:
+                        deps.precomputed_compaction = None
+                    bg_compaction_task = None
+
                 # LLM turn — delegated to _orchestrate.run_turn()
                 frontend.on_status("Co is thinking...")
                 turn_result = await run_turn(
@@ -222,6 +232,16 @@ async def chat_loop(verbose: bool = False):
                     frontend=frontend,
                 )
                 message_history = turn_result.messages
+
+                # Clear precomputed result (consumed or stale)
+                deps.precomputed_compaction = None
+
+                # Spawn background compaction for the next turn
+                bg_compaction_task = asyncio.create_task(
+                    precompute_compaction(
+                        message_history, deps, str(agent.model),
+                    )
+                )
 
                 # Pattern-match on TurnOutcome
                 if turn_result.outcome == "error":
@@ -240,6 +260,8 @@ async def chat_loop(verbose: bool = False):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
+        if bg_compaction_task is not None:
+            bg_compaction_task.cancel()
         await stack.aclose()
         deps.shell.cleanup()
 
@@ -312,6 +334,16 @@ def traces():
     html_path = write_trace_html()
     console.print(f"[bold green]Generated trace viewer:[/bold green] {html_path}")
     webbrowser.open(f"file://{html_path}")
+
+
+@app.command(name="debug-personality")
+def debug_personality(
+    preset: str = typer.Option(None, "--preset", "-p", help="Personality preset to inspect (default: current setting)"),
+):
+    """Show what personality content is injected at each prompt layer."""
+    from co_cli._debug_personality import run_debug_personality
+
+    run_debug_personality(preset)
 
 
 @app.command()

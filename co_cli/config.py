@@ -173,7 +173,7 @@ class Settings(BaseModel):
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
     ollama_num_ctx: int = Field(default=262144)
-    gemini_model: str = Field(default="gemini-2.0-flash")
+    gemini_model: str = Field(default="gemini-2.5-flash")
 
     @model_validator(mode='before')
     @classmethod

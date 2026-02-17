@@ -1,7 +1,7 @@
 # TODO: Loop, Prompt & Personality — Implementation Sequence
 
 **Sources**: `TODO-co-agentic-loop-and-prompting.md` (Phases 1-5), `TODO-co-personality-enhancements.md` (H1-H5, M1-M4)
-**Status**: Phases 1-4 + H1-H5 done. Test gate PASS (85.2%). Phase 3 deferred. Phase 5 + M-tier next.
+**Status**: Phases 1-4 + H1-H5 + Tier 1 (5a, 5b, M4) done. Test gate PASS (85.2%). Phase 3 deferred. Tier 2 next.
 
 ---
 
@@ -15,6 +15,9 @@ H1-H5   [DONE]  Personality calibration, override mandate, memory-informed,
                  compaction addendum, load_personality registration
 Gate fix [DONE]  Docstring/rule fixes per FIX-p1-test-gate-failures.md
 Phase 3  [DEFERRED]  Test gate passed — sub-agents not needed
+5a      [DONE]  Expand quirk DB: +3 Gemini models (6 total), default → gemini-2.5-flash
+5b      [DONE]  Background compaction: CompactionResult, precompute_compaction(), bg task in chat_loop
+M4      [DONE]  Personality debugger: `co debug-personality` CLI command (7 diagnostic layers)
 ```
 
 ### Test Gate History
@@ -31,21 +34,11 @@ Gate verdict: **PASS (85.2% >= 80%)** — Phase 3 deferred. Proceed to Phase 5.
 
 ## Remaining Work — Execution Order
 
-### Tier 1: Independent (any order, no dependencies)
+### Tier 1: Complete
 
-| ID | Item | Source | Effort | Files |
-|----|------|--------|--------|-------|
-| 5a | Expand model quirk database | Agentic §12.1 | Data work | `co_cli/model_quirks.py` |
-| 5b | Background compaction | Agentic §8.1 L3 | Medium | `co_cli/_history.py` |
-| M4 | Personality prompt debugger | Personality M4 | Small | New CLI command |
+All Tier 1 items (5a, 5b, M4) are done. See Completed Work above.
 
-**5a** — Current quirk DB has 3 entries. Expand for Gemini and Ollama models observed in production. Pure data, no arch changes.
-
-**5b** — After each turn, if history exceeds threshold, spawn asyncio task to pre-compute summary during user idle time. Join before next `run_turn()`. Hides 2-5s summarization latency. Optimization only — current inline compaction works correctly.
-
-**M4** — Diagnostic tool (`co debug-personality`) showing what personality content is injected at each layer: soul seed in system prompt, character/style from `load_personality`, memories from H2, compaction addendum from H4. Helps preset authors tune personalities.
-
-### Tier 2: Sequential Chain (must go in order)
+### Tier 2: Sequential Chain (must go in order, next up)
 
 ```
 5d  Personality axes refactor

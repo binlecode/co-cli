@@ -42,6 +42,29 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# CompactionResult — pre-computed summary for background compaction
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CompactionResult:
+    """Pre-computed compaction summary for background processing.
+
+    Produced by ``precompute_compaction()`` during user idle time and
+    consumed by ``truncate_history_window()`` on the next turn to skip
+    the inline LLM summarization call.
+
+    The ``message_count`` field is a stale-check: if the message list
+    length has changed since computation, the result is discarded.
+    """
+
+    summary_text: str
+    head_end: int
+    tail_start: int
+    message_count: int
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -295,6 +318,11 @@ async def truncate_history_window(
       - everything in between, replaced by an LLM summary (or static
         marker on failure)
 
+    If a pre-computed ``CompactionResult`` is available on
+    ``ctx.deps.precomputed_compaction`` and the message count matches
+    (not stale), the pre-computed summary is used directly — skipping
+    the inline LLM call.
+
     Registered as the last history processor.
     """
     max_msgs = ctx.deps.max_history_messages
@@ -323,15 +351,33 @@ async def truncate_history_window(
     dropped = messages[head_end:tail_start]
     dropped_count = len(dropped)
 
-    # Resolve summarisation model and retry budget
-    from co_cli.config import settings as _settings
-
-    model = ctx.deps.summarization_model or ctx.model
-    summary_text = await _run_summarization_with_policy(
-        dropped, model,
-        max_retries=_settings.model_http_retries,
-        personality_active=bool(ctx.deps.personality),
+    # Check for pre-computed compaction result (background compaction)
+    precomputed: CompactionResult | None = getattr(
+        ctx.deps, "precomputed_compaction", None
     )
+    summary_text: str | None = None
+
+    if (
+        precomputed is not None
+        and precomputed.message_count == len(messages)
+        and precomputed.head_end == head_end
+        and precomputed.tail_start == tail_start
+    ):
+        summary_text = precomputed.summary_text
+        log.info(
+            "Sliding window: using pre-computed summary (%d messages)",
+            dropped_count,
+        )
+    else:
+        # Fall through to inline summarization
+        from co_cli.config import settings as _settings
+
+        model = ctx.deps.summarization_model or ctx.model
+        summary_text = await _run_summarization_with_policy(
+            dropped, model,
+            max_retries=_settings.model_http_retries,
+            personality_active=bool(ctx.deps.personality),
+        )
 
     if summary_text is not None:
         summary_marker = ModelRequest(parts=[
@@ -347,6 +393,89 @@ async def truncate_history_window(
         summary_marker = _static_marker(dropped_count)
 
     return messages[:head_end] + [summary_marker] + messages[tail_start:]
+
+
+# ---------------------------------------------------------------------------
+# 3b. Background pre-computation for compaction
+# ---------------------------------------------------------------------------
+
+# Pre-compaction threshold: 70% of max — below the 85% trigger but close
+# enough that pre-computing saves latency on the next turn.
+_PRECOMPACT_TOKEN_RATIO = 0.70
+_PRECOMPACT_MSG_RATIO = 0.80
+
+
+async def precompute_compaction(
+    messages: list[ModelMessage],
+    deps: CoDeps,
+    model: str,
+) -> CompactionResult | None:
+    """Pre-compute a compaction summary during user idle time.
+
+    Called after each turn completes. Checks if history is approaching
+    the compaction threshold (but not yet past it). If so, computes the
+    summary eagerly so ``truncate_history_window()`` can skip the inline
+    LLM call on the next turn.
+
+    Returns ``None`` if history is not close enough to the threshold or
+    if summarization fails.
+    """
+    max_msgs = deps.max_history_messages
+    token_estimate = _estimate_message_tokens(messages)
+    token_threshold = int(_DEFAULT_TOKEN_BUDGET * 0.85)
+
+    # Already past the compaction trigger — truncate_history_window will
+    # handle it inline on the next turn
+    past_trigger = (
+        (max_msgs > 0 and len(messages) > max_msgs)
+        or token_estimate > token_threshold
+    )
+    if past_trigger:
+        return None
+
+    # Check if approaching threshold
+    approaching_by_count = (
+        max_msgs > 0
+        and len(messages) > int(max_msgs * _PRECOMPACT_MSG_RATIO)
+    )
+    approaching_by_tokens = (
+        token_estimate > int(_DEFAULT_TOKEN_BUDGET * _PRECOMPACT_TOKEN_RATIO)
+    )
+    if not approaching_by_count and not approaching_by_tokens:
+        return None
+
+    # Compute the same head/tail boundaries that truncate_history_window uses
+    first_run_end = _find_first_run_end(messages)
+    head_end = first_run_end + 1
+    tail_count = max(4, max_msgs // 2)
+    tail_start = max(head_end, len(messages) - tail_count)
+
+    if tail_start <= head_end:
+        return None
+
+    dropped = messages[head_end:tail_start]
+
+    from co_cli.config import settings as _settings
+
+    resolved_model = deps.summarization_model or model
+    summary_text = await _run_summarization_with_policy(
+        dropped, resolved_model,
+        max_retries=_settings.model_http_retries,
+        personality_active=bool(deps.personality),
+    )
+    if summary_text is None:
+        return None
+
+    log.info(
+        "Background compaction: pre-computed summary for %d messages",
+        len(dropped),
+    )
+    return CompactionResult(
+        summary_text=summary_text,
+        head_end=head_end,
+        tail_start=tail_start,
+        message_count=len(messages),
+    )
 
 
 # ---------------------------------------------------------------------------

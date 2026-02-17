@@ -62,6 +62,10 @@ class CoDeps:
     doom_loop_threshold: int = 3
     max_reflections: int = 3
 
+    # Background compaction — pre-computed summary set by chat_loop(),
+    # consumed (and cleared) by truncate_history_window() on next turn.
+    precomputed_compaction: Any = field(default=None, repr=False)
+
     # Infrastructure state (managed by processors, not tools)
     # Opening context state persists across session for topic-shift detection.
     # Safety state is reset per turn by run_turn().
