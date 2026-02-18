@@ -31,6 +31,7 @@ uv run python evals/eval_safety_grace_turn.py         # Budget exhaustion grace 
 uv run python evals/eval_memory_proactive_recall.py   # Proactive memory injection (W1)
 uv run python evals/eval_memory_signal_detection.py   # Signal detection + contradiction (W2/W6)
 uv run python evals/eval_memory_decay.py              # Decay lifecycle (deterministic, W7)
+uv run python evals/eval_personality_adherence.py    # Personality adherence (P2, heuristic scored)
 ```
 
 ## Architecture
@@ -134,7 +135,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
-- `docs/DESIGN-16-prompt-design.md` — Soul-first prompt design: soul seed, 5 companion rules, personality-rule interaction
+- `docs/DESIGN-16-prompt-design.md` — Prompt & personality system: injection flow, personality assets, rules, design decisions
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-co-agentic-loop-and-prompting.md` — Ground-up agentic loop + prompting architecture design (goal-driven ReAct, doom loop detection, prompt composition)
@@ -143,9 +144,6 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
 - `docs/TODO-tool-docstring-template.md` — 4-dimension template for tool docstrings: what it does, what it returns, when/how to use, caveats
-- `docs/TODO-co-personality-enhancements.md` — Personality system enhancements: calibration examples, override mandate, memory-informed personality, compaction addendum (H1-H5 done, M1-M4 future)
-- `docs/TODO-loop-prompt-personality-impl-sequence.md` — Execution tracker for remaining loop, prompt, and personality work (Phases 5, M1-M4) with test gate history and dependency graph
-- `docs/TODO-eval-mission-critical-workflows.md` — Eval suite roadmap: 10 mission-critical workflows, coverage matrix, P0 gaps (proactive recall, signal detection, contradiction resolution)
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
