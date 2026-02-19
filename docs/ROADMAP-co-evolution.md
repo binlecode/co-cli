@@ -28,13 +28,13 @@ Co aspires to be the CLI version of the companion from "Finch" (2021): a helpful
 
 **Five pillars of co's character:**
 
-| Pillar | Description | Status |
-|--------|-------------|--------|
-| **Soul** | Identity, personality, interaction style (user-selectable from presets) | Shipped — 5 presets, soul seed always-on |
-| **Internal Knowledge** | Learned context, patterns, user habits (persists across sessions) | Shipped — memory lifecycle with save/recall/list |
-| **External Knowledge** | Tools for accessing data (Google, Obsidian, web, MCP servers) | Shipped — 16 tools + 3 MCP servers |
-| **Emotion** | Tone, empathy, context-aware communication | Partial — personality modulates tone; no emotion engine |
-| **Habit** | Workflow preferences, approval patterns, personalization | Partial — memory captures preferences; no proactive habits |
+| Pillar | Description |
+|--------|-------------|
+| **Soul** | Identity, personality, interaction style (user-selectable roles). 4 roles (file-driven), per-turn personality injection |
+| **Internal Knowledge** | Learned context, patterns, user habits (persists across sessions). Memory lifecycle with save/recall/list |
+| **External Knowledge** | Tools for accessing data (Google, Obsidian, web, MCP servers). 16 tools + 3 MCP servers |
+| **Emotion** | Tone, empathy, context-aware communication. Personality modulates tone; no emotion engine yet |
+| **Habit** | Workflow preferences, approval patterns, personalization. Memory captures preferences; no proactive habits yet |
 
 **Differentiator:** No peer system (0/5 studied) attempts the companion vision. Claude Code, Codex, Gemini CLI, and Aider are code-first tools. Co is relationship-first — it builds a working partnership through memory, personality, and accumulated context.
 
@@ -55,32 +55,48 @@ Co aspires to be the CLI version of the companion from "Finch" (2021): a helpful
 
 ### 3.2 Prompt System
 
-Soul-first layered composition:
+Two-part structural prompt — static base assembled once, personality injected every turn:
 
 ```
-System prompt (fixed, every turn):
-  1. instructions.md       (bootstrap identity)
-  2. soul seed             (personality fingerprint, always-on)
-  3. rules/*.md 01-05      (behavioral policy)
-  4. counter-steering       (model quirk corrections)
+Static prompt  (assembled once at agent creation — assemble_prompt()):
+  1. instructions.md            (bootstrap identity)
+  2. rules/*.md 01-05           (behavioral policy)
+  3. counter-steering           (model quirk corrections, if file exists)
 
-Dynamic (tool-loaded, on demand):
-  load_personality(pieces)  (character axis + style axis)
-  recall_memory(query)      (persistent memories)
-  save_memory(content)      (persist knowledge)
+Per-turn layers  (@agent.system_prompt functions in agent.py):
+  add_personality              (## Soul block: soul + 5 behaviors + mandate)
+  add_current_date             (today's date)
+  add_shell_guidance           (shell approval hint)
+  add_project_instructions     (.co-cli/instructions.md)
+  add_personality_memories     (## Learned Context: top 5 personality-context memories)
 ```
+
+First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. All personality content is in the system prompt on every turn. The LLM self-modulates expression depth guided by the adoption mandate. See `TODO-personality-redesign.md`.
 
 ### 3.3 Personality System
 
-5 presets with 4 composable aspect types:
+4 roles, each defined by a soul file (`souls/{name}.md`) + 5 traits wired in `traits/{name}.md`. Each trait value maps to a behavior file (`behaviors/{trait}-{value}.md`). No Python dicts — the folder structure is the schema.
 
-| Preset | Soul seed flavor | Character | Style |
-|--------|-----------------|-----------|-------|
-| finch | Patient, protective, pragmatic | finch | balanced |
-| jeff | Eager learner, curious, honest | jeff | warm |
-| friendly | Warm collaborator, "we" and "let's" | — | warm |
-| terse | Direct, minimal, fragments over sentences | — | terse |
-| inquisitive | Explores before acting, presents tradeoffs | — | balanced |
+**5 traits** (grounded in Big Five personality research):
+
+| Trait | Values | Big Five mapping |
+|-------|--------|-----------------|
+| `communication` | terse, balanced, warm, educational | Extraversion |
+| `relationship` | mentor, peer, companion, professional | (unique to companion) |
+| `curiosity` | proactive, reactive | Openness |
+| `emotional_tone` | empathetic, neutral, analytical | Agreeableness |
+| `thoroughness` | minimal, standard, comprehensive | Conscientiousness |
+
+**4 roles and their trait wiring:**
+
+| Role | communication | relationship | curiosity | emotional_tone | thoroughness |
+|------|--------------|--------------|-----------|----------------|-------------|
+| finch | balanced | mentor | proactive | empathetic | comprehensive |
+| jeff | warm | peer | proactive | empathetic | standard |
+| terse | terse | professional | reactive | neutral | minimal |
+| inquisitive | educational | companion | proactive | neutral | comprehensive |
+
+Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `TODO-personality-redesign.md`.
 
 ### 3.4 Infrastructure
 
@@ -137,20 +153,20 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 **Why first:** Every peer system has loop detection, turn limits, and injection protection. These are P0 safety — the absence is a correctness and cost risk, not a feature gap.
 
-**Scope:**
-- Doom loop detection (hash-based, threshold 3 — adopted from OpenCode/Gemini CLI)
-- Turn limit per user message (default 50, configurable — from all peers)
-- Anti-prompt-injection in summarization (security rule in compaction prompt)
-- Shell reflection loop (error output fed back, max 3 retries — from Aider)
-- Typed loop return values (`continue | stop | error | compact`)
-- Abort marker in history for interrupted turns
+**Shipped:**
+- Turn limit per user message (default 50, configurable) — `_orchestrate.py:416`
+- Typed loop return values (`continue | stop | error | compact`) — `_orchestrate.py:25`
+- Abort marker in history for interrupted turns — `_orchestrate.py:609-615`
+- Intent classification: three-way directive / deep inquiry / shallow inquiry — Rule 05
+- Anti-sycophancy directive — Rule 01
+- Preamble messages before tool calls — Rule 04
+- Memory tool constraints — Rule 02
+- Handoff-style compaction prompt with anti-injection — `_history.py`
 
-**Prompt improvements (zero code cost):**
-- Intent classification: directive vs inquiry (from Gemini CLI)
-- Anti-sycophancy directive (from OpenCode/Gemini CLI)
-- Preamble messages before tool calls (from Codex)
-- Memory tool constraints (from Gemini CLI)
-- Handoff-style compaction prompt (from Codex)
+**Remaining:**
+- Doom loop detection (hash-based, threshold 3 — adopted from OpenCode/Gemini CLI)
+- Grace turn on budget exhaustion (one extra turn for partial results — from Gemini CLI)
+- Shell reflection loop (error output fed back, max 3 retries — from Aider)
 
 **Design doc:** `TODO-co-agentic-loop-and-prompting.md`
 
@@ -172,8 +188,8 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 **Why:** Co-requisite with file write tools. Background execution (Phase E) without shell hardening means unsupervised loose policy. Every peer system addresses this, though approaches diverge.
 
 **Scope:**
-- ~~Drop Docker sandbox~~ Done (`408d3ff`) — subprocess + approval is the sole execution model
-- ~~Unify `!cmd` bypass with the approval system~~ Done — chat loop no longer has a `!cmd` bypass path
+- Subprocess + approval is the sole execution model (no Docker sandbox)
+- Chat loop has no `!cmd` bypass path — all commands go through approval
 - Tighten safe-command classification — safe-prefix auto-approval active universally (no `isolation_level` gate)
 
 **Design docs:** `DESIGN-09-tool-shell.md`
@@ -279,7 +295,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 ### Behavioral
 
 - Co remembers user preferences across sessions (memory lifecycle)
-- Personality adapts communication style consistently (soul seed + presets)
+- Personality adapts communication style consistently (file-driven roles with 5 traits)
 - Long research tasks complete full tool chains (search → fetch → synthesize → save)
 - Interrupted turns resume cleanly with abort markers
 
@@ -374,7 +390,7 @@ User
         │     ├── tools: recall_memory, save_memory, save_shared_finding,
         │     │          knowledge_audit, web_search, web_fetch, obsidian_search,
         │     │          read_file, list_directory
-        │     └── system prompt: finch seed + rules + arena-mode injection
+        │     └── system prompt: static (instructions + rules + quirks) + per-turn personality + arena injection
         │
         ├── Jeff Agent
         │     ├── personality: jeff (learner stance)
@@ -382,7 +398,7 @@ User
         │     ├── tools: recall_memory, save_memory, save_shared_finding,
         │     │          knowledge_audit, web_search, web_fetch, obsidian_search,
         │     │          read_file, list_directory
-        │     └── system prompt: jeff seed + rules + arena-mode injection
+        │     └── system prompt: static (instructions + rules + quirks) + per-turn personality + arena injection
         │
         └── Shared Resources
               ├── Obsidian vault (read-only during session)
@@ -394,7 +410,7 @@ User
 
 **Design Principle #4 compliance:** The arena controller does not build a parallel execution engine. It calls `run_turn()` in alternation — the same primitive used by `co chat` and sub-agent delegation (Phase I). Tools, CoDeps, approval gates, safety rules (doom loop detection, turn limits), and context compaction all remain active per agent. The arena is an orchestration pattern over `run_turn()`, not a feature island.
 
-**Why not AutoGen, CrewAI, or LangGraph?** Co already has the agent primitive (pydantic-ai Agent), the orchestration engine (`run_turn()`), and the frontend abstraction (`FrontendProtocol`). The arena controller is ~150 lines of async Python. Adding a multi-agent framework buys abstractions that conflict with co's existing patterns: CrewAI's role/goal/backstory model duplicates soul seeds, AutoGen's actor model is heavyweight for two agents, LangGraph's graph-based control flow is unnecessary when turn order is simply alternating. The right amount of complexity is the minimum needed for the current task.
+**Why not AutoGen, CrewAI, or LangGraph?** Co already has the agent primitive (pydantic-ai Agent), the orchestration engine (`run_turn()`), and the frontend abstraction (`FrontendProtocol`). The arena controller is ~150 lines of async Python. Adding a multi-agent framework buys abstractions that conflict with co's existing patterns: CrewAI's role/goal/backstory model duplicates souls/traits, AutoGen's actor model is heavyweight for two agents, LangGraph's graph-based control flow is unnecessary when turn order is simply alternating. The right amount of complexity is the minimum needed for the current task.
 
 **Why not OpenAI Swarm / Agents SDK handoff pattern?** Handoffs transfer control from one agent to another within a single conversation. Cultivation requires *parallel persistent state* — each agent maintains its own memory across turns. Handoffs lose this isolation. The blackboard pattern (shared transcript, isolated state) is the correct fit.
 
@@ -620,7 +636,7 @@ Each agent turn within a round follows this structure:
 
 ### 16.2 Prompt Injection for Arena Mode
 
-Each agent's system prompt is extended with an arena-mode addendum. This is injected at agent creation time, not dynamically. It follows the existing pattern of `assemble_prompt()` composing rules:
+Each agent's system prompt is extended with an arena-mode addendum. This follows the existing pattern of `@agent.system_prompt` functions in `agent.py` — an `add_arena_context` function injects the arena addendum per turn:
 
 **Finch (arena mode):**
 ```
@@ -761,7 +777,7 @@ The `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` design covers: FTS5 
 
 **Scope:**
 - Arena controller supports N agents (generalize alternating turns to round-robin or supervisor-directed)
-- New character presets (e.g., "skeptic" — challenges everything, demands primary sources)
+- New personality roles (e.g., "skeptic" — challenges everything, demands primary sources)
 - Supervisor agent that manages turn allocation based on expertise (LangGraph supervisor pattern)
 - Shared findings require majority validation (not just pairwise agreement)
 
@@ -803,15 +819,19 @@ CoDeps remains flat fields. No nested config objects. `memory_dir` and `shared_f
 ```
 get_agent() currently returns: (Agent, ModelSettings, tool_names)
 
-For arena mode, call get_agent() twice with different parameters:
-  get_agent(personality="finch", arena_mode=True, arena_goal=goal_spec)
-  get_agent(personality="jeff", arena_mode=True, arena_goal=goal_spec)
+Personality is NOT a get_agent() parameter — it is set on CoDeps.personality
+and read per turn by add_personality() in @agent.system_prompt.
+
+For arena mode, call get_agent() twice. Each agent gets:
+  - CoDeps with personality="finch" (or "jeff"), memory_dir scoped per-agent
+  - An additional @agent.system_prompt function (add_arena_context)
+    that injects the arena addendum per turn
 
 Arena mode affects:
-  - System prompt: adds arena-mode addendum
+  - Per-turn prompt: adds arena-mode addendum via @agent.system_prompt
   - Tools: adds save_shared_finding, match_memories_to_outline
   - File tools (read_file, list_directory) available for research
-  - Does NOT change: model, provider, safety rules, tool approval
+  - Does NOT change: model, provider, static prompt, safety rules, tool approval
 ```
 
 ### 18.3 Frontend for Arena Mode
@@ -980,63 +1000,39 @@ default weights: vector=0.7, text=0.3
 
 # Part V: Learnings from Reference Systems
 
-## 22. What We Take from Each System
+Peer CLI adoption decisions (what co takes, what it declines, and why) are consolidated in [`TAKEAWAY-converged-adoptions.md`](TAKEAWAY-converged-adoptions.md). This section covers research that informed cultivation design specifically — topics not covered by the CLI peer analysis.
+
+## 22. Cultivation-Specific Research
 
 ### 22.1 Openclaw — Memory Architecture
 
-Openclaw's `src/memory/` is the most production-ready hybrid search implementation in the reference set. Key patterns adopted:
+Openclaw's `src/memory/` is the most production-ready hybrid search implementation in the reference set. Patterns adopted for co's search evolution (Stages 2-3): FTS5 BM25 + sqlite-vec cosine with weighted merge (0.7 vector / 0.3 text), hash-based embedding cache with LRU eviction, cache seeding during reindex, graceful degradation (vector unavailable → keyword-only), and atomic swap for safe reindex. Per-agent isolation via agent-scoped index key informs Phase L's `agent` column design.
 
-| Pattern | Openclaw implementation | Co adoption |
-|---------|----------------------|-------------|
-| **Hybrid search** | FTS5 BM25 + sqlite-vec cosine, weighted merge (0.7/0.3) | Stage 3 — same algorithm, same weights |
-| **Embedding cache** | Hash-based dedup by `(provider, model, content_hash)`, LRU eviction | Stage 3 — same pattern |
-| **Cache seeding** | Copy embeddings from old index during reindex to avoid recomputing | Stage 3 — same pattern |
-| **Per-agent isolation** | Agent-scoped index key: `{agentId}:{workspaceDir}:{settingsHash}` | Phase L — `agent` column in unified index |
-| **Graceful degradation** | Vector extension optional → keyword-only; FTS optional → vector-only | Stage 3 — same fallback chain |
-| **Chunking with overlap** | Token-based sizing with backward overlap for context continuity | Stage 3 — same approach (for articles; memories are small enough to index whole) |
-| **Safe reindex** | Temp database → build full index → atomic swap → restore on failure | Stage 2 — same transaction pattern |
-| **Session transcript indexing** | JSONL transcripts with delta-based sync (file size + message count thresholds) | Phase Q — arena transcripts indexed the same way |
+**What we do NOT take:** Openclaw's QMD (query/memory daemon) external backend. Co stays local-first.
 
-**What we do NOT take from openclaw:** Its QMD (query/memory daemon) external backend. Co stays local-first — no external daemon dependency for core memory operations.
-
-### 22.2 Multi-Agent Debate Research — Protocol Design
+### 22.2 Multi-Agent Debate Research
 
 | Finding | Source | Implication for co |
 |---------|--------|-------------------|
 | Heterogeneous teams outperform homogeneous by 4-6% | A-HMAD (2025) | Finch/Jeff's different epistemic stances are the value driver, not model diversity |
-| MAD does not consistently beat single-agent with equal compute | "Can LLM Agents Really Debate?" (2025) | Don't over-invest in debate choreography; keep protocol lightweight |
-| Intrinsic reasoning strength is the dominant factor | Same paper | Maximize each agent's prompt quality before layering multi-agent patterns |
-| Metacognition (r=0.744) is the strongest performance predictor | Strategic Self-Improvement (arXiv 2512.04988) | Knowledge audit is the highest-value new capability |
-| Balanced diversity beats extreme diversity | A-HMAD (2025) | Two complementary characters (mentor + learner) is the right granularity; don't add 5 extreme personas |
+| MAD does not consistently beat single-agent with equal compute | "Can LLM Agents Really Debate?" (2025) | Keep debate protocol lightweight; value comes from epistemic stance difference |
+| Metacognition (r=0.744) is the strongest performance predictor | arXiv 2512.04988 | Knowledge audit is the highest-value new capability |
 
-### 22.3 Self-Learning Agent Research — Curriculum Design
+### 22.3 Self-Learning Agent Research
 
 | Pattern | Source | Co adoption |
 |---------|--------|-------------|
-| **Automatic curriculum** | Voyager (MineDojo/NVIDIA) | Gap map + round-type selection serves the same purpose — tasks at the frontier of current capability |
-| **Skill library as growing repertoire** | Voyager | Shared findings store is the equivalent — an ever-growing library of validated knowledge |
-| **Iterative prompting with self-verification** | Voyager | Peer validation protocol — the "other agent" is the verifier |
-| **Verbal self-reflection stored as context** | Reflexion | Private memories include metacognitive reflections: "I was wrong about X because Y" |
-| **Controller + Executor + Designer** | MemSkill (2025) | Arena controller (controller) + agents (executor) + curriculum system (designer) |
-| **Closed-loop skill evolution from failure cases** | MemSkill | Post-session harvest identifies which success criteria were NOT met → feeds next session's curriculum |
+| **Automatic curriculum** | Voyager (MineDojo/NVIDIA) | Gap map focuses debate on the knowledge frontier |
+| **Verbal self-reflection** | Reflexion | Private memories include metacognitive reflections |
+| **Controller + Executor + Designer** | MemSkill (2025) | Maps to arena controller + agents + curriculum system |
 
-### 22.4 Persistent Memory Research — Knowledge Lifecycle
+### 22.4 Persistent Memory Research
 
 | System | Key insight for co |
 |--------|-------------------|
-| **Mem0** | Conflict detection + update resolution before writing to knowledge store. Co adopts this as the peer validation protocol — the other agent IS the conflict detector |
-| **A-Mem** | Zettelkasten-style notes with dynamic cross-linking. Co's memory frontmatter (tags, related links) already supports this; Phase R (knowledge graph) deepens it |
-| **Letta/MemGPT** | Two-tier memory (working context + external archive) with self-managed memory editing. Co's context governance (sliding window + compaction) already provides the working-context tier; memories are the archive tier |
-| **Zep/Graphiti** | Temporal knowledge graph with bi-temporal model. Relevant for Phase R but Zep's extreme construction latency is a warning — keep graph operations incremental, not batch-rebuild |
-
-### 22.5 Framework Patterns — What NOT to Build
-
-| Framework | Pattern | Why co should NOT adopt it |
-|-----------|---------|---------------------------|
-| **AutoGen** | Actor model with async message routing | Heavyweight for 2 agents; co's `run_turn()` alternation is simpler and sufficient |
-| **CrewAI** | Role/goal/backstory agent definition | Duplicates co's soul seed + character system; two definition formats means two sources of truth |
-| **LangGraph** | Graph-based workflow with shared state object | Turn order is simply alternating; a graph adds complexity without value for the pair case |
-| **OpenAI Agents SDK** | Stateless handoffs | Loses per-agent memory isolation; cultivation requires parallel persistent state |
+| **Mem0** | Conflict detection + resolution before writing to knowledge store → peer validation protocol |
+| **A-Mem** | Zettelkasten-style notes with dynamic cross-linking → memory frontmatter + Phase R knowledge graph |
+| **Letta/MemGPT** | Two-tier memory (working context + archive) with self-editing → context governance + memory tier |
 
 ---
 
@@ -1117,13 +1113,14 @@ All paths verified against `docs/` contents.
 | `DESIGN-11-tool-google.md` | Google tools: Drive, Gmail, Calendar, lazy auth |
 | `DESIGN-13-tool-web-search.md` | Web intelligence: web_search (Brave API) + web_fetch (HTML→markdown) |
 | `DESIGN-15-mcp-client.md` | MCP client: external tool servers via stdio transport |
-| `DESIGN-16-prompt-design.md` | Soul-first prompt design: soul seed, 5 rules, personality-rule interaction |
+| `TODO-personality-redesign.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
 
 ### TODO Documents (remaining work)
 
 | Doc | Description | Related Phase |
 |-----|-------------|---------------|
 | `TODO-co-agentic-loop-and-prompting.md` | Agentic loop + prompting: ReAct, doom loop, sub-agents, prompt composition | A, D, I |
+| `TODO-personality-redesign.md` | Prompt & personality redesign: file-driven roles, 5 traits, structural delivery | A |
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
 | `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
@@ -1133,19 +1130,7 @@ All paths verified against `docs/` contents.
 
 | Doc | Description |
 |-----|-------------|
-| `REVIEW-agent-loop-peer-systems.md` | Peer system agent loop analysis |
-| `REVIEW-prompts-peer-systems.md` | Peer system prompt architecture synthesis |
-| `REVIEW-prompts-aider.md` | Aider prompt architecture review |
-| `REVIEW-prompts-claude-code.md` | Claude Code prompt architecture review |
-| `REVIEW-prompts-codex.md` | Codex prompt architecture review |
-| `REVIEW-prompts-gemini.md` | Gemini CLI prompt architecture review |
-| `REVIEW-prompts-opencode.md` | OpenCode prompt architecture review |
-| `TAKEAWAY-converged-adoptions.md` | Converged adoption patterns across peers |
-| `TAKEAWAY-from-aider.md` | Key takeaways from Aider |
-| `TAKEAWAY-from-claude-code.md` | Key takeaways from Claude Code |
-| `TAKEAWAY-from-codex.md` | Key takeaways from Codex |
-| `TAKEAWAY-from-gemini-cli.md` | Key takeaways from Gemini CLI |
-| `TAKEAWAY-from-opencode.md` | Key takeaways from OpenCode |
+| `TAKEAWAY-converged-adoptions.md` | Converged peer research: adopted/declined/deferred patterns with rationale |
 | `RESEARCH-cli-agent-tools-landscape-2026.md` | CLI agent tools landscape research |
 | `RESEARCH-obsidian-lakehouse-2026-best-practices.md` | Obsidian lakehouse best practices |
 
@@ -1229,4 +1214,4 @@ Additional reference for memory architecture:
 
 ### Reference Implementations
 29. Openclaw `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap
-30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `DESIGN-16-prompt-design.md`
+30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `TODO-personality-redesign.md`

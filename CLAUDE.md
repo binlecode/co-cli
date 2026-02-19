@@ -133,12 +133,12 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
 - `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
 - `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection (preferences, corrections, decisions), context loading, dedup, consolidation, decay, protection, search evolution
+- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection, context loading, dedup, consolidation, decay, protection, search evolution *(planned — not yet written)*
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
-- `docs/DESIGN-16-prompt-design.md` — Prompt & personality system: injection flow, personality assets, rules, design decisions
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-co-agentic-loop-and-prompting.md` — Ground-up agentic loop + prompting architecture design (goal-driven ReAct, doom loop detection, prompt composition)
+- `docs/TODO-personality-redesign.md` — Prompt & personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning_depth override
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
