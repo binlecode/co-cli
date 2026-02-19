@@ -2,6 +2,8 @@ import os
 from datetime import date
 from pathlib import Path
 
+import httpx
+
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -23,7 +25,6 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
-from co_cli.tools.context import load_personality
 
 
 def get_agent(
@@ -59,6 +60,18 @@ def get_agent(
         # Direct assignment so the settings value always wins over a stale env var.
         os.environ["GEMINI_API_KEY"] = api_key
         model = f"google-gla:{model_name}"
+
+        # Model-specific inference parameters from quirk database.
+        # Gemini 2.5+ thinking models: temperature must stay at 1.0 (Google's guidance);
+        # setting it below 1.0 causes looping / degraded performance.
+        # top_k is fixed at 64 for the 2.5 series — not passed here (API ignores it).
+        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
+        inf = get_model_inference("gemini", _normalize(model_name))
+        model_settings = ModelSettings(
+            temperature=inf.get("temperature", 1.0),
+            top_p=inf.get("top_p", 0.95),
+            max_tokens=inf.get("max_tokens", 65536),
+        )
     elif provider_name == "ollama":
         ollama_host = settings.ollama_host
         model_name = settings.ollama_model
@@ -66,7 +79,13 @@ def get_agent(
         # Ollama's OpenAI-compatible API is at /v1
         base_url = f"{ollama_host}/v1"
 
-        provider = OpenAIProvider(base_url=base_url, api_key="ollama")
+        # Explicit timeout: default openai-sdk read timeout is 600s, but large local
+        # models can exceed that on slow hardware. 300s covers realistic local inference
+        # while failing fast enough to surface real problems.
+        _http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
+        )
+        provider = OpenAIProvider(base_url=base_url, api_key="ollama", http_client=_http_client)
         model = OpenAIChatModel(
             model_name=model_name,
             provider=provider
@@ -96,7 +115,6 @@ def get_agent(
     system_prompt, _manifest = assemble_prompt(
         provider_name,
         model_name=normalized_model,
-        personality=settings.personality,
     )
 
     # Build MCP toolsets from config
@@ -138,6 +156,15 @@ def get_agent(
     )
 
     # Conditional system prompt layers — runtime-gated via @agent.system_prompt
+
+    @agent.system_prompt
+    def add_personality(ctx: RunContext[CoDeps]) -> str:
+        """Inject personality block (soul + behaviors + mandate) per turn."""
+        if not ctx.deps.personality:
+            return ""
+        from co_cli.prompts.personalities._composer import compose_personality
+        return compose_personality(ctx.deps.personality, ctx.deps.reasoning_depth)
+
     @agent.system_prompt
     def add_current_date(ctx: RunContext[CoDeps]) -> str:
         """Inject the current date so the model can reason about time."""
@@ -159,6 +186,14 @@ def get_agent(
             return instructions_path.read_text(encoding="utf-8").strip()
         return ""
 
+    @agent.system_prompt
+    def add_personality_memories(ctx: RunContext[CoDeps]) -> str:
+        """Inject personality-context memories for relationship continuity."""
+        if not ctx.deps.personality:
+            return ""
+        from co_cli.tools.personality import _load_personality_memories
+        return _load_personality_memories()
+
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
@@ -176,7 +211,6 @@ def get_agent(
     agent.tool(search_emails, requires_approval=all_approval)
     agent.tool(list_calendar_events, requires_approval=all_approval)
     agent.tool(search_calendar_events, requires_approval=all_approval)
-    agent.tool(load_personality, requires_approval=all_approval)
     policy = web_policy or settings.web_policy
     search_approval = all_approval or (policy.search == "ask")
     fetch_approval = all_approval or (policy.fetch == "ask")
