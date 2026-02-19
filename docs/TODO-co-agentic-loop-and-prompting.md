@@ -599,35 +599,37 @@ unfinished work over completed early steps.
 
 ### 26. Conditional Layered Assembly
 
-The prompt is assembled from independent layers. Assembly produces a single system prompt string.
+The prompt is assembled from two mechanisms: a static base assembled once at agent creation, and per-turn layers appended before every model request.
 
 ```
-PROMPT ASSEMBLY ORDER:
+STATIC (assemble_prompt() — called once in get_agent()):
 
-1. IDENTITY SEED       — who co is (soul, personality, non-negotiable traits)
-     Source: prompts/personalities/seed/{personality}.md
+1. INSTRUCTIONS        — bootstrap identity from prompts/instructions.md
      Always included
 
 2. COMPANION RULES     — how co behaves (5 rules, see §28-32)
      Source: prompts/rules/01-05.md
      Always included
 
-3. CAPABILITY CONTEXT  — what co can do right now
-     Source: generated at assembly time from runtime state
-     Conditional blocks based on:
-       - has_shell_tool (shell guidance)
-       - has_memory (memory tool guidance)
-       - has_web (web search/fetch guidance)
-       - has_mcp_tools (list of available MCP tools)
-       - is_git_repo (git-aware guidance)
+3. MODEL COUNTER-STEERING — per-model quirk corrections
+     Source: prompts/quirks/{provider}/{model}.md
+     Included only when quirks file exists for current model
 
-4. MODEL COUNTER-STEERING — per-model quirk corrections
-     Source: model_quirks.py data
-     Included only when quirks exist for current model
+PER-TURN (@agent.system_prompt — appended before every model request):
 
-5. PROJECT INSTRUCTIONS — user-provided project context
-     Source: .co-cli/instructions.md (single file)
+4. PERSONALITY         — ## Soul block: identity basis + behaviors + mandate
+     Source: compose_personality(role, depth) in _composer.py
+     Included only when personality role is configured
+
+5. CURRENT DATE        — always included
+
+6. SHELL GUIDANCE      — always included
+
+7. PROJECT INSTRUCTIONS — .co-cli/instructions.md
      Included only when file exists
+
+8. PERSONALITY MEMORIES — ## Learned Context: top 5 personality-context memories
+     Included only when personality role is configured
 
 DYNAMIC (tool-loaded, not in system prompt):
   - Memories                                 — via recall_memory tool
@@ -638,7 +640,7 @@ DYNAMIC (tool-loaded, not in system prompt):
 
 Two mechanisms work together:
 
-**Static layers** (identity seed, companion rules, model quirks) are assembled by `assemble_prompt()` — a plain function that concatenates markdown files and returns a string.
+**Static layers** (instructions, companion rules, model quirks) are assembled by `assemble_prompt()` — a plain function that concatenates markdown files and returns a string.
 
 **Conditional layers** use pydantic-ai's native `@agent.system_prompt` decorator with `RunContext[CoDeps]`:
 

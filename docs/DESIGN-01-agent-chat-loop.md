@@ -68,7 +68,7 @@ Returns `(agent, model_settings, tool_names)`. Selects LLM model based on provid
 ```
 get_agent(all_approval, web_policy, mcp_servers) → (agent, model_settings, tool_names):
     resolve model from settings.llm_provider (gemini or ollama)
-    build system_prompt via get_system_prompt(provider, personality, model_name)
+    build system_prompt via assemble_prompt(provider, model_name)
 
     create Agent with:
         model, deps_type=CoDeps, system_prompt, retries=tool_retries
@@ -323,12 +323,21 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 
 ### System Prompt Assembly
 
-Composed by `get_system_prompt(provider, personality, model_name)` in `prompts/__init__.py`:
+Two-part structure — static base assembled once, per-turn layers appended before every model request.
+
+**Static** (`assemble_prompt(provider, model_name)` in `prompts/__init__.py`):
 
 1. **Instructions** — bootstrap identity from `prompts/instructions.md`
-2. **Soul seed** — personality fingerprint from `prompts/personalities/seed/`
-3. **Behavioral rules** — 5 rules from `prompts/rules/01-05`
-4. **Model counter-steering** — quirk corrections from `prompts/model_quirks.py`
+2. **Behavioral rules** — 5 rules from `prompts/rules/`
+3. **Model counter-steering** — quirk corrections from `prompts/quirks/{provider}/{model}.md` (when file exists)
+
+**Per-turn** (`@agent.system_prompt` functions in `agent.py`):
+
+4. **Personality** — `## Soul` block via `compose_personality(role, depth)` (when role is set)
+5. **Current date** — always
+6. **Shell guidance** — always
+7. **Project instructions** — `.co-cli/instructions.md` (when file exists)
+8. **Personality memories** — `## Learned Context` (when role is set)
 
 See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) for knowledge loading details.
 
@@ -361,7 +370,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | Setting | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
 | `llm_provider` | `LLM_PROVIDER` | `"gemini"` | Provider selection (`gemini` or `ollama`) |
-| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality preset for system prompt |
+| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality role name (per-turn injection) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` | Caps LLM round-trips per user turn |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn |
@@ -385,6 +394,6 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/_commands.py` | Slash command registry, handlers, `dispatch()` |
 | `co_cli/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `co_cli/_history.py` | `truncate_tool_returns`, `truncate_history_window`, `summarize_messages` |
-| `co_cli/prompts/__init__.py` | `assemble_prompt()` — instructions, soul seed, rules, counter-steering |
+| `co_cli/prompts/__init__.py` | `assemble_prompt()` — static prompt: instructions, rules, counter-steering |
 | `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `scripts/eval_tool_calling.py` | Eval runner — golden case scoring, model tagging, baseline comparison |
