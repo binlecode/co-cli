@@ -7,23 +7,20 @@ nav_order: 0
 
 Welcome to the Co CLI system design documentation.
 
-Start with the [System Design](DESIGN-00-co-cli.md) overview, then explore component docs in the sidebar.
+Start with the [System Design](DESIGN-core.md) overview, then explore component docs in the sidebar.
 
 ## Layers
 
 ### Core (01–04)
-- [01 — Agent Loop](DESIGN-01-agent-chat-loop.md) — Agent factory, `CoDeps`, orchestration, streaming, approval, interrupts
-- [03 — LLM Models](DESIGN-03-llm-models.md) — Gemini/Ollama model selection
+- [System Design](DESIGN-core.md) — Agent factory, `CoDeps`, orchestration, streaming, approval, interrupts, cross-cutting concerns
+- [02 — Personality System](DESIGN-02-personality.md) — File-driven roles, trait composition, per-turn injection, reasoning depth
+- [LLM Models](DESIGN-llm-models.md) — Gemini/Ollama model selection + Ollama local setup guide
 - [04 — Streaming Event Ordering](DESIGN-04-streaming-event-ordering.md) — Boundary-safe stream rendering, event semantics
 
 ### Infrastructure (05–08)
-- [05 — OpenTelemetry Logging](DESIGN-05-otel-logging.md) — SQLite span exporter, trace viewers
-- [06 — Tail Viewer](DESIGN-06-tail-viewer.md) — Real-time span viewer (`co tail`)
+- [Logging & Tracking](DESIGN-logging-and-tracking.md) — SQLite span exporter, trace viewers, real-time `co tail`
 - [07 — Context Governance](DESIGN-07-context-governance.md) — History processors, summarisation
 - [08 — Theming & ASCII Art](DESIGN-08-theming-ascii.md) — Light/dark themes, semantic styles
 
-### Tools (09–13)
-- [09 — Shell Tool](DESIGN-09-tool-shell.md) — Approval-gated subprocess, safe-command auto-approval
-- [10 — Obsidian Vault Tools](DESIGN-10-tool-obsidian.md) — Vault search, path traversal protection
-- [11 — Google Tools](DESIGN-11-tool-google.md) — Drive, Gmail, Calendar
-- [13 — Web Tools](DESIGN-13-tool-web-search.md) — Brave Search + URL fetch
+### Tools
+- [Tools](DESIGN-tools.md) — Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)

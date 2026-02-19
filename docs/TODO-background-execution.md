@@ -142,6 +142,6 @@ Background tasks create a `background_task_execute` span linked to the originati
 
 ## Related Documents
 
-- `DESIGN-01-agent-chat-loop.md` -- slash commands, `CoDeps`, orchestration
-- `DESIGN-05-otel-logging.md` -- telemetry integration
-- `DESIGN-09-tool-shell.md` -- shell tool approval logic (reused for background tasks)
+- `DESIGN-core.md` -- slash commands, `CoDeps`, orchestration
+- `DESIGN-logging-and-tracking.md` -- telemetry integration
+- `DESIGN-tools.md` -- shell tool approval logic (reused for background tasks)

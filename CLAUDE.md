@@ -45,7 +45,7 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
          + rich console
 ```
 
-See `docs/DESIGN-00-co-cli.md` for module descriptions, processing flows, and approval pattern.
+See `docs/DESIGN-core.md` for module descriptions, processing flows, and approval pattern.
 
 ## Knowledge System
 
@@ -118,27 +118,22 @@ Every component DESIGN doc follows a 4-section template:
 
 **No code paste in DESIGN docs** — never copy-paste source code into design documents. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-`DESIGN-00-co-cli.md` is the skeleton: architecture overview, component index, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
+`DESIGN-core.md` is the skeleton: system overview, agent loop, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
 
 ### Design (architecture and implementation details, kept in sync with code)
-- `docs/DESIGN-00-co-cli.md` — Architecture overview, component index, cross-cutting concerns (config, tools, approval, security, concurrency)
-- `docs/DESIGN-01-agent-chat-loop.md` — Agent loop: factory, `CoDeps`, orchestration state machine, streaming, approval, slash commands, interrupts
-- `docs/DESIGN-03-llm-models.md` — LLM model configuration (Gemini, Ollama)
+- `docs/DESIGN-core.md` — System overview, agent loop: factory, `CoDeps`, orchestration, streaming, approval, cross-cutting concerns, modules, dependencies
+- `docs/DESIGN-02-personality.md` — Personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning depth override
+- `docs/DESIGN-llm-models.md` — LLM model configuration (Gemini, Ollama) + Ollama local setup guide
 - `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
-- `docs/DESIGN-05-otel-logging.md` — Telemetry architecture, SQLite schema, viewers
-- `docs/DESIGN-06-tail-viewer.md` — Real-time span tail viewer
+- `docs/DESIGN-logging-and-tracking.md` — Telemetry architecture, SQLite schema, viewers, real-time tail
 - `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
 - `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
-- `docs/DESIGN-09-tool-shell.md` — Shell tool, approval-gated subprocess, safe-prefix auto-approval, security model
-- `docs/DESIGN-10-tool-obsidian.md` — Obsidian/notes tool design
-- `docs/DESIGN-11-tool-google.md` — Google tools design (Drive, Gmail, Calendar, lazy auth)
-- `docs/DESIGN-13-tool-web-search.md` — Web intelligence tools: `web_search` (Brave API) + `web_fetch` (HTML→markdown)
+- `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection, context loading, dedup, consolidation, decay, protection, search evolution *(planned — not yet written)*
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 - `docs/TODO-co-agentic-loop-and-prompting.md` — Ground-up agentic loop + prompting architecture design (goal-driven ReAct, doom loop detection, prompt composition)
-- `docs/TODO-personality-redesign.md` — Prompt & personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning_depth override
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
