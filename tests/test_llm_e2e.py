@@ -20,7 +20,7 @@ from co_cli.agent import get_agent
 from co_cli.config import get_settings
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
-from co_cli.tools.memory import _load_all_memories
+from co_cli.tools.memory import _load_memories
 
 
 @pytest.mark.asyncio
@@ -197,7 +197,7 @@ async def test_ollama_memory_gravity():
 
     try:
         # Confirm no updated timestamp before agent run
-        entries_before = _load_all_memories(memory_dir)
+        entries_before = _load_memories(memory_dir)
         before = [e for e in entries_before if e.id == test_id]
         assert len(before) == 1, f"Test memory {test_id} not found after write"
         assert before[0].updated is None, "Test memory should have no updated timestamp initially"
@@ -224,7 +224,7 @@ async def test_ollama_memory_gravity():
         )
 
         # Verify gravity: the memory file should now have an updated timestamp
-        entries_after = _load_all_memories(memory_dir)
+        entries_after = _load_memories(memory_dir)
         after = [e for e in entries_after if e.id == test_id]
         assert len(after) == 1, f"Test memory {test_id} not found after recall"
         assert after[0].updated is not None, (
@@ -410,7 +410,7 @@ async def test_ollama_memory_decay():
             (memory_dir / f"{i:03d}-old-test-memory-{i}.md").write_text(md, encoding="utf-8")
 
         # Verify pre-fill
-        entries_before = _load_all_memories(memory_dir)
+        entries_before = _load_memories(memory_dir)
         assert len(entries_before) == limit
 
         agent, model_settings, _ = get_agent()
@@ -451,7 +451,7 @@ async def test_ollama_memory_decay():
 
         # After save + decay, total should stay at or below the limit
         # save_memory adds 1 (total=4), then decay removes oldest to get back to limit
-        entries_after = _load_all_memories(memory_dir)
+        entries_after = _load_memories(memory_dir)
         assert len(entries_after) <= limit, (
             f"Decay did not trigger: {len(entries_after)} memories "
             f"exceeds limit of {limit}. "

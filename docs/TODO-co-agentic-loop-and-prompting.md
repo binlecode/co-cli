@@ -824,7 +824,7 @@ Inquiries that need depth enforcement, not for conversation.
 
 ### 29. Personality System
 
-Personality is structural — injected every turn via `@agent.system_prompt`, never tool-gated. The LLM does not decide when to load personality. See `TODO-personality-redesign.md` for full design.
+Personality is structural — injected every turn via `@agent.system_prompt`, never tool-gated. The LLM does not decide when to load personality. See `DESIGN-02-personality.md` for full design.
 
 **4 roles** (finch, jeff, terse, inquisitive): each defined by a soul file (`souls/{role}.md`) + 5 traits wired in `traits/{role}.md`. Each trait value maps to a behavior file (`behaviors/{trait}-{value}.md`). No Python dicts — the folder structure is the schema.
 

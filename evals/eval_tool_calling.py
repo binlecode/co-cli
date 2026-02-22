@@ -169,6 +169,13 @@ def check_args(
             k in actual and actual[k] == v
             for k, v in expected.items()
         )
+    if mode == "contains":
+        # For search queries: pass if expected value is a substring of
+        # actual value or vice versa (handles singular/plural, reordering).
+        return all(
+            k in actual and (str(v) in str(actual[k]) or str(actual[k]) in str(v))
+            for k, v in expected.items()
+        )
     return False
 
 

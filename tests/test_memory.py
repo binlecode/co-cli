@@ -11,7 +11,7 @@ import yaml
 from co_cli.tools.memory import (
     _touch_memory,
     _dedup_pulled,
-    _load_all_memories,
+    _load_memories,
     MemoryEntry,
     recall_memory,
     list_memories,
@@ -78,13 +78,13 @@ def _write_memory(memory_dir: Path, memory_id: int, content: str,
 def test_touch_memory_sets_updated(tmp_path: Path):
     """_touch_memory refreshes the updated timestamp."""
     path = _write_memory(tmp_path, 1, "User prefers pytest", tags=["preference"])
-    entry = _load_all_memories(tmp_path)[0]
+    entry = _load_memories(tmp_path)[0]
     assert entry.updated is None
 
     _touch_memory(entry)
 
     # Reload and verify updated is set
-    reloaded = _load_all_memories(tmp_path)[0]
+    reloaded = _load_memories(tmp_path)[0]
     assert reloaded.updated is not None
     assert reloaded.updated.startswith("20")
 
@@ -103,14 +103,14 @@ def test_dedup_pulled_merges_similar(tmp_path: Path):
                   tags=["testing"],
                   created=datetime.now(timezone.utc).isoformat())
 
-    entries = _load_all_memories(tmp_path)
+    entries = _load_memories(tmp_path)
     assert len(entries) == 2
 
     result = _dedup_pulled(entries, threshold=80)
     # One should be merged away
     assert len(result) == 1
     # Remaining file should have merged tags
-    remaining = _load_all_memories(tmp_path)
+    remaining = _load_memories(tmp_path)
     assert len(remaining) == 1
 
 
@@ -121,7 +121,7 @@ def test_dedup_pulled_keeps_distinct(tmp_path: Path):
     _write_memory(tmp_path, 2, "Project uses PostgreSQL for storage",
                   tags=["context"])
 
-    entries = _load_all_memories(tmp_path)
+    entries = _load_memories(tmp_path)
     result = _dedup_pulled(entries, threshold=85)
     assert len(result) == 2
 
@@ -149,7 +149,7 @@ def test_recall_touches_pulled_memories(tmp_path: Path, monkeypatch):
     assert result["count"] >= 1
 
     # Verify the file was touched (updated timestamp set)
-    reloaded = _load_all_memories(memory_dir)
+    reloaded = _load_memories(memory_dir)
     touched = [m for m in reloaded if "dark" in m.content.lower()]
     assert len(touched) == 1
     assert touched[0].updated is not None
@@ -229,6 +229,6 @@ def test_gravity_affects_recency_order(tmp_path: Path, monkeypatch):
     assert result2["count"] >= 1
 
     # After being touched, memory 1 should have a fresh updated timestamp
-    entries = _load_all_memories(memory_dir)
+    entries = _load_memories(memory_dir)
     m1 = [e for e in entries if e.id == 1][0]
     assert m1.updated is not None

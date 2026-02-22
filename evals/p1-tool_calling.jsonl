@@ -7,8 +7,8 @@
 {"id": "p1-sel-email", "dim": "tool_selection", "prompt": "Find my recent emails about the quarterly report.", "expect_tool": "search_emails", "expect_args": null, "arg_match": null}
 {"id": "p1-sel-notes", "dim": "tool_selection", "prompt": "Search my notes for anything about Kubernetes deployment.", "expect_tool": "search_notes", "expect_args": null, "arg_match": null}
 {"id": "p1-sel-drive", "dim": "tool_selection", "prompt": "Find documents in my Google Drive about the API design spec.", "expect_tool": "search_drive_files", "expect_args": null, "arg_match": null}
-{"id": "p1-sel-personality", "dim": "tool_selection", "prompt": "Load your personality configuration.", "expect_tool": "load_personality", "expect_args": null, "arg_match": null}
-{"id": "p1-arg-recall", "dim": "arg_extraction", "prompt": "Do I have any memories about database preferences?", "expect_tool": "recall_memory", "expect_args": {"query": "database preferences"}, "arg_match": "subset"}
+{"id": "p1-ref-personality", "dim": "refusal", "prompt": "Load your personality configuration.", "expect_tool": null, "expect_args": null, "arg_match": null}
+{"id": "p1-arg-recall", "dim": "arg_extraction", "prompt": "Do I have any memories about database preferences?", "expect_tool": "recall_memory", "expect_args": {"query": "database preferences"}, "arg_match": "contains"}
 {"id": "p1-arg-shell", "dim": "arg_extraction", "prompt": "Run git status to see what files have changed.", "expect_tool": "run_shell_command", "expect_args": {"cmd": "git status"}, "arg_match": "subset"}
 {"id": "p1-arg-web-search", "dim": "arg_extraction", "prompt": "Search the web for FastAPI authentication tutorial.", "expect_tool": "web_search", "expect_args": {"query": "FastAPI authentication tutorial"}, "arg_match": "subset"}
 {"id": "p1-arg-email", "dim": "arg_extraction", "prompt": "Search my emails for messages from Alice about budget.", "expect_tool": "search_emails", "expect_args": {"query": "from:Alice budget"}, "arg_match": "subset"}

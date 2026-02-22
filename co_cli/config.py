@@ -146,7 +146,7 @@ class Settings(BaseModel):
     @field_validator("personality")
     @classmethod
     def _validate_personality(cls, v: str) -> str:
-        from co_cli.prompts.personalities._registry import VALID_PERSONALITIES
+        from co_cli.prompts.personalities._composer import VALID_PERSONALITIES
 
         if v not in VALID_PERSONALITIES:
             raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")

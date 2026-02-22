@@ -45,18 +45,28 @@ class MemoryEntry:
 
 
 # ---------------------------------------------------------------------------
-# Single file scanner — everything else filters from this result
+# Single file scanner — supports optional tag filtering at parse time
 # ---------------------------------------------------------------------------
 
 
-def _load_all_memories(memory_dir: Path) -> list[MemoryEntry]:
-    """Load and validate all memory files from a directory.
+def _load_memories(
+    memory_dir: Path,
+    *,
+    tags: list[str] | None = None,
+) -> list[MemoryEntry]:
+    """Load and validate memory files from a directory.
+
+    When *tags* is provided, only entries whose tags intersect with the
+    requested tags are returned (filtering at parse time). When *tags* is
+    None, all entries are loaded.
 
     Returns a list of MemoryEntry objects. Invalid or malformed files are
     skipped with a warning.
 
     Args:
         memory_dir: Path to the memories directory
+        tags: Optional tag filter — only entries matching at least one tag
+              are included. None means load all.
 
     Returns:
         List of validated MemoryEntry objects
@@ -70,6 +80,13 @@ def _load_all_memories(memory_dir: Path) -> list[MemoryEntry]:
             raw = path.read_text(encoding="utf-8")
             fm, body = parse_frontmatter(raw)
             validate_memory_frontmatter(fm)
+
+            # Early exit: skip entries that don't match requested tags
+            if tags is not None:
+                entry_tags = fm.get("tags", [])
+                if not any(t in entry_tags for t in tags):
+                    continue
+
             entries.append(
                 MemoryEntry(
                     id=fm["id"],
@@ -549,7 +566,7 @@ async def save_memory(
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     # Load all memories once
-    memories = _load_all_memories(memory_dir)
+    memories = _load_memories(memory_dir)
 
     # Step 1: Check for duplicates in recent memories
     cutoff = datetime.now(timezone.utc) - timedelta(
@@ -673,7 +690,7 @@ async def recall_memory(
                      are appended beyond this limit.
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
-    memories = _load_all_memories(memory_dir)
+    memories = _load_memories(memory_dir)
 
     # Filter by query (case-insensitive body + tag search)
     query_lower = query.lower()
@@ -805,7 +822,7 @@ async def list_memories(
         limit: Max memories per page (default 20).
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
-    memories = _load_all_memories(memory_dir)
+    memories = _load_memories(memory_dir)
 
     if not memories:
         no_dir = not memory_dir.exists()

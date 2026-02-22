@@ -74,18 +74,45 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
 # ---------------------------------------------------------------------------
 
 
-def make_eval_settings(model_settings: ModelSettings | None = None) -> ModelSettings:
-    """Build deterministic eval settings (temperature=0) from base model settings."""
-    if model_settings is None:
-        return ModelSettings(temperature=0)
+def make_eval_settings(
+    model_settings: ModelSettings | None = None,
+    *,
+    max_tokens: int | None = None,
+) -> ModelSettings:
+    """Build eval settings from real model configuration.
 
-    base: dict[str, Any] = {"temperature": 0}
-    for attr in ("top_p", "max_tokens"):
+    All values are passed through as-is from the quirks database so evals run
+    against the same parameters as live sessions. Both providers now supply
+    model_settings via get_agent():
+      - Ollama: temperature from quirks (e.g. 0.6 for qwen3). Never override
+        to 0 — thinking models produce degenerate loops at temperature=0.
+      - Gemini: temperature from quirks (1.0 for 2.5/3 series). Google's
+        guidance: setting below 1.0 causes looping in thinking models.
+
+    Falls back to temperature=0 only when no model settings exist at all
+    (e.g. unit tests / unknown providers).
+
+    Args:
+        model_settings: Settings from get_agent(), or None for fallback.
+        max_tokens: Optional cap on max_tokens. Surface-level evals (personality
+            adherence, heuristic checks) pass a small cap (e.g. 2048) to limit
+            thinking chain length on local models. Omit to use the quirks default.
+    """
+    if model_settings is None:
+        base: dict[str, Any] = {"temperature": 0}
+        if max_tokens is not None:
+            base["max_tokens"] = max_tokens
+        return ModelSettings(**base)
+
+    base = {}
+    for attr in ("temperature", "top_p", "max_tokens"):
         val = getattr(model_settings, attr, None)
         if val is not None:
             base[attr] = val
     if hasattr(model_settings, "extra_body") and model_settings.extra_body:
         base["extra_body"] = model_settings.extra_body
+    if max_tokens is not None:
+        base["max_tokens"] = max_tokens
     return ModelSettings(**base)
 
 

@@ -37,7 +37,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import get_agent
+from co_cli.agent import CoDeps, get_agent
 from co_cli.config import settings
 
 from evals._common import make_eval_deps, make_eval_settings

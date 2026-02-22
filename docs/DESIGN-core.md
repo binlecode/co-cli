@@ -1,12 +1,82 @@
 ---
-title: "01 — Agent Loop"
-parent: Core
+title: "System Design"
 nav_order: 1
+has_children: true
 ---
 
-# Design: Agent Loop
+# Co CLI — System Design
 
 ## 1. What & How
+
+**Stack:** Python 3.12+, Pydantic AI, Ollama/Gemini, UV
+
+Co is a personal AI assistant CLI — local-first (Ollama) or cloud (Gemini), approval-gated shell execution, OTel tracing to SQLite, human-in-the-loop approval for side effects.
+
+```mermaid
+graph TB
+    subgraph User Interface
+        CLI[Typer CLI]
+        REPL[Prompt Toolkit REPL]
+    end
+
+    subgraph Core Brain
+        Agent[Pydantic AI Agent]
+        LLM{LLM Provider}
+        Ollama[Ollama Local]
+        Gemini[Gemini Cloud]
+    end
+
+    subgraph Tool Layer
+        ToolShell[Shell Tool]
+        ToolObsidian[Obsidian Tool]
+        ToolDrive[Drive Tool]
+        ToolGmail[Gmail Tool]
+        ToolCalendar[Calendar Tool]
+        ToolWeb[Web Tools]
+        MCP[MCP Toolsets]
+    end
+
+    subgraph External Services
+        ObsVault[Obsidian Vault]
+        GDrive[Google Drive API]
+        GmailAPI[Gmail API]
+        GCal[Calendar API]
+        BraveAPI[Brave Search API]
+        HTTP[HTTP / Web]
+        MCPServers[MCP Servers stdio]
+    end
+
+    subgraph Infrastructure
+        Config[Config Manager]
+        Telemetry[OpenTelemetry]
+        SQLite[(SQLite DB)]
+    end
+
+    CLI --> REPL
+    REPL --> Agent
+    Agent --> LLM
+    LLM --> Ollama
+    LLM --> Gemini
+
+    Agent --> ToolShell
+    Agent --> ToolObsidian
+    Agent --> ToolDrive
+    Agent --> ToolGmail
+    Agent --> ToolCalendar
+    Agent --> ToolWeb
+
+    ToolObsidian --> ObsVault
+    ToolDrive --> GDrive
+    ToolGmail --> GmailAPI
+    ToolCalendar --> GCal
+    ToolWeb --> BraveAPI
+    ToolWeb --> HTTP
+    MCP --> MCPServers
+
+    Config --> Agent
+    Agent --> Telemetry
+    Telemetry --> SQLite
+```
 
 The agent loop is the core orchestration layer. It connects the REPL (user input), the pydantic-ai Agent (LLM + tools), and the terminal display (Rich). Three modules collaborate:
 
@@ -59,6 +129,22 @@ graph LR
     RunTurn -->|TurnResult| History
 ```
 
+### Component Docs
+
+| Component | Doc | Summary |
+|-----------|-----|---------|
+| Personality System | [DESIGN-02-personality.md](DESIGN-02-personality.md) | File-driven roles, 5 traits, structural per-turn injection, reasoning depth override |
+| LLM Models | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Gemini/Ollama model selection, inference parameters, Ollama local setup |
+| Streaming Event Ordering | [DESIGN-04-streaming-event-ordering.md](DESIGN-04-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
+| Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
+| Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
+| Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
+| Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files. Includes proactive signal detection (preferences, corrections, decisions) and lifecycle management (dedup, consolidation, decay) |
+| Tools | [DESIGN-tools.md](DESIGN-tools.md) | Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch) — all native tool implementations |
+| MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
+
+---
+
 ## 2. Core Logic
 
 ### Agent Factory (`get_agent`)
@@ -88,7 +174,7 @@ get_agent(all_approval, web_policy, mcp_servers) → (agent, model_settings, too
 | Web tools | Policy-driven | `web_policy.search` / `web_policy.fetch`: `"allow"` or `"ask"` |
 | MCP tools | Per-server config | `"auto"` → deferred; `"never"` → trusted |
 
-See [DESIGN-03-llm-models.md](DESIGN-03-llm-models.md) for model configuration details.
+See [DESIGN-llm-models.md](DESIGN-llm-models.md) for model configuration details.
 
 ### CoDeps (Runtime Dependencies)
 
@@ -363,6 +449,129 @@ See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md)
 | Fallback | Final result rendered as Markdown if streaming produced no text |
 | Tab completion | `WordCompleter` for `/command` names |
 
+---
+
+### Documentation Standards
+
+All DESIGN docs use pseudocode to explain processing logic — never paste source code. This keeps docs readable, prevents staleness when code changes, and forces focus on intent over syntax. Each component doc follows the 4-section template: What & How, Core Logic, Config, Files.
+
+### Configuration
+
+XDG-compliant configuration with project-level overrides. Resolution order (highest wins):
+
+1. Environment variables (`fill_from_env` model validator)
+2. `.co-cli/settings.json` in cwd (project — shallow `|=` merge)
+3. `~/.config/co-cli/settings.json` (user)
+4. Default values (Pydantic `Field(default=...)`)
+
+Project config is checked at `cwd/.co-cli/settings.json` only — no upward directory walk. `save()` always writes to the user-level file.
+
+MCP servers are configured in `settings.json` under `mcp_servers` (dict of name → `MCPServerConfig`) or via `CO_CLI_MCP_SERVERS` env var (JSON). Each server specifies `command`, `args`, `timeout`, `env`, `approval` ("auto"|"never"), and optional `prefix`.
+
+### Tool Conventions
+
+Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` remaining. External tools are provided by MCP servers configured in `settings.json` and connected as pydantic-ai `MCPServerStdio` toolsets.
+
+**Return convention:** Tools returning data for the user return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `has_more`). The system prompt instructs the LLM to show `display` verbatim. `_stream_events()` renders tool returns inline as events arrive via `frontend.on_tool_result()`.
+
+| Tool | Return type | Has `display`? | Metadata |
+|------|------------|----------------|----------|
+| `search_drive_files` | `dict` | Yes | `page`, `has_more` |
+| `read_drive_file` | `str` | No | — |
+| `list_emails` / `search_emails` | `dict` | Yes | `count` |
+| `create_email_draft` | `str` | No | — |
+| `list_calendar_events` / `search_calendar_events` | `dict` | Yes | `count` |
+| `search_notes` | `dict` | Yes | `count`, `has_more` |
+| `list_notes` | `dict` | Yes | `count` |
+| `read_note` | `str` | No | — |
+| `run_shell_command` | `str` | No | — |
+| `web_search` | `dict` | Yes | `results`, `count` |
+| `web_fetch` | `dict` | Yes | `url`, `content_type`, `truncated` |
+
+**Naming convention:** `verb_noun` with converged verb set: `read`, `list`, `search`, `create`, `send`, `run`. `web_search` and `web_fetch` use `web_` prefix to namespace web tools.
+
+**Error classification:** Tool errors are classified into `ToolErrorKind` (TERMINAL, TRANSIENT, MISUSE) via `classify_google_error()` and dispatched through `handle_tool_error()`. TERMINAL returns `{"display": ..., "error": True}` (model picks alternative). TRANSIENT/MISUSE raise `ModelRetry` (model self-corrects). See `tools/_errors.py`.
+
+**ModelRetry convention:** `ModelRetry` = "you called this wrong, fix your parameters" (LLM can self-correct). Empty result = "query was fine, nothing matched" (return `{"count": 0}`). **Terminal config errors** (missing credentials, API not enabled) use `terminal_error()` which returns `{"display": "...", "error": True}` instead of `ModelRetry` — this stops the retry loop and lets the model route to an alternative tool.
+
+**Retry budget:** Agent-level `retries=settings.tool_retries` (default 3). All tools inherit the same budget.
+
+**Provider error handling:** `run_turn()` classifies provider errors via `classify_provider_error()`: HTTP 400 → reflection (inject error, re-run), 429/5xx/network → exponential backoff retry, 401/403/404 → abort. All retries capped at `settings.model_http_retries` (default 2).
+
+**Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 25) caps LLM round-trips per user turn.
+
+### Approval Flow
+
+Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-tools.md](DESIGN-tools.md) for safe-command auto-approval.
+
+| Tool | Approval | Rationale |
+|------|----------|-----------|
+| `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
+| `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
+| MCP tools (approval=auto) | Yes | External tools default to requiring approval |
+| MCP tools (approval=never) | No | Explicitly trusted by user config |
+| All other native tools | No | Read-only operations |
+
+### Security Model
+
+Four defense layers:
+
+1. **Configuration** — Secrets in `settings.json` or env vars, no hardcoded keys, env vars override file values
+2. **Confirmation** — Human-in-the-loop approval for shell commands and email drafts (see approval flow above)
+3. **Environment sanitization** — Allowlist-only env vars, forced safe pagers, process-group cleanup on timeout (see [DESIGN-tools.md](DESIGN-tools.md))
+4. **Input validation** — Path traversal protection in Obsidian tools, API scoping in Google tools
+
+### Concurrency
+
+Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the async loop — query N must complete before query N+1 begins. This prevents conversation history forking and avoids overloading Ollama (can't handle parallel inference on consumer hardware).
+
+### XDG Directory Structure
+
+```
+~/.config/co-cli/
+└── settings.json          # User configuration
+
+~/.local/share/co-cli/
+├── co-cli.db              # OpenTelemetry traces (SQLite)
+└── history.txt            # REPL command history
+
+<project-root>/
+└── .co-cli/
+    └── settings.json      # Project configuration (overrides user)
+```
+
+### Modules
+
+| Module | Purpose |
+|--------|---------|
+| `main.py` | CLI entry point, chat loop, OTel setup |
+| `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
+| `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
+| `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
+| `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
+| `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
+| `shell_backend.py` | `ShellBackend` — approval-gated subprocess execution |
+| `_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
+| `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
+| `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` |
+| `_banner.py` | ASCII art welcome banner |
+| `_commands.py` | Slash command registry, handlers, `dispatch()` |
+| `_history.py` | History processors and `summarize_messages()` |
+| `_approval.py` | Shell safe-command classification |
+| `_tail.py` | Real-time span viewer (`co tail`) |
+| `_trace_viewer.py` | Static HTML trace viewer (`co traces`) |
+| `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
+| `tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
+| `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
+| `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
+| `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
+| `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
+| `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
+| `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
+| `scripts/eval_tool_calling.py` | Eval framework — golden case scoring, model tagging, multi-baseline comparison |
+
+---
+
 ## 3. Config
 
 Settings relevant to the agent loop. Full settings inventory in `co_cli/config.py`.
@@ -379,6 +588,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` | LLM for summarization (or use agent model) |
 | `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | Max stored memories |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 3 defaults | MCP server configurations (JSON) |
+
+---
 
 ## 4. Files
 
@@ -397,3 +608,30 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/prompts/__init__.py` | `assemble_prompt()` — static prompt: instructions, rules, counter-steering |
 | `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `scripts/eval_tool_calling.py` | Eval runner — golden case scoring, model tagging, baseline comparison |
+
+### Dependencies
+
+#### Runtime
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `pydantic-ai` | ^1.52.0 | LLM orchestration |
+| `typer` | ^0.21.1 | CLI framework |
+| `rich` | ^14.3.2 | Terminal UI |
+| `prompt-toolkit` | ^3.0.52 | Interactive REPL |
+| `google-genai` | ^1.61.0 | Gemini API |
+| `google-api-python-client` | ^2.189.0 | Drive/Gmail/Calendar |
+| `google-auth-httplib2` | ^0.3.0 | Google auth transport adapter |
+| `google-auth-oauthlib` | ^1.2.4 | OAuth2 |
+| `opentelemetry-sdk` | ^1.39.1 | Tracing |
+| `httpx` | ^0.28.1 | HTTP client (web tools) |
+| `html2text` | ^2025.4.15 | HTML→markdown conversion (web_fetch) |
+| `datasette` | ^0.65.2 | Telemetry dashboard |
+| `datasette-pretty-json` | ^0.3 | Datasette JSON rendering plugin |
+
+#### Development
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `pytest` | ^9.0.2 | Testing framework |
+| `pytest-asyncio` | ^1.3.0 | Async test support |

@@ -5,6 +5,12 @@ FROM glm-4.7-flash:q4_k_m
 #
 # Inference cost scales with filled context, not the limit.
 # Ollama default num_ctx (4096) is far too small for agentic use.
+#
+# temperature=0.7 + top_p=1.0: official tool-calling/coding profile from the HF card.
+# Use one sampling axis — nucleus sampling off (top_p=1.0) when temperature is set.
+# repeat_penalty MUST be 1.0 — any value above 1.0 causes degenerate repetition loops
+# in GGUF quants (confirmed critical, Unsloth re-uploaded all quants after this bug).
+# num_ctx 202752: Unsloth rope-scaled figure; Ollama library lists 198K.
 
 PARAMETER num_ctx 202752
 PARAMETER num_predict 16384

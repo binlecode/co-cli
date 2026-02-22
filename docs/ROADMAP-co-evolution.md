@@ -71,7 +71,7 @@ Per-turn layers  (@agent.system_prompt functions in agent.py):
   add_personality_memories     (## Learned Context: top 5 personality-context memories)
 ```
 
-First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. All personality content is in the system prompt on every turn. The LLM self-modulates expression depth guided by the adoption mandate. See `TODO-personality-redesign.md`.
+First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. All personality content is in the system prompt on every turn. The LLM self-modulates expression depth guided by the adoption mandate. See `DESIGN-02-personality.md`.
 
 ### 3.3 Personality System
 
@@ -96,7 +96,7 @@ First principle: **personality is structural — injected every turn, never tool
 | terse | terse | professional | reactive | neutral | minimal |
 | inquisitive | educational | companion | proactive | neutral | comprehensive |
 
-Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `TODO-personality-redesign.md`.
+Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `DESIGN-02-personality.md`.
 
 ### 3.4 Infrastructure
 
@@ -1100,9 +1100,8 @@ All paths verified against `docs/` contents.
 
 | Doc | Description |
 |-----|-------------|
-| `DESIGN-00-co-cli.md` | Architecture overview, component index, cross-cutting concerns |
-| `DESIGN-01-agent-chat-loop.md` | Agent loop: factory, CoDeps, orchestration, streaming, approval |
-| `DESIGN-03-llm-models.md` | LLM model configuration (Gemini, Ollama) |
+| `DESIGN-core.md` | System overview, agent loop: factory, CoDeps, orchestration, streaming, approval, cross-cutting concerns |
+| `DESIGN-llm-models.md` | LLM model configuration (Gemini, Ollama) + Ollama local setup |
 | `DESIGN-04-streaming-event-ordering.md` | Streaming event ordering, boundary-safe rendering |
 | `DESIGN-05-otel-logging.md` | Telemetry architecture, SQLite schema, viewers |
 | `DESIGN-06-tail-viewer.md` | Real-time span tail viewer |
@@ -1113,14 +1112,14 @@ All paths verified against `docs/` contents.
 | `DESIGN-11-tool-google.md` | Google tools: Drive, Gmail, Calendar, lazy auth |
 | `DESIGN-13-tool-web-search.md` | Web intelligence: web_search (Brave API) + web_fetch (HTML→markdown) |
 | `DESIGN-15-mcp-client.md` | MCP client: external tool servers via stdio transport |
-| `TODO-personality-redesign.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
+| `DESIGN-02-personality.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
 
 ### TODO Documents (remaining work)
 
 | Doc | Description | Related Phase |
 |-----|-------------|---------------|
 | `TODO-co-agentic-loop-and-prompting.md` | Agentic loop + prompting: ReAct, doom loop, sub-agents, prompt composition | A, D, I |
-| `TODO-personality-redesign.md` | Prompt & personality redesign: file-driven roles, 5 traits, structural delivery | A |
+| `DESIGN-02-personality.md` | Prompt & personality redesign: file-driven roles, 5 traits, structural delivery | A |
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
 | `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
@@ -1131,7 +1130,6 @@ All paths verified against `docs/` contents.
 | Doc | Description |
 |-----|-------------|
 | `TAKEAWAY-converged-adoptions.md` | Converged peer research: adopted/declined/deferred patterns with rationale |
-| `RESEARCH-cli-agent-tools-landscape-2026.md` | CLI agent tools landscape research |
 | `RESEARCH-obsidian-lakehouse-2026-best-practices.md` | Obsidian lakehouse best practices |
 
 ## 26. Peer System Reference
@@ -1214,4 +1212,4 @@ Additional reference for memory architecture:
 
 ### Reference Implementations
 29. Openclaw `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap
-30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `TODO-personality-redesign.md`
+30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `DESIGN-02-personality.md`
