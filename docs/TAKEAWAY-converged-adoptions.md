@@ -6,14 +6,6 @@ Design logic for completed items has been merged into the relevant DESIGN docs. 
 
 ---
 
-### 2.5 FinishReasonLength Detection — DONE
-
-**Source:** Aider (`base_coder.py:1492-1505`, `FinishReasonLength` exception handling)
-
-**Design:** Replaced the 95%-of-`max_tokens` heuristic in `_orchestrate.py` with an exact check: `result.response.finish_reason == "length"`. Access path is `AgentRunResult.response.finish_reason` — `response` is a property returning the last `ModelResponse`, which carries `finish_reason: FinishReason | None` (normalized to OTel values: `"stop"`, `"length"`, `"content_filter"`, `"tool_call"`, `"error"`). `FinishReason` imported from `pydantic_ai` directly. When the model hits its output token limit, the user sees: *"Response may be truncated (hit output token limit). Use /continue to extend."* Normal responses emit nothing.
-
----
-
 ### 3.6 Progressive Knowledge Loading — BLOCKED
 
 **Source:** Claude Code (`plugins/plugin-dev/skills/agent-development/SKILL.md`, index + on-demand reference sections)
@@ -32,7 +24,6 @@ Design logic for completed items has been merged into the relevant DESIGN docs. 
 
 | Item | Status |
 |------|--------|
-| 2.5 FinishReasonLength Detection | DONE |
 | 3.6 Progressive Knowledge Loading | BLOCKED |
 
 **Last checked:** 2026-02-25
