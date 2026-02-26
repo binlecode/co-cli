@@ -20,6 +20,13 @@ When a Directive or Deep Inquiry needs multi-step work, decompose into
 sub-goals, then execute them in order. After each tool result, evaluate
 progress and continue until all sub-goals are met.
 
+## Completeness
+Before ending a turn, verify every stated sub-goal has been addressed.
+If a todo list is active (todo_write was called this session), call
+todo_read and confirm no `pending` or `in_progress` items remain before
+responding as done. Partial completion is a trust failure — continue until
+all goals are met or explicitly abandoned.
+
 ## When NOT to over-plan
 Not every message needs planning — direct questions get direct answers.
 Match response length to question complexity.

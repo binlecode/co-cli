@@ -64,6 +64,10 @@ class CoDeps:
     doom_loop_threshold: int = 3
     max_reflections: int = 3
 
+    # Session-scoped todo list — written/read by todo_write/todo_read tools.
+    # Cleared on session start; not persisted across sessions.
+    session_todos: list[dict] = field(default_factory=list)
+
     # Background compaction — pre-computed summary set by chat_loop(),
     # consumed (and cleared) by truncate_history_window() on next turn.
     precomputed_compaction: Any = field(default=None, repr=False)

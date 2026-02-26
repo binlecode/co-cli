@@ -30,6 +30,7 @@ uv run python evals/eval_safety_abort_marker.py       # Ctrl-C abort marker inje
 uv run python evals/eval_safety_grace_turn.py         # Budget exhaustion grace turn
 uv run python evals/eval_memory_proactive_recall.py   # Proactive memory injection (W1)
 uv run python evals/eval_memory_signal_detection.py   # Signal detection + contradiction (W2/W6)
+uv run python evals/eval_signal_analyzer.py           # Mini-agent classification: high/low/none confidence
 uv run python evals/eval_memory_decay.py              # Decay lifecycle (deterministic, W7)
 uv run python evals/eval_personality_adherence.py    # Personality adherence (P2, heuristic scored)
 ```
@@ -129,10 +130,18 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
 - `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
 - `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: proactive signal detection, context loading, dedup, consolidation, decay, protection, search evolution *(planned — not yet written)*
+- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: auto-triggered signal detection (implemented), context loading, dedup, consolidation, decay, protection, search evolution
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
+### TAKEAWAY (incomplete adoptions backlog — no design content, no completed items)
+
+`docs/TAKEAWAY-*.md` files track work items adopted from peer systems that are not yet fully implemented. Three statuses: OPEN = not started, PARTIAL = in progress, BLOCKED = external dependency.
+
+**Lifecycle rule:** When an item is completed, merge its design logic into the relevant DESIGN doc and remove the entry from the TAKEAWAY file. TAKEAWAY files track only incomplete work — completed items do not stay here.
+
 ### TODO (remaining work items only — no design content, no status tracking)
+
+**Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
 - `docs/TODO-co-agentic-loop-and-prompting.md` — Ground-up agentic loop + prompting architecture design (goal-driven ReAct, doom loop detection, prompt composition)
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling

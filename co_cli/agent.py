@@ -25,6 +25,7 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
+from co_cli.tools.todo import todo_write, todo_read
 
 
 def get_agent(
@@ -198,6 +199,10 @@ def get_agent(
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(save_memory, requires_approval=True)
+
+    # Session task tracking — no approval (in-memory only, no external side effects)
+    agent.tool(todo_write, requires_approval=all_approval)
+    agent.tool(todo_read, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
     agent.tool(recall_memory, requires_approval=all_approval)

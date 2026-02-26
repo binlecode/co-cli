@@ -24,6 +24,8 @@ Shell, memory, Obsidian vault, Google services, and web intelligence — agent t
 |------|----------|-----------|
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
+| `save_memory` | Yes | Writes to `.co-cli/knowledge/memories/` |
+| `todo_write`, `todo_read` | No | In-memory session state only — no external side effects |
 | All other native tools | No | Read-only operations |
 
 ---
@@ -105,6 +107,47 @@ User prefers pytest over unittest for Python testing.
 | `co_cli/config.py` | Memory settings with env var mappings |
 | `co_cli/deps.py` | `CoDeps` memory scalar fields |
 | `tests/test_memory.py` | Functional tests: save, recall, dedup, decay |
+
+---
+
+## Todo Tools
+
+### 1. What & How
+
+`todo_write` / `todo_read` give the model a session-scoped task list for multi-step directives. State lives in `CoDeps.session_todos` (in-memory, not persisted). The model replaces the full list to update status, then reads it back to verify completeness before ending a turn. Rule 05 mandates this check — the model must not respond as done while any `pending` or `in_progress` items remain.
+
+```
+todo_write(todos)
+  ├── Validate each item: content (str), status, priority
+  ├── status ∈ {pending, in_progress, completed, cancelled}
+  ├── priority ∈ {high, medium, low} (default: medium)
+  ├── Validation error? → return error dict, do not write
+  └── Replace ctx.deps.session_todos → return counts
+
+todo_read()
+  └── Return current session_todos
+        └── pending > 0 or in_progress > 0?
+              → signal "work is not complete" in display
+```
+
+### 2. Core Logic
+
+**`todo_write(todos) → dict`** — Replaces the entire list (idempotent; the model rewrites all items to update any one). Validates `status` and `priority` enums before writing — returns an error dict on invalid input without touching stored state. Returns `pending` and `in_progress` counts so the model knows remaining work without a follow-up read.
+
+**`todo_read() → dict`** — Returns current list. When `pending > 0` or `in_progress > 0`, the `display` field contains an explicit "work is not complete" message so the model knows to continue rather than close the turn.
+
+**Completeness enforcement (Rule 05):** `prompts/rules/05_workflow.md` contains a `## Completeness` section directing the model to call `todo_read` and confirm no `pending`/`in_progress` items remain before ending a turn. No orchestration-layer scanning — task state lives in the model's tool calls.
+
+**Why full-list replacement:** Follows the OpenCode/Claude Code TodoWrite pattern. Partial updates (patch-by-id) require the model to track IDs across turns and are error-prone. Rewriting the full list is simpler, stateless from the model's perspective, and equally expressive.
+
+### 3. Files
+
+| File | Purpose |
+|------|---------|
+| `co_cli/tools/todo.py` | `todo_write`, `todo_read` |
+| `co_cli/deps.py` | `CoDeps.session_todos` — session list field, default empty |
+| `co_cli/agent.py` | Registration: both tools, `requires_approval=False` |
+| `co_cli/prompts/rules/05_workflow.md` | `## Completeness` directive |
 
 ---
 
