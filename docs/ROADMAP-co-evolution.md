@@ -164,11 +164,9 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 - Handoff-style compaction prompt with anti-injection — `_history.py`
 
 **Remaining:**
-- Doom loop detection (hash-based, threshold 3 — adopted from OpenCode/Gemini CLI)
-- Grace turn on budget exhaustion (one extra turn for partial results — from Gemini CLI)
-- Shell reflection loop (error output fed back, max 3 retries — from Aider)
+- None in the Phase A safety baseline. Outstanding loop/prompt work is tracked under Phase I and future quality enhancements.
 
-**Design doc:** `TODO-co-agentic-loop-and-prompting.md`
+**Design docs:** `DESIGN-16-prompt-design.md`, `DESIGN-core.md`
 
 ### Phase B: File Tools — HIGH
 
@@ -192,7 +190,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 - Chat loop has no `!cmd` bypass path — all commands go through approval
 - Tighten safe-command classification — safe-prefix auto-approval active universally (no `isolation_level` gate)
 
-**Design docs:** `DESIGN-09-tool-shell.md`
+**Design docs:** `DESIGN-tools.md`
 
 ### Phase D: Context Compaction — HIGH
 
@@ -205,7 +203,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 - Background pre-compaction during user idle time (optimization)
 - Plans and key decisions persist across compaction events
 
-**Design doc:** `DESIGN-07-context-governance.md` (existing), `TODO-co-agentic-loop-and-prompting.md`
+**Design docs:** `DESIGN-07-context-governance.md`, `DESIGN-16-prompt-design.md`
 
 ### Phase E: Background Execution — MEDIUM
 
@@ -252,7 +250,14 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 ### Phase I: Sub-Agent Delegation — MEDIUM
 
-**Why:** 3/5 peers have multi-agent capability. Already designed in `TODO-co-agentic-loop-and-prompting.md` as super-agent + sub-agents with structured output types.
+**Why:** 3/5 peers have multi-agent capability. The baseline design lives in `DESIGN-16-prompt-design.md`; remaining implementation work is tracked in `TODO-co-agentic-loop-and-prompting.md`.
+
+**Priority inside Phase I TODO set:** P1
+
+**Implementation timing (dependency-aware):**
+- After `TODO-tool-docstring-template.md` is completed (improves tool-call reliability before delegation multiplies tool usage).
+- After baseline `TODO-background-execution.md` is in place (long-running delegated work can evolve toward non-blocking execution paths).
+- Before confidence-scored advisory outputs and voice overlays.
 
 **Scope:**
 - Research sub-agent (search → fetch → synthesize, returns `ResearchResult`)
@@ -263,6 +268,10 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 **Orchestration pattern:** Phase I introduces multi-`run_turn()` orchestration — a parent agent dispatching sub-agent turns and collecting results. Whichever of Phase I or Phase M (arena controller) ships first defines this pattern; the second phase reuses it. Both are compositions of the same `run_turn()` primitive (Design Principle #4).
 
 **Gating:** Phase 1 prompt improvements may solve the early-exit problem without sub-agents. The TODO doc specifies a test gate: if 80%+ of research prompts complete full tool chains after prompt rewrite, sub-agents are deferred.
+
+**Other remaining prompt-loop items (from TODO-co-agentic-loop-and-prompting):**
+- Personality prompt-budget optimization — **P1**, recommended before sub-agent rollout to reclaim context headroom.
+- Confidence-scored advisory outputs — **P2**, recommended after search-quality upgrades (`TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` and knowledge/article evolution) so scores are signal-backed instead of guessy.
 
 ### Phase J: Shell Policy Engine (S1) — LOW
 
@@ -1103,27 +1112,32 @@ All paths verified against `docs/` contents.
 | `DESIGN-core.md` | System overview, agent loop: factory, CoDeps, orchestration, streaming, approval, cross-cutting concerns |
 | `DESIGN-llm-models.md` | LLM model configuration (Gemini, Ollama) + Ollama local setup |
 | `DESIGN-04-streaming-event-ordering.md` | Streaming event ordering, boundary-safe rendering |
-| `DESIGN-05-otel-logging.md` | Telemetry architecture, SQLite schema, viewers |
-| `DESIGN-06-tail-viewer.md` | Real-time span tail viewer |
+| `DESIGN-logging-and-tracking.md` | Telemetry architecture, SQLite schema, viewers, real-time tail |
 | `DESIGN-07-context-governance.md` | Context governance: history processors, sliding window, summarization |
 | `DESIGN-08-theming-ascii.md` | Theming, ASCII art banner, display helpers |
-| `DESIGN-09-tool-shell.md` | Shell tool, approval-gated subprocess, security model |
-| `DESIGN-10-tool-obsidian.md` | Obsidian/notes tool design |
-| `DESIGN-11-tool-google.md` | Google tools: Drive, Gmail, Calendar, lazy auth |
-| `DESIGN-13-tool-web-search.md` | Web intelligence: web_search (Brave API) + web_fetch (HTML→markdown) |
+| `DESIGN-tools.md` | Native tools: shell, memory, Obsidian, Google, web, todo conventions |
+| `DESIGN-14-memory-lifecycle-system.md` | Memory lifecycle: signal detection, dedup, consolidation, decay, context loading |
 | `DESIGN-15-mcp-client.md` | MCP client: external tool servers via stdio transport |
+| `DESIGN-16-prompt-design.md` | Agentic loop + prompting architecture: run_turn, safety policy, prompt composition |
 | `DESIGN-02-personality.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
 
 ### TODO Documents (remaining work)
 
 | Doc | Description | Related Phase |
 |-----|-------------|---------------|
-| `TODO-co-agentic-loop-and-prompting.md` | Agentic loop + prompting: ReAct, doom loop, sub-agents, prompt composition | A, D, I |
-| `DESIGN-02-personality.md` | Prompt & personality redesign: file-driven roles, 5 traits, structural delivery | A |
+| `TODO-co-agentic-loop-and-prompting.md` | Remaining loop/prompt work: sub-agent delegation, confidence scoring, prompt-budget optimization | I |
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
 | `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
 | `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | SQLite FTS5 + semantic search: unified `KnowledgeIndex` for all text sources | P (+ Stage 2-3 of memory evolution) |
+
+Recommended cross-TODO sequence (single-agent track):
+1. `TODO-tool-docstring-template.md`
+2. `TODO-co-agentic-loop-and-prompting.md` — personality prompt-budget optimization (P1)
+3. `TODO-background-execution.md`
+4. `TODO-co-agentic-loop-and-prompting.md` — sub-agent delegation (P1)
+5. `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` + `TODO-knowledge-articles.md`
+6. `TODO-co-agentic-loop-and-prompting.md` — confidence-scored advisory outputs (P2)
 
 ### Research & Review Documents
 

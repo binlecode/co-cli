@@ -143,7 +143,7 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
-- `docs/TODO-tool-docstring-template.md` — 4-dimension template for tool docstrings: what it does, what it returns, when/how to use, caveats
+- `docs/TODO-skills-system.md` — Skills system gaps: frontmatter parsing, arg substitution, description injection, env gating
 
 ### Skills
 - `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit

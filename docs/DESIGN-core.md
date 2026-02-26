@@ -139,6 +139,7 @@ graph LR
 | Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
 | Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
 | Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
+| Agentic Loop & Prompting | [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) | Deep spec for `run_turn`, approval re-entry, safety policies, and prompt-layer composition |
 | Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files. Includes proactive signal detection (preferences, corrections, decisions) and lifecycle management (dedup, consolidation, decay) |
 | Tools | [DESIGN-tools.md](DESIGN-tools.md) | Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch) — all native tool implementations |
 | MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
@@ -182,11 +183,11 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 
 | Group | Fields |
 |-------|--------|
-| **Runtime resources** | `shell` (ShellBackend), `auto_confirm` (session yolo), `session_id` (uuid4), `google_creds` (lazy-resolved) |
+| **Runtime resources** | `shell` (ShellBackend), `session_id` (uuid4), `google_creds` (lazy-resolved) |
 | **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
 | **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2) |
 | **History governance** | `max_history_messages` (40), `tool_output_trim_chars` (2000), `summarization_model` (empty = primary model) |
-| **Mutable state** | `drive_page_tokens` (pagination state per query) |
+| **Mutable state** | `drive_page_tokens` (pagination state per query), `auto_approved_tools` (per-tool session approvals), `session_todos` (session task list), `precomputed_compaction` (background summary cache) |
 
 ### Multi-Session State Design
 
@@ -331,12 +332,12 @@ _handle_approvals(agent, deps, result, model_settings, limits, frontend):
         parse args (json.loads if string)
         format description as "tool_name(k=v, ...)"
 
-        if deps.auto_confirm → approve
+        if call.tool_name in deps.auto_approved_tools → approve
         elif run_shell_command AND is_safe_command(cmd, shell_safe_commands) → approve
         else:
             choice = frontend.prompt_approval(desc)
             "y" → approve
-            "a" → set deps.auto_confirm = True, approve
+            "a" → add call.tool_name to deps.auto_approved_tools, approve
             "n" → ToolDenied("User denied this action")
 
     return _stream_events(agent, user_input=None,
@@ -344,7 +345,7 @@ _handle_approvals(agent, deps, result, model_settings, limits, frontend):
         deferred_tool_results=approvals, ...)
 ```
 
-**Safe-command gate:** Commands matching the safe-prefix list are auto-approved. **Denial:** LLM sees `ToolDenied` and can suggest alternatives. **Session yolo:** `"a"` sets `auto_confirm = True` for all subsequent calls in the session.
+**Safe-command gate:** Commands matching the safe-prefix list are auto-approved. **Denial:** LLM sees `ToolDenied` and can suggest alternatives. **Per-tool session approval:** `"a"` stores the specific tool name in `deps.auto_approved_tools` for the rest of the session.
 
 ### FrontendProtocol
 
@@ -377,7 +378,7 @@ Local REPL commands — bypass the LLM, execute instantly. Explicit `dict` regis
 | `/tools` | List registered tool names |
 | `/history` | Show turn/message totals |
 | `/compact` | LLM-summarise history (see [DESIGN-07](DESIGN-07-context-governance.md)) |
-| `/yolo` | Toggle `deps.auto_confirm` |
+| `/depth` | Show/set reasoning depth (`quick`, `normal`, `deep`) |
 | `/model` | Show/switch current model (Ollama only) |
 | `/forget <id>` | Delete memory by ID |
 
@@ -423,6 +424,7 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 ### System Prompt Assembly
 
 Two-part structure — static base assembled once, per-turn layers appended before every model request.
+Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md).
 
 **Static** (`assemble_prompt(provider, model_name)` in `prompts/__init__.py`):
 
@@ -511,7 +513,7 @@ Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` r
 
 **Provider error handling:** `run_turn()` classifies provider errors via `classify_provider_error()`: HTTP 400 → reflection (inject error, re-run), 429/5xx/network → exponential backoff retry, 401/403/404 → abort. All retries capped at `settings.model_http_retries` (default 2).
 
-**Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 25) caps LLM round-trips per user turn.
+**Request limit:** `UsageLimits(request_limit=settings.max_request_limit)` (default 50) caps LLM round-trips per user turn.
 
 ### Approval Flow
 
@@ -591,10 +593,10 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 
 | Setting | Env Var | Default | Purpose |
 |---------|---------|---------|---------|
-| `llm_provider` | `LLM_PROVIDER` | `"gemini"` | Provider selection (`gemini` or `ollama`) |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Provider selection (`gemini` or `ollama`) |
 | `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality role name (per-turn injection) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
-| `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `25` | Caps LLM round-trips per user turn |
+| `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `50` | Caps LLM round-trips per user turn |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Sliding window threshold |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Truncate old tool outputs |

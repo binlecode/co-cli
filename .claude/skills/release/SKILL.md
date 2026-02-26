@@ -67,6 +67,10 @@ Check that `CLAUDE.md` references affected by this release are current:
 
 Only touch lines that are actually stale. If nothing changed, skip this step.
 
+## Confirm before committing
+
+Present a summary of all files changed so far and what each change covers. Wait for the user to confirm before proceeding to the commit step.
+
 ## Step 7: Commit
 
 Stage only files related to this release. Do not stage unrelated uncommitted changes.

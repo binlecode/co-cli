@@ -18,6 +18,8 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
+from co_cli._signal_analyzer import analyze_for_signals, _keyword_precheck
+from co_cli.tools.memory import _save_memory_impl
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
@@ -232,6 +234,30 @@ async def chat_loop(verbose: bool = False):
                     frontend=frontend,
                 )
                 message_history = turn_result.messages
+
+                # Signal detection — CC hookify pattern, auto-triggered post-turn.
+                # Keyword precheck gates the LLM call: only fires when a signal phrase
+                # is present in the last user message (zero cost otherwise).
+                if (
+                    not turn_result.interrupted
+                    and turn_result.outcome != "error"
+                    and _keyword_precheck(message_history)
+                ):
+                    signal = await analyze_for_signals(message_history, agent.model)
+                    if signal.found and signal.candidate and signal.tag:
+                        if signal.confidence == "high":
+                            await _save_memory_impl(
+                                deps, signal.candidate, [signal.tag], None
+                            )
+                            frontend.on_status(f"Learned: {signal.candidate[:80]}")
+                        else:
+                            choice = frontend.prompt_approval(
+                                f"Worth remembering: {signal.candidate}"
+                            )
+                            if choice in ("y", "a"):
+                                await _save_memory_impl(
+                                    deps, signal.candidate, [signal.tag], None
+                                )
 
                 # Clear precomputed result (consumed or stale)
                 deps.precomputed_compaction = None

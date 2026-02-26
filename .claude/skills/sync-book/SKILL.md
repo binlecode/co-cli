@@ -32,6 +32,10 @@ nav_order: <order within parent group>
 
 Parent pages (`core.md`, `infrastructure.md`, `tools.md`) have `has_children: true`. Component docs are children of their layer's parent page. `DESIGN-co-cli.md` is nav_order 1 (top-level, no parent).
 
+## Confirm before making changes
+
+Present a summary of what was found: new unnumbered docs needing assignment, docs needing renaming, and any nav ordering gaps. Wait for the user to confirm before proceeding.
+
 ## Step 2: Sync version
 
 Read the current version from `pyproject.toml`. Update `**Synced:** v{version}` in every `docs/DESIGN-*.md` to match.
@@ -64,6 +68,10 @@ Ensure `docs/_config.yml` excludes all non-book doc prefixes present in `docs/`:
 ## Step 7: Update CLAUDE.md
 
 Update the `## Docs` → `### Design` section in `CLAUDE.md` to list all current DESIGN docs with their numbered filenames and descriptions, in order.
+
+## Confirm before committing
+
+Present a summary of all files changed and what each change covers. Wait for the user to confirm before committing and pushing.
 
 ## Step 8: Commit and push
 

@@ -131,6 +131,9 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
 
     Use file IDs from search_drive_files results. Do not guess file IDs.
 
+    Returns the file content as a plain text string — show directly to the user
+    or pass to further processing.
+
     Caveats:
     - Binary files (images, videos, zip) will fail or produce garbled output
     - Large files may be slow or truncated by API limits

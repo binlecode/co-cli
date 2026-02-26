@@ -6,7 +6,7 @@ has_children: true
 
 # Tools
 
-Shell, memory, Obsidian vault, Google services, and web intelligence — agent tool implementations. See [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) for external MCP tool servers.
+Shell, memory, Obsidian vault, Google services, and web intelligence — agent tool implementations. See [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) for external MCP tool servers, and [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) for loop/prompt architecture that consumes these tools.
 
 ## Common Conventions
 

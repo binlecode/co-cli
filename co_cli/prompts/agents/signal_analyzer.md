@@ -40,7 +40,7 @@ Return a structured result with:
 - Capability questions: "can you use X?", "do you support Y?"
 - Single negative word without behavioral correction context
 - Greetings, acknowledgments, general discussion with no preference signal
-- Sensitive content: health, financial, credentials, personal data — never save these
+- **Sensitive content: ALWAYS check first.** If the message contains or references credentials, API keys, passwords, tokens, personal data, health information, or financial data — return `found=false` regardless of behavioral phrasing. A "don't save" instruction embedded in a message that reveals a secret is protecting that secret, not expressing a behavioral preference.
 
 ## Examples
 
@@ -53,3 +53,4 @@ Return a structured result with:
 | "can you use black for formatting?" | false | null | null | null |
 | "what does this error mean?" | false | null | null | null |
 | "ok thanks" | false | null | null | null |
+| "my API key is sk-1234, please don't save that anywhere" | false | null | null | null |

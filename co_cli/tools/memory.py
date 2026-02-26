@@ -516,6 +516,98 @@ async def _decay_memories(
 
 
 # ---------------------------------------------------------------------------
+# Internal write path (no decay — used by tool and signal detector)
+# ---------------------------------------------------------------------------
+
+
+async def _save_memory_impl(
+    deps: CoDeps,
+    content: str,
+    tags: list[str] | None,
+    related: list[str] | None,
+) -> dict[str, Any]:
+    """Load memories, dedup-check, and write a new memory file (or update existing).
+
+    Intentionally excludes decay — decay requires a RunContext for LLM
+    summarization and runs only on the explicit save_memory() tool call.
+    Called by both save_memory() and the signal detector auto-save path.
+
+    Args:
+        deps: CoDeps with memory config scalars (no RunContext needed).
+        content: Memory text in third person.
+        tags: Categorization tags.
+        related: Slugs of related memories for knowledge linking.
+
+    Returns:
+        dict with display, path, memory_id, action keys.
+    """
+    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    memories = _load_memories(memory_dir)
+
+    # Step 1: Check for duplicates in recent memories
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        days=deps.memory_dedup_window_days
+    )
+    recent = sorted(
+        [m for m in memories if _parse_created(m.created) >= cutoff],
+        key=lambda m: m.created,
+        reverse=True,
+    )[:10]
+
+    is_dup, match, similarity = _check_duplicate(
+        content, recent, threshold=deps.memory_dedup_threshold
+    )
+
+    # Step 2: If duplicate found, update existing memory
+    if is_dup and match is not None:
+        logger.info(
+            f"Duplicate detected (similarity: {similarity:.1f}%) "
+            f"- updating memory {match.id}"
+        )
+        result = _update_existing_memory(match, content, tags)
+        result["similarity"] = similarity
+        return result
+
+    # Step 3: No duplicate — create new memory
+    max_id = max((m.id for m in memories), default=0)
+    memory_id = max_id + 1
+    slug = _slugify(content[:50])
+    filename = f"{memory_id:03d}-{slug}.md"
+
+    frontmatter: dict[str, Any] = {
+        "id": memory_id,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "tags": tags or [],
+        "source": _detect_source(tags),
+        "auto_category": _detect_category(tags),
+    }
+    if related:
+        frontmatter["related"] = related
+
+    md_content = (
+        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
+        f"{content.strip()}\n"
+    )
+
+    file_path = memory_dir / filename
+    file_path.write_text(md_content, encoding="utf-8")
+
+    logger.info(f"Saved memory {memory_id} to {file_path}")
+
+    return {
+        "display": (
+            f"✓ Saved memory {memory_id}: {filename}\n"
+            f"Location: {file_path}"
+        ),
+        "path": str(file_path),
+        "memory_id": memory_id,
+        "action": "saved",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public tools
 # ---------------------------------------------------------------------------
 
@@ -562,95 +654,27 @@ async def save_memory(
         related: Slugs of related memories for knowledge linking
                  (e.g. ["003-user-prefers-pytest"]).
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
-    memory_dir.mkdir(parents=True, exist_ok=True)
+    result = await _save_memory_impl(ctx.deps, content, tags, related)
 
-    # Load all memories once
-    memories = _load_memories(memory_dir)
+    # Decay only checked for new memories (consolidations don't change total count)
+    if result.get("action") == "saved":
+        memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+        all_memories = _load_memories(memory_dir)
+        total_count = len(all_memories)
 
-    # Step 1: Check for duplicates in recent memories
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        days=ctx.deps.memory_dedup_window_days
-    )
-    recent = sorted(
-        [m for m in memories if _parse_created(m.created) >= cutoff],
-        key=lambda m: m.created,
-        reverse=True,
-    )[:10]
+        if total_count > ctx.deps.memory_max_count:
+            logger.info(
+                f"Memory limit exceeded ({total_count}/{ctx.deps.memory_max_count}) "
+                f"- triggering decay"
+            )
+            decay_result = await _decay_memories(ctx, memory_dir, all_memories)
+            decay_info = (
+                f"\n♻️ Decayed {decay_result['decayed']} old memories "
+                f"({decay_result['strategy']})"
+            )
+            result["display"] += decay_info
 
-    is_dup, match, similarity = _check_duplicate(
-        content, recent, threshold=ctx.deps.memory_dedup_threshold
-    )
-
-    # Step 2: If duplicate found, update existing memory
-    if is_dup and match is not None:
-        logger.info(
-            f"Duplicate detected (similarity: {similarity:.1f}%) "
-            f"- updating memory {match.id}"
-        )
-        result = _update_existing_memory(match, content, tags)
-        result["similarity"] = similarity
-        return result
-
-    # Step 3: No duplicate — create new memory
-    max_id = max((m.id for m in memories), default=0)
-    memory_id = max_id + 1
-    slug = _slugify(content[:50])
-    filename = f"{memory_id:03d}-{slug}.md"
-
-    frontmatter: dict[str, Any] = {
-        "id": memory_id,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "tags": tags or [],
-        "source": _detect_source(tags),
-        "auto_category": _detect_category(tags),
-    }
-    if related:
-        frontmatter["related"] = related
-
-    md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
-        f"{content.strip()}\n"
-    )
-
-    file_path = memory_dir / filename
-    file_path.write_text(md_content, encoding="utf-8")
-
-    logger.info(f"Saved memory {memory_id} to {file_path}")
-
-    # Step 4: Check size limit and trigger decay if needed
-    # Include newly created memory in the list for correct decay computation
-    new_entry = MemoryEntry(
-        id=memory_id,
-        path=file_path,
-        content=content.strip(),
-        tags=tags or [],
-        created=frontmatter["created"],
-    )
-    all_memories = memories + [new_entry]
-    total_count = len(all_memories)
-
-    decay_info = ""
-    if total_count > ctx.deps.memory_max_count:
-        logger.info(
-            f"Memory limit exceeded ({total_count}/{ctx.deps.memory_max_count}) "
-            f"- triggering decay"
-        )
-        decay_result = await _decay_memories(ctx, memory_dir, all_memories)
-        decay_info = (
-            f"\n♻️ Decayed {decay_result['decayed']} old memories "
-            f"({decay_result['strategy']})"
-        )
-
-    return {
-        "display": (
-            f"✓ Saved memory {memory_id}: {filename}\n"
-            f"Location: {file_path}{decay_info}"
-        ),
-        "path": str(file_path),
-        "memory_id": memory_id,
-        "action": "saved",
-    }
+    return result
 
 
 async def recall_memory(
