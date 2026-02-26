@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-02-25
+
+### Added
+- **Auto-triggered signal detection** (`_signal_analyzer.py`): Two-stage post-turn filter — keyword precheck gate (O(1)) short-circuits to an LLM mini-agent that classifies the latest user message. High-confidence corrections (explicit `don't/stop/never/avoid`) are saved automatically; low-confidence preferences prompt user approval before saving. No LLM call when the precheck gate finds nothing.
+- **Signal analyzer system prompt** (`prompts/agents/signal_analyzer.md`): Structured classification rules for high/low/none signal tiers, guardrails for hypotheticals, teaching moments, capability questions, and sensitive content.
+- **3 new eval scripts**: `eval_signal_analyzer.py` (12-case classification accuracy), `eval_signal_detector_approval.py` (4-case approval dispatch), `eval_memory_signal_detection.py` (end-to-end detection + contradiction).
+- **`_save_memory_impl()`** (`tools/memory.py`): Shared write path extracted so both the `save_memory` tool and the signal detector's auto-save call the same implementation without triggering decay logic on auto-saves.
+- **DESIGN-14 memory lifecycle doc** and **DESIGN-16 prompt design doc**: Full architecture documentation for signal detection and agentic loop prompt layers.
+
+### Fixed
+- **Signal analyzer credential guardrail**: LLM incorrectly flagged `"my API key is sk-1234, please don't save that anywhere"` as a high-confidence behavioral signal. Fixed by strengthening the guardrail description and adding an explicit counter-example to the prompt table.
+- **Truncation detection heuristic**: Replaced 95%-of-max-tokens estimate with exact `finish_reason == "length"` check — eliminates false positives on long but complete responses.
+
+---
+
 ## [0.4.0] - 2026-02-14
 
 ### Added
