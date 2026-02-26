@@ -133,12 +133,6 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: auto-triggered signal detection (implemented), context loading, dedup, consolidation, decay, protection, search evolution
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
-### TAKEAWAY (incomplete adoptions backlog — no design content, no completed items)
-
-`docs/TAKEAWAY-*.md` files track work items adopted from peer systems that are not yet fully implemented. Three statuses: OPEN = not started, PARTIAL = in progress, BLOCKED = external dependency.
-
-**Lifecycle rule:** When an item is completed, merge its design logic into the relevant DESIGN doc and remove the entry from the TAKEAWAY file. TAKEAWAY files track only incomplete work — completed items do not stay here.
-
 ### TODO (remaining work items only — no design content, no status tracking)
 
 **Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
