@@ -7,18 +7,22 @@ that records all events for assertions.
 from typing import Any
 
 import pytest
-from pydantic_ai import FinalResultEvent
+from pydantic_ai import AgentRunResult, AgentRunResultEvent, FinalResultEvent
 
-from co_cli._orchestrate import FrontendProtocol, _stream_events
+from co_cli._orchestrate import FrontendProtocol, _stream_events, run_turn
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
+from pydantic_ai._agent_graph import GraphAgentState
 from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    UserPromptPart,
 )
 from pydantic_ai.usage import UsageLimits
 
@@ -177,3 +181,61 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
     assert streamed_text is True
     commits = [payload for kind, payload in frontend.events if kind == "text_commit"]
     assert commits == ["The sky"]
+
+
+# ---------------------------------------------------------------------------
+# finish_reason == "length" detection in run_turn()
+# ---------------------------------------------------------------------------
+
+
+def _make_agent_run_result(text: str, finish_reason: str) -> AgentRunResult:
+    """Construct a minimal AgentRunResult with the given finish_reason."""
+    state = GraphAgentState(message_history=[
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[TextPart(content=text)], finish_reason=finish_reason),
+    ])
+    return AgentRunResult(output=text, _state=state)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_emits_truncation_status_on_finish_reason_length():
+    """run_turn() must emit a status warning when finish_reason is 'length'."""
+    result = _make_agent_run_result("partial answer", finish_reason="length")
+    frontend = RecordingFrontend()
+    agent = StaticEventAgent([AgentRunResultEvent(result=result)])
+    deps = CoDeps(shell=ShellBackend())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="give me a very long answer",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    status_messages = [msg for kind, msg in frontend.events if kind == "status"]
+    assert any("truncated" in msg for msg in status_messages)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_silent_on_normal_finish_reason():
+    """run_turn() must not emit a truncation warning when finish_reason is 'stop'."""
+    result = _make_agent_run_result("complete answer", finish_reason="stop")
+    frontend = RecordingFrontend()
+    agent = StaticEventAgent([AgentRunResultEvent(result=result)])
+    deps = CoDeps(shell=ShellBackend())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="tell me something",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    status_messages = [msg for kind, msg in frontend.events if kind == "status"]
+    assert not any("truncated" in msg for msg in status_messages)

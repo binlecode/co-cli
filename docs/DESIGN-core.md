@@ -248,6 +248,8 @@ run_turn(agent, user_input, deps, message_history, ...) → TurnResult:
 
             if not streamed and output is str:
                 frontend.on_final_output(result.output)
+            if result.response.finish_reason == "length":
+                frontend.on_status("Response may be truncated … Use /continue to extend.")
             return TurnResult(messages=result.all_messages(), ...)
 
         except ModelHTTPError:
@@ -272,6 +274,14 @@ run_turn(agent, user_input, deps, message_history, ...) → TurnResult:
 - **Reflection (400):** Error body injected into history as `ModelRequest`; `current_input` set to `None` so the next `_stream_events` resumes from history, letting the model self-correct
 - **Progressive backoff:** Escalates by `backoff_base *= 1.5` per retry, capped at 30s. Applies to both `ModelHTTPError` (429/5xx) and `ModelAPIError` (network/timeout)
 - **Safe message extraction:** `result` may be `None` if the exception fired before any result was captured — `result.all_messages() if result else message_history` preserves history
+
+**Per-turn safety guards** — three mechanisms running independently of each other per turn:
+
+**Doom loop detection** — `detect_safety_issues()` history processor in `_history.py` scans recent `ToolCallPart` entries for consecutive identical calls, hashed as `MD5(tool_name + json.dumps(args, sort_keys=True))`. If the same hash appears `doom_loop_threshold` (default 3) consecutive times, injects a system message: "You are repeating the same tool call. Try a different approach or explain why." The model sees this on its next request. State is processor-local, created fresh per turn — no mutable counters on `CoDeps`. Converges with OpenCode (threshold 3) and Gemini CLI (threshold 5).
+
+**Grace turn on budget exhaustion** — When `UsageLimits(request_limit=max_request_limit)` is exceeded mid-turn, pydantic-ai raises `UsageLimitExceeded`. `run_turn()` catches it and fires one additional `_stream_events()` with `request_limit=1`, injecting: "Turn limit reached. Summarize your progress." This gives the model a chance to produce partial results rather than silently truncating. If the grace turn itself produces tool calls instead of text, it is force-stopped. The user can `/continue` to resume with a fresh budget.
+
+**Shell reflection** — `run_shell_command` raises `ModelRetry` on non-zero exit codes, feeding the error output back to the LLM as a tool result. pydantic-ai's built-in retry mechanism handles re-entry — no orchestration-layer re-entry needed. `detect_safety_issues()` caps consecutive shell errors at `max_reflections` (default 3); on reaching the cap it injects: "Shell reflection limit reached. Ask the user for help or try a fundamentally different approach." (Pattern from Aider's `max_reflections` mechanism.)
 
 ### Streaming (`_stream_events`)
 
@@ -395,6 +405,8 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 ### Interrupt Handling
 
 **Dangling tool call patching:** On `KeyboardInterrupt` / `CancelledError`, `_patch_dangling_tool_calls()` scans *all* `ModelResponse` messages for `ToolCallPart` entries without a matching `ToolReturnPart`, then appends a single synthetic `ModelRequest` with `ToolReturnPart`(s) carrying "Interrupted by user." Full scan handles interrupts during multi-tool approval loops where earlier responses may have unmatched calls.
+
+**Abort marker:** After patching, a second synthetic `ModelRequest` with `UserPromptPart` is appended to history (not displayed to user): "The user interrupted the previous turn. Some actions may be incomplete. Verify current state before continuing." This ensures the model on the next turn knows the previous turn was incomplete and does not repeat work or skip verification. (Pattern from Codex's `<turn_aborted>` marker insertion.)
 
 **Signal handling:** `run_turn()` catches both `KeyboardInterrupt` and `CancelledError` (Python 3.11+ asyncio delivers the latter in async code). For the synchronous approval prompt, `TerminalFrontend.prompt_approval()` temporarily restores Python's default SIGINT handler during `Prompt.ask()`, then restores asyncio's handler in `finally`.
 

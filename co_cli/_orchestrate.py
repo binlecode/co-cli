@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, FinishReason, ToolDenied
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
@@ -463,16 +463,12 @@ async def run_turn(
             if not streamed_text and isinstance(result.output, str):
                 frontend.on_final_output(result.output)
 
-            # Finish reason detection: warn if response appears truncated.
-            # Heuristic: output tokens >= 95% of max_tokens suggests truncation.
-            if turn_usage and isinstance(result.output, str):
-                max_tokens = (model_settings or {}).get("max_tokens", 0)
-                output_tokens = getattr(turn_usage, "response_tokens", 0) or 0
-                if max_tokens and output_tokens >= int(max_tokens * 0.95):
-                    frontend.on_status(
-                        "Response may be truncated (hit output token limit). "
-                        "Use /continue to extend."
-                    )
+            # Finish reason detection: warn if response was truncated at token limit.
+            if result.response.finish_reason == "length":
+                frontend.on_status(
+                    "Response may be truncated (hit output token limit). "
+                    "Use /continue to extend."
+                )
 
             return TurnResult(
                 messages=message_history,
