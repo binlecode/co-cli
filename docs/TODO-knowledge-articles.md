@@ -13,7 +13,15 @@ Phase 1c delivered:
 
 ## Planned Enhancements
 
-### 1. Articles Storage
+### 1. Progressive Loading (Design Constraint)
+
+`recall_article` must return only a summary index (`articles/*/index.md`); full sections (`references/`, `examples/`) load on demand via a separate `read_article_detail` call. This must be a first-class design decision from the start — not a retrofit after the corpus grows.
+
+- Entry point: `recall_article(query)` → returns index summary
+- Detail fetch: `read_article_detail(slug, section)` → loads specific section
+- Applies to: `co_cli/tools/articles.py` (future)
+
+### 2. Articles Storage
 
 Add curated web-fetched content alongside memories.
 
@@ -23,7 +31,7 @@ Add curated web-fetched content alongside memories.
 - Quality gate: agent evaluates source quality before proposing saves
 - Design rule: learned from conversation → memory; fetched from web → article
 
-### 2. Learn Mode (Prompt Overlay)
+### 3. Learn Mode (Prompt Overlay)
 
 Knowledge curation behavior via prompt mode overlay — not a separate agent.
 
@@ -33,7 +41,7 @@ Knowledge curation behavior via prompt mode overlay — not a separate agent.
 - User approves/edits/rejects via standard approval flow (`requires_approval=True`)
 - Wired through `get_mode_overlay("learn")` in prompt assembly (see DESIGN-16-prompt-design.md)
 
-### 3. Search Scaling
+### 4. Search Scaling
 
 When memory count exceeds grep performance (~200+ files):
 
@@ -41,7 +49,7 @@ When memory count exceeds grep performance (~200+ files):
 - Unified search across memories + articles
 - See also: `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` for unified search index
 
-### 4. Multimodal Assets
+### 5. Multimodal Assets
 
 Store images, PDFs, and code snippets alongside articles:
 
