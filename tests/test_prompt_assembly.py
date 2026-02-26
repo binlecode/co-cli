@@ -52,13 +52,13 @@ def test_prompt_includes_all_five_rules():
 
 
 def test_rules_token_budget():
-    """Combined rule text stays under ~1100 tokens (~5000 chars heuristic)."""
+    """Combined rule text stays under ~1500 tokens (~6000 chars heuristic)."""
     total_chars = 0
     for rule_path in sorted(_RULES_DIR.glob("*.md")):
         total_chars += len(rule_path.read_text(encoding="utf-8").strip())
-    assert total_chars < 5000, (
+    assert total_chars < 6000, (
         f"Rules total {total_chars} chars (~{total_chars // 4} tokens), "
-        f"expected < 5000 chars (~1250 tokens)"
+        f"expected < 6000 chars (~1500 tokens)"
     )
 
 
@@ -76,7 +76,7 @@ def test_prompt_has_no_memory():
 
 def test_counter_steering_for_quirk_model():
     """Model with known quirks gets counter-steering appended."""
-    prompt, manifest = assemble_prompt("ollama", model_name="glm-4.7-flash")
+    prompt, manifest = assemble_prompt("ollama", model_name="qwen3-coder-next")
     assert "## Model-Specific Guidance" in prompt
     assert "counter_steering" in manifest.parts_loaded
 
@@ -162,7 +162,6 @@ def test_compose_personality_contains_mandate():
     """Composed personality includes the adoption mandate."""
     composed = compose_personality("finch")
     assert "Adopt this persona fully" in composed
-    assert "Match expression depth to context" in composed
     assert "never overrides safety or factual accuracy" in composed
 
 

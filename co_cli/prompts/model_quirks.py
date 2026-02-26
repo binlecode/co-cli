@@ -145,8 +145,8 @@ def normalize_model_name(model_name: str) -> str:
     that must be removed before quirk database lookup.
 
     Examples:
-        >>> normalize_model_name("glm-4.7-flash:q4_k_m")
-        "glm-4.7-flash"
+        >>> normalize_model_name("qwen3-coder-next:q4_k_m-agentic")
+        "qwen3-coder-next"
         >>> normalize_model_name("gemini-1.5-pro")
         "gemini-1.5-pro"
     """
@@ -178,7 +178,7 @@ def get_counter_steering(provider: str, model_name: str) -> str:
 
     Args:
         provider: LLM provider name (case-insensitive: "gemini", "ollama")
-        model_name: Model identifier (normalized, e.g., "glm-4.7-flash")
+        model_name: Model identifier (normalized, e.g., "qwen3-coder-next")
 
     Returns:
         Counter-steering prompt text if model has known quirks, empty string otherwise.

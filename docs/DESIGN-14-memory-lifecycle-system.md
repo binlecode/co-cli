@@ -5,7 +5,7 @@ nav_order: 14
 
 # Memory Lifecycle System
 
-Cross-session memory involves more than storage and retrieval. This doc covers the lifecycle behaviors: how signals are detected and saved automatically, how memories are kept healthy over time (dedup, consolidation, decay), and how the system scales. Auto-triggered signal detection, dedup, consolidation, and decay are all implemented. Context loading and search evolution remain TODO — tracked in `TODO-knowledge-articles.md` and `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`.
+Cross-session memory involves more than storage and retrieval. This doc covers the lifecycle behaviors: how signals are detected and saved automatically, how memories are kept healthy over time (dedup, consolidation, decay), and how the system scales. Auto-triggered signal detection, dedup, consolidation, and decay are all implemented. Context loading and search evolution remain TODO — tracked in `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`.
 
 ---
 

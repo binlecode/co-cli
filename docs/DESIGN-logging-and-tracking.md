@@ -156,10 +156,10 @@ The HTML file is written to `~/.local/share/co-cli/traces.html` and auto-opened 
 **Output format** — one line per span:
 
 ```
-14:23:05  model  chat glm-4.7-flash:q4_k_m     in=3745 out=25  5.26s
+14:23:05  model  chat qwen3:30b-a3b-thinking-2507-q8_0     in=3745 out=25  5.26s
            │ [thinking] Let me search the notes for that topic.
 14:23:06  tool   execute_tool search_notes      tool=search_notes  args={"query":"test"}…  120ms
-14:23:08  agent  invoke_agent agent             model=glm-4.7-flash:q4_k_m  tokens=7877→4502  255.72s
+14:23:08  agent  invoke_agent agent             model=qwen3:30b-a3b-thinking-2507-q8_0  tokens=7877→4502  255.72s
 ```
 
 | Column | Source | Format |

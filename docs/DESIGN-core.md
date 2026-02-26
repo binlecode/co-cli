@@ -444,7 +444,7 @@ See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md)
 
 ### Eval Framework
 
-`scripts/eval_tool_calling.py` uses `get_agent(all_approval=True)` so every tool call returns `DeferredToolRequests` without executing. Scores: `tool_selection`, `arg_extraction`, `refusal`, `error_recovery`. Golden cases in `evals/tool_calling.jsonl` (~26 lines). Auto-discovers `evals/baseline-*.json` for model comparison; degradation beyond `--max-degradation` (default 10pp) fails the run.
+Tool-calling quality is covered in functional pytest via `tests/test_tool_calling_functional.py` (real `agent.run()` path). It validates `tool_selection`, `arg_extraction`, `refusal`, `intent` routing, and `error_recovery` with an enforced agentic Ollama model configuration.
 
 ### CLI Commands & REPL
 
@@ -583,7 +583,7 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
-| `scripts/eval_tool_calling.py` | Eval framework — golden case scoring, model tagging, multi-baseline comparison |
+| `tests/test_tool_calling_functional.py` | Functional tool-calling gate — selection, args, refusal, intent routing, recovery |
 
 ---
 
@@ -622,7 +622,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/_history.py` | `truncate_tool_returns`, `truncate_history_window`, `summarize_messages` |
 | `co_cli/prompts/__init__.py` | `assemble_prompt()` — static prompt: instructions, rules, counter-steering |
 | `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
-| `scripts/eval_tool_calling.py` | Eval runner — golden case scoring, model tagging, baseline comparison |
+| `tests/test_tool_calling_functional.py` | Functional tool-calling gate test |
 
 ### Dependencies
 

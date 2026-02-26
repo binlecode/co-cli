@@ -1,0 +1,17 @@
+FROM qwen3-coder-next:q4_k_m
+
+# Qwen3-Coder-Next agentic profile (Q4_K_M).
+# Source: https://huggingface.co/Qwen/Qwen3-Coder-Next
+#
+# Inference cost scales with filled context, not the limit.
+# Ollama default num_ctx (4096) is far too small for agentic use.
+# Qwen3-Coder-Next best-practice decoding: temperature=1.0, top_p=0.95, top_k=40.
+# num_predict 65536: official recommendation for long coding tasks.
+# repeat_penalty fixed at 1.0 to avoid GGUF repetition pathologies.
+
+PARAMETER num_ctx 262144
+PARAMETER num_predict 65536
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.0

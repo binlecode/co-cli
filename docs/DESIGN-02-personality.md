@@ -124,7 +124,7 @@ Rules encode behavioral norms that soul files cannot — soul files define *who*
 | `lazy` | Shortcut implementations, placeholder code, stub returns | Implement fully. No stubs, no TODOs, no placeholder comments. |
 | `hesitant` | Asks too many clarification questions instead of acting | Act first on reasonable assumptions, clarify after only if needed. |
 
-6 quirk files shipped: `gemini/{2.5-flash, 2.5-pro, 3-flash-preview, 3-pro-preview}.md` and `ollama/{glm-4.7-flash, qwen3}.md`. Each file contains YAML frontmatter (flags, inference params) plus the prose body.
+6 quirk files shipped: `gemini/{2.5-flash, 2.5-pro, 3-flash-preview, 3-pro-preview}.md` and `ollama/{qwen3, qwen3-coder-next}.md`. Each file contains YAML frontmatter (flags, inference params) plus the prose body.
 
 ### 2b. Per-turn injection
 

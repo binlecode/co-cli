@@ -5,15 +5,14 @@ Three tiers of conversation history reasoning:
   Tier 2 — Deep history (3+ turns, distraction in between, corrections)
   Tier 3 — Tool output in history (synthetic ToolCallPart/ToolReturnPart)
 
-With Ollama, cross-model validation isolates behavioral quirks from
-system-level bugs.  With other providers, runs the single configured model.
+By default, runs the single configured model for the active provider.
+For Ollama, an optional env var can run a model matrix when needed.
 
 Target flow:   agent.run() with message_history across multiple turns
 Critical impact: broken history = agent loses context every turn,
                  destroying multi-turn conversations.
 
-Prerequisites: LLM provider configured.  Ollama tests multiple models;
-               other providers test the single configured model.
+Prerequisites: LLM provider configured.
 
 Usage:
     LLM_PROVIDER=ollama uv run python evals/eval_conversation_history.py
@@ -22,6 +21,7 @@ Usage:
 
 import asyncio
 import logging
+import os
 import sys
 import time
 
@@ -223,12 +223,16 @@ CASES = [
 ]
 
 
-# Models to test
-MODELS_TO_TEST = [
-    "qwen3:30b-a3b-thinking-2507-q8_0",
-    "glm-4.7-flash:q4_k_m-agentic",
-    "glm-4.7-flash:q8_0-agentic",
-]
+def _ollama_models_to_test() -> list[str]:
+    """Return Ollama models for this eval.
+
+    Default: single configured model (settings.ollama_model).
+    Override: set EVAL_OLLAMA_MODELS as comma-separated tags.
+    """
+    raw = (os.getenv("EVAL_OLLAMA_MODELS") or "").strip()
+    if not raw:
+        return [settings.ollama_model]
+    return [m.strip() for m in raw.split(",") if m.strip()]
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +313,7 @@ def _make_eval_settings(model_settings):
 def _patch_dangling_tool_calls(messages: list) -> list:
     """Patch history if last response has unanswered tool calls.
 
-    Overeager models (e.g. GLM) may trigger tool calls during setup turns.
+    Some models may trigger tool calls during setup turns.
     pydantic-ai rejects the next agent.run() if history ends with dangling
     ToolCallPart without matching ToolReturnPart.  Same pattern as
     co_cli/_orchestrate.py:_patch_dangling_tool_calls.
@@ -463,9 +467,10 @@ async def main():
     provider = settings.llm_provider.lower()
     is_ollama = provider == "ollama"
 
-    # For Ollama: multi-model matrix.  For other providers: single configured model.
+    # For Ollama: default to configured model, optional matrix via env var.
+    # For other providers: single configured model.
     if is_ollama:
-        models_to_test = MODELS_TO_TEST
+        models_to_test = _ollama_models_to_test()
     else:
         model_label = f"{provider}-{getattr(settings, f'{provider}_model', 'default')}"
         models_to_test = [model_label]

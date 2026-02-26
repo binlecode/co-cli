@@ -262,7 +262,7 @@ async def web_search(
         lines.append(f"   {r['url']}")
         lines.append("")
 
-    display = "\n".join(lines).rstrip()
+    display = f"Web search results for '{query}':\n\n" + "\n".join(lines).rstrip()
     return {"display": display, "results": results, "count": len(results)}
 
 

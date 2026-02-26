@@ -166,9 +166,9 @@ class Settings(BaseModel):
     ollama_host: str = Field(default="http://localhost:11434")
     # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
     # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
-    # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 2048
+    # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 4096
     # tokens and silently lose multi-turn conversation history.
-    # See docs/GUIDE-ollama-local-setup.md for Modelfile setup.
+    # See docs/DESIGN-llm-models.md for Modelfile setup.
     ollama_model: str = Field(default="qwen3:30b-a3b-thinking-2507-q8_0-agentic")
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.

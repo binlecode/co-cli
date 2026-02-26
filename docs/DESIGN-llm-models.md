@@ -24,7 +24,7 @@ get_agent()
 
 | Provider | Model class | API | ModelSettings |
 |----------|-------------|-----|---------------|
-| Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible `/v1` | `temperature=0.6`, `top_p=0.95`, `max_tokens=32768` (Qwen3) |
+| Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible `/v1` | Loaded per normalized model from `co_cli/prompts/quirks/ollama/*.md` |
 | Gemini | `"google-gla:{model_name}"` string | Google GenAI | `None` (defaults fine) |
 
 ## 2. Core Logic
@@ -60,22 +60,25 @@ main.py: chat_loop()
                     temperature=0.6, top_p=0.95, max_tokens=32768
 ```
 
-### Ollama: GLM-4.7-Flash (alternative)
+### Ollama: Qwen3-Coder-Next (coding alternative)
 
 | Field | Value |
 |-------|-------|
-| Model family | GLM-4.7 (Z.ai) |
-| Parameter count | 29.9B total, ~3B active (MoE) |
-| Context window | 128K–202K tokens |
+| Model family | Qwen3-Coder-Next (Alibaba) |
+| Parameter count | 32B (dense) |
+| Recommended tag | `qwen3-coder-next:q4_k_m-agentic` |
+| Context window | 262K tokens |
+| License | Apache 2.0 |
 
-**Inference parameters** (SWE-Bench / tool-calling profile):
+**Inference parameters** (official profile + agentic sizing):
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
-| `temperature` | `0.7` | Tool-calling profile; greedy (0.0) not used interactively |
-| `top_p` | `1.0` | Nucleus sampling disabled when temperature is the active axis |
-| `max_tokens` | `16384` | Tool-calling profile |
-| `repeat_penalty` | `1.0` | **Critical:** any value > 1.0 causes degenerate loops in GGUF quants |
+| `temperature` | `1.0` | Official recommended decoding profile |
+| `top_p` | `0.95` | Official recommended decoding profile |
+| `top_k` | `40` | Official recommended decoding profile |
+| `max_tokens` | `65536` | Long coding output budget |
+| `repeat_penalty` | `1.0` | Keep neutral to avoid GGUF repetition side-effects |
 
 ### Gemini
 
@@ -107,10 +110,9 @@ No custom `ModelSettings` — Gemini's API defaults are well-suited for tool-cal
 | `co_cli/agent.py` | `get_agent()` factory — model selection + `ModelSettings` |
 | `co_cli/main.py` | Unpacks `(agent, model_settings)`, passes to `run_turn()` |
 | `co_cli/config.py` | `Settings` with LLM provider fields |
-| `ollama/Modelfile.qwen3-30b-a3b-q4` | Qwen3 Q4_K_M agentic profile |
-| `ollama/Modelfile.qwen3-30b-a3b` | Qwen3 Q8_0 agentic profile |
-| `ollama/Modelfile.glm-4.7-flash` | GLM-4.7 Q4_K_M agentic profile |
-| `ollama/Modelfile.glm-4.7-flash-q8` | GLM-4.7 Q8_0 agentic profile |
+| `co_cli/prompts/quirks/ollama/qwen3-coder-next.md` | Qwen3-Coder-Next inference profile + counter-steering |
+| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` | Qwen3 Q8_0 agentic profile |
+| `ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic` | Qwen3-Coder-Next Q4_K_M agentic profile |
 | `tests/test_llm_e2e.py` | LLM E2E tests for both providers |
 
 ---
@@ -125,7 +127,7 @@ Ollama ships models with a **4096-token default context window**. Agentic system
 
 Two constraints apply to thinking models:
 - **Temperature must not be 0.** Greedy decoding causes degenerate repetition loops that exhaust the output budget. Qwen3's model card explicitly warns against it.
-- **`repeat_penalty` must be exactly 1.0** for GGUF quants of Qwen3 and GLM-4.7-Flash. Any value above 1.0 causes repetition loops (known GGUF scoring bug, not a model property).
+- **`repeat_penalty` must be exactly 1.0** for Qwen GGUF quants in this repo to avoid repetition loops.
 
 ### Modelfile setup
 
@@ -137,24 +139,22 @@ Pre-built Modelfiles are in the `ollama/` directory. Pull the base model first, 
 
 | Tag | Modelfile | Quant | Size |
 |-----|-----------|-------|------|
-| `qwen3:30b-a3b-thinking-2507-q4_k_m-agentic` | `Modelfile.qwen3-30b-a3b-q4` | Q4_K_M | ~20 GB |
-| `qwen3:30b-a3b-thinking-2507-q8_0-agentic` | `Modelfile.qwen3-30b-a3b` | Q8_0 | ~32 GB |
+| `qwen3:30b-a3b-thinking-2507-q8_0-agentic` | `Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` | Q8_0 | ~32 GB |
 
 ```bash
 ollama pull qwen3:30b-a3b-thinking-2507-q8_0
-ollama create qwen3:30b-a3b-thinking-2507-q8_0-agentic -f ollama/Modelfile.qwen3-30b-a3b
+ollama create qwen3:30b-a3b-thinking-2507-q8_0-agentic -f ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic
 ```
 
-#### GLM-4.7-Flash
+#### Qwen3-Coder-Next
 
 | Tag | Modelfile | Quant | Size |
 |-----|-----------|-------|------|
-| `glm-4.7-flash:q4_k_m-agentic` | `Modelfile.glm-4.7-flash` | Q4_K_M | ~19 GB |
-| `glm-4.7-flash:q8_0-agentic` | `Modelfile.glm-4.7-flash-q8` | Q8_0 | ~31 GB |
+| `qwen3-coder-next:q4_k_m-agentic` | `Modelfile.qwen3-coder-next-q4_k_m-agentic` | Q4_K_M | ~51 GB |
 
 ```bash
-ollama pull glm-4.7-flash:q4_k_m
-ollama create glm-4.7-flash:q4_k_m-agentic -f ollama/Modelfile.glm-4.7-flash
+ollama pull qwen3-coder-next:q4_k_m
+ollama create qwen3-coder-next:q4_k_m-agentic -f ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic
 ```
 
 Verify parameters after building:
@@ -171,14 +171,14 @@ Update Co settings to use your preferred tag:
 
 ### Modelfile parameter reference
 
-| Parameter | Qwen3 (thinking) | GLM-4.7-Flash | Notes |
-|-----------|-----------------|---------------|-------|
-| `num_ctx` | **262144** | **202752** | Qwen3: 262K native. GLM: Unsloth GGUF with RoPE scaling (official HF card = 128K) |
-| `num_predict` | **32768** | **16384** | Official max for most queries |
-| `temperature` | **0.6** | **0.7** | Thinking-mode / tool-calling profile |
-| `top_p` | **0.95** | **1.0** | Thinking-mode official. GLM: disabled when temperature is active axis |
-| `top_k` | **20** | unset | Qwen3 official; no GLM recommendation |
-| `repeat_penalty` | **1.0** | **1.0** | **Critical for both** — any value > 1.0 causes loops in GGUF quants |
+| Parameter | Qwen3 (thinking) | Qwen3-Coder-Next | Notes |
+|-----------|------------------|------------------|-------|
+| `num_ctx` | **262144** | **262144** | 262K native context for both models |
+| `num_predict` | **32768** | **65536** | Coder model gets larger output budget for code-heavy tasks |
+| `temperature` | **0.6** | **1.0** | Model-card recommended decoding profiles |
+| `top_p` | **0.95** | **0.95** | Model-card recommended decoding profiles |
+| `top_k` | **20** | **40** | Model-card recommended decoding profiles |
+| `repeat_penalty` | **1.0** | **1.0** | Fixed at 1.0 for GGUF stability |
 
 ### Modelfile examples
 
@@ -195,15 +195,16 @@ PARAMETER top_k 20
 PARAMETER repeat_penalty 1.0
 ```
 
-**GLM-4.7-Flash (Q4_K_M):**
+**Qwen3-Coder-Next (Q4_K_M):**
 
 ```dockerfile
-FROM glm-4.7-flash:q4_k_m
+FROM qwen3-coder-next:q4_k_m
 
-PARAMETER num_ctx 202752
-PARAMETER num_predict 16384
-PARAMETER temperature 0.7
-PARAMETER top_p 1.0
+PARAMETER num_ctx 262144
+PARAMETER num_predict 65536
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 40
 PARAMETER repeat_penalty 1.0
 ```
 
@@ -216,7 +217,7 @@ KV cache grows linearly with `num_ctx`. A 262K window with Qwen3 Q8 uses ~28 GB 
 | 16 GB | 8192–16384 | Tight — monitor with `ollama ps` |
 | 32 GB | 16384–32768 | Comfortable for models ≤14B |
 | 64 GB | 32768–65536 | Good headroom for 30B models |
-| 128 GB | Model native (262144 / 202752) | Full context; KV cache ~28 GB for Qwen3 Q8 at 262K |
+| 128 GB | Model native (262144) | Full context; KV cache ~28 GB for Qwen3 Q8 at 262K |
 
 Detect context truncation in Ollama server logs:
 
@@ -231,7 +232,7 @@ Models must support **tool calling** for Co's agentic workflow.
 | Model | Parameters | Context | Tool Calling | RAM (Q8) | Notes |
 |-------|-----------|---------|-------------|----------|-------|
 | Qwen3 30B-A3B | 30.5B (MoE) | 262K | Yes | ~60 GB | Default; thinking mode; temperature ≥ 0.6 required |
-| GLM-4.7-Flash | 29.9B (MoE) | 128K–202K | Yes | ~58 GB | repeat_penalty must be 1.0 |
+| Qwen3-Coder-Next | 32B | 262K | Yes | n/a (Q4_K_M ~51 GB) | Strong coding model; use `qwen3-coder-next:q4_k_m-agentic` |
 | Qwen2.5-Coder 32B | 32B | 128K | Yes | ~35 GB | Dense; strong at code |
 | Llama 3.3 70B | 70B | 128K | Yes | ~75 GB | Q4_K_M recommended; needs 64 GB+ even quantised |
 
@@ -253,11 +254,11 @@ Response should contain a `tool_calls` array, not a text answer.
 - Do not use `temperature=0`. Greedy decoding causes degenerate repetition in the thinking chain. Minimum safe: 0.6 (thinking mode).
 - Thinking tokens are implicit in Ollama — no separate budget control. `num_predict` caps total output including thinking tokens.
 
-**GLM-4.7-Flash:**
-- `repeat_penalty` must be `1.0`. Any higher causes degenerate loops in GGUF quants. Unsloth re-uploaded all quants (Jan 21) after this was found.
-- May output Chinese on the first turn. Counter-steering in `co_cli/prompts/quirks/ollama/glm-4.7-flash.md` addresses this.
-- Responds better to imperative language — use MUST, REQUIRED, STRICTLY in system prompt constraints; avoid suggestive phrasing.
-- `num_ctx` discrepancy: official HF card = 128K, Unsloth GGUF with RoPE scaling = 202,752. The `-agentic` Modelfiles use the Unsloth-extended value.
+**Qwen3-Coder-Next (community notes + implementation):**
+- Use the official decoding profile (`temperature=1.0`, `top_p=0.95`, `top_k=40`) and set `num_predict` high for coding tasks.
+- Tool-call reliability depends on chat template/parser alignment in serving stacks; for vLLM deployments, use the Qwen3 XML tool parser.
+- Keep tool-call output strict (valid arguments JSON, no pseudo tool calls). Counter-steering and inference for this repo live in `co_cli/prompts/quirks/ollama/qwen3-coder-next.md`.
+- Agentic Modelfile implementation is `ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic`.
 
 ### Server tuning
 
@@ -288,6 +289,7 @@ ollama stop <model:tag>      # unload a specific model
 - [Ollama Modelfile Reference](https://docs.ollama.com/modelfile)
 - [Ollama num_ctx silently ignored in OpenAI API](https://github.com/ollama/ollama/issues/5356)
 - [Qwen3-30B-A3B model card](https://huggingface.co/Qwen/Qwen3-30B-A3B)
-- [GLM-4.7-Flash model card](https://huggingface.co/zai-org/GLM-4.7-Flash)
-- [unsloth/GLM-4.7-Flash-GGUF — repeat penalty bug](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/discussions/13)
-- [Cerebras GLM-4.7 migration guide](https://www.cerebras.ai/blog/glm-4-7-migration-guide)
+- [Qwen3-Coder-Next model card](https://huggingface.co/Qwen/Qwen3-Coder-Next)
+- [Qwen3-Coder-Next community discussion: tool-calling reliability](https://huggingface.co/Qwen/Qwen3-Coder-Next/discussions/14)
+- [Qwen3-Coder-Next community discussion: parser/template pitfalls](https://huggingface.co/Qwen/Qwen3-Coder-Next/discussions/17)
+- [vLLM tool calling documentation](https://docs.vllm.ai/en/latest/features/tool_calling/)

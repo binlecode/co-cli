@@ -24,15 +24,13 @@ uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle d
 # Evaluation Suite (evals/)
 uv run python evals/eval_tool_chains.py               # Multi-step chain completion
 uv run python evals/eval_conversation_history.py      # Multi-turn context retention
-uv run python evals/eval_safety_doom_loop.py           # Doom loop detection (deterministic)
 uv run python evals/eval_safety_abort_marker.py       # Ctrl-C abort marker injection
 uv run python evals/eval_safety_grace_turn.py         # Budget exhaustion grace turn
 uv run python evals/eval_memory_proactive_recall.py   # Proactive memory injection (W1)
 uv run python evals/eval_memory_signal_detection.py   # Signal detection + contradiction (W2/W6)
 uv run python evals/eval_signal_analyzer.py           # Mini-agent classification: high/low/none confidence
 uv run python evals/eval_signal_detector_approval.py  # Approval path: high auto-save, low approve/deny, no-signal
-uv run python evals/eval_memory_decay.py              # Decay lifecycle (deterministic, W7)
-uv run python evals/eval_personality_behavior.py     # Personality behavior: 1-turn + multi-turn consistency (heuristic scored)
+uv run python evals/eval_personality_behavior.py      # Personality behavior: 1-turn + multi-turn consistency (heuristic scored)
 
 # Tool-calling quality gate (functional pytest)
 uv run pytest tests/test_tool_calling_functional.py

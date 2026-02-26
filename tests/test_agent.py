@@ -24,6 +24,9 @@ EXPECTED_TOOLS = {
     "search_calendar_events",
     "web_search",
     "web_fetch",
+    # Session task tracking
+    "todo_write",
+    "todo_read",
 }
 
 EXPECTED_APPROVAL_TOOLS = {

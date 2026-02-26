@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-02-26
+
+### Added
+- **`test_tool_calling_functional.py`**: New functional test file replacing `eval_tool_calling.py` dimensions — tool selection, arg extraction, refusal, intent routing, and error recovery, all exercised through the real agent pipeline.
+- **`eval_personality_behavior.py`**: Consolidated personality eval covering 1-turn and multi-turn consistency (heuristic-scored), replacing the removed `eval_personality_adherence.py` and `eval_personality_cross_turn.py`.
+- **`qwen3-coder-next` quirks file** (`prompts/quirks/ollama/qwen3-coder-next.md`): Counter-steering for the new coder model variant.
+- **New agentic Modelfiles**: `Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` and `Modelfile.qwen3-coder-next-q4_k_m-agentic`.
+- **`scripts/trace_report_personality.py`**: Trace report script for personality behavior analysis.
+
+### Fixed
+- **Test suite fully green (193/193)**: Fixed 4 stale test assertions — `test_rules_token_budget` (threshold 5000→6000 chars to match expanded rules), `test_compose_personality_contains_mandate` (removed stale `"Match expression depth to context"` phrase), `test_get_agent_registers_all_tools` (added `todo_write`/`todo_read` to canonical tool inventory), `test_commands_registry_complete` (added `depth` to expected commands set).
+- **`web_search` display**: Added `"Web search results for '{query}':\n\n"` prefix to the `display` field so tool output is self-describing in conversation context.
+
+### Changed
+- **Eval consolidation**: Removed standalone `eval_tool_calling.py`, `eval_personality_adherence.py`, `eval_personality_cross_turn.py` and their associated data/result files; consolidated shared infrastructure into `evals/_common.py`.
+- **Ollama model cleanup**: Removed stale `glm-4.7-flash` Modelfiles and quirks file; removed base (non-agentic) `qwen3-30b-a3b` and `qwen3-30b-a3b-q4` Modelfiles.
+- **`DESIGN-llm-models.md`**: Major update — reflects current model lineup, Modelfile setup guide, and corrected `num_ctx` default (2048→4096).
+- **`config.py` / `model_quirks.py`**: Doc comment updates — corrected num_ctx default token count and updated doc reference to `DESIGN-llm-models.md`.
+
+---
+
 ## [0.4.1] - 2026-02-25
 
 ### Added
