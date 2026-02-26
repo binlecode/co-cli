@@ -142,19 +142,17 @@ See `DESIGN-07-context-governance.md` for compaction internals.
 
 ### Future Extensions (Deferred)
 
-These are intentionally not implemented yet:
+These are intentionally not implemented yet. See `TODO-subagent-delegation.md` for implementation plan.
 
 1. **Sub-agent delegation**
 - Focused research/analysis workers with structured outputs (`ResearchResult`, `AnalysisResult`).
-- Parent remains orchestrator and validator.
-- Shared usage budget via usage forwarding.
-- Gate remains performance-driven: keep prompt-only approach when it meets quality targets.
+- Delegation via tool call on parent — explicit, traceable in OTel spans.
+- Sub-agent tools restricted to read-only (no approval bypass).
+- Shared usage budget via `turn_usage` forwarding on `CoDeps` (Phase C).
 
 2. **Confidence-scored advisory outputs**
 - Add confidence metadata for advisory tools (e.g., search/recall) when ranking quality justifies it.
-
-3. **Prompt budget optimization for personality payload**
-- Further compress trait-derived behavior payload while preserving role fidelity.
+- Blocked on FTS5 ranked retrieval baseline (meaningful signal precondition).
 
 ## 3. Config
 

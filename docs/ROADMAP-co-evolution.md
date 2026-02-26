@@ -250,12 +250,11 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 ### Phase I: Sub-Agent Delegation — MEDIUM
 
-**Why:** 3/5 peers have multi-agent capability. The baseline design lives in `DESIGN-16-prompt-design.md`; remaining implementation work is tracked in `TODO-co-agentic-loop-and-prompting.md`.
+**Why:** 3/5 peers have multi-agent capability. The baseline design lives in `DESIGN-16-prompt-design.md`; remaining implementation work is tracked in `TODO-subagent-delegation.md`.
 
 **Priority inside Phase I TODO set:** P1
 
 **Implementation timing (dependency-aware):**
-- After `TODO-tool-docstring-template.md` is completed (improves tool-call reliability before delegation multiplies tool usage).
 - After baseline `TODO-background-execution.md` is in place (long-running delegated work can evolve toward non-blocking execution paths).
 - Before confidence-scored advisory outputs and voice overlays.
 
@@ -475,7 +474,7 @@ Key differences from private memories:
 
 ### 12.3 Relationship to Existing Knowledge Tiers
 
-The existing roadmap plans two knowledge tiers: Memory (shipped) and Lakehouse/Articles (planned in `TODO-knowledge-articles.md`). Shared findings are a third tier — between memories (conversation-derived, single-agent) and articles (curated, multimodal). The three tiers form a knowledge maturity pipeline:
+The existing roadmap plans two knowledge kinds: Memory (shipped) and Articles (planned in `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`). Shared findings are a third kind — between memories (conversation-derived, single-agent) and articles (curated, multimodal). The three kinds form a knowledge maturity pipeline:
 
 ```
 Private memories (raw, per-agent)
@@ -1125,19 +1124,16 @@ All paths verified against `docs/` contents.
 
 | Doc | Description | Related Phase |
 |-----|-------------|---------------|
-| `TODO-co-agentic-loop-and-prompting.md` | Remaining loop/prompt work: sub-agent delegation, confidence scoring, prompt-budget optimization | I |
+| `TODO-subagent-delegation.md` | Remaining loop/prompt work: sub-agent delegation, confidence-scored advisory outputs | I |
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
-| `TODO-knowledge-articles.md` | Lakehouse tier: articles, multimodal assets, learn mode | Future |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
-| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | SQLite FTS5 + semantic search: unified `KnowledgeIndex` for all text sources | P (+ Stage 2-3 of memory evolution) |
+| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | All knowledge system work: flat migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search | P (+ Stage 2-3 of memory evolution) |
 
 Recommended cross-TODO sequence (single-agent track):
-1. `TODO-tool-docstring-template.md`
-2. `TODO-co-agentic-loop-and-prompting.md` — personality prompt-budget optimization (P1)
-3. `TODO-background-execution.md`
-4. `TODO-co-agentic-loop-and-prompting.md` — sub-agent delegation (P1)
-5. `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` + `TODO-knowledge-articles.md`
-6. `TODO-co-agentic-loop-and-prompting.md` — confidence-scored advisory outputs (P2)
+1. `TODO-background-execution.md`
+2. `TODO-subagent-delegation.md` — sub-agent delegation (P1)
+3. `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`
+4. `TODO-subagent-delegation.md` — confidence-scored advisory outputs (P2)
 
 ### Research & Review Documents
 

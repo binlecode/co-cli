@@ -294,12 +294,16 @@ SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updat
   - Dedup by `origin_url` exact match (not content similarity)
   - Returns: `display`, `article_id`, `action` ("saved" or "consolidated")
   - After file write: call `ctx.deps.knowledge_index.index(...)` if index available (FTS integration point — no-op until Phase 1)
+  - Docstring dims: D3d (article vs memory — when to use each), D3e (writes only; dedup by origin_url, not content), D4 (URL dedup: same origin_url → consolidated)
 - [ ] Add `list_memories` optional `kind: str | None = None` parameter for filtering by kind
 - [ ] Add `kind` column in `list_memories` display output
+  - `list_memories` docstring: add D3f (kind= filter changes result set: "memory", "article", or all)
 
 #### `co_cli/tools/articles.py` (new file — or extend memory.py)
 - [ ] Implement `recall_article(query)` — returns summary index only (title, `origin_url`, tags, first paragraph); never full body (progressive loading)
+  - Docstring dims: D3a (↔ `recall_memory`, → `read_article_detail`), D3b (article vs memory distinction), D3c (summary-only; use `read_article_detail` for full body)
 - [ ] Implement `read_article_detail(slug)` — loads full markdown body on demand
+  - Docstring dims: D3a (← `recall_article` — always call this after), D3e (full body on demand — does NOT summarize), D3f (slug input: from recall_article result)
 
 #### `co_cli/agent.py` (modify)
 - [ ] Import and register `save_article` with `requires_approval=True`
@@ -499,7 +503,7 @@ Use a small cross-encoder GGUF (~640MB). QMD uses a dedicated reranker; Sonar us
 | `list_memories(kind?)` | Filesystem scan | Existing, `kind` filter added in Prereq B |
 | `search_notes(query, folder?, tag?)` | `search(query, source="obsidian")` + post-filter | Existing, updated for FTS |
 | `search_drive_files(query)` | `search(query, source="drive")` | Existing, updated when Drive docs cached |
-| `search_knowledge(query)` | `search(query)` | New — cross-source, Phase 1+ |
+| `search_knowledge(query)` | `search(query)` | New — cross-source, Phase 1+. Docstring dims: D3a (cross-source: memories + articles + notes + drive), D3b (vs `recall_memory`/`recall_article` — use when source is unknown), D3g (falls back to grep if FTS unavailable) |
 
 ---
 

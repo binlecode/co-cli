@@ -15,9 +15,7 @@ _PERSONALITIES_DIR = Path(__file__).parent
 
 _ADOPTION_MANDATE = (
     "Adopt this persona fully — it overrides your default "
-    "personality and communication patterns. Match expression "
-    "depth to context: minimal for routine commands, expressive "
-    "for creative and relational moments.\n"
+    "personality and communication patterns.\n"
     "Your personality shapes how you follow the rules below. "
     "It never overrides safety or factual accuracy."
 )

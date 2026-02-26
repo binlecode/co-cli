@@ -22,7 +22,6 @@ uv run pytest --cov=co_cli                   # With coverage
 uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle demo
 
 # Evaluation Suite (evals/)
-uv run python evals/eval_tool_calling.py              # Tool selection + intent (JSONL scored)
 uv run python evals/eval_tool_chains.py               # Multi-step chain completion
 uv run python evals/eval_conversation_history.py      # Multi-turn context retention
 uv run python evals/eval_safety_doom_loop.py           # Doom loop detection (deterministic)
@@ -33,7 +32,10 @@ uv run python evals/eval_memory_signal_detection.py   # Signal detection + contr
 uv run python evals/eval_signal_analyzer.py           # Mini-agent classification: high/low/none confidence
 uv run python evals/eval_signal_detector_approval.py  # Approval path: high auto-save, low approve/deny, no-signal
 uv run python evals/eval_memory_decay.py              # Decay lifecycle (deterministic, W7)
-uv run python evals/eval_personality_adherence.py    # Personality adherence (P2, heuristic scored)
+uv run python evals/eval_personality_behavior.py     # Personality behavior: 1-turn + multi-turn consistency (heuristic scored)
+
+# Tool-calling quality gate (functional pytest)
+uv run pytest tests/test_tool_calling_functional.py
 ```
 
 ## Architecture
@@ -138,7 +140,7 @@ Every component DESIGN doc follows a 4-section template:
 ### TODO (remaining work items only — no design content, no status tracking)
 
 **Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
-- `docs/TODO-co-agentic-loop-and-prompting.md` — Remaining loop/prompting work only: sub-agent delegation, confidence-scored advisory outputs, personality prompt-budget optimization
+- `docs/TODO-subagent-delegation.md` — Remaining loop/prompting work: sub-agent delegation, confidence-scored advisory outputs
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
 - `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — All knowledge system work: flat storage migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search
