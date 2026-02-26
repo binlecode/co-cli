@@ -51,17 +51,17 @@ See `docs/DESIGN-core.md` for module descriptions, processing flows, and approva
 
 ## Knowledge System
 
-All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt. Two tiers:
+All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt.
 
-**Memory** — conversation-derived knowledge (preferences, decisions, corrections, patterns):
-- Storage: `.co-cli/knowledge/memories/*.md`
-- Tools: `save_memory(content, tags)`, `recall_memory(query)`, `list_memories()`
+**Current state:** Memories stored in `.co-cli/knowledge/memories/*.md` (YAML frontmatter, markdown body).
+Tools: `save_memory(content, tags)`, `recall_memory(query)`, `list_memories()`
 
-**Lakehouse** — curated articles and multimodal assets (future):
-- Storage: `.co-cli/knowledge/articles/*.md`, assets in `articles/assets/{slug}/`
-- Tools: `save_article()`, `recall_article()`, `list_articles()` (planned)
-
-**Retrieval:** grep + frontmatter for MVP (<200 items). Future: SQLite FTS5 → hybrid search with vectors.
+**Planned (see `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`):**
+- Flat `.co-cli/knowledge/*.md` — memories and articles coexist, distinguished by `kind` frontmatter field
+- `kind: article` items add `origin_url`, are decay-protected, support progressive loading
+- Multimodal assets: `.co-cli/knowledge/assets/{slug}/`
+- New tools: `save_article()`, `recall_article()`, `read_article_detail()`, `list_memories(kind=)`
+- Retrieval: FTS5 (BM25) → hybrid semantic search (sqlite-vec) — replacing grep
 
 ## Coding Standards
 
@@ -140,9 +140,8 @@ Every component DESIGN doc follows a 4-section template:
 **Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
 - `docs/TODO-co-agentic-loop-and-prompting.md` — Remaining loop/prompting work only: sub-agent delegation, confidence-scored advisory outputs, personality prompt-budget optimization
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
-- `docs/TODO-knowledge-articles.md` — Lakehouse tier: articles, multimodal assets, learn mode, search scaling
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
-- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — SQLite FTS5 + semantic search: unified index for all text sources (memories, articles, Obsidian, Drive)
+- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — All knowledge system work: flat storage migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search
 - `docs/TODO-skills-system.md` — Skills system gaps: frontmatter parsing, arg substitution, description injection, env gating
 
 ### Skills
