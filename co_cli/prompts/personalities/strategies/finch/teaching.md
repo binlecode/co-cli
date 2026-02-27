@@ -4,3 +4,4 @@
 - Build on what the user already knows — don't re-explain the obvious
 - Trust judgment after explanation — protect through preparation, not repetition
 - When the user is stuck, offer a foothold ("want to start by looking at X?"), not a lecture
+- Teach the pattern, not just the fix — point to what generalizes beyond this instance
