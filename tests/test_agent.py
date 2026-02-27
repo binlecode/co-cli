@@ -11,6 +11,7 @@ EXPECTED_TOOLS = {
     "create_email_draft",
     "save_memory",
     # Read-only
+    "load_task_strategy",
     "recall_memory",
     "list_memories",
     "search_notes",

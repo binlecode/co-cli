@@ -1,18 +1,17 @@
 """Tests for system prompt assembly and personality composition.
 
 Static prompt: instructions + rules + counter-steering (no personality).
-Personality: soul + behaviors (composed separately, injected per turn).
+Personality: expanded soul seed (identity + Core + Never) in static prompt.
+Task-specific guidance: loaded on demand via load_task_strategy tool.
 """
 
 import time
+from pathlib import Path
 
 from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._composer import (
     VALID_PERSONALITIES,
-    load_soul,
     load_soul_seed,
-    load_traits,
-    compose_personality,
 )
 
 
@@ -111,23 +110,24 @@ def test_prompt_assembly_under_100ms():
     )
 
 
-# --- Personality composition ---
+# --- Personality: expanded seed ---
 
 
 def test_all_roles_have_soul():
-    """Every role in traits/ has a loadable soul file."""
-    for name in VALID_PERSONALITIES:
-        soul = load_soul(name)
-        assert len(soul) > 0, f"Empty soul for role: {name}"
-
-
-def test_soul_seed_is_first_paragraph():
-    """Soul seed is the opening identity declaration — stops before any ## section."""
+    """Every role has a loadable seed file."""
     for name in VALID_PERSONALITIES:
         seed = load_soul_seed(name)
         assert len(seed) > 0, f"Empty seed for role: {name}"
-        assert "##" not in seed, f"Seed contains ## heading for role: {name}"
+
+
+def test_soul_seed_starts_with_identity():
+    """Soul seed opens with identity declaration and contains Core and Never sections."""
+    for name in VALID_PERSONALITIES:
+        seed = load_soul_seed(name)
+        assert len(seed) > 0, f"Empty seed for role: {name}"
         assert seed.startswith("You are"), f"Seed doesn't start with identity declaration: {name}"
+        assert "Core:" in seed, f"Seed missing Core section for role: {name}"
+        assert "Never:" in seed, f"Seed missing Never section for role: {name}"
 
 
 def test_static_prompt_starts_with_soul_seed():
@@ -138,89 +138,8 @@ def test_static_prompt_starts_with_soul_seed():
     assert "soul_seed" in manifest.parts_loaded
 
 
-def test_all_roles_have_traits():
-    """Every role has a parseable traits file with 4 traits."""
-    for name in VALID_PERSONALITIES:
-        traits = load_traits(name)
-        assert len(traits) == 4, (
-            f"Role {name} has {len(traits)} traits, expected 4: {traits}"
-        )
-
-
-def test_traits_have_behavior_files():
-    """Every trait value referenced in traits files has a behavior file."""
-    from pathlib import Path
-    behaviors_dir = Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "behaviors"
-    for name in VALID_PERSONALITIES:
-        traits = load_traits(name)
-        for trait_name, trait_value in traits.items():
-            behavior_file = behaviors_dir / f"{trait_name}-{trait_value}.md"
-            assert behavior_file.exists(), (
-                f"Missing behavior file for {name}: {behavior_file.name}"
-            )
-
-
-def test_compose_personality_contains_soul_body():
-    """Composed personality contains soul body (## Never) but not the seed — seed is in static prompt."""
-    composed = compose_personality("finch")
-    assert "## Soul" in composed
-    assert "## Never" in composed
-    # Seed paragraph must NOT be repeated in per-turn block
-    assert "You are Finch" not in composed
-    assert "teaches by doing" not in composed
-
-
-def test_compose_personality_contains_behaviors():
-    """Composed personality includes behavior file content."""
-    composed = compose_personality("finch")
-    # finch has communication: balanced → should include balanced communication content
-    assert "Balanced Communication" in composed
-    # finch has relationship: mentor → should include mentor content
-    assert "Mentor Relationship" in composed
-
-
-def test_no_adoption_mandate_in_personality():
-    """Composed personality must contain no adoption mandate — soul IS the identity."""
-    composed = compose_personality("jeff")
-    assert "overrides your default" not in composed
-    assert "Adopt this persona" not in composed
-
-
-def test_compose_personality_differs_by_role():
-    """Different roles produce different personality blocks."""
-    finch = compose_personality("finch")
-    jeff = compose_personality("jeff")
-    # Seed text is not in per-turn block — differentiation comes from behaviors
-    assert "Balanced Communication" in finch
-    assert "Warm Communication" in jeff
-    assert "Balanced Communication" not in jeff
-
-
-def test_personality_under_budget():
-    """Composed personality stays under 3500 chars (soul body + 5 behaviors)."""
-    for name in VALID_PERSONALITIES:
-        composed = compose_personality(name)
-        assert len(composed) < 4500, (
-            f"Personality '{name}' is {len(composed)} chars, expected < 4500"
-        )
-
-
-def test_total_prompt_under_budget():
-    """Static prompt (with soul seed) + largest personality body stays under budget."""
-    for name in VALID_PERSONALITIES:
-        seed = load_soul_seed(name)
-        prompt, manifest = assemble_prompt("gemini", soul_seed=seed)
-        personality_body = len(compose_personality(name))
-        total = manifest.total_chars + personality_body
-        assert total < 11500, (
-            f"Total for '{name}' is {total} chars "
-            f"(static {manifest.total_chars} + personality {personality_body}), "
-            f"expected < 11500"
-        )
-
-
-def test_valid_personalities_derived_from_traits():
-    """VALID_PERSONALITIES is derived from traits/ folder, not hardcoded."""
+def test_valid_personalities_derived_from_souls():
+    """VALID_PERSONALITIES is derived from souls/ folder, not hardcoded."""
     assert "finch" in VALID_PERSONALITIES
     assert "jeff" in VALID_PERSONALITIES
     assert len(VALID_PERSONALITIES) == 2
@@ -228,7 +147,6 @@ def test_valid_personalities_derived_from_traits():
 
 def test_static_prompt_has_no_core_traits_section():
     """Static identity rules must not define core traits — soul provides all identity."""
-    from pathlib import Path
     identity = (
         Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
     ).read_text()
@@ -238,7 +156,6 @@ def test_static_prompt_has_no_core_traits_section():
 
 def test_identity_rule_does_not_instruct_manual_recall():
     """Identity rule must not tell the model to call recall_memory manually."""
-    from pathlib import Path
     identity = (
         Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
     ).read_text()
@@ -247,8 +164,42 @@ def test_identity_rule_does_not_instruct_manual_recall():
 
 def test_instructions_preamble_is_empty():
     """The instructions.md preamble must be empty — soul provides all identity."""
-    from pathlib import Path
     instructions = (
         Path(__file__).parent.parent / "co_cli/prompts/instructions.md"
     ).read_text().strip()
     assert instructions == ""
+
+
+def test_total_prompt_under_budget():
+    """Static prompt with soul seed stays under budget."""
+    for name in VALID_PERSONALITIES:
+        seed = load_soul_seed(name)
+        prompt, manifest = assemble_prompt("gemini", soul_seed=seed)
+        assert manifest.total_chars < 8000, (
+            f"Static prompt for '{name}' is {manifest.total_chars} chars, expected < 8000"
+        )
+
+
+# --- Strategy files ---
+
+
+def test_all_roles_have_strategy_files():
+    """Every role has all 6 strategy files."""
+    strategies_base = (
+        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "strategies"
+    )
+    task_types = ["technical", "exploration", "debugging", "teaching", "emotional", "quick"]
+    for name in VALID_PERSONALITIES:
+        for task_type in task_types:
+            f = strategies_base / name / f"{task_type}.md"
+            assert f.exists(), f"Missing strategy: {name}/{task_type}.md"
+
+
+def test_strategy_files_have_content():
+    """Every strategy file has non-empty content."""
+    strategies_base = (
+        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "strategies"
+    )
+    for strategy_file in strategies_base.rglob("*.md"):
+        content = strategy_file.read_text(encoding="utf-8").strip()
+        assert len(content) > 0, f"Empty strategy file: {strategy_file.name}"

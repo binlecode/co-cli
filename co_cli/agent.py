@@ -25,6 +25,7 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
+from co_cli.tools.personality import load_task_strategy
 from co_cli.tools.todo import todo_write, todo_read
 
 
@@ -183,14 +184,6 @@ def get_agent(
         )
 
     @agent.system_prompt
-    def add_personality(ctx: RunContext[CoDeps]) -> str:
-        """Inject personality block (soul + behaviors) per turn."""
-        if not ctx.deps.personality:
-            return ""
-        from co_cli.prompts.personalities._composer import compose_personality
-        return compose_personality(ctx.deps.personality)
-
-    @agent.system_prompt
     def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
         """Inject project-level instructions from .co-cli/instructions.md."""
         instructions_path = Path.cwd() / ".co-cli" / "instructions.md"
@@ -216,6 +209,7 @@ def get_agent(
     agent.tool(todo_read, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
+    agent.tool(load_task_strategy, requires_approval=all_approval)
     agent.tool(recall_memory, requires_approval=all_approval)
     agent.tool(list_memories, requires_approval=all_approval)
     agent.tool(search_notes, requires_approval=all_approval)
