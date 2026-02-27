@@ -10,7 +10,6 @@ uv run co chat                   # Interactive REPL
 uv run co status                 # System health check
 uv run co logs                   # Datasette trace viewer (table)
 uv run co traces                 # Nested HTML trace viewer
-uv run co debug-personality      # Personality prompt layer inspector
 
 uv run pytest                    # Run all functional tests
 uv run pytest -v                 # Verbose output

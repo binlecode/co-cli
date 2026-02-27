@@ -33,6 +33,7 @@ def get_agent(
     all_approval: bool = False,
     web_policy: WebPolicy | None = None,
     mcp_servers: dict[str, MCPServerConfig] | None = None,
+    personality: str | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
     """Factory function to create the Pydantic AI Agent.
 
@@ -46,6 +47,9 @@ def get_agent(
             requires_approval while "deny" is enforced inside tool execution.
         mcp_servers: MCP server configs to connect as toolsets. Servers are
             started/stopped via ``async with agent``.
+        personality: Active soul name (e.g., "finch", "jeff"). The soul seed
+            (identity declaration) is extracted and placed at the top of the
+            static system prompt — the model's first context is always the soul.
     """
     provider_name = settings.llm_provider.lower()
 
@@ -63,9 +67,8 @@ def get_agent(
         model = f"google-gla:{model_name}"
 
         # Model-specific inference parameters from quirk database.
-        # Gemini 2.5+ thinking models: temperature must stay at 1.0 (Google's guidance);
-        # setting it below 1.0 causes looping / degraded performance.
-        # top_k is fixed at 64 for the 2.5 series — not passed here (API ignores it).
+        # Fallback defaults keep Gemini on a thinking-safe profile even when
+        # no model-specific quirk file exists.
         from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
         inf = get_model_inference("gemini", _normalize(model_name))
         model_settings = ModelSettings(
@@ -113,9 +116,17 @@ def get_agent(
     # Normalize model name for quirk lookup (strips quantization tags like ":q4_k_m")
     from co_cli.prompts.model_quirks import normalize_model_name
     normalized_model = normalize_model_name(model_name)
+
+    # Soul seed — identity declaration placed first in the static prompt
+    soul_seed: str | None = None
+    if personality:
+        from co_cli.prompts.personalities._composer import load_soul_seed
+        soul_seed = load_soul_seed(personality)
+
     system_prompt, _manifest = assemble_prompt(
         provider_name,
         model_name=normalized_model,
+        soul_seed=soul_seed,
     )
 
     # Build MCP toolsets from config
@@ -159,14 +170,6 @@ def get_agent(
     # Conditional system prompt layers — runtime-gated via @agent.system_prompt
 
     @agent.system_prompt
-    def add_personality(ctx: RunContext[CoDeps]) -> str:
-        """Inject personality block (soul + behaviors + mandate) per turn."""
-        if not ctx.deps.personality:
-            return ""
-        from co_cli.prompts.personalities._composer import compose_personality
-        return compose_personality(ctx.deps.personality, ctx.deps.reasoning_depth)
-
-    @agent.system_prompt
     def add_current_date(ctx: RunContext[CoDeps]) -> str:
         """Inject the current date so the model can reason about time."""
         return f"Today is {date.today().isoformat()}."
@@ -178,6 +181,14 @@ def get_agent(
             "Shell runs as subprocess with approval. "
             "Read-only commands matching the safe-command allowlist are auto-approved."
         )
+
+    @agent.system_prompt
+    def add_personality(ctx: RunContext[CoDeps]) -> str:
+        """Inject personality block (soul + behaviors) per turn."""
+        if not ctx.deps.personality:
+            return ""
+        from co_cli.prompts.personalities._composer import compose_personality
+        return compose_personality(ctx.deps.personality)
 
     @agent.system_prompt
     def add_project_instructions(ctx: RunContext[CoDeps]) -> str:

@@ -52,8 +52,6 @@ class CoDeps:
 
     # Personality / role
     personality: str | None = None
-    # Session-only depth override — not config-backed, always starts at "normal"
-    reasoning_depth: str = "normal"
 
     # History governance
     max_history_messages: int = 40

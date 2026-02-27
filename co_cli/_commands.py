@@ -198,27 +198,6 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     return None
 
 
-async def _cmd_depth(ctx: CommandContext, args: str) -> None:
-    """Show or set the reasoning depth (quick / normal / deep)."""
-    from co_cli.prompts._reasoning_depth_override import VALID_DEPTHS
-
-    depth = args.strip().lower()
-    if not depth:
-        console.print(f"[info]Current depth:[/info] {ctx.deps.reasoning_depth}")
-        console.print(f"[dim]Available: {', '.join(VALID_DEPTHS)}[/dim]")
-        if not ctx.deps.personality:
-            console.print("[dim]Note: no personality configured — depth has no effect until a role is set.[/dim]")
-        return None
-    if depth not in VALID_DEPTHS:
-        console.print(f"[error]Unknown depth:[/error] {depth}. Choose from: {', '.join(VALID_DEPTHS)}")
-        return None
-    ctx.deps.reasoning_depth = depth
-    console.print(f"[success]Reasoning depth set to:[/success] {depth}")
-    if not ctx.deps.personality:
-        console.print("[dim]Note: no personality configured — depth has no effect until a role is set.[/dim]")
-    return None
-
-
 async def _cmd_model(ctx: CommandContext, args: str) -> None:
     """Switch Ollama model or show current model."""
     from co_cli.config import settings
@@ -278,7 +257,6 @@ COMMANDS: dict[str, SlashCommand] = {
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
-    "depth": SlashCommand("depth", "Set response depth: quick / normal / deep", _cmd_depth),
     "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
 }

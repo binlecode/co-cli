@@ -1,8 +1,9 @@
 """Compose personality from file-driven soul + traits + behaviors.
 
 Personality is assembled from three file types:
-- ``souls/{role}.md`` — 2-3 sentence voice fingerprint
-- ``traits/{role}.md`` — key: value trait wiring (5 traits)
+- ``souls/{role}/seed.md`` — identity declaration ("You are X…")
+- ``souls/{role}/body.md`` — behavioral detail sections (## Never, ## Voice, etc.)
+- ``traits/{role}.md``     — key: value trait wiring (4 traits)
 - ``behaviors/{trait}-{value}.md`` — behavioral guidance per trait value
 
 No Python dict, no TypedDict. The folder structure IS the schema.
@@ -12,14 +13,6 @@ from pathlib import Path
 
 
 _PERSONALITIES_DIR = Path(__file__).parent
-
-_ADOPTION_MANDATE = (
-    "Adopt this persona fully — it overrides your default "
-    "personality and communication patterns.\n"
-    "Your personality shapes how you follow the rules below. "
-    "It never overrides safety or factual accuracy."
-)
-
 
 def _discover_valid_personalities() -> list[str]:
     """Derive valid personality names from traits/ folder listing."""
@@ -32,22 +25,64 @@ def _discover_valid_personalities() -> list[str]:
 VALID_PERSONALITIES: list[str] = _discover_valid_personalities()
 
 
-def load_soul(role: str) -> str:
-    """Load the voice fingerprint for a role.
+def load_soul_seed(role: str) -> str:
+    """Load the identity declaration for a role.
+
+    The seed is the most fundamental part of the soul: the "You are X" statement
+    that anchors the agent's identity. It belongs at the top of the static system
+    prompt so the model's first context is the soul, not a generic label.
 
     Args:
-        role: Personality role name (e.g., "finch", "terse").
+        role: Personality role name (e.g., "finch", "jeff").
 
     Returns:
-        Soul text (2-3 sentences).
+        Identity declaration text from ``souls/{role}/seed.md``.
 
     Raises:
-        FileNotFoundError: If the soul file is missing.
+        FileNotFoundError: If the seed file is missing.
     """
-    soul_file = _PERSONALITIES_DIR / "souls" / f"{role}.md"
-    if not soul_file.exists():
-        raise FileNotFoundError(f"Soul file not found: {soul_file}")
-    return soul_file.read_text(encoding="utf-8").strip()
+    seed_file = _PERSONALITIES_DIR / "souls" / role / "seed.md"
+    if not seed_file.exists():
+        raise FileNotFoundError(f"Soul seed file not found: {seed_file}")
+    return seed_file.read_text(encoding="utf-8").strip()
+
+
+def _load_soul_body(role: str) -> str:
+    """Load the soul body — the ## sections that provide behavioral detail.
+
+    The seed (identity declaration) lives in the static system prompt via
+    ``load_soul_seed()``. This returns only the behavioral detail sections
+    (``## Never``, ``## Voice``, etc.) so the per-turn ``## Soul`` block
+    does not repeat the seed.
+
+    Returns empty string if ``souls/{role}/body.md`` does not exist.
+    """
+    body_file = _PERSONALITIES_DIR / "souls" / role / "body.md"
+    if not body_file.exists():
+        return ""
+    return body_file.read_text(encoding="utf-8").strip()
+
+
+def load_soul(role: str) -> str:
+    """Load the full soul — seed + body combined.
+
+    Useful for diagnostics and debug tools that need to display
+    the complete soul content in one block.
+
+    Args:
+        role: Personality role name (e.g., "finch", "jeff").
+
+    Returns:
+        Full soul text: seed paragraph + body sections.
+
+    Raises:
+        FileNotFoundError: If the seed file is missing.
+    """
+    seed = load_soul_seed(role)
+    body = _load_soul_body(role)
+    if body:
+        return seed + "\n\n" + body
+    return seed
 
 
 def load_traits(role: str) -> dict[str, str]:
@@ -81,45 +116,39 @@ def load_traits(role: str) -> dict[str, str]:
     return traits
 
 
-def compose_personality(role: str, depth: str = "normal") -> str:
-    """Compose the full personality block from soul + behavior files + mandate.
+def compose_personality(role: str) -> str:
+    """Compose the per-turn personality block from soul body + behavior files.
+
+    The soul seed (identity declaration) is already in the static system prompt
+    via ``load_soul_seed()`` — it is not repeated here.
 
     Assembly:
-    1. Load ``souls/{role}.md`` — identity basis + voice fingerprint + anti-patterns
+    1. Load soul body from ``souls/{role}/body.md`` (## Never, ## Voice, etc.)
     2. Load ``traits/{role}.md`` — parse key: value pairs into a fresh dict
-    3. Apply ``_DEPTH_OVERRIDES[depth]`` — mutate trait dict before file loading
-    4. For each trait (with overrides applied): load ``behaviors/{key}-{value}.md``
-    5. Concatenate: soul + all behavior contents + adoption mandate
+    3. For each trait: load ``behaviors/{key}-{value}.md``
+    4. Concatenate: soul body + all behavior contents
 
     Args:
         role: Personality role name.
-        depth: User reasoning depth intent — ``"quick"``, ``"normal"``, or ``"deep"``.
-            Overrides specific trait values before behavior file selection.
-            Defaults to ``"normal"`` (no overrides, role defaults apply).
 
     Returns:
-        Complete ``## Soul`` block ready for system prompt injection.
+        ``## Soul`` block (body + behaviors) ready for per-turn injection.
     """
-    from co_cli.prompts._reasoning_depth_override import _DEPTH_OVERRIDES
-
     parts: list[str] = []
 
-    # Identity basis + voice fingerprint + anti-patterns
-    parts.append(load_soul(role))
+    # Soul body only — seed is in the static prompt, not repeated here
+    body = _load_soul_body(role)
+    if body:
+        parts.append(body)
 
-    # Apply depth overrides before behavior file selection
     traits = load_traits(role)
-    traits.update(_DEPTH_OVERRIDES.get(depth, {}))
 
-    # Behavior files for each trait (uses overridden values)
+    # Behavior files for each trait
     for trait_name, trait_value in traits.items():
         behavior_file = (
             _PERSONALITIES_DIR / "behaviors" / f"{trait_name}-{trait_value}.md"
         )
         if behavior_file.exists():
             parts.append(behavior_file.read_text(encoding="utf-8").strip())
-
-    # Adoption mandate
-    parts.append(_ADOPTION_MANDATE)
 
     return "## Soul\n\n" + "\n\n".join(parts)

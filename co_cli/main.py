@@ -18,7 +18,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
-from co_cli._signal_analyzer import analyze_for_signals, _keyword_precheck
+from co_cli._signal_analyzer import analyze_for_signals
 from co_cli.tools.memory import _save_memory_impl
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
@@ -147,6 +147,7 @@ async def chat_loop(verbose: bool = False):
     agent, model_settings, tool_names = get_agent(
         web_policy=settings.web_policy,
         mcp_servers=mcp_servers,
+        personality=settings.personality,
     )
     deps = create_deps()
     frontend = TerminalFrontend()
@@ -171,6 +172,7 @@ async def chat_loop(verbose: bool = False):
         stack = AsyncExitStack()
         agent, model_settings, tool_names = get_agent(
             web_policy=settings.web_policy,
+            personality=settings.personality,
         )
         await stack.enter_async_context(agent)
         mcp_servers = None
@@ -236,12 +238,11 @@ async def chat_loop(verbose: bool = False):
                 message_history = turn_result.messages
 
                 # Signal detection — CC hookify pattern, auto-triggered post-turn.
-                # Keyword precheck gates the LLM call: only fires when a signal phrase
-                # is present in the last user message (zero cost otherwise).
+                # LLM mini-agent classifies every completed turn; guardrails in the
+                # prompt prevent false positives on neutral messages.
                 if (
                     not turn_result.interrupted
                     and turn_result.outcome != "error"
-                    and _keyword_precheck(message_history)
                 ):
                     signal = await analyze_for_signals(message_history, agent.model)
                     if signal.found and signal.candidate and signal.tag:
@@ -361,15 +362,6 @@ def traces():
     console.print(f"[bold green]Generated trace viewer:[/bold green] {html_path}")
     webbrowser.open(f"file://{html_path}")
 
-
-@app.command(name="debug-personality")
-def debug_personality(
-    preset: str = typer.Option(None, "--preset", "-p", help="Personality preset to inspect (default: current setting)"),
-):
-    """Show what personality content is injected at each prompt layer."""
-    from co_cli._debug_personality import run_debug_personality
-
-    run_debug_personality(preset)
 
 
 @app.command()

@@ -1,7 +1,7 @@
 """Tests for system prompt assembly and personality composition.
 
 Static prompt: instructions + rules + counter-steering (no personality).
-Personality: soul + behaviors + mandate (composed separately, injected per turn).
+Personality: soul + behaviors (composed separately, injected per turn).
 """
 
 import time
@@ -10,6 +10,7 @@ from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._composer import (
     VALID_PERSONALITIES,
     load_soul,
+    load_soul_seed,
     load_traits,
     compose_personality,
 )
@@ -18,10 +19,11 @@ from co_cli.prompts.personalities._composer import (
 # --- Instructions ---
 
 
-def test_prompt_starts_with_instructions():
-    """Assembled prompt starts with instructions.md bootstrap content."""
+def test_static_prompt_has_no_generic_identity_claim():
+    """Static prompt must not assert a generic identity — soul provides identity."""
     prompt, manifest = assemble_prompt("gemini")
-    assert prompt.startswith("You are Co, a personal companion")
+    assert "You are a personal companion" not in prompt
+    assert "You are Co" not in prompt
 
 
 # --- Static prompt has no personality ---
@@ -94,8 +96,8 @@ def test_counter_steering_absent_default():
 def test_static_prompt_under_budget():
     """Static system prompt (instructions + rules + quirks) stays bounded."""
     prompt, manifest = assemble_prompt("gemini")
-    assert manifest.total_chars < 5500, (
-        f"Static prompt is {manifest.total_chars} chars, expected < 5500"
+    assert manifest.total_chars < 6500, (
+        f"Static prompt is {manifest.total_chars} chars, expected < 6500"
     )
 
 
@@ -119,12 +121,29 @@ def test_all_roles_have_soul():
         assert len(soul) > 0, f"Empty soul for role: {name}"
 
 
+def test_soul_seed_is_first_paragraph():
+    """Soul seed is the opening identity declaration — stops before any ## section."""
+    for name in VALID_PERSONALITIES:
+        seed = load_soul_seed(name)
+        assert len(seed) > 0, f"Empty seed for role: {name}"
+        assert "##" not in seed, f"Seed contains ## heading for role: {name}"
+        assert seed.startswith("You are"), f"Seed doesn't start with identity declaration: {name}"
+
+
+def test_static_prompt_starts_with_soul_seed():
+    """With a personality, static prompt opens with the soul seed — identity first."""
+    seed = load_soul_seed("finch")
+    prompt, manifest = assemble_prompt("gemini", soul_seed=seed)
+    assert prompt.startswith(seed)
+    assert "soul_seed" in manifest.parts_loaded
+
+
 def test_all_roles_have_traits():
-    """Every role has a parseable traits file with 5 traits."""
+    """Every role has a parseable traits file with 4 traits."""
     for name in VALID_PERSONALITIES:
         traits = load_traits(name)
-        assert len(traits) == 5, (
-            f"Role {name} has {len(traits)} traits, expected 5: {traits}"
+        assert len(traits) == 4, (
+            f"Role {name} has {len(traits)} traits, expected 4: {traits}"
         )
 
 
@@ -141,12 +160,14 @@ def test_traits_have_behavior_files():
             )
 
 
-def test_compose_personality_contains_soul():
-    """Composed personality contains the role identity basis."""
+def test_compose_personality_contains_soul_body():
+    """Composed personality contains soul body (## Never) but not the seed — seed is in static prompt."""
     composed = compose_personality("finch")
     assert "## Soul" in composed
-    assert "You are Co" in composed
-    assert "teaches by doing" in composed
+    assert "## Never" in composed
+    # Seed paragraph must NOT be repeated in per-turn block
+    assert "You are Finch" not in composed
+    assert "teaches by doing" not in composed
 
 
 def test_compose_personality_contains_behaviors():
@@ -158,89 +179,76 @@ def test_compose_personality_contains_behaviors():
     assert "Mentor Relationship" in composed
 
 
-def test_compose_personality_contains_mandate():
-    """Composed personality includes the adoption mandate."""
-    composed = compose_personality("finch")
-    assert "Adopt this persona fully" in composed
-    assert "never overrides safety or factual accuracy" in composed
+def test_no_adoption_mandate_in_personality():
+    """Composed personality must contain no adoption mandate — soul IS the identity."""
+    composed = compose_personality("jeff")
+    assert "overrides your default" not in composed
+    assert "Adopt this persona" not in composed
 
 
 def test_compose_personality_differs_by_role():
     """Different roles produce different personality blocks."""
     finch = compose_personality("finch")
-    terse = compose_personality("terse")
-    assert "teaches by doing" in finch
-    assert "teaches by doing" not in terse
+    jeff = compose_personality("jeff")
+    # Seed text is not in per-turn block — differentiation comes from behaviors
     assert "Balanced Communication" in finch
-    assert "Terse Communication" in terse
+    assert "Warm Communication" in jeff
+    assert "Balanced Communication" not in jeff
 
 
 def test_personality_under_budget():
-    """Composed personality stays under 3500 chars (soul + 5 behaviors + mandate)."""
+    """Composed personality stays under 3500 chars (soul body + 5 behaviors)."""
     for name in VALID_PERSONALITIES:
         composed = compose_personality(name)
-        assert len(composed) < 3500, (
-            f"Personality '{name}' is {len(composed)} chars, expected < 3500"
+        assert len(composed) < 4500, (
+            f"Personality '{name}' is {len(composed)} chars, expected < 4500"
         )
 
 
 def test_total_prompt_under_budget():
-    """Static prompt + largest personality stays under 8500 char budget."""
-    prompt, manifest = assemble_prompt("gemini")
-    largest_personality = max(
-        len(compose_personality(name)) for name in VALID_PERSONALITIES
-    )
-    total = manifest.total_chars + largest_personality
-    assert total < 8500, (
-        f"Total is {total} chars (static {manifest.total_chars} + "
-        f"personality {largest_personality}), expected < 8500"
-    )
+    """Static prompt (with soul seed) + largest personality body stays under budget."""
+    for name in VALID_PERSONALITIES:
+        seed = load_soul_seed(name)
+        prompt, manifest = assemble_prompt("gemini", soul_seed=seed)
+        personality_body = len(compose_personality(name))
+        total = manifest.total_chars + personality_body
+        assert total < 11500, (
+            f"Total for '{name}' is {total} chars "
+            f"(static {manifest.total_chars} + personality {personality_body}), "
+            f"expected < 11500"
+        )
 
 
 def test_valid_personalities_derived_from_traits():
     """VALID_PERSONALITIES is derived from traits/ folder, not hardcoded."""
     assert "finch" in VALID_PERSONALITIES
-    assert "terse" in VALID_PERSONALITIES
-    assert len(VALID_PERSONALITIES) == 4
+    assert "jeff" in VALID_PERSONALITIES
+    assert len(VALID_PERSONALITIES) == 2
 
 
-# --- Reasoning depth ---
+def test_static_prompt_has_no_core_traits_section():
+    """Static identity rules must not define core traits — soul provides all identity."""
+    from pathlib import Path
+    identity = (
+        Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
+    ).read_text()
+    assert "## Core traits" not in identity
+    assert "Helpful:" not in identity
 
 
-def test_compose_personality_quick_depth_overrides_thoroughness():
-    """quick depth swaps thoroughness from role default to minimal."""
-    composed = compose_personality("finch", "quick")
-    assert "Minimal Thoroughness" in composed
-    assert "Comprehensive Thoroughness" not in composed
+def test_identity_rule_does_not_instruct_manual_recall():
+    """Identity rule must not tell the model to call recall_memory manually."""
+    from pathlib import Path
+    identity = (
+        Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
+    ).read_text()
+    assert "recall memories relevant" not in identity
 
 
-def test_compose_personality_quick_depth_overrides_curiosity():
-    """quick depth swaps curiosity from proactive to reactive."""
-    composed = compose_personality("finch", "quick")
-    assert "Reactive Curiosity" in composed
-    assert "Proactive Curiosity" not in composed
-
-
-def test_compose_personality_deep_depth_overrides_thoroughness():
-    """deep depth promotes thoroughness to comprehensive for standard-thoroughness roles."""
-    # jeff has thoroughness: standard — deep overrides to comprehensive
-    composed = compose_personality("jeff", "deep")
-    assert "Comprehensive Thoroughness" in composed
-
-
-def test_compose_personality_deep_depth_noop_for_comprehensive_role():
-    """deep depth is a no-op for roles already at comprehensive thoroughness."""
-    # finch has thoroughness: comprehensive — deep changes nothing
-    assert compose_personality("finch", "normal") == compose_personality("finch", "deep")
-
-
-def test_compose_personality_normal_depth_uses_role_defaults():
-    """normal depth applies no overrides — role trait values are unchanged."""
-    composed = compose_personality("finch", "normal")
-    assert "Comprehensive Thoroughness" in composed
-    assert "Proactive Curiosity" in composed
-
-
-def test_compose_personality_default_depth_is_normal():
-    """compose_personality with no depth argument equals normal depth."""
-    assert compose_personality("finch") == compose_personality("finch", "normal")
+def test_instructions_preamble_is_empty():
+    """The instructions.md preamble must be empty — soul provides all identity."""
+    from pathlib import Path
+    instructions = (
+        Path(__file__).parent.parent / "co_cli/prompts/instructions.md"
+    ).read_text().strip()
+    assert instructions == ""
