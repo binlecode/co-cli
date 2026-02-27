@@ -68,7 +68,7 @@ async def load_task_strategy(
             debugging   — isolate, hypothesize, verify
             teaching    — explain concepts, guide toward understanding
             emotional   — user is frustrated, stuck, or celebrating
-            quick       — direct answer needed, ≤2–3 sentences
+            memory      — save, recall, or manage memories and learned context
 
     Returns:
         display: merged strategy content for the active task types

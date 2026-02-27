@@ -11,6 +11,14 @@ from pathlib import Path
 
 
 _PERSONALITIES_DIR = Path(__file__).parent
+REQUIRED_STRATEGY_TASK_TYPES: tuple[str, ...] = (
+    "technical",
+    "exploration",
+    "debugging",
+    "teaching",
+    "emotional",
+    "memory",
+)
 
 
 def _discover_valid_personalities() -> list[str]:
@@ -25,6 +33,31 @@ def _discover_valid_personalities() -> list[str]:
 
 
 VALID_PERSONALITIES: list[str] = _discover_valid_personalities()
+
+
+def validate_personality_files(role: str) -> list[str]:
+    """Return non-blocking warnings for missing soul/strategy files.
+
+    Validation is defensive and never raises — callers can surface warnings at
+    startup while continuing with degraded behavior.
+    """
+    warnings: list[str] = []
+
+    seed_file = _PERSONALITIES_DIR / "souls" / role / "seed.md"
+    if not seed_file.exists():
+        warnings.append(
+            f"Personality '{role}' missing soul seed: souls/{role}/seed.md"
+        )
+
+    for task_type in REQUIRED_STRATEGY_TASK_TYPES:
+        strategy_file = _PERSONALITIES_DIR / "strategies" / role / f"{task_type}.md"
+        if not strategy_file.exists():
+            warnings.append(
+                "Personality "
+                f"'{role}' missing strategy file: strategies/{role}/{task_type}.md"
+            )
+
+    return warnings
 
 
 def load_soul_seed(role: str) -> str:

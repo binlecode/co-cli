@@ -179,7 +179,7 @@ load_task_strategy(task_types=["technical", "debugging"])
 | `debugging` | isolate fault, hypothesize, verify | Medium — both methodical, different voice |
 | `teaching` | explain concepts, guide toward understanding | High — finch prepares, jeff explores together |
 | `emotional` | user frustrated, stuck, or celebrating | Low — both empathetic, different warmth level |
-| `quick` | direct answer, ≤2–3 sentences | Low — both concise, different tone |
+| `memory` | save, recall, or manage memories and learned context | Medium — finch confirms and names, jeff narrates openly |
 
 Multiple types can be active simultaneously — `["technical", "debugging"]` for "why is this failing?".
 
@@ -192,9 +192,9 @@ co_cli/prompts/personalities/
 │   └── jeff/    seed.md  (identity + Core + Never)
 └── strategies/
     ├── finch/   technical.md  exploration.md  debugging.md
-    │            teaching.md   emotional.md    quick.md
+    │            teaching.md   emotional.md    memory.md
     └── jeff/    technical.md  exploration.md  debugging.md
-                 teaching.md   emotional.md    quick.md
+                 teaching.md   emotional.md    memory.md
 ```
 
 The folder structure is the schema — roles are discovered by listing `souls/` for directories with `seed.md`. Adding a role requires only files, no Python changes.
@@ -203,6 +203,15 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 1. Write `souls/{name}/seed.md` — identity declaration + Core + Never list
 2. Write `strategies/{name}/*.md` — 6 strategy files for the 6 task types
 3. `VALID_PERSONALITIES` updates automatically from `souls/` folder listing
+
+**Startup file validation (non-blocking).** `validate_personality_files(role)` in
+`co_cli/prompts/personalities/_composer.py` checks:
+- `souls/{role}/seed.md`
+- all 6 required strategy files in `strategies/{role}/{task_type}.md`
+
+`load_config()` calls `_validate_personality(settings.personality)` and prints warnings
+at startup when files are missing. Startup does not fail; missing strategies degrade
+gracefully because `load_task_strategy` skips absent files.
 
 ### 2d. Personality memories
 
@@ -312,7 +321,7 @@ Run:
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Role name — validated against `VALID_PERSONALITIES` at config load time by `_validate_personality()` in `config.py` |
+| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Role name — validated against `VALID_PERSONALITIES` at config load time. Missing seed/strategy files emit startup warnings via `_validate_personality()` but do not block startup |
 
 Eval CLI flags are documented by the runner itself:
 `uv run python evals/eval_personality_behavior.py --help`
@@ -336,7 +345,7 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/tools/personality.py` | `load_task_strategy` tool + `_load_personality_memories()` helper |
 | `co_cli/_history.py` | `_PERSONALITY_COMPACTION_ADDENDUM` — summarizer guard for personality moments |
 | `co_cli/_commands.py` | Slash command registry and dispatch |
-| `co_cli/config.py` | `_validate_personality()` — validates role name against `VALID_PERSONALITIES` |
+| `co_cli/config.py` | Field validator enforces role name in `VALID_PERSONALITIES`; `_validate_personality()` emits startup warnings for missing seed/strategy files |
 | `evals/eval_personality_behavior.py` | Consolidated personality eval runner (single + multi-turn), majority vote, gates, JSON/MD/trace outputs |
 | `evals/personality_behavior.jsonl` | Golden personality behavior cases (`id`, `personality`, `turns`, `checks_per_turn`) |
 | `evals/_common.py` | Shared eval infrastructure: deps factory, settings passthrough, check engine, telemetry/trace parsing |

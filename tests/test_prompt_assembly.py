@@ -10,8 +10,10 @@ from pathlib import Path
 
 from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._composer import (
+    REQUIRED_STRATEGY_TASK_TYPES,
     VALID_PERSONALITIES,
     load_soul_seed,
+    validate_personality_files,
 )
 
 
@@ -188,7 +190,7 @@ def test_all_roles_have_strategy_files():
     strategies_base = (
         Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "strategies"
     )
-    task_types = ["technical", "exploration", "debugging", "teaching", "emotional", "quick"]
+    task_types = ["technical", "exploration", "debugging", "teaching", "emotional", "memory"]
     for name in VALID_PERSONALITIES:
         for task_type in task_types:
             f = strategies_base / name / f"{task_type}.md"
@@ -203,3 +205,36 @@ def test_strategy_files_have_content():
     for strategy_file in strategies_base.rglob("*.md"):
         content = strategy_file.read_text(encoding="utf-8").strip()
         assert len(content) > 0, f"Empty strategy file: {strategy_file.name}"
+
+
+def test_validate_personality_files_no_warnings_for_complete_role():
+    """Built-in role with complete files returns no warnings."""
+    assert validate_personality_files("finch") == []
+
+
+def test_validate_personality_files_warns_on_missing_strategy(tmp_path, monkeypatch):
+    """Missing strategy files return startup-safe warnings."""
+    personalities_dir = tmp_path
+    (personalities_dir / "souls" / "finch").mkdir(parents=True)
+    (personalities_dir / "souls" / "finch" / "seed.md").write_text(
+        "You are Finch.\n",
+        encoding="utf-8",
+    )
+    (personalities_dir / "strategies" / "finch").mkdir(parents=True)
+    for task_type in REQUIRED_STRATEGY_TASK_TYPES:
+        if task_type == "memory":
+            continue
+        (personalities_dir / "strategies" / "finch" / f"{task_type}.md").write_text(
+            f"{task_type} strategy",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        "co_cli.prompts.personalities._composer._PERSONALITIES_DIR",
+        personalities_dir,
+    )
+
+    warnings = validate_personality_files("finch")
+    assert warnings == [
+        "Personality 'finch' missing strategy file: strategies/finch/memory.md"
+    ]
