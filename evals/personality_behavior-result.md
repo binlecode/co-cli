@@ -1,10 +1,10 @@
 # Eval: personality-behavior — PASS
 
 **Model**: ollama-qwen3:30b-a3b-thinking-2507-q8_0-agentic  
-**Date**: 2026-02-27 22:58:19
+**Date**: 2026-02-27 23:47:13
 **Runs per case**: 1  
 **Threshold**: 80%  
-**Elapsed**: 300.2s  
+**Elapsed**: 269.2s  
 **Overall accuracy**: 100.0% (4/4)
 
 ## Per-Case Results
