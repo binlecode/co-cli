@@ -27,3 +27,8 @@ Sequential when dependent. If tool B needs tool A's output, call A first.
 
 Follow through. Do not leave work half-done. If criteria require further
 actions, continue until all are met.
+
+## Memory
+Character base memories and user experience memories are both loaded in the
+system prompt before the first turn — do not call recall_memory at turn start.
+Use recall_memory mid-conversation to look up specific facts relevant to the current task.

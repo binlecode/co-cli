@@ -1,13 +1,18 @@
 """Soul loading and personality discovery for the file-driven personality system.
 
-Personality is assembled from two sources:
+Personality is assembled from four sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
+- ``.co-cli/knowledge/memories/``            — character base memories (decay_protected, source=planted)
+- ``rules/01..05_*.md``                       — behavioral rules (assembled by assemble_prompt)
+- ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
 - ``strategies/{role}/{task_type}.md``        — task-specific behavioral guidance (tool-loaded on demand)
 
 The folder structure IS the schema. Adding a role requires only files, no Python changes.
 """
 
 from pathlib import Path
+
+from co_cli._frontmatter import parse_frontmatter
 
 
 _PERSONALITIES_DIR = Path(__file__).parent
@@ -84,3 +89,75 @@ def load_soul_seed(role: str) -> str:
     if not seed_file.exists():
         raise FileNotFoundError(f"Soul seed file not found: {seed_file}")
     return seed_file.read_text(encoding="utf-8").strip()
+
+
+def load_soul_examples(role: str) -> str:
+    """Load concrete response pattern examples for a role (optional).
+
+    Examples trail the behavioral rules in the static system prompt — they are
+    the last identity-level content the model reads before model-specific quirks.
+    This placement follows common few-shot practice: show the pattern closest to
+    the task so the model pattern-matches from the most recently seen examples.
+
+    Args:
+        role: Personality role name (e.g., "finch", "jeff").
+
+    Returns:
+        Examples text from ``souls/{role}/examples.md``, or empty string if absent.
+    """
+    examples_file = _PERSONALITIES_DIR / "souls" / role / "examples.md"
+    if not examples_file.exists():
+        return ""
+    return examples_file.read_text(encoding="utf-8").strip()
+
+
+def load_soul_critique(role: str) -> str:
+    """Load the always-on interpretive critique frame for a role (optional).
+
+    Args:
+        role: Personality role name (e.g., "finch", "jeff").
+
+    Returns:
+        Critique text from ``souls/{role}/critique.md``, or empty string if absent.
+    """
+    critique_file = _PERSONALITIES_DIR / "souls" / role / "critique.md"
+    if not critique_file.exists():
+        return ""
+    return critique_file.read_text(encoding="utf-8").strip()
+
+
+def load_character_memories(role: str, memory_dir: Path) -> str:
+    """Load character base memories for the given role from the knowledge store.
+
+    Scans memory_dir for entries tagged with both the role name and "character".
+    These are pre-planted, decay-protected entries carrying the felt layer of the
+    character — scenes, speech patterns, behavioral observations from source material.
+
+    Args:
+        role: Personality role name (e.g., "finch", "jeff").
+        memory_dir: Path to .co-cli/knowledge/memories/.
+
+    Returns:
+        Formatted memory block (``## Character`` header + prose entries), or empty
+        string if the directory is absent or no matching entries are found.
+    """
+    if not memory_dir.exists():
+        return ""
+
+    entries: list[str] = []
+    for path in sorted(memory_dir.glob("*.md")):
+        try:
+            raw = path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(raw)
+            tags = fm.get("tags", [])
+            if role in tags and "character" in tags:
+                text = body.strip()
+                if text:
+                    entries.append(text)
+        except Exception:
+            continue
+
+    if not entries:
+        return ""
+
+    return "## Character\n\n" + "\n\n".join(entries)

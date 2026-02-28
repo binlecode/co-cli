@@ -1,25 +1,57 @@
-"""Personality helpers — private functions and tools for personality delivery.
+"""Personality helpers — pre-turn classification and system prompt injection.
 
 Personality is delivered via two mechanisms:
-- Static system prompt: the expanded soul seed (identity + Core + Never list)
-- On-demand tool: ``load_task_strategy`` loads soul-specific behavioral guidance
-  for the identified task type(s) at the start of each new task
-
-This module provides both the system prompt helper and the ``load_task_strategy`` tool.
+- Mechanism 1: pre-turn classification (MindsetDeclaration) — the orchestrator
+  calls agent.run(output_type=MindsetDeclaration) once per session before the
+  main response. The model picks task type(s); _apply_mindset() loads strategy
+  files internally and stores content on deps.
+- Mechanism 2: always-on soul critique — loaded from souls/{role}/critique.md
+  at session start and injected into every model call via @agent.system_prompt.
 """
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal, TYPE_CHECKING
 
-from pydantic_ai import RunContext
+from pydantic import BaseModel, Field
 
-from co_cli.deps import CoDeps
 from co_cli.tools.memory import _load_memories
+
+if TYPE_CHECKING:
+    from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
 
 _STRATEGIES_DIR = Path(__file__).parent.parent / "prompts" / "personalities" / "strategies"
+
+MINDSET_TYPES = Literal[
+    "technical", "exploration", "debugging", "teaching", "emotional", "memory"
+]
+
+
+class MindsetDeclaration(BaseModel):
+    task_types: Annotated[list[MINDSET_TYPES], Field(min_length=1)]
+
+
+def _apply_mindset(deps: "CoDeps", task_types: list[str]) -> None:
+    """Load strategy files for selected task types and store on deps.
+
+    Called by the pre-turn orchestrator phase after MindsetDeclaration is returned.
+    Not a tool — system-internal. The model classifies; this loads.
+    """
+    role = deps.personality
+    if not role:
+        return
+    parts: list[str] = []
+    loaded: list[str] = []
+    for task_type in task_types:
+        strategy_file = _STRATEGIES_DIR / role / f"{task_type}.md"
+        if strategy_file.exists():
+            parts.append(strategy_file.read_text(encoding="utf-8").strip())
+            loaded.append(task_type)
+    deps.active_mindset_content = "\n\n".join(parts)
+    deps.active_mindset_types = loaded
+    deps.mindset_loaded = True
 
 
 def _load_personality_memories() -> str:
@@ -47,46 +79,3 @@ def _load_personality_memories() -> str:
     for m in personality_memories:
         lines.append(f"- {m.content}")
     return "\n".join(lines)
-
-
-async def load_task_strategy(
-    ctx: RunContext[CoDeps],
-    task_types: list[str],
-) -> dict[str, Any]:
-    """Load soul-specific behavioral strategy for the current task type(s).
-
-    Call at the start of a new task to load behavioral guidance shaped by your soul.
-    The same task type produces different guidance per personality — finch's teaching
-    strategy is preparation-and-understanding focused; jeff's is collaborative-discovery
-    focused. Multiple task types can be active simultaneously — pass all that apply.
-    Unknown task types are silently skipped.
-
-    Args:
-        task_types: One or more task type tokens:
-            technical   — implementation, commands, file ops, tool use
-            exploration — research, tradeoffs, open-ended investigation
-            debugging   — isolate, hypothesize, verify
-            teaching    — explain concepts, guide toward understanding
-            emotional   — user is frustrated, stuck, or celebrating
-            memory      — save, recall, or manage memories and learned context
-
-    Returns:
-        display: merged strategy content for the active task types
-        loaded: list of task types successfully loaded
-        count: number of strategy files loaded
-    """
-    role = ctx.deps.personality
-    if not role:
-        return {"display": "", "loaded": [], "count": 0}
-
-    parts: list[str] = []
-    loaded: list[str] = []
-
-    for task_type in task_types:
-        strategy_file = _STRATEGIES_DIR / role / f"{task_type}.md"
-        if strategy_file.exists():
-            parts.append(strategy_file.read_text(encoding="utf-8").strip())
-            loaded.append(task_type)
-
-    display = "\n\n".join(parts) if parts else ""
-    return {"display": display, "loaded": loaded, "count": len(loaded)}

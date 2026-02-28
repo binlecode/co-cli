@@ -35,10 +35,11 @@ Configuration — all params, values, and rationale:
     chain-of-thought before the response; an explicit cap (formerly 2048)
     truncates responses mid-output and corrupts personality signal.
 
-  request_limit=4: allows up to 3 sequential tool calls per turn before the
-    model is forced to emit a final response.
-    Accounting: R1=tool_1 call, R2=tool_2 call, R3=tool_3 call, R4=final
-    response. Covers recall_memory → web_search → one more tool → respond.
+  request_limit: not set — no cap on sequential tool calls per turn.
+    Wall-clock time is the only constraint: each case is wrapped in
+    asyncio.timeout(max(runs * 150, 180)s). Capping request count
+    would silently cut off multi-step tool chains before they complete,
+    producing artificially truncated responses and misleading failures.
 
   web_policy / brave_search_api_key: read from settings, not overridden.
     If web_policy.search == "deny" or key is absent, web_search raises
@@ -60,11 +61,13 @@ Configuration — all params, values, and rationale:
     aborts the turn. Can cause unexpected ERROR results in eval runs if the
     model loops on recall_memory. Visible as error_msg in the output JSON.
 
-  case timeout: computed as max(runs * 150, 180) seconds.
-    The timeout wraps ALL runs of one case, not one run. Worst-case 3-turn
-    case at ~50-60s/turn = ~150s/run. At --runs 3: 450s needed. The former
-    constant 120s was calibrated at --runs 1 and silently timed out multi-turn
-    cases, marking remaining runs as errors with no useful signal.
+  --run-timeout default=120s: per-turn wall-clock cap. Each agent.run() call
+    is individually wrapped — a 3-turn case gets 3 independent 120s windows.
+    A timed-out turn aborts the run (history is incomplete); next run starts.
+    Observed worst-case: ~67s/turn; 120s gives ~2× headroom.
+
+  case timeout: runs * turn_timeout * n_turns + 60 seconds.
+    Outer safety net wrapping ALL runs of one case.
 
   --runs default=1: fast local default. Use --runs 3 (or any odd number) for
     majority-vote stability: a case passes if pass_count > len(valid_runs) / 2.
@@ -93,7 +96,6 @@ from typing import Any
 
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
 from co_cli.config import DATA_DIR
@@ -104,7 +106,7 @@ from evals._common import (
     make_eval_settings,
     EvalCase,
     load_cases,
-    score_response,
+    score_turn,
     TurnTrace,
     bootstrap_telemetry,
     collect_spans_for_run,
@@ -131,6 +133,9 @@ class TurnRun:
     failed_checks: list[str] | None = None
     prompt: str | None = None
     trace: TurnTrace | None = None
+    # judge_details: check_index → "PASS: reasoning" or "FAIL: reasoning"
+    # populated for every llm_judge check regardless of outcome
+    judge_details: dict[int, str] | None = None
 
 
 @dataclass
@@ -206,10 +211,9 @@ def is_transient_error(exc: Exception) -> bool:
     return any(p in msg for p in TRANSIENT_PATTERNS)
 
 
-def _case_timeout_s(runs: int) -> int:
-    # The timeout wraps all runs of one case. Worst-case 3-turn case at ~50s/turn
-    # = ~150s/run. Floor of 180s covers --runs 1 single-turn cases.
-    return max(runs * 150, 180)
+def _case_timeout_s(runs: int, turn_timeout: int, n_turns: int) -> int:
+    # Outer safety net: wraps all runs of one case.
+    return runs * turn_timeout * n_turns + 60
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +227,7 @@ async def run_single(
     model_settings: ModelSettings | None,
     case: EvalCase,
     *,
+    turn_timeout: int = 120,
     provider: Any = None,
     db_path: str | None = None,
 ) -> RunResult:
@@ -231,6 +236,9 @@ async def run_single(
     Single-turn cases (len(turns)==1) go through the same loop with one
     iteration. Multi-turn cases pass accumulated history to each subsequent
     turn. A RunResult passes only if every turn passes its checks.
+
+    Each turn is individually capped at ``turn_timeout`` seconds. A timed-out
+    turn aborts the run — history is incomplete so continuing would be invalid.
 
     Pass ``provider`` and ``db_path`` to enable per-turn span collection.
     """
@@ -249,16 +257,22 @@ async def run_single(
         ):
             start_ns = time.time_ns()
             t_turn = time.monotonic()
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                model_settings=eval_settings,
-                message_history=history,
-                # request_limit=4: allows up to 3 sequential tool calls per turn.
-                # Each tool cycle costs 1 request; R4 is the forced final response.
-                # Covers recall_memory → web_search → one more tool → respond.
-                usage_limits=UsageLimits(request_limit=4),
-            )
+            try:
+                async with asyncio.timeout(turn_timeout):
+                    result = await agent.run(
+                        prompt,
+                        deps=deps,
+                        model_settings=eval_settings,
+                        message_history=history,
+                    )
+            except asyncio.TimeoutError:
+                return RunResult(
+                    passed=False,
+                    error=True,
+                    turn_runs=turn_runs,
+                    error_msg=f"turn {turn_idx + 1} timeout: exceeded {turn_timeout}s",
+                    stopped_at_turn=turn_idx,
+                )
             elapsed_s = time.monotonic() - t_turn
 
             # If the model returned DeferredToolRequests, do not advance history —
@@ -277,7 +291,7 @@ async def run_single(
 
             history = result.all_messages()
             text = str(result.output)
-            failures = score_response(text, checks)
+            failures, judge_details = await score_turn(text, checks, agent, deps, eval_settings)
 
             # Collect OTel spans for this turn if telemetry is enabled
             turn_trace: TurnTrace | None = None
@@ -296,6 +310,7 @@ async def run_single(
                 failed_checks=failures if failures else None,
                 prompt=prompt,
                 trace=turn_trace,
+                judge_details=judge_details if judge_details else None,
             ))
 
         all_passed = all(tr.passed for tr in turn_runs)
@@ -641,24 +656,30 @@ def save_result_md(
 
 
 def _extract_system_text(instructions: list[dict[str, Any]]) -> str:
-    """Extract plain text from a system instructions list."""
-    parts: list[str] = []
+    """Extract plain text from a system instructions list.
+
+    Handles both a flat {"content": "..."} format and the pydantic-ai OTel format
+    {"role": "system", "parts": [{"type": "text", "content": "..."}]}.
+    """
+    collected: list[str] = []
     for item in instructions:
         if isinstance(item, str):
-            parts.append(item)
+            collected.append(item)
             continue
         if not isinstance(item, dict):
             continue
+        # Flat content key
         content = item.get("content") or item.get("text") or ""
         if isinstance(content, str) and content:
-            parts.append(content)
-        elif isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text = part.get("text", "")
-                    if text:
-                        parts.append(text)
-    return "\n\n".join(parts)
+            collected.append(content)
+            continue
+        # pydantic-ai OTel format: parts list
+        for part in item.get("parts") or []:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("content") or part.get("text") or ""
+                if text:
+                    collected.append(text)
+    return "\n\n".join(collected)
 
 
 def _format_msg_content(content: Any, max_chars: int = 300) -> str:
@@ -682,7 +703,16 @@ def _format_msg_content(content: Any, max_chars: int = 300) -> str:
                 name = part.get("name") or part.get("tool_name", "?")
                 args = part.get("arguments") or part.get("args", {})
                 args_str = (args if isinstance(args, str) else json.dumps(args))[:60]
-                rendered_parts.append(f"[tool_call: {name}({args_str})]")
+                call_id = part.get("id") or part.get("tool_call_id") or ""
+                id_str = f" [{call_id}]" if call_id else ""
+                rendered_parts.append(f"[tool_call: {name}({args_str}){id_str}]")
+            elif ptype == "tool_call_response":
+                name = part.get("name") or "?"
+                result = part.get("result", "")
+                result_str = (result if isinstance(result, str) else json.dumps(result))[:80]
+                call_id = part.get("id") or part.get("tool_call_id") or ""
+                id_str = f" [{call_id}]" if call_id else ""
+                rendered_parts.append(f"[tool_result: {name}{id_str} → {result_str}]")
             elif ptype == "thinking":
                 thinking = str(part.get("content", "") or part.get("thinking", ""))
                 rendered_parts.append(f"[thinking: {thinking[:50]}…]")
@@ -712,7 +742,7 @@ def save_trace_md(
     token counts, and cache breakout. Every tool execution shows full args and
     untruncated result. Check scoring shows which phrase matched.
     """
-    path = path or _OUTPUT_DIR / f"{cases_stem}-trace.md"
+    path = path or _OUTPUT_DIR / f"{cases_stem}-trace-{time.strftime('%Y%m%d-%H%M%S')}.md"
     lines: list[str] = []
     w = lines.append
 
@@ -775,12 +805,42 @@ def save_trace_md(
 
             t = tr.trace
             if t is None:
-                w("*(no trace data captured)*")
+                w("*(no OTel span data — response and checks shown below)*")
                 w("")
-                continue
-
-            if t.error:
+            elif t.error:
                 w(f"**Trace error**: {t.error}")
+                w("")
+
+            if t is None or t.error:
+                # No span data: skip model-request details but still show response + checks
+                response_text = tr.response_text or ""
+                w(f"#### Response (Turn {tr.turn_idx + 1})")
+                w("")
+                w(response_text if response_text else "*(no text response captured)*")
+                w("")
+                w("**Checks:**")
+                w("")
+                w("| Check | Criteria | Judgment / Matched | Result |")
+                w("|-------|----------|--------------------|--------|")
+                checks_for_turn = case.checks_per_turn[tr.turn_idx]
+                failed_for_turn = tr.failed_checks or []
+                judge_deets = tr.judge_details or {}
+                for check_i, check in enumerate(checks_for_turn):
+                    display = _check_display(check)
+                    check_type = check.get("type", "")
+                    if check_type == "llm_judge":
+                        note = judge_deets.get(check_i, "")
+                        if note:
+                            verdict, _, reasoning = note.partition(": ")
+                            matched = reasoning
+                            result_str = "PASS" if verdict == "PASS" else f"FAIL — {reasoning}"
+                        else:
+                            matched = "(not evaluated)"
+                            result_str = "PASS"
+                    else:
+                        matched = _check_match_detail(check, response_text)
+                        result_str = _check_result(check, failed_for_turn)
+                    w(f"| {check_type} | {_md_cell(display)} | {_md_cell(matched)} | {result_str} |")
                 w("")
                 continue
 
@@ -868,7 +928,8 @@ def save_trace_md(
                     w("|---|------|---------|")
                     for msg_i, msg in enumerate(req.input_messages, 1):
                         role = msg.get("role", "?") if isinstance(msg, dict) else "?"
-                        content = msg.get("content", "") if isinstance(msg, dict) else msg
+                        # pydantic-ai OTel messages use "parts" list, not a flat "content" string
+                        content = (msg.get("content") or msg.get("parts") or "") if isinstance(msg, dict) else msg
                         content_str = _format_msg_content(content, max_chars=300)
                         w(f"| {msg_i} | {role} | {_md_cell(content_str)} |")
                     w("")
@@ -953,18 +1014,31 @@ def save_trace_md(
             w("")
 
             # Checks with match detail — uses TurnRun.failed_checks (authoritative)
+            # For llm_judge checks, uses TurnRun.judge_details for full reasoning.
             w("**Checks:**")
             w("")
-            w("| Check | Criteria | Matched | Result |")
-            w("|-------|----------|---------|--------|")
+            w("| Check | Criteria | Judgment / Matched | Result |")
+            w("|-------|----------|--------------------|--------|")
             checks_for_turn = case.checks_per_turn[tr.turn_idx]
             failed_for_turn = tr.failed_checks or []
             response_for_checks = tr.response_text or ""
-            for check in checks_for_turn:
+            judge_deets = tr.judge_details or {}
+            for check_i, check in enumerate(checks_for_turn):
                 display = _check_display(check)
                 check_type = check.get("type", "")
-                matched = _check_match_detail(check, response_for_checks)
-                result_str = _check_result(check, failed_for_turn)
+                if check_type == "llm_judge":
+                    note = judge_deets.get(check_i, "")
+                    # note format: "PASS: reasoning" or "FAIL: reasoning"
+                    if note:
+                        verdict, _, reasoning = note.partition(": ")
+                        matched = reasoning
+                        result_str = "PASS" if verdict == "PASS" else f"FAIL — {reasoning}"
+                    else:
+                        matched = "(not evaluated)"
+                        result_str = "PASS"
+                else:
+                    matched = _check_match_detail(check, response_for_checks)
+                    result_str = _check_result(check, failed_for_turn)
                 w(f"| {check_type} | {_md_cell(display)} | {_md_cell(matched)} | {result_str} |")
             w("")
 
@@ -999,8 +1073,16 @@ async def run_eval(args: argparse.Namespace) -> int:
         print("No cases to run.")
         return 0
 
-    agent, model_settings, tool_names = get_agent()
-    print(f"Agent created with {len(tool_names)} tools")
+    # Create one agent per unique personality — soul seed is baked into the
+    # static system prompt at agent creation time (get_agent(personality=…)).
+    # A single get_agent() without personality= would skip the soul seed entirely,
+    # breaking the new seed+strategy personality architecture.
+    unique_personalities = sorted({c.personality for c in cases})
+    personality_agents: dict[str, tuple[Any, ModelSettings | None, list[str]]] = {}
+    for p in unique_personalities:
+        p_agent, p_ms, p_tn = get_agent(personality=p)
+        personality_agents[p] = (p_agent, p_ms, p_tn)
+        print(f"Agent({p}) created with {len(p_tn)} tools")
     print(f"Running {args.runs} run(s) per case, threshold={args.threshold:.0%}\n")
 
     db_path = str(DATA_DIR / "co-cli.db")
@@ -1016,7 +1098,7 @@ async def run_eval(args: argparse.Namespace) -> int:
 
     for i, case in enumerate(cases, 1):
         print(
-            f"[{i}/{len(cases)}] {case.id} ({case.personality}) ...",
+            f"Case {i}/{len(cases)}: {case.id} ({case.personality}) ...",
             end=" ", flush=True,
         )
         cr = CaseResult(case=case)
@@ -1031,11 +1113,15 @@ async def run_eval(args: argparse.Namespace) -> int:
             )
         deps = personality_deps[deps_key]
 
+        case_agent, case_model_settings, _ = personality_agents[case.personality]
+
+        n_turns = len(case.turns)
         try:
-            async with asyncio.timeout(_case_timeout_s(args.runs)):
+            async with asyncio.timeout(_case_timeout_s(args.runs, args.run_timeout, n_turns)):
                 for _run_idx in range(args.runs):
                     run_result = await run_single(
-                        agent, deps, model_settings, case,
+                        case_agent, deps, case_model_settings, case,
+                        turn_timeout=args.run_timeout,
                         provider=provider, db_path=db_path,
                     )
                     cr.runs.append(run_result)
@@ -1043,7 +1129,7 @@ async def run_eval(args: argparse.Namespace) -> int:
                         print("E", end="", flush=True)
                     elif run_result.passed:
                         print(".", end="", flush=True)
-                    elif len(case.turns) > 1:
+                    elif n_turns > 1:
                         # Show per-turn marks for multi-turn failures
                         turn_marks = "".join(
                             "." if tr.passed else "x"
@@ -1058,7 +1144,7 @@ async def run_eval(args: argparse.Namespace) -> int:
                 cr.runs.append(RunResult(
                     passed=False,
                     error=True,
-                    error_msg=f"case timeout: exceeded {_case_timeout_s(args.runs)}s",
+                    error_msg=f"case timeout: exceeded {_case_timeout_s(args.runs, args.run_timeout, n_turns)}s",
                 ))
             print("T", end="", flush=True)
 
@@ -1084,7 +1170,8 @@ async def run_eval(args: argparse.Namespace) -> int:
     cases_stem = jsonl_path.stem
     save_path = Path(args.save) if args.save else _OUTPUT_DIR / f"{cases_stem}-data.json"
     report_path = _OUTPUT_DIR / f"{cases_stem}-result.md"
-    trace_path = _OUTPUT_DIR / f"{cases_stem}-trace.md"
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    trace_path = _OUTPUT_DIR / f"{cases_stem}-trace-{ts}.md"
     json_path = save_data_json(results, stats, args, model_tag, path=save_path)
     md_path = save_result_md(
         results, stats, args, exit_code, elapsed, model_tag,
@@ -1130,6 +1217,11 @@ def main() -> int:
     parser.add_argument(
         "--save", type=str, default=None,
         help="Save results JSON to custom path",
+    )
+    parser.add_argument(
+        "--run-timeout", type=int, default=120,
+        dest="run_timeout",
+        help="Per-turn wall-clock cap in seconds (default: 180). Actual run limit = run_timeout * turns. Timed-out runs are marked ERROR.",
     )
     parser.add_argument(
         "--max-drift-rate", type=float, default=None,

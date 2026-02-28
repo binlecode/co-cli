@@ -25,7 +25,6 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories
-from co_cli.tools.personality import load_task_strategy
 from co_cli.tools.todo import todo_write, todo_read
 
 
@@ -118,16 +117,29 @@ def get_agent(
     from co_cli.prompts.model_quirks import normalize_model_name
     normalized_model = normalize_model_name(model_name)
 
-    # Soul seed — identity declaration placed first in the static prompt
+    # Soul block — seed + character base memories first; examples trail the rules
     soul_seed: str | None = None
+    soul_examples: str | None = None
     if personality:
-        from co_cli.prompts.personalities._composer import load_soul_seed
+        from co_cli.prompts.personalities._composer import (
+            load_soul_seed,
+            load_soul_examples,
+            load_character_memories,
+        )
         soul_seed = load_soul_seed(personality)
+        memory_dir = Path.cwd() / ".co-cli" / "knowledge" / "memories"
+        base_memories = load_character_memories(personality, memory_dir)
+        if base_memories:
+            soul_seed = soul_seed + "\n\n" + base_memories
+        examples = load_soul_examples(personality)
+        if examples:
+            soul_examples = examples
 
     system_prompt, _manifest = assemble_prompt(
         provider_name,
         model_name=normalized_model,
         soul_seed=soul_seed,
+        soul_examples=soul_examples,
     )
 
     # Build MCP toolsets from config
@@ -199,6 +211,21 @@ def get_agent(
         from co_cli.tools.personality import _load_personality_memories
         return _load_personality_memories()
 
+    @agent.system_prompt
+    def inject_active_mindset(ctx: RunContext[CoDeps]) -> str:
+        """Mechanism 1: task-specific mindset content, set by pre-turn classification."""
+        if not ctx.deps.active_mindset_content:
+            return ""
+        types = ", ".join(ctx.deps.active_mindset_types)
+        return f"\n## Active mindset: {types}\n\n{ctx.deps.active_mindset_content}"
+
+    @agent.system_prompt
+    def inject_personality_critique(ctx: RunContext[CoDeps]) -> str:
+        """Mechanism 2: always-on soul critique loaded from souls/{role}/critique.md."""
+        if not ctx.deps.personality_critique:
+            return ""
+        return f"\n## Review lens\n\n{ctx.deps.personality_critique}"
+
     # Side-effectful tools — require human approval via DeferredToolRequests
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
@@ -209,7 +236,6 @@ def get_agent(
     agent.tool(todo_read, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
-    agent.tool(load_task_strategy, requires_approval=all_approval)
     agent.tool(recall_memory, requires_approval=all_approval)
     agent.tool(list_memories, requires_approval=all_approval)
     agent.tool(search_notes, requires_approval=all_approval)

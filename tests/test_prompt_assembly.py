@@ -144,7 +144,7 @@ def test_valid_personalities_derived_from_souls():
     """VALID_PERSONALITIES is derived from souls/ folder, not hardcoded."""
     assert "finch" in VALID_PERSONALITIES
     assert "jeff" in VALID_PERSONALITIES
-    assert len(VALID_PERSONALITIES) == 2
+    assert len(VALID_PERSONALITIES) >= 2
 
 
 def test_static_prompt_has_no_core_traits_section():

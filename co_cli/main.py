@@ -29,6 +29,7 @@ from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli._banner import display_welcome_banner
 from co_cli.status import get_status, render_status_table
 from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
+from co_cli.prompts.personalities._composer import load_soul_critique
 
 # Setup Telemetry - must be done before Agent.instrument_all()
 from opentelemetry.sdk.resources import Resource
@@ -79,6 +80,10 @@ def create_deps() -> CoDeps:
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
+    _personality_critique = (
+        load_soul_critique(settings.personality) if settings.personality else ""
+    )
+
     deps = CoDeps(
         shell=ShellBackend(),
         session_id=session_id,
@@ -95,6 +100,7 @@ def create_deps() -> CoDeps:
         web_http_backoff_max_seconds=settings.web_http_backoff_max_seconds,
         web_http_jitter_ratio=settings.web_http_jitter_ratio,
         personality=settings.personality,
+        personality_critique=_personality_critique,
         memory_max_count=settings.memory_max_count,
         memory_dedup_window_days=settings.memory_dedup_window_days,
         memory_dedup_threshold=settings.memory_dedup_threshold,

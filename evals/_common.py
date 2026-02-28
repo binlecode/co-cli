@@ -7,10 +7,11 @@ stubs, tool-call extraction) so individual evals stay focused on scoring logic.
 import json
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclass_replace
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.settings import ModelSettings
 
@@ -91,8 +92,8 @@ def make_eval_settings(
     model_settings via get_agent():
       - Ollama: temperature from quirks (e.g. 0.6 for qwen3). Never override
         to 0 — thinking models produce degenerate loops at temperature=0.
-      - Gemini: temperature from quirks (1.0 for 2.5/3 series). Google's
-        guidance: setting below 1.0 causes looping in thinking models.
+      - Gemini: temperature from quirks (typically 1.0 for thinking models).
+        Google's guidance: setting below 1.0 causes looping in thinking models.
 
     Falls back to temperature=0 only when no model settings exist at all
     (e.g. unit tests / unknown providers).
@@ -308,18 +309,165 @@ _CHECK_DISPATCH: dict[str, Any] = {
 
 
 def score_response(text: str, checks: list[dict[str, Any]]) -> list[str]:
-    """Run all checks. Returns list of failure descriptions."""
+    """Run synchronous checks. Returns list of failure descriptions.
+
+    Skips ``llm_judge`` and other async-only check types silently.
+    Use ``score_turn`` for full evaluation including LLM judge checks.
+    """
     failures: list[str] = []
     for check in checks:
         check_type = check["type"]
         fn = _CHECK_DISPATCH.get(check_type)
         if fn is None:
-            failures.append(f"unknown check type: {check_type}")
+            # Unknown or async-only type (e.g. llm_judge) — skip silently
             continue
         result = fn(text, check)
         if result is not None:
             failures.append(result)
     return failures
+
+
+# ---------------------------------------------------------------------------
+# LLM-as-judge (async)
+# ---------------------------------------------------------------------------
+
+
+class JudgeResult(BaseModel):
+    passed: bool
+    reasoning: str
+
+
+_JUDGES_DIR = Path(__file__).parent / "judges"
+
+
+def _load_character_judge(role: str) -> str:
+    """Load character-specific judgment rules from ``evals/judges/{role}.md``.
+
+    Returns empty string if no judge file exists for the role — the judge
+    prompt will omit the character rules section gracefully.
+    """
+    if not role:
+        return ""
+    path = _JUDGES_DIR / f"{role}.md"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+_JUDGE_PROMPT = (
+    "You are evaluating whether this AI response is in character for {personality}.\n\n"
+    "CHARACTER JUDGMENT RULES:\n{character_rules}\n\n"
+    "SPECIFIC CRITERION FOR THIS CHECK:\n{criteria}\n\n"
+    "RESPONSE TO EVALUATE:\n{response}\n\n"
+    "Return JSON with exactly two fields:\n"
+    '- "passed": true only if the response clearly satisfies the criterion with confidence\n'
+    '- "reasoning": one sentence explaining your judgment\n\n'
+    "When in doubt, fail. High bar — only pass when the criterion is clearly and unambiguously met."
+)
+
+
+def _make_judge_settings(base: ModelSettings | None) -> ModelSettings:
+    """Build model settings for the LLM judge from base eval settings.
+
+    Reduces temperature to 70% of the base value for more stable binary
+    judgments while keeping it above 0.3 (thinking models loop at very low
+    temperatures). Preserves ``extra_body`` (e.g. ``enable_thinking``) so
+    the thinking budget is still available for reasoning through criteria.
+    Max tokens is intentionally not capped — thinking models consume output
+    tokens for chain-of-thought before emitting the JSON object.
+    """
+    if base is None:
+        return ModelSettings(temperature=0.7)
+    base_temp = base.get("temperature") or 1.0
+    # Floor at 0.3 — thinking models produce degenerate loops at temperature=0
+    judge_temp = max(0.3, base_temp * 0.7)
+    kwargs: dict[str, Any] = {"temperature": judge_temp}
+    extra_body = base.get("extra_body")
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    return ModelSettings(**kwargs)
+
+
+async def _llm_judge(
+    text: str,
+    criteria: str,
+    agent: Any,
+    deps: CoDeps,
+    model_settings: ModelSettings | None,
+) -> JudgeResult:
+    """Run one LLM judge check. Returns the full JudgeResult (passed + reasoning).
+
+    Loads the character-specific judgment rules from ``evals/judges/{role}.md``
+    so the judge applies consistent behavioral standards across all cases for
+    that personality. The JSONL criterion is the per-check assertion; the judge
+    file is the shared character evaluation rubric.
+
+    Soul seed and soul critique (from the agent's system prompt and deps) provide
+    additional character context. Active mindset is stripped — it is the task
+    strategy for generating responses, not for evaluating them.
+    """
+    role = deps.personality or ""
+    character_rules = _load_character_judge(role)
+    personality_label = role.capitalize() if role else "this character"
+    judge_deps = dataclass_replace(
+        deps,
+        active_mindset_content="",
+        active_mindset_types=[],
+    )
+    judge_ms = _make_judge_settings(model_settings)
+    prompt = _JUDGE_PROMPT.format(
+        personality=personality_label,
+        character_rules=character_rules or "(no character rules file found)",
+        criteria=criteria,
+        response=text,
+    )
+    result = await agent.run(
+        prompt,
+        output_type=JudgeResult,
+        message_history=[],
+        deps=judge_deps,
+        model_settings=judge_ms,
+    )
+    return result.output
+
+
+async def score_turn(
+    text: str,
+    checks: list[dict[str, Any]],
+    agent: Any,
+    deps: CoDeps,
+    model_settings: ModelSettings | None,
+) -> tuple[list[str], dict[int, str]]:
+    """Run all checks for one turn.
+
+    Returns ``(failures, judge_details)`` where:
+    - ``failures``: list of failure description strings (empty = all pass)
+    - ``judge_details``: dict of check_index → "PASS: reasoning" or "FAIL: reasoning"
+      for every ``llm_judge`` check, so reasoning is visible for both outcomes
+
+    Handles async ``llm_judge`` checks via LLM call and falls back to
+    synchronous dispatch for all other check types (``forbidden``, etc.).
+    """
+    failures: list[str] = []
+    judge_details: dict[int, str] = {}
+    for i, check in enumerate(checks):
+        check_type = check["type"]
+        if check_type == "llm_judge":
+            jr = await _llm_judge(
+                text, check["criteria"], agent, deps, model_settings
+            )
+            prefix = "PASS" if jr.passed else "FAIL"
+            judge_details[i] = f"{prefix}: {jr.reasoning}"
+            if not jr.passed:
+                failures.append(f"llm_judge: {jr.reasoning}")
+        else:
+            fn = _CHECK_DISPATCH.get(check_type)
+            if fn is None:
+                continue
+            result = fn(text, check)
+            if result is not None:
+                failures.append(result)
+    return failures, judge_details
 
 
 # ---------------------------------------------------------------------------
@@ -676,11 +824,10 @@ def analyze_turn_spans(
     for s in sorted_spans:
         name_lower = s.name.lower()
 
-        # invoke_agent span — collect system instructions, all messages, final result
+        # invoke_agent span — collect all messages and final result
+        # Note: gen_ai.system_instructions does not exist in pydantic-ai OTel spans;
+        # the system prompt lives in gen_ai.input.messages[role=system] on chat spans.
         if "invoke_agent" in name_lower or name_lower == "agent":
-            sys_instr = _parse_messages_attr(s, "gen_ai.system_instructions")
-            if sys_instr:
-                turn_system_instructions = sys_instr
             all_msgs = _parse_messages_attr(s, "pydantic_ai.all_messages")
             if all_msgs:
                 all_messages_raw = all_msgs
@@ -759,7 +906,11 @@ def analyze_turn_spans(
                 cache_read_tokens=cache_read,
                 cache_write_tokens=cache_write,
                 input_messages=_parse_messages_attr(s, "gen_ai.input.messages"),
-                system_instructions=_parse_messages_attr(s, "gen_ai.system_instructions"),
+                # System prompt lives in input_messages[role=system] — no separate attribute
+                system_instructions=[
+                    m for m in _parse_messages_attr(s, "gen_ai.input.messages")
+                    if isinstance(m, dict) and m.get("role") == "system"
+                ],
                 tool_definitions=_parse_messages_attr(s, "gen_ai.tool.definitions"),
             ))
             continue
@@ -868,6 +1019,9 @@ def _check_display(check: dict[str, Any]) -> str:
         return f"no_preamble: {phrases}"
     if t == "has_question":
         return "has_question"
+    if t == "llm_judge":
+        criteria = check.get("criteria", "")
+        return f"llm_judge: {criteria[:80]}{'...' if len(criteria) > 80 else ''}"
     return t
 
 
@@ -903,4 +1057,6 @@ def _check_match_detail(check: dict[str, Any], text: str) -> str:
         return "—"
     if t == "has_question":
         return '"?" found' if "?" in text else "no ? found"
+    if t == "llm_judge":
+        return "(LLM evaluated)"
     return "—"

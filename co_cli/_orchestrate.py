@@ -27,6 +27,7 @@ TurnOutcome = Literal["continue", "stop", "error", "compact"]
 from co_cli._approval import _is_safe_command
 from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
 from co_cli.deps import CoDeps
+from co_cli.tools.personality import MindsetDeclaration, _apply_mindset
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,7 @@ class _StreamState:
     last_thinking_render_at: float = 0.0
     thinking_active: bool = False
     streamed_text: bool = False
+    tool_preamble_emitted: bool = False
 
 
 def _flush_thinking(state: _StreamState, frontend: FrontendProtocol) -> None:
@@ -263,6 +265,29 @@ def _patch_dangling_tool_calls(
 
 
 # ---------------------------------------------------------------------------
+# Tool preamble — fallback status when model emits no text before first tool call
+# ---------------------------------------------------------------------------
+
+_TOOL_PREAMBLE: dict[str, str] = {
+    "recall_memory": "Checking saved context before answering.",
+    "web_search": "Looking up current sources.",
+    "web_fetch": "Reading that source for details.",
+    "run_shell_command": "Running a quick check.",
+    "save_memory": "Saving that to memory.",
+    "list_memories": "Checking saved context.",
+    "search_notes": "Searching notes.",
+    "read_note": "Reading that note.",
+    "search_drive_files": "Checking Drive.",
+    "list_emails": "Checking email.",
+    "list_calendar_events": "Checking calendar.",
+}
+
+
+def _tool_preamble_message(tool_name: str) -> str:
+    return _TOOL_PREAMBLE.get(tool_name, "Running a quick check before answering.")
+
+
+# ---------------------------------------------------------------------------
 # _stream_events — extracted from _stream_agent_run
 # ---------------------------------------------------------------------------
 
@@ -314,6 +339,11 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
             if isinstance(event, FunctionToolCallEvent):
                 _flush_for_tool_output(state, frontend)
                 tool = event.part.tool_name
+                # Fallback: if model emitted no text before the first tool call, inject a
+                # user-visible status line so there is no perceived silence.
+                if not state.streamed_text and not state.tool_preamble_emitted:
+                    frontend.on_status(_tool_preamble_message(tool))
+                    state.tool_preamble_emitted = True
                 if tool == "run_shell_command":
                     cmd = event.part.args_as_dict().get("cmd", "")
                     pending_cmds[event.tool_call_id] = cmd
@@ -431,6 +461,17 @@ async def run_turn(
     # Reset turn-scoped safety state (doom loop + shell reflection tracking)
     from co_cli._history import SafetyState
     deps._safety_state = SafetyState()
+
+    # Pre-turn mindset classification — fires once per session on Turn 1
+    if deps.personality and not deps.mindset_loaded:
+        _mindset_result = await agent.run(
+            user_input,
+            output_type=MindsetDeclaration,
+            message_history=[],
+            deps=deps,
+            model_settings=model_settings,
+        )
+        _apply_mindset(deps, _mindset_result.output.task_types)
 
     result = None
     streamed_text = False

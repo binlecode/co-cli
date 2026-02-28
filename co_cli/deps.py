@@ -53,6 +53,14 @@ class CoDeps:
     # Personality / role
     personality: str | None = None
 
+    # Mechanism 1 — per-session mindset selection (set by pre-turn classification)
+    mindset_loaded: bool = False
+    active_mindset_types: list[str] = field(default_factory=list)
+    active_mindset_content: str = ""
+
+    # Mechanism 2 — always-on soul critique (loaded from souls/{role}/critique.md at session start)
+    personality_critique: str = ""
+
     # History governance
     max_history_messages: int = 40
     tool_output_trim_chars: int = 2000
