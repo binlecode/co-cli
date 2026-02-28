@@ -30,4 +30,5 @@ demo_knowledge_temp/
 
 # Misc
 *.log
+*.pdf
 .DS_Store
