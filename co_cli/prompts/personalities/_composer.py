@@ -5,7 +5,7 @@ Personality is assembled from five sources in this order:
 - ``.co-cli/knowledge/memories/``            — character base memories (decay_protected, source=planted)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by assemble_prompt)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
-- ``strategies/{role}/{task_type}.md``        — task-specific behavioral guidance (pre-turn classification)
+- ``mindsets/{role}/{task_type}.md``          — task-specific behavioral guidance (pre-turn classification)
 
 The folder structure IS the schema. Adding a role requires only files, no Python changes.
 """
@@ -16,7 +16,7 @@ from co_cli._frontmatter import parse_frontmatter
 
 
 _PERSONALITIES_DIR = Path(__file__).parent
-REQUIRED_STRATEGY_TASK_TYPES: tuple[str, ...] = (
+REQUIRED_MINDSET_TASK_TYPES: tuple[str, ...] = (
     "technical",
     "exploration",
     "debugging",
@@ -41,7 +41,7 @@ VALID_PERSONALITIES: list[str] = _discover_valid_personalities()
 
 
 def validate_personality_files(role: str) -> list[str]:
-    """Return non-blocking warnings for missing soul/strategy files.
+    """Return non-blocking warnings for missing soul/mindset files.
 
     Validation is defensive and never raises — callers can surface warnings at
     startup while continuing with degraded behavior.
@@ -54,12 +54,12 @@ def validate_personality_files(role: str) -> list[str]:
             f"Personality '{role}' missing soul seed: souls/{role}/seed.md"
         )
 
-    for task_type in REQUIRED_STRATEGY_TASK_TYPES:
-        strategy_file = _PERSONALITIES_DIR / "strategies" / role / f"{task_type}.md"
-        if not strategy_file.exists():
+    for task_type in REQUIRED_MINDSET_TASK_TYPES:
+        mindset_file = _PERSONALITIES_DIR / "mindsets" / role / f"{task_type}.md"
+        if not mindset_file.exists():
             warnings.append(
                 "Personality "
-                f"'{role}' missing strategy file: strategies/{role}/{task_type}.md"
+                f"'{role}' missing mindset file: mindsets/{role}/{task_type}.md"
             )
 
     return warnings

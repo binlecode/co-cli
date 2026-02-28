@@ -144,7 +144,7 @@ through automatically — no routing changes needed.
 
 ## Phase 3 — User Model
 
-**Why:** Co models the AI (soul seed, strategies, examples) but not the user. Personality adapts
+**Why:** Co models the AI (soul seed, mindsets, examples) but not the user. Personality adapts
 its style but has nothing to adapt *to* — the role plays into the void. Letta/MemGPT maintains
 a `human` block alongside `persona`. Character.AI builds a persistent user profile that shapes
 every turn. Without a user model, personality-context memories are the only adaptation mechanism

@@ -440,7 +440,7 @@ Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-16-pro
 6. **Shell guidance** — always
 7. **Project instructions** — `.co-cli/instructions.md` (when file exists)
 8. **Personality memories** — `## Learned Context` (when role is set)
-9. **Active mindset** — `## Active mindset: {types}` strategy content (after Turn 1 classification, when non-empty)
+9. **Active mindset** — `## Active mindset: {types}` mindset content (after Turn 1 classification, when non-empty)
 10. **Review lens** — `## Review lens` from `souls/{role}/critique.md` (when role is set)
 
 See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) for knowledge loading details.

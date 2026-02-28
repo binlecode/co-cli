@@ -404,7 +404,7 @@ async def _llm_judge(
 
     Soul seed and soul critique (from the agent's system prompt and deps) provide
     additional character context. Active mindset is stripped — it is the task
-    strategy for generating responses, not for evaluating them.
+    mindset for generating responses, not for evaluating them.
     """
     role = deps.personality or ""
     character_rules = _load_character_judge(role)

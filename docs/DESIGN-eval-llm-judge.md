@@ -134,7 +134,7 @@ The judge runs with the same agent instance as the main eval turn:
 | Soul examples (`souls/{role}/examples.md`) | **Yes** — via `@agent.system_prompt` | Shows what in-character responses look like |
 | Soul critique (`souls/{role}/critique.md`) | **Yes** — via `inject_personality_critique` | The character's review lens ("Does the structure hold?") is directly applicable to judgment |
 | Character judge rules (`judges/{role}.md`) | **Yes** — injected into judge prompt | The primary evaluation rubric; explicit pass/fail criteria and ambiguity rule |
-| Active mindset (`strategies/{role}/{type}.md`) | **No** — cleared via `dataclass_replace` | Task strategy for generating responses, not for evaluating them |
+| Active mindset (`mindsets/{role}/{type}.md`) | **No** — cleared via `dataclass_replace` | Task mindset for generating responses, not for evaluating them |
 
 Character context layers from multiple sources are intentional and complementary:
 soul seed + critique describe the character; the judge file operationalizes evaluation.

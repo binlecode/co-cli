@@ -10,7 +10,7 @@ from pathlib import Path
 
 from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._composer import (
-    REQUIRED_STRATEGY_TASK_TYPES,
+    REQUIRED_MINDSET_TASK_TYPES,
     VALID_PERSONALITIES,
     load_soul_seed,
     validate_personality_files,
@@ -177,26 +177,26 @@ def test_total_prompt_under_budget():
 # --- Strategy files ---
 
 
-def test_all_roles_have_strategy_files():
-    """Every role has all 6 strategy files."""
-    strategies_base = (
-        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "strategies"
+def test_all_roles_have_mindset_files():
+    """Every role has all 6 mindset files."""
+    mindsets_base = (
+        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "mindsets"
     )
     task_types = ["technical", "exploration", "debugging", "teaching", "emotional", "memory"]
     for name in VALID_PERSONALITIES:
         for task_type in task_types:
-            f = strategies_base / name / f"{task_type}.md"
-            assert f.exists(), f"Missing strategy: {name}/{task_type}.md"
+            f = mindsets_base / name / f"{task_type}.md"
+            assert f.exists(), f"Missing mindset: {name}/{task_type}.md"
 
 
-def test_strategy_files_have_content():
-    """Every strategy file has non-empty content."""
-    strategies_base = (
-        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "strategies"
+def test_mindset_files_have_content():
+    """Every mindset file has non-empty content."""
+    mindsets_base = (
+        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "mindsets"
     )
-    for strategy_file in strategies_base.rglob("*.md"):
-        content = strategy_file.read_text(encoding="utf-8").strip()
-        assert len(content) > 0, f"Empty strategy file: {strategy_file.name}"
+    for mindset_file in mindsets_base.rglob("*.md"):
+        content = mindset_file.read_text(encoding="utf-8").strip()
+        assert len(content) > 0, f"Empty mindset file: {mindset_file.name}"
 
 
 def test_validate_personality_files_no_warnings_for_complete_role():
@@ -204,20 +204,20 @@ def test_validate_personality_files_no_warnings_for_complete_role():
     assert validate_personality_files("finch") == []
 
 
-def test_validate_personality_files_warns_on_missing_strategy(tmp_path, monkeypatch):
-    """Missing strategy files return startup-safe warnings."""
+def test_validate_personality_files_warns_on_missing_mindset(tmp_path, monkeypatch):
+    """Missing mindset files return startup-safe warnings."""
     personalities_dir = tmp_path
     (personalities_dir / "souls" / "finch").mkdir(parents=True)
     (personalities_dir / "souls" / "finch" / "seed.md").write_text(
         "You are Finch.\n",
         encoding="utf-8",
     )
-    (personalities_dir / "strategies" / "finch").mkdir(parents=True)
-    for task_type in REQUIRED_STRATEGY_TASK_TYPES:
+    (personalities_dir / "mindsets" / "finch").mkdir(parents=True)
+    for task_type in REQUIRED_MINDSET_TASK_TYPES:
         if task_type == "memory":
             continue
-        (personalities_dir / "strategies" / "finch" / f"{task_type}.md").write_text(
-            f"{task_type} strategy",
+        (personalities_dir / "mindsets" / "finch" / f"{task_type}.md").write_text(
+            f"{task_type} mindset",
             encoding="utf-8",
         )
 
@@ -228,5 +228,5 @@ def test_validate_personality_files_warns_on_missing_strategy(tmp_path, monkeypa
 
     warnings = validate_personality_files("finch")
     assert warnings == [
-        "Personality 'finch' missing strategy file: strategies/finch/memory.md"
+        "Personality 'finch' missing mindset file: mindsets/finch/memory.md"
     ]

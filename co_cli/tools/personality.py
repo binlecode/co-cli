@@ -3,7 +3,7 @@
 Personality is delivered via two mechanisms:
 - Mechanism 1: pre-turn classification (MindsetDeclaration) — the orchestrator
   calls agent.run(output_type=MindsetDeclaration) once per session before the
-  main response. The model picks task type(s); _apply_mindset() loads strategy
+  main response. The model picks task type(s); _apply_mindset() loads mindset
   files internally and stores content on deps.
 - Mechanism 2: always-on soul critique — loaded from souls/{role}/critique.md
   at session start and injected into every model call via @agent.system_prompt.
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_STRATEGIES_DIR = Path(__file__).parent.parent / "prompts" / "personalities" / "strategies"
+_MINDSETS_DIR = Path(__file__).parent.parent / "prompts" / "personalities" / "mindsets"
 
 MINDSET_TYPES = Literal[
     "technical", "exploration", "debugging", "teaching", "emotional", "memory"
@@ -34,7 +34,7 @@ class MindsetDeclaration(BaseModel):
 
 
 def _apply_mindset(deps: "CoDeps", task_types: list[str]) -> None:
-    """Load strategy files for selected task types and store on deps.
+    """Load mindset files for selected task types and store on deps.
 
     Called by the pre-turn orchestrator phase after MindsetDeclaration is returned.
     Not a tool — system-internal. The model classifies; this loads.
@@ -45,7 +45,7 @@ def _apply_mindset(deps: "CoDeps", task_types: list[str]) -> None:
     parts: list[str] = []
     loaded: list[str] = []
     for task_type in task_types:
-        strategy_file = _STRATEGIES_DIR / role / f"{task_type}.md"
+        strategy_file = _MINDSETS_DIR / role / f"{task_type}.md"
         if strategy_file.exists():
             parts.append(strategy_file.read_text(encoding="utf-8").strip())
             loaded.append(task_type)
@@ -65,7 +65,7 @@ def _load_personality_memories() -> str:
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     personality_memories = _load_memories(
-        memory_dir, tags=["personality-context"]
+        memory_dir, tags=["personality-context", "user-profile"]
     )
     if not personality_memories:
         return ""

@@ -1076,7 +1076,7 @@ async def run_eval(args: argparse.Namespace) -> int:
     # Create one agent per unique personality — soul seed is baked into the
     # static system prompt at agent creation time (get_agent(personality=…)).
     # A single get_agent() without personality= would skip the soul seed entirely,
-    # breaking the new seed+strategy personality architecture.
+    # breaking the new seed+mindset personality architecture.
     unique_personalities = sorted({c.personality for c in cases})
     personality_agents: dict[str, tuple[Any, ModelSettings | None, list[str]]] = {}
     for p in unique_personalities:

@@ -43,7 +43,7 @@ quirks/{provider}/{model}.md → model-specific counter-steering (when present)
 MindsetDeclaration          → pre-turn orchestrator classification (Turn 1 only)
                                agent.run(output_type=MindsetDeclaration)
                                model picks task type(s) → _apply_mindset() reads
-                               strategies/{role}/{task_type}.md → deps.active_mindset_content
+                               mindsets/{role}/{task_type}.md → deps.active_mindset_content
                                injected every turn by inject_active_mindset()
 ```
 
@@ -55,7 +55,7 @@ Five fields on `CoDeps` control personality composition at runtime:
 |-------|----------|--------|---------|-------|
 | `personality` | Who co is (identity) | `CO_CLI_PERSONALITY` / config | `"finch"` | Immutable within session |
 | `personality_critique` | Always-on review lens | `souls/{role}/critique.md` loaded by `create_deps()` | `""` | Immutable within session |
-| `active_mindset_content` | Task-specific strategy content | Set by `_apply_mindset()` after Turn 1 | `""` | Set once per session |
+| `active_mindset_content` | Task-specific mindset content | Set by `_apply_mindset()` after Turn 1 | `""` | Set once per session |
 | `active_mindset_types` | Selected task type names | Set by `_apply_mindset()` after Turn 1 | `[]` | Set once per session |
 | `mindset_loaded` | Classification guard (prevents re-classification) | Set by `_apply_mindset()` | `False` | Set once per session |
 
@@ -65,8 +65,8 @@ These constraints govern every decision in the sections below:
 
 1. **Soul is always loaded** — every co instance has a personality; there is no generic fallback identity
 2. **Seed is the authority** — the expanded seed is the complete static anchor: identity, trait essence, and Never list. It is present in every context window. The model's first context is always the soul
-3. **File structure is the schema** — roles and strategies are discovered by listing directories; no Python dicts, no hardcoded lists
-4. **Never list in seed, not strategies** — negative constraints need system prompt authority; the seed is the one place guaranteed to be present in every context window
+3. **File structure is the schema** — roles and mindsets are discovered by listing directories; no Python dicts, no hardcoded lists
+4. **Never list in seed, not mindsets** — negative constraints need system prompt authority; the seed is the one place guaranteed to be present in every context window
 5. **Modulate, never override** — personality shapes HOW rules are expressed; it never weakens safety, approval gates, or factual accuracy
 
 ### Prompt layer map
@@ -94,7 +94,7 @@ These constraints govern every decision in the sections below:
 │ Pre-turn mindset  (Turn 1 — orchestrator-driven, not a tool)    │
 │                                                                 │
 │   MindsetDeclaration       → model picks task type(s)           │
-│   _apply_mindset()         → loads strategies/{role}/*.md       │
+│   _apply_mindset()         → loads mindsets/{role}/*.md         │
 │   inject_active_mindset    → ## Active mindset: {types}         │
 │   inject_personality_critique → ## Review lens                  │
 │                                                                 │
@@ -170,13 +170,13 @@ Four `@agent.system_prompt` functions registered in `get_agent()` in `co_cli/age
 | `add_current_date` | 1 | Always | `"Today is {date}."` |
 | `add_shell_guidance` | 2 | Always | Shell approval hint |
 | `add_project_instructions` | 3 | `.co-cli/instructions.md` exists | Project-specific instructions |
-| `add_personality_memories` | 4 | `ctx.deps.personality` is set | `## Learned Context` section (top 5 personality-context memories by recency) |
-| `inject_active_mindset` | 5 | `ctx.deps.active_mindset_content` non-empty | `## Active mindset: {types}` — strategy file content loaded by pre-turn classification |
+| `add_personality_memories` | 4 | `ctx.deps.personality` is set | `## Learned Context` section (top 5 personality-context + user-profile memories by recency) |
+| `inject_active_mindset` | 5 | `ctx.deps.active_mindset_content` non-empty | `## Active mindset: {types}` — mindset file content loaded by pre-turn classification |
 | `inject_personality_critique` | 6 | `ctx.deps.personality_critique` non-empty | `## Review lens` — always-on self-eval lens from `souls/{role}/critique.md` |
 
 The static prompt is assembled once and never re-read between turns; the per-turn functions read from `ctx.deps` on every call. `personality_critique` is loaded at session start in `create_deps()` via `load_soul_critique()`. `active_mindset_content` is set by `_apply_mindset()` after Turn 1 classification.
 
-### 2c. Personality: seed + strategy
+### 2c. Personality: seed + mindset
 
 `load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans the knowledge store for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
 
@@ -193,7 +193,7 @@ souls/{role}/seed.md
   Never:                   hard constraint list (negative space)
 ```
 
-The `Never:` list belongs in the seed, not in strategies: negative constraints degrade faster than positive ones over long context. The seed is the one place guaranteed to be present in every context window — Never constraints must be there.
+The `Never:` list belongs in the seed, not in mindsets: negative constraints degrade faster than positive ones over long context. The seed is the one place guaranteed to be present in every context window — Never constraints must be there.
 
 **Examples structure** — optional, trailing the behavioral rules:
 
@@ -211,14 +211,14 @@ Examples trail the rules because they are the last identity-level content the mo
 agent.run(user_input, output_type=MindsetDeclaration, message_history=[], deps=deps)
   →  model returns task_types: list[MINDSET_TYPES]
   →  _apply_mindset(deps, task_types):
-       reads strategies/{role}/{task_type}.md for each type
+       reads mindsets/{role}/{task_type}.md for each type
        stores merged content → deps.active_mindset_content
        stores type list → deps.active_mindset_types
        sets deps.mindset_loaded = True
   →  inject_active_mindset() injects this content every subsequent turn
 ```
 
-This is orchestrator-driven — the model does not call a tool. The same strategy content stays active for the full session (mindset is not re-classified on subsequent turns).
+This is orchestrator-driven — the model does not call a tool. The same mindset content stays active for the full session (mindset is not re-classified on subsequent turns).
 
 6 task types per role:
 
@@ -247,7 +247,7 @@ co_cli/prompts/personalities/
 │   └── tars/    seed.md      (identity + Core + Never)
 │                critique.md  (always-on self-eval lens)
 │                examples.md  (optional: trigger→response patterns, trailing rules)
-└── strategies/
+└── mindsets/
     ├── finch/   technical.md  exploration.md  debugging.md
     │            teaching.md   emotional.md    memory.md
     ├── jeff/    technical.md  exploration.md  debugging.md
@@ -261,7 +261,7 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 **Adding a new role** requires only files — no Python changes:
 1. Write `souls/{name}/seed.md` — identity declaration + Core + Never list
 2. Write `souls/{name}/critique.md` — always-on self-eval lens
-3. Write `strategies/{name}/*.md` — 6 strategy files for the 6 task types
+3. Write `mindsets/{name}/*.md` — 6 mindset files for the 6 task types
 4. Optionally write `souls/{name}/examples.md` — trigger→response patterns; silently ignored if absent
 5. Optionally write base memories in `.co-cli/knowledge/memories/` tagged `[name, "character"]`
 6. `VALID_PERSONALITIES` updates automatically from `souls/` folder listing
@@ -269,10 +269,10 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 **Startup file validation (non-blocking).** `validate_personality_files(role)` in
 `co_cli/prompts/personalities/_composer.py` checks:
 - `souls/{role}/seed.md`
-- all 6 required strategy files in `strategies/{role}/{task_type}.md`
+- all 6 required mindset files in `mindsets/{role}/{task_type}.md`
 
 `load_config()` calls `_validate_personality(settings.personality)` and prints warnings
-at startup when files are missing. Startup does not fail; missing strategy files are
+at startup when files are missing. Startup does not fail; missing mindset files are
 skipped by `_apply_mindset()` — degraded but functional.
 
 ### 2d. Character base memories
@@ -351,9 +351,9 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 | Static: 5 rules | ~4,800 | behavioral policy, assembled once |
 | Static: soul examples | 0–400 | `## Response patterns`, trailing rules |
 | Static: counter-steering (quirk file body) | 0–500 | model-specific, when file exists |
-| Per-turn: active mindset (strategy content) | 0–600 | `## Active mindset` — set Turn 1, injected every turn |
+| Per-turn: active mindset (mindset content) | 0–600 | `## Active mindset` — set Turn 1, injected every turn |
 | Per-turn: personality critique | 0–200 | `## Review lens` — loaded at session start, injected every turn |
-| Per-turn: personality memories | 0–500 | top-5 personality-context memories by recency |
+| Per-turn: personality memories | 0–500 | `## Learned Context` — top-5 personality-context + user-profile memories by recency |
 | Per-turn: date + shell hint + project instructions | ~100–500 | always present |
 | **System prompt total** | **~5,700–7,900** | |
 
@@ -376,25 +376,25 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 |-----------|--------|-------|
 | Soul seed (static, once) | ~200–370 chars | ~400–600 chars |
 | Per-turn personality injection | ~2,300–3,500 chars × 20 = ~46,000–70,000 | 0 chars (seed is static) |
-| Strategy + critique (per-turn after Turn 1) | n/a | ~600–800 chars × 19 turns = ~11,400–15,200 total |
+| Mindset + critique (per-turn after Turn 1) | n/a | ~600–800 chars × 19 turns = ~11,400–15,200 total |
 
 **Peer comparison** (system prompt only; tool schemas are separate in all systems):
 
 | System | System prompt | Has personality |
 |--------|--------------|-----------------|
-| co | ~6,500–9,200 | Yes — expanded seed anchor + pre-classified strategy + critique |
+| co | ~6,500–9,200 | Yes — expanded seed anchor + pre-classified mindset + critique |
 | Gemini-CLI | ~18,000 | No — heavier operational/workflow guidance |
 | aider (editblock mode) | ~4,500 | No — pure edit-format guidance |
 
-Strategy content is classified once (Turn 1) and injected as `## Active mindset` every subsequent turn — zero model compliance required to load it, but present in every context window after classification.
+Mindset content is classified once (Turn 1) and injected as `## Active mindset` every subsequent turn — zero model compliance required to load it, but present in every context window after classification.
 
 ### 2h. Design decisions
 
 **Expanded seed as static anchor.** The soul seed is the complete static identity anchor: identity declaration, distilled trait essence, and hard constraints. Placed first in the static system prompt, it is present in every context window. The model's first context is always the soul — not a generic label. The Never list lives in the seed because negative constraints degrade faster than positive ones in long context, and the seed is the one place guaranteed to be present.
 
-**Identity in seed, strategy via pre-turn classification.** Stable identity content (who the model is, hard constraints) lives in the static seed. Dynamic, task-shaped behavioral guidance is loaded automatically before Turn 1 via `MindsetDeclaration` classification and injected into every system prompt thereafter. The seed is authoritative configuration; strategy content is orchestrator-loaded context active for the session. This split prevents the fox-henhouse problem for identity (Never list is structural) while delivering task-relevant guidance without a model-called tool.
+**Identity in seed, mindset via pre-turn classification.** Stable identity content (who the model is, hard constraints) lives in the static seed. Dynamic, task-shaped behavioral guidance is loaded automatically before Turn 1 via `MindsetDeclaration` classification and injected into every system prompt thereafter. The seed is authoritative configuration; mindset content is orchestrator-loaded context active for the session. This split prevents the fox-henhouse problem for identity (Never list is structural) while delivering task-relevant guidance without a model-called tool.
 
-**Structural delivery for identity; orchestrator delivery for strategy.** The Never list and Core trait essence belong structurally in the seed — they need system prompt authority, not retrieval authority. Task-specific behavioral guidance (exploration approach, teaching style, debugging process) is classified before the first turn and injected per-turn via `inject_active_mindset` — always present in context without requiring model compliance to load it.
+**Structural delivery for identity; orchestrator delivery for mindset.** The Never list and Core trait essence belong structurally in the seed — they need system prompt authority, not retrieval authority. Task-specific behavioral guidance (exploration approach, teaching style, debugging process) is classified before the first turn and injected per-turn via `inject_active_mindset` — always present in context without requiring model compliance to load it.
 
 **Role immutability within a session.** `CoDeps.personality` is set once at session start, read-only thereafter. This prevents personality drift within a conversation.
 
@@ -408,7 +408,7 @@ Strategy content is classified once (Turn 1) and injected as `## Active mindset`
 
 **No self-modification.** Peers openclaw (agent writes to SOUL.md) and letta (agent edits its own persona via `core_memory_replace()`) allow the agent to mutate its own personality. Co does not. `## Learned Context` memories already provide session-to-session adaptation without mutating structural files.
 
-**No fragment composition.** The soul+strategy combination is hardwired per role in `souls/{role}/seed.md` and `strategies/{role}/`. A new role requires only creating those files — no Python changes.
+**No fragment composition.** The soul+mindset combination is hardwired per role in `souls/{role}/seed.md` and `mindsets/{role}/`. A new role requires only creating those files — no Python changes.
 
 ### 2i. Personality behavior evals
 
@@ -433,7 +433,7 @@ Run:
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Role name — validated against `VALID_PERSONALITIES` at config load time. Missing seed/strategy files emit startup warnings via `_validate_personality()` but do not block startup |
+| `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Role name — validated against `VALID_PERSONALITIES` at config load time. Missing seed/mindset files emit startup warnings via `_validate_personality()` but do not block startup |
 
 Eval CLI flags are documented by the runner itself:
 `uv run python evals/eval_personality_behavior.py --help`
@@ -454,13 +454,13 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/prompts/personalities/souls/{role}/seed.md` | Identity anchor: identity declaration + Core trait essence + Never list (3 roles: finch, jeff, tars) |
 | `co_cli/prompts/personalities/souls/{role}/critique.md` | Always-on self-eval lens; loaded at session start by `load_soul_critique()`, injected every turn as `## Review lens` |
 | `co_cli/prompts/personalities/souls/{role}/examples.md` | Optional trigger→response patterns; loaded by `load_soul_examples()`, placed after rules (3 roles: finch, jeff, tars) |
-| `co_cli/prompts/personalities/strategies/{role}/{task_type}.md` | Soul-specific behavioral guidance per task type (18 files: 6 types × 3 roles) |
+| `co_cli/prompts/personalities/mindsets/{role}/{task_type}.md` | Soul-specific behavioral guidance per task type (18 files: 6 types × 3 roles) |
 | `.co-cli/knowledge/memories/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–11, `decay_protected: true`, `source: planted`) |
 | `co_cli/agent.py` | `get_agent(personality=…)` — builds soul block (seed + base memories), loads examples, assembles static prompt, registers 6 `@agent.system_prompt` functions (incl. mindset + critique), registers tools |
 | `co_cli/tools/personality.py` | `MindsetDeclaration` model, `_apply_mindset()`, `_load_personality_memories()` helper |
 | `co_cli/_history.py` | `_PERSONALITY_COMPACTION_ADDENDUM` — summarizer guard for personality moments |
 | `co_cli/_commands.py` | Slash command registry and dispatch |
-| `co_cli/config.py` | Field validator enforces role name in `VALID_PERSONALITIES`; `_validate_personality()` emits startup warnings for missing seed/strategy files |
+| `co_cli/config.py` | Field validator enforces role name in `VALID_PERSONALITIES`; `_validate_personality()` emits startup warnings for missing seed/mindset files |
 | `evals/eval_personality_behavior.py` | Consolidated personality eval runner (single + multi-turn), majority vote, gates, JSON/MD/trace outputs |
 | `evals/personality_behavior.jsonl` | Golden personality behavior cases (`id`, `personality`, `turns`, `checks_per_turn`) |
 | `evals/_common.py` | Shared eval infrastructure: deps factory, settings passthrough, check engine, telemetry/trace parsing |

@@ -114,20 +114,20 @@ def test_personality_validation():
 
 
 def test_load_config_surfaces_personality_file_warnings(tmp_path, monkeypatch, capsys):
-    """Missing strategy diagnostics print as startup warnings."""
+    """Missing mindset diagnostics print as startup warnings."""
     monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "co_cli.config._validate_personality",
         lambda _role: [
-            "Personality 'finch' missing strategy file: strategies/finch/quick.md"
+            "Personality 'finch' missing mindset file: mindsets/finch/quick.md"
         ],
     )
 
     load_config()
     out = capsys.readouterr().out
     assert (
-        "Warning: Personality 'finch' missing strategy file: "
-        "strategies/finch/quick.md" in out
+        "Warning: Personality 'finch' missing mindset file: "
+        "mindsets/finch/quick.md" in out
     )
 
