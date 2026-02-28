@@ -170,7 +170,7 @@ Four `@agent.system_prompt` functions registered in `get_agent()` in `co_cli/age
 | `add_current_date` | 1 | Always | `"Today is {date}."` |
 | `add_shell_guidance` | 2 | Always | Shell approval hint |
 | `add_project_instructions` | 3 | `.co-cli/instructions.md` exists | Project-specific instructions |
-| `add_personality_memories` | 4 | `ctx.deps.personality` is set | `## Learned Context` section (top 5 personality-context + user-profile memories by recency) |
+| `add_personality_memories` | 4 | `ctx.deps.personality` is set | `## Learned Context` section (top 5 personality-context memories by recency) |
 | `inject_active_mindset` | 5 | `ctx.deps.active_mindset_content` non-empty | `## Active mindset: {types}` — mindset file content loaded by pre-turn classification |
 | `inject_personality_critique` | 6 | `ctx.deps.personality_critique` non-empty | `## Review lens` — always-on self-eval lens from `souls/{role}/critique.md` |
 
@@ -353,7 +353,7 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 | Static: counter-steering (quirk file body) | 0–500 | model-specific, when file exists |
 | Per-turn: active mindset (mindset content) | 0–600 | `## Active mindset` — set Turn 1, injected every turn |
 | Per-turn: personality critique | 0–200 | `## Review lens` — loaded at session start, injected every turn |
-| Per-turn: personality memories | 0–500 | `## Learned Context` — top-5 personality-context + user-profile memories by recency |
+| Per-turn: personality memories | 0–500 | `## Learned Context` — top-5 personality-context memories by recency |
 | Per-turn: date + shell hint + project instructions | ~100–500 | always present |
 | **System prompt total** | **~5,700–7,900** | |
 

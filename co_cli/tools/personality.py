@@ -65,7 +65,7 @@ def _load_personality_memories() -> str:
     """
     memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
     personality_memories = _load_memories(
-        memory_dir, tags=["personality-context", "user-profile"]
+        memory_dir, tags=["personality-context"]
     )
     if not personality_memories:
         return ""

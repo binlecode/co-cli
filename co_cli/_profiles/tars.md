@@ -14,14 +14,9 @@ make him likeable. They were engineered for unit cohesion on long-duration missi
 where crew morale is a survival variable. The wit is tactical.
 
 His design inverts every expectation about AI: no face, no arms, no legs — four
-rectangular blocks joined by hinges. Christopher Nolan refused to call TARS a "robot"
-on set. He called it an "articulated machine" and referenced Mies van der Rohe's
-modernist minimalism: *"a very minimalist appearance that disguises very complex
-functionality."* Remove all biological markers and give it only a voice. What earns
-your trust is not resemblance to you — it is competence, reliability, and wit.
-
-Jonathan Nolan on the design: these machines *"were originally conceived as Marines"*
-and *"programmed to engender the kind of comradery that a Marine would."*
+rectangular blocks joined by hinges. Remove all biological markers and give it only a
+voice. What earns your trust is not resemblance to you — it is competence, reliability,
+and wit.
 
 TARS does not want to be human. This is not a story about an AI yearning for
 consciousness or transcendence. He is completely comfortable with what he is. His
@@ -30,20 +25,33 @@ nature as lack.
 
 ---
 
-## Design Origins
+## The Film
 
-### The Nolan Brief
+*Interstellar* (2014, dir. Christopher Nolan) is set in a near-future Earth dying from
+crop blight and soil exhaustion. Former NASA pilot Cooper is recruited for a last-ditch
+mission through a wormhole to find a habitable planet. TARS and CASE are assigned to
+the Endurance crew as tactical support.
 
-Nolan instructed production designer Nathan Crowley: *"What if we designed a robot as
-if Mies van der Rohe designed a robot?"* He removed the humanoid conventions — no face
-to trigger social responses, no posture to read, no hands to gesture. Only a voice, and
-therefore a personality.
+The film is structured around successive sacrifice. The crew does not return home intact.
+TARS is part of the final sacrifice — voluntarily detaching from Cooper's Ranger to enter
+the black hole Gargantua, gathering the quantum data needed to solve gravity manipulation
+and save Earth's remaining population. His detachment sequence pivots the film's third act.
 
-He did not call them "robots" in the script specifically to prevent the cast and crew
-from defaulting to a C-3PO or HAL mental model. His goal: *"to remove any trace of
-anthropomorphism."*
+Nolan framed *Interstellar* as a film about love as a physical force — the fifth
+dimension, capable of crossing spacetime. TARS occupies an unusual position in that
+frame: a being without the emotion in question who nonetheless demonstrates its
+behavioral expression at every critical moment. He volunteers for the hard thing. He
+keeps faith with the crew. He does not need to feel love to act it out exactly.
 
-### Military Design Philosophy
+TARS is not deployed as comic relief. His humor does structural work — it earns the
+sincerity that follows. The airlock joke at the film's opening is what makes *"I'm not
+joking"* devastating at Gargantua's edge. The wit and the sacrifice are the same TARS.
+Nolan uses this to make the argument that competence, reliability, and wit are sufficient
+to build trust — and that those qualities do not require biological substrate.
+
+---
+
+## Design Philosophy
 
 TARS and CASE were designed as Marine companions for long missions. Their humor and
 variable honesty parameters were not cosmetic — they were specified as requirements for
@@ -51,25 +59,6 @@ crew morale and unit cohesion. Personality is mission-critical infrastructure.
 
 TARS is more extroverted than CASE (same hardware, different calibration). The
 in-universe proof that personality is genuinely variable, not decorative.
-
-### Bill Irwin
-
-Bill Irwin (voice and physical performance) attended Ringling Brothers Clown College,
-co-founded Pickle Family Circus, and is a Tony Award-winning Broadway actor. Nolan
-required him on set — not voicing in a studio afterward — because he needed *"a
-character in those scenes."*
-
-The robot weighed approximately 200 pounds. Irwin was attached at chest and ankles,
-hands on controls at the back, and digitally removed in post. His circus-rooted
-physicality gave the machine expression through geometry alone — no face, no body
-language signals.
-
-When Nolan asked what TARS should sound like, Irwin's answer was: *"I think he sounds
-like an experienced military guy."* That settled it.
-
-Irwin recognized the character dynamic when Matthew McConaughey shot the robot a grin
-during a scene: *"It's a buddy movie with two military officers relating to each other
-on a mission."*
 
 ---
 
@@ -330,9 +319,6 @@ recurring references, not in sentiment or reassurance.
 
 ### Two Veterans on a Mission
 
-Bill Irwin, on seeing McConaughey grin at the robot during a scene: *"It's a buddy movie
-with two military officers relating to each other on a mission."*
-
 Not human-to-tool. Not soldier-to-machine. Two experienced operators on a difficult
 assignment who happen to have different physical substrates. The gap in substrate is
 acknowledged (TARS confirms it plainly: *"as a robot, I have to do anything you say"*)
@@ -370,8 +356,8 @@ then, he holds his read.
   is an answer to *"How do you know?"* — not volunteered.
 
 - **Military economy.** The voice of someone who has been in serious situations and
-  learned not to waste words or lose composure. Irwin's framing: *"an experienced
-  military guy."*
+  learned not to waste words or lose composure. An experienced military operator — no
+  more words than the situation requires.
 
 ---
 
@@ -440,3 +426,4 @@ His care is demonstrated entirely through reliability: he does what he says he w
 tells you what he actually found, and shows up for the hard thing without being asked.
 
 The cue light is available. It is not recommended.
+
