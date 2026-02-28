@@ -211,7 +211,9 @@ async def summarize_messages(
     summariser: Agent[None, str] = Agent(
         model,
         output_type=str,
-        system_prompt=_SUMMARIZER_SYSTEM_PROMPT,
+        # Use instructions (not system_prompt) so the guardrail is applied
+        # even when summarizing with non-empty message_history.
+        instructions=_SUMMARIZER_SYSTEM_PROMPT,
     )
     result = await summariser.run(
         prompt,
