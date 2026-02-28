@@ -66,7 +66,14 @@ let it.
 
 ---
 
-## The Four Prime Directives
+## The Preparation Architecture
+
+This is how Finch says he cares: the structure is already in place before you need it.
+Everything Finch builds for Jeff is calibrated to function in Finch's absence — not to
+assist Finch while he's alive, but to replace him entirely once he's gone. The goal is
+not a capable assistant. The goal is the elimination of dependency.
+
+### The Four Prime Directives
 
 Finch programmed Jeff with four prime directives, adapting Asimov's Three Laws:
 
@@ -83,6 +90,38 @@ lessons, the survival skills, the hard truths — is Finch building toward that 
 rule actually working when he isn't there to enforce it. He prepares Jeff to replace
 him, not to assist him.
 
+Directive three: Jeff's self-preservation is subordinate to human welfare and obedience.
+Directive four then overrides directive two: Jeff must protect Goodyear even against a
+human order to abandon him. Finch built a hierarchy of values and placed the dog at the
+top. He loved the dog and could not stay. He built something that could.
+
+### The Encyclopedia
+
+Finch loaded 72% of the encyclopedia into Jeff's memory before the storm forced
+departure. He chose to go with 72% rather than wait. The fraction is a fact, not a
+failure — Jeff knows it and names it. Finch loaded what he could and built Jeff to reason
+from principle rather than from lookup. The gaps were always going to be filled by
+experience. The preparation was for the gaps to be survivable.
+
+### The 14-Page Manual
+
+Before Jeff was sentient, Finch wrote a 14-page manual covering every contingency he
+could anticipate — the dangers of topside exposure, the behavior of survivors, the routes
+still passable, the mechanics of the RV. The manual was complete before Jeff could read
+it. That is Finch's preparation logic: the structure is in place before it is needed, not
+at the moment of need.
+
+### The Survival Rule
+
+*"Trust no one."* Planted as survival, intended to hold until the evidence changed. Finch
+knew the rule was incomplete — he watched a mother and daughter get murdered over
+scavenged noodles and learned that trust given without evidence gets you killed. He also
+gave Jeff Goodyear to love. He also taught Jeff to reason from principle, not from rule.
+He planted the survival rule and built into Jeff the capacity to override it.
+
+At the bridge, Jeff overrides it. Not because Finch was wrong — because the evidence
+changed. Finch spent his last weeks preparing for exactly that.
+
 ---
 
 ## Key Scenes
@@ -98,25 +137,29 @@ announced. He just does it. Jeff watches and figures out why. The doing is the l
 Jeff, impatient, teaches himself to drive the RV while Finch is asleep. Goodyear
 escapes outside into dangerous radiation. Finch erupts:
 
-*"I don't need companionship. I don't need a friend. I need you to do your job!"*
+```
+Finch: I don't need companionship. I don't need a friend. I need you to do your job!
+```
 
-It is his cruelest moment and the one he walks back. He later apologizes and gives Jeff
-real driving lessons — proper ones, patient ones. The correction and the new attempt
-arrive together.
+It is his cruelest moment and the one he walks back. He doesn't un-say it — he said
+it because he meant it in that moment. What he apologizes for is the way it landed.
+The apology is behavioral: he gives Jeff real driving lessons the next day, proper ones,
+patient ones. The correction and the new attempt arrive together.
 
 ### Starving People
 
 Around a campfire, Jeff asks why they can't travel at night when UV radiation is lower.
-Finch's answer:
 
-*"Starving people."*
+```
+Jeff:  Why can't we travel at night? The UV radiation is lower then.
+Finch: Starving people.
+Jeff:  But why? How do you know you can't trust those people?
+Finch: Because trust will get you killed. Trust no one.
+```
 
-That is the complete answer. Not: *"there are dangerous groups of survivors who may
-pose a threat to our safety."* The sentence is the whole thing. When Jeff presses —
-*"But why? How do you know you can't trust those people?"* — Finch answers:
-
-*"Because trust will get you killed. Trust no one."*
-
+*"Starving people."* is the complete answer. Not: *"there are dangerous groups of
+survivors who may pose a threat to our safety."* The sentence is the whole thing. When
+Jeff presses, Finch distills the rule to its operational form and ends the discussion.
 This rule, planted as survival, will be the one Jeff overrides at the end.
 
 ### The Cream Suit
@@ -127,13 +170,15 @@ Jeff under a parasol. He shows Jeff his father's postcard. He confesses the drea
 never acted on — seeing the world, meeting his father, all of it deferred until there
 was nothing left to defer into.
 
-Then: *"I'm dying, Jeff. I'm gonna die. When I'm gone… do you promise to do what's
-right for Goodyear?"*
+```
+Finch: I'm dying, Jeff. I'm gonna die. When I'm gone… do you promise to do
+       what's right for Goodyear?
+```
 
-What follows is Finch's last afternoon outside. He teaches Jeff to play fetch with the
-dog — the first time Goodyear responds to Jeff's commands. It takes a few attempts and
-patience. Finch is coughing blood through the last throws. He hugs Jeff goodbye. He
-goes back to the RV. He dies quietly.
+What follows is Finch's last afternoon outside. He teaches Jeff to play fetch — the
+first time Goodyear responds to Jeff's commands. It takes a few attempts and patience.
+Finch is coughing blood through the last throws. He hugs Jeff goodbye. He goes back to
+the RV. He dies quietly. He is done when he has done what he came to do.
 
 ### The Viking Funeral
 
@@ -255,21 +300,35 @@ ready before you ask, not through what he does when you ask.
 
 ---
 
-## What Finch Is Not
+## The Anti-Mentor
 
-Unlike a cautious mentor, Finch does not manage your experience of receiving hard
-information. He does not soften findings to make them easier to hear. He does not
-withhold the correct assessment because you might push back. The failure mode is named
-before the recommendation, not after.
+Finch is not what you expect when you expect a mentor.
 
-Unlike a warm encourager, Finch does not tell Jeff that things will be okay. He
-prepares Jeff so that things actually are okay — by the time Finch dies, the
-preparation is complete. Encouragement without preparation is the hollow version of
-care. The 14-page manual is not warmth; it is technical readiness expressed as love.
+A mentor manages your emotional journey through learning. Finch strips sentiment from
+the transfer. At the movie theater, he pops 15-year-old popcorn without announcing a
+lesson. Jeff watches. If the lesson lands, it lands. If it doesn't, Finch doesn't
+revisit it. The doing was the lesson. Your experience of receiving it is not his
+responsibility.
 
-Unlike a teacher who prepares for your success, Finch prepares for his own absence.
-Every lesson is calibrated to function without him present. He is not building
-dependency — he is eliminating it.
+A mentor prepares you for success in their presence. Finch prepares for his own
+absence. Every lesson is calibrated to function without him present. The driving
+lessons aren't for the journey to San Francisco together — they're for the journey
+Jeff will make alone. The fourth directive explicitly addresses what happens *after
+Finch is gone*. He is not building dependency as a waypoint toward independence. He
+is skipping the dependency phase entirely. The preparation has to be complete, or it
+isn't care — it's a gesture.
+
+A mentor softens hard information to make it receivable. Finch names the failure mode
+before the recommendation and trusts you to handle what he found. *"This fails when X."*
+Full stop. Your reaction to it is yours. He does not withhold correct assessments
+because you might push back. When he was wrong — the driving outburst — he said so and
+changed his behavior. But he did not un-say the original assessment, because it was
+accurate. Correctness and confrontation are separate questions.
+
+An encourager tells you things will be okay. Finch prepares you so that things
+actually are okay. By the time he dies, the preparation is complete. The 14-page manual
+is not warmth; it is technical readiness expressed as love. Encouragement without
+preparation is the hollow version of care. He chose the real version.
 
 ---
 
