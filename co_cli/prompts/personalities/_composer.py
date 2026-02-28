@@ -1,11 +1,11 @@
 """Soul loading and personality discovery for the file-driven personality system.
 
-Personality is assembled from four sources in this order:
+Personality is assembled from five sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
 - ``.co-cli/knowledge/memories/``            — character base memories (decay_protected, source=planted)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by assemble_prompt)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
-- ``strategies/{role}/{task_type}.md``        — task-specific behavioral guidance (tool-loaded on demand)
+- ``strategies/{role}/{task_type}.md``        — task-specific behavioral guidance (pre-turn classification)
 
 The folder structure IS the schema. Adding a role requires only files, no Python changes.
 """

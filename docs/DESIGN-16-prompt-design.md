@@ -114,16 +114,18 @@ Provider error handling:
 Prompt composition uses two mechanisms:
 
 1. **Static assembly** (`assemble_prompt`), once per agent creation:
-- `prompts/instructions.md`
+- soul seed + character base memories (`souls/{role}/seed.md` + planted memories, placed first)
 - ordered rules from `prompts/rules/*.md`
+- soul examples from `souls/{role}/examples.md` (when file exists, trailing rules)
 - optional model counter-steering from `prompts/quirks/{provider}/{model}.md`
 
 2. **Per-turn conditional layers** (`@agent.system_prompt`):
-- personality block (`compose_personality`) when role exists
 - current date
 - shell guidance
 - project instructions from `.co-cli/instructions.md` when present
 - personality-context memories when role exists
+- active mindset (`## Active mindset: {types}`) after Turn 1 classification, when non-empty
+- review lens (`## Review lens`) from `souls/{role}/critique.md` when role exists
 
 Design principles:
 - System prompt defines identity and behavior policy.

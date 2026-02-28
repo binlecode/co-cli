@@ -187,6 +187,7 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 | **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
 | **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2) |
 | **History governance** | `max_history_messages` (40), `tool_output_trim_chars` (2000), `summarization_model` (empty = primary model) |
+| **Personality** | `personality` (role name), `personality_critique` (always-on review lens from `critique.md`), `active_mindset_content` + `active_mindset_types` (set post-Turn-1 classification), `mindset_loaded` (classification guard) |
 | **Mutable state** | `drive_page_tokens` (pagination state per query), `auto_approved_tools` (per-tool session approvals), `session_todos` (session task list), `precomputed_compaction` (background summary cache) |
 
 ### Multi-Session State Design
@@ -426,19 +427,21 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 Two-part structure — static base assembled once, per-turn layers appended before every model request.
 Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md).
 
-**Static** (`assemble_prompt(provider, model_name)` in `prompts/__init__.py`):
+**Static** (`assemble_prompt(provider, model_name, soul_seed, soul_examples)` in `prompts/__init__.py`):
 
-1. **Instructions** — bootstrap identity from `prompts/instructions.md`
-2. **Behavioral rules** — 5 rules from `prompts/rules/`
-3. **Model counter-steering** — quirk corrections from `prompts/quirks/{provider}/{model}.md` (when file exists)
+1. **Soul seed + character base memories** — identity anchor from `souls/{role}/seed.md` + planted memories (combined by `get_agent()`, placed first)
+2. **Behavioral rules** — numbered rules from `prompts/rules/*.md` (strict contiguous order)
+3. **Soul examples** — trigger→response patterns from `souls/{role}/examples.md` (when file exists, trailing rules)
+4. **Model counter-steering** — quirk corrections from `prompts/quirks/{provider}/{model}.md` (when file exists)
 
 **Per-turn** (`@agent.system_prompt` functions in `agent.py`):
 
-4. **Personality** — `## Soul` block via `compose_personality(role, depth)` (when role is set)
 5. **Current date** — always
 6. **Shell guidance** — always
 7. **Project instructions** — `.co-cli/instructions.md` (when file exists)
 8. **Personality memories** — `## Learned Context` (when role is set)
+9. **Active mindset** — `## Active mindset: {types}` strategy content (after Turn 1 classification, when non-empty)
+10. **Review lens** — `## Review lens` from `souls/{role}/critique.md` (when role is set)
 
 See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) for knowledge loading details.
 
