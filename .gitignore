@@ -27,6 +27,7 @@ htmlcov/
 
 # Demo and eval output
 demo_knowledge_temp/
+evals/personality_behavior-trace-*.md
 
 # Misc
 *.log
