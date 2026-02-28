@@ -40,6 +40,13 @@ def _ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _validate_personality(personality: str) -> list[str]:
+    """Return startup warnings for missing personality files."""
+    from co_cli.prompts.personalities._composer import validate_personality_files
+
+    return validate_personality_files(personality)
+
+
 WebDecision = Literal["allow", "ask", "deny"]
 
 
@@ -145,7 +152,7 @@ class Settings(BaseModel):
 
     @field_validator("personality")
     @classmethod
-    def _validate_personality(cls, v: str) -> str:
+    def _validate_personality_name(cls, v: str) -> str:
         from co_cli.prompts.personalities._composer import VALID_PERSONALITIES
 
         if v not in VALID_PERSONALITIES:
@@ -173,7 +180,7 @@ class Settings(BaseModel):
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
     ollama_num_ctx: int = Field(default=262144)
-    gemini_model: str = Field(default="gemini-2.5-flash")
+    gemini_model: str = Field(default="gemini-2.0-flash")
 
     @model_validator(mode='before')
     @classmethod
@@ -268,7 +275,13 @@ def load_config() -> Settings:
                 print(f"Error loading project config {project_config}: {e}. Skipping.")
 
     # Layer 3: Env vars (handled by fill_from_env model_validator)
-    return Settings.model_validate(data)
+    resolved = Settings.model_validate(data)
+
+    # Non-blocking personality file diagnostics surfaced at startup.
+    for warning in _validate_personality(resolved.personality):
+        print(f"Warning: {warning}")
+
+    return resolved
 
 
 # Resolved project config path (None when no .co-cli/settings.json in cwd)

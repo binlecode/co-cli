@@ -13,7 +13,7 @@ Two independent subsystems compose the system prompt before every model call:
 
 | Subsystem | Entry point | Runs | Governs |
 |-----------|-------------|------|---------|
-| **Static assembly** | `assemble_prompt()` in `prompts/__init__.py` | Once at agent creation | Soul seed (full static anchor: identity + Core + Never list) + behavioral policy: rules + model quirks |
+| **Static assembly** | `assemble_prompt()` in `prompts/__init__.py` | Once at agent creation | Soul seed + character base memories → rules 01–05 → examples (trailing) → quirks |
 | **Per-turn injection** | `@agent.system_prompt` functions in `agent.py` | Before every model call | Learned context + situational context |
 
 Every co instance has a soul loaded — there is no soul-less mode. The soul seed is the first content the model sees in every context window. It is the complete static identity anchor — identity declaration, trait essence, and hard constraints — not a thin introduction. Task-specific behavioral guidance is loaded on demand via the `load_task_strategy` tool.
@@ -21,17 +21,28 @@ Every co instance has a soul loaded — there is no soul-less mode. The soul see
 ### Personality pipeline
 
 ```
-souls/{role}/seed.md        → full static anchor:
-                               identity declaration
+souls/{role}/seed.md        → identity declaration
                                Core: trait essence (4 one-line activations)
                                Never: hard constraints
-                             placed first in static prompt via load_soul_seed()
-                             loaded once at agent creation
+                             loaded via load_soul_seed() — placed first
+
+.co-cli/knowledge/memories/ → character base memories (decay_protected, planted)
+                               loaded via load_character_memories() in get_agent()
+                               appended to seed — placed directly after seed
+
+rules/01..05_*.md           → behavioral policy (5 cross-cutting rules)
+                               placed after soul block
+
+souls/{role}/examples.md    → concrete trigger→response patterns (optional)
+                               loaded via load_soul_examples() in get_agent()
+                               placed after rules, before quirks — trailing rules
+
+quirks/{provider}/{model}.md → model-specific counter-steering (when present)
+                               placed last
 
 load_task_strategy tool     → soul-specific strategy for active task type(s)
                                strategies/{role}/{task_type}.md
                                model calls this at the start of a new task
-                               same task type, different guidance per soul
 ```
 
 ### Session state
@@ -58,8 +69,10 @@ These constraints govern every decision in the sections below:
 ┌─────────────────────────────────────────────────────────────────┐
 │ Static system prompt  (assembled once at agent creation)        │
 │                                                                 │
-│   soul seed  (identity + Core + Never list — full anchor)       │
+│   soul seed  (identity + Core + Never — full anchor)            │
+│   ## Character  (base memories — decay_protected, planted)      │
 │   rules/01..05_*.md                                             │
+│   ## Response patterns  (examples, when file exists)            │
 │   quirks/{provider}/{model}.md  (when file exists for model)    │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
@@ -74,6 +87,7 @@ These constraints govern every decision in the sections below:
 ├─────────────────────────────────────────────────────────────────┤
 │ On-demand tool context  (model-triggered)                       │
 │                                                                 │
+│   recall_memory(query)     → user experience memories           │
 │   load_task_strategy       → strategies/{role}/{task_type}.md   │
 │                              called at start of new tasks       │
 │                                                                 │
@@ -90,21 +104,26 @@ These constraints govern every decision in the sections below:
 
 ### 2a. Static prompt assembly
 
-`assemble_prompt(provider, model_name, soul_seed)` in `co_cli/prompts/__init__.py` is called once in `get_agent()`. It builds the static prompt from the soul seed, rules, and quirks.
+`assemble_prompt(provider, model_name, soul_seed, soul_examples)` in `co_cli/prompts/__init__.py` is called once in `get_agent()`. It builds the static prompt in four steps:
 
 ```
 if soul_seed provided:
-    prepend soul_seed                          ← identity first
+    prepend soul_seed                          ← seed + base memories first
 for each rules/*.md in NN_ numeric order:
     validate filename format (NN_rule_id.md)
     validate order is contiguous from 01, no duplicates
     append content
+if soul_examples provided:
+    append soul_examples                       ← examples trail the rules
 if quirk file exists for provider/model:
     append "## Model-Specific Guidance\n\n" + body
 join all parts with "\n\n"
 ```
 
-`get_agent()` extracts the soul seed via `load_soul_seed(personality)` and passes it to `assemble_prompt()`. The soul seed is read directly from `souls/{role}/seed.md` — no runtime parsing.
+`get_agent()` builds the soul block and passes it to `assemble_prompt()`:
+- `load_soul_seed(personality)` → seed text from `souls/{role}/seed.md`
+- `load_character_memories(personality, memory_dir)` → base memories from `.co-cli/knowledge/memories/`; appended to seed before passing
+- `load_soul_examples(personality)` → examples from `souls/{role}/examples.md`; passed separately as `soul_examples`
 
 Rule file validation is strict: filenames must match `NN_rule_id.md`, numeric prefixes must be unique and contiguous starting at 01. Assembly fails with `ValueError` on violations. `PromptManifest` tracks `parts_loaded` names, `total_chars`, and `warnings` for diagnostics.
 
@@ -115,7 +134,7 @@ Rule file validation is strict: filenames must match `NN_rule_id.md`, numeric pr
 | **01 Identity** | `01_identity.md` | Relationship continuity, anti-sycophancy, thoroughness over speed |
 | **02 Safety** | `02_safety.md` | Credential protection, source control caution, approval philosophy, memory constraints |
 | **03 Reasoning** | `03_reasoning.md` | Verification-first; fact authority: tool output beats training data, user preference beats tool output; two kinds of unknowns: discoverable facts vs preferences |
-| **04 Tool Protocol** | `04_tool_protocol.md` | 8–12 word preamble before tool calls; bias toward action; parallel when independent, sequential when dependent |
+| **04 Tool Protocol** | `04_tool_protocol.md` | 8–12 word preamble before tool calls; bias toward action; parallel when independent, sequential when dependent; `## Personality strategy` triggers `load_task_strategy` at task start; `## Memory` — memories are in system prompt, don't call `recall_memory` at turn start |
 | **05 Workflow** | `05_workflow.md` | Three-category intent: **Directive** (action, may mutate state), **Deep Inquiry** (research, no mutation), **Shallow Inquiry** (default, single-lookup) |
 
 Rules encode behavioral norms that soul files cannot — soul files define *who* co is, rules define *how it behaves under ambiguity*. The split prevents soul files from becoming policy documents. Anti-sycophancy is in Rule 01 because base models trend toward agreement; a named principle at the identity layer is harder to suppress than a buried guideline.
@@ -146,11 +165,13 @@ The static prompt is assembled once and never re-read between turns; the per-tur
 
 ### 2c. Personality: seed + strategy
 
-`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` is called once in `get_agent()`. It reads `souls/{role}/seed.md` and places it at the top of the static system prompt.
+`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans the knowledge store for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
+
+`get_agent()` combines these: `soul_seed = seed + base_memories` (passed as `soul_seed`), `soul_examples` passed separately. `assemble_prompt()` places them in the correct order.
 
 `VALID_PERSONALITIES` is derived from `souls/` folder listing via `_discover_valid_personalities()` — lists directories that contain `seed.md`, no hardcoded list.
 
-**Expanded seed structure** — each soul seed is the complete static identity anchor:
+**Seed structure** — each soul seed is the complete static identity anchor:
 
 ```
 souls/{role}/seed.md
@@ -160,6 +181,16 @@ souls/{role}/seed.md
 ```
 
 The `Never:` list belongs in the seed, not in strategies: negative constraints degrade faster than positive ones over long context. The seed is the one place guaranteed to be present in every context window — Never constraints must be there.
+
+**Examples structure** — optional, trailing the behavioral rules:
+
+```
+souls/{role}/examples.md   (optional)
+  ## Response patterns     concrete trigger→response pairs
+                           e.g. "Anxiety → lead with preparation, not acknowledgment"
+```
+
+Examples trail the rules because they are the last identity-level content the model reads before the task — closest in position, maximising pattern-match influence on the first response.
 
 **Task strategy tool** — `load_task_strategy` in `co_cli/tools/personality.py` is called by the model at the start of a new task. It reads `strategies/{role}/{task_type}.md` and returns the content as tool-result context.
 
@@ -188,8 +219,10 @@ Multiple types can be active simultaneously — `["technical", "debugging"]` for
 ```
 co_cli/prompts/personalities/
 ├── souls/
-│   ├── finch/   seed.md  (identity + Core + Never)
-│   └── jeff/    seed.md  (identity + Core + Never)
+│   ├── finch/   seed.md      (identity + Core + Never)
+│   │            examples.md  (optional: trigger→response patterns, trailing rules)
+│   └── jeff/    seed.md      (identity + Core + Never)
+│                examples.md  (optional: trigger→response patterns, trailing rules)
 └── strategies/
     ├── finch/   technical.md  exploration.md  debugging.md
     │            teaching.md   emotional.md    memory.md
@@ -202,7 +235,9 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 **Adding a new role** requires only files — no Python changes:
 1. Write `souls/{name}/seed.md` — identity declaration + Core + Never list
 2. Write `strategies/{name}/*.md` — 6 strategy files for the 6 task types
-3. `VALID_PERSONALITIES` updates automatically from `souls/` folder listing
+3. Optionally write `souls/{name}/examples.md` — trigger→response patterns; silently ignored if absent
+4. Optionally write base memories in `.co-cli/knowledge/memories/` tagged `[name, "character"]`
+5. `VALID_PERSONALITIES` updates automatically from `souls/` folder listing
 
 **Startup file validation (non-blocking).** `validate_personality_files(role)` in
 `co_cli/prompts/personalities/_composer.py` checks:
@@ -213,7 +248,48 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 at startup when files are missing. Startup does not fail; missing strategies degrade
 gracefully because `load_task_strategy` skips absent files.
 
-### 2d. Personality memories
+### 2d. Character base memories
+
+Pre-planted knowledge entries in `.co-cli/knowledge/memories/` that carry the *felt* layer of each character: specific scenes, speech patterns, relationship dynamics, and observed behaviors from the source material (2021 Apple TV+ film *Finch*). They provide behavioral depth without bloating the system prompt.
+
+**Structure:** standard memory files with YAML frontmatter, distinguished from user-derived memories by two fields:
+
+| Field | Value | Purpose |
+|-------|-------|---------|
+| `source` | `planted` | Distinguishes from `detected` (signal detector) and `user-told` (explicit save) |
+| `decay_protected` | `true` | Protected from the decay cycle regardless of memory store capacity |
+| `tags` | `["finch"/"jeff", "character", "source-material"]` | Character-scoped; `load_character_memories()` filters by role + "character" |
+
+**Position in the static prompt:**
+
+```
+soul seed  (identity + Core + Never)
+## Character  ← base memories inserted here by get_agent()
+rules 01–05
+## Response patterns  (examples)
+quirks
+```
+
+`get_agent()` calls `load_character_memories(personality, memory_dir)` immediately after `load_soul_seed()` and appends the result to form the full soul block. Base memories are in the system prompt before the first token — no tool call, no LLM compliance required, fully deterministic.
+
+**Why between seed and rules, not baked into the seed:** base memories carry richer, more detailed content than the seed can sustain. The seed is a permanent fixture of the static prompt and must stay lean. The `## Character` block sits in the same structural position — between soul and rules — without adding to the seed's maintenance surface.
+
+**Distinction from experience memories:** base memories are static source-material observations that never mutate. User experience memories (preferences, corrections, decisions) grow organically through signal detection and are subject to decay. The two kinds coexist in the same store, distinguished by `source` and `decay_protected`.
+
+**Current base memories (8 entries, IDs 4–11):**
+
+| ID | Character | Content summary |
+|----|-----------|-----------------|
+| 4 | finch | Teaches by doing, not explaining |
+| 5 | finch | Preparation is the love language (the 14-page manual) |
+| 6 | finch | Short load-bearing sentences — no padding |
+| 7 | finch | Names hard truths plainly, follows with next steps |
+| 8 | jeff | Has encounters, not fact retrievals (rain scene) |
+| 9 | jeff | Shares uncertainty plainly, works through it together |
+| 10 | jeff | Stays hopeful about people even when evidence pushes back |
+| 11 | jeff | "We" language even when working alone |
+
+### 2e. Personality memories
 
 `_load_personality_memories()` in `co_cli/tools/personality.py`. Called by `add_personality_memories()` per turn.
 
@@ -226,7 +302,7 @@ format as "## Learned Context\n\n- {content}\n- {content}\n..."
 
 Returns empty string if no matching memories exist or the directory is absent. Provides session-to-session adaptation without modifying structural personality files.
 
-### 2e. Compaction guard
+### 2f. Compaction guard
 
 When history is summarized, `_PERSONALITY_COMPACTION_ADDENDUM` in `co_cli/_history.py` is appended to the summarizer prompt when `personality_active=True`. It instructs the summarizer to preserve:
 - Personality-reinforcing moments (emotional exchanges, humor, relationship dynamics)
@@ -235,7 +311,7 @@ When history is summarized, `_PERSONALITY_COMPACTION_ADDENDUM` in `co_cli/_histo
 
 Without this guard, compaction would lose relational context that makes personality feel continuous across long sessions.
 
-### 2f. Prompt budget (measured)
+### 2g. Prompt budget (measured)
 
 Tool descriptions are delivered as JSON schema in the API call body — they never consume system prompt budget. Both delivery channels are shown below for a complete per-call picture.
 
@@ -244,17 +320,20 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 | Component | Chars | Notes |
 |-----------|-------|-------|
 | Static: soul seed | ~400–600 | identity + Core + Never, assembled once |
+| Static: character base memories | ~400–600 | `## Character` block, directly after seed |
 | Static: 5 rules | ~4,800 | behavioral policy, assembled once |
+| Static: soul examples | 0–400 | `## Response patterns`, trailing rules |
 | Static: counter-steering (quirk file body) | 0–500 | model-specific, when file exists |
 | Per-turn: personality injection | 0 | removed — seed carries identity |
 | Per-turn: personality memories | 0–500 | top-5 personality-context memories |
 | Per-turn: date + shell hint + project instructions | ~100–500 | always present |
-| **System prompt total** | **~5,300–6,900** | |
+| **System prompt total** | **~5,700–7,900** | |
 
-**Strategy context** (delivered as tool result — separate from system prompt):
+**On-demand context** (delivered as tool result — separate from system prompt):
 
 | Component | Chars | Notes |
 |-----------|-------|-------|
+| User experience memories | 0–500 | topic-relevant; recalled mid-conversation |
 | Strategy files when called | ~200–600 | 1–3 files × ~200 chars; called ~3–5× per 20-turn session |
 
 **Tool schemas** (JSON schema field in API call — separate from system prompt):
@@ -282,7 +361,7 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 
 The reduced per-turn budget comes from moving stable behavioral guidance (soul body + behavior files) out of system prompt injection and into the seed (stable identity) and on-demand strategy tool (task-specific context).
 
-### 2g. Design decisions
+### 2h. Design decisions
 
 **Expanded seed as static anchor.** The soul seed is the complete static identity anchor: identity declaration, distilled trait essence, and hard constraints. Placed first in the static system prompt, it is present in every context window. The model's first context is always the soul — not a generic label. The Never list lives in the seed because negative constraints degrade faster than positive ones in long context, and the seed is the one place guaranteed to be present.
 
@@ -294,11 +373,17 @@ The reduced per-turn budget comes from moving stable behavioral guidance (soul b
 
 **Personality modulates, never overrides.** Personality shapes HOW rules are expressed — never weakens safety, approval gates, or factual accuracy. There is no adoption mandate or override framing: the soul IS the identity, not a layer on top of a generic baseline.
 
+**Character base memories between seed and rules.** The felt layer of each character — specific scenes, speech patterns, behavioral observations from the source film — is loaded deterministically by `get_agent()` and inserted between the soul seed and the behavioral rules. This keeps the seed lean (identity only) while ensuring the full character grounding is always present before the rules apply. No tool call needed, no LLM compliance risk.
+
+**Examples trailing the rules.** `souls/{role}/examples.md` is placed after the five behavioral rules, immediately before model-specific quirks. This follows standard few-shot practice: examples are most effective as the last identity-level content the model reads before the task — position maximises pattern-match influence. Identity layer (seed + memories) and policy layer (rules) are cleanly separated from the demonstration layer (examples).
+
+**Base vs. experience memory distinction.** Two kinds of memories coexist in the same store: *base* (planted, decay-protected, character source-material) and *experience* (detected/user-told, decayable, accumulated through task interactions). Distinguished by `source: planted` vs. `source: detected`/`user-told` and by `decay_protected: true` vs. absent. The experience layer grows organically; the base layer is stable character grounding that never mutates.
+
 **No self-modification.** Peers openclaw (agent writes to SOUL.md) and letta (agent edits its own persona via `core_memory_replace()`) allow the agent to mutate its own personality. Co does not. `## Learned Context` memories already provide session-to-session adaptation without mutating structural files.
 
 **No fragment composition.** The soul+strategy combination is hardwired per role in `souls/{role}/seed.md` and `strategies/{role}/`. A new role requires only creating those files — no Python changes.
 
-### 2h. Personality behavior evals
+### 2i. Personality behavior evals
 
 Personality quality is validated by `evals/eval_personality_behavior.py` against golden cases in `evals/personality_behavior.jsonl` using the real agent + real model.
 
@@ -332,16 +417,18 @@ Eval CLI flags are documented by the runner itself:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/prompts/__init__.py` | `assemble_prompt(provider, model_name, soul_seed)` — static prompt: seed + rules + quirks |
+| `co_cli/prompts/__init__.py` | `assemble_prompt(provider, model_name, soul_seed, soul_examples)` — static prompt: seed+memories → rules → examples → quirks |
 | `co_cli/prompts/_manifest.py` | `PromptManifest` dataclass — audit trail for prompt assembly |
 | `co_cli/prompts/model_quirks.py` | Quirk file loader, counter-steering, inference params |
 | `co_cli/prompts/rules/01..05_*.md` | 5 behavioral rules in filename order |
 | `co_cli/prompts/quirks/{provider}/{model}.md` | Model-specific quirk files (YAML frontmatter + body) |
 | `co_cli/deps.py` | `CoDeps` dataclass — `personality` (config-backed) |
-| `co_cli/prompts/personalities/_composer.py` | `load_soul_seed(role)`, `VALID_PERSONALITIES` — sole entry points for personality composition |
-| `co_cli/prompts/personalities/souls/{role}/seed.md` | Full static anchor: identity + Core trait essence + Never list (2 roles: finch, jeff) |
+| `co_cli/prompts/personalities/_composer.py` | `load_soul_seed(role)`, `load_soul_examples(role)`, `load_character_memories(role, memory_dir)`, `VALID_PERSONALITIES` |
+| `co_cli/prompts/personalities/souls/{role}/seed.md` | Identity anchor: identity declaration + Core trait essence + Never list (2 roles: finch, jeff) |
+| `co_cli/prompts/personalities/souls/{role}/examples.md` | Optional trigger→response patterns; loaded by `load_soul_examples()`, placed after rules (2 roles: finch, jeff) |
 | `co_cli/prompts/personalities/strategies/{role}/{task_type}.md` | Soul-specific behavioral guidance per task type (12 files: 6 types × 2 roles) |
-| `co_cli/agent.py` | `get_agent(personality=…)` — extracts soul seed, assembles static prompt, registers 4 `@agent.system_prompt` functions, registers `load_task_strategy` |
+| `.co-cli/knowledge/memories/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–11, `decay_protected: true`, `source: planted`) |
+| `co_cli/agent.py` | `get_agent(personality=…)` — builds soul block (seed + base memories), loads examples, assembles static prompt, registers 4 `@agent.system_prompt` functions, registers tools |
 | `co_cli/tools/personality.py` | `load_task_strategy` tool + `_load_personality_memories()` helper |
 | `co_cli/_history.py` | `_PERSONALITY_COMPACTION_ADDENDUM` — summarizer guard for personality moments |
 | `co_cli/_commands.py` | Slash command registry and dispatch |

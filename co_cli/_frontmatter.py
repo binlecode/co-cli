@@ -98,7 +98,7 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     """
     if "id" not in fm:
         raise ValueError("memory frontmatter missing required field: id")
-    if not isinstance(fm["id"], int):
+    if not isinstance(fm["id"], int) or isinstance(fm["id"], bool):
         raise ValueError("memory frontmatter field 'id' must be an integer")
 
     if "created" not in fm:

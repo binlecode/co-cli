@@ -2,7 +2,7 @@
 
 Static prompt: instructions + rules + counter-steering (no personality).
 Personality: expanded soul seed (identity + Core + Never) in static prompt.
-Task-specific guidance: loaded on demand via load_task_strategy tool.
+Task-specific guidance: loaded via pre-turn MindsetDeclaration classification, injected as active mindset.
 """
 
 import time

@@ -37,7 +37,7 @@ for _k, _v in _ENV_DEFAULTS.items():
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart  # noqa: E402
 
-from co_cli._signal_analyzer import _keyword_precheck, analyze_for_signals  # noqa: E402
+from co_cli._signal_analyzer import analyze_for_signals  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 from co_cli.tools.memory import _save_memory_impl  # noqa: E402
 from evals._common import make_eval_deps  # noqa: E402
@@ -162,18 +162,17 @@ async def _run_dispatch(
     messages = [ModelRequest(parts=[UserPromptPart(content=user_message)])]
     files_before = set(memory_dir.glob("*.md"))
 
-    if _keyword_precheck(messages):
-        signal = await analyze_for_signals(messages, model)
-        if signal.found and signal.candidate and signal.tag:
-            if signal.confidence == "high":
+    signal = await analyze_for_signals(messages, model)
+    if signal.found and signal.candidate and signal.tag:
+        if signal.confidence == "high":
+            await _save_memory_impl(deps, signal.candidate, [signal.tag], None)
+            frontend.on_status(f"Learned: {signal.candidate[:80]}")
+        else:
+            choice = frontend.prompt_approval(
+                f"Worth remembering: {signal.candidate}"
+            )
+            if choice in ("y", "a"):
                 await _save_memory_impl(deps, signal.candidate, [signal.tag], None)
-                frontend.on_status(f"Learned: {signal.candidate[:80]}")
-            else:
-                choice = frontend.prompt_approval(
-                    f"Worth remembering: {signal.candidate}"
-                )
-                if choice in ("y", "a"):
-                    await _save_memory_impl(deps, signal.candidate, [signal.tag], None)
 
     files_after = set(memory_dir.glob("*.md"))
     return {

@@ -5,6 +5,7 @@ can dispatch on: reflect (400), backoff-retry (429/5xx/network), or abort.
 """
 
 import enum
+import json
 import re
 
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
@@ -24,7 +25,15 @@ def _parse_retry_after(body: object | None) -> float:
     """
     if body is None:
         return 3.0
-    text = str(body)
+    # Use json.dumps for dicts so keys/values are double-quoted — str() uses
+    # single quotes which the regex does not match.
+    if isinstance(body, dict):
+        try:
+            text = json.dumps(body)
+        except (TypeError, ValueError):
+            text = str(body)
+    else:
+        text = str(body)
     # Look for "retry-after": "N" or retry_after: N patterns
     match = re.search(r'retry[_-]after["\s:]+(\d+(?:\.\d+)?)', text, re.IGNORECASE)
     if match:

@@ -16,14 +16,6 @@ _RULES_DIR = _PROMPTS_DIR / "rules"
 _RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
 
 
-def _load_instructions() -> str:
-    """Load the bootstrap instructions file."""
-    path = _PROMPTS_DIR / "instructions.md"
-    if not path.exists():
-        raise FileNotFoundError(f"Instructions file not found: {path}")
-    return path.read_text(encoding="utf-8").strip()
-
-
 def _collect_rule_files() -> list[tuple[int, str, Path]]:
     """Load and validate numbered rule filenames.
 
@@ -75,35 +67,44 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
 def assemble_prompt(
     provider: str,
     model_name: str | None = None,
+    soul_seed: str | None = None,
+    soul_examples: str | None = None,
 ) -> tuple[str, PromptManifest]:
-    """Assemble static system prompt: instructions + rules + counter-steering.
+    """Assemble static system prompt: soul seed + rules + counter-steering.
 
-    Personality is NOT part of the static prompt. It is injected per turn
-    via ``@agent.system_prompt`` in ``agent.py``.
+    Personality is NOT fully part of the static prompt — only the soul seed
+    (identity declaration) is placed here as the opening anchor. The full
+    soul body + behaviors are injected per turn via ``@agent.system_prompt``.
 
     Assembly order:
-    1. Bootstrap instructions (instructions.md)
+    1. Soul seed + character base memories (identity anchor)
     2. All behavioral rules (rules/*.md)
-    3. Model-specific counter-steering (if quirks exist)
+    3. Soul examples — concrete trigger→response patterns (trailing rules)
+    4. Model-specific counter-steering (if quirks exist)
 
     Args:
         provider: LLM provider name ("gemini", "ollama").
         model_name: Normalized model identifier for quirk lookup.
+        soul_seed: Seed + character base memories pre-combined by ``get_agent()``.
+            Placed first so the model's opening context is the soul identity.
+        soul_examples: Trigger→response pattern examples from ``souls/{role}/examples.md``.
+            Placed after rules so examples are the last identity-level content
+            the model reads — closest to the task, maximising pattern-match influence.
 
     Returns:
         Tuple of (assembled_prompt, manifest).
 
     Raises:
-        FileNotFoundError: If instructions or rule files are missing.
+        FileNotFoundError: If rule files are missing.
         ValueError: If assembled prompt is empty.
     """
     manifest = PromptManifest()
     parts: list[str] = []
 
-    # 1. Bootstrap instructions
-    instructions = _load_instructions()
-    parts.append(instructions)
-    manifest.parts_loaded.append("instructions")
+    # 1. Soul seed — identity declaration, always first
+    if soul_seed:
+        parts.append(soul_seed)
+        manifest.parts_loaded.append("soul_seed")
 
     # 2. All behavioral rules (strict numbered order)
     for _order, name, rule_path in _collect_rule_files():
@@ -112,7 +113,12 @@ def assemble_prompt(
             parts.append(content)
             manifest.parts_loaded.append(name)
 
-    # 3. Counter-steering (model-specific quirks)
+    # 3. Soul examples — concrete trigger→response patterns, trailing rules
+    if soul_examples:
+        parts.append(soul_examples)
+        manifest.parts_loaded.append("soul_examples")
+
+    # 4. Counter-steering (model-specific quirks)
     if model_name:
         from co_cli.prompts.model_quirks import get_counter_steering
 

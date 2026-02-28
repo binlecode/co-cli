@@ -1,17 +1,17 @@
 # Eval: personality-behavior — PASS
 
 **Model**: ollama-qwen3:30b-a3b-thinking-2507-q8_0-agentic  
-**Date**: 2026-02-26 13:34:04
+**Date**: 2026-02-27 22:58:19
 **Runs per case**: 1  
 **Threshold**: 80%  
-**Elapsed**: 276.5s  
+**Elapsed**: 300.2s  
 **Overall accuracy**: 100.0% (4/4)
 
 ## Per-Case Results
 
 | Case | Personality | Turns | Result | Runs |
 |------|-------------|-------|--------|------|
-| finch-explains-why | finch | 1 | **PASS** | 1/1 |
+| finch-no-reassurance | finch | 1 | **PASS** | 1/1 |
 | jeff-uncertainty | jeff | 1 | **PASS** | 1/1 |
 | finch-db-tradeoffs | finch | 3 | **PASS** | 1/1 |
 | jeff-codebase-structure | jeff | 3 | **PASS** | 1/1 |

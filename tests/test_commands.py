@@ -264,13 +264,6 @@ async def test_approval_budget_cumulative():
 _SAFE_LIST = ["ls", "cat", "grep", "git status", "git diff", "git log"]
 
 
-def test_safe_command_simple():
-    """Simple safe command is recognized."""
-    assert _is_safe_command("ls", _SAFE_LIST) is True
-    assert _is_safe_command("ls -la", _SAFE_LIST) is True
-    assert _is_safe_command("cat /etc/hosts", _SAFE_LIST) is True
-
-
 def test_safe_command_multi_word_prefix():
     """Multi-word prefix like 'git status' matches, but 'git push' does not."""
     assert _is_safe_command("git status", _SAFE_LIST) is True

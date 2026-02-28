@@ -59,19 +59,19 @@ Two-part structural prompt — static base assembled once, personality injected 
 
 ```
 Static prompt  (assembled once at agent creation — assemble_prompt()):
-  1. instructions.md            (bootstrap identity)
+  1. soul seed                  (identity declaration — "You are X…")
   2. rules/*.md 01-05           (behavioral policy)
   3. counter-steering           (model quirk corrections, if file exists)
 
 Per-turn layers  (@agent.system_prompt functions in agent.py):
-  add_personality              (## Soul block: soul + 5 behaviors + mandate)
+  add_personality              (## Soul block: full soul + 5 behaviors)
   add_current_date             (today's date)
   add_shell_guidance           (shell approval hint)
   add_project_instructions     (.co-cli/instructions.md)
   add_personality_memories     (## Learned Context: top 5 personality-context memories)
 ```
 
-First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. All personality content is in the system prompt on every turn. The LLM self-modulates expression depth guided by the adoption mandate. See `DESIGN-02-personality.md`.
+First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. The soul seed anchors identity at the top of every static prompt; the full soul + behaviors reinforce it per turn. See `DESIGN-02-personality.md`.
 
 ### 3.3 Personality System
 

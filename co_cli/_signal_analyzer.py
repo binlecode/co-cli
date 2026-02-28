@@ -1,8 +1,8 @@
 """Auto-triggered signal detector — CC hookify pattern adapted for Co.
 
-Scans the post-turn message history for correction/preference signals using a
-two-stage filter: a cheap keyword precheck gates an LLM mini-agent call.
-The mini-agent returns a structured SignalResult; confidence determines whether
+Scans the post-turn message history for correction/preference/habit/decision
+signals using an LLM mini-agent with structured output.
+The mini-agent returns a SignalResult; confidence determines whether
 the memory is saved automatically (high) or surfaced for user approval (low).
 """
 
@@ -18,40 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Signal phrases for keyword precheck
-# ---------------------------------------------------------------------------
-
-_CORRECTION_PHRASES = [
-    "don't",
-    "do not",
-    "stop doing",
-    "stop using",
-    "never",
-    "avoid",
-    "revert",
-    "undo that",
-    "not like that",
-    "i didn't ask",
-    "please don't",
-]
-
-_FRUSTRATED_PHRASES = [
-    "why did you",
-    "that's not what i",
-    "that was wrong",
-]
-
-_PREFERENCE_PHRASES = [
-    "i prefer",
-    "please use",
-    "always use",
-    "use instead",
-]
-
-_ALL_PHRASES = _CORRECTION_PHRASES + _FRUSTRATED_PHRASES + _PREFERENCE_PHRASES
-
-
-# ---------------------------------------------------------------------------
 # Structured output schema
 # ---------------------------------------------------------------------------
 
@@ -63,39 +29,6 @@ class SignalResult(BaseModel):
     candidate: str | None = None
     tag: Literal["correction", "preference"] | None = None
     confidence: Literal["high", "low"] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Precheck — cheap substring scan, no LLM call
-# ---------------------------------------------------------------------------
-
-
-def _keyword_precheck(messages: list) -> bool:
-    """Scan the last user message for known signal phrases.
-
-    Reverse-scans message history for the most recent UserPromptPart.
-    Returns True if any precheck phrase is found (case-insensitive).
-    Cost: zero LLM calls.
-
-    Args:
-        messages: Full message history (ModelRequest / ModelResponse list).
-
-    Returns:
-        True if a signal phrase was detected in the last user message.
-    """
-    for msg in reversed(messages):
-        if not isinstance(msg, ModelRequest):
-            continue
-        for part in reversed(msg.parts):
-            if isinstance(part, UserPromptPart):
-                text = (
-                    part.content
-                    if isinstance(part.content, str)
-                    else str(part.content)
-                )
-                text_lower = text.lower()
-                return any(phrase in text_lower for phrase in _ALL_PHRASES)
-    return False
 
 
 # ---------------------------------------------------------------------------

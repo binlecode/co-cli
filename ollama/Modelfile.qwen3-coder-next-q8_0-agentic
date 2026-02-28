@@ -1,0 +1,18 @@
+FROM qwen3-coder-next:q8_0
+
+# Qwen3-Coder-Next agentic profile (Q8_0).
+# Sources:
+# - https://huggingface.co/Qwen/Qwen3-Coder-Next (best-practice decoding + max_tokens)
+# - https://ollama.com/library/qwen3-coder-next:q8_0 (Ollama tag defaults)
+#
+# Inference cost scales with filled context, not the configured limit.
+# Ollama default num_ctx (4096) is too small for agentic coding workflows.
+# On 128GB unified memory, 262K context is typically workable for this Q8 model.
+# If you hit memory pressure, reduce num_ctx to 131072 or 65536.
+
+PARAMETER num_ctx 262144
+PARAMETER num_predict 65536
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.0

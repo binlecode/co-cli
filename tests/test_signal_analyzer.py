@@ -1,16 +1,14 @@
-"""Functional tests for the deterministic components of _signal_analyzer.
+"""Functional tests for _signal_analyzer.
 
-Covers _keyword_precheck (phrase detection) and _build_window (turn extraction).
-Both are zero-LLM-cost pre-filters: a broken precheck silently suppresses all
-signal detection; a broken window builder starves the mini-agent of context.
-
-Also covers analyze_for_signals E2E via the configured ollama model.
+Covers _build_window (turn extraction) and analyze_for_signals E2E via the
+configured LLM model. Signal detection is fully LLM-driven — no heuristic
+precheck to test separately.
 """
 
 import pytest
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart, TextPart
 
-from co_cli._signal_analyzer import _build_window, _keyword_precheck, analyze_for_signals
+from co_cli._signal_analyzer import _build_window, analyze_for_signals
 from co_cli.agent import get_agent
 
 
@@ -28,107 +26,8 @@ def _assistant(text: str) -> ModelResponse:
 
 
 # ---------------------------------------------------------------------------
-# _keyword_precheck — phrase category coverage
-# ---------------------------------------------------------------------------
-
-
-def test_precheck_correction_dont():
-    assert _keyword_precheck([_user("don't use trailing comments")]) is True
-
-
-def test_precheck_correction_stop_doing():
-    assert _keyword_precheck([_user("please stop doing that")]) is True
-
-
-def test_precheck_correction_never():
-    assert _keyword_precheck([_user("never add docstrings everywhere")]) is True
-
-
-def test_precheck_correction_avoid():
-    assert _keyword_precheck([_user("avoid global state here")]) is True
-
-
-def test_precheck_frustrated_why_did_you():
-    assert _keyword_precheck([_user("why did you add that extra file?")]) is True
-
-
-def test_precheck_frustrated_that_was_wrong():
-    assert _keyword_precheck([_user("that was wrong, I wanted the original")]) is True
-
-
-def test_precheck_preference_i_prefer():
-    assert _keyword_precheck([_user("I prefer shorter responses")]) is True
-
-
-def test_precheck_preference_always_use():
-    assert _keyword_precheck([_user("always use 4-space indentation")]) is True
-
-
-def test_precheck_preference_use_instead():
-    assert _keyword_precheck([_user("use instead of trailing comments")]) is True
-
-
-def test_precheck_frustrated_not_what_i():
-    assert _keyword_precheck([_user("that's not what i asked for")]) is True
-
-
-def test_precheck_case_insensitive():
-    assert _keyword_precheck([_user("DON'T do that again")]) is True
-
-
-# ---------------------------------------------------------------------------
-# _keyword_precheck — negative cases
-# ---------------------------------------------------------------------------
-
-
-def test_precheck_neutral_question():
-    assert _keyword_precheck([_user("what time is it in Tokyo?")]) is False
-
-
-def test_precheck_only_assistant_messages():
-    assert _keyword_precheck([_assistant("Here is the result.")]) is False
-
-
-# ---------------------------------------------------------------------------
-# _keyword_precheck — last-message-only semantics
-# ---------------------------------------------------------------------------
-
-
-def test_precheck_fires_on_latest_user_message():
-    """Signal in most recent user message triggers precheck."""
-    messages = [
-        _user("what time is it?"),
-        _assistant("It's 3pm."),
-        _user("don't use trailing comments"),
-    ]
-    assert _keyword_precheck(messages) is True
-
-
-def test_precheck_ignores_signal_in_earlier_message():
-    """Signal only in an older message does NOT trigger precheck."""
-    messages = [
-        _user("don't use trailing comments"),
-        _assistant("Got it, I'll avoid that."),
-        _user("what time is it?"),
-    ]
-    assert _keyword_precheck(messages) is False
-
-
-# ---------------------------------------------------------------------------
 # _build_window — turn extraction
 # ---------------------------------------------------------------------------
-
-
-def test_window_single_user_message():
-    window = _build_window([_user("hello there")])
-    assert "User: hello there" in window
-
-
-def test_window_includes_assistant_turns():
-    messages = [_user("hello"), _assistant("Hi! How can I help?")]
-    window = _build_window(messages)
-    assert "User: hello" in window
-    assert "Co: Hi! How can I help?" in window
 
 
 def test_window_capped_at_10_lines():
@@ -149,6 +48,68 @@ def test_window_preserves_most_recent_turns():
         messages.append(_assistant(f"old response {i}"))
     messages.append(_user("most recent message"))
     assert "most recent message" in _build_window(messages)
+
+
+# ---------------------------------------------------------------------------
+# _build_window edge cases — probing for silent data loss
+# ---------------------------------------------------------------------------
+
+
+def test_window_excludes_tool_return_content():
+    """ToolReturnPart content in ModelRequest is not emitted as a window line.
+
+    _build_window only extracts UserPromptPart and TextPart. A ModelRequest
+    that contains a ToolReturnPart (not UserPromptPart) must not add any line,
+    otherwise the mini-agent receives raw tool output as if it were a user turn.
+    """
+    messages = [
+        _user("search for cats"),
+        ModelResponse(parts=[ToolCallPart(tool_name="web_search", args="{}", tool_call_id="c1")]),
+        ModelRequest(parts=[ToolReturnPart(tool_name="web_search", content="cat results here", tool_call_id="c1")]),
+    ]
+    window = _build_window(messages)
+    assert "cat results here" not in window, (
+        "Tool return content leaked into the window. "
+        "_build_window should only emit UserPromptPart lines, not ToolReturnPart."
+    )
+    assert "User: search for cats" in window
+
+
+def test_window_excludes_tool_call_only_model_response():
+    """ModelResponse containing only ToolCallPart adds no 'Co:' line.
+
+    If a response has no TextPart, it should contribute nothing to the window.
+    Leaking a ToolCallPart repr into the window would confuse the signal agent.
+    """
+    messages = [
+        _user("search"),
+        ModelResponse(parts=[ToolCallPart(tool_name="web_search", args="{}", tool_call_id="c1")]),
+        _user("what did you find?"),
+    ]
+    window = _build_window(messages)
+    lines = [ln for ln in window.splitlines() if ln.strip()]
+    non_user_lines = [ln for ln in lines if not ln.startswith("User:")]
+    assert not non_user_lines, (
+        f"Expected no 'Co:' lines when ModelResponse has no TextPart. "
+        f"Got: {non_user_lines}"
+    )
+
+
+def test_window_with_only_tool_messages_returns_empty():
+    """History containing only tool calls and returns produces empty window.
+
+    When the model has not yet produced any text and no user has spoken
+    (e.g., mid-tool-chain), the window should be empty — not garbage.
+    """
+    messages = [
+        ModelResponse(parts=[ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")]),
+        ModelRequest(parts=[ToolReturnPart(tool_name="recall_memory", content="memory content", tool_call_id="c1")]),
+    ]
+    window = _build_window(messages)
+    assert window.strip() == "", (
+        f"Window should be empty when there are no user or assistant text parts. "
+        f"Got: {window!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +136,35 @@ async def test_analyze_preference_detected():
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
     assert result.tag == "preference"
+
+
+@pytest.mark.asyncio
+async def test_analyze_decision_high_confidence():
+    """Team decision statement is detected as high-confidence preference."""
+    agent, _, _ = get_agent()
+    messages = [_user("we decided to use PostgreSQL from now on")]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.found is True
+    assert result.confidence == "high"
+
+
+@pytest.mark.asyncio
+async def test_analyze_migration_high_confidence():
+    """Migration statement is detected as high-confidence preference."""
+    agent, _, _ = get_agent()
+    messages = [_user("we switched from REST to GraphQL last month")]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.found is True
+    assert result.confidence == "high"
+
+
+@pytest.mark.asyncio
+async def test_analyze_habit_detected():
+    """Habit disclosure is detected as a signal."""
+    agent, _, _ = get_agent()
+    messages = [_user("I've been putting everything in one big file so far")]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.found is True
 
 
 @pytest.mark.asyncio

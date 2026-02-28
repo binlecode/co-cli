@@ -73,8 +73,8 @@ def load_soul_seed(role: str) -> str:
     top of the static system prompt via ``get_agent(personality=…)`` so the
     model's first context is always the soul.
 
-    Behavioral guidance for specific task types is loaded on demand via the
-    ``load_task_strategy`` tool, not injected here.
+    Behavioral guidance for specific task types is loaded via pre-turn classification
+    and injected into the system prompt by ``inject_active_mindset``.
 
     Args:
         role: Personality role name (e.g., "finch", "jeff").

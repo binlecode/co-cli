@@ -143,6 +143,68 @@ def test_trim_preserves_tool_name_and_call_id(monkeypatch):
     assert "truncated" in part.content
 
 
+def test_trim_exact_threshold_not_truncated(monkeypatch):
+    """Content of exactly threshold chars is preserved (boundary: > not >=).
+
+    The check is `if length > threshold`, so content equaling the threshold
+    must pass through unchanged.
+    """
+    threshold = 100
+    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", threshold)
+    exact_content = "x" * threshold
+    msgs: list[ModelMessage] = [
+        _user("q"),
+        _tool_return("shell", exact_content),
+        _assistant("ok"),
+        _user("next"),
+        _assistant("done"),
+    ]
+    result = truncate_tool_returns(msgs)
+    part = result[1].parts[0]
+    assert part.content == exact_content, (
+        f"Content of exactly {threshold} chars should NOT be truncated "
+        f"(condition is length > threshold, not length >= threshold)"
+    )
+
+
+def test_trim_one_over_threshold_is_truncated(monkeypatch):
+    """Content of threshold+1 chars is truncated (strict boundary check)."""
+    threshold = 100
+    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", threshold)
+    over_content = "x" * (threshold + 1)
+    msgs: list[ModelMessage] = [
+        _user("q"),
+        _tool_return("shell", over_content),
+        _assistant("ok"),
+        _user("next"),
+        _assistant("done"),
+    ]
+    result = truncate_tool_returns(msgs)
+    part = result[1].parts[0]
+    assert "truncated" in part.content, (
+        f"Content of {threshold + 1} chars (one over threshold {threshold}) "
+        f"should be truncated"
+    )
+
+
+def test_trim_zero_threshold_disables_truncation(monkeypatch):
+    """threshold=0 disables truncation entirely (returns messages unchanged)."""
+    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 0)
+    huge_content = "a" * 100_000
+    msgs: list[ModelMessage] = [
+        _user("q"),
+        _tool_return("shell", huge_content),
+        _assistant("ok"),
+        _user("next"),
+        _assistant("done"),
+    ]
+    result = truncate_tool_returns(msgs)
+    part = result[1].parts[0]
+    assert part.content == huge_content, (
+        "threshold=0 should disable truncation, but content was modified"
+    )
+
+
 # ---------------------------------------------------------------------------
 # summarize_messages — requires running LLM provider
 # ---------------------------------------------------------------------------

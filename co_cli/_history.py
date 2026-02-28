@@ -482,34 +482,6 @@ async def precompute_compaction(
 # 4. Opening context injection (async — memory recall, no LLM)
 # ---------------------------------------------------------------------------
 
-# Stopwords for topic extraction (common English words to filter out)
-_STOPWORDS = frozenset(
-    "a an the is are was were be been being have has had do does did "
-    "will would shall should may might can could of in to for on with "
-    "at by from as into through during before after above below between "
-    "out off over under again further then once here there when where "
-    "why how all each every both few more most other some such no nor "
-    "not only own same so than too very i me my we our you your he him "
-    "his she her it its they them their what which who whom this that "
-    "these those am about up if or and but because until while".split()
-)
-
-
-def _extract_keywords(text: str) -> set[str]:
-    """Extract meaningful keywords from text (split + stopword removal)."""
-    words = set(text.lower().split())
-    return words - _STOPWORDS
-
-
-def _topic_overlap(current: str, previous: str) -> float:
-    """Compute keyword overlap ratio between two messages."""
-    kw_current = _extract_keywords(current)
-    kw_previous = _extract_keywords(previous)
-    if not kw_current:
-        return 0.0
-    intersection = kw_current & kw_previous
-    return len(intersection) / max(len(kw_current), 1)
-
 
 def _get_last_user_message(messages: list[ModelMessage]) -> str | None:
     """Extract the text of the most recent UserPromptPart from messages."""
@@ -521,26 +493,37 @@ def _get_last_user_message(messages: list[ModelMessage]) -> str | None:
     return None
 
 
+def _count_user_turns(messages: list[ModelMessage]) -> int:
+    """Count ModelRequest messages that contain a non-system UserPromptPart."""
+    count = 0
+    for msg in messages:
+        if isinstance(msg, ModelRequest):
+            if any(isinstance(p, UserPromptPart) for p in msg.parts):
+                count += 1
+    return count
+
+
 @dataclass
 class OpeningContextState:
     """Session-scoped state for inject_opening_context.
 
-    Persists across turns for topic-shift detection. Initialized once
+    Persists across turns to debounce recall per user turn. Initialized once
     per session in create_deps(), stored on CoDeps._opening_ctx_state.
     """
-    last_recall_topic: str = ""
     recall_count: int = 0
     model_request_count: int = 0
+    last_recall_user_turn: int = 0
 
 
 async def inject_opening_context(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Inject recalled memories at conversation start and on topic shifts.
+    """Inject recalled memories on every new user turn.
 
-    Runs before every model request. Zero LLM cost (keyword extraction
-    is split + stopword removal, memory search is grep-based).
+    Runs before every model request. Recall fires unconditionally on each
+    new user turn — no heuristic gate. recall_memory is grep-based
+    (zero LLM cost); returns empty when nothing matches.
 
     State is stored on ctx.deps._opening_ctx_state (session-scoped).
     """
@@ -548,33 +531,16 @@ async def inject_opening_context(
     if state is None:
         return messages
 
-    state.model_request_count += 1
+    state.model_request_count += 1  # keep for observability
 
-    # Debounce: at most one recall per 5 model requests
-    if state.recall_count > 0 and state.model_request_count % 5 != 0:
-        return messages
+    user_turn_count = _count_user_turns(messages)
 
     # Find the current user message
     user_msg = _get_last_user_message(messages)
     if not user_msg:
         return messages
 
-    # Check if this is the first request (no prior ModelResponse)
-    has_prior_response = any(
-        isinstance(m, ModelResponse) for m in messages
-    )
-
-    should_recall = False
-    if not has_prior_response:
-        # First request — always recall
-        should_recall = True
-    elif state.last_recall_topic:
-        # Subsequent request — check for topic shift
-        overlap = _topic_overlap(user_msg, state.last_recall_topic)
-        if overlap < 0.3:
-            should_recall = True
-
-    if not should_recall:
+    if user_turn_count <= state.last_recall_user_turn:
         return messages
 
     # Recall memories for the current topic
@@ -582,8 +548,8 @@ async def inject_opening_context(
 
     try:
         result = await recall_memory(ctx, user_msg, max_results=3)
-        state.last_recall_topic = user_msg
         state.recall_count += 1
+        state.last_recall_user_turn = user_turn_count
     except Exception:
         log.debug("inject_opening_context: recall_memory failed", exc_info=True)
         return messages
@@ -634,44 +600,72 @@ def detect_safety_issues(
     doom_threshold = ctx.deps.doom_loop_threshold
     max_refl = ctx.deps.max_reflections
 
-    # Scan recent ModelResponse parts for consecutive identical tool calls
+    # Scan recent messages in reverse to measure the most-recent contiguous streak
+    # for each safety check.
+    #
+    # Key invariant: once a streak is broken (different call / non-error return),
+    # older messages cannot extend it — stop tracking that counter immediately.
+    # Without this early-exit, an older differing entry resets the counter and
+    # the final value reflects ancient history rather than the most-recent run.
     consecutive_same: int = 0
     last_hash: str | None = None
+    doom_streak_done: bool = False  # True after the first hash mismatch
+
     consecutive_shell_errors: int = 0
+    shell_streak_done: bool = False  # True after the first non-shell-error return
+
     calls_scanned: int = 0
 
     for msg in reversed(messages):
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, ToolCallPart):
-                    args_str = json.dumps(
-                        part.args.args_dict() if hasattr(part.args, "args_dict") else str(part.args),
-                        sort_keys=True,
-                    )
-                    h = hashlib.md5(
-                        f"{part.tool_name}:{args_str}".encode()
-                    ).hexdigest()
-                    if h == last_hash:
-                        consecutive_same += 1
-                    else:
-                        consecutive_same = 1
-                        last_hash = h
+                    if not doom_streak_done:
+                        args_str = json.dumps(
+                            part.args.args_dict() if hasattr(part.args, "args_dict") else str(part.args),
+                            sort_keys=True,
+                        )
+                        h = hashlib.md5(
+                            f"{part.tool_name}:{args_str}".encode()
+                        ).hexdigest()
+                        if last_hash is None:
+                            consecutive_same = 1
+                            last_hash = h
+                        elif h == last_hash:
+                            consecutive_same += 1
+                        else:
+                            # Streak broken: consecutive_same holds the most-recent count
+                            doom_streak_done = True
                     calls_scanned += 1
         elif isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, ToolReturnPart):
+                if isinstance(part, ToolReturnPart) and not shell_streak_done:
                     content = part.content
+                    if isinstance(content, str):
+                        c = content.lower()
+                        # Require "error" at the start of the string, or the pydantic-ai
+                        # ModelRetry wrapper prefix ("Shell: command failed / unexpected error").
+                        # Substring match on the whole output caused false positives on
+                        # informational text like "3 tests passed, 0 errors".
+                        str_is_error = (
+                            c.startswith("error")
+                            or c.startswith("shell: command failed")
+                            or c.startswith("shell: unexpected error")
+                        )
+                    else:
+                        str_is_error = False
                     is_error = (
                         (isinstance(content, dict) and content.get("error"))
                         or (isinstance(content, str) and part.tool_name == "run_shell_command"
-                            and "error" in content.lower()[:50])
+                            and str_is_error)
                     )
                     if is_error and part.tool_name == "run_shell_command":
                         consecutive_shell_errors += 1
                     else:
-                        consecutive_shell_errors = 0
+                        # Streak broken: consecutive_shell_errors holds the most-recent count
+                        shell_streak_done = True
 
-        if calls_scanned > 10:
+        if (doom_streak_done and shell_streak_done) or calls_scanned > 10:
             break
 
     injections: list[ModelMessage] = []
