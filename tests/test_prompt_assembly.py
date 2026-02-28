@@ -1,6 +1,6 @@
 """Tests for system prompt assembly and personality composition.
 
-Static prompt: instructions + rules + counter-steering (no personality).
+Static prompt: soul seed + rules + counter-steering.
 Personality: expanded soul seed (identity + Core + Never) in static prompt.
 Task-specific guidance: loaded via pre-turn MindsetDeclaration classification, injected as active mindset.
 """
@@ -162,14 +162,6 @@ def test_identity_rule_does_not_instruct_manual_recall():
         Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
     ).read_text()
     assert "recall memories relevant" not in identity
-
-
-def test_instructions_preamble_is_empty():
-    """The instructions.md preamble must be empty — soul provides all identity."""
-    instructions = (
-        Path(__file__).parent.parent / "co_cli/prompts/instructions.md"
-    ).read_text().strip()
-    assert instructions == ""
 
 
 def test_total_prompt_under_budget():

@@ -1,9 +1,74 @@
 # TODO: Coding Tool Convergence Execution Plan
 
 Date: 2026-02-28  
-Source: converted from `docs/TAKEAWAY-coding-tool-convergence.md`
+Source: merged from former `docs/TAKEAWAY-coding-tool-convergence.md` (removed)
 
 This TODO tracks unimplemented work to align Co's coding workflow with converged, high-value patterns from top reference systems, while preserving Co's approval-first architecture.
+
+## Analysis (Merged)
+
+### Cross-System Convergence
+
+Converged patterns:
+1. Approval or policy-gated side effects.
+2. Native file tools for read/edit/write as first-class coding surface.
+3. Rewind/undo capability for safe iteration after agent mutations.
+4. Subagent delegation for specialized workflows.
+5. Strong observability and eval gates on tool behavior.
+
+Not yet converged enough for forced adoption:
+1. OS-level sandbox strictness.
+2. Universal plugin marketplace format.
+3. Universal multi-agent coordination pattern.
+
+### Current State in Co
+
+Strengths:
+1. Canonical deferred approval flow (`requires_approval=True`, `DeferredToolRequests`).
+2. Runtime safety hygiene and process-tree termination in shell backend.
+3. Typed orchestration loop (`run_turn`) with retry, compaction, and interruption handling.
+4. Solid tracing and eval infrastructure.
+
+Gaps:
+1. Coding edits still rely heavily on shell instead of structured file ops.
+2. No implemented coder subagent delegation tool.
+3. No workspace rewind/checkpoint UX.
+4. Shell safety classifier is prefix-based, not policy-grade.
+
+## Design (Merged)
+
+### Recommended Direction
+
+1. Keep `qwen3:30b-a3b-thinking-2507-q8_0-agentic` as parent orchestrator.
+2. Add coding-specialized subagent as a tool using `qwen3-coder-next:*‑agentic`.
+3. Shift routine coding edits from shell to native file tools.
+4. Preserve approval-first invariants with no delegation bypass.
+
+### Target Tool Catalog
+
+Coding core:
+1. `list_directory` (read-only)
+2. `read_file` (read-only)
+3. `find_in_files` (read-only)
+4. `write_file` (approval)
+5. `edit_file` (approval)
+6. `run_shell_command` (approval; fallback/system ops)
+
+Coding delegation:
+1. `delegate_coder`
+2. `delegate_research` (optional)
+3. `delegate_analysis` (optional)
+
+Safety and rollback:
+1. `checkpoint_workspace`
+2. `rewind_workspace`
+3. `show_diff_preview`
+
+### Suitability Filter (Do Not Adopt Yet)
+
+1. Full OS-sandbox rewrite before file tools/delegation maturity.
+2. Autonomous code mutation without approval checkpoints.
+3. Complex marketplace/plugin packaging before core coding reliability is stable.
 
 ## Sequencing
 
