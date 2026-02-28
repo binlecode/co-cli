@@ -14,6 +14,7 @@ wheels/
 settings.json
 .co_history
 .co_logs.db
+.co-cli/co-cli.db
 
 # Test and tooling caches
 .pytest_cache/
