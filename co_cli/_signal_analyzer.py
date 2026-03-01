@@ -29,6 +29,7 @@ class SignalResult(BaseModel):
     candidate: str | None = None
     tag: Literal["correction", "preference"] | None = None
     confidence: Literal["high", "low"] | None = None
+    inject: bool = False
 
 
 # ---------------------------------------------------------------------------

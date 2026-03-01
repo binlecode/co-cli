@@ -25,7 +25,7 @@ get_agent()
 | Provider | Model class | API | ModelSettings |
 |----------|-------------|-----|---------------|
 | Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible `/v1` | Loaded per normalized model from `co_cli/prompts/quirks/ollama/*.md` |
-| Gemini | `"google-gla:{model_name}"` string | Google GenAI | `None` (defaults fine) |
+| Gemini | `"google-gla:{model_name}"` string | Google GenAI | Loaded per normalized model from `co_cli/prompts/quirks/gemini/*.md` |
 
 ## 2. Core Logic
 
@@ -88,7 +88,7 @@ main.py: chat_loop()
 | Provider | Google GenAI (`google-gla:` model string) |
 | API key | `settings.gemini_api_key` / `GEMINI_API_KEY` |
 
-No custom `ModelSettings` — Gemini's API defaults are well-suited for tool-calling workloads.
+`ModelSettings` is built from quirk file inference parameters (temperature, top_p, max_tokens) loaded via `get_model_inference("gemini", normalized_model)`, with fallbacks of `temperature=1.0`, `top_p=0.95`, `max_tokens=65536`. Quirk files for Gemini models live in `co_cli/prompts/quirks/gemini/*.md`.
 
 ## 3. Config
 

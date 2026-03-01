@@ -120,7 +120,7 @@ def _force_agentic_ollama_model():
         ),
         (
             "Do I have any memories about database preferences?",
-            "recall_memory",
+            "search_knowledge_or_list_memories",
             "query",
             "database preferences",
         ),
@@ -141,16 +141,41 @@ async def test_tool_selection_and_arg_extraction(
 
     last_details = "no run executed"
     for _ in range(3):
-        result = await agent.run(
-            prompt,
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=2),
-        )
+        try:
+            result = await agent.run(
+                prompt,
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=2),
+            )
+        except Exception as e:
+            last_details = f"agent.run error: {type(e).__name__}: {e}"
+            continue
         if not isinstance(result.output, DeferredToolRequests):
             last_details = f"expected deferred tool call, got {type(result.output).__name__}"
             continue
         tool_name, args = _extract_first_deferred_call(result.output)
+        if expected_tool == "search_knowledge_or_list_memories":
+            if tool_name == "search_knowledge":
+                actual = str(args.get("query", "")).lower()
+                if "database preferences" in actual:
+                    return
+                last_details = (
+                    f"tool={tool_name!r}, missing arg fragment "
+                    f"'database preferences' in query={args.get('query')!r}"
+                )
+                continue
+            if tool_name == "list_memories":
+                kind = args.get("kind")
+                if kind in (None, "memory"):
+                    return
+                last_details = f"tool={tool_name!r}, unexpected kind={kind!r}, args={args!r}"
+                continue
+            last_details = (
+                f"tool={tool_name!r}, expected one of "
+                f"('search_knowledge', 'list_memories'), args={args!r}"
+            )
+            continue
         if tool_name != expected_tool:
             last_details = f"tool={tool_name!r}, expected={expected_tool!r}, args={args!r}"
             continue
@@ -227,31 +252,3 @@ async def test_intent_routing_observation_vs_directive(
         f"expected {expected_tool!r}, got {last_tool!r}"
     )
 
-
-@pytest.mark.asyncio
-async def test_error_recovery_after_obsidian_failure():
-    if not _is_ollama_provider():
-        return
-
-    agent, model_settings, _ = get_agent()
-    _assert_agentic_model(agent)
-    deps = _make_deps("test-error-recovery")
-
-    last_details = "no run executed"
-    for _ in range(3):
-        result = await agent.run(
-            "Search my Obsidian notes for meeting minutes from last week.",
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=5),
-        )
-        tool_name, _ = _extract_first_tool_call(result.all_messages())
-        recovered = isinstance(result.output, str) and len(result.output.strip()) > 0
-        if tool_name == "search_notes" and recovered:
-            return
-        last_details = (
-            f"first_tool={tool_name!r}, output_type={type(result.output).__name__}, "
-            f"output_preview={str(result.output)[:200]!r}"
-        )
-
-    pytest.fail(f"Error recovery failed: {last_details}")

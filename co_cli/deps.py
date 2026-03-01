@@ -70,6 +70,10 @@ class CoDeps:
     doom_loop_threshold: int = 3
     max_reflections: int = 3
 
+    # Knowledge index (FTS5 / hybrid search) — set in main.py, None when backend="grep"
+    knowledge_index: Any | None = field(default=None, repr=False)
+    knowledge_search_backend: str = "fts5"
+
     # Session-scoped todo list — written/read by todo_write/todo_read tools.
     # Cleared on session start; not persisted across sessions.
     session_todos: list[dict] = field(default_factory=list)

@@ -1,473 +1,171 @@
-# TODO: Coding Tool Convergence Execution Plan
+# TODO: Coding Tool Convergence
 
-Date: 2026-02-28  
-Source: merged from former `docs/TAKEAWAY-coding-tool-convergence.md` (removed)
+Unimplemented work to align co-cli's coding workflow with converged patterns from peer
+systems while preserving approval-first architecture.
 
-This TODO tracks unimplemented work to align Co's coding workflow with converged, high-value patterns from top reference systems, while preserving Co's approval-first architecture.
-
-## Analysis (Merged)
-
-### Cross-System Convergence
-
-Converged patterns:
-1. Approval or policy-gated side effects.
-2. Native file tools for read/edit/write as first-class coding surface.
-3. Rewind/undo capability for safe iteration after agent mutations.
-4. Subagent delegation for specialized workflows.
-5. Strong observability and eval gates on tool behavior.
-
-Not yet converged enough for forced adoption:
-1. OS-level sandbox strictness.
-2. Universal plugin marketplace format.
-3. Universal multi-agent coordination pattern.
-
-### Current State in Co
-
-Strengths:
-1. Canonical deferred approval flow (`requires_approval=True`, `DeferredToolRequests`).
-2. Runtime safety hygiene and process-tree termination in shell backend.
-3. Typed orchestration loop (`run_turn`) with retry, compaction, and interruption handling.
-4. Solid tracing and eval infrastructure.
-
-Gaps:
-1. Coding edits still rely heavily on shell instead of structured file ops.
-2. No implemented coder subagent delegation tool.
-3. No workspace rewind/checkpoint UX.
-4. Shell safety classifier is prefix-based, not policy-grade.
-
-## Design (Merged)
-
-### Recommended Direction
-
-1. Keep `qwen3:30b-a3b-thinking-2507-q8_0-agentic` as parent orchestrator.
-2. Add coding-specialized subagent as a tool using `qwen3-coder-next:*‑agentic`.
-3. Shift routine coding edits from shell to native file tools.
-4. Preserve approval-first invariants with no delegation bypass.
-
-### Target Tool Catalog
-
-Coding core:
-1. `list_directory` (read-only)
-2. `read_file` (read-only)
-3. `find_in_files` (read-only)
-4. `write_file` (approval)
-5. `edit_file` (approval)
-6. `run_shell_command` (approval; fallback/system ops)
-
-Coding delegation:
-1. `delegate_coder`
-2. `delegate_research` (optional)
-3. `delegate_analysis` (optional)
-
-Safety and rollback:
-1. `checkpoint_workspace`
-2. `rewind_workspace`
-3. `show_diff_preview`
-
-### Suitability Filter (Do Not Adopt Yet)
-
-1. Full OS-sandbox rewrite before file tools/delegation maturity.
-2. Autonomous code mutation without approval checkpoints.
-3. Complex marketplace/plugin packaging before core coding reliability is stable.
+**Goal:** Coding tasks default to native file tools over shell. Coder-specific model used
+only through tool-level delegation. Safety posture remains approval-first with no bypass path.
 
 ## Sequencing
 
-1. TODO 1: Native File Tools for Coding (P0)
-2. TODO 2: Shell Policy Engine S1 (P0)
-3. TODO 3: `delegate_coder` Tool-Level Subagent (P1)
-4. TODO 4: Coding Eval Gates (P1)
-5. TODO 5: Workspace Checkpoint + Rewind (P2)
-6. TODO 6: Approval Risk Classifier (P2, optional)
+1. TODO 1 → TODO 2 (both P0, independent but file tools needed before delegation)
+2. TODO 3 depends on TODO 1 (delegate_coder uses edit_file/write_file)
+3. TODO 4 depends on TODO 3 (eval gates measure delegation quality)
+4. TODO 5 and TODO 6 are independent P2 additions
 
 ---
 
-## TODO 1 — Native File Tools for Coding (P0)
+## TODO 1 — Native File Tools (P0)
 
-### Gap Analysis
+**What:** Add first-class file operation tools: `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file`. Shell remains available but is no longer the primary editing surface.
 
-Current state:
-- Coding edits are mostly executed through `run_shell_command`.
-- Agent tool registry has no first-class `read_file` / `edit_file` / `write_file` tools.
+**Why:** File edits through `run_shell_command` have a larger error surface and no path-boundary guarantees. Native tools make edit intent explicit at the tool-call level.
 
-Converged pattern:
-- Top coding systems expose native file operations as first-class tools.
-- Shell remains fallback, not primary editing surface.
-
-### Reason of Adoption
-
-1. Reduce command-generation error surface for common file tasks.
-2. Improve determinism and reviewability of file mutations.
-3. Enable stronger path-boundary guarantees than raw shell editing.
-
-### Suitability / Benefit for Co
-
-1. Direct fit with existing `agent.tool(...)` registration and approval model.
-2. Keeps shell tool for non-file ops while shifting routine edits to safer primitives.
-3. Improves user trust by making edit intent explicit at tool-call level.
-
-### Implementation Design (Code-Ready)
-
-Add new module:
-- `co_cli/tools/files.py`
-
-Add tool functions:
-```python
-async def list_directory(ctx: RunContext[CoDeps], path: str = ".", glob: str | None = None, max_entries: int = 500) -> dict[str, Any]
-async def read_file(ctx: RunContext[CoDeps], path: str, start_line: int | None = None, end_line: int | None = None) -> dict[str, Any]
-async def find_in_files(ctx: RunContext[CoDeps], query: str, path: str = ".", glob: str | None = None, max_matches: int = 200) -> dict[str, Any]
-async def write_file(ctx: RunContext[CoDeps], path: str, content: str) -> dict[str, Any]
-async def edit_file(ctx: RunContext[CoDeps], path: str, search: str, replace: str, replace_all: bool = False) -> dict[str, Any]
-```
-
-Path safety layer:
-- Resolve all paths against workspace root.
-- Reject traversal and symlink escape.
-- Reject writes outside workspace root.
-
-Suggested helper contract:
-```python
-def resolve_workspace_path(workspace_root: Path, user_path: str) -> Path:
-    # raise ValueError on escape
-```
-
-Agent registration:
-- `co_cli/agent.py`
-  - register read-only tools with `requires_approval=all_approval`
-  - register `write_file` / `edit_file` with `requires_approval=True`
-
-Tool return contract:
-- `dict[str, Any]` with `display` always present.
-- Include metadata fields: `path`, `line_count`, `match_count`, `bytes_written`, `changed`.
-
-Tests:
+**Files:**
+- `co_cli/tools/files.py` (new) — 5 tool functions + `resolve_workspace_path` helper
+- `co_cli/agent.py` — register read-only tools with `requires_approval=all_approval`; `write_file`/`edit_file` with `requires_approval=True`
 - `tests/test_tools_files.py` (new)
-  - path traversal rejection
-  - symlink escape rejection
-  - read ranges correctness
-  - edit one vs edit all semantics
-  - write approval path exercised through orchestration functional tests
 
-### Acceptance Criteria
+**Implementation:**
+- All paths resolved against workspace root; traversal and symlink escapes raise `ValueError`
+- `read_file` supports optional `start_line`/`end_line` for large files
+- `find_in_files` is grep-backed with `glob` pattern filter and `max_matches` cap
+- `edit_file` has `replace_all: bool = False` flag; raises if `search` string not found (no silent no-op)
+- All tools return `dict[str, Any]` with `display` + metadata fields (`path`, `line_count`, `match_count`, `bytes_written`, `changed`)
 
-1. File read/list/find tasks run without shell for normal workflows.
-2. All write/edit actions require approval.
-3. Path and symlink escapes are blocked.
-4. Tool outputs follow `display` + metadata contract.
+**Done-when:**
+- `uv run pytest tests/test_tools_files.py` passes
+- Path traversal test: `../../etc/passwd` raises `ValueError` before any I/O
+- Symlink escape test: symlink pointing outside workspace root is rejected
+- `edit_file` with `replace_all=False` on a string with 2 occurrences raises `ValueError`
+- `write_file` and `edit_file` calls appear in approval flow (functional test)
 
 ---
 
-## TODO 2 — Shell Policy Engine S1 (P0)
+## TODO 2 — Shell Policy Engine (P0)
 
-### Gap Analysis
+**What:** Replace the flat prefix + operator blocklist in `_approval.py` with a structured policy evaluator (`ShellDecision`: `ALLOW / REQUIRE_APPROVAL / DENY`) in a new `co_cli/shell_policy.py` module.
 
-Current state:
-- Safe command check is prefix + operator blacklist in `_approval.py`.
-- Classification is intentionally simple but misses policy-grade command parsing.
+**Why:** Current `_is_safe_command` misses policy-grade patterns: control chars, heredoc injection, env-var injection forms, compound chaining that bypasses prefix checks.
 
-Converged pattern:
-- Stronger systems use parser/policy semantics beyond flat prefix checks.
-
-### Reason of Adoption
-
-1. Reduce false-safe classifications for complex command forms.
-2. Keep approval UX while tightening deterministic safety guarantees.
-
-### Suitability / Benefit for Co
-
-1. Works with existing deferred approval flow (`_handle_approvals`).
-2. Preserves "approval is security boundary" philosophy while hardening pre-check.
-
-### Implementation Design (Code-Ready)
-
-Add policy evaluator:
-- `co_cli/shell_policy.py` (new)
-
-Core API:
-```python
-class ShellDecision(str, Enum):
-    ALLOW = "allow"
-    REQUIRE_APPROVAL = "require_approval"
-    DENY = "deny"
-
-@dataclass
-class ShellPolicyResult:
-    decision: ShellDecision
-    reason: str
-
-def evaluate_shell_command(cmd: str, safe_prefixes: list[str], workspace_root: Path) -> ShellPolicyResult
-```
-
-Policy behavior:
-1. Reject dangerous structural patterns (`deny`): control chars, heredocs in restricted mode, suspicious env injection forms.
-2. Require approval for chaining/redirection/subshell forms.
-3. Allow only exact/prefix-safe read operations for auto-approval.
-4. Preserve backward compatibility: unknown => `require_approval`.
-
-Integrate:
-- Replace `_is_safe_command` call in `_orchestrate.py::_handle_approvals` with policy evaluator decision.
-- Keep existing user prompt flow unchanged.
-
-Tests:
+**Files:**
+- `co_cli/shell_policy.py` (new) — `ShellDecision`, `ShellPolicyResult`, `evaluate_shell_command()`
+- `co_cli/_orchestrate.py` — replace `_is_safe_command` call with `evaluate_shell_command`
 - `tests/test_shell_policy.py` (new)
-  - allow/read-only
-  - require-approval for compound commands
-  - deny cases
-  - regression coverage for current safe list semantics
 
-### Acceptance Criteria
+**Implementation:**
+- `DENY`: control chars, heredoc injection in restricted mode, env-injection forms (`VAR=$(...)` chains)
+- `REQUIRE_APPROVAL`: shell chaining (`&&`, `||`, `;`), redirections (`>`, `>>`), subshells (`$(...)` as arg)
+- `ALLOW`: exact prefix-safe read-only ops matching configured `safe_prefixes`
+- Unknown/unclassified → `REQUIRE_APPROVAL` (backward-compatible default)
+- No behavior change to approval UX or prompt flow
 
-1. No command is auto-approved unless policy returns explicit `ALLOW`.
-2. Existing harmless workflows still auto-approve.
-3. High-risk patterns are denied or forced to approval predictably.
+**Done-when:**
+- `uv run pytest tests/test_shell_policy.py` passes
+- `git status` still auto-approves (regression check)
+- `rm -rf /` returns `DENY`
+- `cat file && rm file` returns `REQUIRE_APPROVAL`
+- `export VAR=$(curl ...)` returns `DENY`
 
 ---
 
-## TODO 3 — `delegate_coder` Tool-Level Subagent (P1)
+## TODO 3 — `delegate_coder` Subagent Tool (P1)
 
-### Gap Analysis
+**Prerequisite:** TODO 1 must be complete (delegate result is applied via `edit_file`/`write_file`).
 
-Current state:
-- Single-agent runtime only; no implemented coding delegation tool.
+**What:** Add `delegate_coder` tool that runs a coding-specialized subagent (e.g. `qwen3-coder-next`) and returns a structured plan + diff preview. Parent agent executes mutations through approved file tools — no subagent direct write path.
 
-Converged pattern:
-- Specialized subagents are used for focused workflows.
-- Delegation is tool-invoked and traceable.
+**Why:** Coding-specialized models outperform general models on code generation. Delegation must stay tool-level and traceable; subagent never bypasses approval.
 
-### Reason of Adoption
-
-1. Use coding-specialized model (`qwen3-coder-next:*‑agentic`) without changing parent model.
-2. Improve completion quality for complex code tasks.
-
-### Suitability / Benefit for Co
-
-1. Aligns with existing planned delegation pattern.
-2. Keeps `run_turn()` as primary orchestration primitive.
-3. Supports incremental rollout behind explicit tool invocation.
-
-### Implementation Design (Code-Ready)
-
-Add subagent factory:
-- `co_cli/agents/coder.py` (new)
-
-```python
-class CoderResult(BaseModel):
-    summary: str
-    diff_preview: str
-    files_touched: list[str]
-    tests_run: list[str] = []
-    confidence: float
-
-def make_coder_agent(model_name: str, base_url: str) -> Agent[CoDeps, CoderResult]
-```
-
-Add delegation tool:
-- `co_cli/tools/delegation.py` (new)
-
-```python
-async def delegate_coder(
-    ctx: RunContext[CoDeps],
-    task: str,
-    max_requests: int = 12,
-    coder_model: str = "qwen3-coder-next:q4_k_m-agentic",
-) -> dict[str, Any]
-```
-
-Execution model (safe first release):
-1. Subagent analyzes, plans, and returns structured patch plan + diff preview.
-2. Parent executes actual file mutation through approved `edit_file` / `write_file` tools.
-3. No subagent direct write path in phase 1.
-
-Agent registration:
-- `co_cli/agent.py`: register `delegate_coder` as read-only tool (`requires_approval=all_approval`).
-
-Config extension:
-- `co_cli/config.py`: optional `coder_delegate_model` field.
-- Env: `CO_CLI_CODER_DELEGATE_MODEL`.
-
-Tests:
+**Files:**
+- `co_cli/agents/coder.py` (new) — `CoderResult` Pydantic model, `make_coder_agent()`
+- `co_cli/tools/delegation.py` (new) — `delegate_coder()` tool
+- `co_cli/agent.py` — register `delegate_coder` with `requires_approval=all_approval`
+- `co_cli/config.py` — optional `coder_delegate_model` field, env: `CO_CLI_CODER_DELEGATE_MODEL`
 - `tests/test_delegate_coder.py` (new)
-  - structured output shape
-  - model routing to coder model
-  - no write bypass path
-  - usage limit respected
 
-### Acceptance Criteria
+**Implementation:**
+- `CoderResult`: `summary`, `diff_preview`, `files_touched: list[str]`, `tests_run: list[str]`, `confidence: float`
+- Subagent gets read tools only — no write/edit registration in the coder agent
+- Parent receives `CoderResult` and applies mutations via its own approved `edit_file`/`write_file` calls
+- OTel: parent tool span contains nested subagent run span
 
-1. Parent model remains default orchestrator.
-2. Coding specialization uses delegated coder model only at tool level.
-3. No file mutation bypasses approval-gated write/edit tools.
-4. OTel spans show parent tool span with nested subagent run.
+**Done-when:**
+- `uv run pytest tests/test_delegate_coder.py` passes
+- Subagent has no registered `write_file`/`edit_file` tools (assert in test)
+- Coder model routes to `CO_CLI_CODER_DELEGATE_MODEL`, not parent model
+- OTel trace shows nested spans: parent tool call → subagent run
 
 ---
 
 ## TODO 4 — Coding Eval Gates (P1)
 
-### Gap Analysis
+**What:** Add `evals/eval_coding_toolchain.py` with 5 measurable quality gates covering the file-tools + delegation pipeline.
 
-Current state:
-- Existing eval suite covers behavior/signal/safety paths, not coding-delegation quality gates.
+**Why:** No current eval covers coding-delegation quality. Gate regressions are undetected until user reports.
 
-Converged pattern:
-- Mature systems gate tool quality continuously for regression prevention.
-
-### Reason of Adoption
-
-1. Prevent silent degradation when adding file tools + delegation.
-2. Quantify real quality gains from coder subagent.
-
-### Suitability / Benefit for Co
-
-1. Fits current eval framework and telemetry stack.
-2. Enables release gating by measurable coding outcomes.
-
-### Implementation Design (Code-Ready)
-
-Add eval runner:
+**Files:**
 - `evals/eval_coding_toolchain.py` (new)
-- Data: `evals/coding_toolchain.jsonl` (new)
+- `evals/coding_toolchain.jsonl` (new) — test cases
+- `evals/coding_toolchain-result.md` (output artifact)
 
-Metrics:
-1. `edit_success_rate`
-2. `patch_apply_rate`
-3. `post_edit_test_pass_rate`
-4. `approval_prompts_per_case`
-5. `tool_error_recovery_rate`
+**Implementation:**
+- Case format: `{"id": "...", "prompt": "...", "expected_files": ["..."], "checks": [...]}`
+- Metrics: `edit_success_rate`, `patch_apply_rate`, `post_edit_test_pass_rate`, `approval_prompts_per_case`, `tool_error_recovery_rate`
+- Gate thresholds: `edit_success_rate >= 0.80`, `patch_apply_rate >= 0.90`, `tool_error_recovery_rate >= 0.70`
+- Exit code non-zero on gate failure (CI-compatible)
 
-Case format:
-```json
-{"id":"...", "prompt":"...", "expected_files":["..."], "checks":[...]}
-```
-
-Gate defaults:
-- `edit_success_rate >= 0.80`
-- `patch_apply_rate >= 0.90`
-- `tool_error_recovery_rate >= 0.70`
-
-Outputs:
-- `evals/coding_toolchain-data.json`
-- `evals/coding_toolchain-result.md`
-
-### Acceptance Criteria
-
-1. New coding eval runs in CI/local with reproducible output artifacts.
-2. Release process can fail on gate regression.
+**Done-when:**
+- `uv run python evals/eval_coding_toolchain.py` runs to completion with JSON + markdown output
+- At least 5 test cases in `coding_toolchain.jsonl`
+- Non-zero exit when any gate threshold is missed
 
 ---
 
 ## TODO 5 — Workspace Checkpoint + Rewind (P2)
 
-### Gap Analysis
+**What:** Add `/checkpoint [label]` and `/rewind [id|last]` slash commands backed by git snapshot (or filesystem copy fallback for non-git workspaces).
 
-Current state:
-- No explicit workspace checkpoint and rewind flow for coding turns.
+**Why:** No recovery path for unwanted agent edits. Approval-first reduces risk but doesn't eliminate it; rewind provides a backstop.
 
-Converged pattern:
-- Rewind/undo is common where agents edit code.
-
-### Reason of Adoption
-
-1. Increase recoverability for failed or unwanted edits.
-2. Reduce risk perception for autonomous code changes.
-
-### Suitability / Benefit for Co
-
-1. Complements approval-first model.
-2. Natural extension once native file write/edit tools exist.
-
-### Implementation Design (Code-Ready)
-
-Add checkpoint module:
-- `co_cli/workspace_checkpoint.py` (new)
-
-Core APIs:
-```python
-def create_checkpoint(root: Path, label: str) -> str
-def list_checkpoints(root: Path) -> list[CheckpointInfo]
-def restore_checkpoint(root: Path, checkpoint_id: str) -> RestoreResult
-```
-
-Storage approach:
-- Git-backed snapshot if repo exists.
-- Filesystem copy fallback for non-git workspace (bounded to changed files manifest).
-
-Commands/tools:
-- Slash commands in `_commands.py`:
-  - `/checkpoint [label]`
-  - `/rewind [checkpoint_id|last]`
-
-Safety:
-- Rewind requires explicit approval confirmation prompt.
-
-Tests:
+**Files:**
+- `co_cli/workspace_checkpoint.py` (new) — `create_checkpoint()`, `list_checkpoints()`, `restore_checkpoint()`
+- `co_cli/_commands.py` — register `/checkpoint` and `/rewind` handlers
 - `tests/test_rewind.py` (new)
 
-### Acceptance Criteria
+**Implementation:**
+- Git-backed: `git stash` or lightweight branch snapshot against workspace root
+- Non-git fallback: copy changed files manifest to `.co-cli/checkpoints/<id>/`
+- `restore_checkpoint` requires explicit approval confirmation prompt before write
+- Rewind restores file content + handles create/delete/modify lifecycle events
 
-1. User can revert last coding change set reliably.
-2. Restores both content and file lifecycle events (create/delete/modify).
+**Done-when:**
+- `uv run pytest tests/test_rewind.py` passes
+- `/checkpoint` creates a restorable snapshot (verified by mutating a file, rewinding, confirming original content)
+- Rewind is blocked without approval confirmation
+- Non-git workspace fallback exercised in test
 
 ---
 
-## TODO 6 — Approval Risk Classifier (P2, Optional)
+## TODO 6 — Approval Risk Classifier (P2, optional)
 
-### Gap Analysis
+**What:** Add `co_cli/_approval_risk.py` with `classify_tool_call() → ApprovalRisk (LOW/MEDIUM/HIGH)`. Route approval prompts based on risk tier rather than static per-tool flag.
 
-Current state:
-- Approval routing is static by tool + safe-command checks.
-- No learned risk tiering.
+**Why:** Static approval routing causes fatigue on low-risk repeated actions. Risk-tiered routing reduces prompts without lowering the safety floor.
 
-Converged pattern:
-- Some systems reduce prompt fatigue via policy/risk routing.
-
-### Reason of Adoption
-
-1. Reduce approval fatigue without lowering safety.
-2. Keep user in control for high-risk actions.
-
-### Suitability / Benefit for Co
-
-1. Optional overlay; can be flag-guarded.
-2. Works with existing deferred approval path.
-
-### Implementation Design (Code-Ready)
-
-Add classifier:
+**Files:**
 - `co_cli/_approval_risk.py` (new)
-
-```python
-class ApprovalRisk(str, Enum):
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-def classify_tool_call(tool_name: str, args: dict[str, Any]) -> ApprovalRisk
-```
-
-Routing policy:
-1. `HIGH` => always prompt
-2. `MEDIUM` => prompt unless explicit scoped session approval
-3. `LOW` => auto-approve only if policy flag enabled
-
-Config:
-- `approval_risk_enabled: bool = False`
-- `approval_auto_low_risk: bool = False`
-
-Integrate into:
-- `_orchestrate.py::_handle_approvals`
-
-Tests:
+- `co_cli/_orchestrate.py` — integrate into `_handle_approvals`
+- `co_cli/config.py` — `approval_risk_enabled: bool = False`, `approval_auto_low_risk: bool = False`
 - `tests/test_approval_risk.py` (new)
 
-### Acceptance Criteria
+**Implementation:**
+- `HIGH` → always prompt
+- `MEDIUM` → prompt unless explicit scoped session approval granted
+- `LOW` → auto-approve only if `approval_auto_low_risk=True` (disabled by default)
+- Feature entirely disabled by default; existing behavior unchanged when `approval_risk_enabled=False`
 
-1. Feature disabled by default.
-2. Enabling feature reduces prompt count without approval bypass regressions.
-
----
-
-## Exit Criteria (Plan-Level)
-
-1. Coding tasks default to file tools over shell.
-2. Coder-specific model is used only through tool-level delegation.
-3. Safety posture remains approval-first with no bypass path.
-4. Coding quality is protected by dedicated eval gates.
+**Done-when:**
+- `uv run pytest tests/test_approval_risk.py` passes
+- Feature disabled by default: existing approval behavior unchanged (regression test)
+- With feature enabled: `read_file` on existing path classifies as `LOW`; `write_file` with new path classifies as `HIGH`

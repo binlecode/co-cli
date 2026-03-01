@@ -258,6 +258,45 @@ async def test_approval_budget_cumulative():
         deps.shell.cleanup()
 
 
+# --- /forget FTS eviction ---
+
+
+@pytest.mark.asyncio
+async def test_forget_command_evicts_fts_row(tmp_path, monkeypatch):
+    """/forget removes the file and evicts the FTS row in the same session."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    monkeypatch.chdir(tmp_path)
+    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
+    knowledge_dir.mkdir(parents=True)
+
+    content = (
+        "---\nid: 1\nkind: memory\ncreated: '2026-01-01T00:00:00+00:00'\ntags: []\n---\n\n"
+        "xyloquartz-forget-fts eviction keyword\n"
+    )
+    memory_file = knowledge_dir / "001-test-forget.md"
+    memory_file.write_text(content, encoding="utf-8")
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("memory", knowledge_dir)
+    assert len(idx.search("xyloquartz-forget-fts")) == 1
+
+    agent, _, tool_names = get_agent()
+    ctx = CommandContext(
+        message_history=[],
+        deps=CoDeps(shell=ShellBackend(), session_id="test-forget-fts", knowledge_index=idx),
+        agent=agent,
+        tool_names=tool_names,
+    )
+
+    handled, _ = await dispatch("/forget 1", ctx)
+    assert handled is True
+    assert not memory_file.exists(), "File must be deleted by /forget"
+    assert len(idx.search("xyloquartz-forget-fts")) == 0, "FTS row must be evicted after /forget"
+
+    idx.close()
+
+
 # --- Safe command classification ---
 
 

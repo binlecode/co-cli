@@ -1,574 +1,870 @@
-# Gap Analysis: co-cli vs openclaw
+# TODO: Openclaw Adoption Action Plan
 
-**Date**: 2026-02-18
-**Source**: openclaw @ 33f30367e (pulled 2026-02-18)
-**Focus**: Tooling and skills gaps — actionable for co-cli MVP+
+Actionable improvements derived from studying openclaw's production patterns. Work is
+ordered P1 → P3 with per-section checklists and verification steps.
 
-This doc captures specific patterns from openclaw that co-cli should adopt,
-organized by domain and priority. Each item includes what openclaw does,
-what co-cli does today, and what specifically to borrow.
+**Source:** openclaw @ 33f30367e (pulled 2026-02-18).
 
----
+**Coordination note — §4 `/new` command:**
+§4 requires `_index_session_summary()` in `co_cli/_history.py` (session summary indexing,
+currently deferred — no timeline). Do not start §4 until that infra exists.
 
-## 1. Memory System
-
-### 1.1 Hybrid Search (FTS5 + Vector) — P1
-
-**What openclaw does:**
-Three modalities merged via linear combination:
-- FTS5 BM25 (SQLite built-in, no deps)
-- sqlite-vec cosine similarity (loadable extension)
-- Merge: `score = 0.6 * vectorScore + 0.4 * textScore`
-
-Graceful degradation: if no embedding provider is configured, falls back to
-FTS5-only mode with keyword extraction from conversational queries
-(`extractKeywords()` strips stopwords, handles CJK).
-
-**What co-cli does today:**
-Substring grep on content + tags. O(n) scan over all `.md` files.
-`rapidfuzz.token_sort_ratio` for dedup only — not used in retrieval ranking.
-
-**Gap:**
-- No FTS index → full scan on every recall
-- No semantic/vector retrieval at all
-- No graceful degradation path
-
-**What to borrow:**
-1. Add SQLite + FTS5 as the next retrieval tier (zero extra deps, SQLite is stdlib)
-2. Schema: `chunks` table + `chunks_fts` virtual table. Index chunk text + tags
-3. FTS-first implementation: no embeddings required, pure BM25 ranking
-4. Keyword extraction for conversational queries (strip stopwords before FTS)
-5. Embedding + sqlite-vec as opt-in phase-2 once FTS is stable
-
-**Files in openclaw:** `src/memory/hybrid.ts`, `src/memory/memory-schema.ts`,
-`src/memory/query-expansion.ts`, `src/memory/sqlite.ts`
+**Detailed implementation tasks** for §1–§7 are in `docs/TODO-openclaw-adoption.md`.
 
 ---
 
-### 1.2 Temporal Decay Scoring — P2
+## §1 — Shell Arg Validation on Auto-Approve `[P1]`
 
-**What openclaw does:**
-Exponential decay applied post-retrieval: `score *= exp(-ln(2)/halfLife * ageDays)`
-Default half-life: 30 days. Evergreen files (non-dated slugs like `memory.md`)
-bypass decay. Applied to search scores, not to file deletion.
+### Problem
 
-**What co-cli does today:**
-Decay is count-based deletion: oldest memories deleted or consolidated when
-`memory_max_count` is exceeded. No per-retrieval relevance weighting by age.
+`_is_safe_command()` in `co_cli/_approval.py` checks two things: (1) no shell chaining operators
+(`;`, `&`, `|`, `>`, `<`, `` ` ``, `$(`, newline), and (2) command string starts with a prefix
+from `shell_safe_commands`. Argument content is never inspected. `git diff --no-index /etc/passwd /dev/null`
+passes the current check — `git diff` matches the prefix, no chaining operators are present, and
+the path argument escapes unnoticed. The prefix list is a UX convenience, not a security boundary;
+approval is the security boundary — but coarse arg bypass still narrows the effective approval gate.
 
-**Gap:**
-Search results don't rank fresh memories higher than stale ones. A 6-month-old
-preference competes equally with yesterday's correction.
+### Fix
 
-**What to borrow:**
-Apply a recency multiplier to search scores rather than (only) deleting old
-memories. Add `decay_protected` flag already in the schema to mark evergreen
-items. Half-life can be a setting with a 30-day default.
+Extend `_is_safe_command()` with an arg-level validation pass that runs after the prefix match:
 
----
+- Extract tokens after the matched prefix
+- Reject any arg containing: glob chars `*?[]{}`, path separator `/` or `\`, path starters
+  `./` `~/` `..`, or null bytes
+- Single-letter flags (`-v`, `-n`) and `--word-flags` with no path chars: pass
+- Keep the existing no-chaining check as the first gate (unchanged; fast path)
 
-### 1.3 MMR Re-Ranking — P3
+No changes to `safe_commands` list or config schema.
 
-**What openclaw does:**
-After candidate retrieval, applies Maximal Marginal Relevance:
-`MMR = λ * relevance - (1-λ) * maxSimilarityToAlreadySelected`
-Default λ=0.7 (prefer relevance, moderate diversity). Uses Jaccard on token sets.
-Net effect: avoids returning 5 nearly-identical memories on the same topic.
+### Implementation
 
-**What co-cli does today:**
-`_dedup_pulled()` deduplicates by pairwise `token_sort_ratio ≥ 85` — eliminates
-near-duplicates but doesn't rank for diversity.
+#### `co_cli/_approval.py`
 
-**Gap:**
-Co-cli's dedup is binary (include/exclude) at a high threshold. MMR is a
-continuous re-ranking that maximizes coverage across returned results.
+- [ ] Add `_validate_args(args_str: str) -> bool` — returns True if args are safe, False if any
+      arg contains glob chars, path chars, or null bytes
+  - Split `args_str` on whitespace
+  - For each token: reject if it contains `* ? [ ] { }`, starts with `/`, `./`, `~/`, `..`,
+    contains `\`, or contains null byte `\x00`
+  - `--flag` and `-f` style tokens with no path chars pass
+- [ ] In `_is_safe_command()`, after the prefix match succeeds: extract the portion of `cmd`
+      after the matched prefix; if non-empty, call `_validate_args(remainder)` and return its result
+- [ ] If no prefix matches, return False unchanged
 
-**What to borrow:**
-Port the MMR algorithm: it's ~50 lines of Python, no external deps beyond
-tokenization. Apply after FTS retrieval once that's in place.
+#### Tests — `tests/test_approval.py`
 
----
+- [ ] `git diff --no-index /etc/passwd /dev/null` → rejected (path arg)
+- [ ] `git diff HEAD~1` → approved (no path chars, `~1` is a rev not a tilde-path)
+- [ ] `ls /etc` → rejected (path arg)
+- [ ] `grep -r pattern` → rejected (`-r` is fine but use a case with a path to verify rejection)
+- [ ] `git status --short` → approved (flag only, no path)
+- [ ] `git diff` (no args) → approved
+- [ ] `grep foo*` → rejected (glob char)
+- [ ] `wc -l` → approved (flag only)
+- [ ] `find . -name "*.py"` → rejected (path arg `.` and glob in arg)
 
-### 1.4 Embedding Provider Layer — P3
+### Verification
 
-**What openclaw does:**
-Uniform `EmbeddingProvider` interface with four backends:
-- OpenAI `text-embedding-3-small` (default), batch API support
-- Gemini `gemini-embedding-001`, batch API support
-- Voyage `voyage-4-large`, 32k tokens
-- Local `node-llama-cpp` (quantized model, no API key needed)
-
-Provider auto-detected from available keys; falls back to FTS-only if none.
-Embedding cache: SQLite table keyed by `(provider, model, providerKey, contentHash)`.
-LRU eviction. Result: re-embedding only on content change.
-
-**What co-cli does today:**
-No embedding layer at all.
-
-**Gap:**
-Full gap. Semantic search is blocked until FTS is in place (1.1).
-
-**What to borrow (post-FTS):**
-1. `EmbeddingProvider` ABC with `embed_query(text)` and `embed_batch(texts)`
-2. Provider priority order (reuses existing Ollama base URL, no new credentials):
-   1. `nomic-embed-text` — 274M, 768 dims, 8192-token context, 54.5M Ollama pulls;
-      zero-config if Ollama is already running; memories fit in one chunk
-   2. `mxbai-embed-large` — 335M, 1024 dims, MTEB retrieval 64.68 (vs 53 for nomic);
-      better quality at the cost of 512-token context limit per chunk
-   3. `qwen3-embedding:0.6b` — SOTA MTEB scores (~70+), 32k context, 0.6B params;
-      best quality but meaningfully heavier alongside an LLM session
-   4. Gemini API (`gemini-embedding-001`) — fallback when Ollama is not running;
-      requires `gemini_api_key` already in settings
-3. Embedding cache in the same SQLite DB (add `embedding_cache` table)
-4. Auto-detect: probe Ollama first (`nomic-embed-text`), then Gemini API, then FTS-only
-
----
-
-### 1.5 Session-to-Memory Hook — P2
-
-**What openclaw does:**
-On `/new` command, the hook reads the last 15 messages, generates a slug via LLM,
-and saves a dated memory file: `memory/YYYY-MM-DD-<slug>.md`. Sessions are also
-indexed as a searchable source alongside memory files.
-
-**What co-cli does today:**
-`/new` is not a slash command. Session history is not persisted as a retrievable
-memory source.
-
-**Gap:**
-Conversation knowledge is entirely ephemeral. A good exchange that yielded a
-decision or a preference is lost when the session ends.
-
-**What to borrow:**
-1. Add `/new` slash command that triggers a session-close hook
-2. Hook generates a dated summary memory from the recent conversation
-3. LLM generates a 4-6 word slug for the filename
-4. Fits directly into existing `save_memory` infrastructure
-
----
-
-### 1.6 Chunking with Overlap — P3
-
-**What openclaw does:**
-Line-based chunking with configurable tokens/overlap. Each chunk has
-`(startLine, endLine, hash)`. Enforces provider `maxInputTokens` by re-splitting
-oversized chunks. Chunks are indexed and retrieved, not whole files.
-
-**What co-cli does today:**
-Whole-file storage and retrieval. No chunking.
-
-**Gap:**
-For long memories or session transcripts, FTS matches the whole file. Chunking
-provides finer-grained retrieval with line-level citations.
-
-**What to borrow:**
-Adopt line-based chunking once the SQLite tier is in place. At MVP scale
-(<200 files), chunking is not urgent but the schema should be designed to
-support it so migration is cheap later.
-
----
-
-## 2. Shell / Exec
-
-### 2.1 Safe Binary Trust — P1
-
-**What openclaw does:**
-Two-layer auto-approval:
-1. **Trusted directories**: `/bin`, `/usr/bin`, `/usr/local/bin`, `/opt/homebrew/bin` —
-   executables resolved to these directories don't need allowlist entries
-2. **Safe bins list**: `jq grep cut sort uniq head tail tr wc` — auto-approved
-   when called with scalar arguments only (no file references, no glob patterns,
-   no path-like args starting with `./ ~/ /`)
-3. Argument validation rejects: glob chars (`*?[]`), path-like args, file references
-
-**What co-cli does today:**
-Prefix-based auto-approval: if the command string starts with a token in
-`_DEFAULT_SAFE_COMMANDS`, it's approved automatically. No argument validation.
-`git diff --no-index /etc/passwd /dev/null` would auto-approve.
-
-**Gap:**
-Prefix matching is coarse — it approves the command name but not the arguments.
-A malicious argument can bypass the approval gate entirely.
-
-**What to borrow:**
-1. Add argument validation to auto-approval: reject commands where any argument
-   contains glob chars, path separators, or looks like a file reference
-2. Validate resolved path of executable is in a trusted directory list
-3. Keep prefix list as an additional allow layer, but layer on argument checks
-
-**Files in openclaw:** `src/infra/exec-safe-bin-trust.ts`
-
----
-
-### 2.2 Dangerous Environment Variable Filtering — P1
-
-**What openclaw does:**
-Explicit blocklist of env vars that can be used for privilege escalation:
+```bash
+uv run pytest tests/test_approval.py -v
 ```
-LD_PRELOAD, LD_LIBRARY_PATH, LD_AUDIT,
-DYLD_INSERT_LIBRARIES, DYLD_LIBRARY_PATH,
-NODE_OPTIONS, NODE_PATH,
-PYTHONPATH, PYTHONHOME,
-RUBYLIB, PERL5LIB,
-BASH_ENV, ENV,
-GCONV_PATH, IFS, SSLKEYLOGFILE
-```
-Plus prefix blocks: `DYLD_*`, `LD_*`. Applied at exec time, not at approval time.
-
-**What co-cli does today:**
-`restricted_env()` in `_shell_env.py` — but I could not read its content to
-confirm it blocks the same set. Config mentions sanitized environment.
-
-**Action:**
-Read `co_cli/_shell_env.py` and verify coverage against the openclaw blocklist.
-Add any missing vars to the restricted env. This is a security correctness check,
-not a new feature.
 
 ---
 
-### 2.3 Exec Approval Persistence — P2
+## §2 — Exec Approval Persistence `[P1]`
 
-**What openclaw does:**
-Allowlist stored in `~/.openclaw/exec-approvals.json` (mode 0o600):
+### Problem
+
+Approval is per-session only. Every `uv run co chat` re-prompts for every command, including
+ones the user approved in every previous session. `git status`, `pytest`, `uv run pytest` —
+all require re-approval. There is no way to say "always allow this pattern" that survives a
+restart. This is the highest daily friction point in the UX.
+
+### Fix
+
+Persist approved patterns to `.co-cli/exec-approvals.json` (mode 0o600). On approval prompt,
+check persisted patterns first — if a match is found, auto-approve silently. When the user
+chooses "a" (always), write the pattern to the file. Expose `/approvals list` and
+`/approvals clear [id]` slash commands for management.
+
+Pattern matching: `fnmatch.fnmatch(cmd, pattern)` — shell glob on the full command string.
+
+**File schema:**
 ```json
 {
-  "agents": {
-    "main": {
-      "allowlist": [
-        { "id": "uuid", "pattern": "git *", "lastUsedAt": "...", "lastUsedCommand": "..." }
-      ]
+  "approvals": [
+    {
+      "id": "uuid4-string",
+      "pattern": "git status*",
+      "created_at": "2026-02-28T12:00:00+00:00",
+      "last_used_at": "2026-02-28T14:30:00+00:00",
+      "last_used_command": "git status --short"
     }
-  }
+  ]
 }
 ```
-Once approved, pattern is persisted — user is not re-prompted for the same class
-of commands across sessions. Patterns are UUID-keyed for surgical removal.
 
-**What co-cli does today:**
-Approval is per-session only. Every new session re-prompts for every command,
-including ones the user approved 100 times before.
+### Implementation
 
-**Gap:**
-High friction: the user must re-approve `git status`, `pytest`, `npm test` every
-session. Approval history is lost on restart.
+#### `co_cli/_exec_approvals.py` (new file)
 
-**What to borrow:**
-1. Persist approved patterns to `.co-cli/exec-approvals.json` (mode 0o600)
-2. Schema: per-agent list of `{ id, pattern, lastUsedAt, lastUsedCommand }`
-3. Pattern matching: shell glob (`fnmatch`) on command string
-4. Add `lastUsedAt` so patterns can age out (stale approval hygiene)
-5. Expose via a `co exec-approvals list/clear` subcommand
+- [ ] `load_approvals(path: Path) -> list[dict]` — read and parse JSON; return `[]` on missing/corrupt
+- [ ] `save_approvals(path: Path, approvals: list[dict]) -> None` — write JSON, create file with
+      mode 0o600 on first write; subsequent writes preserve permissions
+- [ ] `find_approved(cmd: str, approvals: list[dict]) -> dict | None` — return first approval
+      where `fnmatch.fnmatch(cmd, entry["pattern"])` is True; return None if no match
+- [ ] `add_approval(approvals: list[dict], pattern: str, cmd: str) -> list[dict]` — append new
+      entry with `uuid4()` id, `created_at` now, `last_used_at` now, `last_used_command` cmd;
+      return updated list
+- [ ] `update_last_used(approvals: list[dict], approval_id: str, cmd: str) -> list[dict]` — set
+      `last_used_at` now and `last_used_command` on the matching entry; return updated list
+- [ ] `prune_stale(approvals: list[dict], max_age_days: int = 90) -> list[dict]` — remove entries
+      where `last_used_at` is older than `max_age_days`; return pruned list
 
----
+#### `co_cli/_orchestrate.py`
 
-### 2.4 Process Registry (Background Commands) — P3
+- [ ] At the start of the tool approval check: call `find_approved(cmd, load_approvals(deps.exec_approvals_path))`
+- [ ] If found: auto-approve, call `update_last_used()` + `save_approvals()`; skip user prompt
+- [ ] On user choosing "a" (always): call `add_approval()` + `save_approvals()` with the full
+      command as both the pattern and `last_used_command`; show confirmation
+  - Note: prompt the user for an optional pattern (default: exact command) — e.g. "git status*"
+    is more useful than "git status --short" as a persisted pattern. If the user just presses
+    enter, use the exact command string
 
-**What openclaw does:**
-Full in-memory registry for active processes:
-- `runningSessions`: live processes with stdout/stderr buffer + tail (last 2000 chars)
-- `finishedSessions`: completed processes with exit code, output, duration
-- TTL-based cleanup (30 min default, 1 min–3 hr range)
-- Backgrounding: process runs in background after 10s; user gets session ID to poll
-- Max output: 200 KB aggregated, 30 KB pending buffer
+#### `co_cli/deps.py`
 
-**What co-cli does today:**
-`asyncio.wait_for` with timeout. No background support. If a command exceeds
-timeout, it's killed and output is lost. No partial output streaming.
+- [ ] Add `exec_approvals_path: Path = field(default_factory=lambda: Path.cwd() / ".co-cli/exec-approvals.json")`
 
-**Gap:**
-Long-running commands (builds, tests, downloads) have no path forward. User must
-either wait with a long timeout or kill the command and lose output.
+#### `co_cli/config.py`
 
-**What to borrow:**
-1. Process registry dataclass: `{ id, cmd, pid, stdout_buf, exit_code, started_at }`
-2. Background flag: if command is still running after N seconds, return a session
-   ID to the model with instructions to poll later
-3. Poll tool: `get_process_output(session_id)` checks if still running, returns
-   accumulated output
-4. Output cap: truncate at 200 KB, always keep last 2000 chars as tail
+- [ ] No new field needed — `exec_approvals_path` is a derived path, not user-configurable.
+      If future use cases require overriding, add `exec_approvals_path: str | None = None` then.
 
----
+#### `co_cli/main.py`
 
-## 3. Security
+- [ ] Pass `exec_approvals_path=Path.cwd() / ".co-cli/exec-approvals.json"` into `CoDeps`
+      in `create_deps()`
 
-### 3.1 SSRF Protection (Web Fetch) — P1
+#### `co_cli/_commands.py`
 
-**What openclaw does:**
-Full SSRF guard in `src/infra/net/ssrf.ts`:
-- Blocks: localhost, `*.local`, `*.internal`, `metadata.google.internal`
-- Private IPv4: `10/8`, `172.16/12`, `192.168/16`, `169.254/16`
-- Private IPv6: link-local `fe80::/10`, site-local `fec0::/10`, unique local `fc00::/7`
-- **IPv6 embedded IPv4 extraction**: detects `::ffff:`, `64:ff9b::`, `2002::`, `2001:0000::` wrappers
-- **DNS pinning**: resolves all A/AAAA records before fetch; blocks if ANY resolved IP is private;
-  wraps fetch dispatcher with pinned IPs to prevent TOCTOU
+- [ ] Add `_cmd_approvals(ctx, args)` handler — subcommands: `list` and `clear [id]`
+  - `list`: load and display all approvals (id, pattern, last used, last command)
+  - `clear` with no id: confirm then wipe all approvals
+  - `clear <id>`: remove entry with matching UUID prefix (first 8 chars is enough for UX)
+- [ ] Register as `SlashCommand("approvals", "Manage persistent exec approvals", _cmd_approvals)`
+      in `COMMANDS`
 
-**What co-cli does today:**
-`tools/_url_safety.py` is referenced but does not exist as a separate file —
-it may have been deleted or never created. `web.py` imports `is_url_safe` from it.
+#### Tests — `tests/test_exec_approvals.py` (new file)
 
-**Gap:**
-This is a critical security gap. If `_url_safety.py` doesn't exist or doesn't
-block private IPs, `web_fetch` can be used to probe the internal network.
+- [ ] `add_approval()` then `find_approved()` with exact command → match
+- [ ] `find_approved()` with glob pattern `"git *"` matches `"git status"` and `"git diff HEAD"`
+- [ ] `find_approved()` with no matching pattern → None
+- [ ] `prune_stale()` removes entries older than `max_age_days`; keeps recent entries
+- [ ] `save_approvals()` + `load_approvals()` round-trip: data intact, file mode 0o600
+- [ ] `update_last_used()` updates timestamp and last command on correct entry
 
-**Immediate action:**
-1. Confirm whether `_url_safety.py` exists and what it implements
-2. If missing or incomplete, port the private IP detection from openclaw:
-   - Block `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`
-   - Block `::1`, `fe80::/10`
-   - Block hostname patterns: `*.local`, `*.internal`, `localhost`
-   - DNS resolution before fetch to catch CNAME → private IP redirects
-3. IPv6 embedded IPv4 extraction is optional for MVP but should be noted
+### Verification
 
-**Files in openclaw:** `src/infra/net/ssrf.ts`
+```bash
+uv run pytest tests/test_exec_approvals.py -v
+uv run co chat
+# 1. Run a shell command that requires approval
+# 2. Choose "a" (always) — confirm .co-cli/exec-approvals.json is written
+# 3. Exit and restart: co chat
+# 4. Run the same command — confirm no approval prompt appears
+```
 
 ---
 
-### 3.2 Security Audit Command — P3
+## §3 — Temporal Decay Scoring on Retrieval `[P2]`
 
-**What openclaw does:**
-`co doctor` runs a multi-category security audit:
-- Filesystem permissions (state dir, config file world-readable/writable)
-- Gateway auth config (bind addr, token length, trusted proxies)
-- Exec approvals (allowFrom wildcards, oversized allowlists)
-- Logging config (sensitive data redaction)
-- Returns structured findings: `{ severity, checkId, title, detail, remediation }`
+### Problem
 
-**What co-cli does today:**
-`co status` checks LLM connectivity, memory dir, tool availability. No security
-posture checks.
+FTS5 BM25 score is the only ranking signal in `recall_memory`. A memory written 6 months ago
+competes equally with one written yesterday for the same query. `_touch_memory()` refreshes
+`updated` on recall (gravity), but this only affects future grep-path ordering — it has no effect
+on FTS ranking scores. Stale preferences and superseded decisions rank the same as today's
+corrections.
 
-**Gap:**
-No automated check that config is secure (e.g., overly broad safe-command list,
-world-readable settings.json with API keys).
+### Fix
 
-**What to borrow:**
-Add a `co doctor` or `co security-check` subcommand that checks:
-1. `~/.config/co-cli/settings.json` file permissions (should be 0o600)
-2. Memory directory permissions
-3. Whether API keys appear in shell history or env vars
-4. Whether exec approval list contains overly broad patterns (`*`)
+Apply an exponential decay multiplier to BM25 scores post-retrieval, before dedup and display.
+Formula: `final_score = bm25_score * exp(-ln(2) / half_life_days * age_days)`
+Default half-life: 30 days (configurable). Items with `decay_protected: true` bypass decay —
+they are evergreen. Applied only on the FTS path; grep path uses recency-sort already.
 
----
+### Implementation
 
-## 4. Agent Architecture
+#### `co_cli/tools/memory.py`
 
-### 4.1 Model Fallback — P2
+- [ ] Add `_decay_multiplier(updated_iso: str, half_life_days: int) -> float`:
+  - Parse `updated_iso` to datetime (use `_parse_created` helper, same ISO8601 format)
+  - Compute `age_days = (now - updated).total_seconds() / 86400`
+  - Return `math.exp(-math.log(2) / half_life_days * age_days)`
+  - Clamp to `[0.0, 1.0]` — decay never amplifies scores
+- [ ] In `recall_memory()`, FTS path: after `fts_results` are returned and `matches` list is built,
+      apply decay to reorder:
+  - For each match, compute `_decay_multiplier(m.updated or m.created, ctx.deps.memory_recall_half_life_days)`
+  - Assign a decay-adjusted rank: lower rank = higher decayed score
+  - Re-sort `matches` by decayed score descending before slicing to `max_results`
+  - Skip decay for entries where `m.decay_protected is True`
+- [ ] Import `math` at top of file (stdlib, no new dep)
 
-**What openclaw does:**
-`runWithModelFallback()` pattern:
-- Primary model + explicit fallback list in config
-- On failure: try next model in list
-- Context overflow: NOT retried (inner compaction handles it)
-- Cooldown: tracks failed providers, probes after recovery window
-- Probe throttle: min 30s between probes per provider
+#### `co_cli/config.py`
 
-**What co-cli does today:**
-Single model configured in `settings.json`. If the model fails, the whole session
-fails. No fallback, no cooldown tracking.
+- [ ] Add `memory_recall_half_life_days: int = Field(default=30, ge=1)` to `Settings`
+- [ ] Add to `env_map`: `"memory_recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS"`
 
-**Gap:**
-API outages or rate limits terminate the session with no recovery path.
+#### `co_cli/deps.py`
 
-**What to borrow:**
-1. Add `fallback_models: list[str]` to `Settings`
-2. In the agent loop, catch provider errors and retry with the next model
-3. Simple implementation: no cooldown or probe logic needed for MVP
+- [ ] Add `memory_recall_half_life_days: int = 30`
 
----
+#### `co_cli/main.py`
 
-### 4.2 Skills System — P3
+- [ ] Pass `memory_recall_half_life_days=settings.memory_recall_half_life_days` into `CoDeps`
+      in `create_deps()`
 
-**What openclaw does:**
-SKILL.md files in `skills/*/SKILL.md` directories. Frontmatter controls:
-- OS requirements (`os: [darwin, linux]`)
-- Required binaries (`requires.bins: [jq, git]`)
-- Required env vars (`requires.env: [GITHUB_TOKEN]`)
-- Invocation policy (user-invocable, model-invocable)
+#### Tests — `tests/test_memory_decay.py`
 
-Skills are included in the system prompt at session start. Ineligible skills
-(missing bins, wrong OS) are silently filtered. Budget: 150 skills, 30 KB max.
+- [ ] Two memories with identical content but different `updated`: the newer one ranks first
+      after decay scoring
+- [ ] A memory with `decay_protected: true` has the same effective score regardless of age
+      (decay multiplier not applied)
+- [ ] `_decay_multiplier` with `age_days=0` returns 1.0 (no decay at creation)
+- [ ] `_decay_multiplier` with `age_days == half_life_days` returns approximately 0.5
+- [ ] `_decay_multiplier` never returns > 1.0 regardless of input
 
-**What co-cli does today:**
-No skills system. System prompt is assembled from personality + memory + date.
-Tool docs serve as the "skills" layer implicitly.
+### Verification
 
-**Gap:**
-No way for users to extend co's behavior with domain-specific prompts without
-editing source. No OS-aware conditional skill loading.
-
-**What to borrow (phase 2):**
-1. `skills/` directory in `.co-cli/` for user-defined SKILL.md files
-2. Frontmatter: `requires.bins`, `os`, `invocation` at minimum
-3. At session start, scan, filter eligible skills, inject into system prompt
-4. Token budget: respect context limits on skill injection
+```bash
+uv run pytest tests/test_memory_decay.py -v
+```
 
 ---
 
-### 4.3 Cron / Background Scheduling — P3
+## §4 — `/new` Slash Command `[P2, blocked on letta §4]`
 
-**What openclaw does:**
-Full cron service with three schedule kinds (`at`, `every`, `cron`), two session
-targets (`main`, `isolated`), and exponential backoff on job errors. Jobs persist
-to `cron.json`. Isolated agent sessions reuse a per-job session ID across runs
-for conversational continuity.
+### Dependency
 
-**What co-cli does today:**
-No scheduling. All execution is synchronous/interactive.
+**Do not start until `_index_session_summary()` exists in `co_cli/_history.py`.** That function (session summary indexing at compaction time) is currently deferred — no timeline. The `/new` command reuses that infra — no parallel LLM call machinery needed.
 
-**Gap:**
-Cannot automate recurring tasks (daily summaries, reminders, data fetches).
+### Problem
 
-**What to borrow:**
-Deferred to post-MVP. The scheduler requires session persistence infrastructure
-(gap 4.4) first. Log as a roadmap item.
+No explicit session-close hook exists. Conversation knowledge is ephemeral — a good exchange
+that yielded a decision or preference is lost when the session ends. `/new` covers the active
+user-intent path: "I want to checkpoint this session now and start fresh."
 
----
+### Fix
 
-### 4.4 Session Persistence — P2
+`/new` summarizes the last N messages (up to 15) into a dated knowledge file via LLM, writes
+it to `.co-cli/knowledge/session-{timestamp}.md`, then clears history and resets the session
+(new context window). Uses `summarize_messages()` + `_index_session_summary()` from `co_cli/_history.py`.
 
-**What openclaw does:**
-Per-agent `sessions.json` with `SessionEntry` records (sessionId, model, channel,
-token counts, last delivery target, compaction count). Sessions survive across
-processes. Freshness policy: idle > 60 min → new session. Pruning by count and age.
+### Implementation
 
-**What co-cli does today:**
-Conversation history is in-memory only. Each `uv run co chat` starts a blank
-context. Multi-turn memory across restarts relies entirely on the memory tools.
+#### `co_cli/_commands.py`
 
-**Gap:**
-No session continuity. Context window compaction count, model preferences, and
-token usage are lost between invocations.
+- [ ] Add `_cmd_new(ctx, args)`:
+  - If `ctx.message_history` is empty: print `[dim]Nothing to checkpoint — history is empty.[/dim]`
+    and return None (no-op)
+  - Take last min(15, len(history)) messages
+  - Call `_run_summarization_with_policy(recent_msgs, model)` from `co_cli/_history.py`
+  - If summary is None: print failure message, do not clear history
+  - If summary succeeds: call `_index_session_summary(ctx.deps, summary, len(recent_msgs))`; await it
+  - Clear history: return `[]`
+  - Print confirmation: `[success]Session checkpointed and history cleared.[/success]`
+- [ ] Register `SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new)`
+      in `COMMANDS`
+- [ ] Import `_run_summarization_with_policy` from `co_cli._history` inside the handler
+      (lazy import to avoid circular; same pattern as `_cmd_compact`)
+- [ ] Import `_index_session_summary` from `co_cli._history` inside the handler
 
-**What to borrow:**
-1. `.co-cli/session.json` with at minimum: `{ sessionId, lastUsedAt, compactionCount, model }`
-2. Restore history from the last session (up to context window) on startup
-3. Prune on idle > N minutes (configurable, default 60)
-4. This is the foundation for cron/subagent support (4.3) and eval continuity
+#### Tests — (add to appropriate test file after `_index_session_summary` ships)
 
----
+- [ ] `/new` with history: writes a `session-*.md` file in `.co-cli/knowledge/` with
+      `provenance: session` frontmatter and indexes it; returns `[]` (clears history)
+- [ ] `/new` with empty history: no file written, returns None (history unchanged)
 
-## 5. Config System
+### Verification
 
-### 5.1 Config Includes (`$include`) — P3
-
-**What openclaw does:**
-`$include` key in config JSON5 accepts a path or array of paths. Deep merge
-semantics (arrays concatenate, objects recurse, scalars override). Path
-confinement enforced: includes must stay under config root (CWE-22 mitigation).
-Circular detection with depth limit = 10.
-
-**What co-cli does today:**
-Flat `settings.json`. All config in one file. No composition.
-
-**Gap:**
-Team setups (shared base config + personal overrides) require manual duplication.
-
-**What to borrow:**
-Not urgent for single-user CLI. Useful when co-cli is deployed in team contexts.
-Add `$include` support once settings model is stable.
+```bash
+uv run co chat
+# Run some turns, then: /new
+# Confirm session-*.md written in .co-cli/knowledge/
+# Confirm history is cleared (next turn starts fresh)
+```
 
 ---
 
-### 5.2 Doctor / Health Check Enhancements — P2
+## §5 — Model Fallback `[P2]`
 
-**What openclaw does:**
-`co doctor` runs: config validation, auth profile health, legacy state migration,
-session lock cleanup, security checks, sandbox health. Structured findings with
-remediation hints.
+### Problem
 
-**What co-cli does today:**
-`co status` checks LLM API, memory dir, tool deps. No migration, no security
-posture, no structured findings.
+A single model is configured per provider. If the API is rate-limited, down, or the model
+is unavailable, the entire session fails with no recovery path. The user must restart and
+manually switch.
 
-**Gap:**
-Config errors (wrong provider key name, deprecated field) silently fail or produce
-cryptic errors. No upgrade path detection.
+### Fix
 
-**What to borrow:**
-1. Schema validation with unknown key detection + user-facing hint
-2. API key presence check per configured provider (not just the active one)
-3. Memory dir permissions check (warn if world-readable)
-4. Structured output: `{ severity, checkId, detail, remediation }`
+`fallback_models: list[str]` in `Settings`. In the agent run, on a provider error
+(`ModelRetry` or HTTP 429/503), rebuild the agent with the next model in the list and retry.
+No cooldown or probe logic for MVP — simple sequential fallback is sufficient.
 
----
+### Implementation
 
-## 6. Skills (New: Latest openclaw diff)
+#### `co_cli/config.py`
 
-The 2026-02-18 pull added several patterns worth noting immediately:
+- [ ] Add `fallback_models: list[str] = Field(default_factory=list)` to `Settings`
+- [ ] Add to `env_map`: `"fallback_models": "CO_FALLBACK_MODELS"` with comma-split validator
+      (same pattern as `shell_safe_commands` / `_parse_safe_commands`)
 
-### 6.1 `exec-safe-bin-trust.ts` (new file in pull) — P1
+#### `co_cli/deps.py`
 
-Hardcoded trusted directories for executable resolution + argument-level validation.
-See section 2.1 — this is the specific file that implements that pattern.
+- [ ] Add `fallback_models: list[str] = field(default_factory=list)`
 
-### 6.2 `install-source-utils.ts` (new file in pull) — P2
+#### `co_cli/main.py`
 
-Validates plugin/extension installation sources. Key pattern: `npm pack
---ignore-scripts` to download packages without executing postinstall hooks.
-Relevant when co-cli adds any plugin install mechanism.
+- [ ] Pass `fallback_models=settings.fallback_models` into `CoDeps` in `create_deps()`
 
-### 6.3 `git-root.ts` (new file in pull) — P2
+#### `co_cli/agent.py`
 
-Filesystem walk to detect git root (max depth 12). Co-cli currently uses `git`
-subprocess for this. The pure filesystem walk is faster (no subprocess) and works
-in restricted environments.
+- [ ] In `get_agent()` or the agent run wrapper in `_orchestrate.py`: wrap the agent run in
+      a retry loop over `deps.fallback_models`
+  - On `ModelRetry` or provider HTTP error: log the switch with `logger.warning()`; rebuild
+    agent model to the next fallback; retry the same turn
+  - If all fallbacks exhausted: re-raise the original exception
+  - Context overflow errors: do NOT retry (inner compaction handles those — a different model
+    won't help)
 
-**What to borrow:**
-Port the git root walk to Python: `find_git_root(start: Path, max_depth=12)`.
-Use instead of `git rev-parse --show-toplevel` subprocess in `shell_backend.py`.
+#### Tests — `tests/test_agent.py`
 
-### 6.4 Subagent announce improvements — P3
+- [ ] Verify `fallback_models` is a field in `CoDeps` with correct type and default
+- [ ] Verify `fallback_models` is passed from `create_deps()` (no mock needed — inspect `CoDeps`)
 
-`subagent-announce.ts` now has retry logic (3x, exponential backoff) and a
-`suppressAnnounceReason` field for steer-restart scenarios. Relevant when co-cli
-adds subagent support. File for future reference.
+### Verification
 
-### 6.5 `devices-cli.ts` (new file in pull) — out of scope
-
-Device pairing is a gateway/mobile feature with no co-cli equivalent. Skip.
+```bash
+uv run pytest tests/test_agent.py -v
+# Manual: set fallback_models to a known-good model in settings.json,
+# then trigger a provider error — confirm session switches to fallback instead of crashing
+```
 
 ---
 
-## Priority Summary
+## §6 — Session Persistence `[P2]`
 
-| Priority | Item | Effort |
-|----------|------|--------|
-| P1 | SSRF protection in web_fetch (3.1) — verify/fix `_url_safety.py` | XS–S |
-| P1 | Safe binary trust: argument validation on auto-approve (2.1) | S |
-| P1 | Dangerous env var blocklist audit (2.2) | XS |
-| P2 | SQLite FTS5 retrieval tier (1.1) | M |
-| P2 | Exec approval persistence (2.3) | M |
-| P2 | Session persistence (4.4) | M |
-| P2 | Temporal decay scoring on search (1.2) | S |
-| P2 | Session-to-memory hook on `/new` (1.5) | S |
-| P2 | Model fallback (4.1) | S |
-| P2 | Doctor enhancements (5.2) | S |
-| P2 | Git root via filesystem walk (6.3) | XS |
-| P3 | MMR re-ranking (1.3) | S |
-| P3 | Embedding provider layer (1.4) | L |
-| P3 | Chunking with overlap (1.6) | M |
-| P3 | Process registry / backgrounding (2.4) | L |
-| P3 | Security audit command (3.2) | M |
-| P3 | Skills system (4.2) | L |
-| P3 | Cron scheduling (4.3) — requires 4.4 | XL |
-| P3 | Config includes (5.1) | S |
+### Problem
+
+`uv run co chat` always starts with a blank session. Compaction count, model used last session,
+and the session UUID are lost between invocations. Multi-turn memory across restarts relies
+entirely on the memory tools. There is no session continuity — not even metadata — making
+features like cron scheduling (§13) impossible to implement cleanly.
+
+### Fix
+
+Write `.co-cli/session.json` (mode 0o600) with a lightweight metadata record on each turn.
+Restore on startup if the session is still fresh (within `session_ttl_minutes`). Conversation
+history is NOT restored (memory tools handle cross-session knowledge); only metadata is restored.
+This is the foundation required by §13 (cron scheduling).
+
+**File schema:**
+```json
+{
+  "session_id": "uuid4-hex-string",
+  "model": "gemini-2.0-flash",
+  "last_used_at": "2026-02-28T14:30:00+00:00",
+  "compaction_count": 0
+}
+```
+
+**Freshness policy:** if `last_used_at` is older than `session_ttl_minutes` (default 60),
+start a new session (new UUID, reset compaction_count). Within the TTL, restore last session
+metadata only.
+
+### Implementation
+
+#### `co_cli/_session.py` (new file)
+
+- [ ] `load_session(path: Path) -> dict | None` — parse JSON; return None on missing/corrupt
+- [ ] `save_session(path: Path, session: dict) -> None` — write JSON with mode 0o600 on first write
+- [ ] `is_fresh(session: dict, ttl_minutes: int) -> bool` — return True if `last_used_at` is
+      within the TTL window; False if expired or field missing
+- [ ] `new_session(model: str) -> dict` — return a new session dict with `uuid4().hex` id,
+      given model, `last_used_at` now, `compaction_count=0`
+- [ ] `touch_session(session: dict) -> dict` — update `last_used_at` to now; return updated dict
+
+#### `co_cli/main.py`
+
+- [ ] At `chat_loop()` startup: call `load_session(session_path)`. If session is not None and
+      `is_fresh(session, settings.session_ttl_minutes)`: use `session["session_id"]` as
+      `deps.session_id`. Else: call `new_session(model_name)` and save immediately.
+- [ ] After each turn: call `touch_session(session)` + `save_session(session_path, session)`.
+      Update `compaction_count` when compaction fires.
+- [ ] `session_path = Path.cwd() / ".co-cli/session.json"`
+
+#### `co_cli/deps.py`
+
+- [ ] `session_id: str = ""` already exists — no change to field type or default
+
+#### `co_cli/config.py`
+
+- [ ] Add `session_ttl_minutes: int = Field(default=60, ge=1)` to `Settings`
+- [ ] Add to `env_map`: `"session_ttl_minutes": "CO_SESSION_TTL_MINUTES"`
+
+#### Tests — `tests/test_session.py` (new file)
+
+- [ ] `new_session()` returns dict with all required keys and valid UUID hex
+- [ ] `is_fresh()` returns True for recent `last_used_at` within TTL
+- [ ] `is_fresh()` returns False for `last_used_at` older than TTL
+- [ ] `is_fresh()` returns False when session is None (guard)
+- [ ] `save_session()` + `load_session()` round-trip: data intact, file mode 0o600
+- [ ] `touch_session()` updates `last_used_at` to a newer value
+
+### Verification
+
+```bash
+uv run pytest tests/test_session.py -v
+uv run co chat
+# Exit and restart within TTL — session_id in logs should be the same
+# Wait past TTL — session_id should be different
+```
 
 ---
 
-## Anti-Patterns to Avoid
+## §7 — Doctor Security Checks `[P2]`
 
-Openclaw patterns that do NOT fit co-cli's architecture:
+### Problem
 
-1. **Gateway / WebSocket server** — openclaw is a multi-channel bot server;
-   co-cli is a local CLI. No gateway, no WebSocket, no device pairing.
+`co status` checks LLM connectivity and tool availability but has no security posture checks.
+A `settings.json` with API keys that is world-readable (0o644 instead of 0o600) will not be
+flagged. An exec approvals file with a catch-all `*` pattern (approves every command without
+prompting) will not be flagged. No automated way to detect these misconfigurations before they
+cause a problem.
 
-2. **Plugin package system** — openclaw has npm-based plugin installs with
-   postinstall isolation. Co-cli uses pydantic-ai tool registration directly.
-   MCP servers already cover extensibility at the tool level.
+### Fix
 
-3. **Multi-agent per-channel sessions** — co-cli is single-user, single-session.
-   The per-agent session store, group session routing, and delivery targets are
-   all channel-specific concepts with no equivalent.
+Add 3 security checks to `get_status()` output via a new `check_security()` function. Minimal,
+high-signal checks only for MVP. Display findings in `co status` output under a "Security" section.
+Also surface from `co status` slash command in the REPL.
 
-4. **LanceDB** — not present in openclaw's memory module either; openclaw uses
-   SQLite + sqlite-vec. No need to evaluate LanceDB separately.
+**Checks:**
+1. `~/.config/co-cli/settings.json` permissions: warn if world-readable (mode & 0o004)
+2. `.co-cli/settings.json` project config: same check
+3. Exec approvals list: warn if any pattern is `*` (approves all commands)
+
+### Implementation
+
+#### `co_cli/status.py`
+
+- [ ] Add `SecurityFinding` dataclass:
+  ```python
+  @dataclass
+  class SecurityFinding:
+      severity: str  # "warn" | "error"
+      check_id: str  # e.g. "config-world-readable"
+      detail: str    # human-readable description
+      remediation: str  # what to do
+  ```
+- [ ] Add `check_security() -> list[SecurityFinding]`:
+  - Check `SETTINGS_FILE` (`~/.config/co-cli/settings.json`): if exists and
+    `stat().st_mode & 0o004`, append `SecurityFinding(severity="warn", check_id="user-config-world-readable", ...)`
+  - Check `Path.cwd() / ".co-cli/settings.json"`: same permission check
+  - Check `Path.cwd() / ".co-cli/exec-approvals.json"`: if exists, load with
+    `_exec_approvals.load_approvals()`; if any entry has `pattern == "*"`, append
+    `SecurityFinding(severity="warn", check_id="exec-approval-wildcard", ...)`
+  - Return list (empty = clean)
+- [ ] Import `_exec_approvals` lazily inside `check_security()` to avoid circular dep at import
+
+#### `co_cli/main.py` (`co status` command)
+
+- [ ] Call `check_security()` and display findings in `render_status_table()` or as a
+      separate panel below the status table. If findings list is empty, show nothing
+      (no "Security: clean" noise). If findings exist, print each with severity-appropriate
+      style (warn = yellow, error = red).
+
+#### `co_cli/_commands.py` (`/status` handler)
+
+- [ ] `_cmd_status`: already calls `render_status_table(info)`. After printing, call
+      `check_security()` and display findings the same way as `co status`.
+
+#### Tests — `tests/test_status.py`
+
+- [ ] Create a temp settings file with mode 0o644: `check_security()` returns a finding with
+      `check_id="user-config-world-readable"` and `severity="warn"`
+- [ ] Create a temp settings file with mode 0o600: no finding for that check
+- [ ] Create a temp exec-approvals file with a `*` pattern: `check_security()` returns a finding
+      with `check_id="exec-approval-wildcard"`
+- [ ] All checks clean: `check_security()` returns `[]`
+
+### Verification
+
+```bash
+uv run pytest tests/test_status.py -v
+chmod 644 ~/.config/co-cli/settings.json && uv run co status
+# Should show security warning about world-readable config
+chmod 600 ~/.config/co-cli/settings.json && uv run co status
+# Should be clean
+```
+
+---
+
+## §8 — MMR Re-Ranking `[P3]`
+
+### Problem
+
+`_dedup_pulled()` deduplicates returned memories with a binary threshold (pairwise
+`token_sort_ratio >= 85`). If FTS returns 5 memories on the same topic, dedup may keep all 5
+(they're distinct enough at 85%) — but all 5 cover nearly the same ground and crowd out
+memories on different aspects. MMR balances relevance with diversity so the returned set
+covers more ground.
+
+### Fix
+
+After FTS retrieval and before dedup, apply Maximal Marginal Relevance re-ranking:
+`MMR = λ * relevance - (1-λ) * maxSimilarityToAlreadySelected`
+Default λ=0.7 (prefer relevance, moderate diversity). Uses Jaccard on token sets. ~50 lines
+of Python, no external deps beyond tokenization.
+
+**Dependency:** FTS path must be in place (already shipped). Applied only on FTS path.
+
+### Implementation
+
+#### `co_cli/tools/memory.py`
+
+- [ ] Add `_token_set(text: str) -> set[str]` — lowercase, split on non-alphanumeric chars;
+      used for Jaccard computation
+- [ ] Add `_jaccard(a: set[str], b: set[str]) -> float` — `len(a & b) / len(a | b)` if
+      `a | b` is non-empty, else 0.0
+- [ ] Add `_mmr_rerank(candidates: list[tuple[MemoryEntry, float]], lmbda: float = 0.7, k: int = 5) -> list[MemoryEntry]`:
+  - `candidates` is a list of `(entry, relevance_score)` pairs
+  - Iteratively select the candidate that maximizes MMR: `λ * rel_score - (1-λ) * max_sim_to_selected`
+  - `max_sim_to_selected`: max Jaccard similarity of candidate tokens to any already-selected entry
+  - Stop after `k` items or when candidates is exhausted
+- [ ] In `recall_memory()` FTS path: after building `matches` list from FTS results, apply
+      `_mmr_rerank([(entry, r.score) for entry, r in zip(matches, fts_results)], k=max_results)`
+      before dedup; the decay multiplier (§3) should be applied to scores before MMR input
+
+#### Tests — `tests/test_memory.py`
+
+- [ ] MMR with 5 near-identical candidates: selects fewer (more diverse) results than dedup alone
+- [ ] MMR with `λ=1.0` (relevance only): returns candidates sorted by score (no diversity penalty)
+- [ ] MMR with `λ=0.0` (diversity only): second pick is maximally different from first
+
+### Verification
+
+```bash
+uv run pytest tests/test_memory.py -v -k mmr
+```
+
+---
+
+## §9 — Embedding Provider Layer `[P3]`
+
+### Problem
+
+`recall_memory` uses FTS5 BM25 only. Semantic search (finding memories by meaning, not exact
+keyword) is not available. A user asking "what's my preference for error handling?" won't find
+a memory written as "I dislike catching all exceptions broadly" without keyword overlap.
+
+### Fix
+
+Add an `EmbeddingProvider` ABC with pluggable backends. Auto-detect available providers at
+session start. Cache embeddings in SQLite to avoid re-embedding on every search.
+
+**Provider priority order (auto-detect):**
+1. `nomic-embed-text` via Ollama (zero config if Ollama is already running; 274M params, 768d, 8k ctx)
+2. `mxbai-embed-large` via Ollama (335M params, 1024d, better MTEB retrieval at the cost of 512-token ctx)
+3. `qwen3-embedding:0.6b` via Ollama (SOTA MTEB ~70+, 32k ctx, 0.6B params — best quality, heavier)
+4. `gemini-embedding-001` via Gemini API (fallback when Ollama is not running; reuses existing key)
+5. FTS-only (graceful fallback when no embedding provider is available)
+
+### Implementation
+
+**Note:** This is a significant effort (L). Do not start until §3 (decay), §8 (MMR), and
+letta §3a (tag junction table) are shipped.
+
+#### `co_cli/tools/_embeddings.py` (new file)
+
+- [ ] `EmbeddingProvider` ABC: `embed_query(text: str) -> list[float]` and
+      `embed_batch(texts: list[str]) -> list[list[float]]`
+- [ ] `OllamaEmbeddingProvider(model: str, host: str)` — calls `/api/embeddings`
+- [ ] `GeminiEmbeddingProvider(api_key: str, model: str)` — calls Gemini embedding API
+- [ ] `detect_provider(settings) -> EmbeddingProvider | None` — probe Ollama for preferred models
+      in priority order; fall back to Gemini if key present; return None for FTS-only mode
+
+#### `co_cli/knowledge_index.py`
+
+- [ ] Add `embedding_cache` table: `(provider TEXT, model TEXT, content_hash TEXT, embedding BLOB, created_at TEXT)`
+- [ ] Add `get_cached_embedding(provider, model, content_hash) -> list[float] | None`
+- [ ] Add `store_embedding(provider, model, content_hash, embedding)`
+- [ ] Add `hybrid_search(query, embedding_provider, ...)` — FTS BM25 + cosine similarity merge:
+      `score = 0.6 * vector_score + 0.4 * text_score`
+
+#### `co_cli/tools/memory.py`
+
+- [ ] In `recall_memory()`: if `ctx.deps.embedding_provider is not None` and backend is `hybrid`,
+      call `knowledge_index.hybrid_search()` instead of `knowledge_index.search()`
+
+#### `co_cli/deps.py`
+
+- [ ] Add `embedding_provider: Any | None = field(default=None, repr=False)`
+
+#### `co_cli/main.py`
+
+- [ ] At startup, call `detect_provider(settings)` and assign to `deps.embedding_provider`
+
+#### `co_cli/config.py`
+
+- [ ] Add `embedding_model: str = Field(default="")` — override auto-detect with specific model name
+
+#### Tests — `tests/test_embeddings.py` (new file)
+
+- [ ] `detect_provider()` returns None when Ollama is offline and no Gemini key
+- [ ] Embedding cache round-trip: store then retrieve returns same vector
+- [ ] `hybrid_search` score is weighted combination of FTS and vector scores
+
+### Verification
+
+```bash
+# Requires Ollama running with a supported embedding model:
+OLLAMA_MODEL=nomic-embed-text uv run pytest tests/test_embeddings.py -v
+```
+
+---
+
+## §10 — Process Registry / Backgrounding `[P3]`
+
+### Problem
+
+`run_shell_command` uses `asyncio.wait_for` with a timeout. Long-running commands (builds, test
+suites, `npm install`) have no path forward: the user either waits with a long timeout or kills
+the command and loses output. No partial output streaming, no background execution.
+
+### Fix
+
+Process registry with background execution: if a command is still running after a threshold
+(default 10s), detach it to the background and return a session ID to the agent. Agent can
+poll via `get_process_output(session_id)`. Output capped at 200KB, last 2000 chars always kept
+as tail.
+
+**Note:** This is a large effort (L). Coordinate with `docs/TODO-background-execution.md` before
+starting.
+
+### Implementation
+
+#### `co_cli/_process_registry.py` (new file)
+
+- [ ] `ProcessEntry` dataclass: `id: str, cmd: str, pid: int, stdout_buf: str, exit_code: int | None, started_at: str, finished_at: str | None`
+- [ ] `ProcessRegistry` class (in-memory singleton):
+  - `running: dict[str, ProcessEntry]`
+  - `finished: dict[str, ProcessEntry]`
+  - `register(entry)`, `finish(id, exit_code)`, `append_output(id, chunk)`, `get(id) -> ProcessEntry | None`
+  - TTL-based cleanup: entries in `finished` expire after 30 min
+- [ ] Output cap: `append_output` truncates `stdout_buf` to 200KB total; always keeps last 2000 chars
+
+#### `co_cli/tools/shell.py`
+
+- [ ] Add `background_threshold_seconds: int = 10` to `run_shell_command`
+- [ ] If command exceeds threshold: register in `ProcessRegistry`, return
+      `{"display": f"Command running in background. Session: {id}\nUse get_process_output('{id}') to check status.", ...}`
+- [ ] Add `get_process_output(ctx, session_id: str) -> dict[str, Any]` tool — returns stdout,
+      exit code, running/finished status
+
+#### Tests — `tests/test_process_registry.py` (new file)
+
+- [ ] Output cap: appending >200KB truncates to last 2000 chars tail
+- [ ] TTL cleanup: finished entries expire after 30 min
+
+### Verification
+
+```bash
+uv run pytest tests/test_process_registry.py -v
+# Manual: run a long command (sleep 15) and verify background session is returned
+```
+
+---
+
+## §11 — Security Audit Command `[P3]`
+
+### Problem
+
+§7 adds inline security checks to `co status`. A dedicated audit command can run a broader
+set of checks that are too verbose or slow for the inline status display.
+
+### Fix
+
+Add `co doctor` (or `co security-check`) subcommand that runs an extended audit:
+all §7 checks plus additional checks that require more computation or produce more output.
+
+**Additional checks beyond §7:**
+- Memory directory permissions (warn if world-readable)
+- Whether `exec_approvals.json` is world-readable
+- Whether any configured safe command includes a glob or path separator (misconfiguration)
+- Shell history check: warn if `GEMINI_API_KEY` or `ANTHROPIC_API_KEY` appear in `~/.zsh_history` or `~/.bash_history`
+
+### Implementation
+
+#### `co_cli/status.py`
+
+- [ ] Add `run_security_audit() -> list[SecurityFinding]` — superset of `check_security()`:
+  - All 3 checks from §7
+  - Memory dir permissions check
+  - exec-approvals.json permissions check
+  - Safe command list: flag any entry containing `/` or `*`
+  - Shell history scan (best-effort; skip if history file not readable)
+
+#### `co_cli/main.py`
+
+- [ ] Add `@app.command("doctor")` subcommand: calls `run_security_audit()`, prints all findings
+      with severity styles; if clean, print `[success]No issues found.[/success]`
+
+#### Tests — `tests/test_status.py`
+
+- [ ] Add cases for the new checks in `run_security_audit()`
+
+### Verification
+
+```bash
+uv run co doctor
+```
+
+---
+
+## §12 — Skills System `[P3]`
+
+### Problem
+
+No user-extensible skill layer. Behavior customization requires editing source code. Users
+cannot add domain-specific prompts without forking the project. OS-aware conditional loading
+is not possible.
+
+### Fix
+
+`skills/` directory in `.co-cli/` for user-defined SKILL.md files. Frontmatter controls
+requirements and invocation policy. At session start, scan, filter eligible skills, inject
+into system prompt within a token budget. See `docs/TODO-skills-system.md` for full spec.
+
+### Implementation
+
+Tracked in `docs/TODO-skills-system.md`. Not detailed here — coordinate with that doc.
+
+---
+
+## §13 — Cron Scheduling `[P3, blocked on §6]`
+
+### Problem
+
+No scheduling. All execution is synchronous/interactive. Cannot automate recurring tasks
+(daily summaries, reminders, data fetches).
+
+### Fix
+
+Full cron service with `at`, `every`, and `cron` schedule kinds. Jobs persist to `cron.json`.
+Requires session persistence (§6) first — isolated agent sessions reuse per-job session IDs
+across runs.
+
+**Dependency:** §6 (session persistence) must ship first.
+
+### Implementation
+
+Tracked in `docs/TODO-background-execution.md`. Not detailed here — coordinate with that doc.
+
+---
+
+## §14 — Config Includes `[P3]`
+
+### Problem
+
+Flat `settings.json`. Team setups (shared base config + personal overrides) require manual
+duplication or separate config management.
+
+### Fix
+
+`$include` key in settings JSON that accepts a path or array of paths. Deep merge semantics.
+Path confinement enforced: includes must stay under config root (CWE-22 mitigation). Not urgent
+for single-user CLI but needed for team deployment contexts.
+
+### Implementation
+
+#### `co_cli/config.py`
+
+- [ ] In `load_config()`: detect `$include` key in loaded dict before calling `Settings.model_validate()`
+- [ ] Resolve included paths relative to the settings file's directory; reject paths outside root
+      (path traversal guard)
+- [ ] Deep merge: arrays concatenate, objects recurse, scalars from later layer override earlier
+- [ ] Circular detection: depth limit = 10, track visited paths by realpath
+- [ ] Remove `$include` key from merged dict before passing to `Settings.model_validate()`
+
+#### Tests
+
+- [ ] `$include` pointing to a second file: merged result has both files' settings
+- [ ] `$include` with path traversal (`../../etc/passwd`): raises ValueError
+- [ ] Circular include (`a.json` includes `b.json` includes `a.json`): raises at depth limit
+
+### Verification
+
+```bash
+uv run pytest tests/test_config.py -v -k include
+```
+
+---
+
+## Sequencing Table
+
+| Priority | Item | Effort | Dependency |
+|----------|------|--------|------------|
+| P1 | §1 Shell arg validation | S | — |
+| P1 | §2 Exec approval persistence | M | — |
+| P2 | §3 Temporal decay scoring | S | — |
+| P2 | §4 `/new` slash command | S | `_index_session_summary` in `_history.py` (deferred) |
+| P2 | §5 Model fallback | S | — |
+| P2 | §6 Session persistence | M | — |
+| P2 | §7 Doctor security checks | S | §2 (for approvals check) |
+| P3 | §8 MMR re-ranking | S | §3 (decay scores as input) |
+| P3 | §9 Embedding provider layer | L | §8, tag junction table (shipped) |
+| P3 | §10 Process registry / backgrounding | L | `docs/TODO-background-execution.md` |
+| P3 | §11 Security audit command | M | §7 |
+| P3 | §12 Skills system | L | `docs/TODO-skills-system.md` |
+| P3 | §13 Cron scheduling | XL | §6 |
+| P3 | §14 Config includes | S | — |
+
+---
+
+## End-to-End Verification
+
+After implementing §1–§7:
+```bash
+uv run pytest tests/test_approval.py tests/test_exec_approvals.py \
+    tests/test_memory_decay.py tests/test_session.py tests/test_status.py -v
+
+uv run co status   # should show Security section if any findings exist
+uv run co chat     # approve a command with "a"; restart; verify not re-prompted
+```
+
+---
+
+## Files
+
+| File | Action | Section |
+|------|--------|---------|
+| `co_cli/_approval.py` | Modify — arg-level validation in `_is_safe_command()` | §1 |
+| `co_cli/_exec_approvals.py` | New — persistence layer for exec approvals | §2 |
+| `co_cli/_session.py` | New — session metadata persistence | §6 |
+| `co_cli/_process_registry.py` | New — process registry for background commands | §10 |
+| `co_cli/tools/_embeddings.py` | New — embedding provider ABC + backends | §9 |
+| `co_cli/_orchestrate.py` | Modify — check persisted approvals; save on "a" choice | §2 |
+| `co_cli/_commands.py` | Modify — add `/new`, `/approvals list`, `/approvals clear` | §2, §4 |
+| `co_cli/tools/memory.py` | Modify — temporal decay multiplier, MMR re-ranking | §3, §8 |
+| `co_cli/tools/shell.py` | Modify — background threshold, `get_process_output` tool | §10 |
+| `co_cli/knowledge_index.py` | Modify — embedding cache table, hybrid search | §9 |
+| `co_cli/config.py` | Modify — `session_ttl_minutes`, `fallback_models`, `memory_recall_half_life_days`, `embedding_model` | §3, §5, §6, §9, §14 |
+| `co_cli/deps.py` | Modify — same fields + `exec_approvals_path`, `embedding_provider` | §2, §3, §5, §6, §9 |
+| `co_cli/agent.py` | Modify — model fallback retry loop | §5 |
+| `co_cli/status.py` | Modify — `SecurityFinding`, `check_security()`, `run_security_audit()` | §7, §11 |
+| `co_cli/main.py` | Modify — session persistence wiring, security display, create_deps fields | §5, §6, §7 |
+| `tests/test_approval.py` | Modify — arg-validation cases | §1 |
+| `tests/test_exec_approvals.py` | New | §2 |
+| `tests/test_memory_decay.py` | Modify — retrieval decay + MMR cases | §3, §8 |
+| `tests/test_session.py` | New | §6 |
+| `tests/test_status.py` | Modify — security check cases, audit command cases | §7, §11 |
+| `tests/test_embeddings.py` | New | §9 |
+| `tests/test_process_registry.py` | New | §10 |

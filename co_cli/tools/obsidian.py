@@ -102,9 +102,6 @@ def search_notes(
     if not keywords:
         raise ModelRetry("Obsidian: empty query. Provide keywords to search.")
 
-    # Build word-boundary patterns for each keyword
-    patterns = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
-
     # Normalize tag filter
     if tag and not tag.startswith("#"):
         tag = f"#{tag}"
@@ -112,7 +109,56 @@ def search_notes(
     # Determine search root
     search_root = vault / folder if folder else vault
 
-    # TODO: Replace with KnowledgeIndex (see docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md)
+    # FTS path — sync on first use, then search the index
+    if ctx.deps.knowledge_index is not None:
+        try:
+            ctx.deps.knowledge_index.sync_dir("obsidian", search_root)
+            tag_filter = tag.lstrip("#") if tag else None
+            fts_results = ctx.deps.knowledge_index.search(
+                query,
+                source="obsidian",
+                tags=[tag_filter] if tag_filter else None,
+                limit=limit + 1,
+            )
+            if folder:
+                search_root_str = str(search_root)
+                fts_results = [
+                    r for r in fts_results
+                    if r.path == search_root_str or r.path.startswith(search_root_str + "/")
+                ]
+            has_more = len(fts_results) > limit
+            fts_results = fts_results[:limit]
+
+            if not fts_results:
+                return {
+                    "display": f"No notes found matching: {' '.join(keywords)}",
+                    "count": 0,
+                    "has_more": False,
+                }
+
+            lines = []
+            for r in fts_results:
+                rel_path = r.path
+                try:
+                    rel_path = str(Path(r.path).relative_to(vault))
+                except ValueError:
+                    pass
+                lines.append(f"**{rel_path}**")
+                if r.snippet:
+                    lines.append(f"  {r.snippet}")
+                lines.append("")
+
+            return {
+                "display": "\n".join(lines).rstrip(),
+                "count": len(fts_results),
+                "has_more": has_more,
+            }
+        except Exception:
+            pass  # Fall through to regex path
+
+    # Build word-boundary patterns for each keyword (regex fallback)
+    patterns = [re.compile(rf"\b{re.escape(k)}\b", re.IGNORECASE) for k in keywords]
+
     results = []
     has_more = False
     for note in search_root.rglob("*.md"):

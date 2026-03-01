@@ -52,15 +52,12 @@ See `docs/DESIGN-core.md` for module descriptions, processing flows, and approva
 
 All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt.
 
-**Current state:** Memories stored in `.co-cli/knowledge/memories/*.md` (YAML frontmatter, markdown body).
-Tools: `save_memory(content, tags)`, `recall_memory(query)`, `list_memories()`
+**Current state:** All knowledge in flat `.co-cli/knowledge/*.md` (YAML frontmatter, markdown body).
+Memories (`kind: memory`) and articles (`kind: article`) coexist, distinguished by `kind` frontmatter.
+FTS5 (BM25) search via `KnowledgeIndex` in `search.db`.
 
-**Planned (see `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`):**
-- Flat `.co-cli/knowledge/*.md` — memories and articles coexist, distinguished by `kind` frontmatter field
-- `kind: article` items add `origin_url`, are decay-protected, support progressive loading
-- Multimodal assets: `.co-cli/knowledge/assets/{slug}/`
-- New tools: `save_article()`, `recall_article()`, `read_article_detail()`, `list_memories(kind=)`
-- Retrieval: FTS5 (BM25) → hybrid semantic search (sqlite-vec) — replacing grep
+Agent-facing tools: `save_memory`, `save_article`, `search_knowledge` (cross-source, primary search), `list_memories`, `read_article_detail`.
+Internal adapters (not agent-registered): `recall_memory`, `recall_article`, `search_notes`.
 
 ## Coding Standards
 
@@ -79,7 +76,7 @@ Tools: `save_memory(content, tags)`, `recall_memory(query)`, `list_memories()`
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
 - **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
-- **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites. See `docs/DESIGN-08-theming-ascii.md` for style inventory and theme architecture
+- **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites
 
 ## Testing Policy
 
@@ -128,10 +125,10 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
 - `docs/DESIGN-logging-and-tracking.md` — Telemetry architecture, SQLite schema, viewers, real-time tail
 - `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
-- `docs/DESIGN-08-theming-ascii.md` — Theming, ASCII art banner, display helpers
 - `docs/DESIGN-16-prompt-design.md` — Agentic loop + prompt architecture: run_turn, approval re-entry, safety policy, static/per-turn prompt layers
 - `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: auto-triggered signal detection (implemented), context loading, dedup, consolidation, decay, protection, search evolution
+- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: auto-triggered signal detection, precision edits, tag/temporal filtering, decay, protection
+- `docs/DESIGN-knowledge.md` — Knowledge system: flat storage, kinds (memory/article), frontmatter schema, FTS5 index, tool surface, evolution path
 - `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
@@ -140,22 +137,47 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/TODO-subagent-delegation.md` — Remaining loop/prompting work: sub-agent delegation, confidence-scored advisory outputs
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
-- `docs/TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — All knowledge system work: flat storage migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search
+- `docs/TODO-sqlite-tag-fts-sem-search-for-knowledge.md` — Phase 2 (hybrid semantic search, sqlite-vec) and Phase 3 (cross-encoder rerank) — not yet started; 4 open bugs blocking ship-ready status
 - `docs/TODO-skills-system.md` — Skills system gaps: frontmatter parsing, arg substitution, description injection, env gating
+- `docs/TODO-gap-openclaw-analysis.md` — Openclaw adoption action plan: shell arg validation, exec approval persistence, temporal decay scoring, model fallback, session persistence, doctor security checks, MMR re-ranking, embedding provider layer, cron scheduling, config includes (P1–P3)
+- `docs/TODO-coding-tool-convergence.md` — Coding tool convergence: native file tools (read/list/find/write/edit), shell policy engine, coder subagent delegation, coding eval gates, workspace checkpoint + rewind, approval risk classifier (P0–P2)
 
 ### Skills
-- `/release <version|feature|bugfix>` — Full release workflow: tests, version bump, changelog, design doc sync, TODO cleanup, commit
-- `/sync-book` — Sync GitHub Pages design book: index, nav ordering, cross-references, excludes, push
+
+Three skills map onto the dev workflow. Human gates are at decisions, not artifacts.
+
+```
+PO brief
+    ↓
+TL:  /orchestrate-plan  → docs/TODO-<slug>.md  (TL + Reviewer + Auditor)
+    ↓
+👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
+    ↓
+Dev: /orchestrate-dev   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc)
+    ↓
+👤  Gate 2: TL reviews delivery report    (all done_when passed?)
+    ↓
+👤  Gate 3: PO acceptance                 (does it work for the user?)
+    ↓
+ship
+```
+
+- `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques in parallel → TL decides → repeat until clean, produces `docs/TODO-<slug>.md`
+- `/orchestrate-dev <slug>` — Implements approved plan: execute tasks, self-review, verify done_when, run tests, sync docs, produce `docs/DELIVERY-<slug>.md`
+- `/sync-doc [doc...]` — Verify DESIGN docs against current source code and fix inaccuracies in-place. No args = all DESIGN docs. Also invoked internally by `orchestrate-dev`.
 
 ## Reference Repos (local, for design research)
 
-Peer CLI tools cloned in `~/workspace_genai/` for studying shell safety, approval flows, sandbox designs, and UX patterns:
+Peer CLI tools cloned in `~/workspace_genai/` for studying shell safety, approval flows, sandbox designs, memory architectures, and UX patterns:
 
-| Repo | Language | Key files for shell safety / approval |
-|------|----------|--------------------------------------|
-| `codex` | Rust | `codex-rs/core/src/command_safety/` — deepest: tokenizes cmds, inspects flags, recursive shell wrapper parsing. Also `codex-rs/linux-sandbox/src/bwrap.rs` — vendored bubblewrap |
+| Repo | Language | Key files for shell safety / approval / memory |
+|------|----------|-------------------------------------------------|
+| `codex` | Rust | `codex-rs/shell-command/src/command_safety/` — deepest: tokenizes cmds, inspects flags, recursive shell wrapper parsing. Also `codex-rs/linux-sandbox/src/bwrap.rs` — vendored bubblewrap |
 | `gemini-cli` | TypeScript | `tools.allowed` prefix matching in settings, tool executor middleware |
-| `opencode` | Go | Multi-provider, flexible model switching |
+| `opencode` | TypeScript | Multi-surface agentic coding tool (CLI + desktop + cloud); `packages/opencode/` — agent loop, tool execution, provider abstraction |
 | `claude-code` | TypeScript | `packages/core/src/scheduler/policy.ts` — hook-based permission engine; `packages/cli/src/config/settings.ts` — allow/deny rules (post-CVE-2025-66032); `packages/core/src/utils/sandbox.ts` |
 | `aider` | Python | Simplest model — no sandbox, `io.confirm_ask()` for everything; proves you can ship without a sandbox if approval gate is strict |
 | `openclaw` | TypeScript | `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap |
+| `letta` | Python | Three-tier memory: in-context blocks (`letta/schemas/memory.py`, `block.py`) + archival passages with pgvector/tags (`letta/orm/passage.py`, `letta/services/passage_manager.py`) + summarization on overflow (`letta/services/summarizer/`). Agent-driven memory tools in `letta/functions/function_sets/base.py` (`core_memory_*`, `archival_memory_*`, `memory_rethink`). Key insight: agent decides what to archive — no auto-save, no decay, consolidation is agent-initiated |
+| `sidekick-cli` | Python | Closest peer in scope: REPL CLI, multi-provider LLM, MCP, per-project config. `src/sidekick/agent.py` — approval UX: three-option (yes/always/no) with per-tool session disable. `src/sidekick/config.py` — config + MCP server parsing. `src/sidekick/mcp/servers.py` — MCP approval callback wiring |
+| `mem0` | Python | Production memory layer: hybrid vector + knowledge graph search, cross-session persistence, LLM-driven extraction. `mem0/memory/main.py` — add/search/update/delete API. `mem0/memory/graph_memory.py` — graph store (Neo4j/Kuzu). `mem0/vector_stores/` — pluggable backends (Qdrant, Chroma, pgvector, Faiss). Key for co-cli: how fact extraction + contradiction resolution is LLM-driven, not rule-based |

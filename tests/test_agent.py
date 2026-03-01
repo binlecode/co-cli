@@ -10,10 +10,14 @@ EXPECTED_TOOLS = {
     "run_shell_command",
     "create_email_draft",
     "save_memory",
+    "save_article",
+    # Precision memory edits (approval governed by all_approval flag)
+    "update_memory",
+    "append_memory",
     # Read-only
-    "recall_memory",
     "list_memories",
-    "search_notes",
+    "read_article_detail",
+    "search_knowledge",
     "list_notes",
     "read_note",
     "search_drive_files",
@@ -33,6 +37,7 @@ EXPECTED_APPROVAL_TOOLS = {
     "run_shell_command",
     "create_email_draft",
     "save_memory",
+    "save_article",
 }
 
 
@@ -76,6 +81,14 @@ def test_web_search_ask_requires_approval():
     tool_map = {t.name: t for t in agent._function_toolset.tools.values()}
     assert tool_map["web_search"].requires_approval is True
     assert tool_map["web_fetch"].requires_approval is False
+
+
+def test_all_approval_gates_precision_write_tools():
+    """all_approval=True forces update_memory and append_memory to require approval."""
+    agent, _, _ = get_agent(all_approval=True)
+    tool_map = {t.name: t for t in agent._function_toolset.tools.values()}
+    assert tool_map["update_memory"].requires_approval is True
+    assert tool_map["append_memory"].requires_approval is True
 
 
 def test_web_fetch_ask_requires_approval():

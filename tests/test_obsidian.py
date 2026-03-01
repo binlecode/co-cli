@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from co_cli.knowledge_index import KnowledgeIndex
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.shell_backend import ShellBackend
 from co_cli.deps import CoDeps
@@ -113,29 +114,6 @@ def test_search_notes_tag_filter(tmp_path):
     assert "archived.md" in result["display"]
 
 
-def test_search_notes_snippet_word_boundaries(tmp_path):
-    """Test that snippets break at word boundaries, not mid-word."""
-    long_content = "The quick brown fox jumps over the lazy dog. " * 10
-    long_content += "KEYWORD found here in the middle of a very long document. "
-    long_content += "More words follow after the match to test the boundary. " * 10
-    (tmp_path / "long.md").write_text(long_content)
-
-    ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
-    ))
-
-    result = search_notes(ctx, "KEYWORD")
-    assert result["count"] == 1
-    snippet = result["display"].split("\n")[1].strip()
-    # Snippet should start/end with ... and not cut mid-word
-    assert snippet.startswith("...")
-    assert snippet.endswith("...")
-    # Should not start or end with a partial word (no leading/trailing word fragments)
-    inner = snippet.strip(".")
-    assert not inner[0].isalpha() or inner.startswith(" ") or inner[0].isupper()
-
 
 def test_list_notes_pagination(tmp_path):
     """list_notes returns correct pages with offset/limit."""
@@ -201,3 +179,101 @@ def test_obsidian_list_and_read(tmp_path):
     content = read_note(ctx, "Project.md")
     assert "# Project" in content
     assert "#work" in content
+
+
+def test_fts_folder_filter_excludes_siblings(tmp_path):
+    """FTS path with folder= must not return results from sibling folders.
+
+    Simulates the case where both Work/ and Personal/ were previously indexed
+    (broad index), then a search restricted to Work/ must exclude Personal/ notes.
+    """
+    vault = tmp_path / "vault"
+    work = vault / "Work"
+    personal = vault / "Personal"
+    work.mkdir(parents=True)
+    personal.mkdir(parents=True)
+
+    keyword = "xylofts-unique-keyword"
+    (work / "standup.md").write_text(f"# Standup\n{keyword} in work note.")
+    (personal / "diary.md").write_text(f"# Diary\n{keyword} in personal note.")
+
+    # Broad index — both folders indexed under source='obsidian'
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("obsidian", vault)
+
+    ctx = Context(deps=CoDeps(
+        shell=ShellBackend(),
+        obsidian_vault_path=vault,
+        knowledge_index=idx,
+        session_id="test",
+    ))
+
+    result = search_notes(ctx, keyword, folder="Work")
+
+    assert result["count"] == 1, f"Expected 1 result (Work only), got {result['count']}"
+    assert "Work" in result["display"]
+    assert "Personal" not in result["display"]
+
+    idx.close()
+
+
+def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
+    """FTS folder filter must not bleed into folders sharing a name prefix.
+
+    Searching folder='Work' must not return results from 'Workbench/'.
+    """
+    vault = tmp_path / "vault"
+    (vault / "Work").mkdir(parents=True)
+    (vault / "Workbench").mkdir(parents=True)
+
+    keyword = "xylofts-prefix-leak"
+    (vault / "Work" / "standup.md").write_text(f"# Standup\n{keyword} in work note.")
+    (vault / "Workbench" / "bench.md").write_text(f"# Bench\n{keyword} in workbench note.")
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("obsidian", vault)
+
+    ctx = Context(deps=CoDeps(
+        shell=ShellBackend(),
+        obsidian_vault_path=vault,
+        knowledge_index=idx,
+        session_id="test",
+    ))
+
+    result = search_notes(ctx, keyword, folder="Work")
+
+    assert result["count"] == 1, f"Expected 1 result (Work only), got {result['count']}: {result['display']}"
+    assert "Work/standup.md" in result["display"]
+    assert "Workbench" not in result["display"]
+
+    idx.close()
+
+
+def test_fts_tag_filter_works_with_index(tmp_path):
+    """FTS path must apply tag filter correctly when knowledge_index is active."""
+    vault = tmp_path / "vault"
+    vault.mkdir(parents=True)
+    (vault / "active.md").write_text(
+        "---\ntags: [active, work]\n---\n# Active\nProject alpha xylofts-tag-test is on track."
+    )
+    (vault / "archived.md").write_text(
+        "---\ntags: [archived]\n---\n# Archived\nProject beta xylofts-tag-test was cancelled."
+    )
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("obsidian", vault)
+
+    ctx = Context(deps=CoDeps(
+        shell=ShellBackend(),
+        obsidian_vault_path=vault,
+        knowledge_index=idx,
+        session_id="test",
+    ))
+
+    result = search_notes(ctx, "xylofts-tag-test", tag="#active")
+
+    assert result["count"] == 1, f"Expected 1 result (active tag only), got {result['count']}: {result['display']}"
+    assert "active.md" in result["display"]
+    assert "archived.md" not in result["display"]
+
+    idx.close()

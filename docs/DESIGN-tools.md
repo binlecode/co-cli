@@ -24,7 +24,8 @@ Shell, memory, Obsidian vault, Google services, and web intelligence — agent t
 |------|----------|-----------|
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
-| `save_memory` | Yes | Writes to `.co-cli/knowledge/memories/` |
+| `save_memory` | Yes | Writes to `.co-cli/knowledge/` |
+| `save_article` | Yes | Writes to `.co-cli/knowledge/` |
 | `todo_write`, `todo_read` | No | In-memory session state only — no external side effects |
 | All other native tools | No | Read-only operations |
 
@@ -87,18 +88,18 @@ Bidirectional routing: `recall_memory ↔ search_notes ↔ search_drive_files` (
 
 ### 1. What & How
 
-Memory tools provide cross-session knowledge persistence. The agent proactively saves preferences, corrections, decisions, and research findings as markdown files with YAML frontmatter. On recall, substring grep + tag filtering retrieves matches, with gravity (recency touch) and one-hop link traversal for connected knowledge.
+Memory tools provide cross-session knowledge persistence. The agent proactively saves preferences, corrections, decisions, and research findings as markdown files with YAML frontmatter. On recall, FTS5 BM25 search (primary) or substring grep (fallback) retrieves matches, with gravity (recency touch) and one-hop link traversal for connected knowledge.
 
 ```
 save_memory(content, tags?, related?)
-  ├── Load all memories from .co-cli/knowledge/memories/
+  ├── Load all memories from .co-cli/knowledge/
   ├── Fuzzy-dedup check (token_sort_ratio, last N days)
   │     dup found? → update existing (consolidate)
   │     no dup?   → write new {id:03d}-{slug}.md
   └── total > memory_max_count? → trigger decay strategy
 
 recall_memory(query, max_results=5)
-  ├── Substring match on content + tags (case-insensitive)
+  ├── FTS5 BM25 search (primary) or substring grep (fallback)
   ├── Sort by recency (updated or created)
   ├── Dedup pulled results (pairwise fuzzy similarity)
   ├── One-hop related traversal (up to 5 linked entries)
@@ -112,7 +113,7 @@ list_memories(offset=0, limit=20)
 
 **`save_memory(content, tags, related) → dict`** — Proactive save. Checks for duplicates in recent memories (within `memory_dedup_window_days`) using `rapidfuzz.fuzz.token_sort_ratio`. On similarity ≥ `memory_dedup_threshold` (default 85%), updates the existing entry (merges tags, overwrites content). Otherwise creates a new `{id:03d}-{slug}.md` file. After save, if total count exceeds `memory_max_count`, triggers decay. Returns `action: "saved"` or `action: "consolidated"`.
 
-**`recall_memory(query, max_results) → dict`** — Case-insensitive substring search on content and tags. Pulls up to `max_results` direct matches sorted by recency. Deduplicates pulled results via pairwise fuzzy similarity (merges near-duplicates on the fly, deletes the older file). Traverses one-hop `related` links, adding up to 5 connected entries. Touches all pulled entries (updates `updated` timestamp = gravity: frequently-recalled memories stay accessible).
+**`recall_memory(query, max_results) → dict`** — FTS5 BM25 ranked search when `knowledge_index` is available; falls back to case-insensitive substring search otherwise. Pulls up to `max_results` direct matches sorted by recency. Deduplicates pulled results via pairwise fuzzy similarity (merges near-duplicates on the fly, deletes the older file). Traverses one-hop `related` links, adding up to 5 connected entries. Touches all pulled entries (updates `updated` timestamp = gravity: frequently-recalled memories stay accessible).
 
 **`list_memories(offset, limit) → dict`** — Full inventory, sorted by ID. Paginated with `has_more`. Shows lifecycle indicators: `[category]` tag, decay-protected flag.
 
@@ -126,10 +127,11 @@ list_memories(offset=0, limit=20)
 ```
 ---
 id: 42
+kind: memory
 created: 2026-01-15T10:00:00+00:00
 updated: 2026-02-01T14:30:00+00:00
 tags: [preference, python]
-source: detected        # "detected" if signal tags present, "user-told" otherwise
+provenance: detected    # "detected" if signal tags present, "user-told" otherwise
 auto_category: preference
 decay_protected: false
 related: ["003-user-prefers-pytest"]

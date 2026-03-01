@@ -137,31 +137,53 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
     from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
     from co_cli.config import settings
 
-    # Swap model
+    # Swap model — save old for rollback
+    old_model = agent.model
     provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
-    agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
+    new_model = OpenAIChatModel(model_name=model_name, provider=provider)
+    agent.model = new_model
+    try:
+        # Rebuild system prompt with new model quirks
+        normalized_model = normalize_model_name(model_name)
+        soul_seed = None
+        soul_examples = None
+        if settings.personality:
+            from pathlib import Path as _Path
+            from co_cli.prompts.personalities._composer import (
+                load_soul_seed, load_soul_examples, load_character_memories,
+            )
+            soul_seed = load_soul_seed(settings.personality)
+            base_memories = load_character_memories(
+                settings.personality, _Path.cwd() / ".co-cli" / "knowledge"
+            )
+            if base_memories:
+                soul_seed = soul_seed + "\n\n" + base_memories
+            examples = load_soul_examples(settings.personality)
+            if examples:
+                soul_examples = examples
+        new_system_prompt, _manifest = assemble_prompt(
+            "ollama",
+            model_name=normalized_model,
+            soul_seed=soul_seed,
+            soul_examples=soul_examples,
+        )
+        agent.system_prompt = new_system_prompt
 
-    # Rebuild system prompt with new model quirks
-    normalized_model = normalize_model_name(model_name)
-    new_system_prompt, _manifest = assemble_prompt(
-        "ollama",
-        model_name=normalized_model,
-        personality=settings.personality,
-    )
-    agent.system_prompt = new_system_prompt
+        # Build ModelSettings from inference profile
+        inf = get_model_inference("ollama", normalized_model)
+        num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
+        extra: dict = {"num_ctx": num_ctx}
+        extra.update(inf.get("extra_body", {}))
 
-    # Build ModelSettings from inference profile
-    inf = get_model_inference("ollama", normalized_model)
-    num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
-    extra: dict = {"num_ctx": num_ctx}
-    extra.update(inf.get("extra_body", {}))
-
-    return ModelSettings(
-        temperature=inf.get("temperature", 0.7),
-        top_p=inf.get("top_p", 1.0),
-        max_tokens=inf.get("max_tokens", 16384),
-        extra_body=extra,
-    )
+        return ModelSettings(
+            temperature=inf.get("temperature", 0.7),
+            top_p=inf.get("top_p", 1.0),
+            max_tokens=inf.get("max_tokens", 16384),
+            extra_body=extra,
+        )
+    except Exception:
+        agent.model = old_model
+        raise
 
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
@@ -180,9 +202,9 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Memory ID must be a number.[/dim]")
         return None
 
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    memory_dir = Path.cwd() / ".co-cli/knowledge"
     if not memory_dir.exists():
-        console.print("[dim]No memories directory found.[/dim]")
+        console.print("[dim]No knowledge directory found.[/dim]")
         return None
 
     # Find file with this ID
@@ -193,8 +215,11 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         return None
 
     # Delete file
-    matching_files[0].unlink()
-    console.print(f"[success]✓ Deleted memory {memory_id}: {matching_files[0].name}[/success]")
+    file_to_delete = matching_files[0]
+    file_to_delete.unlink()
+    if ctx.deps.knowledge_index is not None:
+        ctx.deps.knowledge_index.remove("memory", str(file_to_delete))
+    console.print(f"[success]✓ Deleted memory {memory_id}: {file_to_delete.name}[/success]")
     return None
 
 

@@ -5,7 +5,7 @@ This TODO contains only unimplemented work. Implemented architecture and behavio
 **Nature of this work:** Both items are performance add-ons — they improve quality and reliability of existing behaviors but do not gate any other evolution path. The main agent already handles research, analysis, and retrieval without them. No other TODO depends on this work shipping first.
 
 Recommended sequence across active TODOs (items below are in implementation order):
-1. `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` — foundational: knowledge recall is structurally incomplete without ranked retrieval; co is otherwise fully functional
+1. `TODO-sqlite-tag-fts-sem-search-for-knowledge.md` — foundational: knowledge recall is structurally incomplete without ranked retrieval; co is otherwise fully functional
 2. `TODO-background-execution.md` — long-running task substrate
 3. Item 1 — sub-agent delegation (P1, after background infrastructure)
 4. Item 2 — confidence-scored advisory outputs (P2, after ranked retrieval baseline)
@@ -98,7 +98,7 @@ Docstring dims (see DESIGN-tools.md standard):
 ```
 co_cli/agents/analysis.py
   make_analysis_agent(deps: CoDeps) → Agent[CoDeps, AnalysisResult]
-    tools: recall_memory, search_notes, search_drive_files  (read-only)
+    tools: search_knowledge, search_drive_files  (read-only)
     output_type: AnalysisResult
     system_prompt: "compare, evaluate, and synthesize the provided inputs"
 
@@ -163,7 +163,7 @@ Priority:
 - P2 (quality enhancement, lower urgency than delegation)
 
 When to implement:
-- After `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` Phase 1 is complete (ranked retrieval baseline).
+- After `TODO-sqlite-tag-fts-sem-search-for-knowledge.md` Phase 1 is complete (ranked retrieval baseline).
 - Preferably after Phase 2 hybrid retrieval and Prereq B (articles), so confidence is derived from stronger ranking signals across sources.
 
 Best sequence rationale:

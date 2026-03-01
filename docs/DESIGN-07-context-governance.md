@@ -99,7 +99,7 @@ Summary preserves: key decisions and outcomes, file paths and tool names, error 
 
 ### Background Pre-Computation
 
-After each turn, if history length exceeds 70% of `max_history_messages` (or 80% of `max_history_messages` by message count), `precompute_compaction()` spawns an `asyncio.Task` to pre-compute the summary during user idle time — while the user reads the response and composes their next message. The task is joined at the start of the next `run_turn()` call before the history processor chain runs.
+After each turn, `precompute_compaction()` is spawned unconditionally as an `asyncio.Task`. It checks internally whether history is approaching the compaction threshold: the task returns `None` (no-op) if below thresholds, and computes the summary eagerly if: (a) message count exceeds 80% of `max_history_messages`, or (b) estimated token count exceeds 70% of the internal token budget. The task runs during user idle time — while the user reads the response and composes their next message. The result is joined at the start of the next `run_turn()` call before the history processor chain runs.
 
 If the pre-computed summary is ready and the history hasn't changed since it was computed (no new messages added), `truncate_history_window` uses it directly rather than computing inline. If the user replies faster than pre-computation completes, the processor falls back to inline computation transparently.
 
@@ -127,17 +127,18 @@ When a `KeyboardInterrupt` or `CancelledError` occurs mid-turn, `ModelResponse` 
 
 ### History Processor Registration
 
-Both processors are registered at agent creation time in `agent.py`:
+Four processors are registered at agent creation time in `agent.py`:
 
 ```
 Agent(
     model,
-    history_processors=[truncate_tool_returns, truncate_history_window],
+    history_processors=[inject_opening_context, truncate_tool_returns,
+                         detect_safety_issues, truncate_history_window],
     ...
 )
 ```
 
-pydantic-ai runs processors in order before every model request. Sync processors (`truncate_tool_returns`) run first; async processors (`truncate_history_window`) run second.
+pydantic-ai runs processors in order before every model request. `inject_opening_context` and `detect_safety_issues` handle opening-context injection and doom-loop/reflection-cap safety checks. `truncate_tool_returns` trims old tool outputs. `truncate_history_window` summarises and compacts history when the message count exceeds the threshold.
 
 <details>
 <summary>Peer landscape</summary>

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-03-01
+
+### Added
+- **Knowledge index dependency updates**: Added `sqlite-vec` and `pysqlite3` runtime dependencies to support hybrid semantic search with sqlite extension loading on environments where stdlib `sqlite3` lacks extension APIs.
+- **Knowledge system functional coverage**: Added dedicated functional test suites for knowledge indexing and article tools (`tests/test_knowledge_index.py`, `tests/test_save_article.py`) and expanded Obsidian FTS regression coverage.
+
+### Fixed
+- **Obsidian FTS folder scoping**: Fixed folder filtering to use boundary-safe path matching so sibling folders with common prefixes (for example `Work` vs `Workbench`) do not leak into results.
+- **Obsidian FTS tag filtering**: Fixed type mismatch in FTS path (`tags` now passed as list) so tag-constrained searches return correct results.
+- **Forget/de-index consistency**: `/forget` now evicts deleted memory files from the search index immediately via `KnowledgeIndex.remove()`, preventing ghost recall results.
+- **Approval gating parity**: `update_memory` and `append_memory` now honor `all_approval=True` in eval/strict approval mode.
+- **Grep fallback source contract**: `search_knowledge` grep fallback now returns empty for non-memory sources when FTS is unavailable, instead of returning mislabeled memory results.
+- **LLM E2E/tool-calling test stability**: Updated assertions to match current tool surface (`search_knowledge` primary retrieval path) and removed brittle failure-path checks causing nondeterministic provider-specific failures.
+
+### Changed
+- **Knowledge roadmap docs sync**: `docs/TODO-sqlite-tag-fts-sem-search-for-knowledge.md` now reflects the current shipped state (Phase 1 + Phase 2 complete, Phase 3 reranker pending).
+- **No-skip test policy enforcement for touched suites**: Removed skip decorators from updated knowledge/web/tool-calling tests and converted them to deterministic pass/fail assertions. Current full suite: `274 passed`.
+
+---
+
 ## [0.4.3] - 2026-02-26
 
 ### Added

@@ -174,3 +174,22 @@ async def test_analyze_no_signal():
     messages = [_user("what time is it in Tokyo?")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is False
+
+
+@pytest.mark.asyncio
+async def test_inject_true_for_correction():
+    """Explicit correction is classified with inject=True."""
+    agent, _, _ = get_agent()
+    messages = [_user("don't use camelCase in Python code")]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.found is True
+    assert result.inject is True
+
+
+@pytest.mark.asyncio
+async def test_inject_false_for_ephemeral():
+    """Session-scoped decision produces inject=False."""
+    agent, _, _ = get_agent()
+    messages = [_user("let's use React for this project, just this one")]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.inject is False

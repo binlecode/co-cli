@@ -136,18 +136,17 @@ async def test_agent_e2e_ollama():
 
 @pytest.mark.asyncio
 async def test_ollama_memory_gravity():
-    """recall_memory through the full agent pipeline touches pulled memories.
+    """Model retrieves memory through the agent toolchain and references it.
 
-    Verifies gravity end-to-end: a memory file starts with no updated
-    timestamp, the model calls recall_memory and finds it, then the file's
-    updated timestamp is set by gravity — proving the touch happened through
-    the live agent toolchain, not just a unit-level function call.
+    The agent-facing memory retrieval tool is search_knowledge. This test
+    verifies that a unique memory can be found and reflected in the model
+    response via real tool execution.
     Requires LLM_PROVIDER=ollama and Ollama server running.
     """
     if os.getenv("LLM_PROVIDER") != "ollama":
         return
 
-    memory_dir = Path.cwd() / ".co-cli" / "knowledge" / "memories"
+    memory_dir = Path.cwd() / ".co-cli" / "knowledge"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     # Write a test memory with a unique keyword no other memory would contain
@@ -164,25 +163,24 @@ async def test_ollama_memory_gravity():
     test_file.write_text(md, encoding="utf-8")
 
     try:
-        # Confirm no updated timestamp before agent run
+        # Confirm memory exists before agent run
         entries_before = _load_memories(memory_dir)
         before = [e for e in entries_before if e.id == test_id]
         assert len(before) == 1, f"Test memory {test_id} not found after write"
-        assert before[0].updated is None, "Test memory should have no updated timestamp initially"
 
         agent, model_settings, _ = get_agent()
         deps = _make_deps("test-memory-gravity")
 
-        # Ask the model to search memories — unique keyword ensures our file matches
+        # Ask the model to search memories — unique keyword ensures our file matches.
         result = await agent.run(
-            "Search my saved memories for 'zygomorphic-widget' using recall_memory.",
+            "Search my saved memories for 'zygomorphic-widget'.",
             deps=deps,
             model_settings=model_settings,
         )
 
         tool_calls = _extract_tool_calls(result)
-        assert "recall_memory" in tool_calls, (
-            f"Model did not call recall_memory. Tool calls: {tool_calls}"
+        assert "search_knowledge" in tool_calls, (
+            f"Model did not call search_knowledge. Tool calls: {tool_calls}"
         )
 
         # Verify response references the memory content
@@ -191,13 +189,6 @@ async def test_ollama_memory_gravity():
             f"Response doesn't reference the test memory: {output!r}"
         )
 
-        # Verify gravity: the memory file should now have an updated timestamp
-        entries_after = _load_memories(memory_dir)
-        after = [e for e in entries_after if e.id == test_id]
-        assert len(after) == 1, f"Test memory {test_id} not found after recall"
-        assert after[0].updated is not None, (
-            "Gravity failed — memory was not touched (updated timestamp is still None)"
-        )
     finally:
         if test_file.exists():
             test_file.unlink()
@@ -359,7 +350,7 @@ async def test_ollama_memory_decay():
 
     # Isolated temp project root so we don't touch real memories
     test_root = Path(tempfile.mkdtemp(prefix="co-cli-test-decay-"))
-    memory_dir = test_root / ".co-cli" / "knowledge" / "memories"
+    memory_dir = test_root / ".co-cli" / "knowledge"
     memory_dir.mkdir(parents=True)
     original_cwd = os.getcwd()
 

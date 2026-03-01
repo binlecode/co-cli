@@ -46,10 +46,19 @@ def test_parse_frontmatter_no_frontmatter():
 
 
 def test_parse_frontmatter_scalar_yaml_returns_empty():
-    """YAML that parses to a non-dict (e.g. a bare string) returns {}."""
+    """YAML that parses to a non-dict (e.g. a bare string) returns ({}, body)."""
     content = "---\njust a string\n---\nbody"
     fm, body = parse_frontmatter(content)
     assert fm == {}
+    assert body == "body"
+
+
+def test_parse_frontmatter_empty_yaml_returns_body():
+    """Empty YAML block returns ({}, body) without --- delimiters."""
+    content = "---\n\n---\nbody text"
+    fm, body = parse_frontmatter(content)
+    assert fm == {}
+    assert body == "body text"
 
 
 def test_parse_frontmatter_datetime_converted_to_string():
@@ -142,3 +151,37 @@ def test_validate_rejects_malformed_updated():
     """Non-ISO8601 'updated' value raises ValueError."""
     with pytest.raises(ValueError, match="updated"):
         validate_memory_frontmatter(_valid_fm(updated="yesterday"))
+
+
+def test_validate_accepts_valid_provenance_values():
+    """All valid provenance enum values are accepted without error."""
+    for provenance in ("detected", "user-told", "planted", "auto_decay", "web-fetch"):
+        validate_memory_frontmatter(_valid_fm(provenance=provenance))
+
+
+def test_validate_rejects_invalid_provenance():
+    """Invalid provenance value raises ValueError mentioning 'provenance'."""
+    with pytest.raises(ValueError, match="provenance"):
+        validate_memory_frontmatter(_valid_fm(provenance="bad-value"))
+
+
+def test_validate_accepts_title_string():
+    """title as a string is accepted."""
+    validate_memory_frontmatter(_valid_fm(title="Python Asyncio Guide"))
+
+
+def test_validate_rejects_non_string_title():
+    """Non-string title raises ValueError."""
+    with pytest.raises(ValueError, match="title"):
+        validate_memory_frontmatter(_valid_fm(title=42))
+
+
+def test_validate_accepts_related_list():
+    """related as a list of strings is accepted."""
+    validate_memory_frontmatter(_valid_fm(related=["001-some-memory", "002-other"]))
+
+
+def test_validate_rejects_related_non_list():
+    """related as a string (not a list) raises ValueError."""
+    with pytest.raises(ValueError, match="related"):
+        validate_memory_frontmatter(_valid_fm(related="001-some-memory"))

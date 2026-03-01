@@ -25,7 +25,7 @@ pending --> running --> completed (exit 0)
                    --> cancelled (SIGTERM -> SIGKILL)
 ```
 
-Cancellation: send SIGTERM, wait 5s grace period, then SIGKILL if still alive. Both steps are required and complementary: spawn with `start_new_session=True` so the child gets its own process group; kill via `co_cli._shell_env.kill_process_group()` — already implements the SIGTERM → SIGKILL sequence on that group.
+Cancellation: send SIGTERM, wait 5s grace period, then SIGKILL if still alive. Both steps are required and complementary: spawn with `start_new_session=True` so the child gets its own process group; kill via `co_cli._shell_env.kill_process_tree()` — already implements the SIGTERM → SIGKILL sequence on that group.
 
 Inactivity timeout: if `background_task_inactivity_timeout_seconds > 0` and the process emits no output for that duration, auto-cancel it. Implemented as an asyncio watcher that polls output.log size; resets the deadline on file growth; fires cancellation when the deadline expires. Default: 0 (disabled). Prevents zombie tasks that stall silently.
 
@@ -130,7 +130,7 @@ Background tasks create a `background_task_execute` span linked to the originati
 
 - [ ] `TaskStorage`: create, update, read, list, delete, cleanup old tasks
 - [ ] `TaskRunner`: spawn via asyncio, capture output, track status transitions
-- [ ] Cancellation: SIGTERM with SIGKILL fallback, process group kill (reuse `_shell_env.kill_process_group()`)
+- [ ] Cancellation: SIGTERM with SIGKILL fallback, process group kill (reuse `_shell_env.kill_process_tree()`)
 - [ ] Inactivity timeout: auto-cancel stalled tasks when configured
 - [ ] Graceful shutdown: `TaskRunner.shutdown()` cancels all running tasks on co-cli exit
 - [ ] Orphan recovery: tasks with `status=running` at startup marked `failed`
@@ -164,21 +164,3 @@ Background tasks create a `background_task_execute` span linked to the originati
 - `DESIGN-logging-and-tracking.md` -- telemetry integration
 - `DESIGN-tools.md` -- shell tool approval logic (reused for background tasks)
 
----
-
-## Audit: Design/Implementation Gaps (2026-02-26, commit `285b35a`)
-
-- [ ] Create `co_cli/background.py` with `TaskRunner`, `TaskStorage`, `TaskStatus`, and `TaskMetadata` to back the lifecycle defined above.
-- [ ] Create `co_cli/tools/task_control.py` and implement `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks`.
-- [ ] Register task-control tools in `co_cli/agent.py` with approval policy matching this design.
-- [ ] Add `task_runner` to `CoDeps` and wire it from `main.py` during chat loop initialization.
-- [ ] Add slash handlers for `/background`, `/tasks`, `/cancel`, and `/status <id>` in `co_cli/_commands.py`.
-- [ ] Resolve `/status` routing overlap: keep current system health output for no-arg `/status`, and dispatch to task lookup when an ID is provided.
-- [ ] Add background settings and env bindings in `co_cli/config.py`: `background_max_concurrent`, `background_task_retention_days`, `background_auto_cleanup`, `background_task_inactivity_timeout_seconds`.
-- [ ] Implement startup cleanup + orphan recovery scan for task directories before command handlers/tool calls rely on runner state.
-- [ ] Implement inactivity-timeout auto-cancel watcher for background tasks when configured.
-- [ ] Implement graceful `TaskRunner.shutdown()` invocation in `main.py` cleanup path (in addition to existing compaction-task cancellation).
-- [ ] Implement binary output detection and safe rendering path (`is_binary`) for `check_task_status`.
-- [ ] Implement OTel span creation/linking for `background_task_execute` and persist span IDs in task metadata.
-- [ ] Add `tests/test_background.py` covering storage, runner transitions, cancellation, slash command routing, tool registration, and telemetry linkage.
-- [ ] Align wording in this TODO with actual helper naming: current process-group kill helper is `kill_process_tree()` in `co_cli/_shell_env.py` (not `kill_process_group()`).

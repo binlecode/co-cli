@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import date
 from pathlib import Path
@@ -24,8 +25,41 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, recall_memory, list_memories
+from co_cli.tools.memory import save_memory, recall_memory, list_memories, update_memory, append_memory
+from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.todo import todo_write, todo_read
+
+logger = logging.getLogger(__name__)
+
+
+def _migrate_memories_dir(knowledge_dir: Path) -> None:
+    """Migrate legacy .co-cli/knowledge/memories/*.md to flat .co-cli/knowledge/.
+
+    Idempotent: files already at destination are skipped. Empty memories/
+    subdir is removed after migration.
+    """
+    memories_subdir = knowledge_dir / "memories"
+    if not memories_subdir.exists():
+        return
+
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    migrated = 0
+    for src in memories_subdir.glob("*.md"):
+        dest = knowledge_dir / src.name
+        if not dest.exists():
+            src.rename(dest)
+            migrated += 1
+        else:
+            logger.debug(f"Migration: skipping {src.name} — already at destination")
+
+    # Remove subdir if now empty
+    try:
+        memories_subdir.rmdir()
+        logger.info(f"Migrated {migrated} memory files from memories/ to knowledge/")
+    except OSError:
+        # Not empty (e.g. unexpected subdirs) — leave it
+        if migrated:
+            logger.info(f"Migrated {migrated} memory files; memories/ subdir not removed (not empty)")
 
 
 def get_agent(
@@ -51,6 +85,9 @@ def get_agent(
             (identity declaration) is extracted and placed at the top of the
             static system prompt — the model's first context is always the soul.
     """
+    # Migrate legacy memories/ subdir to flat knowledge/ dir (idempotent)
+    _migrate_memories_dir(Path.cwd() / ".co-cli" / "knowledge")
+
     provider_name = settings.llm_provider.lower()
 
     model_settings: ModelSettings | None = None
@@ -127,7 +164,7 @@ def get_agent(
             load_character_memories,
         )
         soul_seed = load_soul_seed(personality)
-        memory_dir = Path.cwd() / ".co-cli" / "knowledge" / "memories"
+        memory_dir = Path.cwd() / ".co-cli" / "knowledge"
         base_memories = load_character_memories(personality, memory_dir)
         if base_memories:
             soul_seed = soul_seed + "\n\n" + base_memories
@@ -230,15 +267,18 @@ def get_agent(
     agent.tool(run_shell_command, requires_approval=True)
     agent.tool(create_email_draft, requires_approval=True)
     agent.tool(save_memory, requires_approval=True)
+    agent.tool(save_article, requires_approval=True)
+    agent.tool(update_memory, requires_approval=all_approval)
+    agent.tool(append_memory, requires_approval=all_approval)
 
     # Session task tracking — no approval (in-memory only, no external side effects)
     agent.tool(todo_write, requires_approval=all_approval)
     agent.tool(todo_read, requires_approval=all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
-    agent.tool(recall_memory, requires_approval=all_approval)
     agent.tool(list_memories, requires_approval=all_approval)
-    agent.tool(search_notes, requires_approval=all_approval)
+    agent.tool(read_article_detail, requires_approval=all_approval)
+    agent.tool(search_knowledge, requires_approval=all_approval)
     agent.tool(list_notes, requires_approval=all_approval)
     agent.tool(read_note, requires_approval=all_approval)
     agent.tool(search_drive_files, requires_approval=all_approval)

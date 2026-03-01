@@ -153,7 +153,23 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
             content = service.files().export(fileId=file_id, mimeType="text/plain").execute()
         else:
             content = service.files().get_media(fileId=file_id).execute()
-        return content.decode("utf-8")
+        text = content.decode("utf-8")
+
+        # FTS index — opportunistically cache Drive content after full fetch
+        if ctx.deps.knowledge_index is not None:
+            try:
+                import hashlib as _hashlib
+                ctx.deps.knowledge_index.index(
+                    source="drive",
+                    path=file_id,
+                    title=file.get("name"),
+                    content=text,
+                    hash=_hashlib.sha256(text.encode()).hexdigest(),
+                )
+            except Exception:
+                pass
+
+        return text
     except ModelRetry:
         raise
     except Exception as e:

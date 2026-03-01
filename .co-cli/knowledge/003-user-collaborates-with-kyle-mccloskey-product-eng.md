@@ -2,7 +2,7 @@
 auto_category: null
 created: '2026-02-15T01:13:19.037437+00:00'
 id: 3
-source: user-told
+provenance: user-told
 tags:
 - relationship
 - professional

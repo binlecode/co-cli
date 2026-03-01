@@ -2,10 +2,11 @@
 
 This module provides tools for saving, recalling, and listing memories in the
 internal knowledge system. Memories are stored as markdown files with YAML
-frontmatter in .co-cli/knowledge/memories/.
+frontmatter in .co-cli/knowledge/.
 
-Retrieval uses grep-based search for MVP (<200 memories). Future phases will
-add SQLite FTS5 and vector search as corpus grows.
+Retrieval uses grep-based search for MVP (<200 memories). FTS5 search is
+available when knowledge_search_backend is 'fts5' or 'hybrid' and
+knowledge_index is set in deps.
 """
 
 import logging
@@ -13,7 +14,11 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+# Matches line-number prefixes injected by the Read tool (e.g. "1→ " or "Line 1: ")
+_LINE_PREFIX_RE = re.compile(r"(^|\n)\d+\u2192 ", re.MULTILINE)
+_LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
 import yaml
 from rapidfuzz import fuzz
@@ -42,6 +47,7 @@ class MemoryEntry:
     updated: str | None = None
     decay_protected: bool = False
     related: list[str] | None = None
+    kind: str = "memory"
 
 
 # ---------------------------------------------------------------------------
@@ -53,6 +59,7 @@ def _load_memories(
     memory_dir: Path,
     *,
     tags: list[str] | None = None,
+    kind: str | None = None,
 ) -> list[MemoryEntry]:
     """Load and validate memory files from a directory.
 
@@ -60,13 +67,14 @@ def _load_memories(
     requested tags are returned (filtering at parse time). When *tags* is
     None, all entries are loaded.
 
-    Returns a list of MemoryEntry objects. Invalid or malformed files are
-    skipped with a warning.
+    When *kind* is provided, only entries of that kind are returned.
+    Files without a kind field default to "memory".
 
     Args:
-        memory_dir: Path to the memories directory
+        memory_dir: Path to the knowledge directory
         tags: Optional tag filter — only entries matching at least one tag
               are included. None means load all.
+        kind: Optional kind filter — "memory" or "article". None means load all.
 
     Returns:
         List of validated MemoryEntry objects
@@ -80,6 +88,11 @@ def _load_memories(
             raw = path.read_text(encoding="utf-8")
             fm, body = parse_frontmatter(raw)
             validate_memory_frontmatter(fm)
+
+            # Early exit: skip entries that don't match requested kind
+            entry_kind = fm.get("kind", "memory")
+            if kind is not None and entry_kind != kind:
+                continue
 
             # Early exit: skip entries that don't match requested tags
             if tags is not None:
@@ -97,6 +110,7 @@ def _load_memories(
                     updated=fm.get("updated"),
                     decay_protected=fm.get("decay_protected", False),
                     related=fm.get("related"),
+                    kind=entry_kind,
                 )
             )
         except Exception as e:
@@ -123,7 +137,7 @@ def _slugify(text: str) -> str:
     return slug.strip("-")[:50]
 
 
-def _detect_source(tags: list[str] | None) -> str:
+def _detect_provenance(tags: list[str] | None) -> str:
     """Detect if memory was auto-saved (detected) or explicitly requested (user-told).
 
     Args:
@@ -162,6 +176,23 @@ def _detect_category(tags: list[str] | None) -> str | None:
 def _parse_created(created_str: str) -> datetime:
     """Parse an ISO8601 created timestamp to a timezone-aware datetime."""
     return datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+
+
+def _grep_recall(
+    memories: list[MemoryEntry],
+    query: str,
+    max_results: int,
+) -> list[MemoryEntry]:
+    """Case-insensitive substring search across memory content and tags."""
+    query_lower = query.lower()
+    matches = [
+        m
+        for m in memories
+        if query_lower in m.content.lower()
+        or any(query_lower in t.lower() for t in m.tags)
+    ]
+    matches.sort(key=lambda m: m.updated or m.created, reverse=True)
+    return matches[:max_results]
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +359,9 @@ def _update_existing_memory(
     # Update frontmatter
     existing_fm["updated"] = datetime.now(timezone.utc).isoformat()
     existing_fm["tags"] = merged_tags
-    existing_fm["source"] = _detect_source(merged_tags)
+    existing_fm["provenance"] = _detect_provenance(merged_tags)
     existing_fm["auto_category"] = _detect_category(merged_tags)
+    existing_fm.setdefault("kind", "memory")
 
     # Clean up dead metadata from old files
     existing_fm.pop("consolidation_reason", None)
@@ -409,9 +441,10 @@ async def _decay_summarize(
 
     frontmatter = {
         "id": memory_id,
+        "kind": "memory",
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": ["_consolidated", "_auto_decay"],
-        "source": "auto_decay",
+        "provenance": "auto_decay",
         "auto_category": None,
     }
 
@@ -425,6 +458,25 @@ async def _decay_summarize(
     logger.info(
         f"Saved consolidated memory {memory_id} (summarized {deleted_count} memories)"
     )
+
+    # FTS: index the new summary file; deleted originals are evicted by the
+    # remove_stale() call in save_memory() that follows this function.
+    if ctx.deps.knowledge_index is not None:
+        try:
+            import hashlib as _hashlib
+            ctx.deps.knowledge_index.index(
+                source="memory",
+                kind="memory",
+                path=str(file_path),
+                title=filename,
+                content=summary_text.strip(),
+                mtime=file_path.stat().st_mtime,
+                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                tags=" ".join(frontmatter["tags"]),
+                created=frontmatter["created"],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to index decay summary {memory_id}: {e}")
 
     return {"decayed": deleted_count, "strategy": "summarize"}
 
@@ -541,7 +593,7 @@ async def _save_memory_impl(
     Returns:
         dict with display, path, memory_id, action keys.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    memory_dir = Path.cwd() / ".co-cli/knowledge"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     memories = _load_memories(memory_dir)
@@ -568,6 +620,27 @@ async def _save_memory_impl(
         )
         result = _update_existing_memory(match, content, tags)
         result["similarity"] = similarity
+        if deps.knowledge_index is not None:
+            try:
+                import hashlib as _hashlib
+                raw = match.path.read_text(encoding="utf-8")
+                fm, body = parse_frontmatter(raw)
+                file_hash = _hashlib.sha256(raw.encode()).hexdigest()
+                deps.knowledge_index.index(
+                    source="memory",
+                    kind=fm.get("kind", "memory"),
+                    path=str(match.path),
+                    title=_slugify(content[:50]),
+                    content=body.strip(),
+                    mtime=match.path.stat().st_mtime,
+                    hash=file_hash,
+                    tags=" ".join(fm.get("tags", [])),
+                    category=fm.get("auto_category"),
+                    created=fm.get("created"),
+                    updated=fm.get("updated"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to reindex consolidated memory {match.id}: {e}")
         return result
 
     # Step 3: No duplicate — create new memory
@@ -578,9 +651,10 @@ async def _save_memory_impl(
 
     frontmatter: dict[str, Any] = {
         "id": memory_id,
+        "kind": "memory",
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tags or [],
-        "source": _detect_source(tags),
+        "provenance": _detect_provenance(tags),
         "auto_category": _detect_category(tags),
     }
     if related:
@@ -595,6 +669,25 @@ async def _save_memory_impl(
     file_path.write_text(md_content, encoding="utf-8")
 
     logger.info(f"Saved memory {memory_id} to {file_path}")
+
+    # FTS index integration — no-op when knowledge_index is None
+    if deps.knowledge_index is not None:
+        try:
+            import hashlib as _hashlib
+            deps.knowledge_index.index(
+                source="memory",
+                kind="memory",
+                path=str(file_path),
+                title=_slugify(content[:50]),
+                content=content.strip(),
+                mtime=file_path.stat().st_mtime,
+                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                tags=" ".join(tags or []),
+                category=_detect_category(tags),
+                created=frontmatter["created"],
+            )
+        except Exception as e:
+            logger.warning(f"Failed to index memory {memory_id}: {e}")
 
     return {
         "display": (
@@ -620,6 +713,9 @@ async def save_memory(
 ) -> dict[str, Any]:
     """Save a memory for cross-session persistence. Duplicates are
     auto-detected and consolidated — safe to call without checking first.
+    For targeted in-place edits to an existing memory, use update_memory (exact-match replace)
+    or append_memory (additive write) instead — both avoid the full-body overwrite risk of this
+    dedup path.
 
     When to save — detect these signals proactively:
     - Preference: "I always use 4-space indentation", "I prefer dark themes"
@@ -658,7 +754,7 @@ async def save_memory(
 
     # Decay only checked for new memories (consolidations don't change total count)
     if result.get("action") == "saved":
-        memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+        memory_dir = Path.cwd() / ".co-cli/knowledge"
         all_memories = _load_memories(memory_dir)
         total_count = len(all_memories)
 
@@ -674,6 +770,16 @@ async def save_memory(
             )
             result["display"] += decay_info
 
+            # FTS: remove stale entries for deleted files (rglob covers all subdirs)
+            if ctx.deps.knowledge_index is not None:
+                try:
+                    current_paths = {str(p) for p in memory_dir.rglob("*.md")}
+                    ctx.deps.knowledge_index.remove_stale(
+                        "memory", current_paths, directory=memory_dir
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to remove stale FTS entries: {e}")
+
     return result
 
 
@@ -681,6 +787,10 @@ async def recall_memory(
     ctx: RunContext[CoDeps],
     query: str,
     max_results: int = 5,
+    tags: list[str] | None = None,
+    tag_match_mode: Literal["any", "all"] = "any",
+    created_after: str | None = None,
+    created_before: str | None = None,
 ) -> dict[str, Any]:
     """Search the internal memory system by keyword. Memories hold cross-session
     knowledge: preferences, decisions, corrections, and research findings.
@@ -712,25 +822,70 @@ async def recall_memory(
         query: Keywords to search (e.g. "python testing", "database", "preference").
         max_results: Max direct matches to return (default 5). Related memories
                      are appended beyond this limit.
+        tags: Exact tag filter list. None = no filter.
+        tag_match_mode: 'any' (OR — at least one tag matches) or 'all' (AND — all tags match).
+        created_after: ISO8601 date string; only return memories created on or after this date.
+        created_before: ISO8601 date string; only return memories created on or before this date.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
-    memories = _load_memories(memory_dir)
+    memory_dir = Path.cwd() / ".co-cli/knowledge"
 
-    # Filter by query (case-insensitive body + tag search)
-    query_lower = query.lower()
-    matches = [
-        m
-        for m in memories
-        if query_lower in m.content.lower()
-        or any(query_lower in t.lower() for t in m.tags)
-    ]
-
-    # Sort by recency (updated or created, desc)
-    matches.sort(
-        key=lambda m: m.updated or m.created,
-        reverse=True,
-    )
-    matches = matches[:max_results]
+    # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
+    if (
+        ctx.deps.knowledge_index is not None
+        and ctx.deps.knowledge_search_backend in ("fts5", "hybrid")
+    ):
+        try:
+            fts_results = ctx.deps.knowledge_index.search(
+                query,
+                source="memory",
+                kind="memory",
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=max_results * 4,
+            )
+            if not fts_results:
+                return {
+                    "display": f"No memories found matching '{query}'",
+                    "count": 0,
+                    "results": [],
+                }
+            # Convert SearchResult → MemoryEntry for gravity + dedup + display
+            memories = _load_memories(memory_dir)
+            path_to_entry = {str(m.path): m for m in memories}
+            matches: list[MemoryEntry] = []
+            for r in fts_results:
+                entry = path_to_entry.get(r.path)
+                if entry is not None:
+                    matches.append(entry)
+            matches = matches[:max_results]
+        except Exception as e:
+            logger.warning(f"FTS recall failed, falling back to grep: {e}")
+            # Fall through to grep path
+            memories = _load_memories(memory_dir)
+            if tags:
+                if tag_match_mode == "all":
+                    memories = [m for m in memories if all(t in m.tags for t in tags)]
+                else:
+                    memories = [m for m in memories if any(t in m.tags for t in tags)]
+            if created_after:
+                memories = [m for m in memories if m.created and m.created >= created_after]
+            if created_before:
+                memories = [m for m in memories if m.created and m.created <= created_before]
+            matches = _grep_recall(memories, query, max_results)
+    else:
+        memories = _load_memories(memory_dir)
+        if tags:
+            if tag_match_mode == "all":
+                memories = [m for m in memories if all(t in m.tags for t in tags)]
+            else:
+                memories = [m for m in memories if any(t in m.tags for t in tags)]
+        if created_after:
+            memories = [m for m in memories if m.created and m.created >= created_after]
+        if created_before:
+            memories = [m for m in memories if m.created and m.created <= created_before]
+        matches = _grep_recall(memories, query, max_results)
 
     if not matches:
         return {
@@ -818,6 +973,7 @@ async def list_memories(
     ctx: RunContext[CoDeps],
     offset: int = 0,
     limit: int = 20,
+    kind: str | None = None,
 ) -> dict[str, Any]:
     """List saved memories with IDs, dates, tags, and one-line summaries.
     Returns one page at a time (default 20 per page).
@@ -838,19 +994,23 @@ async def list_memories(
     - limit: page size requested
     - has_more: true if more pages exist beyond this one
     - capacity: configured memory capacity limit
-    - memories: list of summary dicts with id, created, tags, summary
+    - memories: list of summary dicts with id, created, tags, summary, kind
 
     Args:
         offset: Starting position (0-based). Example: offset=20 skips the
                 first 20 memories.
         limit: Max memories per page (default 20).
+        kind: Filter by kind — "memory", "article", or None for all.
+              Passing kind="article" returns only saved articles.
+              Passing kind="memory" returns only conversation memories.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
-    memories = _load_memories(memory_dir)
+    memory_dir = Path.cwd() / ".co-cli/knowledge"
+    memories = _load_memories(memory_dir, kind=kind)
 
     if not memories:
         no_dir = not memory_dir.exists()
-        msg = "No memories saved yet." if no_dir else "No memories found."
+        kind_note = f" (kind={kind})" if kind else ""
+        msg = "No memories saved yet." if no_dir else f"No memories found{kind_note}."
         return {
             "display": msg,
             "count": 0,
@@ -880,6 +1040,7 @@ async def list_memories(
         memory_dicts.append(
             {
                 "id": m.id,
+                "kind": m.kind,
                 "created": m.created,
                 "updated": m.updated,
                 "tags": m.tags,
@@ -911,8 +1072,9 @@ async def list_memories(
         # Format protection indicator
         protected_str = " 🔒" if md.get("decay_protected") else ""
 
+        kind_str = f" [{md.get('kind', 'memory')}]"
         lines.append(
-            f"**{md['id']:03d}** ({date_str}){category_str}{protected_str} "
+            f"**{md['id']:03d}** ({date_str}){kind_str}{category_str}{protected_str} "
             f": {md['summary']}"
         )
 
@@ -931,4 +1093,167 @@ async def list_memories(
         "has_more": has_more,
         "capacity": ctx.deps.memory_max_count,
         "memories": memory_dicts,
+    }
+
+
+async def update_memory(
+    ctx: RunContext[CoDeps],
+    slug: str,
+    old_content: str,
+    new_content: str,
+) -> dict[str, Any]:
+    """Surgically replace a specific passage in a memory file without rewriting
+    the entire body.  Safer than save_memory for targeted edits — no dedup
+    path, no full-body replacement.
+
+    *slug* is the full file stem, e.g. ``"001-dont-use-trailing-comments"``.
+    Use list_memories to find it.
+
+    Guards applied before any I/O:
+    - Rejects old_content / new_content that contain Read-tool line-number
+      prefixes (``1→ `` or ``Line N: ``).
+    - old_content must appear exactly once in the body (case-sensitive).
+
+    Returns a dict with:
+    - display: confirmation + updated body text
+    - slug: the memory slug that was edited
+
+    Args:
+        slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
+        old_content: Exact passage to replace (must appear exactly once).
+        new_content: Replacement text.
+    """
+    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
+    if match is None:
+        raise FileNotFoundError(f"Memory '{slug}' not found")
+
+    # Guard: reject Read-tool line-number artifacts
+    for s, name in ((old_content, "old_content"), (new_content, "new_content")):
+        if _LINE_PREFIX_RE.search(s) or _LINE_NUM_RE.search(s):
+            raise ValueError(
+                f"{name} contains line-number prefixes (e.g. '1\u2192 ' or 'Line N: '). "
+                "Strip them before calling update_memory."
+            )
+
+    raw = match.read_text(encoding="utf-8")
+    fm, body = parse_frontmatter(raw)
+
+    # Tab normalization — treat tabs and equivalent spaces as equivalent
+    body_text = body.expandtabs()
+    old_norm = old_content.expandtabs()
+    new_norm = new_content.expandtabs()
+
+    count = body_text.count(old_norm)
+    if count == 0:
+        raise ValueError(
+            f"old_content not found in memory '{slug}'. "
+            "Check for exact match (case-sensitive, whitespace-sensitive)."
+        )
+    if count > 1:
+        # Find line numbers of each occurrence for a useful error message
+        positions: list[int] = []
+        pos = 0
+        while True:
+            idx = body_text.find(old_norm, pos)
+            if idx == -1:
+                break
+            line_num = body_text[:idx].count("\n") + 1
+            positions.append(line_num)
+            pos = idx + 1
+        raise ValueError(
+            f"old_content appears {count} times in '{slug}' "
+            f"(body lines ~{positions}). Provide more context to make it unique."
+        )
+
+    updated_body = body_text.replace(old_norm, new_norm, 1)
+    fm["updated"] = datetime.now(timezone.utc).isoformat()
+    md_content = (
+        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+        f"{updated_body.strip()}\n"
+    )
+    match.write_text(md_content, encoding="utf-8")
+
+    if ctx.deps.knowledge_index is not None:
+        try:
+            import hashlib as _hashlib
+            ctx.deps.knowledge_index.index(
+                source="memory",
+                kind=fm.get("kind", "memory"),
+                path=str(match),
+                title=slug,
+                content=updated_body.strip(),
+                mtime=match.stat().st_mtime,
+                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                tags=" ".join(fm.get("tags", [])),
+                created=fm.get("created"),
+                updated=fm.get("updated"),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
+
+    return {
+        "display": f"Updated memory '{slug}'.\n{updated_body.strip()}",
+        "slug": slug,
+    }
+
+
+async def append_memory(
+    ctx: RunContext[CoDeps],
+    slug: str,
+    content: str,
+) -> dict[str, Any]:
+    """Append content to the end of an existing memory file.
+
+    Use when new information extends a memory rather than replacing it.
+    Safer than update_memory when you don't have an exact passage to match.
+
+    *slug* is the full file stem, e.g. ``"001-dont-use-trailing-comments"``.
+    Use list_memories to find it.
+
+    Returns a dict with:
+    - display: confirmation message
+    - slug: the memory slug that was appended to
+
+    Args:
+        slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
+        content: Text to append (added on a new line at the end of the body).
+    """
+    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
+    if match is None:
+        raise FileNotFoundError(f"Memory '{slug}' not found")
+
+    raw = match.read_text(encoding="utf-8")
+    fm, body = parse_frontmatter(raw)
+
+    updated_body = body.rstrip() + "\n" + content
+    fm["updated"] = datetime.now(timezone.utc).isoformat()
+    md_content = (
+        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+        f"{updated_body.strip()}\n"
+    )
+    match.write_text(md_content, encoding="utf-8")
+
+    if ctx.deps.knowledge_index is not None:
+        try:
+            import hashlib as _hashlib
+            ctx.deps.knowledge_index.index(
+                source="memory",
+                kind=fm.get("kind", "memory"),
+                path=str(match),
+                title=slug,
+                content=updated_body.strip(),
+                mtime=match.stat().st_mtime,
+                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                tags=" ".join(fm.get("tags", [])),
+                created=fm.get("created"),
+                updated=fm.get("updated"),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
+
+    return {
+        "display": f"Appended to '{slug}'.",
+        "slug": slug,
     }

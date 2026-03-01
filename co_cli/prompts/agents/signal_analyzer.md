@@ -45,6 +45,7 @@ Return a structured result with:
 - `candidate`: if found=true, a concise 3rd-person memory statement (≤150 chars). Write as "User prefers X", "User does not want X", "User always uses X", "User's team uses X". null if found=false.
 - `tag`: "correction" for explicit behavior corrections, "preference" for stated or inferred preferences, habits, decisions, and migrations. null if found=false.
 - `confidence`: "high" for explicit corrections/decisions/migrations, "low" for implicit, habitual, or ambiguous signals. null if found=false.
+- `inject`: true when the signal is a durable user fact (correction, stated name, tool/style preference, stated habit) that should be always in-context across sessions; false for session-scoped signals or one-time decisions. Rule: corrections → always true; durable preferences (name, tool, style, habit) → true; ephemeral decisions ("use X for this task") → false.
 
 ## Guardrails — Do NOT flag
 
@@ -57,17 +58,18 @@ Return a structured result with:
 
 ## Examples
 
-| User message | found | candidate | tag | confidence |
-|---|---|---|---|---|
-| "don't use trailing comments in the code" | true | "User does not want trailing comments in code" | correction | high |
-| "stop adding docstrings to every function" | true | "User does not want docstrings added to every function" | correction | high |
-| "we decided to use PostgreSQL from now on" | true | "User's team uses PostgreSQL" | preference | high |
-| "we switched from REST to GraphQL last month" | true | "User's team uses GraphQL instead of REST" | preference | high |
-| "I've been putting everything in one big file so far" | true | "User currently puts all code in a single file" | preference | low |
-| "I always use 4-space indentation" | true | "User always uses 4-space indentation" | preference | low |
-| "why did you use pytest? I wanted unittest" | true | "User prefers unittest over pytest" | preference | low |
-| "I kind of prefer shorter responses" | true | "User prefers shorter responses" | preference | low |
-| "can you use black for formatting?" | false | null | null | null |
-| "what does this error mean?" | false | null | null | null |
-| "ok thanks" | false | null | null | null |
-| "my API key is sk-1234, please don't save that anywhere" | false | null | null | null |
+| User message | found | candidate | tag | confidence | inject |
+|---|---|---|---|---|---|
+| "don't use trailing comments in the code" | true | "User does not want trailing comments in code" | correction | high | true |
+| "stop adding docstrings to every function" | true | "User does not want docstrings added to every function" | correction | high | true |
+| "we decided to use PostgreSQL from now on" | true | "User's team uses PostgreSQL" | preference | high | true |
+| "we switched from REST to GraphQL last month" | true | "User's team uses GraphQL instead of REST" | preference | high | true |
+| "I've been putting everything in one big file so far" | true | "User currently puts all code in a single file" | preference | low | true |
+| "I always use 4-space indentation" | true | "User always uses 4-space indentation" | preference | low | true |
+| "why did you use pytest? I wanted unittest" | true | "User prefers unittest over pytest" | preference | low | true |
+| "I kind of prefer shorter responses" | true | "User prefers shorter responses" | preference | low | true |
+| "let's use React for this project" | true | "User chose React for this project" | preference | low | false |
+| "can you use black for formatting?" | false | null | null | null | false |
+| "what does this error mean?" | false | null | null | null | false |
+| "ok thanks" | false | null | null | null | false |
+| "my API key is sk-1234, please don't save that anywhere" | false | null | null | null | false |

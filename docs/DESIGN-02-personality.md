@@ -26,7 +26,7 @@ souls/{role}/seed.md        → identity declaration
                                Never: hard constraints
                              loaded via load_soul_seed() — placed first
 
-.co-cli/knowledge/memories/ → character base memories (decay_protected, planted)
+.co-cli/knowledge/          → character base memories (decay_protected, planted)
                                loaded via load_character_memories() in get_agent()
                                appended to seed — placed directly after seed
 
@@ -178,7 +178,7 @@ The static prompt is assembled once and never re-read between turns; the per-tur
 
 ### 2c. Personality: seed + mindset
 
-`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans the knowledge store for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
+`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans `.co-cli/knowledge/` for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
 
 `get_agent()` combines these: `soul_seed = seed + base_memories` (passed as `soul_seed`), `soul_examples` passed separately. `assemble_prompt()` places them in the correct order.
 
@@ -277,13 +277,13 @@ skipped by `_apply_mindset()` — degraded but functional.
 
 ### 2d. Character base memories
 
-Pre-planted knowledge entries in `.co-cli/knowledge/memories/` that carry the *felt* layer of each character: specific scenes, speech patterns, relationship dynamics, and observed behaviors from the source material (2021 Apple TV+ film *Finch*). They provide behavioral depth without bloating the system prompt.
+Pre-planted knowledge entries in `.co-cli/knowledge/` that carry the *felt* layer of each character: specific scenes, speech patterns, relationship dynamics, and observed behaviors from the source material (2021 Apple TV+ film *Finch*). They provide behavioral depth without bloating the system prompt.
 
 **Structure:** standard memory files with YAML frontmatter, distinguished from user-derived memories by two fields:
 
 | Field | Value | Purpose |
 |-------|-------|---------|
-| `source` | `planted` | Distinguishes from `detected` (signal detector) and `user-told` (explicit save) |
+| `provenance` | `planted` | Distinguishes from `detected` (signal detector) and `user-told` (explicit save) |
 | `decay_protected` | `true` | Protected from the decay cycle regardless of memory store capacity |
 | `tags` | `["finch"/"jeff", "character", "source-material"]` | Character-scoped; `load_character_memories()` filters by role + "character" |
 
@@ -301,7 +301,7 @@ quirks
 
 **Why between seed and rules, not baked into the seed:** base memories carry richer, more detailed content than the seed can sustain. The seed is a permanent fixture of the static prompt and must stay lean. The `## Character` block sits in the same structural position — between soul and rules — without adding to the seed's maintenance surface.
 
-**Distinction from experience memories:** base memories are static source-material observations that never mutate. User experience memories (preferences, corrections, decisions) grow organically through signal detection and are subject to decay. The two kinds coexist in the same store, distinguished by `source` and `decay_protected`.
+**Distinction from experience memories:** base memories are static source-material observations that never mutate. User experience memories (preferences, corrections, decisions) grow organically through signal detection and are subject to decay. The two kinds coexist in the same store, distinguished by `provenance` (`planted` vs. `detected`/`user-told`) and `decay_protected` (`true` vs. absent).
 
 **Current base memories (8 entries, IDs 4–11):**
 
@@ -321,7 +321,7 @@ quirks
 `_load_personality_memories()` in `co_cli/tools/personality.py`. Called by `add_personality_memories()` per turn.
 
 ```
-scan .co-cli/knowledge/memories/*.md for tag "personality-context"
+scan .co-cli/knowledge/*.md for tag "personality-context"
 sort by updated (or created) descending
 take top 5
 format as "## Learned Context\n\n- {content}\n- {content}\n..."
@@ -404,7 +404,7 @@ Mindset content is classified once (Turn 1) and injected as `## Active mindset` 
 
 **Examples trailing the rules.** `souls/{role}/examples.md` is placed after the five behavioral rules, immediately before model-specific quirks. This follows standard few-shot practice: examples are most effective as the last identity-level content the model reads before the task — position maximises pattern-match influence. Identity layer (seed + memories) and policy layer (rules) are cleanly separated from the demonstration layer (examples).
 
-**Base vs. experience memory distinction.** Two kinds of memories coexist in the same store: *base* (planted, decay-protected, character source-material) and *experience* (detected/user-told, decayable, accumulated through task interactions). Distinguished by `source: planted` vs. `source: detected`/`user-told` and by `decay_protected: true` vs. absent. The experience layer grows organically; the base layer is stable character grounding that never mutates.
+**Base vs. experience memory distinction.** Two kinds of memories coexist in the same store: *base* (planted, decay-protected, character source-material) and *experience* (detected/user-told, decayable, accumulated through task interactions). Distinguished by `provenance: planted` vs. `provenance: detected`/`user-told` and by `decay_protected: true` vs. absent. The experience layer grows organically; the base layer is stable character grounding that never mutates.
 
 **No self-modification.** Peers openclaw (agent writes to SOUL.md) and letta (agent edits its own persona via `core_memory_replace()`) allow the agent to mutate its own personality. Co does not. `## Learned Context` memories already provide session-to-session adaptation without mutating structural files.
 
@@ -455,7 +455,7 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/prompts/personalities/souls/{role}/critique.md` | Always-on self-eval lens; loaded at session start by `load_soul_critique()`, injected every turn as `## Review lens` |
 | `co_cli/prompts/personalities/souls/{role}/examples.md` | Optional trigger→response patterns; loaded by `load_soul_examples()`, placed after rules (3 roles: finch, jeff, tars) |
 | `co_cli/prompts/personalities/mindsets/{role}/{task_type}.md` | Soul-specific behavioral guidance per task type (18 files: 6 types × 3 roles) |
-| `.co-cli/knowledge/memories/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–11, `decay_protected: true`, `source: planted`) |
+| `.co-cli/knowledge/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–11, `decay_protected: true`, `provenance: planted`) |
 | `co_cli/agent.py` | `get_agent(personality=…)` — builds soul block (seed + base memories), loads examples, assembles static prompt, registers 6 `@agent.system_prompt` functions (incl. mindset + critique), registers tools |
 | `co_cli/tools/personality.py` | `MindsetDeclaration` model, `_apply_mindset()`, `_load_personality_memories()` helper |
 | `co_cli/_history.py` | `_PERSONALITY_COMPACTION_ADDENDUM` — summarizer guard for personality moments |

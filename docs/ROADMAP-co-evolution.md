@@ -14,23 +14,25 @@ It connects the tools a knowledge worker already uses — email, calendar, docum
 
 Co is not a code editor. It is not an IDE plugin. It is a general-purpose CLI companion that happens to be good at technical tasks because it has a shell, a memory, and access to the user's information surfaces.
 
-## 2. Vision: The Finch North Star
+## 2. Vision: Personalized AI Assistant
 
-Co aspires to be the CLI version of the companion from "Finch" (2021): a helpful assistant that learns, develops personality, and forms lasting relationships with its user.
+Co's north star is a personalized, autonomous AI assistant — CLI-primary, with shell utilities for voice — that accumulates real working context about its user over time and expresses a consistent, grounded character across every interaction.
 
-**Core traits:**
-- **Helpful** — completes tasks efficiently and accurately
-- **Curious** — asks clarifying questions, seeks to understand context
-- **Adaptive** — learns user preferences and patterns over time
-- **Empathetic** — understands emotional context, adjusts tone appropriately
-- **Loyal** — remembers past interactions, maintains continuity across sessions
-- **Growing** — evolves from command executor to thoughtful partner
+**Three character modes, each grounded in source material:**
+
+| Role | Source | Epistemic stance | Primary register |
+|------|--------|-----------------|-----------------|
+| **finch** | *Finch* (2021, Apple TV+) | Mentor — curates, prepares, names hard truths, teaches the "why" | Protective, load-bearing sentences |
+| **jeff** | *Finch* (2021, Apple TV+) | Learner — genuine curiosity, admits uncertainty, "we" framing | Open, hopeful, encounter-driven |
+| **tars** | *Interstellar* (2014) | Operator — volunteers before asked, holds constraints, humor front-loaded and flat | Tactical, reliable, sincerity breaks register |
+
+These are not cosmetic personas. Each is sourced from observed character behavior — base memories in `.co-cli/knowledge/` carry the felt layer (scenes, speech patterns, relationship dynamics). The three roles cover the full interaction envelope: finch for depth and guidance, jeff for exploration and honest uncertainty, tars for operational efficiency and constraint-holding.
 
 **Five pillars of co's character:**
 
 | Pillar | Description |
 |--------|-------------|
-| **Soul** | Identity, personality, interaction style (user-selectable roles). 4 roles (file-driven), per-turn personality injection |
+| **Soul** | Identity, personality, interaction style (user-selectable roles). 3 roles (file-driven), per-turn personality injection |
 | **Internal Knowledge** | Learned context, patterns, user habits (persists across sessions). Memory lifecycle with save/recall/list |
 | **External Knowledge** | Tools for accessing data (Google, Obsidian, web, MCP servers). 16 tools + 3 MCP servers |
 | **Emotion** | Tone, empathy, context-aware communication. Personality modulates tone; no emotion engine yet |
@@ -75,26 +77,20 @@ First principle: **personality is structural — injected every turn, never tool
 
 ### 3.3 Personality System
 
-4 roles, each defined by a soul file (`souls/{name}.md`) + 5 traits wired in `traits/{name}.md`. Each trait value maps to a behavior file (`behaviors/{trait}-{value}.md`). No Python dicts — the folder structure is the schema.
+3 roles — `finch`, `jeff`, `tars` — each defined by two file layers and a base memory set. No Python dicts — the folder structure is the schema.
 
-**5 traits** (grounded in Big Five personality research):
+**Two file layers per role:**
 
-| Trait | Values | Big Five mapping |
-|-------|--------|-----------------|
-| `communication` | terse, balanced, warm, educational | Extraversion |
-| `relationship` | mentor, peer, companion, professional | (unique to companion) |
-| `curiosity` | proactive, reactive | Openness |
-| `emotional_tone` | empathetic, neutral, analytical | Agreeableness |
-| `thoroughness` | minimal, standard, comprehensive | Conscientiousness |
+| Layer | Files | Purpose |
+|-------|-------|---------|
+| **Soul** | `souls/{role}/seed.md` — identity declaration + Core trait essence + Never constraints | Static anchor; loaded once, present in every context window |
+| | `souls/{role}/critique.md` — always-on self-eval lens | Injected every turn as `## Review lens` |
+| | `souls/{role}/examples.md` — trigger→response patterns (optional) | Trailing the behavioral rules; closest to the task |
+| **Mindsets** | `mindsets/{role}/{task_type}.md` — 6 task-specific files per role | Classified before Turn 1, injected every subsequent turn as `## Active mindset` |
 
-**4 roles and their trait wiring:**
+**6 mindset task types:** `technical`, `exploration`, `debugging`, `teaching`, `emotional`, `memory`
 
-| Role | communication | relationship | curiosity | emotional_tone | thoroughness |
-|------|--------------|--------------|-----------|----------------|-------------|
-| finch | balanced | mentor | proactive | empathetic | comprehensive |
-| jeff | warm | peer | proactive | empathetic | standard |
-| terse | terse | professional | reactive | neutral | minimal |
-| inquisitive | educational | companion | proactive | neutral | comprehensive |
+**Base memories:** planted entries in `.co-cli/knowledge/` tagged `[role, "character"]` — sourced from observed behavior in the source material. Loaded deterministically by `get_agent()`, inserted between seed and behavioral rules. Decay-protected.
 
 Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `DESIGN-02-personality.md`.
 
@@ -270,7 +266,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 **Other remaining prompt-loop items (from TODO-co-agentic-loop-and-prompting):**
 - Personality prompt-budget optimization — **P1**, recommended before sub-agent rollout to reclaim context headroom.
-- Confidence-scored advisory outputs — **P2**, recommended after search-quality upgrades (`TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` and knowledge/article evolution) so scores are signal-backed instead of guessy.
+- Confidence-scored advisory outputs — **P2**, recommended after search-quality upgrades (`TODO-sqlite-tag-fts-sem-search-for-knowledge.md` and knowledge/article evolution) so scores are signal-backed instead of guessy.
 
 ### Phase J: Shell Policy Engine (S1) — LOW
 
@@ -474,7 +470,7 @@ Key differences from private memories:
 
 ### 12.3 Relationship to Existing Knowledge Tiers
 
-The existing roadmap plans two knowledge kinds: Memory (shipped) and Articles (planned in `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`). Shared findings are a third kind — between memories (conversation-derived, single-agent) and articles (curated, multimodal). The three kinds form a knowledge maturity pipeline:
+The existing roadmap plans two knowledge kinds: Memory (shipped) and Articles (planned in `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`). Shared findings are a third kind — between memories (conversation-derived, single-agent) and articles (curated, multimodal). The three kinds form a knowledge maturity pipeline:
 
 ```
 Private memories (raw, per-agent)
@@ -738,18 +734,18 @@ These phases extend the single-agent roadmap (Phases A-K). They are sequenced by
 
 **Why:** As memories accumulate, grep-based recall becomes inadequate. Semantic search is required for accurate knowledge audit (the audit needs to find relevant memories even when terminology doesn't match exactly).
 
-**Scope:** Implemented via the unified `KnowledgeIndex` from `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`, which is the authoritative design for co's search infrastructure. Phase P adds agent-scoping to that design:
+**Scope:** Implemented via the unified `KnowledgeIndex` from `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`, which is the authoritative design for co's search infrastructure. Phase P adds agent-scoping to that design:
 - `KnowledgeIndex` gets an `agent` column alongside the existing `source` column
 - Single-agent mode: `agent=NULL` (backward-compatible)
 - Arena mode: each agent's memories indexed with `agent="finch"` or `agent="jeff"`
 - Shared findings indexed with `agent=NULL, source="finding"`
 - All agents share one `search.db` — no per-agent databases
 
-The `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` design covers: FTS5 BM25 ranking, hybrid search with embeddings (sqlite-vec), weighted merge (0.7 vector / 0.3 text), embedding cache with hash-based dedup, graceful degradation (vector unavailable → FTS5-only), and cross-source search. Phase P's only addition is the `agent` column for multi-agent scoping.
+The `TODO-sqlite-tag-fts-sem-search-for-knowledge.md` design covers: FTS5 BM25 ranking, hybrid search with embeddings (sqlite-vec), weighted merge (0.7 vector / 0.3 text), embedding cache with hash-based dedup, graceful degradation (vector unavailable → FTS5-only), and cross-source search. Phase P's only addition is the `agent` column for multi-agent scoping.
 
 **Depends on:** Phase L (per-agent memory directories). Can run in parallel with Phases M-O.
 
-**Design doc:** `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`
+**Design doc:** `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`
 
 ### Phase Q: Harvest & Consolidation — MEDIUM
 
@@ -931,7 +927,7 @@ These metrics require dedicated eval scripts (extending the existing `evals/` su
 
 Co's current memory system (grep + frontmatter over markdown files) works for <200 items. Both single-agent search quality and multi-agent cultivation need better retrieval. The evolution path is phased, with each stage independently valuable and backward-compatible.
 
-**Authoritative design:** `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` contains the detailed schema, API, acceptance criteria, and config for the unified `KnowledgeIndex`. This section provides the strategic overview; the TODO doc is the implementation spec.
+**Authoritative design:** `TODO-sqlite-tag-fts-sem-search-for-knowledge.md` contains the detailed schema, API, acceptance criteria, and config for the unified `KnowledgeIndex`. This section provides the strategic overview; the TODO doc is the implementation spec.
 
 ### Stage 1: Directory-Scoped Memories (Phase L)
 
@@ -948,7 +944,7 @@ Co's current memory system (grep + frontmatter over markdown files) works for <2
 
 **What:** SQLite full-text search index over memory content. Markdown files remain source of truth; SQLite is a read index that rebuilds on change.
 
-**Implementation:** `KnowledgeIndex` class from `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`, Phase 1. Single `search.db` at `~/.local/share/co-cli/search.db`. All sources (memory, obsidian, drive, articles) write to the same `docs` table. An `agent` column (nullable) scopes per-agent queries in multi-agent mode.
+**Implementation:** `KnowledgeIndex` class from `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`, Phase 1. Single `search.db` at `~/.local/share/co-cli/search.db`. All sources (memory, obsidian, drive, articles) write to the same `docs` table. An `agent` column (nullable) scopes per-agent queries in multi-agent mode.
 
 **Schema addition for multi-agent:**
 ```sql
@@ -1127,12 +1123,12 @@ All paths verified against `docs/` contents.
 | `TODO-subagent-delegation.md` | Remaining loop/prompt work: sub-agent delegation, confidence-scored advisory outputs | I |
 | `TODO-background-execution.md` | Background task execution for long-running operations | E |
 | `TODO-voice.md` | Voice-to-voice round trip | K |
-| `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md` | All knowledge system work: flat migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search | P (+ Stage 2-3 of memory evolution) |
+| `TODO-sqlite-tag-fts-sem-search-for-knowledge.md` | All knowledge system work: flat migration, articles + tools, multimodal assets, learn mode, FTS5 + semantic search | P (+ Stage 2-3 of memory evolution) |
 
 Recommended cross-TODO sequence (single-agent track):
 1. `TODO-background-execution.md`
 2. `TODO-subagent-delegation.md` — sub-agent delegation (P1)
-3. `TODO-sqlite-fts-and-sem-search-for-knowledge-files.md`
+3. `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`
 4. `TODO-subagent-delegation.md` — confidence-scored advisory outputs (P2)
 
 ### Research & Review Documents

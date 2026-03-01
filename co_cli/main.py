@@ -80,6 +80,34 @@ def create_deps() -> CoDeps:
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
+    # Initialize knowledge index when FTS backend is active
+    knowledge_index = None
+    if settings.knowledge_search_backend in ("fts5", "hybrid"):
+        from co_cli.knowledge_index import KnowledgeIndex
+        knowledge_index = KnowledgeIndex(
+            DATA_DIR / "search.db",
+            backend=settings.knowledge_search_backend,
+            embedding_provider=settings.knowledge_embedding_provider,
+            embedding_model=settings.knowledge_embedding_model,
+            embedding_dims=settings.knowledge_embedding_dims,
+            ollama_host=settings.ollama_host,
+            gemini_api_key=settings.gemini_api_key,
+            hybrid_vector_weight=settings.knowledge_hybrid_vector_weight,
+            hybrid_text_weight=settings.knowledge_hybrid_text_weight,
+            reranker_provider=settings.knowledge_reranker_provider,
+            reranker_model=settings.knowledge_reranker_model,
+            reranker_model_path=settings.knowledge_reranker_model_path,
+        )
+        knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
+        if knowledge_dir.exists():
+            try:
+                knowledge_index.sync_dir("memory", knowledge_dir)
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(f"Knowledge index sync failed: {e}")
+                knowledge_index.close()
+                knowledge_index = None
+
     _personality_critique = (
         load_soul_critique(settings.personality) if settings.personality else ""
     )
@@ -111,6 +139,8 @@ def create_deps() -> CoDeps:
         summarization_model=settings.summarization_model,
         doom_loop_threshold=settings.doom_loop_threshold,
         max_reflections=settings.max_reflections,
+        knowledge_index=knowledge_index,
+        knowledge_search_backend=settings.knowledge_search_backend,
     )
     # Initialize session-scoped processor state
     deps._opening_ctx_state = OpeningContextState()
@@ -140,7 +170,11 @@ async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> lis
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in native_set:
                     mcp_tool_names.append(name)
-        except Exception:
+        except Exception as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                f"MCP tool list failed for {inner.tool_prefix!r}: {e}"
+            )
             # Server not yet connected or list failed — use placeholder
             prefix = inner.tool_prefix or "mcp"
             mcp_tool_names.append(f"{prefix}_*")
@@ -252,9 +286,10 @@ async def chat_loop(verbose: bool = False):
                 ):
                     signal = await analyze_for_signals(message_history, agent.model)
                     if signal.found and signal.candidate and signal.tag:
+                        tags = [signal.tag] + (["personality-context"] if signal.inject else [])
                         if signal.confidence == "high":
                             await _save_memory_impl(
-                                deps, signal.candidate, [signal.tag], None
+                                deps, signal.candidate, tags, None
                             )
                             frontend.on_status(f"Learned: {signal.candidate[:80]}")
                         else:
@@ -263,7 +298,7 @@ async def chat_loop(verbose: bool = False):
                             )
                             if choice in ("y", "a"):
                                 await _save_memory_impl(
-                                    deps, signal.candidate, [signal.tag], None
+                                    deps, signal.candidate, tags, None
                                 )
 
                 # Clear precomputed result (consumed or stale)

@@ -3,7 +3,7 @@ auto_category: character
 created: '2026-02-27T00:00:00+00:00'
 decay_protected: true
 id: 4
-source: planted
+provenance: planted
 tags:
 - finch
 - character

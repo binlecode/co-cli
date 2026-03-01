@@ -9,7 +9,7 @@ nav_order: 16
 
 This component defines co-cli's execution primitive (`run_turn`) and prompt architecture (static assembly + per-turn layers). It is the runtime contract between REPL orchestration, pydantic-ai execution, history processors, and tool approval flow.
 
-`DESIGN-core.md` remains the system skeleton. This doc is the canonical deep spec for loop behavior, safety policies, and prompt-layer composition.
+`DESIGN-core.md` remains the system skeleton. This doc is the canonical deep spec for loop behavior, safety policies, and context governance coupling.
 
 ```mermaid
 graph TD
@@ -131,6 +131,8 @@ Design principles:
 - System prompt defines identity and behavior policy.
 - Tool docstrings define tool selection/chaining guidance.
 - Knowledge remains tool-loaded; no bulk memory/articles embedded in base prompt.
+
+For the deep spec on prompt composition (assembly order, per-turn layers, budget), see `DESIGN-02-personality.md`.
 
 ### Context Governance Coupling
 

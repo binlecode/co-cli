@@ -9,6 +9,10 @@ from typing import Any
 
 import yaml
 
+_VALID_PROVENANCE: frozenset[str] = frozenset({
+    "detected", "user-told", "planted", "auto_decay", "web-fetch",
+})
+
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     """Parse YAML frontmatter from markdown content.
@@ -38,7 +42,7 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
 
     # Handle empty frontmatter
     if not yaml_content:
-        return {}, content
+        return {}, body
 
     try:
         frontmatter = yaml.safe_load(yaml_content)
@@ -46,7 +50,7 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
             frontmatter = {}
         if not isinstance(frontmatter, dict):
             # Invalid frontmatter structure, treat as no frontmatter
-            return {}, content
+            return {}, body
 
         # Convert datetime objects back to ISO8601 strings with Z suffix
         for key, value in frontmatter.items():
@@ -83,8 +87,10 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         - created: ISO8601 timestamp string
 
     Optional fields:
+        - kind: str ("memory" or "article")
+        - origin_url: str or null (source URL for articles)
+        - provenance: str (detected | user-told | planted | auto_decay | web-fetch)
         - tags: list[str]
-        - source: str (detected | user-told | auto_decay)
         - auto_category: str (preference | correction | decision | context | pattern)
         - updated: ISO8601 timestamp string (added when consolidated)
         - consolidation_reason: str (reason for consolidation)
@@ -112,15 +118,31 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         )
 
     # Validate optional fields if present
+    if "kind" in fm:
+        if fm["kind"] not in ("memory", "article"):
+            raise ValueError(
+                "memory frontmatter field 'kind' must be 'memory' or 'article'"
+            )
+
+    if "origin_url" in fm:
+        if fm["origin_url"] is not None and not isinstance(fm["origin_url"], str):
+            raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
+
+    if "provenance" in fm:
+        if fm["provenance"] is not None:
+            if not isinstance(fm["provenance"], str):
+                raise ValueError("memory frontmatter field 'provenance' must be a string or null")
+            if fm["provenance"] not in _VALID_PROVENANCE:
+                raise ValueError(
+                    f"memory frontmatter field 'provenance' must be one of "
+                    f"{sorted(_VALID_PROVENANCE)}, got {fm['provenance']!r}"
+                )
+
     if "tags" in fm:
         if not isinstance(fm["tags"], list):
             raise ValueError("memory frontmatter field 'tags' must be a list")
         if not all(isinstance(tag, str) for tag in fm["tags"]):
             raise ValueError("memory frontmatter field 'tags' must contain only strings")
-
-    if "source" in fm:
-        if fm["source"] is not None and not isinstance(fm["source"], str):
-            raise ValueError("memory frontmatter field 'source' must be a string or null")
 
     if "auto_category" in fm:
         if fm["auto_category"] is not None and not isinstance(fm["auto_category"], str):
@@ -146,3 +168,14 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     if "decay_protected" in fm:
         if not isinstance(fm["decay_protected"], bool):
             raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
+
+    if "title" in fm:
+        if fm["title"] is not None and not isinstance(fm["title"], str):
+            raise ValueError("memory frontmatter field 'title' must be a string or null")
+
+    if "related" in fm:
+        if fm["related"] is not None:
+            if not isinstance(fm["related"], list):
+                raise ValueError("memory frontmatter field 'related' must be a list or null")
+            if not all(isinstance(s, str) for s in fm["related"]):
+                raise ValueError("memory frontmatter field 'related' must contain only strings")

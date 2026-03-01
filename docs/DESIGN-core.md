@@ -160,7 +160,8 @@ get_agent(all_approval, web_policy, mcp_servers) → (agent, model_settings, too
     create Agent with:
         model, deps_type=CoDeps, system_prompt, retries=tool_retries
         output_type = [str, DeferredToolRequests]
-        history_processors = [truncate_tool_returns, truncate_history_window]
+        history_processors = [inject_opening_context, truncate_tool_returns,
+                               detect_safety_issues, truncate_history_window]
 
     register side-effectful tools with requires_approval=True
     register read-only tools with requires_approval=all_approval
@@ -170,7 +171,7 @@ get_agent(all_approval, web_policy, mcp_servers) → (agent, model_settings, too
 
 | Category | Approval | Notes |
 |----------|----------|-------|
-| Side-effectful | Always deferred | `run_shell_command`, `create_email_draft`, `save_memory` |
+| Side-effectful | Always deferred | `run_shell_command`, `create_email_draft`, `save_memory`, `save_article` |
 | Read-only | Auto-execute | `all_approval=True` forces deferred (for eval harness) |
 | Web tools | Policy-driven | `web_policy.search` / `web_policy.fetch`: `"allow"` or `"ask"` |
 | MCP tools | Per-server config | `"auto"` → deferred; `"never"` → trusted |
@@ -526,6 +527,8 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 |------|----------|-----------|
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
+| `save_memory` | Yes | Writes to `.co-cli/knowledge/` |
+| `save_article` | Yes | Writes to `.co-cli/knowledge/` |
 | MCP tools (approval=auto) | Yes | External tools default to requiring approval |
 | MCP tools (approval=never) | No | Explicitly trusted by user config |
 | All other native tools | No | Read-only operations |
@@ -551,10 +554,12 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 
 ~/.local/share/co-cli/
 ├── co-cli.db              # OpenTelemetry traces (SQLite)
+├── search.db              # FTS5 / hybrid knowledge search index (rebuildable)
 └── history.txt            # REPL command history
 
 <project-root>/
 └── .co-cli/
+    ├── knowledge/         # All knowledge files (kind: memory + kind: article)
     └── settings.json      # Project configuration (overrides user)
 ```
 

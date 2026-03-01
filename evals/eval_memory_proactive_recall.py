@@ -159,7 +159,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             # Seed memories

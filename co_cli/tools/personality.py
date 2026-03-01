@@ -57,13 +57,13 @@ def _apply_mindset(deps: "CoDeps", task_types: list[str]) -> None:
 def _load_personality_memories() -> str:
     """Load personality-context tagged memories for system prompt injection.
 
-    Scans ``.co-cli/knowledge/memories/`` for entries tagged with
+    Scans ``.co-cli/knowledge/`` for entries tagged with
     ``personality-context``. Returns the top 5 (by recency) formatted as
     a ``## Learned Context`` section, or empty string if none found.
 
     Called by ``add_personality_memories()`` in ``agent.py`` on every turn.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge/memories"
+    memory_dir = Path.cwd() / ".co-cli/knowledge"
     personality_memories = _load_memories(
         memory_dir, tags=["personality-context"]
     )

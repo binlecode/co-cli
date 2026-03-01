@@ -37,7 +37,7 @@ def _seed_memory(
         "id": memory_id,
         "created": created,
         "tags": tags or [],
-        "source": "user-told",
+        "provenance": "user-told",
         "auto_category": None,
     }
     if decay_protected:
@@ -71,7 +71,7 @@ def test_decay_summarize_triggers():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             for i in range(1, max_count + 1):
@@ -95,7 +95,7 @@ def test_decay_cut_triggers():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             for i in range(1, max_count + 1):
@@ -119,7 +119,7 @@ def test_decay_protected_survives():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             for i in range(1, max_count + 1):
@@ -156,7 +156,7 @@ def test_decay_below_limit_no_trigger():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             seed_count = max_count - 5

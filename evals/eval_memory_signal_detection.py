@@ -168,7 +168,7 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge/memories"
+            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
             # Pre-seed memories if specified
