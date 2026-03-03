@@ -133,7 +133,7 @@ join all parts with "\n\n"
 
 `get_agent()` builds the soul block and passes it to `assemble_prompt()`:
 - `load_soul_seed(personality)` → seed text from `souls/{role}/seed.md`
-- `load_character_memories(personality, memory_dir)` → base memories from `.co-cli/knowledge/memories/`; appended to seed before passing
+- `load_character_memories(personality, memory_dir)` → base memories from `.co-cli/knowledge/`; appended to seed before passing
 - `load_soul_examples(personality)` → examples from `souls/{role}/examples.md`; passed separately as `soul_examples`
 
 Rule file validation is strict: filenames must match `NN_rule_id.md`, numeric prefixes must be unique and contiguous starting at 01. Assembly fails with `ValueError` on violations. `PromptManifest` tracks `parts_loaded` names, `total_chars`, and `warnings` for diagnostics.

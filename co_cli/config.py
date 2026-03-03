@@ -116,9 +116,8 @@ class Settings(BaseModel):
     knowledge_embedding_dims: int = Field(default=256, ge=1)
     knowledge_hybrid_vector_weight: float = Field(default=0.7, ge=0.0, le=1.0)
     knowledge_hybrid_text_weight: float = Field(default=0.3, ge=0.0, le=1.0)
-    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local"] = Field(default="none")
+    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local"] = Field(default="local")
     knowledge_reranker_model: str = Field(default="")
-    knowledge_reranker_model_path: str = Field(default="")
 
     # Memory lifecycle (notes with gravity)
     memory_max_count: int = Field(default=200, ge=10)
@@ -225,7 +224,6 @@ class Settings(BaseModel):
             "knowledge_embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
             "knowledge_reranker_provider": "CO_KNOWLEDGE_RERANKER_PROVIDER",
             "knowledge_reranker_model": "CO_KNOWLEDGE_RERANKER_MODEL",
-            "knowledge_reranker_model_path": "CO_KNOWLEDGE_RERANKER_MODEL_PATH",
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
             "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
             "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",

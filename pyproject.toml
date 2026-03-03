@@ -37,5 +37,5 @@ dev = [
     "pytest-cov>=7.0.0",
 ]
 reranker = [
-    "llama-cpp-python>=0.3.4",
+    "fastembed>=0.4.0",
 ]

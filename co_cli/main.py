@@ -96,7 +96,6 @@ def create_deps() -> CoDeps:
             hybrid_text_weight=settings.knowledge_hybrid_text_weight,
             reranker_provider=settings.knowledge_reranker_provider,
             reranker_model=settings.knowledge_reranker_model,
-            reranker_model_path=settings.knowledge_reranker_model_path,
         )
         knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
         if knowledge_dir.exists():

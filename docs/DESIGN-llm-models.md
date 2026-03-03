@@ -66,7 +66,7 @@ main.py: chat_loop()
 |-------|-------|
 | Model family | Qwen3-Coder-Next (Alibaba) |
 | Parameter count | 80B (MoE) |
-| Recommended tag | `qwen3-coder-next:q4_k_m-agentic` (`qwen3-coder-next:q8_0-agentic` on 128 GB+) |
+| Recommended tag | `qwen3-coder-next:q4_k_m-agentic` |
 | Context window | 262K tokens |
 | License | Apache 2.0 |
 
@@ -113,7 +113,6 @@ main.py: chat_loop()
 | `co_cli/prompts/quirks/ollama/qwen3-coder-next.md` | Qwen3-Coder-Next inference profile + counter-steering |
 | `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` | Qwen3 Q8_0 agentic profile |
 | `ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic` | Qwen3-Coder-Next Q4_K_M agentic profile |
-| `ollama/Modelfile.qwen3-coder-next-q8_0-agentic` | Qwen3-Coder-Next Q8_0 agentic profile |
 | `tests/test_llm_e2e.py` | LLM E2E tests for both providers |
 
 ---
@@ -152,20 +151,16 @@ ollama create qwen3:30b-a3b-thinking-2507-q8_0-agentic -f ollama/Modelfile.qwen3
 | Tag | Modelfile | Quant | Size |
 |-----|-----------|-------|------|
 | `qwen3-coder-next:q4_k_m-agentic` | `Modelfile.qwen3-coder-next-q4_k_m-agentic` | Q4_K_M | ~51 GB |
-| `qwen3-coder-next:q8_0-agentic` | `Modelfile.qwen3-coder-next-q8_0-agentic` | Q8_0 | ~84 GB |
 
 ```bash
 ollama pull qwen3-coder-next:q4_k_m
 ollama create qwen3-coder-next:q4_k_m-agentic -f ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic
-
-ollama pull qwen3-coder-next:q8_0
-ollama create qwen3-coder-next:q8_0-agentic -f ollama/Modelfile.qwen3-coder-next-q8_0-agentic
 ```
 
 Verify parameters after building:
 
 ```bash
-ollama show qwen3-coder-next:q8_0-agentic
+ollama show qwen3-coder-next:q4_k_m-agentic
 ```
 
 Update Co settings to use your preferred tag:
@@ -213,19 +208,6 @@ PARAMETER top_k 40
 PARAMETER repeat_penalty 1.0
 ```
 
-**Qwen3-Coder-Next (Q8_0):**
-
-```dockerfile
-FROM qwen3-coder-next:q8_0
-
-PARAMETER num_ctx 262144
-PARAMETER num_predict 65536
-PARAMETER temperature 1.0
-PARAMETER top_p 0.95
-PARAMETER top_k 40
-PARAMETER repeat_penalty 1.0
-```
-
 ### Sizing guide
 
 KV cache grows linearly with `num_ctx`. A 262K window with Qwen3 Q8 uses ~28 GB for KV cache alone on top of the 32 GB weights.
@@ -250,7 +232,7 @@ Models must support **tool calling** for Co's agentic workflow.
 | Model | Parameters | Context | Tool Calling | RAM (Q8) | Notes |
 |-------|-----------|---------|-------------|----------|-------|
 | Qwen3 30B-A3B | 30.5B (MoE) | 262K | Yes | ~60 GB | Default; thinking mode; temperature ≥ 0.6 required |
-| Qwen3-Coder-Next | 80B (MoE) | 262K | Yes | ~84 GB (`q8_0`) | Strong coding model; use `qwen3-coder-next:q4_k_m-agentic` for balanced RAM, or `qwen3-coder-next:q8_0-agentic` on 128 GB systems |
+| Qwen3-Coder-Next | 80B (MoE) | 262K | Yes | ~51 GB | Strong coding model; use `qwen3-coder-next:q4_k_m-agentic` |
 | Qwen2.5-Coder 32B | 32B | 128K | Yes | ~35 GB | Dense; strong at code |
 | Llama 3.3 70B | 70B | 128K | Yes | ~75 GB | Q4_K_M recommended; needs 64 GB+ even quantised |
 

@@ -138,7 +138,44 @@ autocomplete and absent from the per-turn system prompt.
 
 ---
 
-## Gap 6 — `allowed-tools` per-skill tool grants (P3)
+## Gap 6 — `/doctor` agent self-awareness skill (P2)
+
+**What:** A `/doctor` skill that lets the agent audit its own active capabilities and report
+in its personality voice. Paired with a `check_capabilities()` tool that the skill calls for
+reliable introspection.
+
+**Why:** The agent's awareness of its own health belongs to the agent — not to a Python
+startup check layer. Mandatory failures (LLM unreachable) surface naturally at the first
+model call. Optional capabilities (reranker, knowledge backend, Google, Obsidian, web search,
+MCP) only matter when invoked; there is no value announcing them on every boot.
+
+`/doctor` makes self-awareness user-invokable and agent-native: the user asks when they want
+to know, the agent reasons from its live context, and responds in its own voice. No startup
+infrastructure, no injected `CheckResult` dataclasses.
+
+**How:**
+
+1. Add `check_capabilities()` tool in `co_cli/tools/` — registered via `agent.tool()`,
+   `requires_approval=False`. Reads live dep state from `ctx.deps`: knowledge backend,
+   effective reranker, Google credentials present, Obsidian vault reachable, Brave key set,
+   MCP servers configured. Returns `dict[str, Any]` with a `display` field summarising
+   active/degraded/absent capabilities.
+
+2. Write `.claude/skills/doctor.md` — prompt instructs the agent to call `check_capabilities`,
+   then describe what is available, what is degraded, and how to remedy gaps. Response must
+   be in the agent's personality voice, not a table dump.
+
+3. Set `disable-model-invocation: true` in frontmatter (requires Gap 1) so the model does
+   not auto-invoke `/doctor` when a user asks an unrelated question about its state.
+
+**Done when:** `/doctor` produces a natural-language capability summary in the current
+personality's voice. With fastembed absent (`CO_KNOWLEDGE_RERANKER_PROVIDER=local`), it
+reports degraded search quality. With no `BRAVE_SEARCH_API_KEY`, it notes web search is
+unavailable. With all optional components present, it confirms normal operation.
+
+---
+
+## Gap 8 — `allowed-tools` per-skill tool grants (P3)
 
 **What:** Allow a skill to declare which tools it needs in frontmatter
 (`allowed-tools: ["run_shell_command", "web_search"]`). Grant those tools without an
@@ -162,7 +199,7 @@ that triggers the same shell command does prompt normally.
 
 ---
 
-## Gap 7 — Shell preprocessing (P3)
+## Gap 9 — Shell preprocessing (P3)
 
 **What:** Evaluate `` !`command` `` blocks in skill bodies before the content is sent to
 Claude. This allows dynamic context injection — e.g. the current branch, a file list, or
@@ -183,7 +220,7 @@ produces a user message where that block is replaced by the current branch name.
 
 ---
 
-## Gap 8 — `context: fork` subagent execution (P3, deferred)
+## Gap 10 — `context: fork` subagent execution (P3, deferred)
 
 **What:** Run a skill in an isolated subagent context so its conversation turns do not
 pollute the main conversation history.

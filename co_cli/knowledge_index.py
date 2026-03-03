@@ -149,7 +149,6 @@ class KnowledgeIndex:
         hybrid_text_weight: float = 0.3,
         reranker_provider: str = "none",
         reranker_model: str = "",
-        reranker_model_path: str = "",
     ) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
@@ -163,11 +162,13 @@ class KnowledgeIndex:
         self._hybrid_text_weight = hybrid_text_weight
         self._reranker_provider = reranker_provider
         self._reranker_model = reranker_model
-        self._reranker_model_path = reranker_model_path
         if not self._reranker_model:
-            self._reranker_model = (
-                "gemini-2.0-flash" if self._reranker_provider == "gemini" else "qwen2.5:3b"
-            )
+            if self._reranker_provider == "gemini":
+                self._reranker_model = "gemini-2.0-flash"
+            elif self._reranker_provider == "local":
+                self._reranker_model = "BAAI/bge-reranker-base"
+            else:
+                self._reranker_model = "qwen2.5:3b"
         self._llm_model: Any = None
 
         self._conn = sqlite3.connect(str(db_path))
@@ -718,47 +719,34 @@ class KnowledgeIndex:
         candidates: list[SearchResult],
         limit: int,
     ) -> list[SearchResult]:
-        """GGUF cross-encoder reranking via llama-cpp-python. Falls back gracefully."""
+        """ONNX cross-encoder reranking via fastembed. Falls back gracefully."""
         try:
-            from llama_cpp import Llama
+            from fastembed.rerank.cross_encoder import TextCrossEncoder
         except ImportError:
-            logger.warning("llama-cpp-python not installed; falling back to unranked results")
+            logger.warning("fastembed not installed; falling back to unranked results (uv sync --group reranker)")
             return candidates[:limit]
-
-        if not self._reranker_model_path:
-            logger.warning("reranker_model_path not set; falling back to unranked results")
-            return candidates[:limit]
-
-        model_path = Path(self._reranker_model_path)
-        if not model_path.exists():
-            logger.warning(f"GGUF model not found at {model_path}; falling back to unranked results")
-            return candidates[:limit]
-
-        if self._llm_model is None:
-            self._llm_model = Llama(model_path=str(model_path), verbose=False)
 
         texts = self._fetch_reranker_texts(candidates)
-        raw = self._llm_model.create_reranking(query=query, documents=texts)
-        # raw = [{"index": int, "relevance_score": float}, ...]
-        score_by_idx = {item["index"]: item["relevance_score"] for item in raw}
+        if self._llm_model is None:
+            self._llm_model = TextCrossEncoder(model_name=self._reranker_model)
 
-        reranked = [
+        scores = list(self._llm_model.rerank(query, texts))
+        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+        return [
             SearchResult(
                 source=r.source,
                 kind=r.kind,
                 path=r.path,
                 title=r.title,
                 snippet=r.snippet,
-                score=score_by_idx.get(i, 0.0),
+                score=s,
                 tags=r.tags,
                 category=r.category,
                 created=r.created,
                 updated=r.updated,
             )
-            for i, r in enumerate(candidates)
+            for s, r in ranked[:limit]
         ]
-        reranked.sort(key=lambda r: r.score, reverse=True)
-        return reranked[:limit]
 
     def _build_fts_query(self, query: str) -> str | None:
         """Tokenize query, filter stopwords, quote terms, AND-join.

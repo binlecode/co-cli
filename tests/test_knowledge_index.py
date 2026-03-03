@@ -634,12 +634,21 @@ def test_ollama_listwise_rerank_reorders_results(tmp_path):
     idx.close()
 
 
-def test_local_cross_encoder_skips_gracefully_when_model_path_missing(tmp_path):
-    """_local_cross_encoder_rerank() with empty model path falls back without exception."""
+def test_local_cross_encoder_skips_gracefully_on_fastembed_import_error(tmp_path):
+    """_local_cross_encoder_rerank() falls back without exception when fastembed is not installed."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _block_fastembed(name, *args, **kwargs):
+        if name == "fastembed" or name.startswith("fastembed."):
+            raise ImportError(f"Mocked: {name} not available")
+        return real_import(name, *args, **kwargs)
+
     idx = KnowledgeIndex(
         tmp_path / "search.db",
         reranker_provider="local",
-        reranker_model_path="",
+        reranker_model="BAAI/bge-reranker-base",
     )
     candidates = [
         SearchResult(
@@ -649,28 +658,46 @@ def test_local_cross_encoder_skips_gracefully_when_model_path_missing(tmp_path):
         )
         for i in range(5)
     ]
-    result = idx._local_cross_encoder_rerank("test query", candidates, limit=3)
-    assert len(result) == 3
-    assert result == candidates[:3]
+    builtins.__import__ = _block_fastembed
+    try:
+        result = idx._rerank_results("test query", candidates, 5)
+    finally:
+        builtins.__import__ = real_import
+    assert len(result) == 5
+    assert result == candidates[:5]
     idx.close()
 
 
-def test_local_cross_encoder_skips_gracefully_when_gguf_not_on_disk(tmp_path):
-    """_local_cross_encoder_rerank() with nonexistent model path falls back without exception."""
+def test_local_cross_encoder_reranks_correctly(tmp_path):
+    """_local_cross_encoder_rerank() places the relevant doc first when fastembed is installed."""
+    pytest.importorskip("fastembed")
+
     idx = KnowledgeIndex(
         tmp_path / "search.db",
         reranker_provider="local",
-        reranker_model_path="/nonexistent/bge.gguf",
+        reranker_model="BAAI/bge-reranker-base",
     )
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(5)
-    ]
-    result = idx._local_cross_encoder_rerank("test query", candidates, limit=3)
-    assert len(result) == 3
-    assert result == candidates[:3]
+    idx.index(
+        source="memory", path="/off1.md",
+        title="chocolate cake recipe",
+        content="How to bake a chocolate cake with flour, sugar and eggs",
+        hash="h1", mtime=0.0,
+    )
+    idx.index(
+        source="memory", path="/off2.md",
+        title="gardening tips",
+        content="How to grow tomatoes in your backyard garden",
+        hash="h2", mtime=0.0,
+    )
+    idx.index(
+        source="memory", path="/relevant.md",
+        title="asyncio concurrency patterns",
+        content="Python asyncio event loop enables concurrent async programming with coroutines",
+        hash="h3", mtime=0.0,
+    )
+    results = idx.search("asyncio concurrency", limit=3)
+    assert len(results) >= 1
+    assert results[0].path == "/relevant.md", (
+        f"Expected /relevant.md first, got: {[r.path for r in results]}"
+    )
     idx.close()

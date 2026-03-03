@@ -5,7 +5,7 @@ nav_order: 14
 
 # Memory Lifecycle System
 
-Cross-session memory involves more than storage and retrieval. This doc covers the lifecycle behaviors: how signals are detected and saved automatically, how memories are kept healthy over time (dedup, consolidation, decay), and how retrieval is filtered. Auto-triggered signal detection, precision edits, tag/temporal filtering, and decay are all implemented. Semantic search (sqlite-vec) remains in `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`. For the broader knowledge system architecture (storage layout, FTS5 index, tool surface), see `DESIGN-knowledge.md`.
+Cross-session memory involves more than storage and retrieval. This doc covers the lifecycle behaviors: how signals are detected and saved automatically, how memories are kept healthy over time (dedup, consolidation, decay), and how retrieval is filtered. Auto-triggered signal detection, precision edits, tag/temporal filtering, and decay are all implemented. For the broader knowledge system architecture (storage layout, FTS5 index, tool surface, and deferred enhancements), see `DESIGN-knowledge.md`.
 
 ---
 

@@ -57,6 +57,7 @@ Check every factual claim against the source. Inaccuracy patterns to look for:
 | **Wrong field name** | Struct/dataclass/schema field name misspelled or renamed in code |
 | **Stale file path** | File listed in Files section has been moved or deleted |
 | **Missing coverage** | Shipped feature with no doc coverage at all (add a minimal description, don't over-document) |
+| **Stale cross-doc index** | `DESIGN-core.md` Component Docs table missing a `docs/DESIGN-*.md` file, or referencing a renamed/deleted one. Check applies only when `DESIGN-core.md` is in scope — glob actual `docs/DESIGN-*.md` files and diff against the table. |
 
 #### 2d. Fix in-place
 

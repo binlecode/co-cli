@@ -148,7 +148,11 @@ For each identified DESIGN doc, execute the sync-doc logic:
 - Fix any inaccuracies introduced by this work (phantom features, stale flow descriptions, wrong schema, missing config entries)
 - Record what was fixed (or "clean" if nothing needed fixing)
 
-### Step 3 — Fix before reporting
+### Step 3 — TODO lifecycle
+
+For every task that reached ✓ pass, apply the lifecycle rule: remove its implementation content from `docs/TODO-<slug>.md` and update the "Current State" section to mark it shipped. Design details that belong in a DESIGN doc should be merged there (already handled by Step 2 sync). If no unshipped work remains, reduce the TODO to a minimal stub listing only deferred items.
+
+### Step 4 — Fix before reporting
 
 If any test fails or any doc sync found inaccuracies: fix those issues now, before writing the delivery report. The delivery report reflects the final state after fixes, not the intermediate state during execution.
 

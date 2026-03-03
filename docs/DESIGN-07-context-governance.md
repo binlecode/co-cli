@@ -201,7 +201,7 @@ Goal: resume conversations across `co chat` invocations using existing SQLite in
 | `co_cli/_history.py` | History processors (`truncate_tool_returns`, `truncate_history_window`), `summarize_messages()`, helpers (`_find_first_run_end`, `_static_marker`, `_content_length`) |
 | `co_cli/_orchestrate.py` | `run_turn()` passes `message_history` to agent, `_patch_dangling_tool_calls()` for interrupt safety |
 | `co_cli/_commands.py` | `/compact`, `/clear`, `/history` command handlers |
-| `co_cli/agent.py` | Registers `history_processors=[truncate_tool_returns, truncate_history_window]` on the agent |
+| `co_cli/agent.py` | Registers `history_processors=[inject_opening_context, truncate_tool_returns, detect_safety_issues, truncate_history_window]` on the agent |
 | `co_cli/main.py` | Chat loop: initialises `message_history = []`, updates after each turn, rebinds on slash commands |
 | `co_cli/config.py` | `tool_output_trim_chars`, `max_history_messages`, `summarization_model` settings |
 | `tests/test_history.py` | Functional tests for processors, summarisation, and `/compact` |

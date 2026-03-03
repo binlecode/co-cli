@@ -17,7 +17,7 @@ KnowledgeIndex.search(query, source, kind, tags, limit)
        │
        ├── FTS5 MATCH + bm25() → ranked results      (Phase 1, shipped)
        ├── + vec0 cosine similarity → hybrid merge    (Phase 2, shipped — see Config)
-       └── + cross-encoder rerank                     (Phase 3, see TODO)
+       └── + cross-encoder / LLM rerank               (Phase 3, shipped — see Config)
        │
   search.db  (~/.local/share/co-cli/search.db)
 ```
@@ -154,9 +154,13 @@ Sync triggers keep `docs_fts` in lock-step with `docs` on insert, delete, and up
 | Prereq B | Articles + tools | Grep on both kinds | None |
 | Phase 1 | FTS5 index | BM25 ranked | None |
 | Phase 2 | Hybrid search | Semantic + keyword | sqlite-vec |
-| Phase 3 | Reranker | Cross-encoder | llama-cpp-python |
+| Phase 3 | Reranker | Cross-encoder or LLM listwise | fastembed (optional) |
 
-Prereq A, Prereq B, Phase 1, and Phase 2 are shipped. Phase 2 is code-complete: `KnowledgeIndex` implements `_hybrid_search()`, `_vec_search()`, `_hybrid_merge()`, `_embed_cached()`, and `_generate_embedding()`. Phase 2 activates when `knowledge_search_backend="hybrid"` (see Config). Known gaps and open bugs blocking ship-ready status are tracked in `TODO-sqlite-tag-fts-sem-search-for-knowledge.md`. Phase 3 is not yet started.
+All phases shipped. Phase 3 adds a post-search reranking step that runs after `_hybrid_merge()` (hybrid path) or after FTS5 candidate fetch (fts5 path). Three providers: `"local"` (fastembed ONNX cross-encoder — preferred, zero API cost, `uv sync --group reranker`), `"ollama"` (LLM listwise using the generation model — fallback when fastembed absent), `"gemini"` (Gemini `generate_content` — cloud fallback). Provider `"none"` disables reranking. Config: `CO_KNOWLEDGE_RERANKER_PROVIDER` (default `"local"`).
+
+**Deferred enhancements (not yet implemented):**
+- **Score blending** — replace pure rank-position score with `0.3 * hybrid_score + 0.7 * reranker_score`. Requires sigmoid normalization of fastembed raw logits first (uncalibrated floats, not probabilities). Defer until score calibration is validated via the reranker eval.
+- **MMR diversity pass** — post-reranker Jaccard-based deduplication: drop results too similar to a higher-ranked result. Orthogonal to reranking; can be layered on top. Reference: `~/workspace_genai/openclaw/src/memory/`.
 
 ## 3. Config
 
@@ -166,8 +170,10 @@ Prereq A, Prereq B, Phase 1, and Phase 2 are shipped. Phase 2 is code-complete: 
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for Phase 2 hybrid search: `"ollama"`, `"gemini"`, or `"none"` |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name passed to the embedding provider |
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding vector dimensions (must match the model's output size) |
-| `knowledge_hybrid_vector_weight` | (no env var) | `0.7` | Weight applied to vector similarity scores in the hybrid merge (code gap: not in `fill_from_env` map) |
-| `knowledge_hybrid_text_weight` | (no env var) | `0.3` | Weight applied to BM25 text scores in the hybrid merge (code gap: not in `fill_from_env` map) |
+| `knowledge_hybrid_vector_weight` | (no env var) | `0.7` | Weight applied to vector similarity scores in the hybrid merge |
+| `knowledge_hybrid_text_weight` | (no env var) | `0.3` | Weight applied to BM25 text scores in the hybrid merge |
+| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Post-search reranker: `"local"` (fastembed cross-encoder), `"ollama"` (LLM listwise), `"gemini"` (Gemini listwise), `"none"` (disabled) |
+| `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Override model for reranker; defaults: `local`→`BAAI/bge-reranker-base`, `ollama`→`qwen2.5:3b`, `gemini`→`gemini-2.0-flash` |
 
 ## 4. Files
 

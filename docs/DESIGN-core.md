@@ -140,7 +140,8 @@ graph LR
 | Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
 | Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
 | Agentic Loop & Prompting | [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) | Deep spec for `run_turn`, approval re-entry, safety policies, and prompt-layer composition |
-| Knowledge System | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Persistent knowledge and memory across sessions via markdown files. Includes proactive signal detection (preferences, corrections, decisions) and lifecycle management (dedup, consolidation, decay) |
+| Knowledge System | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Flat `.co-cli/knowledge/` store, memory/article kinds, frontmatter schema, FTS5 + hybrid search index, tool surface, evolution path |
+| Memory Lifecycle | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Proactive signal detection (preferences, corrections, decisions), precision edits, tag/temporal filtering, decay, protection |
 | Tools | [DESIGN-tools.md](DESIGN-tools.md) | Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch) — all native tool implementations |
 | MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
 
@@ -531,7 +532,7 @@ Side-effectful tools are registered with `requires_approval=True`. The chat loop
 | `save_article` | Yes | Writes to `.co-cli/knowledge/` |
 | MCP tools (approval=auto) | Yes | External tools default to requiring approval |
 | MCP tools (approval=never) | No | Explicitly trusted by user config |
-| All other native tools | No | Read-only operations |
+| All other native tools | No | Read-only or agent-managed state (no external side effects) |
 
 ### Security Model
 
