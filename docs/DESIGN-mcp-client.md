@@ -1,9 +1,3 @@
----
-title: "15 — MCP Client"
-parent: Tools
-nav_order: 7
----
-
 # Design: MCP Client Integration
 
 ## 1. What & How
@@ -157,6 +151,8 @@ Example — mark filesystem server as read-only:
 
 `co status` checks each configured MCP server's command availability via `shutil.which()`. Reports `"ready"` when the command is on PATH, or `"<command> not found"` otherwise.
 
+`deps.mcp_count` is set to `len(settings.mcp_servers)` at `create_deps()` time. The `check_capabilities` tool reads this field for capability introspection — it is not the count of successfully-connected servers, only the count of configured servers.
+
 ### Env Var Merge Semantics
 
 Three layers affect MCP server configuration. Each uses **replacement**, not deep merge, consistent with the rest of co-cli's config system:
@@ -186,5 +182,6 @@ Three layers affect MCP server configuration. Each uses **replacement**, not dee
 | `co_cli/config.py` | `MCPServerConfig` model, `_DEFAULT_MCP_SERVERS`, `mcp_servers` field on `Settings` |
 | `co_cli/agent.py` | Build `MCPServerStdio` toolsets from config, approval wrapping, GitHub token resolution |
 | `co_cli/main.py` | `async with agent` lifecycle, `_discover_mcp_tools()` for tool name enumeration |
+| `co_cli/deps.py` | `CoDeps.mcp_count` — count of configured MCP servers for capability introspection |
 | `co_cli/status.py` | MCP server health check via `shutil.which()` in `get_status()` |
 | `tests/test_mcp.py` | Config, agent integration, status display, E2E server tests (30+ tests) |

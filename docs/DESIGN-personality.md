@@ -1,8 +1,3 @@
----
-title: Personality System
-nav_order: 3
----
-
 # Personality System
 
 ## 1. What & How
@@ -22,7 +17,7 @@ Every co instance has a soul loaded — there is no soul-less mode. The soul see
 
 ```
 souls/{role}/seed.md        → identity declaration
-                               Core: trait essence (4 one-line activations)
+                               Core: trait essence activations (semicolon-separated)
                                Never: hard constraints
                              loaded via load_soul_seed() — placed first
 
@@ -189,7 +184,7 @@ The static prompt is assembled once and never re-read between turns; the per-tur
 ```
 souls/{role}/seed.md
   identity declaration     "You are X — …"
-  Core:                    4 one-line trait essence activations
+  Core:                    trait essence activations (semicolon-separated)
   Never:                   hard constraint list (negative space)
 ```
 

@@ -73,7 +73,7 @@ Per-turn layers  (@agent.system_prompt functions in agent.py):
   add_personality_memories     (## Learned Context: top 5 personality-context memories)
 ```
 
-First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. The soul seed anchors identity at the top of every static prompt; the full soul + behaviors reinforce it per turn. See `DESIGN-02-personality.md`.
+First principle: **personality is structural — injected every turn, never tool-gated.** The LLM does not decide when to load personality. The soul seed anchors identity at the top of every static prompt; the full soul + behaviors reinforce it per turn. See `DESIGN-personality.md`.
 
 ### 3.3 Personality System
 
@@ -92,7 +92,7 @@ First principle: **personality is structural — injected every turn, never tool
 
 **Base memories:** planted entries in `.co-cli/knowledge/` tagged `[role, "character"]` — sourced from observed behavior in the source material. Loaded deterministically by `get_agent()`, inserted between seed and behavioral rules. Decay-protected.
 
-Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `DESIGN-02-personality.md`.
+Role is selected at session start and immutable thereafter. Personality modulates HOW rules are expressed but NEVER overrides safety, approval gates, or factual accuracy. See `DESIGN-personality.md`.
 
 ### 3.4 Infrastructure
 
@@ -162,7 +162,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 **Remaining:**
 - None in the Phase A safety baseline. Outstanding loop/prompt work is tracked under Phase I and future quality enhancements.
 
-**Design docs:** `DESIGN-16-prompt-design.md`, `DESIGN-core.md`
+**Design docs:** `DESIGN-prompt-design.md`, `DESIGN-core.md`
 
 ### Phase B: File Tools — HIGH
 
@@ -199,7 +199,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 - Background pre-compaction during user idle time (optimization)
 - Plans and key decisions persist across compaction events
 
-**Design docs:** `DESIGN-07-context-governance.md`, `DESIGN-16-prompt-design.md`
+**Design docs:** `DESIGN-context-governance.md`, `DESIGN-prompt-design.md`
 
 ### Phase E: Background Execution — MEDIUM
 
@@ -246,7 +246,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 
 ### Phase I: Sub-Agent Delegation — MEDIUM
 
-**Why:** 3/5 peers have multi-agent capability. The baseline design lives in `DESIGN-16-prompt-design.md`; remaining implementation work is tracked in `TODO-subagent-delegation.md`.
+**Why:** 3/5 peers have multi-agent capability. The baseline design lives in `DESIGN-prompt-design.md`; remaining implementation work is tracked in `TODO-subagent-delegation.md`.
 
 **Priority inside Phase I TODO set:** P1
 
@@ -1104,17 +1104,16 @@ All paths verified against `docs/` contents.
 
 | Doc | Description |
 |-----|-------------|
-| `DESIGN-core.md` | System overview, agent loop: factory, CoDeps, orchestration, streaming, approval, cross-cutting concerns |
+| `DESIGN-core.md` | System overview, agent loop: factory, CoDeps, bootstrap, session lifecycle, skills, orchestration, streaming, four-tier approval, cross-cutting concerns |
 | `DESIGN-llm-models.md` | LLM model configuration (Gemini, Ollama) + Ollama local setup |
-| `DESIGN-04-streaming-event-ordering.md` | Streaming event ordering, boundary-safe rendering |
 | `DESIGN-logging-and-tracking.md` | Telemetry architecture, SQLite schema, viewers, real-time tail |
-| `DESIGN-07-context-governance.md` | Context governance: history processors, sliding window, summarization |
-| `DESIGN-08-theming-ascii.md` | Theming, ASCII art banner, display helpers |
-| `DESIGN-tools.md` | Native tools: shell, memory, Obsidian, Google, web, todo conventions |
-| `DESIGN-14-memory-lifecycle-system.md` | Memory lifecycle: signal detection, dedup, consolidation, decay, context loading |
-| `DESIGN-15-mcp-client.md` | MCP client: external tool servers via stdio transport |
-| `DESIGN-16-prompt-design.md` | Agentic loop + prompting architecture: run_turn, safety policy, prompt composition |
-| `DESIGN-02-personality.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
+| `DESIGN-context-governance.md` | Context governance: history processors, sliding window, summarization, background pre-computation |
+| `DESIGN-theming-ascii.md` | Theming, ASCII art banner, display helpers |
+| `DESIGN-tools.md` | Native tools: shell (four-tier approval + persistent approvals), memory, Obsidian, Google, web, capabilities, bundled skills |
+| `DESIGN-knowledge.md` | Knowledge system: flat store, FTS5/hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay) |
+| `DESIGN-mcp-client.md` | MCP client: external tool servers via stdio transport |
+| `DESIGN-prompt-design.md` | Agentic loop + prompting: run_turn, four-tier approval re-entry, tool preamble, safety policy, prompt composition |
+| `DESIGN-personality.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
 
 ### TODO Documents (remaining work)
 
@@ -1218,4 +1217,4 @@ Additional reference for memory architecture:
 
 ### Reference Implementations
 29. Openclaw `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap
-30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `DESIGN-02-personality.md`
+30. Co-cli memory system — `co_cli/tools/memory.py`, `CLAUDE.md` (Knowledge System section), `DESIGN-personality.md`

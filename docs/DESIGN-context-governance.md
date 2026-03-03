@@ -1,14 +1,8 @@
----
-title: "07 — Context Governance"
-parent: Infrastructure
-nav_order: 3
----
-
 # Design: Context Governance
 
 ## 1. What & How
 
-Context governance for co-cli's conversation history. Two `history_processors` registered on the agent prevent silent context overflow: tool output trimming and sliding-window summarisation. The chat loop maintains `message_history` as a simple list, updated after each turn, with slash commands for manual control (`/clear`, `/compact`, `/history`). For orchestration and prompt-layer architecture around these processors, see `DESIGN-16-prompt-design.md`.
+Context governance for co-cli's conversation history. Two `history_processors` registered on the agent prevent silent context overflow: tool output trimming and sliding-window summarisation. The chat loop maintains `message_history` as a simple list, updated after each turn, with slash commands for manual control (`/clear`, `/compact`, `/history`). For orchestration and prompt-layer architecture around these processors, see `DESIGN-prompt-design.md`.
 
 ```mermaid
 sequenceDiagram
@@ -103,7 +97,9 @@ After each turn, `precompute_compaction()` is spawned unconditionally as an `asy
 
 If the pre-computed summary is ready and the history hasn't changed since it was computed (no new messages added), `truncate_history_window` uses it directly rather than computing inline. If the user replies faster than pre-computation completes, the processor falls back to inline computation transparently.
 
-This hides 2-5s summarisation latency behind user think time. Result stored in `deps.precomputed_compaction`. Pre-computation does not affect the user turn if it hasn't finished — it is always an optimisation, never a blocking step.
+This hides 2-5s summarisation latency behind user think time. Result stored in `deps.precomputed_compaction` (type `Any`, cleared after consumption). Pre-computation does not affect the user turn if it hasn't finished — it is always an optimisation, never a blocking step.
+
+`chat_loop` joins the background task at the start of the next turn (before the history processor chain runs) and writes the result to `deps.precomputed_compaction`. If the task hasn't finished, `deps.precomputed_compaction` stays `None` and the processor falls back to inline computation transparently. After the processor consumes the pre-computed summary, it clears `deps.precomputed_compaction = None`.
 
 (Pattern from Aider's background summarisation thread joined before next `send_new_user_message`.)
 
@@ -117,7 +113,7 @@ This hides 2-5s summarisation latency behind user think time. Result stored in `
 1. `ModelRequest` with `UserPromptPart`: `[Compacted conversation summary]\n{summary}`
 2. `ModelResponse` with `TextPart`: `Understood. I have the conversation context.`
 
-Returns `None` on empty history or on summarisation failure.
+Returns `None` on empty history or on summarisation failure. After `/compact` returns new history, `chat_loop` calls `increment_compaction(session_data)` and `save_session()` — the compaction count is tracked in `_session.py` for observability across restarts.
 
 ### Interrupt Handling
 
@@ -181,10 +177,6 @@ Two-model design for summarisation:
 | `/compact` (manual command) | `ctx.agent.model` (primary always) | User-initiated — quality matters more than cost, user is waiting for a good summary |
 
 When `summarization_model` is empty (default), both paths use the primary model.
-
-### Session Persistence (Future)
-
-Goal: resume conversations across `co chat` invocations using existing SQLite infrastructure. New `sessions` table, `ModelMessagesTypeAdapter` for serialisation, `--resume` flag, `/sessions` command.
 
 ## 3. Config
 

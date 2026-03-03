@@ -1,9 +1,3 @@
----
-title: "08 — Theming & ASCII Art"
-parent: Infrastructure
-nav_order: 4
----
-
 # Design: Theming & ASCII Art
 
 ## 1. What & How

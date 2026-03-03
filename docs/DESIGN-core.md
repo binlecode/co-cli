@@ -1,9 +1,3 @@
----
-title: "System Design"
-nav_order: 1
-has_children: true
----
-
 # Co CLI — System Design
 
 ## 1. What & How
@@ -133,17 +127,15 @@ graph LR
 
 | Component | Doc | Summary |
 |-----------|-----|---------|
-| Personality System | [DESIGN-02-personality.md](DESIGN-02-personality.md) | File-driven roles, 5 traits, structural per-turn injection, reasoning depth override |
+| Personality System | [DESIGN-personality.md](DESIGN-personality.md) | File-driven roles, 5 traits, structural per-turn injection, reasoning depth override |
 | LLM Models | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Gemini/Ollama model selection, inference parameters, Ollama local setup |
-| Streaming Event Ordering | [DESIGN-04-streaming-event-ordering.md](DESIGN-04-streaming-event-ordering.md) | First-principles RCA and event-boundary design for robust streaming output |
 | Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
-| Context Governance | [DESIGN-07-context-governance.md](DESIGN-07-context-governance.md) | History processors, sliding window, summarisation |
-| Theming | [DESIGN-08-theming-ascii.md](DESIGN-08-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
-| Agentic Loop & Prompting | [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) | Deep spec for `run_turn`, approval re-entry, safety policies, and prompt-layer composition |
-| Knowledge System | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Flat `.co-cli/knowledge/` store, memory/article kinds, frontmatter schema, FTS5 + hybrid search index, tool surface, evolution path |
-| Memory Lifecycle | [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) | Proactive signal detection (preferences, corrections, decisions), precision edits, tag/temporal filtering, decay, protection |
-| Tools | [DESIGN-tools.md](DESIGN-tools.md) | Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch) — all native tool implementations |
-| MCP Client | [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
+| Context Governance | [DESIGN-context-governance.md](DESIGN-context-governance.md) | History processors, sliding window, summarisation, background pre-computation |
+| Theming | [DESIGN-theming-ascii.md](DESIGN-theming-ascii.md) | Light/dark themes, ASCII banner, semantic styles |
+| Agentic Loop & Prompting | [DESIGN-prompt-design.md](DESIGN-prompt-design.md) | Deep spec for `run_turn`, four-tier approval re-entry, tool preamble, safety policies, prompt-layer composition |
+| Knowledge System | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Flat `.co-cli/knowledge/` store, FTS5 + hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay, tag/temporal filtering) |
+| Tools | [DESIGN-tools.md](DESIGN-tools.md) | Memory, Shell (four-tier approval + persistent approvals), Obsidian, Google (Drive/Gmail/Calendar), Web, Capabilities, bundled skills |
+| MCP Client | [DESIGN-mcp-client.md](DESIGN-mcp-client.md) | External tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance) |
 
 ---
 
@@ -186,10 +178,12 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 | Group | Fields |
 |-------|--------|
 | **Runtime resources** | `shell` (ShellBackend), `session_id` (uuid4), `google_creds` (lazy-resolved) |
-| **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy` |
-| **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2) |
+| **Tool config** | `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `brave_search_api_key`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_policy`, `web_http_max_retries` (2), `web_http_backoff_base_seconds` (1.0), `web_http_backoff_max_seconds` (8.0), `web_http_jitter_ratio` (0.2), `exec_approvals_path` (persistent exec approvals JSON), `mcp_count` (0, MCP server count for capability introspection) |
+| **Knowledge** | `knowledge_index` (KnowledgeIndex or None — None when `knowledge_search_backend="grep"`), `knowledge_search_backend` ("fts5"), `knowledge_reranker_provider` ("none") |
+| **Memory config** | `memory_max_count` (200), `memory_dedup_window_days` (7), `memory_dedup_threshold` (85), `memory_decay_strategy` ("summarize"), `memory_decay_percentage` (0.2), `memory_recall_half_life_days` (30, temporal decay half-life for FTS5 recall scoring) |
 | **History governance** | `max_history_messages` (40), `tool_output_trim_chars` (2000), `summarization_model` (empty = primary model) |
 | **Personality** | `personality` (role name), `personality_critique` (always-on review lens from `critique.md`), `active_mindset_content` + `active_mindset_types` (set post-Turn-1 classification), `mindset_loaded` (classification guard) |
+| **Skills & fallback** | `skill_registry` (list of skill dicts, populated by chat_loop; drives `add_available_skills` system prompt), `llm_fallback_models` (same-provider fallback model list for error recovery) |
 | **Mutable state** | `drive_page_tokens` (pagination state per query), `auto_approved_tools` (per-tool session approvals), `session_todos` (session task list), `precomputed_compaction` (background summary cache) |
 
 ### Multi-Session State Design
@@ -202,28 +196,92 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 
 **Invariant:** Mutable per-session state belongs in `CoDeps`, never in module globals. One `CoDeps` per chat session — tools accumulate state across turns within a session.
 
+### Bootstrap Phase
+
+Before the REPL loop starts, `run_bootstrap()` runs three startup steps in sequence, reporting each via `frontend.on_status()`:
+
+```
+run_bootstrap(deps, frontend, knowledge_dir, session_path, session_ttl_minutes, n_skills):
+    1. sync_knowledge
+         deps.knowledge_index.sync_dir("memory", knowledge_dir)
+         → reports "Knowledge synced — N item(s) (backend)"
+         → on error: closes index, sets deps.knowledge_index = None, reports failure
+
+    2. restore_session
+         session = load_session(session_path)
+         if is_fresh(session, ttl_minutes):
+             deps.session_id = session["session_id"]   ← restore for OTel continuity
+             → reports "Session restored — {short_id}..."
+         else:
+             session = new_session()
+             deps.session_id = session["session_id"]
+             → reports "Session new — {short_id}..."
+
+    3. skills_loaded
+         → reports "{n_skills} skill(s) loaded"
+
+    return session_data   ← used for touch/save/increment_compaction in the REPL loop
+```
+
+Source: `co_cli/_bootstrap.py`
+
+### Session Lifecycle
+
+Session identity persists across `co chat` restarts within the TTL window, enabling OTel trace continuity and future conversation resume.
+
+```
+_session.py functions:
+    new_session()              → {session_id: uuid4.hex, created_at, last_used_at, compaction_count: 0}
+    load_session(path)         → dict | None  (None if missing/unreadable)
+    save_session(path, sess)   → writes JSON, chmod 0o600
+    is_fresh(sess, ttl_min)    → True if last_used_at within ttl_minutes (future timestamps → True)
+    touch_session(sess)        → new dict with last_used_at = now (immutable update)
+    increment_compaction(sess) → new dict with compaction_count + 1
+```
+
+**Session dict fields:** `session_id` (UUID hex), `created_at` (ISO8601), `last_used_at` (ISO8601), `compaction_count` (int).
+
+**Lifecycle in the chat loop:**
+- After bootstrap: session_data held in `chat_loop` local state
+- After each LLM turn: `touch_session()` + `save_session()`
+- On `/compact`: `increment_compaction()` + `save_session()`
+- On exit: final `save_session()`
+- Storage: `.co-cli/session.json`, mode `0o600`
+
+`deps.session_id` carries the restored or new session UUID — OTel spans are tagged with it for trace continuity across turns.
+
 ### Chat Session Lifecycle
 
 ```
 chat_loop():
     agent, model_settings, tool_names = get_agent(web_policy, mcp_servers)
-    deps = create_deps()
+    deps = create_deps()                       ← prunes stale exec approvals at startup
+    skill_commands = _load_skills(project_dir, settings)
+    deps.skill_registry = [...]                ← for system prompt injection
+
     frontend = TerminalFrontend()
     message_history = []
 
     async with agent:                          ← connects MCP servers
+        session_data = await run_bootstrap(deps, frontend, ...)
+        display_welcome_banner(info)
+
         loop:
             user_input = prompt_async()        ← prompt-toolkit + tab completion
 
             dispatch:
                 "exit"/"quit"  → break
                 empty/blank    → continue
-                "/command"     → dispatch_command(), no LLM
+                "/command"     → dispatch_command()
+                                  if ctx.skill_body: user_input = ctx.skill_body → run_turn()
+                                  else: continue (no LLM)
                 anything else  → run_turn()
 
             message_history = turn_result.messages
+            touch_session() + save_session()
+            bg_compaction_task = precompute_compaction(...)
 
-    finally: deps.shell.cleanup()
+    finally: save_session(), deps.shell.cleanup()
 ```
 
 **MCP fallback:** If the agent context fails (MCP server unavailable), the chat loop recreates the agent without MCP and continues with native tools only.
@@ -375,15 +433,38 @@ Local REPL commands — bypass the LLM, execute instantly. Explicit `dict` regis
 
 | Command | Effect |
 |---------|--------|
-| `/help` | Print table of all commands |
+| `/help` | Print table of all commands and user-invocable skills |
 | `/clear` | Empty conversation history |
 | `/status` | System health check |
 | `/tools` | List registered tool names |
 | `/history` | Show turn/message totals |
-| `/compact` | LLM-summarise history (see [DESIGN-07](DESIGN-07-context-governance.md)) |
-| `/depth` | Show/set reasoning depth (`quick`, `normal`, `deep`) |
-| `/model` | Show/switch current model (Ollama only) |
+| `/compact` | LLM-summarise history (see [Context Governance](DESIGN-context-governance.md)) |
+| `/model [name]` | Show/switch current model (interactive picker or direct switch) |
 | `/forget <id>` | Delete memory by ID |
+| `/approvals [list\|clear [id]]` | Manage persistent exec approval patterns |
+
+### Skills System
+
+Skills are `.md` files that define LLM prompts or workflow templates invocable via `/name`. They extend the REPL without writing Python.
+
+**Loading:** `_load_skills(project_skills_dir, settings)` — bundled skills (`co_cli/bundled_skills/*.md`) are loaded first, then project-local (`.co-cli/skills/*.md`); project overrides bundled on name collision. Reserved names (built-in command names) are skipped with a warning. Loaded skills are stored in the module-level `SKILL_COMMANDS` dict and a summary is written to `deps.skill_registry` for system prompt injection.
+
+**`SkillCommand` dataclass:** `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `requires`.
+
+**`requires` gates** — evaluated at load time; skills failing a gate are silently skipped:
+- `bins` — all listed binaries must exist on `PATH`
+- `anyBins` — at least one listed binary must exist
+- `env` — all listed env vars must be set
+- `os` — `sys.platform` must start with one of the listed prefixes
+- `settings` — named `Settings` fields must be non-None/non-empty
+
+**Dispatch:** `/skill_name [args]` → `dispatch()` sets `ctx.skill_body` to the skill body (with argument substitution) → `chat_loop` feeds `skill_body` as the user input into `run_turn()`.
+
+**Argument substitution:** `$ARGUMENTS` (full args string), `$0` (skill name), `$1`, `$2`, ... (positional). If `$ARGUMENTS` is absent, args are appended to the body (backward-compat mode).
+
+**Bundled skills:** shipped in `co_cli/bundled_skills/` — always available regardless of project. Currently ships `doctor.md`, which invokes `check_capabilities` to report active integrations.
+
+**`disable_model_invocation: true`:** skill is user-invocable (appears in `/help`) but excluded from `deps.skill_registry`, so the LLM cannot invoke it directly.
 
 ### Error Handling
 
@@ -427,7 +508,7 @@ All retries capped at `model_http_retries` (default 2). Backoff capped at 30s, e
 ### System Prompt Assembly
 
 Two-part structure — static base assembled once, per-turn layers appended before every model request.
-Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md).
+Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-prompt-design.md](DESIGN-prompt-design.md).
 
 **Static** (`assemble_prompt(provider, model_name, soul_seed, soul_examples)` in `prompts/__init__.py`):
 
@@ -444,8 +525,9 @@ Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-16-pro
 8. **Personality memories** — `## Learned Context` (when role is set)
 9. **Active mindset** — `## Active mindset: {types}` mindset content (after Turn 1 classification, when non-empty)
 10. **Review lens** — `## Review lens` from `souls/{role}/critique.md` (when role is set)
+11. **Available skills** — `## Available Skills` listing `/name — description` entries from `skill_registry` (when non-empty; capped at 2 KB)
 
-See [DESIGN-14-memory-lifecycle-system.md](DESIGN-14-memory-lifecycle-system.md) for knowledge loading details.
+See [DESIGN-knowledge.md](DESIGN-knowledge.md) for knowledge loading details.
 
 ### Eval Framework
 
@@ -522,7 +604,20 @@ Native tools use `agent.tool()` with `RunContext[CoDeps]`. Zero `tool_plain()` r
 
 ### Approval Flow
 
-Side-effectful tools are registered with `requires_approval=True`. The chat loop prompts `[y/n/a(yolo)]` via `DeferredToolRequests`. Tools contain only business logic — no UI imports. See [DESIGN-tools.md](DESIGN-tools.md) for safe-command auto-approval.
+Side-effectful tools are registered with `requires_approval=True`. `_handle_approvals()` runs a four-tier decision chain for each pending tool call. Tools contain only business logic — no UI imports.
+
+**Four-tier approval chain (in order, first match wins):**
+
+1. **Safe-command allowlist** (`_approval._is_safe_command()`) — shell-only. Read-only commands matching the configurable prefix list are auto-approved silently. Chaining operators (`;`, `&`, `|`, `>`, etc.) force promotion to tier 4.
+2. **Persistent cross-session approvals** (`_exec_approvals.find_approved()`) — shell-only. If the command matches a stored fnmatch pattern in `.co-cli/exec-approvals.json`, auto-approve and update `last_used_at`. Patterns are derived from previous `"a"` choices. Bare `"*"` pattern is blocked as a safety guard.
+3. **Per-session auto-approve** (`deps.auto_approved_tools`) — non-shell tools. If the user previously chose `"a"` for this tool name in the current session, auto-approve.
+4. **User prompt** — `frontend.prompt_approval(desc)` → `[y/n/a]`. Denial sends `ToolDenied("User denied this action")` — LLM sees it and can suggest alternatives.
+
+**What `"a"` (always) persists:**
+- `run_shell_command`: derives a pattern (e.g. `"git commit *"`) and saves it to `.co-cli/exec-approvals.json` — **persists across sessions**
+- All other tools: adds tool name to `deps.auto_approved_tools` — **session-only**
+
+Stale exec approvals (older than 90 days by `last_used_at`) are pruned at `create_deps()` startup. `/approvals list` and `/approvals clear [id]` manage stored patterns.
 
 | Tool | Approval | Rationale |
 |------|----------|-----------|
@@ -561,6 +656,9 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 <project-root>/
 └── .co-cli/
     ├── knowledge/         # All knowledge files (kind: memory + kind: article)
+    ├── skills/            # Project-local skill .md files (override bundled on name collision)
+    ├── session.json       # Session persistence (mode 0o600): session_id, created_at, last_used_at, compaction_count
+    ├── exec-approvals.json # Persistent exec approval patterns (mode 0o600)
     └── settings.json      # Project configuration (overrides user)
 ```
 
@@ -568,9 +666,12 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 
 | Module | Purpose |
 |--------|---------|
-| `main.py` | CLI entry point, chat loop, OTel setup |
+| `main.py` | CLI entry point, chat loop, OTel setup, `create_deps()` |
 | `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
 | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
+| `_bootstrap.py` | `run_bootstrap()` — startup: knowledge sync, session restore/create, skills count report |
+| `_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
+| `_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
 | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
@@ -579,11 +680,12 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 | `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
 | `status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` |
 | `_banner.py` | ASCII art welcome banner |
-| `_commands.py` | Slash command registry, handlers, `dispatch()` |
+| `_commands.py` | Slash command registry, handlers, `dispatch()`, `_load_skills()`, `SkillCommand` |
 | `_history.py` | History processors and `summarize_messages()` |
-| `_approval.py` | Shell safe-command classification |
+| `_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `_tail.py` | Real-time span viewer (`co tail`) |
 | `_trace_viewer.py` | Static HTML trace viewer (`co traces`) |
+| `bundled_skills/` | Bundled skill `.md` files — always available; currently ships `doctor.md` |
 | `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
 | `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
@@ -592,6 +694,7 @@ Single-threaded, synchronous execution loop. Uses `await run_turn()` inside the 
 | `tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `tools/web.py` | `web_search`, `web_fetch` — Brave Search API + URL fetch |
+| `tools/capabilities.py` | `check_capabilities` — capability introspection tool (read-only, no approval) |
 | `tests/test_tool_calling_functional.py` | Functional tool-calling gate — selection, args, refusal, intent routing, recovery |
 
 ---
@@ -611,7 +714,14 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Truncate old tool outputs |
 | `summarization_model` | `CO_CLI_SUMMARIZATION_MODEL` | `""` | LLM for summarization (or use agent model) |
 | `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | Max stored memories |
+| `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life (days) for temporal decay scoring in FTS5 recall |
+| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL (minutes) |
+| `llm_fallback_models` | `CO_LLM_FALLBACK_MODELS` | `[]` | Comma-separated same-provider fallback models for error recovery |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 3 defaults | MCP server configurations (JSON) |
+| `web_http_max_retries` | `CO_CLI_WEB_HTTP_MAX_RETRIES` | `2` | Max HTTP retries for `web_fetch` (exponential backoff) |
+| `web_http_backoff_base_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS` | `1.0` | Base backoff interval (seconds) for `web_fetch` retries |
+| `web_http_backoff_max_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS` | `8.0` | Max backoff cap (seconds) for `web_fetch` retries |
+| `web_http_jitter_ratio` | `CO_CLI_WEB_HTTP_JITTER_RATIO` | `0.2` | Jitter fraction applied to backoff interval (0–1) |
 
 ---
 
@@ -625,12 +735,17 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/main.py` | CLI entry point, `chat_loop()`, `create_deps()`, OTel setup |
 | `co_cli/_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
 | `co_cli/_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()`, `_parse_retry_after()` |
+| `co_cli/_bootstrap.py` | `run_bootstrap()` — startup steps: knowledge sync, session restore, skills report |
+| `co_cli/_session.py` | Session persistence functions: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
+| `co_cli/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `co_cli/display.py` | Themed Rich Console, semantic styles, `TerminalFrontend` |
-| `co_cli/_commands.py` | Slash command registry, handlers, `dispatch()` |
+| `co_cli/_commands.py` | Slash command registry, handlers, `dispatch()`, `_load_skills()`, `SkillCommand` |
 | `co_cli/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | `co_cli/_history.py` | `truncate_tool_returns`, `truncate_history_window`, `summarize_messages` |
 | `co_cli/prompts/__init__.py` | `assemble_prompt()` — static prompt: instructions, rules, counter-steering |
 | `co_cli/tools/_errors.py` | `ToolErrorKind`, `classify_google_error()`, `handle_tool_error()`, `terminal_error()` |
+| `co_cli/tools/capabilities.py` | `check_capabilities` — capability introspection tool |
+| `co_cli/bundled_skills/` | Bundled skill files shipped with the package (always available) |
 | `tests/test_tool_calling_functional.py` | Functional tool-calling gate test |
 
 ### Dependencies

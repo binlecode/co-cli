@@ -116,7 +116,7 @@ Re-delegation guidance in parent prompt:
 | `co_cli/tools/delegation.py` | Create | `delegate_research`, `delegate_analysis` tools |
 | `co_cli/agent.py` | Modify | Register delegation tools |
 | `co_cli/deps.py` | Modify | Add `turn_usage` field (Phase C) |
-| `docs/DESIGN-16-prompt-design.md` | Modify | Promote sub-agent delegation from Future to Current |
+| `docs/DESIGN-prompt-design.md` | Modify | Promote sub-agent delegation from Future to Current |
 | `tests/test_delegation.py` | Create | Functional tests: research tool returns summary+sources, analysis tool returns conclusion |
 
 ---
@@ -125,5 +125,5 @@ Re-delegation guidance in parent prompt:
 
 - `DESIGN-core.md` — agent factory, `CoDeps`, tool registration
 - `DESIGN-tools.md` — tool return contract, approval pattern
-- `DESIGN-16-prompt-design.md` — sub-agent delegation in Future Extensions section
+- `DESIGN-prompt-design.md` — sub-agent delegation in Future Extensions section
 - `TODO-background-execution.md` — prerequisite: background infrastructure (implement first)

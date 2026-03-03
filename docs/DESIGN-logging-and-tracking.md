@@ -1,9 +1,3 @@
----
-title: "Logging & Tracking"
-parent: Infrastructure
-nav_order: 1
----
-
 # Logging & Tracking
 
 ## 1. What & How

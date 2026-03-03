@@ -1,12 +1,6 @@
----
-title: Tools
-nav_order: 4
-has_children: true
----
-
 # Tools
 
-Shell, memory, Obsidian vault, Google services, and web intelligence — agent tool implementations. See [DESIGN-15-mcp-client.md](DESIGN-15-mcp-client.md) for external MCP tool servers, and [DESIGN-16-prompt-design.md](DESIGN-16-prompt-design.md) for loop/prompt architecture that consumes these tools.
+Shell, memory, Obsidian vault, Google services, and web intelligence — agent tool implementations. See [DESIGN-mcp-client.md](DESIGN-mcp-client.md) for external MCP tool servers, and [DESIGN-prompt-design.md](DESIGN-prompt-design.md) for loop/prompt architecture that consumes these tools.
 
 ## Common Conventions
 
@@ -67,8 +61,8 @@ Additional: CAPS reserved for safety-critical constraints only (write/delete too
 
 ```
 User says "find X"
-  ├── in memories (preferences, decisions)  → recall_memory
-  ├── in Obsidian notes (personal notes)    → search_notes → read_note
+  ├── in memories (preferences, decisions)  → search_knowledge(kind=memory) → list_memories
+  ├── in Obsidian notes (personal notes)    → search_knowledge(source=obsidian) → list_notes → read_note
   ├── in Google Drive (cloud docs)          → search_drive_files → read_drive_file
   ├── in Gmail (emails)                     → search_emails
   ├── in Calendar (events)                  → search_calendar_events
@@ -76,7 +70,9 @@ User says "find X"
   └── on the filesystem / other             → run_shell_command
 ```
 
-Bidirectional routing: `recall_memory ↔ search_notes ↔ search_drive_files` (tri-directional disambiguation), `search_notes → read_note ← list_notes`, `search_drive_files → read_drive_file`, `web_search → web_fetch → run_shell_command` (curl fallback), `list_emails ↔ search_emails`, `list_calendar_events ↔ search_calendar_events`. New tools must wire into this graph — update bidirectional refs in both directions.
+Bidirectional routing: `search_knowledge ↔ list_notes ↔ search_drive_files` (tri-directional disambiguation), `list_notes → read_note`, `search_drive_files → read_drive_file`, `web_search → web_fetch → run_shell_command` (curl fallback), `list_emails ↔ search_emails`, `list_calendar_events ↔ search_calendar_events`. New tools must wire into this graph — update bidirectional refs in both directions.
+
+**Bundled skills:** `co_cli/bundled_skills/` ships `.md` skill files that are always available regardless of project directory. Currently ships `doctor.md`, which invokes `check_capabilities` to print active integration status. Project-local skills (`.co-cli/skills/*.md`) can override bundled skills by name.
 
 **Remaining docstring improvements** (apply when tools are next modified):
 - `search_notes`: `has_more` is returned but `display` doesn't embed "More results available — increase limit or narrow with folder/tag." Add per the `search_drive_files` pattern.
@@ -113,7 +109,7 @@ list_memories(offset=0, limit=20)
 
 **`save_memory(content, tags, related) → dict`** — Proactive save. Checks for duplicates in recent memories (within `memory_dedup_window_days`) using `rapidfuzz.fuzz.token_sort_ratio`. On similarity ≥ `memory_dedup_threshold` (default 85%), updates the existing entry (merges tags, overwrites content). Otherwise creates a new `{id:03d}-{slug}.md` file. After save, if total count exceeds `memory_max_count`, triggers decay. Returns `action: "saved"` or `action: "consolidated"`.
 
-**`recall_memory(query, max_results) → dict`** — FTS5 BM25 ranked search when `knowledge_index` is available; falls back to case-insensitive substring search otherwise. Pulls up to `max_results` direct matches sorted by recency. Deduplicates pulled results via pairwise fuzzy similarity (merges near-duplicates on the fly, deletes the older file). Traverses one-hop `related` links, adding up to 5 connected entries. Touches all pulled entries (updates `updated` timestamp = gravity: frequently-recalled memories stay accessible).
+**`recall_memory(query, max_results) → dict`** — FTS5 BM25 ranked search when `knowledge_index` is available; falls back to case-insensitive substring search otherwise. Pulls up to `max_results * 4` FTS candidates, then re-scores them with temporal decay (`_decay_multiplier` — exponential half-life, configurable via `memory_recall_half_life_days`; decay-protected entries score 1.0), sorts by decay weight, and trims to `max_results`. Deduplicates pulled results via pairwise fuzzy similarity (merges near-duplicates on the fly, deletes the older file). Traverses one-hop `related` links, adding up to 5 connected entries. Touches all pulled entries (updates `updated` timestamp = gravity: frequently-recalled memories stay accessible).
 
 **`list_memories(offset, limit) → dict`** — Full inventory, sorted by ID. Paginated with `has_more`. Shows lifecycle indicators: `[category]` tag, decay-protected flag.
 
@@ -151,6 +147,7 @@ User prefers pytest over unittest for Python testing.
 | `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | Fuzzy similarity threshold (0–100) for dedup |
 | `memory_decay_strategy` | `CO_CLI_MEMORY_DECAY_STRATEGY` | `summarize` | `summarize` (consolidate) or `cut` (delete) |
 | `memory_decay_percentage` | `CO_CLI_MEMORY_DECAY_PERCENTAGE` | `0.2` | Fraction of total to decay when limit exceeded |
+| `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life (days) for temporal decay scoring in FTS5 recall; decay-protected entries are exempt |
 
 ### 4. Files
 
@@ -253,7 +250,9 @@ run_shell_command(ctx, cmd, timeout=120):
     on any other exception → ModelRetry("unexpected error, try different approach")
 ```
 
-**Safe-prefix auto-approval:** Runs in `_handle_approvals()` inside `_orchestrate.py`. Commands matching the configurable safe list skip the `[y/n/a]` prompt.
+**Four-tier approval chain** (all in `_handle_approvals()` inside `_orchestrate.py`):
+
+**Tier 1 — Safe-command allowlist** (`_approval._is_safe_command`):
 
 ```
 _is_safe_command(cmd, safe_commands):
@@ -263,6 +262,26 @@ _is_safe_command(cmd, safe_commands):
 ```
 
 Multi-word prefixes (e.g. `git status`) are matched before single-word ones to prevent `git` from matching `git push`.
+
+**Tier 2 — Persistent cross-session approvals** (`_exec_approvals`):
+
+```
+entries = load_approvals(.co-cli/exec-approvals.json)
+found = find_approved(cmd, entries)   ← fnmatch pattern matching
+if found:
+    update_last_used(path, found["id"])
+    auto-approve
+```
+
+`derive_pattern(cmd)` collects consecutive non-flag tokens from the start (up to 3), stopping at the first flag encountered, then appends ` *` (e.g. `git commit -m "msg"` → `git commit *`). Bare `"*"` is never used to auto-approve — skipped during matching in `find_approved()`. Stale entries (older than 90 days by `last_used_at`) are pruned at `create_deps()` startup.
+
+**Tier 3 — Per-session auto-approve** (`deps.auto_approved_tools`, non-shell tools only).
+
+**Tier 4 — User prompt** — `[y/n/a]`.
+
+**`"a"` persistence:** for `run_shell_command`, derives and saves a pattern to `.co-cli/exec-approvals.json` (cross-session). For other tools, adds to `deps.auto_approved_tools` (session-only).
+
+`/approvals list` and `/approvals clear [id]` manage stored patterns at the REPL.
 
 **Default safe commands:** `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`, `rg`, `ag`, `wc`, `sort`, `uniq`, `cut`, `tr`, `jq`, `echo`, `printf`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `env`, `which`, `file`, `stat`, `id`, `du`, `df`, `git status`, `git diff`, `git log`, `git show`, `git branch`, `git tag`, `git blame`.
 
@@ -351,11 +370,12 @@ The subprocess runs as the user with read-write access to local files. This is a
 |------|---------|
 | `co_cli/tools/shell.py` | Tool function — delegates to shell backend, `ModelRetry` on error |
 | `co_cli/shell_backend.py` | `ShellBackend` — subprocess execution with `restricted_env()` |
-| `co_cli/_approval.py` | `_is_safe_command()` — safe-prefix classification for auto-approval |
+| `co_cli/_approval.py` | `_is_safe_command()` — safe-prefix classification (tier 1 auto-approval) |
+| `co_cli/_exec_approvals.py` | Persistent exec approvals (tier 2): `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `co_cli/_shell_env.py` | `restricted_env()` and `kill_process_tree()` |
-| `co_cli/deps.py` | `CoDeps` — holds `shell` instance, `shell_safe_commands`, `shell_max_timeout` |
+| `co_cli/deps.py` | `CoDeps` — holds `shell`, `shell_safe_commands`, `shell_max_timeout`, `exec_approvals_path`, `auto_approved_tools` |
 | `co_cli/config.py` | Shell settings with env var mappings |
-| `co_cli/_orchestrate.py` | `_handle_approvals()` — safe-command check + `[y/n/a]` prompt loop |
+| `co_cli/_orchestrate.py` | `_handle_approvals()` — four-tier approval chain |
 | `co_cli/agent.py` | Tool registration (`requires_approval=True`) + shell system prompt injection |
 | `tests/test_shell.py` | Functional tests — subprocess execution, env sanitization, timeout, cwd |
 | `tests/test_commands.py` | Safe-command classification tests — prefix matching, chaining rejection |
@@ -366,43 +386,47 @@ The subprocess runs as the user with read-write access to local files. This is a
 
 ### 1. What & How
 
-The Obsidian tools provide read-only access to a local Obsidian vault for knowledge retrieval (RAG). Three tools: search, list, and read.
+The Obsidian tools provide read-only access to a local Obsidian vault. Two agent-registered tools: `list_notes` and `read_note`. Obsidian content is searchable via `search_knowledge(source="obsidian")` — the unified cross-source search that syncs the vault into KnowledgeIndex on first call.
 
 ```
 User: "find notes about project X"
   │
   ▼
-Agent → search_notes(query="project X")
-  ├── Get vault path from ctx.deps.obsidian_vault_path
-  ├── Glob all *.md files (optionally scoped by folder)
-  ├── Regex search with word boundaries (AND logic)
-  └── Return matches with snippets
+Agent → search_knowledge(query="project X", source="obsidian")
+          ├── Syncs vault into KnowledgeIndex (hash-based incremental)
+          ├── FTS5 MATCH + BM25 ranking (primary path when index available)
+          └── Falls back to grep scan of *.md otherwise
+
+User: "list notes tagged #project"
+  │
+  ▼
+Agent → list_notes(tag="#project") → read_note(filename)
 ```
 
-### 2. Core Logic
+`search_notes` is an internal adapter (not agent-registered) that performs Obsidian-specific keyword search — either via KnowledgeIndex FTS5 or regex fallback. It is not called by `search_knowledge`; both independently sync the vault via `KnowledgeIndex.sync_dir("obsidian", ...)`.
 
-**`search_notes(query, limit=10, folder=None, tag=None) → dict`** — Multi-keyword AND search with word boundaries (`\bproject\b`). Optional `folder` narrows the search root; optional `tag` checks YAML frontmatter tags and inline content tags. Returns `{"display": "...", "count": N, "has_more": bool}`. Empty results return `count: 0` (not `ModelRetry`).
+### 2. Core Logic
 
 **`list_notes(tag=None, offset=0, limit=20) → dict`** — Browse vault structure, optionally filter by tag. Paginated (default 20 per page). Returns `{"display": "...", "count": N, "total": N, "offset": N, "limit": N, "has_more": bool}`.
 
 **`read_note(filename) → str`** — Read full content of a note. Path traversal protection prevents reading outside the vault.
 
-**Error handling:**
+**`search_notes(query, limit=10, folder=None, tag=None) → dict`** (internal, not agent-registered) — Multi-keyword AND search with word boundaries (`\bproject\b`). Dual path: FTS5 via `KnowledgeIndex.sync_dir("obsidian", search_root)` when `ctx.deps.knowledge_index` is set (falls through to regex on exception); regex scan of `*.md` otherwise. Optional `folder` narrows search root; optional `tag` checks YAML frontmatter tags and inline content. Returns `{"display": "...", "count": N, "has_more": bool}`. Empty results return `count: 0` (not `ModelRetry`).
+
+**Error handling (`list_notes`, `read_note`):**
 
 | Scenario | Response |
 |----------|----------|
-| Vault not configured | `ModelRetry("Ask user to set obsidian_vault_path")` |
-| Empty query | `ModelRetry("Provide keywords to search")` |
-| No search results | `{"count": 0}` |
+| Vault not configured | `ModelRetry("vault not configured or not found")` |
 | Note not found | `ModelRetry("Available notes: [...]. Use exact path")` |
-| Path traversal attempt | `ModelRetry("Access denied: path is outside the vault")` |
+| Path traversal attempt | `ModelRetry("access denied — path is outside the vault")` |
 
-**Security — path traversal protection:**
+**Security — path traversal protection (`read_note`):**
 
 ```
 safe_path = (vault / filename).resolve()
 if not safe_path.is_relative_to(vault.resolve()):
-    raise ModelRetry("Access denied: path is outside the vault.")
+    raise ModelRetry("Obsidian: access denied — path is outside the vault.")
 ```
 
 All tools are read-only — no write or delete operations.
@@ -651,3 +675,30 @@ web_fetch(ctx, url)
 | `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on `web_policy` |
 | `co_cli/status.py` | Web tools status row |
 | `tests/test_web.py` | Functional tests: search, fetch, SSRF, policy gates, error handling |
+
+---
+
+## Capabilities Tool
+
+### 1. What & How
+
+`check_capabilities` is a read-only introspection tool used by the `/doctor` skill to surface the health of active integrations. It reads from `ctx.deps` and `settings` — no network calls, no side effects. Registered with `requires_approval=False`.
+
+### 2. Core Logic
+
+**`check_capabilities(ctx) → dict`** — Returns a formatted summary of active integrations:
+
+- `knowledge_backend`: active search backend (`"fts5"`, `"hybrid"`, or `"grep"` when index unavailable)
+- `reranker`: active reranker provider name from `settings.knowledge_reranker_provider`
+- `google`: `True` if `google_credentials_path` is set on `CoDeps`
+- `obsidian`: `True` if `obsidian_vault_path` is set on `CoDeps`
+- `brave`: `True` if `brave_search_api_key` is set on `CoDeps`
+- `mcp_count`: count of configured MCP servers from `settings.mcp_servers`
+- `display`: human-readable formatted summary
+
+### 3. Files
+
+| File | Purpose |
+|------|---------|
+| `co_cli/tools/capabilities.py` | `check_capabilities` — capability introspection |
+| `co_cli/agent.py` | Registration: `agent.tool(check_capabilities, requires_approval=False)` |

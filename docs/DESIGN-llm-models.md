@@ -1,9 +1,3 @@
----
-title: LLM Models
-nav_order: 3
-parent: Core
----
-
 # LLM Models
 
 ## 1. What & How
@@ -100,6 +94,7 @@ main.py: chat_loop()
 | `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `262144` | Context window size sent per request (note: silently ignored by Ollama's OpenAI API — set via Modelfile instead) |
 | `gemini_api_key` | `GEMINI_API_KEY` | `None` | Google GenAI API key |
 | `gemini_model` | `GEMINI_MODEL` | `"gemini-2.0-flash"` | Gemini model name |
+| `llm_fallback_models` | `CO_LLM_FALLBACK_MODELS` | `[]` | Ordered list of fallback model strings tried on HTTP error; each consumed once then removed |
 
 **Not configurable:** `temperature`, `top_p`, `max_tokens` — hardcoded in `agent.py` (model-specific tuning, not user-facing).
 

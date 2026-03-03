@@ -56,7 +56,7 @@ All knowledge is dynamic — loaded on-demand via tools, never baked into the sy
 Memories (`kind: memory`) and articles (`kind: article`) coexist, distinguished by `kind` frontmatter.
 FTS5 (BM25) search via `KnowledgeIndex` in `search.db`.
 
-Agent-facing tools: `save_memory`, `save_article`, `search_knowledge` (cross-source, primary search), `list_memories`, `read_article_detail`.
+Agent-facing tools: `save_memory`, `update_memory`, `append_memory`, `save_article`, `search_knowledge` (cross-source, primary search), `list_memories`, `read_article_detail`, `list_notes`, `read_note`.
 Internal adapters (not agent-registered): `recall_memory`, `recall_article`, `search_notes`.
 
 ## Coding Standards
@@ -120,26 +120,24 @@ Every component DESIGN doc follows a 4-section template:
 
 ### Design (architecture and implementation details, kept in sync with code)
 - `docs/DESIGN-core.md` — System overview, agent loop: factory, `CoDeps`, orchestration, streaming, approval, cross-cutting concerns, modules, dependencies
-- `docs/DESIGN-02-personality.md` — Personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning depth override
+- `docs/DESIGN-personality.md` — Personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning depth override
 - `docs/DESIGN-llm-models.md` — LLM model configuration (Gemini, Ollama) + Ollama local setup guide
-- `docs/DESIGN-04-streaming-event-ordering.md` — Streaming event ordering, boundary-safe rendering, and regression coverage
 - `docs/DESIGN-logging-and-tracking.md` — Telemetry architecture, SQLite schema, viewers, real-time tail
-- `docs/DESIGN-07-context-governance.md` — Context governance (history processors, sliding window, summarisation)
-- `docs/DESIGN-16-prompt-design.md` — Agentic loop + prompt architecture: run_turn, approval re-entry, safety policy, static/per-turn prompt layers
-- `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
-- `docs/DESIGN-14-memory-lifecycle-system.md` — Memory lifecycle management: auto-triggered signal detection, precision edits, tag/temporal filtering, decay, protection
-- `docs/DESIGN-knowledge.md` — Knowledge system: flat storage, kinds (memory/article), frontmatter schema, FTS5 index, tool surface, evolution path
-- `docs/DESIGN-15-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
+- `docs/DESIGN-context-governance.md` — Context governance (history processors, sliding window, summarisation)
+- `docs/DESIGN-prompt-design.md` — Agentic loop + prompt architecture: run_turn, approval re-entry (four-tier), tool preamble, safety policy, static/per-turn prompt layers
+- `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell (four-tier approval), Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch), Capabilities
+- `docs/DESIGN-knowledge.md` — Knowledge system: flat storage, kinds, FTS5/hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay, tag/temporal filtering)
+- `docs/DESIGN-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### TODO (remaining work items only — no design content, no status tracking)
 
 **Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
-- `docs/TODO-subagent-delegation.md` — Remaining loop/prompting work: sub-agent delegation, confidence-scored advisory outputs
+- `docs/TODO-subagent-delegation.md` — Sub-agent delegation: research + analysis sub-agents, budget sharing, confidence-scored advisory outputs
 - `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
-- `docs/TODO-sqlite-tag-fts-sem-search-for-knowledge.md` — Phase 2 (hybrid semantic search, sqlite-vec) and Phase 3 (cross-encoder rerank) — not yet started; 4 open bugs blocking ship-ready status
-- `docs/TODO-skills-system.md` — Skills system gaps: frontmatter parsing, arg substitution, description injection, env gating
-- `docs/TODO-gap-openclaw-analysis.md` — Openclaw adoption action plan: shell arg validation, exec approval persistence, temporal decay scoring, model fallback, session persistence, doctor security checks, MMR re-ranking, embedding provider layer, cron scheduling, config includes (P1–P3)
+- `docs/TODO-openclaw-adoption.md` — Deferred task: `/new` slash command (TASK-9, blocked on `_index_session_summary()`)
+- `docs/TODO-skills-system.md` — P3 skills gaps (Gaps 8–10): `allowed-tools` grants, shell preprocessing, `context:fork` subagent
+- `docs/TODO-gap-openclaw-analysis.md` — P3 openclaw gaps (§8–§14): MMR re-ranking, embedding provider, process registry, security audit command, skills system, cron scheduling, config includes
 - `docs/TODO-coding-tool-convergence.md` — Coding tool convergence: native file tools (read/list/find/write/edit), shell policy engine, coder subagent delegation, coding eval gates, workspace checkpoint + rewind, approval risk classifier (P0–P2)
 
 ### Skills

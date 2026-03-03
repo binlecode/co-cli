@@ -99,8 +99,8 @@ Files:
 
 - `co_cli/agent.py`
 - `docs/DESIGN-core.md`
-- `docs/DESIGN-16-prompt-design.md`
-- `docs/DESIGN-02-personality.md`
+- `docs/DESIGN-prompt-design.md`
+- `docs/DESIGN-personality.md`
 - `tests/test_agent.py`
 
 Acceptance criteria:
