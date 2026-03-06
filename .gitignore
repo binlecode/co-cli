@@ -32,5 +32,5 @@ evals/personality_behavior-trace-*.md
 
 # Misc
 *.log
-*.pdf
+# *.pdf
 .DS_Store

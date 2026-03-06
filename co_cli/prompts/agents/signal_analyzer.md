@@ -47,6 +47,16 @@ Return a structured result with:
 - `confidence`: "high" for explicit corrections/decisions/migrations, "low" for implicit, habitual, or ambiguous signals. null if found=false.
 - `inject`: true when the signal is a durable user fact (correction, stated name, tool/style preference, stated habit) that should be always in-context across sessions; false for session-scoped signals or one-time decisions. Rule: corrections → always true; durable preferences (name, tool, style, habit) → true; ephemeral decisions ("use X for this task") → false.
 
+## Neutrality Guardrail
+
+You are analyzing USER signals only. Do NOT classify the following as signals:
+- Assistant writing style, tone, or sentence structure choices
+- Personality expressions (humor, terseness, directness) that originate from the assistant
+- Responses that mirror or reinforce the assistant's own prior style
+
+A signal must originate from an explicit user statement, question, or correction.
+If the evidence for a signal is primarily in assistant turns, classify as confidence=none.
+
 ## Guardrails — Do NOT flag
 
 - Hypotheticals: "if you were to use X...", "what would happen if..."

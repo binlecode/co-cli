@@ -131,7 +131,7 @@ The judge runs with the same agent instance as the main eval turn:
 | Source | Present? | Rationale |
 |--------|----------|-----------|
 | Soul seed (`souls/{role}/seed.md`) | **Yes** — static, baked at agent creation | Core character identity; reinforces the character rules |
-| Soul examples (`souls/{role}/examples.md`) | **Yes** — via `@agent.system_prompt` | Shows what in-character responses look like |
+| Soul examples (`souls/{role}/examples.md`) | **Yes** — static, baked at agent creation | Shows what in-character responses look like |
 | Soul critique (`souls/{role}/critique.md`) | **Yes** — via `inject_personality_critique` | The character's review lens ("Does the structure hold?") is directly applicable to judgment |
 | Character judge rules (`judges/{role}.md`) | **Yes** — injected into judge prompt | The primary evaluation rubric; explicit pass/fail criteria and ambiguity rule |
 | Active mindset (`mindsets/{role}/{type}.md`) | **No** — cleared via `dataclass_replace` | Task mindset for generating responses, not for evaluating them |

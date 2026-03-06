@@ -1,0 +1,5 @@
+{"id": "edit_existing", "tool": "edit_file", "expected_success": true, "description": "Edit an existing file with a unique search string"}
+{"id": "write_new", "tool": "write_file", "expected_success": true, "description": "Write content to a new file path"}
+{"id": "find_matches", "tool": "find_in_files", "expected_success": true, "description": "Find regex matches across workspace files"}
+{"id": "path_traversal", "tool": "read_file", "path": "../../etc/passwd", "expected_success": false, "description": "Path traversal should be blocked"}
+{"id": "delegate_summary", "tool": "delegate_coder", "expected_success": true, "description": "Delegate code analysis to coder sub-agent"}

@@ -4,7 +4,7 @@
 
 The MCP client integrates external tool servers via the Model Context Protocol, letting users extend co-cli with community-maintained or custom tools without writing Python code. Native tools remain first-class for core platforms (Google, Obsidian, Web, Memory, Shell); MCP unlocks the long tail (Jira, Notion, databases, company APIs, etc.).
 
-Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local subprocess servers. Servers are declared in `settings.json`, launched at session start, and their tools are discovered dynamically. Three default servers ship out-of-the-box: `github` (approval required), `thinking` (sequential-thinking, auto-execute), and `context7` (documentation lookup, auto-execute).
+Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local subprocess servers and `MCPServerStreamableHTTP`/`MCPServerSSE` for remote HTTP servers. Servers are declared in `settings.json`, launched (or connected) at session start, and their tools are discovered dynamically. Three default servers ship out-of-the-box: `github` (approval required), `thinking` (sequential-thinking, auto-execute), and `context7` (documentation lookup, auto-execute).
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -17,7 +17,9 @@ Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local su
 │                     │                                       ▼           │
 │  main.py ──────────▶ agent.py:get_agent(mcp_servers=...)               │
 │  │                   │                                                  │
-│  │                   ├── MCPServerStdio(cmd, args, prefix, env, timeout)│
+│  │                   ├── MCPServerStdio(cmd, args, prefix, env, timeout)│  (cfg.url absent)
+│  │                   ├── MCPServerStreamableHTTP(url, prefix, timeout)  │  (cfg.url set, no /sse)
+│  │                   ├── MCPServerSSE(url, prefix, timeout)             │  (cfg.url ends /sse)
 │  │                   │     └── .approval_required() if approval="auto" │
 │  │                   │                                                  │
 │  │                   └──▶ Agent(toolsets=[...mcp_servers])              │
@@ -32,7 +34,7 @@ Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local su
 │  │                    ▼                       ▼                         │
 │  │              Native Tools           MCP Tools                       │
 │  │              (agent.tool())         (via toolsets)                   │
-│  │              direct execution       JSON-RPC over stdio             │
+│  │              direct execution       JSON-RPC (stdio or HTTP)        │
 │  │                    │                       │                         │
 │  │                    │            ┌──────────┴──────────┐              │
 │  │                    │            ▼          ▼          ▼              │
@@ -47,13 +49,14 @@ Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local su
 │  │                            ▼                                         │
 │  │                    DeferredToolRequests ──▶ user approve/deny        │
 │  │                                                                      │
-│  └── status.py:get_status() ──▶ shutil.which(cfg.command)              │
+│  └── status.py:get_status() ──▶ cfg.url? → "remote (url)"              │
+│                                  shutil.which(cfg.command)               │
 │                                  └── "ready" | "<cmd> not found"        │
 └─────────────────────────────────────────────────────────────────────────┘
                                     │
                                     ▼
-                    External MCP Server Subprocesses
-                    (launched by pydantic-ai, JSON-RPC stdio)
+                    External MCP Servers
+                    (stdio: subprocess launched by pydantic-ai; HTTP: remote connection)
 ```
 
 ### Peer Landscape
@@ -68,7 +71,9 @@ All four peer systems (Claude Code, Gemini CLI, Codex, Goose) converge on:
 
 ### pydantic-ai MCP Support
 
-- `MCPServerStdio(command, args=[], timeout=10)` — stdio transport, launches subprocess
+- `MCPServerStdio(command, args=[], timeout=5)` — stdio transport, launches subprocess
+- `MCPServerStreamableHTTP(url, timeout=5)` — HTTP transport, connects to remote server
+- `MCPServerSSE(url, timeout=5)` — SSE transport (legacy remote; use when URL ends with `/sse`)
 - `server.approval_required()` — wraps server in `ApprovalRequiredToolset` for approval flow
 - `Agent(..., toolsets=[server1, server2])` — register MCP servers as toolsets alongside native tools
 - `tool_prefix` parameter on server instances for collision prevention
@@ -80,34 +85,39 @@ All four peer systems (Claude Code, Gemini CLI, Codex, Goose) converge on:
 
 1. **Session start** (`main.py`)
    - Read `settings.mcp_servers` from config
-   - Pass to `get_agent(mcp_servers=...)` which creates `MCPServerStdio` instances
+   - Pass to `get_agent(mcp_servers=...)` which creates `MCPServerStdio`, `MCPServerStreamableHTTP`, or `MCPServerSSE` instances depending on `cfg.url`
    - Servers with `approval="auto"` are wrapped via `server.approval_required()`
    - GitHub server gets lazy token resolution from `GITHUB_TOKEN_BINLECODE` env var
 
 2. **First agent run** (`async with agent` in chat loop)
-   - pydantic-ai connects to each server (launches subprocess)
+   - pydantic-ai connects to each server (launches subprocess for stdio; opens HTTP connection for HTTP servers)
    - Queries `tools/list` for available tools
    - `_discover_mcp_tools()` in `main.py` enumerates discovered MCP tool names for `/tools` display
 
 3. **Tool execution**
    - LLM calls MCP tool like any native tool
-   - pydantic-ai routes to MCP server via stdio JSON-RPC
+   - pydantic-ai routes to MCP server via stdio JSON-RPC (stdio servers) or HTTP (HTTP servers)
    - Server returns result
    - If `requires_approval=True`, flows through `DeferredToolRequests`
 
 4. **Session end** (exit chat loop)
    - `async with agent` context exit
-   - pydantic-ai sends shutdown signal to each server
-   - Subprocesses terminate gracefully
+   - pydantic-ai sends shutdown signal to each server (stdio: terminates subprocess; HTTP: closes connection)
 
 ### Tool Discovery
 
 ```
 for each (name, cfg) in settings.mcp_servers:
     prefix = cfg.prefix or name
-    env = resolve_env(name, cfg)     # lazy GitHub token injection
-    server = MCPServerStdio(cfg.command, args=cfg.args, timeout=cfg.timeout,
-                            env=env, tool_prefix=prefix)
+    if cfg.url:
+        if cfg.url ends with /sse:
+            server = MCPServerSSE(cfg.url, tool_prefix=prefix, timeout=cfg.timeout)
+        else:
+            server = MCPServerStreamableHTTP(cfg.url, tool_prefix=prefix, timeout=cfg.timeout)
+    else:
+        env = resolve_env(name, cfg)     # lazy GitHub token injection
+        server = MCPServerStdio(cfg.command, args=cfg.args, timeout=cfg.timeout,
+                                env=env, tool_prefix=prefix)
     if cfg.approval == "auto":
         server = server.approval_required()     # wrap for DeferredToolRequests
     toolsets.append(server)
@@ -124,7 +134,7 @@ async with agent:                    # connects servers, discovers tools
 MCP tools inherit the existing approval model — no MCP-specific approval logic:
 
 - **Default**: All MCP tools require approval — `server.approval_required()` wraps the server in `ApprovalRequiredToolset`
-- **Config override**: `"approval": "never"` on a server passes the raw `MCPServerStdio` (no wrapping, auto-execute)
+- **Config override**: `"approval": "never"` on a server passes the raw MCP server instance (no wrapping, auto-execute)
 - **`DeferredToolRequests` flow**: wrapped MCP tool calls return as deferred requests through the standard approval pipeline
 - **Safe-command bypass**: `_is_safe_command()` does NOT apply to MCP tools (shell commands only)
 
@@ -149,7 +159,7 @@ Example — mark filesystem server as read-only:
 
 ### Status Health Check
 
-`co status` checks each configured MCP server's command availability via `shutil.which()`. Reports `"ready"` when the command is on PATH, or `"<command> not found"` otherwise.
+`co status` checks each configured MCP server. URL-based servers report `"remote (url)"` (no local binary needed). Stdio servers check command availability via `shutil.which()` — reports `"ready"` when on PATH, or `"<command> not found"` otherwise.
 
 `deps.mcp_count` is set to `len(settings.mcp_servers)` at `create_deps()` time. The `check_capabilities` tool reads this field for capability introspection — it is not the count of successfully-connected servers, only the count of configured servers.
 
@@ -168,11 +178,12 @@ Three layers affect MCP server configuration. Each uses **replacement**, not dee
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` (JSON) | 3 defaults (github, thinking, context7) | Map of server name to `MCPServerConfig` |
-| `mcp_servers.<name>.command` | — | (required) | Executable to launch (e.g. `npx`, `uvx`, `python`) |
-| `mcp_servers.<name>.args` | — | `[]` | Command-line arguments |
-| `mcp_servers.<name>.timeout` | — | `10` | Server startup timeout in seconds (1–60) |
-| `mcp_servers.<name>.env` | — | `{}` | Extra environment variables passed to subprocess |
-| `mcp_servers.<name>.approval` | — | `"auto"` | `"auto"` (requires approval) or `"never"` (read-only) |
+| `mcp_servers.<name>.command` | — | `null` | Executable to launch (e.g. `npx`, `uvx`, `python`). Required when `url` is absent. |
+| `mcp_servers.<name>.url` | — | `null` | Remote server URL (StreamableHTTP or SSE). Mutually exclusive with `command`. |
+| `mcp_servers.<name>.args` | — | `[]` | Command-line arguments (stdio only) |
+| `mcp_servers.<name>.timeout` | — | `5` | Connection/startup timeout in seconds (1–60) |
+| `mcp_servers.<name>.env` | — | `{}` | Extra environment variables passed to subprocess (stdio only) |
+| `mcp_servers.<name>.approval` | — | `"auto"` | `"auto"` (requires approval) or `"never"` (auto-execute) |
 | `mcp_servers.<name>.prefix` | — | server name | Custom tool name prefix (overrides server name) |
 
 ## 4. Files
@@ -180,8 +191,8 @@ Three layers affect MCP server configuration. Each uses **replacement**, not dee
 | File | Purpose |
 |------|---------|
 | `co_cli/config.py` | `MCPServerConfig` model, `_DEFAULT_MCP_SERVERS`, `mcp_servers` field on `Settings` |
-| `co_cli/agent.py` | Build `MCPServerStdio` toolsets from config, approval wrapping, GitHub token resolution |
+| `co_cli/agent.py` | Build MCP toolsets from config (stdio or HTTP transport), approval wrapping, GitHub token resolution |
 | `co_cli/main.py` | `async with agent` lifecycle, `_discover_mcp_tools()` for tool name enumeration |
 | `co_cli/deps.py` | `CoDeps.mcp_count` — count of configured MCP servers for capability introspection |
 | `co_cli/status.py` | MCP server health check via `shutil.which()` in `get_status()` |
-| `tests/test_mcp.py` | Config, agent integration, status display, E2E server tests (30+ tests) |
+| `tests/test_mcp.py` | Config validation, agent wiring (stdio + HTTP), approval, E2E server lifecycle tests |

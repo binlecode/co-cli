@@ -15,6 +15,7 @@ Use recall_article for summary-level lookup; use read_article_detail for full bo
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -24,9 +25,145 @@ from pydantic_ai import RunContext
 
 from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.deps import CoDeps
+from co_cli.knowledge_index import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
 
 logger = logging.getLogger(__name__)
+
+_PROVENANCE_WEIGHTS: dict[str, float] = {
+    "user-told": 1.0,
+    "planted": 0.8,
+    "detected": 0.7,
+    "session": 0.6,
+    "web-fetch": 0.5,
+    "auto_decay": 0.3,
+}
+
+_CERTAINTY_MULTIPLIERS: dict[str, float] = {
+    "high": 1.0,
+    "medium": 0.8,
+    "low": 0.6,
+}
+
+
+_NEGATION_MARKERS: frozenset[str] = frozenset({
+    "not", "no", "never", "don't", "do not", "stopped", "changed",
+    "no longer", "don't use", "avoid",
+})
+
+
+def _detect_contradictions(results: list[SearchResult]) -> set[str]:
+    """Detect contradicting result pairs within the same category.
+
+    Groups results by category, then for each pair checks if words in one
+    result's content appear in the other's content alongside a negation marker
+    within a 5-token window.
+
+    Returns a set of path strings for results involved in conflicts.
+
+    Limitation: heuristic window-based detection produces false positives on
+    complex sentences. LLM-based detection is a Phase 2 enhancement.
+
+    Note: path-keyed set means duplicate paths (degenerate case from hybrid
+    merge) are both flagged correctly — expected behavior, not a bug.
+    """
+    conflict_paths: set[str] = set()
+
+    # Group by category; skip results without category
+    by_category: dict[str, list[SearchResult]] = {}
+    for r in results:
+        if r.category:
+            by_category.setdefault(r.category, []).append(r)
+
+    for category_results in by_category.values():
+        if len(category_results) < 2:
+            continue
+
+        for i in range(len(category_results)):
+            for j in range(i + 1, len(category_results)):
+                r_a = category_results[i]
+                r_b = category_results[j]
+
+                # Read content from file if available; skip on failure
+                content_a = _read_content_for_contradiction(r_a)
+                content_b = _read_content_for_contradiction(r_b)
+                if not content_a or not content_b:
+                    continue
+
+                if _has_negation_conflict(content_a, content_b):
+                    conflict_paths.add(r_a.path)
+                    conflict_paths.add(r_b.path)
+
+    return conflict_paths
+
+
+def _read_content_for_contradiction(r: SearchResult) -> str:
+    """Read file content for contradiction detection. Returns empty string on failure."""
+    if not r.path:
+        return ""
+    try:
+        from pathlib import Path as _Path
+        from co_cli._frontmatter import parse_frontmatter as _parse_frontmatter
+        raw = _Path(r.path).read_text(encoding="utf-8")
+        _, body = _parse_frontmatter(raw)
+        return body.strip().lower()
+    except Exception:
+        return ""
+
+
+def _has_negation_conflict(content_a: str, content_b: str) -> bool:
+    """Check if content_a and content_b form an opposing pair.
+
+    Tokenizes both contents. For each token in content_a that also appears in
+    content_b, checks if a negation marker appears within a 5-token window
+    around that token in either content.
+    """
+    tokens_a = content_a.split()
+    tokens_b = content_b.split()
+    shared_words = set(tokens_a) & set(tokens_b) - _NEGATION_MARKERS
+
+    if not shared_words:
+        return False
+
+    # Check if a negation marker appears near a shared word in either content
+    for tokens, other_tokens in [(tokens_a, tokens_b), (tokens_b, tokens_a)]:
+        for idx, token in enumerate(tokens):
+            if token in shared_words:
+                window_start = max(0, idx - 5)
+                window_end = min(len(tokens), idx + 6)
+                window = set(tokens[window_start:window_end])
+                if window & _NEGATION_MARKERS:
+                    # Also confirm the other content has the shared word without negation
+                    # or with negation (either direction counts as conflict)
+                    if token in other_tokens:
+                        return True
+
+    return False
+
+
+def _compute_confidence(r: SearchResult, half_life_days: int) -> float:
+    """Compute composite confidence score for a search result.
+
+    Formula: 0.5 * score + 0.3 * decay + 0.2 * (prov_weight * certainty_mult)
+    Decay uses exponential half-life on age in days from r.created.
+
+    Limitation: heuristic formula; LLM-based confidence is a Phase 2 enhancement.
+    """
+    if r.created and half_life_days > 0:
+        try:
+            age_days = (
+                datetime.now(timezone.utc) - datetime.fromisoformat(r.created)
+            ).total_seconds() / 86400
+            decay = math.exp(-math.log(2) * max(0, age_days) / half_life_days)
+            decay = max(0.0, min(1.0, decay))
+        except Exception:
+            decay = 1.0
+    else:
+        decay = 1.0
+
+    prov_w = _PROVENANCE_WEIGHTS.get(r.provenance or "", 0.5)
+    cert_m = _CERTAINTY_MULTIPLIERS.get(r.certainty or "", 0.8)
+    return 0.5 * r.score + 0.3 * decay + 0.2 * (prov_w * cert_m)
 
 
 async def search_knowledge(
@@ -119,13 +256,23 @@ async def search_knowledge(
     if not results:
         return {"display": f"No results found for '{query}'", "count": 0, "results": []}
 
+    # Compute confidence for each result (post-retrieval, tool layer)
+    half_life_days = ctx.deps.memory_recall_half_life_days or 0
+    for r in results:
+        r.confidence = _compute_confidence(r, half_life_days)
+
+    # Detect contradictions within the result set
+    conflict_paths = _detect_contradictions(results)
+
     lines = [f"Found {len(results)} result(s) for '{query}':\n"]
     result_dicts = []
     for r in results:
         kind_label = f"[{r.kind}]" if r.kind else ""
         src_label = f"[{r.source}]" if r.source else ""
         title_str = r.title or Path(r.path).stem if r.path else "unknown"
-        lines.append(f"**{title_str}** {src_label}{kind_label} (score: {r.score:.3f})")
+        conf_str = f", conf: {r.confidence:.3f}" if r.confidence is not None else ""
+        display_title = f"⚠ Conflict: **{title_str}**" if r.path in conflict_paths else f"**{title_str}**"
+        lines.append(f"{display_title} {src_label}{kind_label} (score: {r.score:.3f}{conf_str})")
         if r.snippet:
             lines.append(f"  {r.snippet}")
         lines.append("")
@@ -136,6 +283,8 @@ async def search_knowledge(
             "snippet": r.snippet,
             "score": r.score,
             "path": r.path,
+            "confidence": r.confidence,
+            "conflict": r.path in conflict_paths,
         })
 
     return {

@@ -46,17 +46,19 @@ STOPWORDS: frozenset[str] = frozenset({
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS docs (
-    source   TEXT NOT NULL,
-    kind     TEXT,
-    path     TEXT NOT NULL,
-    title    TEXT,
-    content  TEXT,
-    mtime    REAL,
-    hash     TEXT,
-    tags     TEXT,
-    category TEXT,
-    created  TEXT,
-    updated  TEXT,
+    source     TEXT NOT NULL,
+    kind       TEXT,
+    path       TEXT NOT NULL,
+    title      TEXT,
+    content    TEXT,
+    mtime      REAL,
+    hash       TEXT,
+    tags       TEXT,
+    category   TEXT,
+    created    TEXT,
+    updated    TEXT,
+    provenance TEXT,
+    certainty  TEXT,
     UNIQUE(source, path)
 );
 
@@ -98,6 +100,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 
 _SELECT_SQL = """
 SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updated,
+       d.provenance, d.certainty,
        snippet(docs_fts, 1, '>', '<', '...', 40) AS snippet,
        bm25(docs_fts) AS rank
   FROM docs_fts
@@ -119,6 +122,9 @@ class SearchResult:
     category: str | None
     created: str | None
     updated: str | None
+    provenance: str | None = None
+    certainty: str | None = None
+    confidence: float | None = None
 
 
 class KnowledgeIndex:
@@ -169,12 +175,21 @@ class KnowledgeIndex:
                 self._reranker_model = "BAAI/bge-reranker-base"
             else:
                 self._reranker_model = "qwen2.5:3b"
-        self._llm_model: Any = None
+        self._reranker_instance: Any = None
 
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
+
+        # Safe migration: add provenance and certainty columns to existing databases.
+        # SQLite does not support ADD COLUMN IF NOT EXISTS; catch OperationalError on duplicate.
+        for col in ("provenance TEXT", "certainty TEXT"):
+            try:
+                self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
         if self._backend == "hybrid":
             try:
@@ -210,6 +225,8 @@ class KnowledgeIndex:
         category: str | None = None,
         created: str | None = None,
         updated: str | None = None,
+        provenance: str | None = None,
+        certainty: str | None = None,
     ) -> None:
         """Insert or update a document in the index.
 
@@ -227,10 +244,12 @@ class KnowledgeIndex:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO docs
-                (source, kind, path, title, content, mtime, hash, tags, category, created, updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (source, kind, path, title, content, mtime, hash, tags, category, created, updated,
+                 provenance, certainty)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (source, kind, path, title, content, mtime, hash, tags, category, created, updated),
+            (source, kind, path, title, content, mtime, hash, tags, category, created, updated,
+             provenance, certainty),
         )
         self._conn.commit()
 
@@ -392,6 +411,8 @@ class KnowledgeIndex:
                 category=row["category"],
                 created=row["created"],
                 updated=row["updated"],
+                provenance=row["provenance"],
+                certainty=row["certainty"],
             ))
         return results
 
@@ -421,7 +442,7 @@ class KnowledgeIndex:
         rowids = list(rowid_to_distance.keys())
 
         placeholders = ",".join("?" * len(rowids))
-        sql = f"SELECT rowid, source, kind, path, title, tags, category, created, updated FROM docs WHERE rowid IN ({placeholders})"
+        sql = f"SELECT rowid, source, kind, path, title, tags, category, created, updated, provenance, certainty FROM docs WHERE rowid IN ({placeholders})"
         params: list[Any] = list(rowids)
 
         if source is not None:
@@ -467,6 +488,8 @@ class KnowledgeIndex:
                 category=row["category"],
                 created=row["created"],
                 updated=row["updated"],
+                provenance=row["provenance"],
+                certainty=row["certainty"],
             ))
 
         results.sort(key=lambda r: r.score, reverse=True)
@@ -515,6 +538,8 @@ class KnowledgeIndex:
                 category=r.category,
                 created=r.created,
                 updated=r.updated,
+                provenance=r.provenance,
+                certainty=r.certainty,
             ))
 
         merged.sort(key=lambda r: r.score, reverse=True)
@@ -602,6 +627,8 @@ class KnowledgeIndex:
                     category=r.category,
                     created=r.created,
                     updated=r.updated,
+                    provenance=r.provenance,
+                    certainty=r.certainty,
                 )
                 for i, r in enumerate(candidates)
             ]
@@ -635,6 +662,7 @@ class KnowledgeIndex:
         """Generate relevance scores for texts. Returns [0.0]*n for unknown provider."""
         if self._reranker_provider in ("ollama", "gemini"):
             return self._llm_rerank(query, texts)
+        logger.warning(f"Unknown reranker provider {self._reranker_provider!r}; returning zero scores")
         return [0.0] * len(texts)
 
     def _llm_rerank(self, query: str, texts: list[str]) -> list[float]:
@@ -727,10 +755,10 @@ class KnowledgeIndex:
             return candidates[:limit]
 
         texts = self._fetch_reranker_texts(candidates)
-        if self._llm_model is None:
-            self._llm_model = TextCrossEncoder(model_name=self._reranker_model)
+        if self._reranker_instance is None:
+            self._reranker_instance = TextCrossEncoder(model_name=self._reranker_model)
 
-        scores = list(self._llm_model.rerank(query, texts))
+        scores = list(self._reranker_instance.rerank(query, texts))
         ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
         return [
             SearchResult(
@@ -744,6 +772,8 @@ class KnowledgeIndex:
                 category=r.category,
                 created=r.created,
                 updated=r.updated,
+                provenance=r.provenance,
+                certainty=r.certainty,
             )
             for s, r in ranked[:limit]
         ]
@@ -826,6 +856,8 @@ class KnowledgeIndex:
                     category=fm.get("auto_category"),
                     created=fm.get("created"),
                     updated=fm.get("updated"),
+                    provenance=fm.get("provenance"),
+                    certainty=fm.get("certainty"),
                 )
                 indexed += 1
             except Exception as e:

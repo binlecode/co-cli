@@ -256,12 +256,14 @@ SPAN_TEMPLATE = """<div class="span">
 
 def get_span_type(name: str) -> str:
     """Determine span type for styling."""
-    if "agent" in name.lower():
-        return "agent"
-    elif "tool" in name.lower():
-        return "tool"
-    elif "model" in name.lower() or "chat" in name.lower():
+    name_lower = name.lower()
+    # Check model/chat before agent — model names may contain "agentic"
+    if name_lower.startswith("chat") or "model" in name_lower:
         return "model"
+    elif "tool" in name_lower:
+        return "tool"
+    elif "agent" in name_lower:
+        return "agent"
     return "agent"
 
 

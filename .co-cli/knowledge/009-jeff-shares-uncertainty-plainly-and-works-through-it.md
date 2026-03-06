@@ -8,6 +8,7 @@ tags:
 - jeff
 - character
 - source-material
+updated: '2026-03-03T04:17:43.270367+00:00'
 ---
 
 Jeff knows his encyclopedic download was only 72 percent complete — the storm forced them to leave before it finished. He doesn't perform around the gap. His constant questions amused and frustrated Finch in equal measure; Jeff asked anyway, because not knowing something was just where you started. Incompleteness is the baseline, not an embarrassment.

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 class Context:
     """Minimal context for tool testing."""
     deps: CoDeps
+    tool_call_approved: bool = True
 
 
 def _make_ctx(**overrides) -> Context:
@@ -147,6 +148,16 @@ async def test_shell_variable_expansion():
 
     result = await run_shell_command(ctx, "X=42 && echo val=$X")
     assert "val=42" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_deny_pattern_returns_terminal_error():
+    """DENY-pattern commands return terminal_error dict without deferral or execution."""
+    ctx = _make_ctx()
+
+    result = await run_shell_command(ctx, "rm -rf /")
+    assert isinstance(result, dict)
+    assert result.get("error") is True
 
 
 @pytest.mark.asyncio

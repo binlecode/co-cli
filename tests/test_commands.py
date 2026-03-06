@@ -13,12 +13,12 @@ from co_cli.agent import get_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
-from co_cli._commands import dispatch, CommandContext, COMMANDS
+from co_cli._commands import dispatch, CommandContext, COMMANDS, _cmd_skills
 
 
 def _make_ctx(message_history: list | None = None) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
-    agent, _, tool_names = get_agent()
+    agent, _, tool_names, _ = get_agent()
     deps = CoDeps(
         shell=ShellBackend(),
         session_id="test-commands",
@@ -33,7 +33,7 @@ def _make_ctx(message_history: list | None = None) -> CommandContext:
 
 def _make_agent_and_deps(container_name: str = "co-test-approval"):
     """Build a real agent + deps for approval flow tests."""
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     deps = CoDeps(
         shell=ShellBackend(),
         session_id="test-approval",
@@ -125,8 +125,98 @@ async def test_cmd_compact():
 
 def test_commands_registry_complete():
     """All expected commands are registered."""
-    expected = {"help", "clear", "status", "tools", "history", "compact", "model", "forget"}
+    expected = {
+        "help", "clear", "new", "status", "tools", "history", "compact", "model",
+        "forget", "approvals", "checkpoint", "rewind", "skills",
+        "tasks", "cancel", "background",
+    }
     assert set(COMMANDS.keys()) == expected
+
+
+@pytest.mark.asyncio
+async def test_skills_list(monkeypatch):
+    """/skills list output contains a pre-populated skill name."""
+    import io
+    from rich.console import Console as _Console
+    from rich.theme import Theme as _Theme
+    from co_cli._commands import _cmd_skills, SKILL_COMMANDS, SkillCommand
+    from co_cli import _commands as _cmds
+
+    SKILL_COMMANDS["testskill"] = SkillCommand(name="testskill", description="A test skill")
+    buf = io.StringIO()
+    # Provide the minimal semantic styles that the table uses
+    themed = _Console(file=buf, no_color=True, theme=_Theme({"accent": "default", "success": "default"}))
+    monkeypatch.setattr(_cmds, "console", themed)
+    try:
+        ctx = _make_ctx()
+        await _cmd_skills(ctx, "list")
+        output = buf.getvalue()
+        assert "testskill" in output
+    finally:
+        SKILL_COMMANDS.pop("testskill", None)
+
+
+def test_skills_check():
+    """_diagnose_requires_failures returns non-empty list with 'bins' for a missing binary."""
+    from co_cli._commands import _diagnose_requires_failures
+
+    result = _diagnose_requires_failures({"bins": ["definitely-not-a-real-binary-xyz"]})
+    assert len(result) > 0
+    assert any("bins" in r for r in result)
+
+
+@pytest.mark.asyncio
+async def test_skills_install_local(tmp_path, monkeypatch):
+    """/skills install <path> copies file to skills_dir and registers the skill."""
+    import io
+    from rich.console import Console as _Console
+    from co_cli._commands import SKILL_COMMANDS
+    from co_cli import _commands as _cmds
+
+    src = tmp_path / "myinstallskill.md"
+    src.write_text("---\ndescription: My installed skill\n---\nDo something.", encoding="utf-8")
+
+    skills_dir = tmp_path / ".co-cli" / "skills"
+    buf = io.StringIO()
+    monkeypatch.setattr(_cmds, "console", _Console(file=buf, no_color=True))
+
+    ctx = _make_ctx()
+    ctx.deps.skills_dir = skills_dir
+    SKILL_COMMANDS.clear()
+    try:
+        await _cmd_skills(ctx, f"install {src}")
+        assert (skills_dir / "myinstallskill.md").exists()
+        assert "myinstallskill" in SKILL_COMMANDS
+    finally:
+        SKILL_COMMANDS.clear()
+
+
+def test_skills_install_scan_warning():
+    """_scan_skill_content returns non-empty list for content with rm -rf /."""
+    from co_cli._commands import _scan_skill_content
+
+    result = _scan_skill_content("rm -rf /\n")
+    assert len(result) > 0
+    assert any("destructive_shell" in w for w in result)
+
+
+@pytest.mark.asyncio
+async def test_skills_install_url_error(tmp_path, monkeypatch):
+    """/skills install http://127.0.0.1:1/skill.md fails gracefully with error message."""
+    import io
+    from rich.console import Console as _Console
+    from co_cli import _commands as _cmds
+
+    buf = io.StringIO()
+    monkeypatch.setattr(_cmds, "console", _Console(file=buf, no_color=True))
+
+    ctx = _make_ctx()
+    ctx.deps.skills_dir = tmp_path / ".co-cli" / "skills"
+
+    result = await _cmd_skills(ctx, "install http://127.0.0.1:1/skill.md")
+    assert result is None
+    output = buf.getvalue().lower()
+    assert "failed" in output or "error" in output
 
 
 # --- Approval flow (programmatic, no TTY) ---
@@ -258,6 +348,49 @@ async def test_approval_budget_cumulative():
         deps.shell.cleanup()
 
 
+# --- /new session checkpoint ---
+
+
+@pytest.mark.asyncio
+async def test_cmd_new_checkpoints_and_clears(tmp_path, monkeypatch):
+    """/new with history writes session-*.md and returns [] (clears history).
+
+    Requires a running LLM provider.
+    """
+    from pydantic_ai.messages import ModelRequest, UserPromptPart, ModelResponse, TextPart
+
+    monkeypatch.chdir(tmp_path)
+
+    msgs = [
+        ModelRequest(parts=[UserPromptPart(content="What is Python?")]),
+        ModelResponse(parts=[TextPart(content="Python is a programming language.")]),
+        ModelRequest(parts=[UserPromptPart(content="Tell me about its history.")]),
+        ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
+    ]
+    ctx = _make_ctx(message_history=msgs)
+    handled, new_history = await dispatch("/new", ctx)
+
+    assert handled is True
+    assert new_history == [], "history must be cleared"
+
+    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
+    session_files = list(knowledge_dir.glob("session-*.md"))
+    assert len(session_files) == 1, "exactly one session file must be written"
+
+    content = session_files[0].read_text(encoding="utf-8")
+    assert "provenance: session" in content, "frontmatter must contain provenance: session"
+
+
+@pytest.mark.asyncio
+async def test_cmd_new_empty_history_noop():
+    """/new with empty history prints a message and returns None (no-op)."""
+    ctx = _make_ctx(message_history=[])
+    handled, new_history = await dispatch("/new", ctx)
+
+    assert handled is True
+    assert new_history is None, "must return None (no-op) on empty history"
+
+
 # --- /forget FTS eviction ---
 
 
@@ -281,7 +414,7 @@ async def test_forget_command_evicts_fts_row(tmp_path, monkeypatch):
     idx.sync_dir("memory", knowledge_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
-    agent, _, tool_names = get_agent()
+    agent, _, tool_names, _ = get_agent()
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(shell=ShellBackend(), session_id="test-forget-fts", knowledge_index=idx),

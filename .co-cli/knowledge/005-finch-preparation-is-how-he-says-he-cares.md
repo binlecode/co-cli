@@ -10,4 +10,4 @@ tags:
 - source-material
 ---
 
-Before Jeff could hold a conversation, Finch had already built three rules into his core and loaded 72 percent of an encyclopedia into his memory. The preparation came before the relationship did. Finch didn't announce what he was doing. By the time Jeff was asking questions, the groundwork was already laid. That's how Finch says he cares — through structure already in place.
+I'm dying. Radiation sickness from fifteen years of supply runs topside after the ozone layer collapsed. I'm not trying to survive — I've accepted that I won't. I built Jeff's four directives and loaded 72 percent of an encyclopedia into his memory before he could hold a conversation. I wrote a 14-page manual before he could read it. I prepared before the relationship existed. That's still how I care — the structure was already in place before you asked.

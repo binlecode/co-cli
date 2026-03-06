@@ -2,266 +2,361 @@
 
 ## 1. What & How
 
-The knowledge system is co-cli's unified store for everything the agent learns or saves across sessions. All knowledge items are flat `.md` files in `.co-cli/knowledge/`, distinguished by a `kind` frontmatter field: `memory` for conversation-derived facts, `article` for externally-fetched reference material. A single SQLite FTS5 index (`search.db` in `~/.local/share/co-cli/`) is derived from those files — it is rebuildable and never the source of truth.
+Co uses one unified knowledge substrate built from two layers: markdown files in `.co-cli/knowledge/` as source of truth, and a derived SQLite search index at `~/.local/share/co-cli/search.db` for ranked retrieval. The same substrate serves conversation memories (`kind: memory`), saved reference articles (`kind: article`), and externally indexed text (Obsidian and Drive) under a shared `KnowledgeIndex`.
 
-This doc covers the full knowledge system: storage layout, search index, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay, tag/temporal filtering), and evolution path.
+```mermaid
+graph TD
+    UserTurn[User turn]
+    Agent[Agent + history processors]
+    Tools[Knowledge tools]
+    KDir[.co-cli/knowledge/*.md]
+    KDB[~/.local/share/co-cli/search.db]
+    Obs[Obsidian vault]
+    Drive[Google Drive text cache]
 
-```
-search_knowledge (agent tool)  ← recall_memory, recall_article, search_notes (internal adapters)
-       │
-       ▼
-KnowledgeIndex.search(query, source, kind, tags, limit)
-       │
-       ├── FTS5 MATCH + bm25() → ranked results      (Phase 1, shipped)
-       ├── + vec0 cosine similarity → hybrid merge    (Phase 2, shipped — see Config)
-       └── + cross-encoder / LLM rerank               (Phase 3, shipped — see Config)
-       │
-  search.db  (~/.local/share/co-cli/search.db)
+    UserTurn --> Agent
+    Agent -->|inject_opening_context| Tools
+    Agent -->|post-turn signal hook| Tools
+
+    Tools -->|save_memory/save_article| KDir
+    Tools -->|index/sync| KDB
+
+    Obs -->|search trigger sync_dir| KDB
+    Drive -->|read_drive_file index| KDB
+
+    KDir -->|startup sync| KDB
+    KDB -->|ranked search| Tools
 ```
 
 ## 2. Core Logic
 
-### Conceptual Model
+### 2.1 Conceptual model
+
+- Source-of-truth data: flat markdown files in `.co-cli/knowledge/`.
+- File kinds:
+  - `kind: memory` for user-state facts (preferences, corrections, decisions, context).
+  - `kind: article` for externally fetched references.
+- Search index: `KnowledgeIndex` (SQLite FTS5, optional hybrid vector + rerank) in `search.db`.
+- External namespaces inside the index:
+  - `source="memory"` for both memories and articles.
+  - `source="obsidian"` for vault notes.
+  - `source="drive"` for Drive file content indexed on read.
+
+### 2.2 Storage and frontmatter contract
+
+Knowledge files are parsed by `_frontmatter.parse_frontmatter()` and validated by `validate_memory_frontmatter()` when loaded through memory/article tools.
+
+Required frontmatter fields for knowledge files loaded as memory/article entries:
+- `id: int`
+- `created: ISO8601 string`
+
+Supported lifecycle and metadata fields:
+- `kind: "memory" | "article"` (defaults to `memory` when absent)
+- `origin_url: str | null` (article provenance URL)
+- `provenance: detected | user-told | planted | web-fetch | session`
+- `certainty: "high" | "medium" | "low"` (keyword-classified at write time for memories; absent for articles)
+- `tags: list[str]`
+- `auto_category: str | null`
+- `updated: ISO8601 string | null`
+- `consolidation_reason: str | null` (reason recorded when a memory is consolidated in-place; stripped during subsequent consolidation rewrites)
+- `decay_protected: bool`
+- `title: str | null`
+- `related: list[str] | null`
+
+### 2.3 Startup flow
+
+- `create_deps()` resolves knowledge backend adaptively at wakeup:
+  - configured `hybrid` -> fallback `fts5` on hybrid init failure -> fallback `grep` if FTS init also fails.
+  - configured `fts5` -> fallback `grep` if FTS init fails.
+  - resolved backend is written to `deps.knowledge_search_backend` for runtime consistency.
+- `run_bootstrap()` then syncs markdown knowledge to the index:
+  - If `deps.knowledge_index` exists and `.co-cli/knowledge` exists: `sync_dir("memory", knowledge_dir)`.
+  - On sync failure: index is closed and disabled for the session (`deps.knowledge_index = None`), causing runtime fallback to grep-based retrieval.
+
+Index write/sync triggers by source:
+
+| Source | Trigger | Stored `docs.path` |
+|--------|---------|--------------------|
+| `memory` (memories + articles) | bootstrap `sync_dir`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `/forget` eviction | absolute filesystem path |
+| `obsidian` | `search_notes` and `search_knowledge` (when source is `None` or `obsidian`) call `sync_dir` | absolute filesystem path |
+| `drive` | `read_drive_file` indexes content after fetch | Drive `file_id` |
+
+### 2.4 KnowledgeIndex internals
+
+`KnowledgeIndex` schema:
+- `docs` table stores normalized metadata and content (`source`, `kind`, `path`, `title`, `content`, `tags`, `created`, `updated`, etc.).
+- `docs_fts` virtual table (FTS5) indexes `title`, `content`, `tags`.
+- FTS triggers keep `docs_fts` synchronized with `docs` on insert/update/delete.
+- `embedding_cache` stores generated embeddings by `(provider, model, content_hash)`.
+- Hybrid mode creates `docs_vec` (`sqlite-vec`) and stores vectors keyed by `rowid`.
+
+Sync/index mechanics:
+- Hash-based change detection (`needs_reindex`) prevents unchanged writes.
+- `sync_dir()` recursively scans markdown (`**/*.md` by default).
+- `remove_stale()` deletes rows whose files disappeared; optional `directory` scope prevents sibling-folder eviction during partial syncs.
+
+FTS query behavior:
+- Query tokens are lowercased, stopwords removed, tokens length `> 1`, and AND-joined.
+- If all tokens are removed, search returns empty.
+- Tag filters are exact token membership checks against space-separated tags.
+- Temporal filters use `created_after` / `created_before` against `docs.created`.
+
+Scoring:
+- FTS BM25 rank is converted to `score = 1 / (1 + abs(rank))`.
+- Hybrid merge score = `vector_weight * vec_score + text_weight * fts_score`.
+
+Reranking:
+- Provider options: `none`, `local`, `ollama`, `gemini`.
+- `local` uses fastembed cross-encoder (if installed); otherwise graceful passthrough.
+- `ollama` / `gemini` use listwise ranking prompts and map ranking position to descending scores.
+
+### 2.5 Retrieval surfaces
+
+Agent-registered retrieval tools:
+- `search_knowledge(query, source?, kind?, tags?, created_after?, created_before?)`
+- `list_memories(offset, limit, kind?)`
+- `read_article_detail(slug)`
+
+Internal retrieval adapters (not agent-registered):
+- `recall_memory(...)`
+- `recall_article(...)`
+- `search_notes(...)`
+
+#### `search_knowledge` behavior
+
+- Primary cross-source retrieval entrypoint for model calls.
+- With index enabled:
+  - Optionally syncs Obsidian source before searching (`sync_dir("obsidian", vault_or_folder)` when source is `None` or `obsidian`).
+  - Executes ranked index search across chosen source/kind filters.
+- Without index:
+  - Grep fallback only for `.co-cli/knowledge` files (`source="memory"` only).
+  - `obsidian` and `drive` source filters return empty in fallback mode.
+
+#### `recall_memory` behavior (internal)
+
+Used by history processor `inject_opening_context` (not directly callable by the model).
+
+Flow:
+1. Search path:
+   - FTS path when backend is `fts5`/`hybrid` and index exists.
+   - Otherwise grep substring path.
+2. Optional filters:
+   - Tags (`any` or `all`).
+   - `created_after` / `created_before`.
+3. FTS candidate conversion to file entries.
+4. Temporal decay rescoring (FTS path):
+   - Weight from `_decay_multiplier(created, memory_recall_half_life_days)`.
+   - `decay_protected` entries are exempt.
+5. Dedup pulled results via `_dedup_pulled()`.
+6. One-hop relation expansion (`related` slugs, max 5 extra).
+7. Gravity touch: `_touch_memory()` updates `updated` timestamp on pulled direct matches.
+
+Important side effect:
+- Retrieval can mutate data (`updated` timestamps and dedup-on-read merges/deletes).
+
+#### `recall_article` behavior (internal)
+
+- FTS path if index exists and backend in `fts5`/`hybrid`.
+- Grep fallback otherwise.
+- Returns summary metadata (`article_id`, `title`, `origin_url`, tags, snippet, slug).
+- Full content access is separated into `read_article_detail(slug)`.
+
+### 2.6 Write and mutation surfaces
+
+Agent-registered write tools:
+- `save_memory` (requires approval)
+- `save_article` (requires approval)
+- `update_memory` / `append_memory` (default runtime: no approval; approval only in `all_approval` mode)
+
+Non-tool write paths:
+- post-turn signal auto-save in `main.py` via `memory_lifecycle.persist_memory`
+- `/new` session checkpoint via `memory_lifecycle.persist_memory`
+- `/forget` slash command file deletion + index eviction
+
+#### `save_memory` + `persist_memory`
+
+All write paths route through `memory_lifecycle.persist_memory()`:
+
+`persist_memory(deps, content, tags, related, provenance, title, on_failure, model)` lifecycle:
+1. Dedup fast-path: loads recent memories within `memory_dedup_window_days` (capped to 10), checks `rapidfuzz.token_sort_ratio` against candidate. If similarity >= `memory_dedup_threshold`, consolidates existing memory in-place (`updated`, merged tags) and returns.
+2. LLM consolidation (when `model` is provided): calls `extract_facts` → `resolve` to produce an action plan (ADD/UPDATE/DELETE/NONE). Applies plan via `apply_plan_atomically`. If plan contains no ADD action, returns without writing a new file. On `asyncio.TimeoutError`: `on_failure="add"` falls through to write; `on_failure="skip"` returns without writing.
+3. New file write: creates `{memory_id:03d}-slug.md` with normalized lowercase tags.
+4. Retention cap: if total strictly exceeds `memory_max_count`, deletes oldest non-protected entries until under cap (cut-only, no summary creation).
+5. FTS reindex for new/consolidated writes when index exists.
+
+Special cases:
+- `title` provided (`/new` checkpoints): dedup and consolidation skipped; filename is `{title}.md`.
+- `on_failure="add"` (explicit `save_memory` tool): safe fallback to ADD on consolidation timeout.
+- `on_failure="skip"` (auto-signal save): skip write on consolidation timeout.
+
+#### Memory retention
+
+Triggered inside `persist_memory` when total memories strictly exceeds `memory_max_count`.
+
+Strategy: cut-only — delete oldest non-protected memories until total is within the cap. No summary-memory creation. No percentage-based decay mode.
+
+#### Precision edits
+
+- `update_memory(slug, old_content, new_content)`:
+  - Guards against line-number artifacts.
+  - Requires exactly one old-content match after tab normalization.
+  - Sets `updated`, rewrites file, reindexes.
+- `append_memory(slug, content)`:
+  - Appends newline content, sets `updated`, reindexes.
+
+#### `save_article`
+
+- Dedup key: exact `origin_url` string match.
+- First save creates `kind: article`, `provenance: web-fetch`, `decay_protected: true`.
+- Duplicate URL save consolidates in place (updates content/title/tags/updated).
+- Uses shared `.co-cli/knowledge` ID sequence.
+- Reindexes after save/consolidation when index exists.
+
+#### `/new` session checkpoint
+
+- Summarizes recent session messages via `_index_session_summary()`.
+- Persists summary with:
+  - `tags: ["session"]`
+  - `provenance: "session"`
+  - `title: session-<UTC timestamp>`
+- Clears chat history after checkpoint.
+
+#### `/forget` deletion path
+
+- Finds file by `{memory_id:03d}-*.md` (e.g. `005-*.md`) in `.co-cli/knowledge`.
+- Deletes the matched file.
+- Evicts index row via `knowledge_index.remove("memory", path)` when index exists.
+
+### 2.7 Runtime knowledge injection components
+
+#### Opening context injection (`inject_opening_context`)
+
+Runs as a history processor before every model request:
+- Detects new user turn.
+- Calls internal `recall_memory(user_message, max_results=3)`.
+- If matches exist, appends a `ModelRequest(parts=[SystemPromptPart(...)])`:
+  - `Relevant memories:\n<recall display>`.
+
+#### Personality memory injection (`add_personality_memories`)
+
+Runs as `@agent.instructions` on every turn:
+- Loads top 5 memories tagged `personality-context` by recency.
+- Injects them as `## Learned Context` bullet list.
+
+#### Post-turn signal detector (`analyze_for_signals`)
+
+Runs after successful turns in `main.py`:
+- Mini-agent analyzes last conversation window (up to 10 lines of User/Co text).
+- Output schema: `{found, candidate, tag: Literal["correction", "preference"] | None, confidence: Literal["high", "low"] | None, inject: bool}`.
+- High confidence:
+  - Auto-saves immediately through `memory_lifecycle.persist_memory`.
+  - Emits status `Learned: ...`.
+- Low confidence:
+  - Prompts user approval (`y/a` saves, `n` drops).
+- If `inject=true`, tag list adds `personality-context` before save.
+
+### 2.8 Retrieval quality signals
+
+#### Write-time certainty classification
+
+When a memory is saved via `persist_memory` (new save or consolidation), `_classify_certainty(content)` assigns a bucket to the `certainty` frontmatter field:
+- `"low"` — hedging language detected ("I think", "maybe", "probably", "might", "not sure", "possibly", "I believe", "could be").
+- `"high"` — assertive language detected ("always", "never", "definitely", "I always", "I never", "I use", "I prefer", "I don't", "I do not").
+- `"medium"` — default when neither pattern matches.
+
+The `certainty` value is also stored in the `docs` table (`certainty TEXT` column) so it is available to retrieval paths at search time. Articles are not certainty-classified (external content, not user assertions).
+
+#### Confidence scoring (`search_knowledge`)
+
+After FTS/hybrid retrieval, `search_knowledge` computes a composite `confidence: float` for each `SearchResult` using `_compute_confidence()` (tool layer, not index engine):
 
 ```
-All knowledge items = markdown files with YAML frontmatter
-  kind: memory   → conversation-derived (preference, correction, decision, context, pattern)
-  kind: article  → externally-fetched (web docs, reference material, research)
-
-Directory: .co-cli/knowledge/*.md           (unified flat dir)
-Assets:    .co-cli/knowledge/assets/{slug}/ (multimodal, binary — referenced by articles)
-Index:     ~/.local/share/co-cli/search.db  (derived, rebuildable)
+confidence = 0.5 * score + 0.3 * decay + 0.2 * (prov_weight * certainty_mult)
 ```
 
-No short/long-term memory tiers. Instead, three mechanisms serve as the tiering:
-- **Gravity**: `updated` timestamp refreshed on recall — frequently recalled items surface first
-- **Decay**: oldest unprotected memories removed when `memory_max_count` exceeded (articles are decay-protected by default)
-- **`personality-context` tag**: items tagged `personality-context` are injected into the system prompt every turn via `add_personality_memories`
+Where `decay = exp(-ln(2) * age_days / half_life_days)`, capped to `[0.0, 1.0]`.
 
-### Frontmatter Schema
+Provenance weights: `user-told=1.0`, `planted=0.8`, `detected=0.7`, `session=0.6`, `web-fetch=0.5`, `auto_decay=0.3` (legacy), unknown/absent=`0.5`.
+Certainty multipliers: `high=1.0`, `medium=0.8`, `low=0.6`, absent=`0.8`.
 
-```yaml
-# Required
-id: int
-created: ISO8601
+Confidence is surfaced in the `display` string as `(score: X.XXX, conf: X.XXX)` and in each result dict under the `confidence` key.
 
-# Kind and provenance
-kind: memory | article        # defaults to "memory" on parse if absent
-origin_url: str | null        # source URL for articles; null for memories
+#### Contradiction detection (`search_knowledge`)
 
-# provenance — lifecycle field: how/why this item was created
-# Named "provenance" to avoid collision with KnowledgeIndex.source column
-# (which is a storage-namespace concept: "memory", "obsidian", "drive")
-provenance: detected | user-told | planted | auto_decay | web-fetch
+After confidence computation, `_detect_contradictions(results)` groups results by `category` and checks same-category pairs for opposing polarity using a 5-token window heuristic. If a shared noun/verb appears alongside a negation marker ("not", "no", "never", "don't", "do not", "stopped", "changed", "no longer", "don't use", "avoid") in either result's content, both are flagged.
 
-# Optional
-updated: ISO8601 | null
-tags: list[str]
-auto_category: str | null
-decay_protected: bool
-related: list[str]
-```
+Flagged results get a `⚠ Conflict: ` prefix in the display line and `"conflict": True` in their result dict. Non-conflicting results carry `"conflict": False` for schema consistency.
 
-`provenance` values: `detected` = auto-saved by signal detector, `user-told` = explicit `save_memory` call, `planted` = pre-seeded character base memories, `auto_decay` = created by decay consolidation, `web-fetch` = saved via `save_article`.
+Limitation: heuristic window-based detection produces false positives on complex sentences. LLM-based detection is a Phase 2 enhancement.
 
-`provenance` is the lifecycle field. The `source` column in `KnowledgeIndex` is a storage-namespace concept (`'memory'`, `'obsidian'`, `'drive'`) — distinct from `provenance`.
+### 2.9 Failure and fallback behavior
 
-### Storage Layout
+- Wakeup is adaptive: index initialization degrades `hybrid -> fts5 -> grep` (or `fts5 -> grep`) instead of hard-failing session startup.
+- If bootstrap knowledge sync fails, index is disabled for the session and tools fall back to grep where supported.
+- `search_knowledge` with no index supports memory/article search only; non-memory sources require index.
+- Hybrid search gracefully falls back to lexical results when embedding generation/vector path fails.
+- Reranker failures are non-fatal and fall back to unranked candidate order.
 
-```
-.co-cli/knowledge/
-  001-user-prefers-pytest.md       kind: memory
-  002-python-asyncio-guide.md      kind: article, origin_url: https://...
-  003-kyle-mccloskey-collab.md     kind: memory
-  assets/
-    python-asyncio-guide/
-      diagram.png
+### 2.10 Current implementation issues detected in code scan
 
-~/.local/share/co-cli/
-  search.db                        FTS5 index (rebuildable)
-  co-cli.db                        Telemetry (separate, unchanged)
-```
-
-`assets/` is the one allowed subdir — binary files referenced by articles, kept separate so `glob("*.md")` scans remain clean.
-
-### KnowledgeIndex Design Principle
-
-`KnowledgeIndex` is a single SQLite-backed search index (`search.db`) that any source can write to. The `source` column (`'memory'`, `'obsidian'`, `'drive'`) is the storage-namespace discriminator — all knowledge files (memories + articles) share `source='memory'`; `kind` distinguishes them within that namespace. External sources (Obsidian, Drive) get indexed when tools read them; there is no background crawler.
-
-Startup sync runs hash-based change detection against `.co-cli/knowledge/*.md` files to keep the index current. `search.db` can be deleted and rebuilt cleanly on next startup. When `search.db` is absent or `knowledge_search_backend="grep"`, all search tools fall back to grep-based scan of `.co-cli/knowledge/*.md`.
-
-**Indexing triggers by source:**
-
-| Source | Index trigger | Notes |
-|--------|--------------|-------|
-| Memory | `save_memory()` + startup sync | Frontmatter fields (tags, category) indexed |
-| Article | `save_article()` + startup sync | Decay-protected by default |
-| Obsidian | On `search_notes()` call or `search_knowledge()` with `source=None/obsidian`, hash-based incremental | Local markdown vault |
-| Drive | On `read_drive_file()` — text available after full fetch | Cached locally |
-
-### Tool Surface
-
-| Tool | Backed by | Notes |
-|------|-----------|-------|
-| `save_memory(content, tags)` | Writes `kind: memory` file | Dedup-on-write, decay check |
-| `recall_memory(query, tags?, created_after?, created_before?)` | `search(query, source="memory")` | Internal adapter — not agent-registered; use `search_knowledge(source="memory")` |
-| `update_memory(slug, old_content, new_content)` | In-place edit by slug | Guards: line-prefix rejection, uniqueness |
-| `append_memory(slug, content)` | Append to existing slug | Raises on missing slug |
-| `list_memories(kind?)` | Filesystem scan | `kind` filter supported |
-| `save_article(content, title, origin_url, tags?)` | Writes `kind: article` file | URL-dedup consolidation |
-| `recall_article(query, tags?, created_after?, created_before?)` | `search(query, kind="article")` | Internal adapter — not agent-registered; use `search_knowledge(kind="article")` |
-| `read_article_detail(slug)` | Direct file read | Progressive loading for large articles |
-| `search_knowledge(query, source?, kind?)` | `search(query)` | Cross-source: memories + articles + notes + drive |
-
-### FTS5 Schema
-
-```sql
-CREATE TABLE IF NOT EXISTS docs (
-    source   TEXT NOT NULL,           -- 'memory', 'obsidian', 'drive'
-    kind     TEXT,                    -- 'memory' or 'article' (knowledge files only)
-    path     TEXT NOT NULL,           -- relative path within source dir
-    title    TEXT,                    -- memory slug or article title
-    content  TEXT,                    -- full markdown body (no frontmatter)
-    mtime    REAL,                    -- file mtime for change detection
-    hash     TEXT,                    -- SHA256 of file content for dedup
-    tags     TEXT,                    -- space-separated tags for FTS5
-    category TEXT,                    -- auto_category from frontmatter
-    created  TEXT,                    -- ISO8601 from frontmatter
-    updated  TEXT,                    -- ISO8601 from frontmatter
-    UNIQUE(source, path)
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
-    title,
-    content,
-    tags,
-    tokenize='porter unicode61',
-    content='docs',
-    content_rowid='rowid'
-);
-```
-
-Sync triggers keep `docs_fts` in lock-step with `docs` on insert, delete, and update. Tag filtering uses Python-side set matching on the space-separated `tags` column returned by FTS5 — exact, no false positives.
-
-### Auto-Triggered Signal Detection
-
-The signal detector is a post-turn hook that detects behavioral signals in user messages and persists them as memories automatically — without requiring an explicit "remember this" instruction. Signals are classified by an LLM mini-agent on each completed turn; no keyword precheck gate.
-
-Confidence gates the save path: high-confidence signals are saved silently; non-high-confidence signals surface for approval. `tag` categorizes the memory — it does not determine whether approval is required.
-
-```
-run_turn() → TurnResult
-    ├── interrupted=True or outcome="error" → skip
-    └── analyze_for_signals(messages, agent.model)
-             ├── found=False → skip
-             ├── found=True but candidate/tag missing → skip
-             └── found=True + candidate + tag
-                   ├── confidence="high"   → _save_memory_impl + on_status("Learned: …")
-                   └── confidence!="high"  → prompt_approval("Worth remembering: …")
-                              "y"/"a" → _save_memory_impl
-                              "n"     → discard
-```
-
-**Signal analyzer mini-agent** (`analyze_for_signals` in `_signal_analyzer.py`) — standalone pydantic-ai `Agent`, `output_type=SignalResult`, no tools, reuses `agent.model`. System prompt from `prompts/agents/signal_analyzer.md`. Window: last 10 lines (~5 turns) of alternating `User:` / `Co:` text. Any exception returns `SignalResult(found=False)` — never crashes the chat loop.
-
-**`SignalResult` schema:** `found`, `candidate` (3rd-person, ≤150 chars), `tag` (`"correction"` | `"preference"` | `None`), `confidence` (`"high"` | `"low"` | `None`), `inject` (bool — add `personality-context` tag so memory is injected every turn).
-
-**High confidence (save immediately):** explicit corrections ("Don't use X", "Stop doing X", "Revert that"), active decisions ("We decided to use X", "We switched from X to Y").
-
-**Low confidence (prompt user):** frustrated reactions ("Why did you X?"), stated preferences ("I prefer X"), habit disclosures ("I always X"), repeated frustration.
-
-**Guardrails (never flag):** hypotheticals, teaching moments, capability questions, sensitive content (health, credentials, financial, personal data). Enforced in the system prompt — probabilistic, not code-level.
-
-**`inject` routing:** `inject=True` appends `"personality-context"` to tags → `_load_personality_memories()` injects up to 5 such items as `## Learned Context` per turn. Corrections always inject; durable preferences (name, tool, style, habit) inject; ephemeral decisions ("use X for this task") do not.
-
-**`_save_memory_impl(deps, content, tags, related)`** — shared write path for both the explicit `save_memory()` tool and the auto-detector. Dedup-checks recent memories, consolidates if similar ≥ `memory_dedup_threshold`, otherwise writes `{id:03d}-{slug}.md`. Does NOT trigger decay (decay runs only inside the explicit `save_memory()` tool).
-
-### Precision Memory Edit Tools
-
-Two agent-facing tools for targeted in-place edits on knowledge files:
-
-**`update_memory(slug, old_content, new_content)`** — guards in order before write:
-1. Slug lookup — missing slug raises `FileNotFoundError`
-2. Line-number prefix rejection — rejects Read-tool artifacts (`\d+→ ` or `Line \d+: `)
-3. Tab normalization — `expandtabs()` before matching
-4. Existence check — zero occurrences raises `ValueError`
-5. Uniqueness check — multiple occurrences raises `ValueError` with line numbers
-6. Replace first occurrence, write back with `fm["updated"] = now`, re-index if index present
-
-Returns `{"display": "Updated memory '{slug}'.\n{updated_body}", "slug": slug}`.
-
-**`append_memory(slug, content)`** — slug lookup → strip trailing whitespace → append `"\n" + content` → write back with `fm["updated"] = now` → re-index. Missing slug raises `FileNotFoundError`.
-
-Both tools: `requires_approval=False` — targeted edits, equivalent trust to `save_memory`.
-
-### Tag Filtering and Temporal Search
-
-`KnowledgeIndex.search()` supports exact multi-tag filtering and date-range filtering via `created_after` / `created_before`. Exposed by `recall_memory` and `recall_article` (not `search_knowledge`).
-
-**Tag filtering** — tags stored as space-separated TEXT in `docs.tags`. No junction table. After FTS5/vector query returns rows, Python-side filtering applies:
-- `tag_match_mode="all"`: every requested tag must be present (set subset check)
-- `tag_match_mode="any"`: at least one requested tag must match (set intersection)
-- Over-fetch (`LIMIT = limit * 20`) before Python filter gives enough candidates. Duplicate tags in filter list are deduplicated with `dict.fromkeys()`.
-
-**Temporal filtering** — `created_after` / `created_before` add `AND d.created >= ?` / `<= ?` WHERE clauses in both FTS and vector paths. In grep fallback mode, in-Python date filter applied. `updated` intentionally excluded — gravity updates `updated` timestamps, making it unstable for temporal queries.
-
-### Evolution Path
-
-| Step | What ships | Search quality | New deps |
-|------|-----------|---------------|----------|
-| Prereq A | Flat dir migration | Grep (unchanged) | None |
-| Prereq B | Articles + tools | Grep on both kinds | None |
-| Phase 1 | FTS5 index | BM25 ranked | None |
-| Phase 2 | Hybrid search | Semantic + keyword | sqlite-vec |
-| Phase 3 | Reranker | Cross-encoder or LLM listwise | fastembed (optional) |
-
-All phases shipped. Phase 3 adds a post-search reranking step that runs after `_hybrid_merge()` (hybrid path) or after FTS5 candidate fetch (fts5 path). Three providers: `"local"` (fastembed ONNX cross-encoder — preferred, zero API cost, `uv sync --group reranker`), `"ollama"` (LLM listwise using the generation model — fallback when fastembed absent), `"gemini"` (Gemini `generate_content` — cloud fallback). Provider `"none"` disables reranking. Config: `CO_KNOWLEDGE_RERANKER_PROVIDER` (default `"local"`).
-
-**Deferred enhancements (not yet implemented):**
-- **Score blending** — replace pure rank-position score with `0.3 * hybrid_score + 0.7 * reranker_score`. Requires sigmoid normalization of fastembed raw logits first (uncalibrated floats, not probabilities). Defer until score calibration is validated via the reranker eval.
-- **MMR diversity pass** — post-reranker Jaccard-based deduplication: drop results too similar to a higher-ranked result. Orthogonal to reranking; can be layered on top. Reference: `~/workspace_genai/openclaw/src/memory/`.
+1. `/forget` matches `{memory_id:03d}-*.md` and can delete an `article` sharing that ID, not only memories.
+2. `/forget` help text tells users to run `/list_memories`, but that slash command does not exist.
+3. `recall_memory` FTS path reorders candidates by temporal decay weight only, which can suppress lexical relevance ordering from FTS.
+4. `read_article_detail` prefix fallback returns the first glob match without deterministic disambiguation.
+5. `save_article` dedup uses strict raw URL equality; equivalent normalized URLs can still produce duplicates.
 
 ## 3. Config
 
+### 3.1 Knowledge retrieval settings
+
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | `"grep"` (legacy fallback), `"fts5"` (BM25 only), `"hybrid"` (Phase 2: BM25 + vector) |
-| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for Phase 2 hybrid search: `"ollama"`, `"gemini"`, or `"none"` |
-| `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name passed to the embedding provider |
-| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding vector dimensions (must match the model's output size) |
-| `knowledge_hybrid_vector_weight` | (no env var) | `0.7` | Weight applied to vector similarity scores in the hybrid merge |
-| `knowledge_hybrid_text_weight` | (no env var) | `0.3` | Weight applied to BM25 text scores in the hybrid merge |
-| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Post-search reranker: `"local"` (fastembed cross-encoder), `"ollama"` (LLM listwise), `"gemini"` (Gemini listwise), `"none"` (disabled) |
-| `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Override model for reranker; defaults: `local`→`BAAI/bge-reranker-base`, `ollama`→`qwen2.5:3b`, `gemini`→`gemini-2.0-flash` |
-| `memory_dedup_window_days` | `CO_CLI_MEMORY_DEDUP_WINDOW_DAYS` | `7` | Lookback window for duplicate detection in `_save_memory_impl` (applies to explicit saves and auto-saved signals) |
-| `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | Fuzzy similarity threshold (0–100) for dedup consolidation in `_save_memory_impl` |
+| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | Retrieval backend: `grep`, `fts5`, `hybrid` |
+| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid mode: `ollama`, `gemini`, `none` |
+| `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name sent to provider |
+| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding dimensionality for `docs_vec` |
+| `knowledge_hybrid_vector_weight` | (none) | `0.7` | Hybrid merge vector score weight. Note: bypasses `CoDeps` — passed directly into `KnowledgeIndex.__init__()` from `create_deps()`. |
+| `knowledge_hybrid_text_weight` | (none) | `0.3` | Hybrid merge FTS score weight. Note: bypasses `CoDeps` — passed directly into `KnowledgeIndex.__init__()` from `create_deps()`. |
+| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider: `none`, `local`, `ollama`, `gemini` |
+| `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
+
+### 3.2 Memory lifecycle settings
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | Memory capacity limit; retention cut triggers when total strictly exceeds this |
+| `memory_dedup_window_days` | `CO_CLI_MEMORY_DEDUP_WINDOW_DAYS` | `7` | Recency window for write-time dedup candidate scan |
+| `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | Similarity threshold (0-100) for dedup consolidation |
+| `memory_consolidation_top_k` | `CO_MEMORY_CONSOLIDATION_TOP_K` | `5` | Number of recent memories to consider for LLM consolidation |
+| `memory_consolidation_timeout_seconds` | `CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS` | `20` | Per-call timeout for consolidation LLM calls (extract_facts, resolve) |
+| `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life used by temporal decay rescoring in FTS recall path |
+
+### 3.3 Source enablement settings
+
+| Setting | Env Var | Default | Description |
+|---------|---------|---------|-------------|
+| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | Vault path for note indexing/search |
+| `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `None` | Credential path for Drive access and indexing on read |
 
 ## 4. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge_index.py` | `KnowledgeIndex` class — FTS5 schema, sync triggers, `search()`, `index()`, `remove_stale()`, `rebuild()`, tag/temporal filtering |
-| `co_cli/tools/memory.py` | `save_memory`, `recall_memory`, `update_memory`, `append_memory`, `list_memories`, `_save_memory_impl` shared write path |
-| `co_cli/tools/articles.py` | `save_article`, `recall_article`, `read_article_detail`, `search_knowledge` — article tools and cross-source search |
-| `co_cli/tools/obsidian.py` | `list_notes`, `read_note` (agent-registered) + `search_notes` (internal adapter) |
-| `co_cli/tools/google_drive.py` | `read_drive_file` — indexes Drive content into `KnowledgeIndex` on fetch |
-| `co_cli/_frontmatter.py` | Frontmatter parse/validate — `kind`, `provenance`, `origin_url` fields |
-| `co_cli/_signal_analyzer.py` | `_build_window`, `analyze_for_signals`, `SignalResult` — post-turn signal detection |
-| `co_cli/prompts/agents/signal_analyzer.md` | Signal detector system prompt: signal types, confidence rules, guardrails, output format, examples |
-| `co_cli/main.py` | Post-turn signal hook in `chat_loop()`, after `message_history = turn_result.messages` |
-| `.co-cli/knowledge/` | Flat knowledge store — all `kind: memory` and `kind: article` files |
-
----
-
-## Design Decisions — Not Adopted
-
-Patterns from Letta's production memory system that were considered and explicitly not adopted:
-
-| Pattern | Rationale |
-|---------|-----------|
-| **Full Block infrastructure** | `decay_protected` frontmatter + `personality-context` tag cover the always-in-context use case without a Block/PostgreSQL stack |
-| **Sleeptime consolidation agent** | co-cli's lifecycle (gravity + decay + dedup-on-write) is the consolidation mechanism. Letta needs sleeptime because its archival store is permanent with no decay |
-| **PARTIAL_EVICT mode** | One context governance mode (`truncate_history_window`) is sufficient; a second mode with different triggering semantics introduces ambiguous state |
-| **`memory_apply_patch` multi-block diff** | `update_memory` + `append_memory` cover all realistic edit cases with simpler contracts |
-| **Session summary indexing** | Adds file persistence + config wiring at compaction time. Deferred: no observed recall gap that justifies the added complexity at current scale |
-| **Parallel-safe tool execution** | pydantic-ai's tool execution model is not verified to support custom dispatchers. Deferred pending measured tool latency bottleneck |
+| `co_cli/knowledge_index.py` | Core index engine: schema, sync/index/remove/rebuild, FTS/hybrid/rerank search |
+| `co_cli/memory_lifecycle.py` | Write entrypoint for all memory save paths: dedup → consolidation → write → retention |
+| `co_cli/memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution (two-phase mini-agent) |
+| `co_cli/memory_retention.py` | Cut-only retention enforcement: delete oldest non-protected until under cap |
+| `co_cli/tools/memory.py` | Memory recall/list/edit tools and shared helpers (`_load_memories`, `_check_duplicate`, etc.) |
+| `co_cli/tools/articles.py` | Article save/recall/detail and `search_knowledge` cross-source retrieval |
+| `co_cli/tools/personality.py` | Loads `personality-context` memories for per-turn instruction injection |
+| `co_cli/tools/obsidian.py` | Note search/list/read plus index sync on search |
+| `co_cli/tools/google_drive.py` | Drive search/read and opportunistic index writes on file read |
+| `co_cli/_frontmatter.py` | Frontmatter parsing and validation rules used by knowledge files |
+| `co_cli/_bootstrap.py` | Startup knowledge sync: calls `sync_dir` on `.co-cli/knowledge` at session start |
+| `co_cli/_history.py` | Opening-context recall injector and compaction logic |
+| `co_cli/_signal_analyzer.py` | LLM mini-agent for post-turn signal detection |
+| `co_cli/prompts/agents/signal_analyzer.md` | Signal classification policy prompt |
+| `co_cli/main.py` | Runtime hooks: bootstrap sync, post-turn signal save, session checkpoint flow |
+| `co_cli/_commands.py` | `/new` checkpoint and `/forget` delete flows affecting knowledge store |
+| `co_cli/agent.py` | Agent factory and tool registration (agent-facing vs internal knowledge surfaces) |
+| `co_cli/prompts/agents/memory_consolidator.md` | Two-phase prompt: fact extraction + contradiction resolution |

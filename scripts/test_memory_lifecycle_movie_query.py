@@ -279,7 +279,7 @@ async def main():
 
     # Web tools auto-execute (no approval prompt) for this demo
     demo_web_policy = WebPolicy(search="allow", fetch="allow")
-    agent, model_settings, _ = get_agent(web_policy=demo_web_policy)
+    agent, model_settings, _, _ = get_agent(web_policy=demo_web_policy)
 
     # Resolve provider + model for display
     provider = settings.llm_provider.lower()

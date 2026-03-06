@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ class _FakeDeps:
     memory_dedup_threshold: int = 85
     memory_decay_strategy: str = "summarize"
     memory_decay_percentage: float = 0.2
+    memory_recall_half_life_days: int = 30
     knowledge_index: Any = None
     knowledge_search_backend: str = "grep"
     obsidian_vault_path: Any = None
@@ -463,6 +465,176 @@ def test_search_knowledge_fallback_grep_kind_filter(tmp_path, monkeypatch):
 
     memory_result = _run(search_knowledge(_ctx(), "zygomorphic-grepkind", kind="memory"))
     assert memory_result["count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TASK-4: confidence field in search_knowledge results
+# ---------------------------------------------------------------------------
+
+
+def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch):
+    """search_knowledge FTS path populates confidence in each result dict."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    _run(save_memory(
+        ctx,
+        "User prefers zygomorphic-confidence-test framework for testing",
+        tags=["preference"],
+    ))
+
+    result = _run(search_knowledge(ctx, "zygomorphic-confidence-test"))
+    assert result["count"] >= 1
+    first = result["results"][0]
+    assert "confidence" in first
+    assert first["confidence"] is not None
+    assert isinstance(first["confidence"], float)
+    assert 0.0 <= first["confidence"] <= 1.5  # formula can exceed 1 in theory, bounded by inputs
+    idx.close()
+
+
+def test_search_knowledge_display_contains_conf_label(tmp_path, monkeypatch):
+    """search_knowledge display string shows 'conf:' for FTS results."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    _run(save_memory(
+        ctx,
+        "User prefers zygomorphic-conf-display-test style guides",
+        tags=["preference"],
+    ))
+
+    result = _run(search_knowledge(ctx, "zygomorphic-conf-display-test"))
+    assert result["count"] >= 1
+    assert "conf:" in result["display"]
+    idx.close()
+
+
+def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
+    """_compute_confidence: user-told+high scores higher than detected+medium at same base score."""
+    from co_cli.knowledge_index import SearchResult
+    from co_cli.tools.articles import _compute_confidence
+
+    created = datetime.now(timezone.utc).isoformat()
+
+    r_high = SearchResult(
+        source="memory", kind="memory", path="/a.md",
+        title=None, snippet=None, score=0.5,
+        tags=None, category=None, created=created, updated=None,
+        provenance="user-told", certainty="high",
+    )
+    r_low = SearchResult(
+        source="memory", kind="memory", path="/b.md",
+        title=None, snippet=None, score=0.5,
+        tags=None, category=None, created=created, updated=None,
+        provenance="detected", certainty="medium",
+    )
+    conf_high = _compute_confidence(r_high, half_life_days=30)
+    conf_low = _compute_confidence(r_low, half_life_days=30)
+    assert conf_high > conf_low, (
+        f"user-told+high ({conf_high:.4f}) should outscore detected+medium ({conf_low:.4f})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# TASK-5: contradiction detection in search_knowledge
+# ---------------------------------------------------------------------------
+
+
+def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
+    """search_knowledge marks both memories conflict:True when same category has opposing polarity."""
+    from co_cli.knowledge_index import KnowledgeIndex
+    import yaml as _yaml
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    # Write two memories in the same category with opposing content
+    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    fm_a = {
+        "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
+        "tags": ["preference"], "provenance": "user-told",
+        "auto_category": "preference", "certainty": "high",
+    }
+    fm_b = {
+        "id": 2, "kind": "memory", "created": "2026-01-02T00:00:00+00:00",
+        "tags": ["preference"], "provenance": "user-told",
+        "auto_category": "preference", "certainty": "high",
+    }
+    path_a = knowledge_dir / "001-prefer-dark.md"
+    path_b = knowledge_dir / "002-no-dark.md"
+    path_a.write_text(
+        f"---\n{_yaml.dump(fm_a, default_flow_style=False)}---\n\nI prefer dark mode\n",
+        encoding="utf-8",
+    )
+    path_b.write_text(
+        f"---\n{_yaml.dump(fm_b, default_flow_style=False)}---\n\nI don't prefer dark mode\n",
+        encoding="utf-8",
+    )
+
+    idx.sync_dir("memory", knowledge_dir)
+
+    result = _run(search_knowledge(ctx, "dark mode prefer"))
+    assert result["count"] >= 2
+
+    # Both results in same category with opposing polarity should be flagged
+    flagged = [r for r in result["results"] if r.get("conflict") is True]
+    assert len(flagged) >= 2, (
+        f"Expected 2 conflict flags, got {len(flagged)}: {result['results']}"
+    )
+    idx.close()
+
+
+def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
+    """search_knowledge returns conflict:False when results are compatible."""
+    from co_cli.knowledge_index import KnowledgeIndex
+    import yaml as _yaml
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
+    knowledge_dir.mkdir(parents=True, exist_ok=True)
+
+    fm_a = {
+        "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
+        "tags": ["preference"], "provenance": "user-told",
+        "auto_category": "preference", "certainty": "high",
+    }
+    fm_b = {
+        "id": 2, "kind": "memory", "created": "2026-01-02T00:00:00+00:00",
+        "tags": ["preference"], "provenance": "user-told",
+        "auto_category": "preference", "certainty": "high",
+    }
+    path_a = knowledge_dir / "001-dark.md"
+    path_b = knowledge_dir / "002-dark2.md"
+    path_a.write_text(
+        f"---\n{_yaml.dump(fm_a, default_flow_style=False)}---\n\nI prefer dark mode\n",
+        encoding="utf-8",
+    )
+    path_b.write_text(
+        f"---\n{_yaml.dump(fm_b, default_flow_style=False)}---\n\nI also enjoy dark themes\n",
+        encoding="utf-8",
+    )
+
+    idx.sync_dir("memory", knowledge_dir)
+
+    result = _run(search_knowledge(ctx, "dark mode"))
+    # All results should have conflict:False (compatible statements)
+    assert all(not r.get("conflict") for r in result["results"]), (
+        f"No conflicts expected for compatible memories: {result['results']}"
+    )
+    idx.close()
 
 
 def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypatch):

@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 
 _VALID_PROVENANCE: frozenset[str] = frozenset({
-    "detected", "user-told", "planted", "auto_decay", "web-fetch",
+    "detected", "user-told", "planted", "auto_decay", "web-fetch", "session",
 })
 
 
@@ -89,7 +89,7 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     Optional fields:
         - kind: str ("memory" or "article")
         - origin_url: str or null (source URL for articles)
-        - provenance: str (detected | user-told | planted | auto_decay | web-fetch)
+        - provenance: str (detected | user-told | planted | auto_decay | web-fetch | session)
         - tags: list[str]
         - auto_category: str (preference | correction | decision | context | pattern)
         - updated: ISO8601 timestamp string (added when consolidated)

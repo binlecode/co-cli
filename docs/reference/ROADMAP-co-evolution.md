@@ -199,7 +199,7 @@ Sequenced by peer convergence strength and dependency order. Security before aut
 - Background pre-compaction during user idle time (optimization)
 - Plans and key decisions persist across compaction events
 
-**Design docs:** `DESIGN-context-governance.md`, `DESIGN-prompt-design.md`
+**Design docs:** `DESIGN-prompt-design.md`
 
 ### Phase E: Background Execution — MEDIUM
 
@@ -1107,12 +1107,11 @@ All paths verified against `docs/` contents.
 | `DESIGN-core.md` | System overview, agent loop: factory, CoDeps, bootstrap, session lifecycle, skills, orchestration, streaming, four-tier approval, cross-cutting concerns |
 | `DESIGN-llm-models.md` | LLM model configuration (Gemini, Ollama) + Ollama local setup |
 | `DESIGN-logging-and-tracking.md` | Telemetry architecture, SQLite schema, viewers, real-time tail |
-| `DESIGN-context-governance.md` | Context governance: history processors, sliding window, summarization, background pre-computation |
 | `DESIGN-theming-ascii.md` | Theming, ASCII art banner, display helpers |
 | `DESIGN-tools.md` | Native tools: shell (four-tier approval + persistent approvals), memory, Obsidian, Google, web, capabilities, bundled skills |
 | `DESIGN-knowledge.md` | Knowledge system: flat store, FTS5/hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay) |
 | `DESIGN-mcp-client.md` | MCP client: external tool servers via stdio transport |
-| `DESIGN-prompt-design.md` | Agentic loop + prompting: run_turn, four-tier approval re-entry, tool preamble, safety policy, prompt composition |
+| `DESIGN-prompt-design.md` | Agentic loop + prompting: run_turn, four-tier approval re-entry, tool preamble, safety policy, prompt composition, context governance, history processors, compaction |
 | `DESIGN-personality.md` | Prompt & personality system: static/per-turn split, 4 file-driven roles, 5 traits, structural delivery, reasoning_depth override |
 
 ### TODO Documents (remaining work)

@@ -30,7 +30,7 @@ def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
         max_reflections=3,
     )
     deps._safety_state = SafetyState()
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     return RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
 

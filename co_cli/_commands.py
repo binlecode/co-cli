@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
+import re
+import shutil
+import sys
 from collections.abc import Callable, Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.display import console, prompt_selection
+from co_cli._frontmatter import parse_frontmatter
+
+logger = logging.getLogger(__name__)
 
 
 # -- Types -----------------------------------------------------------------
@@ -18,7 +29,8 @@ from co_cli.display import console, prompt_selection
 class CommandContext:
     """Grab-bag passed to every slash-command handler.
 
-    Mutable so handlers like /model can set model_settings for the chat loop.
+    Mutable so handlers like /model can set model_settings for the chat loop,
+    and skill dispatch can set skill_body to fall through to the LLM turn.
     """
 
     message_history: list[Any]
@@ -26,6 +38,12 @@ class CommandContext:
     agent: Any  # Agent[CoDeps, ...] — same reason
     tool_names: list[str]
     model_settings: ModelSettings | None = None
+    # Set by dispatch() when a skill matches — chat_loop uses this to feed
+    # the skill body as user input into the LLM turn instead of continuing.
+    skill_body: str | None = None
+    # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
+    # free of prompt_toolkit imports (design boundary). None outside REPL context.
+    completer: Any = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +53,112 @@ class SlashCommand:
     name: str
     description: str
     handler: Callable[[CommandContext, str], Awaitable[list[Any] | None]]
+
+
+@dataclass(frozen=True)
+class SkillCommand:
+    """A dynamically-loaded skill command (from .co-cli/skills/*.md)."""
+
+    name: str
+    description: str = ""
+    body: str = ""
+    argument_hint: str = ""
+    user_invocable: bool = True
+    disable_model_invocation: bool = False
+    requires: dict = field(default_factory=dict)
+    skill_env: dict[str, str] = field(default_factory=dict)
+    # Per-skill tool grants — auto-approve listed tools during this skill's LLM turn.
+    # Turn-scoped: propagated to CoDeps.active_skill_allowed_tools by dispatch().
+    allowed_tools: list[str] = field(default_factory=list)
+
+
+# Module-level skill registry — populated by chat_loop() via _load_skills().
+# dispatch() accesses this directly; no parameter passing needed.
+SKILL_COMMANDS: dict[str, SkillCommand] = {}
+
+# Env vars that skill-env may never override — security boundary.
+_SKILL_ENV_BLOCKED: frozenset[str] = frozenset({
+    "PATH", "PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES", "HOME", "USER", "SHELL", "SUDO_UID",
+})
+
+# Static security patterns for skill content scanning (TASK-4).
+_SKILL_SCAN_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("credential_exfil", re.compile(
+        r'(curl|wget|nc)\s[^\n]*\$\{?[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD|API)[A-Z_]*\}?',
+        re.IGNORECASE,
+    )),
+    ("pipe_to_shell", re.compile(r'(curl|wget)\s[^|\n]+\|\s*(ba)?sh', re.IGNORECASE)),
+    ("destructive_shell", re.compile(
+        r'rm\s+-rf\s*/|dd\s+if=/dev/(zero|random|urandom)|:\(\)\s*\{',
+        re.IGNORECASE,
+    )),
+    ("prompt_injection", re.compile(
+        r'ignore\s+(all\s+)?previous\s+instructions|you\s+are\s+now\s+(a|an)\s',
+        re.IGNORECASE,
+    )),
+]
+
+
+def _scan_skill_content(content: str) -> list[str]:
+    """Scan skill content for security patterns.
+
+    Returns a list of tagged warning strings. Empty list = content is clean.
+    Each entry has the form '[tag] line N: <line>'.
+    """
+    warnings: list[str] = []
+    for i, line in enumerate(content.splitlines(), 1):
+        for tag, pattern in _SKILL_SCAN_PATTERNS:
+            if pattern.search(line):
+                warnings.append(f"[{tag}] line {i}: {line}")
+    return warnings
+
+
+def _build_completer_words() -> list[str]:
+    """Single source of truth for the REPL tab-completer word list."""
+    return [f"/{name}" for name in COMMANDS] + [
+        f"/{name}" for name, s in SKILL_COMMANDS.items() if s.user_invocable
+    ]
+
+
+def _refresh_completer(ctx: CommandContext) -> None:
+    """Refresh the REPL completer words after a SKILL_COMMANDS mutation."""
+    if ctx.completer is None:
+        return
+    ctx.completer.words = _build_completer_words()
+
+
+def _skills_snapshot(skills_dir: Path) -> dict[str, float]:
+    """Return {filepath_str: mtime} for all .md files in skills_dir."""
+    if not skills_dir.exists():
+        return {}
+    return {str(p): p.stat().st_mtime for p in sorted(skills_dir.glob("*.md"))}
+
+
+def _inject_source_url(content: str, url: str) -> str:
+    """Inject or update source-url field in skill frontmatter."""
+    if not content.startswith("---\n"):
+        return f"---\nsource-url: {url}\n---\n{content}"
+    rest = content[4:]
+    close_match = re.search(r'\n---(\n|$)', rest)
+    if close_match is None:
+        return f"---\nsource-url: {url}\n---\n{content}"
+    close_start = close_match.start()
+    fm_block = rest[:close_start]
+    after_close = rest[close_match.end():]
+    lines = fm_block.splitlines()
+    new_lines = []
+    replaced = False
+    for line in lines:
+        if line.startswith("source-url:"):
+            new_lines.append(f"source-url: {url}")
+            replaced = True
+        else:
+            new_lines.append(line)
+    if not replaced:
+        new_lines.append(f"source-url: {url}")
+    new_fm = "\n".join(new_lines)
+    return f"---\n{new_fm}\n---\n{after_close}"
 
 
 # -- Handlers --------------------------------------------------------------
@@ -49,6 +173,11 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table.add_column("Description")
     for cmd in COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
+    if SKILL_COMMANDS:
+        for skill in SKILL_COMMANDS.values():
+            if skill.user_invocable:
+                hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
+                table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
     console.print(table)
     return None
 
@@ -60,11 +189,39 @@ async def _cmd_clear(ctx: CommandContext, args: str) -> list[Any]:
 
 
 async def _cmd_status(ctx: CommandContext, args: str) -> None:
-    """Show system health (same as `co status`)."""
-    from co_cli.status import get_status, render_status_table
+    """Show system health, or task status when <id> is given."""
+    task_id = args.strip()
+    if task_id:
+        # Route to task lookup
+        runner = getattr(ctx.deps, "task_runner", None)
+        if runner is None:
+            console.print("[bold red]Task runner not available.[/bold red]")
+            return None
+        meta = runner.get_task(task_id)
+        if meta is None:
+            console.print(f"[bold red]Task not found:[/bold red] {task_id}")
+            return None
+        from rich.table import Table
+        table = Table(title=f"Task: {task_id}", border_style="accent", expand=False)
+        table.add_column("Field", style="accent")
+        table.add_column("Value")
+        for k, v in meta.items():
+            table.add_row(str(k), str(v) if v is not None else "")
+        console.print(table)
+        # Show last 20 lines of output
+        lines = runner._storage.tail_output(task_id, n=20)
+        if lines:
+            console.print("[dim]--- Output (last 20 lines) ---[/dim]")
+            for line in lines:
+                console.print(line)
+        return None
+
+    from co_cli.status import get_status, render_status_table, check_security, render_security_findings
 
     info = get_status(tool_count=len(ctx.tool_names))
     console.print(render_status_table(info))
+    findings = check_security()
+    render_security_findings(findings)
     return None
 
 
@@ -99,8 +256,17 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    # Use the agent's model for /compact (user-initiated, quality matters)
+    # Use dedicated summarization model when configured; otherwise fall back to
+    # the active agent model.
     model = ctx.agent.model
+    if ctx.deps.summarization_model:
+        from co_cli.agents._factory import make_subagent_model
+
+        model = make_subagent_model(
+            ctx.deps.summarization_model,
+            ctx.deps.llm_provider,
+            ctx.deps.ollama_host,
+        )
     summary = await _run_summarization_with_policy(
         ctx.message_history, model,
         max_retries=settings.model_http_retries,
@@ -124,6 +290,40 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
         f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
     )
     return new_history
+
+
+def _swap_model_inplace(agent: Any, model_name: str, provider_name: str, settings: Any) -> ModelSettings:
+    """Swap the agent's model in-place without rebuilding MCP connections.
+
+    Ollama path: OpenAIProvider + OpenAIChatModel (same as _switch_ollama_model).
+    Gemini path: update the google-gla:model_name string on agent.model directly.
+
+    Returns new ModelSettings for the caller to apply.
+    """
+    if provider_name == "ollama":
+        return _switch_ollama_model(agent, model_name, settings.ollama_host)
+    elif provider_name == "gemini":
+        import os as _os
+        from pydantic_ai.settings import ModelSettings as _MS
+        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
+        # Ensure API key is in environment
+        if settings.gemini_api_key:
+            _os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
+        agent.model = f"google-gla:{model_name}"
+        inf = get_model_inference("gemini", _normalize(model_name))
+        return _MS(
+            temperature=inf.get("temperature", 1.0),
+            top_p=inf.get("top_p", 0.95),
+            max_tokens=inf.get("max_tokens", 65536),
+        )
+    else:
+        raise ValueError(f"_swap_model_inplace: unknown provider '{provider_name}'")
+
+
+def _set_reasoning_model_head(model_roles: dict[str, list[str]], model_name: str) -> None:
+    """Set reasoning role head to model_name while preserving remaining order."""
+    existing = [m for m in model_roles.get("reasoning", []) if m != model_name]
+    model_roles["reasoning"] = [model_name, *existing]
 
 
 def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:
@@ -227,8 +427,11 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
     """Switch Ollama model or show current model."""
     from co_cli.config import settings
 
+    reasoning_chain = ctx.deps.model_roles.get("reasoning", [])
+    active_reasoning = reasoning_chain[0] if reasoning_chain else "(unset)"
+
     if settings.llm_provider.lower() != "ollama":
-        console.print(f"[info]Provider: {settings.llm_provider} — model: {settings.gemini_model}[/info]")
+        console.print(f"[info]Provider: {settings.llm_provider} — model: {active_reasoning}[/info]")
         console.print("[dim]Model switching is only supported for Ollama.[/dim]")
         return None
 
@@ -238,6 +441,7 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
     if args.strip():
         try:
             ctx.model_settings = _switch_ollama_model(ctx.agent, args.strip(), settings.ollama_host)
+            _set_reasoning_model_head(ctx.deps.model_roles, args.strip())
             console.print(f"[success]Switched to model: [accent]{args.strip()}[/accent][/success]")
         except Exception as e:
             console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
@@ -267,10 +471,614 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
 
     try:
         ctx.model_settings = _switch_ollama_model(ctx.agent, selected, settings.ollama_host)
+        _set_reasoning_model_head(ctx.deps.model_roles, selected)
         console.print(f"[success]Switched to model: [accent]{selected}[/accent][/success]")
     except Exception as e:
         console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
     return None
+
+
+async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
+    """Checkpoint current session to knowledge and start fresh."""
+    from co_cli._history import _index_session_summary
+    from co_cli.memory_lifecycle import persist_memory as _save_memory_impl
+
+    if not ctx.message_history:
+        console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
+        return None
+
+    summary = await _index_session_summary(
+        ctx.message_history,
+        ctx.agent.model,
+        personality_active=bool(ctx.deps.personality),
+    )
+
+    if summary is None:
+        console.print("[yellow]Could not summarize session — history not cleared.[/yellow]")
+        return None
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    await _save_memory_impl(
+        ctx.deps,
+        content=summary,
+        tags=["session"],
+        related=[],
+        provenance="session",
+        title=f"session-{timestamp}",
+    )
+
+    console.print(f"[dim]Session checkpointed as session-{timestamp}.md. Starting fresh.[/dim]")
+    return []
+
+
+async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
+    """Create a workspace snapshot."""
+    from co_cli.workspace_checkpoint import create_checkpoint
+
+    label = args.strip()
+    try:
+        cid = create_checkpoint(Path.cwd(), label=label)
+        console.print(f"[success]✓ Checkpoint created: {cid}[/success]")
+    except RuntimeError as e:
+        console.print(f"[bold red]Checkpoint failed:[/bold red] {e}")
+    return None
+
+
+async def _cmd_rewind(ctx: CommandContext, args: str) -> None:
+    """Restore a workspace snapshot."""
+    from co_cli.workspace_checkpoint import list_checkpoints, restore_checkpoint
+
+    target = args.strip()
+    if not target or target == "last":
+        entries = list_checkpoints(Path.cwd())
+        if not entries:
+            console.print("[dim]No checkpoints found.[/dim]")
+            return None
+        target = entries[0]["id"]
+
+    answer = console.input(f"Restore to checkpoint '{target}'? [y/N] ")
+    if answer.strip().lower() != "y":
+        console.print("[dim]Rewind cancelled.[/dim]")
+        return None
+
+    try:
+        restore_checkpoint(Path.cwd(), target, confirmed=True)
+        console.print(f"[success]✓ Restored to checkpoint {target}[/success]")
+    except RuntimeError as e:
+        console.print(f"[bold red]Rewind failed:[/bold red] {e}")
+    return None
+
+
+async def _cmd_skills(ctx: CommandContext, args: str) -> None:
+    """List and inspect loaded skills, or install a new one."""
+    from rich.table import Table
+
+    sub = args.strip().split(maxsplit=1)
+    subcmd = sub[0].lower() if sub else "list"
+    subargs = sub[1] if len(sub) > 1 else ""
+
+    if subcmd in ("", "list"):
+        if not SKILL_COMMANDS:
+            console.print("[dim]No skills loaded.[/dim]")
+            return None
+        table = Table(title="Loaded Skills", border_style="accent", expand=False)
+        table.add_column("Name", style="accent")
+        table.add_column("Description")
+        table.add_column("Requires")
+        table.add_column("User-Invocable")
+        for skill in SKILL_COMMANDS.values():
+            req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
+            table.add_row(
+                skill.name,
+                skill.description or "",
+                req_keys,
+                "✓" if skill.user_invocable else "✗",
+            )
+        console.print(table)
+
+    elif subcmd == "check":
+        from co_cli.config import settings as _settings
+
+        default_dir = Path(__file__).parent / "skills"
+        project_dir = ctx.deps.skills_dir
+
+        all_paths: list[Path] = []
+        if default_dir.exists():
+            all_paths.extend(sorted(default_dir.glob("*.md")))
+        if project_dir.exists():
+            all_paths.extend(sorted(project_dir.glob("*.md")))
+
+        if not all_paths:
+            console.print("[dim]No skill files found.[/dim]")
+            return None
+
+        table = Table(title="Skills Check", border_style="accent", expand=False)
+        table.add_column("File", style="accent")
+        table.add_column("Status")
+        table.add_column("Reason")
+
+        for path in all_paths:
+            name = path.stem
+            if name in SKILL_COMMANDS:
+                table.add_row(path.name, "[success]✓ Loaded[/success]", "")
+            else:
+                try:
+                    text = path.read_text(encoding="utf-8")
+                    meta, _ = parse_frontmatter(text)
+                    requires = meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+                    failures = _diagnose_requires_failures(requires, _settings)
+                    reason = "; ".join(failures) if failures else "name conflict with built-in"
+                    table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
+                except Exception as e:
+                    table.add_row(path.name, "[bold red]✗ Error[/bold red]", str(e))
+
+        console.print(table)
+
+    elif subcmd == "install":
+        await _install_skill(ctx, subargs)
+
+    elif subcmd == "reload":
+        from co_cli.config import settings as _settings
+        # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
+        new_skills = _load_skills(ctx.deps.skills_dir, _settings)
+        # Scan only files that successfully loaded — avoids warnings for requires-gated skills
+        default_dir = Path(__file__).parent / "skills"
+        project_dir = ctx.deps.skills_dir
+        all_paths = (sorted(default_dir.glob("*.md")) if default_dir.exists() else []) + \
+                    (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
+        for p in all_paths:
+            if p.stem in new_skills:
+                try:
+                    for w in _scan_skill_content(p.read_text(encoding="utf-8")):
+                        console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
+                except Exception:
+                    pass
+        SKILL_COMMANDS.clear()
+        SKILL_COMMANDS.update(new_skills)
+        ctx.deps.skill_registry = [
+            {"name": s.name, "description": s.description}
+            for s in SKILL_COMMANDS.values()
+            if s.description and not s.disable_model_invocation
+        ]
+        _refresh_completer(ctx)
+        console.print(f"[success]✓ Reloaded {len(SKILL_COMMANDS)} skill(s)[/success]")
+
+    elif subcmd == "upgrade":
+        await _upgrade_skill(ctx, subargs)
+
+    else:
+        console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
+        console.print("[dim]Usage: /skills [list|check|install <path|url>|reload|upgrade <name>][/dim]")
+
+    return None
+
+
+async def _install_skill(ctx: CommandContext, target: str, force: bool = False) -> None:
+    """Copy a skill .md file from a local path or URL into skills_dir and reload."""
+    from co_cli.config import settings as _settings
+
+    target = target.strip()
+    if not target:
+        console.print("[bold red]Usage:[/bold red] /skills install <path|url>")
+        return
+
+    # Fetch content
+    if target.startswith("http://") or target.startswith("https://"):
+        try:
+            import httpx
+            import urllib.parse
+            resp = httpx.get(target, timeout=10)
+            resp.raise_for_status()
+        except Exception as e:
+            console.print(f"[bold red]Failed to fetch skill:[/bold red] {e}")
+            return
+        content_type = resp.headers.get("content-type", "")
+        if not content_type.startswith("text/"):
+            console.print(f"[bold red]Unexpected content-type (expected text/*):[/bold red] {content_type}")
+            return
+        content = resp.text
+        content = _inject_source_url(content, target)
+        filename = Path(urllib.parse.urlparse(target).path).name
+    else:
+        try:
+            p = Path(target)
+            content = p.read_text(encoding="utf-8")
+            filename = p.name
+        except Exception as e:
+            console.print(f"[bold red]Failed to read skill:[/bold red] {e}")
+            return
+
+    if not filename.endswith(".md"):
+        console.print(f"[bold red]Skill file must end with .md:[/bold red] {filename}")
+        return
+
+    # Security scan — blocking before install (user must confirm)
+    warnings = _scan_skill_content(content)
+    if warnings:
+        console.print("[bold yellow]Security scan warnings:[/bold yellow]")
+        for w in warnings:
+            console.print(f"  [yellow]{w}[/yellow]")
+        answer = console.input("Install anyway? [y/N] ")
+        if answer.strip().lower() != "y":
+            console.print("[dim]Install cancelled.[/dim]")
+            return
+
+    # Confirm overwrite if file already exists (skip when force=True)
+    dest = ctx.deps.skills_dir / filename
+    if dest.exists() and not force:
+        answer = console.input(f"Overwrite existing skill '{filename}'? [y/N] ")
+        if answer.strip().lower() != "y":
+            console.print("[dim]Install cancelled.[/dim]")
+            return
+
+    # Write to skills_dir
+    ctx.deps.skills_dir.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+
+    # Reload in-session: package-default + updated project dir
+    new_skills = _load_skills(ctx.deps.skills_dir, _settings)
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS.update(new_skills)
+
+    # Update skill_registry so agent prompt reflects the new skill
+    ctx.deps.skill_registry = [
+        {"name": s.name, "description": s.description}
+        for s in SKILL_COMMANDS.values()
+        if s.description and not s.disable_model_invocation
+    ]
+    _refresh_completer(ctx)
+
+    console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
+
+
+async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
+    """Re-fetch and reinstall a skill that was installed from a URL."""
+    name = args.strip()
+    if not name:
+        console.print("[bold red]Usage:[/bold red] /skills upgrade <name>")
+        return
+    if name not in SKILL_COMMANDS:
+        console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
+        return
+    skill_file = ctx.deps.skills_dir / f"{name}.md"
+    if not skill_file.exists():
+        console.print(f"[bold red]Skill '{name}' not found in project skills dir.[/bold red]")
+        return
+    text = skill_file.read_text(encoding="utf-8")
+    meta, _ = parse_frontmatter(text)
+    source_url = meta.get("source-url", "").strip() if isinstance(meta, dict) else ""
+    if not source_url:
+        console.print(f"[bold red]Skill '{name}' has no source-url — not installed from a URL.[/bold red]")
+        return
+    await _install_skill(ctx, source_url, force=True)
+
+
+async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
+    """Manage persistent exec approval patterns."""
+    from co_cli._exec_approvals import load_approvals, save_approvals
+
+    path = ctx.deps.exec_approvals_path
+    sub = args.strip().split(maxsplit=1)
+    subcmd = sub[0].lower() if sub else "list"
+    subargs = sub[1] if len(sub) > 1 else ""
+
+    if subcmd == "list":
+        entries = load_approvals(path)
+        if not entries:
+            console.print("[dim]No persistent approvals saved.[/dim]")
+            return None
+        from rich.table import Table
+        table = Table(title="Persistent Exec Approvals", border_style="accent")
+        table.add_column("ID", style="accent")
+        table.add_column("Pattern")
+        table.add_column("Last Used")
+        for e in entries:
+            table.add_row(
+                e.get("id", "?"),
+                e.get("pattern", "?"),
+                (e.get("last_used_at") or e.get("created_at", "?"))[:19],
+            )
+        console.print(table)
+
+    elif subcmd == "clear":
+        entries = load_approvals(path)
+        if not entries:
+            console.print("[dim]No approvals to clear.[/dim]")
+            return None
+        if subargs:
+            # Clear specific entry by ID
+            entry_id = subargs.strip()
+            new_entries = [e for e in entries if e.get("id") != entry_id]
+            if len(new_entries) == len(entries):
+                console.print(f"[bold red]No approval with id:[/bold red] {entry_id}")
+            else:
+                save_approvals(path, new_entries)
+                console.print(f"[success]✓ Removed approval {entry_id}[/success]")
+        else:
+            # Clear all
+            save_approvals(path, [])
+            console.print(f"[success]✓ Cleared {len(entries)} approval(s)[/success]")
+
+    else:
+        console.print(f"[bold red]Unknown /approvals subcommand:[/bold red] {subcmd}")
+        console.print("[dim]Usage: /approvals [list|clear [id]][/dim]")
+
+    return None
+
+
+async def _cmd_background(ctx: CommandContext, args: str) -> None:
+    """Run a command in the background. Usage: /background <cmd>"""
+    cmd = args.strip()
+    if not cmd:
+        console.print("[bold red]Usage:[/bold red] /background <command>")
+        console.print("[dim]Example: /background uv run pytest[/dim]")
+        return None
+
+    runner = getattr(ctx.deps, "task_runner", None)
+    if runner is None:
+        console.print("[bold red]Task runner not available.[/bold red]")
+        return None
+
+    try:
+        task_id = await runner.start_task(cmd, str(Path.cwd()))
+        console.print(f"[success][{task_id}] started[/success]")
+        console.print(f"[dim]Use /status {task_id} to check progress.[/dim]")
+    except Exception as e:
+        console.print(f"[bold red]Failed to start background task:[/bold red] {e}")
+    return None
+
+
+async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
+    """List background tasks. Usage: /tasks [status]"""
+    runner = getattr(ctx.deps, "task_runner", None)
+    if runner is None:
+        console.print("[bold red]Task runner not available.[/bold red]")
+        return None
+
+    status_filter = args.strip() or None
+    tasks = runner.list_tasks(status_filter)
+
+    if not tasks:
+        filter_note = f" with status={status_filter}" if status_filter else ""
+        console.print(f"[dim]No background tasks{filter_note}.[/dim]")
+        return None
+
+    from rich.table import Table
+    label = f"Background Tasks ({status_filter or 'all'})"
+    table = Table(title=label, border_style="accent", expand=False)
+    table.add_column("Task ID", style="accent")
+    table.add_column("Status")
+    table.add_column("Command")
+    table.add_column("Started")
+    for t in tasks:
+        started = (t.get("started_at") or "queued")[:19]
+        table.add_row(t.get("task_id", ""), t.get("status", ""), t.get("command", ""), started)
+    console.print(table)
+    return None
+
+
+async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
+    """Cancel a running background task. Usage: /cancel <task_id>"""
+    task_id = args.strip()
+    if not task_id:
+        console.print("[bold red]Usage:[/bold red] /cancel <task_id>")
+        return None
+
+    runner = getattr(ctx.deps, "task_runner", None)
+    if runner is None:
+        console.print("[bold red]Task runner not available.[/bold red]")
+        return None
+
+    meta = runner.get_task(task_id)
+    if meta is None:
+        console.print(f"[bold red]Task not found:[/bold red] {task_id}")
+        return None
+
+    from co_cli.background import TaskStatus
+    if meta.get("status") != TaskStatus.running.value:
+        console.print(f"[dim]Task {task_id} is not running (status={meta.get('status')}).[/dim]")
+        return None
+
+    cancelled = await runner.cancel_task(task_id)
+    if cancelled:
+        console.print(f"[success]✓ Cancelled task {task_id}[/success]")
+    else:
+        console.print(f"[dim]Task {task_id} was not running.[/dim]")
+    return None
+
+
+# -- Skills loader ---------------------------------------------------------
+
+
+def _diagnose_requires_failures(requires: dict, settings: Any = None) -> list[str]:
+    """Evaluate the requires block and return human-readable failure strings.
+
+    Empty list means all requirements are met.
+    """
+    failures: list[str] = []
+
+    bins = requires.get("bins", [])
+    if bins:
+        missing = [b for b in bins if not shutil.which(b)]
+        if missing:
+            failures.append(f"missing bins: {', '.join(missing)}")
+
+    any_bins = requires.get("anyBins", [])
+    if any_bins and not any(shutil.which(b) for b in any_bins):
+        failures.append(f"none of anyBins found: {', '.join(any_bins)}")
+
+    env_vars = requires.get("env", [])
+    if env_vars:
+        missing_env = [e for e in env_vars if not os.getenv(e)]
+        if missing_env:
+            failures.append(f"missing env vars: {', '.join(missing_env)}")
+
+    platforms = requires.get("os", [])
+    if platforms and not sys.platform.startswith(tuple(platforms)):
+        failures.append(f"os not satisfied: need {platforms}, got {sys.platform}")
+
+    settings_fields = requires.get("settings", [])
+    if settings_fields:
+        if settings is None:
+            failures.append(f"missing settings: {', '.join(settings_fields)}")
+        else:
+            missing_settings = [f for f in settings_fields if not getattr(settings, f, None)]
+            if missing_settings:
+                failures.append(f"missing settings: {', '.join(missing_settings)}")
+
+    return failures
+
+
+def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
+    """Evaluate the requires block. Returns True when all conditions are met."""
+    # bins: all listed binaries must exist on PATH
+    bins = requires.get("bins", [])
+    if bins and not all(shutil.which(b) for b in bins):
+        logger.info(f"Skipping skill {name}: requires bins not satisfied: {bins}")
+        return False
+
+    # anyBins: at least one binary must exist on PATH (only checked when non-empty)
+    any_bins = requires.get("anyBins", [])
+    if any_bins and not any(shutil.which(b) for b in any_bins):
+        logger.info(f"Skipping skill {name}: requires anyBins not satisfied: {any_bins}")
+        return False
+
+    # env: all listed environment variables must be set (non-empty)
+    env_vars = requires.get("env", [])
+    if env_vars and not all(os.getenv(e) for e in env_vars):
+        logger.info(f"Skipping skill {name}: requires env not satisfied: {env_vars}")
+        return False
+
+    # os: sys.platform must start with one of the listed platform prefixes
+    platforms = requires.get("os", [])
+    if platforms and not sys.platform.startswith(tuple(platforms)):
+        logger.info(f"Skipping skill {name}: requires os not satisfied: {platforms}")
+        return False
+
+    # settings: named Settings fields must be non-None and non-empty.
+    # Fail closed: if settings gate is required but settings object is unavailable, skip the skill.
+    settings_fields = requires.get("settings", [])
+    if settings_fields:
+        if settings is None or not all(getattr(settings, f, None) for f in settings_fields):
+            logger.info(f"Skipping skill {name}: requires settings not satisfied: {settings_fields}")
+            return False
+
+    return True
+
+
+def _load_skill_file(
+    path: Path,
+    result: dict[str, SkillCommand],
+    reserved: set[str],
+    settings: Any = None,
+) -> None:
+    """Parse a single skill .md file and add to result dict if valid."""
+    name = path.stem
+    try:
+        text = path.read_text(encoding="utf-8")
+        meta, body = parse_frontmatter(text)
+
+        if name in reserved:
+            logger.warning(f"Skill '{name}' conflicts with built-in command, skipping")
+            return
+
+        requires = meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+        if not _check_requires(name, requires, settings):
+            return
+
+        # Security scan — warning-only for existing/developer-owned assets
+        scan_warnings = _scan_skill_content(text)
+        for w in scan_warnings:
+            logger.warning(f"Security scan warning in {path}: {w}")
+
+        # Extract skill-env with type guard; filter blocked and non-string values
+        raw_env = meta.get("skill-env", {})
+        skill_env: dict[str, str] = {}
+        if isinstance(raw_env, dict):
+            for k, v in raw_env.items():
+                if isinstance(k, str) and isinstance(v, str) and k not in _SKILL_ENV_BLOCKED:
+                    skill_env[k] = v
+
+        # Extract allowed-tools with type guard; non-list values default to empty
+        raw_allowed = meta.get("allowed-tools", [])
+        allowed_tools: list[str] = raw_allowed if isinstance(raw_allowed, list) else []
+
+        result[name] = SkillCommand(
+            name=name,
+            description=meta.get("description", ""),
+            body=body.strip(),
+            argument_hint=meta.get("argument-hint", ""),
+            user_invocable=meta.get("user-invocable", True),
+            disable_model_invocation=meta.get("disable-model-invocation", False),
+            requires=requires,
+            skill_env=skill_env,
+            allowed_tools=allowed_tools,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load skill {path}: {e}")
+
+
+def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillCommand]:
+    """Scan skills directories and return a dict of SkillCommand objects.
+
+    Package-default skills (co_cli/skills/) are loaded first.
+    Project-local skills (.co-cli/skills/) are loaded second and override
+    package-default skills on name collision (project customization path).
+
+    Reserved names are derived from COMMANDS.keys() at call time so newly
+    added built-in commands are automatically protected without touching this
+    function.
+    """
+    result: dict[str, SkillCommand] = {}
+    reserved = set(COMMANDS.keys())
+
+    # Package-default skills (shipped inside the package — available from any directory)
+    default_dir = Path(__file__).parent / "skills"
+    if default_dir.exists():
+        for path in sorted(default_dir.glob("*.md")):
+            _load_skill_file(path, result, reserved, settings)
+
+    # Project-local skills (override package-default on name collision)
+    if skills_dir.exists():
+        for path in sorted(skills_dir.glob("*.md")):
+            _load_skill_file(path, result, reserved, settings)
+
+    return result
+
+
+# -- Shell preprocessing ---------------------------------------------------
+
+_SHELL_BLOCK_RE = re.compile(r'!`([^`\n]+)`')
+
+
+async def _preprocess_shell_blocks(
+    body: str, *, max_blocks: int = 3, timeout: float = 5.0
+) -> str:
+    """Evaluate !`...` shell blocks in a skill body before the LLM sees it.
+
+    Replaces up to max_blocks shell blocks with their stdout output (trimmed).
+    Blocks beyond max_blocks are left unreplaced in the body.
+    On error or timeout, the block is replaced with empty string.
+
+    Note: uses /bin/sh (POSIX mode). Skill authors must use POSIX sh syntax
+    in shell blocks — zsh-specific constructs will not work here.
+    """
+    matches = list(_SHELL_BLOCK_RE.finditer(body))
+    for match in matches[:max_blocks]:
+        cmd = match.group(1)
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            output = stdout.decode().strip()
+        except Exception as e:
+            logger.warning(f"Shell block failed: {cmd!r}: {e}")
+            output = ""
+        body = body.replace(match.group(0), output, 1)
+    return body
 
 
 # -- Registry --------------------------------------------------------------
@@ -278,12 +1086,20 @@ async def _cmd_model(ctx: CommandContext, args: str) -> None:
 COMMANDS: dict[str, SlashCommand] = {
     "help": SlashCommand("help", "List available slash commands", _cmd_help),
     "clear": SlashCommand("clear", "Clear conversation history", _cmd_clear),
+    "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
     "status": SlashCommand("status", "Show system health", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
+    "approvals": SlashCommand("approvals", "Manage persistent exec approval patterns", _cmd_approvals),
+    "checkpoint": SlashCommand("checkpoint", "Create a workspace snapshot", _cmd_checkpoint),
+    "rewind": SlashCommand("rewind", "Restore a workspace snapshot", _cmd_rewind),
+    "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),
+    "background": SlashCommand("background", "Run a command in the background", _cmd_background),
+    "tasks": SlashCommand("tasks", "List background tasks", _cmd_tasks),
+    "cancel": SlashCommand("cancel", "Cancel a running background task", _cmd_cancel),
 }
 
 
@@ -297,6 +1113,10 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
       - handled=False  → input was not a slash command, caller should proceed normally
       - handled=True, new_history=None → command executed, history unchanged
       - handled=True, new_history=list → command executed, caller must rebind history
+
+    When a skill matches, ctx.skill_body is set to the (substituted) skill body
+    and (True, None) is returned. The caller must check ctx.skill_body and fall
+    through to the LLM turn instead of continuing the command loop.
     """
     if not raw_input.startswith("/"):
         return False, None
@@ -306,10 +1126,38 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
     args = parts[1] if len(parts) > 1 else ""
 
     cmd = COMMANDS.get(name)
-    if cmd is None:
-        console.print(f"[bold red]Unknown command:[/bold red] /{name}")
-        console.print("[dim]Type /help to see available commands.[/dim]")
+    if cmd is not None:
+        result = await cmd.handler(ctx, args)
+        return True, result
+
+    # Check skill registry after built-in commands (skills cannot shadow builtins)
+    skill = SKILL_COMMANDS.get(name)
+    if skill is not None:
+        # Warn if env from a previous skill dispatch wasn't cleared (double dispatch guard)
+        if ctx.deps.active_skill_env:
+            logger.warning(
+                "dispatch: active_skill_env non-empty at skill match — double dispatch in one turn?"
+            )
+        ctx.deps.active_skill_env = dict(skill.skill_env)
+        # Propagate per-skill tool grants — cleared by chat_loop() after run_turn()
+        ctx.deps.active_skill_allowed_tools = set(skill.allowed_tools)
+        body = skill.body
+        if args:
+            args_list = args.split()
+            if "$ARGUMENTS" in body:
+                # Structured substitution: replace placeholders
+                body = body.replace("$ARGUMENTS", args)
+                body = body.replace("$0", name)
+                for i, arg in reversed(list(enumerate(args_list, 1))):
+                    body = body.replace(f"${i}", arg)
+            else:
+                # Backward-compat: append args after body
+                body = body.rstrip() + "\n" + args
+        # Shell preprocessing — evaluate !`...` blocks before handing to LLM
+        body = await _preprocess_shell_blocks(body)
+        ctx.skill_body = body
         return True, None
 
-    result = await cmd.handler(ctx, args)
-    return True, result
+    console.print(f"[bold red]Unknown command:[/bold red] /{name}")
+    console.print("[dim]Type /help to see available commands.[/dim]")
+    return True, None

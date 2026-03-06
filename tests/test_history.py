@@ -47,8 +47,8 @@ def _tool_return(name: str, content: str | dict, call_id: str = "c1") -> ModelRe
     ])
 
 
-def _real_run_context(model, *, max_history_messages=40, summarization_model=""):
-    """Build a real RunContext for truncate_history_window tests."""
+def _real_run_context(model, *, max_history_messages=40, summarization_model="", tool_output_trim_chars=2000):
+    """Build a real RunContext for history processor tests."""
     from pydantic_ai._run_context import RunContext
     from co_cli.deps import CoDeps
     from co_cli.shell_backend import ShellBackend
@@ -57,7 +57,7 @@ def _real_run_context(model, *, max_history_messages=40, summarization_model="")
         shell=ShellBackend(),
         session_id="test-history",
         max_history_messages=max_history_messages,
-        tool_output_trim_chars=2000,
+        tool_output_trim_chars=tool_output_trim_chars,
         summarization_model=summarization_model,
     )
     return RunContext(
@@ -72,9 +72,9 @@ def _real_run_context(model, *, max_history_messages=40, summarization_model="")
 # ---------------------------------------------------------------------------
 
 
-def test_trim_long_string_truncated(monkeypatch):
+def test_trim_long_string_truncated():
     """Long string content is truncated with marker."""
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 50)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=50)
     long_content = "a" * 200
     msgs: list[ModelMessage] = [
         _user("q"),
@@ -83,7 +83,7 @@ def test_trim_long_string_truncated(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert isinstance(part.content, str)
     assert len(part.content) < 200
@@ -91,9 +91,9 @@ def test_trim_long_string_truncated(monkeypatch):
     assert "200 chars" in part.content
 
 
-def test_trim_dict_content_truncated(monkeypatch):
+def test_trim_dict_content_truncated():
     """Dict content is JSON-serialised, truncated, becomes a string."""
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 30)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=30)
     big_dict = {"display": "x" * 200, "count": 5}
     msgs: list[ModelMessage] = [
         _user("q"),
@@ -102,28 +102,28 @@ def test_trim_dict_content_truncated(monkeypatch):
         _user("more"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert isinstance(part.content, str)
     assert "truncated" in part.content
 
 
-def test_trim_last_exchange_protected(monkeypatch):
+def test_trim_last_exchange_protected():
     """The last 2 messages (current turn) are never trimmed."""
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 10)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=10)
     long_content = "z" * 500
     msgs: list[ModelMessage] = [
         _user("q"),
         _tool_return("shell", long_content),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert part.content == long_content
 
 
-def test_trim_preserves_tool_name_and_call_id(monkeypatch):
+def test_trim_preserves_tool_name_and_call_id():
     """After truncation, tool_name and tool_call_id are preserved."""
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 10)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=10)
     msgs: list[ModelMessage] = [
         _user("q"),
         ModelRequest(parts=[
@@ -137,21 +137,21 @@ def test_trim_preserves_tool_name_and_call_id(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert part.tool_name == "run_shell_command"
     assert part.tool_call_id == "call_abc123"
     assert "truncated" in part.content
 
 
-def test_trim_exact_threshold_not_truncated(monkeypatch):
+def test_trim_exact_threshold_not_truncated():
     """Content of exactly threshold chars is preserved (boundary: > not >=).
 
     The check is `if length > threshold`, so content equaling the threshold
     must pass through unchanged.
     """
     threshold = 100
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", threshold)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=threshold)
     exact_content = "x" * threshold
     msgs: list[ModelMessage] = [
         _user("q"),
@@ -160,7 +160,7 @@ def test_trim_exact_threshold_not_truncated(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert part.content == exact_content, (
         f"Content of exactly {threshold} chars should NOT be truncated "
@@ -168,10 +168,10 @@ def test_trim_exact_threshold_not_truncated(monkeypatch):
     )
 
 
-def test_trim_one_over_threshold_is_truncated(monkeypatch):
+def test_trim_one_over_threshold_is_truncated():
     """Content of threshold+1 chars is truncated (strict boundary check)."""
     threshold = 100
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", threshold)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=threshold)
     over_content = "x" * (threshold + 1)
     msgs: list[ModelMessage] = [
         _user("q"),
@@ -180,7 +180,7 @@ def test_trim_one_over_threshold_is_truncated(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert "truncated" in part.content, (
         f"Content of {threshold + 1} chars (one over threshold {threshold}) "
@@ -188,9 +188,9 @@ def test_trim_one_over_threshold_is_truncated(monkeypatch):
     )
 
 
-def test_trim_zero_threshold_disables_truncation(monkeypatch):
+def test_trim_zero_threshold_disables_truncation():
     """threshold=0 disables truncation entirely (returns messages unchanged)."""
-    monkeypatch.setattr("co_cli.config.settings.tool_output_trim_chars", 0)
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=0)
     huge_content = "a" * 100_000
     msgs: list[ModelMessage] = [
         _user("q"),
@@ -199,7 +199,7 @@ def test_trim_zero_threshold_disables_truncation(monkeypatch):
         _user("next"),
         _assistant("done"),
     ]
-    result = truncate_tool_returns(msgs)
+    result = truncate_tool_returns(ctx, msgs)
     part = result[1].parts[0]
     assert part.content == huge_content, (
         "threshold=0 should disable truncation, but content was modified"
@@ -219,7 +219,7 @@ async def test_summarize_messages():
     """
     from co_cli.agent import get_agent
 
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
 
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
@@ -231,6 +231,39 @@ async def test_summarize_messages():
     assert isinstance(summary, str)
     assert len(summary) > 10
     assert "docker" in summary.lower() or "container" in summary.lower()
+
+
+@pytest.mark.asyncio
+async def test_summarize_messages_with_dedicated_model():
+    """summarize_messages works end-to-end with the dedicated summarization model.
+
+    Skips gracefully when the model is not installed or Ollama is unreachable.
+    Delivery is complete when the test passes (not just skips) on a machine
+    where the model is installed.
+    """
+    import httpx
+    from co_cli.agents._factory import make_subagent_model
+
+    MODEL = "qwen3.5:35b-a3b-q4_k_m-summarize"
+    try:
+        resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
+        available = {m["name"] for m in resp.json().get("models", [])}
+        if not any(m == MODEL or m.startswith(MODEL.split(":")[0] + ":") for m in available):
+            pytest.skip(f"Model {MODEL!r} not installed")
+    except Exception:
+        pytest.skip("Ollama not reachable")
+
+    model = make_subagent_model(MODEL, "ollama", "http://localhost:11434")
+    msgs = [
+        _user("What is Docker?"),
+        _assistant("Docker is a containerisation platform that uses OS-level virtualisation."),
+        _user("How do I install it on Ubuntu?"),
+        _assistant("Run: sudo apt-get install docker-ce docker-ce-cli containerd.io"),
+    ]
+    result = await summarize_messages(msgs, model)
+    assert isinstance(result, str)
+    assert len(result) > 10
+    assert "docker" in result.lower() or "container" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +278,7 @@ async def test_truncate_history_window_triggers_compaction():
     Requires a running LLM provider.
     """
     from co_cli.agent import get_agent
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
 
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
@@ -295,7 +328,7 @@ async def test_compact_produces_two_message_history():
     from co_cli.shell_backend import ShellBackend
     from co_cli._commands import dispatch, CommandContext
 
-    agent, _, tool_names = get_agent()
+    agent, _, tool_names, _ = get_agent()
     deps = CoDeps(
         shell=ShellBackend(),
         session_id="test-compact",
@@ -391,7 +424,7 @@ async def test_summarize_messages_personality_active():
     """
     from co_cli.agent import get_agent
 
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
 
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
@@ -548,3 +581,35 @@ async def test_policy_runner_retries_exhausted_returns_none(monkeypatch):
     assert result is None
     # 1 initial + 2 retries = 3 total calls
     assert call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# compaction personality guardrail — no LLM provider needed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compaction_excludes_personality_addendum() -> None:
+    """With personality_active=False, _PERSONALITY_COMPACTION_ADDENDUM is not in the prompt."""
+    from co_cli._history import _PERSONALITY_COMPACTION_ADDENDUM, summarize_messages
+
+    captured: list[str] = []
+
+    def capture_fn(messages, info):
+        for msg in messages:
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    captured.append(part.content)
+        return ModelResponse(parts=[TextPart(content="ok")])
+
+    model = FunctionModel(capture_fn)
+    msgs: list[ModelMessage] = [
+        _user("What is Docker?"),
+        _assistant("A containerization platform."),
+    ]
+    result = await summarize_messages(msgs, model, personality_active=False)
+    assert result == "ok"
+    assert len(captured) > 0, "FunctionModel was not called — prompt not captured"
+    assert not any(_PERSONALITY_COMPACTION_ADDENDUM in c for c in captured), (
+        f"Addendum leaked when personality_active=False: {captured}"
+    )

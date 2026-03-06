@@ -45,7 +45,7 @@ async def main() -> int:
     print("  E2E: Abort Marker Injection")
     print("=" * 60)
 
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     deps = make_eval_deps(session_id="e2e-abort-marker")
     deps._safety_state = SafetyState()
     frontend = SilentFrontend()

@@ -7,6 +7,8 @@ description: Verify DESIGN docs against current source code and fix inaccuracies
 
 Direct execution skill — no planning ceremony. Read doc → read source → diff claims → fix in-place.
 
+**If invoked after `/orchestrate-review`:** pass the docs flagged as `blocking` by Code Dev as explicit args — fixes P0 items first rather than rediscovering them during a full-scope pass. Example: `/sync-doc DESIGN-knowledge DESIGN-core`.
+
 ## Invocation
 
 ```
@@ -41,6 +43,15 @@ Read every file listed in the doc's Files section. Also read `co_cli/config.py` 
 
 If a file listed in the Files section does not exist, that itself is an inaccuracy (stale path).
 
+#### 2b2. Check source file docstrings and comments
+
+For every **Python source file** read in 2b, also scan its module-level docstring, function/class docstrings, and inline comments for stale API references. Fix stale docstrings/comments directly in the source file using the Edit tool. This is the mirror of 2c: 2c checks whether docs accurately describe code; 2b2 checks whether source-file prose accurately describes the code it lives in.
+
+Focus on:
+- Decorator names (e.g. `@agent.system_prompt` → `@agent.instructions`)
+- Function/method names referenced in docstrings
+- Behaviour descriptions that no longer match the implementation
+
 #### 2c. Check claims — inaccuracy patterns
 
 Check every factual claim against the source. Inaccuracy patterns to look for:
@@ -58,6 +69,7 @@ Check every factual claim against the source. Inaccuracy patterns to look for:
 | **Stale file path** | File listed in Files section has been moved or deleted |
 | **Missing coverage** | Shipped feature with no doc coverage at all (add a minimal description, don't over-document) |
 | **Stale cross-doc index** | `DESIGN-core.md` Component Docs table missing a `docs/DESIGN-*.md` file, or referencing a renamed/deleted one. Check applies only when `DESIGN-core.md` is in scope — glob actual `docs/DESIGN-*.md` files and diff against the table. |
+| **Stale term in out-of-scope docs** | A renamed API, decorator, or concept appears in DESIGN docs outside the explicit invocation scope. When an API rename is *confirmed* by reading source (not suspected), widen scope to grep all `docs/DESIGN-*.md` files for the old term. Announce the expansion before fixing: `⚠ Expanding scope: renaming <old> → <new> across all DESIGN docs.` |
 
 #### 2d. Fix in-place
 
@@ -93,7 +105,7 @@ If any doc had a stale file path in its Files section (source file doesn't exist
 
 ## Scope boundaries
 
-- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, or CLAUDE.md
+- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or any file under `docs/reference/`. The `docs/reference/` directory contains permanent review and research records that are never edited by sync-doc.
 - **Factual fixes only** — never restructure sections, rename headings, or change the doc's scope
 - **No new sections** unless a shipped feature has zero coverage anywhere in the doc
-- **No code changes** — if you find a code gap (e.g., a setting in the doc that's missing from `config.py`'s env_map), document it as `*(no env var — code gap)*` in the Config table, don't fix the code
+- **No code changes** — if you find a code gap (e.g., a setting in the doc that's missing from `config.py`'s env_map), document it as `*(no env var — code gap)*` in the Config table, don't fix the code. **Exception (step 2b2):** source-file docstring and comment fixes are required — when step 2b2 identifies stale API refs, decorator renames, or behaviour description mismatches in a source file's docstrings or inline comments, fix them directly in the source file using the Edit tool. Only docstring/comment text is in scope; functional logic changes remain forbidden.

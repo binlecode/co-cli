@@ -1,7 +1,7 @@
 """Prompt assembly for the Co CLI agent.
 
 Static system prompt: soul seed + rules + counter-steering.
-Personality is injected per turn via @agent.system_prompt, not here.
+Personality is injected per turn via @agent.instructions, not here.
 """
 
 import re
@@ -74,7 +74,7 @@ def assemble_prompt(
 
     Personality is NOT fully part of the static prompt — only the soul seed
     (identity declaration) is placed here as the opening anchor. The full
-    soul body + behaviors are injected per turn via ``@agent.system_prompt``.
+    soul body + behaviors are injected per turn via ``@agent.instructions``.
 
     Assembly order:
     1. Soul seed + character base memories (identity anchor)

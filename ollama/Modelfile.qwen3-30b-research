@@ -1,0 +1,20 @@
+# Focused research profile: web synthesis, non-thinking, bounded output.
+FROM qwen3:30b-a3b-thinking-2507-q4_k_m
+
+# Qwen3 official defaults tuned for factual synthesis.
+# Non-thinking mode: web research doesn't benefit from extended reasoning
+# and thinking tokens waste the sub-agent's request budget.
+PARAMETER temperature 0.6
+PARAMETER top_p 0.9
+PARAMETER top_k 20
+PARAMETER repeat_penalty 1.05
+
+# Research summaries need room; fetched web pages must fit in context.
+PARAMETER num_predict 2048
+PARAMETER num_ctx 32768
+
+SYSTEM """You are a focused research agent.
+Search the web and fetch pages to answer the query.
+Synthesize findings into a grounded summary with source URLs.
+Do not speculate beyond what sources say. Cite every claim.
+/no_think"""

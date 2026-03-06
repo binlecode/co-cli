@@ -4,15 +4,15 @@ This module provides tools for saving, recalling, and listing memories in the
 internal knowledge system. Memories are stored as markdown files with YAML
 frontmatter in .co-cli/knowledge/.
 
-Retrieval uses grep-based search for MVP (<200 memories). FTS5 search is
-available when knowledge_search_backend is 'fts5' or 'hybrid' and
-knowledge_index is set in deps.
+Retrieval uses FTS5 search when knowledge_search_backend is 'fts5' or 'hybrid'
+and knowledge_index is set in deps. Falls back to grep-based search otherwise.
 """
 
 import logging
+import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,11 +21,14 @@ _LINE_PREFIX_RE = re.compile(r"(^|\n)\d+\u2192 ", re.MULTILINE)
 _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
 import yaml
+from opentelemetry import trace as otel_trace
 from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
 from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.deps import CoDeps
+
+_TRACER = otel_trace.get_tracer("co.memory")
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +140,31 @@ def _slugify(text: str) -> str:
     return slug.strip("-")[:50]
 
 
+_HEDGING_PATTERNS: frozenset[str] = frozenset({
+    "i think", "maybe", "probably", "might", "not sure",
+    "possibly", "i believe", "could be",
+})
+
+_CERTAIN_PATTERNS: frozenset[str] = frozenset({
+    "always", "never", "definitely", "i always", "i never",
+    "i use", "i prefer", "i don't", "i do not",
+})
+
+
+def _classify_certainty(content: str) -> str:
+    """Classify memory content into certainty bucket based on keyword heuristics.
+
+    Returns "low" if hedging language detected, "high" if certain assertions
+    detected, "medium" as default.
+    """
+    lower = content.lower()
+    if any(phrase in lower for phrase in _HEDGING_PATTERNS):
+        return "low"
+    if any(phrase in lower for phrase in _CERTAIN_PATTERNS):
+        return "high"
+    return "medium"
+
+
 def _detect_provenance(tags: list[str] | None) -> str:
     """Detect if memory was auto-saved (detected) or explicitly requested (user-told).
 
@@ -178,12 +206,38 @@ def _parse_created(created_str: str) -> datetime:
     return datetime.fromisoformat(created_str.replace("Z", "+00:00"))
 
 
+def _decay_multiplier(ts_iso: str, half_life_days: int) -> float:
+    """Compute exponential decay weight for a memory's age.
+
+    Returns a value in [0, 1]:
+      - age_days == 0 → 1.0 (no decay)
+      - age_days == half_life_days → ~0.5
+      - future-dated → 1.0 (clock-skew guard)
+
+    Args:
+        ts_iso: ISO8601 creation timestamp string
+        half_life_days: Number of days for weight to halve
+    """
+    try:
+        created = _parse_created(ts_iso)
+        now = datetime.now(timezone.utc)
+        age_days = max(0, (now - created).days)
+        return max(0.0, min(1.0, math.exp(-math.log(2) * age_days / half_life_days)))
+    except Exception:
+        return 1.0
+
+
 def _grep_recall(
     memories: list[MemoryEntry],
     query: str,
     max_results: int,
 ) -> list[MemoryEntry]:
-    """Case-insensitive substring search across memory content and tags."""
+    """Case-insensitive substring search across memory content and tags.
+
+    Sorts by recency (updated or created, newest first).
+    Temporal decay multiplier is not applied here — grep backend already
+    sorts by recency. Decay scoring is applied in the FTS5 path only.
+    """
     query_lower = query.lower()
     matches = [
         m
@@ -361,6 +415,7 @@ def _update_existing_memory(
     existing_fm["tags"] = merged_tags
     existing_fm["provenance"] = _detect_provenance(merged_tags)
     existing_fm["auto_category"] = _detect_category(merged_tags)
+    existing_fm["certainty"] = _classify_certainty(new_content)
     existing_fm.setdefault("kind", "memory")
 
     # Clean up dead metadata from old files
@@ -383,320 +438,6 @@ def _update_existing_memory(
         "path": str(entry.path),
         "memory_id": entry.id,
         "action": "consolidated",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Decay strategies
-# ---------------------------------------------------------------------------
-
-
-async def _decay_summarize(
-    ctx: RunContext[CoDeps],
-    memory_dir: Path,
-    memories_to_decay: list[MemoryEntry],
-    all_memories: list[MemoryEntry],
-) -> dict[str, Any]:
-    """Decay strategy: Consolidate oldest memories into a simple summary.
-
-    Note: For MVP, uses simple concatenation rather than LLM summarization.
-
-    Args:
-        ctx: Agent runtime context
-        memory_dir: Path to memories directory
-        memories_to_decay: List of oldest memories to decay
-        all_memories: Full loaded memory list (used to compute next ID)
-
-    Returns:
-        dict with keys:
-            - decayed: Number of memories decayed
-            - strategy: "summarize"
-    """
-    if not memories_to_decay:
-        return {"decayed": 0, "strategy": "summarize"}
-
-    # Simple concatenation (MVP approach — no LLM call needed)
-    summary_lines = [f"Consolidated {len(memories_to_decay)} old memories:", ""]
-    for m in memories_to_decay:
-        tags_str = f" [tags: {', '.join(m.tags)}]" if m.tags else ""
-        summary_lines.append(f"- {m.content}{tags_str}")
-
-    summary_text = "\n".join(summary_lines)
-
-    # Delete original memory files
-    deleted_count = 0
-    for m in memories_to_decay:
-        try:
-            m.path.unlink()
-            logger.info(f"Deleted memory {m.id} during decay")
-            deleted_count += 1
-        except Exception as e:
-            logger.warning(f"Failed to delete memory {m.id}: {e}")
-
-    # Save summary as new memory (next ID from loaded list)
-    max_id = max((m.id for m in all_memories), default=0)
-    memory_id = max_id + 1
-    slug = _slugify(summary_text[:50])
-    filename = f"{memory_id:03d}-{slug}.md"
-
-    frontmatter = {
-        "id": memory_id,
-        "kind": "memory",
-        "created": datetime.now(timezone.utc).isoformat(),
-        "tags": ["_consolidated", "_auto_decay"],
-        "provenance": "auto_decay",
-        "auto_category": None,
-    }
-
-    md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
-        f"{summary_text.strip()}\n"
-    )
-    file_path = memory_dir / filename
-    file_path.write_text(md_content, encoding="utf-8")
-
-    logger.info(
-        f"Saved consolidated memory {memory_id} (summarized {deleted_count} memories)"
-    )
-
-    # FTS: index the new summary file; deleted originals are evicted by the
-    # remove_stale() call in save_memory() that follows this function.
-    if ctx.deps.knowledge_index is not None:
-        try:
-            import hashlib as _hashlib
-            ctx.deps.knowledge_index.index(
-                source="memory",
-                kind="memory",
-                path=str(file_path),
-                title=filename,
-                content=summary_text.strip(),
-                mtime=file_path.stat().st_mtime,
-                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                tags=" ".join(frontmatter["tags"]),
-                created=frontmatter["created"],
-            )
-        except Exception as e:
-            logger.warning(f"Failed to index decay summary {memory_id}: {e}")
-
-    return {"decayed": deleted_count, "strategy": "summarize"}
-
-
-async def _decay_cut(
-    ctx: RunContext[CoDeps],
-    memory_dir: Path,
-    memories_to_decay: list[MemoryEntry],
-) -> dict[str, Any]:
-    """Decay strategy: Delete oldest memories permanently.
-
-    Args:
-        ctx: Agent runtime context
-        memory_dir: Path to memories directory
-        memories_to_decay: List of oldest memories to decay
-
-    Returns:
-        dict with keys:
-            - decayed: Number of memories decayed
-            - strategy: "cut"
-    """
-    if not memories_to_decay:
-        return {"decayed": 0, "strategy": "cut"}
-
-    deleted = 0
-    for m in memories_to_decay:
-        try:
-            m.path.unlink()
-            logger.info(f"Deleted memory {m.id} during cut decay")
-            deleted += 1
-        except Exception as e:
-            logger.warning(f"Failed to delete memory {m.id}: {e}")
-
-    return {"decayed": deleted, "strategy": "cut"}
-
-
-async def _decay_memories(
-    ctx: RunContext[CoDeps],
-    memory_dir: Path,
-    memories: list[MemoryEntry],
-) -> dict[str, Any]:
-    """Trigger memory decay based on configured strategy.
-
-    Args:
-        ctx: Agent runtime context
-        memory_dir: Path to memories directory
-        memories: Already-loaded list of all memories
-
-    Returns:
-        dict with keys:
-            - decayed: Number of memories decayed
-            - strategy: "summarize" | "cut"
-    """
-    total_count = len(memories)
-    max_count = ctx.deps.memory_max_count
-    excess = total_count - max_count
-
-    # Calculate how many to decay: at least enough to get below the limit
-    decay_count = int(total_count * ctx.deps.memory_decay_percentage)
-    if decay_count == 0:
-        decay_count = 1  # Always decay at least 1 when triggered
-
-    strategy = ctx.deps.memory_decay_strategy
-
-    # Summarize creates 1 new file, so net removal = decay_count - 1.
-    # Ensure net removal >= excess so total drops below the limit.
-    if strategy == "summarize":
-        min_needed = excess + 1  # +1 accounts for the summary file created
-        decay_count = max(decay_count, min_needed)
-    else:
-        decay_count = max(decay_count, excess)
-
-    # Get oldest unprotected memories
-    oldest = sorted(
-        [m for m in memories if not m.decay_protected],
-        key=lambda m: m.created,
-    )[:decay_count]
-
-    # Execute decay strategy
-    if strategy == "summarize":
-        return await _decay_summarize(ctx, memory_dir, oldest, memories)
-    elif strategy == "cut":
-        return await _decay_cut(ctx, memory_dir, oldest)
-    else:
-        logger.warning(
-            f"Unknown decay strategy: {strategy}, using summarize"
-        )
-        return await _decay_summarize(ctx, memory_dir, oldest, memories)
-
-
-# ---------------------------------------------------------------------------
-# Internal write path (no decay — used by tool and signal detector)
-# ---------------------------------------------------------------------------
-
-
-async def _save_memory_impl(
-    deps: CoDeps,
-    content: str,
-    tags: list[str] | None,
-    related: list[str] | None,
-) -> dict[str, Any]:
-    """Load memories, dedup-check, and write a new memory file (or update existing).
-
-    Intentionally excludes decay — decay requires a RunContext for LLM
-    summarization and runs only on the explicit save_memory() tool call.
-    Called by both save_memory() and the signal detector auto-save path.
-
-    Args:
-        deps: CoDeps with memory config scalars (no RunContext needed).
-        content: Memory text in third person.
-        tags: Categorization tags.
-        related: Slugs of related memories for knowledge linking.
-
-    Returns:
-        dict with display, path, memory_id, action keys.
-    """
-    memory_dir = Path.cwd() / ".co-cli/knowledge"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-
-    memories = _load_memories(memory_dir)
-
-    # Step 1: Check for duplicates in recent memories
-    cutoff = datetime.now(timezone.utc) - timedelta(
-        days=deps.memory_dedup_window_days
-    )
-    recent = sorted(
-        [m for m in memories if _parse_created(m.created) >= cutoff],
-        key=lambda m: m.created,
-        reverse=True,
-    )[:10]
-
-    is_dup, match, similarity = _check_duplicate(
-        content, recent, threshold=deps.memory_dedup_threshold
-    )
-
-    # Step 2: If duplicate found, update existing memory
-    if is_dup and match is not None:
-        logger.info(
-            f"Duplicate detected (similarity: {similarity:.1f}%) "
-            f"- updating memory {match.id}"
-        )
-        result = _update_existing_memory(match, content, tags)
-        result["similarity"] = similarity
-        if deps.knowledge_index is not None:
-            try:
-                import hashlib as _hashlib
-                raw = match.path.read_text(encoding="utf-8")
-                fm, body = parse_frontmatter(raw)
-                file_hash = _hashlib.sha256(raw.encode()).hexdigest()
-                deps.knowledge_index.index(
-                    source="memory",
-                    kind=fm.get("kind", "memory"),
-                    path=str(match.path),
-                    title=_slugify(content[:50]),
-                    content=body.strip(),
-                    mtime=match.path.stat().st_mtime,
-                    hash=file_hash,
-                    tags=" ".join(fm.get("tags", [])),
-                    category=fm.get("auto_category"),
-                    created=fm.get("created"),
-                    updated=fm.get("updated"),
-                )
-            except Exception as e:
-                logger.warning(f"Failed to reindex consolidated memory {match.id}: {e}")
-        return result
-
-    # Step 3: No duplicate — create new memory
-    max_id = max((m.id for m in memories), default=0)
-    memory_id = max_id + 1
-    slug = _slugify(content[:50])
-    filename = f"{memory_id:03d}-{slug}.md"
-
-    frontmatter: dict[str, Any] = {
-        "id": memory_id,
-        "kind": "memory",
-        "created": datetime.now(timezone.utc).isoformat(),
-        "tags": tags or [],
-        "provenance": _detect_provenance(tags),
-        "auto_category": _detect_category(tags),
-    }
-    if related:
-        frontmatter["related"] = related
-
-    md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
-        f"{content.strip()}\n"
-    )
-
-    file_path = memory_dir / filename
-    file_path.write_text(md_content, encoding="utf-8")
-
-    logger.info(f"Saved memory {memory_id} to {file_path}")
-
-    # FTS index integration — no-op when knowledge_index is None
-    if deps.knowledge_index is not None:
-        try:
-            import hashlib as _hashlib
-            deps.knowledge_index.index(
-                source="memory",
-                kind="memory",
-                path=str(file_path),
-                title=_slugify(content[:50]),
-                content=content.strip(),
-                mtime=file_path.stat().st_mtime,
-                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                tags=" ".join(tags or []),
-                category=_detect_category(tags),
-                created=frontmatter["created"],
-            )
-        except Exception as e:
-            logger.warning(f"Failed to index memory {memory_id}: {e}")
-
-    return {
-        "display": (
-            f"✓ Saved memory {memory_id}: {filename}\n"
-            f"Location: {file_path}"
-        ),
-        "path": str(file_path),
-        "memory_id": memory_id,
-        "action": "saved",
     }
 
 
@@ -750,35 +491,19 @@ async def save_memory(
         related: Slugs of related memories for knowledge linking
                  (e.g. ["003-user-prefers-pytest"]).
     """
-    result = await _save_memory_impl(ctx.deps, content, tags, related)
+    from co_cli.memory_lifecycle import persist_memory
 
-    # Decay only checked for new memories (consolidations don't change total count)
-    if result.get("action") == "saved":
-        memory_dir = Path.cwd() / ".co-cli/knowledge"
-        all_memories = _load_memories(memory_dir)
-        total_count = len(all_memories)
-
-        if total_count > ctx.deps.memory_max_count:
-            logger.info(
-                f"Memory limit exceeded ({total_count}/{ctx.deps.memory_max_count}) "
-                f"- triggering decay"
-            )
-            decay_result = await _decay_memories(ctx, memory_dir, all_memories)
-            decay_info = (
-                f"\n♻️ Decayed {decay_result['decayed']} old memories "
-                f"({decay_result['strategy']})"
-            )
-            result["display"] += decay_info
-
-            # FTS: remove stale entries for deleted files (rglob covers all subdirs)
-            if ctx.deps.knowledge_index is not None:
-                try:
-                    current_paths = {str(p) for p in memory_dir.rglob("*.md")}
-                    ctx.deps.knowledge_index.remove_stale(
-                        "memory", current_paths, directory=memory_dir
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to remove stale FTS entries: {e}")
+    with _TRACER.start_as_current_span("co.memory.save") as span:
+        span.set_attribute("memory.tags", ",".join(tags or []))
+        result = await persist_memory(ctx.deps, content, tags, related, on_failure="add", model=ctx.model)
+        span.set_attribute("memory.action", result.get("action", "unknown"))
+        span.set_attribute("memory.memory_id", result.get("memory_id", 0))
+        if "similarity" in result:
+            span.set_attribute("memory.dedup_similarity", result["similarity"])
+        if result.get("decay_triggered"):
+            span.set_attribute("memory.decay_triggered", True)
+            span.set_attribute("memory.decay_count", result.get("decay_count", 0))
+            span.set_attribute("memory.decay_strategy", result.get("decay_strategy", ""))
 
     return result
 
@@ -854,12 +579,23 @@ async def recall_memory(
             # Convert SearchResult → MemoryEntry for gravity + dedup + display
             memories = _load_memories(memory_dir)
             path_to_entry = {str(m.path): m for m in memories}
-            matches: list[MemoryEntry] = []
+            raw_matches: list[MemoryEntry] = []
             for r in fts_results:
                 entry = path_to_entry.get(r.path)
                 if entry is not None:
-                    matches.append(entry)
-            matches = matches[:max_results]
+                    raw_matches.append(entry)
+            # Apply temporal decay scoring (FTS5 path only).
+            # decay_protected entries are not penalized.
+            half_life = ctx.deps.memory_recall_half_life_days
+            scored: list[tuple[float, MemoryEntry]] = []
+            for entry in raw_matches:
+                if entry.decay_protected:
+                    weight = 1.0
+                else:
+                    weight = _decay_multiplier(entry.created, half_life)
+                scored.append((weight, entry))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            matches = [e for _, e in scored][:max_results]
         except Exception as e:
             logger.warning(f"FTS recall failed, falling back to grep: {e}")
             # Fall through to grep path
@@ -1166,31 +902,35 @@ async def update_memory(
             f"(body lines ~{positions}). Provide more context to make it unique."
         )
 
-    updated_body = body_text.replace(old_norm, new_norm, 1)
-    fm["updated"] = datetime.now(timezone.utc).isoformat()
-    md_content = (
-        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-        f"{updated_body.strip()}\n"
-    )
-    match.write_text(md_content, encoding="utf-8")
+    with _TRACER.start_as_current_span("co.memory.update") as span:
+        span.set_attribute("memory.slug", slug)
+        span.set_attribute("memory.action", "update")
 
-    if ctx.deps.knowledge_index is not None:
-        try:
-            import hashlib as _hashlib
-            ctx.deps.knowledge_index.index(
-                source="memory",
-                kind=fm.get("kind", "memory"),
-                path=str(match),
-                title=slug,
-                content=updated_body.strip(),
-                mtime=match.stat().st_mtime,
-                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                tags=" ".join(fm.get("tags", [])),
-                created=fm.get("created"),
-                updated=fm.get("updated"),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
+        updated_body = body_text.replace(old_norm, new_norm, 1)
+        fm["updated"] = datetime.now(timezone.utc).isoformat()
+        md_content = (
+            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+            f"{updated_body.strip()}\n"
+        )
+        match.write_text(md_content, encoding="utf-8")
+
+        if ctx.deps.knowledge_index is not None:
+            try:
+                import hashlib as _hashlib
+                ctx.deps.knowledge_index.index(
+                    source="memory",
+                    kind=fm.get("kind", "memory"),
+                    path=str(match),
+                    title=slug,
+                    content=updated_body.strip(),
+                    mtime=match.stat().st_mtime,
+                    hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                    tags=" ".join(fm.get("tags", [])),
+                    created=fm.get("created"),
+                    updated=fm.get("updated"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
 
     return {
         "display": f"Updated memory '{slug}'.\n{updated_body.strip()}",
@@ -1227,31 +967,35 @@ async def append_memory(
     raw = match.read_text(encoding="utf-8")
     fm, body = parse_frontmatter(raw)
 
-    updated_body = body.rstrip() + "\n" + content
-    fm["updated"] = datetime.now(timezone.utc).isoformat()
-    md_content = (
-        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-        f"{updated_body.strip()}\n"
-    )
-    match.write_text(md_content, encoding="utf-8")
+    with _TRACER.start_as_current_span("co.memory.append") as span:
+        span.set_attribute("memory.slug", slug)
+        span.set_attribute("memory.action", "append")
 
-    if ctx.deps.knowledge_index is not None:
-        try:
-            import hashlib as _hashlib
-            ctx.deps.knowledge_index.index(
-                source="memory",
-                kind=fm.get("kind", "memory"),
-                path=str(match),
-                title=slug,
-                content=updated_body.strip(),
-                mtime=match.stat().st_mtime,
-                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                tags=" ".join(fm.get("tags", [])),
-                created=fm.get("created"),
-                updated=fm.get("updated"),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
+        updated_body = body.rstrip() + "\n" + content
+        fm["updated"] = datetime.now(timezone.utc).isoformat()
+        md_content = (
+            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+            f"{updated_body.strip()}\n"
+        )
+        match.write_text(md_content, encoding="utf-8")
+
+        if ctx.deps.knowledge_index is not None:
+            try:
+                import hashlib as _hashlib
+                ctx.deps.knowledge_index.index(
+                    source="memory",
+                    kind=fm.get("kind", "memory"),
+                    path=str(match),
+                    title=slug,
+                    content=updated_body.strip(),
+                    mtime=match.stat().st_mtime,
+                    hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                    tags=" ".join(fm.get("tags", [])),
+                    created=fm.get("created"),
+                    updated=fm.get("updated"),
+                )
+            except Exception as e:
+                logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
 
     return {
         "display": f"Appended to '{slug}'.",

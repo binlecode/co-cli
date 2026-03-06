@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Model role governance**: Unified model selection behind `model_roles` role chains. `create_deps()` now resolves summarization via `get_role_head(settings.model_roles, "summarization")` instead of a standalone setting.
+- **Model role env vars**: Standardized on `CO_MODEL_ROLE_<ROLE>` (`REASONING`, `SUMMARIZATION`, `CODING`, `RESEARCH`, `ANALYSIS`). Removed the legacy `CO_CLI_SUMMARIZATION_MODEL` path.
+- **Role validation hardening**: Added explicit role-key validation (`VALID_MODEL_ROLES`) and reject-unknown behavior for `model_roles`.
+
+### Added
+- **Role governance tests**: Added `tests/test_model_roles_config.py` coverage for unknown role rejection, role-env parsing, and deps summarization-model derivation from `model_roles["summarization"]`.
+
 ## [0.4.5] - 2026-03-01
 
 ### Added

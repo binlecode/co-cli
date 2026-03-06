@@ -1,4 +1,4 @@
-"""Functional tests for MCP client integration (stdio transport).
+"""Functional tests for MCP client integration (stdio and HTTP transport).
 
 Tests cover agent wiring, config loading, and E2E server lifecycle.
 """
@@ -7,6 +7,7 @@ import json
 import os
 
 import pytest
+from pydantic import ValidationError
 
 from co_cli.config import MCPServerConfig, Settings, load_config
 from co_cli.agent import get_agent
@@ -29,28 +30,38 @@ def test_settings_defaults_have_mcp():
 
 def test_github_token_resolved_lazily(monkeypatch):
     """GitHub token is resolved at agent creation, not at config import time."""
+    from pydantic_ai.mcp import MCPServerStdio
     monkeypatch.setenv("GITHUB_TOKEN_BINLECODE", "ghp_test123")
-    agent, _, _ = get_agent(mcp_servers={
+    agent, _, _, _ = get_agent(mcp_servers={
         "github": MCPServerConfig(
             command="npx",
             args=["-y", "@modelcontextprotocol/server-github"],
         ),
     })
-    mcp = agent.toolsets[1].wrapped
-    assert mcp.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_test123"
+    mcp_inner = next(
+        (getattr(t, "wrapped", t) for t in agent.toolsets if isinstance(getattr(t, "wrapped", t), MCPServerStdio)),
+        None,
+    )
+    assert mcp_inner is not None
+    assert mcp_inner.env["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_test123"
 
 
 def test_github_token_absent_no_env(monkeypatch):
     """GitHub server gets no token env when GITHUB_TOKEN_BINLECODE is unset."""
+    from pydantic_ai.mcp import MCPServerStdio
     monkeypatch.delenv("GITHUB_TOKEN_BINLECODE", raising=False)
-    agent, _, _ = get_agent(mcp_servers={
+    agent, _, _, _ = get_agent(mcp_servers={
         "github": MCPServerConfig(
             command="npx",
             args=["-y", "@modelcontextprotocol/server-github"],
         ),
     })
-    mcp = agent.toolsets[1].wrapped
-    assert mcp.env is None or "GITHUB_PERSONAL_ACCESS_TOKEN" not in (mcp.env or {})
+    mcp_inner = next(
+        (getattr(t, "wrapped", t) for t in agent.toolsets if isinstance(getattr(t, "wrapped", t), MCPServerStdio)),
+        None,
+    )
+    assert mcp_inner is not None
+    assert mcp_inner.env is None or "GITHUB_PERSONAL_ACCESS_TOKEN" not in (mcp_inner.env or {})
 
 
 def test_env_var_override(tmp_path, monkeypatch):
@@ -89,7 +100,7 @@ def test_mcp_from_settings_file(tmp_path, monkeypatch):
 
 def test_agent_no_mcp():
     """get_agent() works without mcp_servers passed explicitly."""
-    agent, model_settings, tool_names = get_agent(mcp_servers={})
+    agent, model_settings, tool_names, _ = get_agent(mcp_servers={})
     assert len(tool_names) > 0
     mcp_count = sum(
         1 for t in agent.toolsets
@@ -106,7 +117,7 @@ def test_agent_with_mcp():
             args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
         ),
     }
-    agent, _, tool_names = get_agent(mcp_servers=mcp)
+    agent, _, tool_names, _ = get_agent(mcp_servers=mcp)
 
     mcp_count = sum(
         1 for t in agent.toolsets
@@ -122,7 +133,7 @@ def test_tool_prefixing():
     mcp = {
         "fs": MCPServerConfig(command="echo"),
     }
-    agent, _, _ = get_agent(mcp_servers=mcp)
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
 
     for toolset in agent.toolsets:
         inner = getattr(toolset, "wrapped", toolset)
@@ -140,7 +151,7 @@ def test_custom_prefix_used():
     mcp = {
         "fs": MCPServerConfig(command="echo", prefix="myprefix"),
     }
-    agent, _, _ = get_agent(mcp_servers=mcp)
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
 
     for toolset in agent.toolsets:
         inner = getattr(toolset, "wrapped", toolset)
@@ -156,7 +167,7 @@ def test_approval_auto_wraps():
     mcp = {
         "test": MCPServerConfig(command="echo", approval="auto"),
     }
-    agent, _, _ = get_agent(mcp_servers=mcp)
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
 
     for toolset in agent.toolsets:
         if type(toolset).__name__ == "_AgentFunctionToolset":
@@ -174,7 +185,7 @@ def test_approval_never_no_wrap():
     mcp = {
         "test": MCPServerConfig(command="echo", approval="never"),
     }
-    agent, _, _ = get_agent(mcp_servers=mcp)
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
 
     for toolset in agent.toolsets:
         if type(toolset).__name__ == "_AgentFunctionToolset":
@@ -191,13 +202,86 @@ def test_multiple_mcp_servers():
         "fs": MCPServerConfig(command="echo"),
         "db": MCPServerConfig(command="echo", approval="never"),
     }
-    agent, _, _ = get_agent(mcp_servers=mcp)
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
 
     mcp_count = sum(
         1 for t in agent.toolsets
         if type(t).__name__ != "_AgentFunctionToolset"
     )
     assert mcp_count == 2
+
+
+# -- HTTP transport config tests -----------------------------------------------
+
+
+def test_url_config_streamable_http():
+    """MCPServerConfig with url validates without command."""
+    cfg = MCPServerConfig(url="http://localhost:3000")
+    assert cfg.url == "http://localhost:3000"
+    assert cfg.command is None
+
+
+def test_url_config_sse():
+    """MCPServerConfig with /sse URL validates correctly."""
+    cfg = MCPServerConfig(url="http://localhost:3000/sse")
+    assert cfg.url == "http://localhost:3000/sse"
+    assert cfg.command is None
+
+
+def test_missing_command_and_url_raises():
+    """MCPServerConfig with neither command nor url raises ValidationError."""
+    with pytest.raises(ValidationError):
+        MCPServerConfig()
+
+
+def test_url_and_command_both_set_raises():
+    """MCPServerConfig with both url and command set raises ValidationError."""
+    with pytest.raises(ValidationError):
+        MCPServerConfig(url="http://localhost:3000", command="npx")
+
+
+def test_agent_with_http_server_creates_streamable_http():
+    """get_agent() creates MCPServerStreamableHTTP for URL-based config."""
+    from pydantic_ai.mcp import MCPServerStreamableHTTP
+
+    mcp = {
+        "remote": MCPServerConfig(url="http://localhost:3000", approval="never"),
+    }
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
+
+    for toolset in agent.toolsets:
+        inner = getattr(toolset, "wrapped", toolset)
+        if isinstance(inner, MCPServerStreamableHTTP):
+            assert inner.tool_prefix == "remote"
+            break
+    else:
+        pytest.fail("No MCPServerStreamableHTTP found in agent toolsets")
+
+
+def test_agent_with_sse_url_creates_mcp_server_sse():
+    """get_agent() creates MCPServerSSE for URL ending in /sse."""
+    from pydantic_ai.mcp import MCPServerSSE
+
+    mcp = {"remote": MCPServerConfig(url="http://localhost:3000/sse", approval="never")}
+    agent, _, _, _ = get_agent(mcp_servers=mcp)
+
+    for toolset in agent.toolsets:
+        inner = getattr(toolset, "wrapped", toolset)
+        if isinstance(inner, MCPServerSSE):
+            assert inner.tool_prefix == "remote"
+            break
+    else:
+        pytest.fail("No MCPServerSSE found in agent toolsets")
+
+
+def test_status_url_server_shows_remote(monkeypatch):
+    """get_status() reports 'remote (url)' for URL-based MCP servers."""
+    from co_cli.status import get_status
+
+    fake = Settings(mcp_servers={"myremote": MCPServerConfig(url="http://localhost:3000")})
+    monkeypatch.setattr("co_cli.status.settings", fake)
+    info = get_status()
+    assert ("myremote", "remote (url)") in info.mcp_servers
 
 
 # -- E2E functional tests (real MCP servers via npx) ---------------------------
@@ -290,7 +374,7 @@ async def test_e2e_all_defaults_via_agent():
     """Start all 3 default MCP servers through the agent lifecycle."""
     from co_cli.config import _DEFAULT_MCP_SERVERS
 
-    agent, _, tool_names = get_agent(mcp_servers=_DEFAULT_MCP_SERVERS.copy())
+    agent, _, tool_names, _ = get_agent(mcp_servers=_DEFAULT_MCP_SERVERS.copy())
 
     async with agent:
         from co_cli.main import _discover_mcp_tools

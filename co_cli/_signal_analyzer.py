@@ -1,7 +1,7 @@
 """Auto-triggered signal detector — CC hookify pattern adapted for Co.
 
-Scans the post-turn message history for correction/preference/habit/decision
-signals using an LLM mini-agent with structured output.
+Scans the post-turn message history for correction/preference signals using
+an LLM mini-agent with structured output.
 The mini-agent returns a SignalResult; confidence determines whether
 the memory is saved automatically (high) or surfaced for user approval (low).
 """

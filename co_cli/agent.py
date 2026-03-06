@@ -1,4 +1,3 @@
-import logging
 import os
 from datetime import date
 from pathlib import Path
@@ -28,38 +27,15 @@ from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, recall_memory, list_memories, update_memory, append_memory
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.todo import todo_write, todo_read
-
-logger = logging.getLogger(__name__)
-
-
-def _migrate_memories_dir(knowledge_dir: Path) -> None:
-    """Migrate legacy .co-cli/knowledge/memories/*.md to flat .co-cli/knowledge/.
-
-    Idempotent: files already at destination are skipped. Empty memories/
-    subdir is removed after migration.
-    """
-    memories_subdir = knowledge_dir / "memories"
-    if not memories_subdir.exists():
-        return
-
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
-    migrated = 0
-    for src in memories_subdir.glob("*.md"):
-        dest = knowledge_dir / src.name
-        if not dest.exists():
-            src.rename(dest)
-            migrated += 1
-        else:
-            logger.debug(f"Migration: skipping {src.name} — already at destination")
-
-    # Remove subdir if now empty
-    try:
-        memories_subdir.rmdir()
-        logger.info(f"Migrated {migrated} memory files from memories/ to knowledge/")
-    except OSError:
-        # Not empty (e.g. unexpected subdirs) — leave it
-        if migrated:
-            logger.info(f"Migrated {migrated} memory files; memories/ subdir not removed (not empty)")
+from co_cli.tools.capabilities import check_capabilities
+from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
+from co_cli.tools.delegation import delegate_coder, delegate_research, delegate_analysis
+from co_cli.tools.task_control import (
+    start_background_task,
+    check_task_status,
+    cancel_background_task,
+    list_background_tasks,
+)
 
 
 def get_agent(
@@ -68,10 +44,11 @@ def get_agent(
     web_policy: WebPolicy | None = None,
     mcp_servers: dict[str, MCPServerConfig] | None = None,
     personality: str | None = None,
-) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str]]:
+    model_name: str | None = None,
+) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str], dict[str, bool]]:
     """Factory function to create the Pydantic AI Agent.
 
-    Supports 'ollama' and 'gemini' (default) via config.
+    Supports 'ollama' (default) and 'gemini' via config.
 
     Args:
         all_approval: When True, register ALL tools with requires_approval=True.
@@ -85,29 +62,27 @@ def get_agent(
             (identity declaration) is extracted and placed at the top of the
             static system prompt — the model's first context is always the soul.
     """
-    # Migrate legacy memories/ subdir to flat knowledge/ dir (idempotent)
-    _migrate_memories_dir(Path.cwd() / ".co-cli" / "knowledge")
-
     provider_name = settings.llm_provider.lower()
 
     model_settings: ModelSettings | None = None
 
+    active_model_name = model_name or settings.model_roles["reasoning"][0]
+
     if provider_name == "gemini":
         api_key = settings.gemini_api_key
-        model_name = settings.gemini_model
         if not api_key:
             raise ValueError("gemini_api_key is required in settings when llm_provider is 'gemini'.")
 
         # pydantic-ai reads GEMINI_API_KEY from the environment.
         # Direct assignment so the settings value always wins over a stale env var.
         os.environ["GEMINI_API_KEY"] = api_key
-        model = f"google-gla:{model_name}"
+        model = f"google-gla:{active_model_name}"
 
         # Model-specific inference parameters from quirk database.
         # Fallback defaults keep Gemini on a thinking-safe profile even when
         # no model-specific quirk file exists.
         from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
-        inf = get_model_inference("gemini", _normalize(model_name))
+        inf = get_model_inference("gemini", _normalize(active_model_name))
         model_settings = ModelSettings(
             temperature=inf.get("temperature", 1.0),
             top_p=inf.get("top_p", 0.95),
@@ -115,7 +90,6 @@ def get_agent(
         )
     elif provider_name == "ollama":
         ollama_host = settings.ollama_host
-        model_name = settings.ollama_model
 
         # Ollama's OpenAI-compatible API is at /v1
         base_url = f"{ollama_host}/v1"
@@ -128,13 +102,13 @@ def get_agent(
         )
         provider = OpenAIProvider(base_url=base_url, api_key="ollama", http_client=_http_client)
         model = OpenAIChatModel(
-            model_name=model_name,
+            model_name=active_model_name,
             provider=provider
         )
 
         # Model-specific inference parameters from quirk database
         from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
-        inf = get_model_inference("ollama", _normalize(model_name))
+        inf = get_model_inference("ollama", _normalize(active_model_name))
         num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
         extra: dict = {"num_ctx": num_ctx}
         extra.update(inf.get("extra_body", {}))
@@ -152,7 +126,7 @@ def get_agent(
 
     # Normalize model name for quirk lookup (strips quantization tags like ":q4_k_m")
     from co_cli.prompts.model_quirks import normalize_model_name
-    normalized_model = normalize_model_name(model_name)
+    normalized_model = normalize_model_name(active_model_name)
 
     # Soul block — seed + character base memories first; examples trail the rules
     soul_seed: str | None = None
@@ -161,6 +135,7 @@ def get_agent(
         from co_cli.prompts.personalities._composer import (
             load_soul_seed,
             load_soul_examples,
+            load_soul_mindsets,
             load_character_memories,
         )
         soul_seed = load_soul_seed(personality)
@@ -168,6 +143,9 @@ def get_agent(
         base_memories = load_character_memories(personality, memory_dir)
         if base_memories:
             soul_seed = soul_seed + "\n\n" + base_memories
+        soul_mindsets = load_soul_mindsets(personality)
+        if soul_mindsets:
+            soul_seed = soul_seed + "\n\n" + soul_mindsets
         examples = load_soul_examples(personality)
         if examples:
             soul_examples = examples
@@ -182,22 +160,29 @@ def get_agent(
     # Build MCP toolsets from config
     mcp_toolsets = []
     if mcp_servers:
-        from pydantic_ai.mcp import MCPServerStdio
+        from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
 
         for name, cfg in mcp_servers.items():
-            env = dict(cfg.env) if cfg.env else {}
-            # Lazy GitHub token: resolve at session start, not at config import
-            if name == "github" and "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
-                token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
-                if token:
-                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
-            server = MCPServerStdio(
-                cfg.command,
-                args=cfg.args,
-                timeout=cfg.timeout,
-                env=env or None,
-                tool_prefix=cfg.prefix or name,
-            )
+            if cfg.url:
+                # HTTP transport — SSE when URL ends with /sse, else StreamableHTTP
+                if cfg.url.rstrip("/").endswith("/sse"):
+                    server = MCPServerSSE(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+                else:
+                    server = MCPServerStreamableHTTP(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+            else:
+                env = dict(cfg.env) if cfg.env else {}
+                # Lazy GitHub token: resolve at session start, not at config import
+                if name == "github" and "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
+                    token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
+                    if token:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
+                server = MCPServerStdio(
+                    cfg.command,
+                    args=cfg.args,
+                    timeout=cfg.timeout,
+                    env=env or None,
+                    tool_prefix=cfg.prefix or name,
+                )
             if cfg.approval == "auto":
                 server = server.approval_required()
             mcp_toolsets.append(server)
@@ -217,22 +202,22 @@ def get_agent(
         toolsets=mcp_toolsets if mcp_toolsets else None,
     )
 
-    # Conditional system prompt layers — runtime-gated via @agent.system_prompt
+    # Conditional prompt layers — runtime-gated via @agent.instructions (fresh per turn, never accumulated)
 
-    @agent.system_prompt
+    @agent.instructions
     def add_current_date(ctx: RunContext[CoDeps]) -> str:
         """Inject the current date so the model can reason about time."""
         return f"Today is {date.today().isoformat()}."
 
-    @agent.system_prompt
+    @agent.instructions
     def add_shell_guidance(ctx: RunContext[CoDeps]) -> str:
         """Inject shell tool guidance when shell is available."""
         return (
-            "Shell runs as subprocess with approval. "
-            "Read-only commands matching the safe-command allowlist are auto-approved."
+            "Shell runs as subprocess. DENY-pattern commands are blocked before deferral. "
+            "Safe-prefix commands execute directly. All others require user approval."
         )
 
-    @agent.system_prompt
+    @agent.instructions
     def add_project_instructions(ctx: RunContext[CoDeps]) -> str:
         """Inject project-level instructions from .co-cli/instructions.md."""
         instructions_path = Path.cwd() / ".co-cli" / "instructions.md"
@@ -240,7 +225,7 @@ def get_agent(
             return instructions_path.read_text(encoding="utf-8").strip()
         return ""
 
-    @agent.system_prompt
+    @agent.instructions
     def add_personality_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject personality-context memories for relationship continuity."""
         if not ctx.deps.personality:
@@ -248,50 +233,90 @@ def get_agent(
         from co_cli.tools.personality import _load_personality_memories
         return _load_personality_memories()
 
-    @agent.system_prompt
-    def inject_active_mindset(ctx: RunContext[CoDeps]) -> str:
-        """Mechanism 1: task-specific mindset content, set by pre-turn classification."""
-        if not ctx.deps.active_mindset_content:
-            return ""
-        types = ", ".join(ctx.deps.active_mindset_types)
-        return f"\n## Active mindset: {types}\n\n{ctx.deps.active_mindset_content}"
-
-    @agent.system_prompt
+    @agent.instructions
     def inject_personality_critique(ctx: RunContext[CoDeps]) -> str:
-        """Mechanism 2: always-on soul critique loaded from souls/{role}/critique.md."""
+        """Inject always-on soul critique from souls/{role}/critique.md."""
         if not ctx.deps.personality_critique:
             return ""
         return f"\n## Review lens\n\n{ctx.deps.personality_critique}"
 
-    # Side-effectful tools — require human approval via DeferredToolRequests
-    agent.tool(run_shell_command, requires_approval=True)
-    agent.tool(create_email_draft, requires_approval=True)
-    agent.tool(save_memory, requires_approval=True)
-    agent.tool(save_article, requires_approval=True)
-    agent.tool(update_memory, requires_approval=all_approval)
-    agent.tool(append_memory, requires_approval=all_approval)
+    @agent.instructions
+    def add_available_skills(ctx: RunContext[CoDeps]) -> str:
+        """Inject the list of available skills so the model can route /skill commands."""
+        if not ctx.deps.skill_registry:
+            return ""
+        lines = ["## Available Skills"]
+        for entry in ctx.deps.skill_registry:
+            lines.append(f"/{entry['name']} — {entry['description']}")
+        text = "\n".join(lines)
+        # Cap at 2KB; append truncation notice if needed
+        if len(text) > 2048:
+            # Count skills that fit within budget
+            budget = 2048 - 40
+            truncated = text[:budget]
+            shown = truncated.count("\n")
+            remaining = len(ctx.deps.skill_registry) - shown
+            text = truncated + f"\n(+{remaining} more — type / to see all)"
+        return text
+
+    tool_registry: list[tuple[str, bool]] = []  # (name, requires_approval)
+
+    def _register(fn, requires_approval: bool) -> None:
+        agent.tool(fn, requires_approval=requires_approval)
+        tool_registry.append((fn.__name__, requires_approval))
+
+    # Background task management
+    _register(start_background_task, True)
+    _register(check_task_status, False)
+    _register(cancel_background_task, False)
+    _register(list_background_tasks, False)
+
+    # Capability introspection — no approval (read-only, no side effects)
+    _register(check_capabilities, False)
+
+    # Sub-agent delegation — no approval (read-only tools only, gated by model_roles setting)
+    _register(delegate_coder, False)
+    _register(delegate_research, False)
+    _register(delegate_analysis, False)
+
+    # Native file tools
+    _register(list_directory, False)
+    _register(read_file, False)
+    _register(find_in_files, False)
+    _register(write_file, True)
+    _register(edit_file, True)
+
+    # Shell: policy (DENY/ALLOW/REQUIRE_APPROVAL) is evaluated inside the tool.
+    # DENY and ALLOW are decided before any deferral; only REQUIRE_APPROVAL defers.
+    _register(run_shell_command, False)
+    _register(create_email_draft, True)
+    _register(save_memory, True)
+    _register(save_article, True)
+    _register(update_memory, all_approval)
+    _register(append_memory, all_approval)
 
     # Session task tracking — no approval (in-memory only, no external side effects)
-    agent.tool(todo_write, requires_approval=all_approval)
-    agent.tool(todo_read, requires_approval=all_approval)
+    _register(todo_write, all_approval)
+    _register(todo_read, all_approval)
 
     # Read-only tools — no approval needed (unless all_approval for eval)
-    agent.tool(list_memories, requires_approval=all_approval)
-    agent.tool(read_article_detail, requires_approval=all_approval)
-    agent.tool(search_knowledge, requires_approval=all_approval)
-    agent.tool(list_notes, requires_approval=all_approval)
-    agent.tool(read_note, requires_approval=all_approval)
-    agent.tool(search_drive_files, requires_approval=all_approval)
-    agent.tool(read_drive_file, requires_approval=all_approval)
-    agent.tool(list_emails, requires_approval=all_approval)
-    agent.tool(search_emails, requires_approval=all_approval)
-    agent.tool(list_calendar_events, requires_approval=all_approval)
-    agent.tool(search_calendar_events, requires_approval=all_approval)
+    _register(list_memories, all_approval)
+    _register(read_article_detail, all_approval)
+    _register(search_knowledge, all_approval)
+    _register(list_notes, all_approval)
+    _register(read_note, all_approval)
+    _register(search_drive_files, all_approval)
+    _register(read_drive_file, all_approval)
+    _register(list_emails, all_approval)
+    _register(search_emails, all_approval)
+    _register(list_calendar_events, all_approval)
+    _register(search_calendar_events, all_approval)
     policy = web_policy or settings.web_policy
     search_approval = all_approval or (policy.search == "ask")
     fetch_approval = all_approval or (policy.fetch == "ask")
-    agent.tool(web_search, requires_approval=search_approval)
-    agent.tool(web_fetch, requires_approval=fetch_approval)
+    _register(web_search, search_approval)
+    _register(web_fetch, fetch_approval)
 
-    tool_names = list(agent._function_toolset.tools.keys())
-    return agent, model_settings, tool_names
+    tool_names = [name for name, _ in tool_registry]
+    tool_approval = {name: flag for name, flag in tool_registry}
+    return agent, model_settings, tool_names, tool_approval

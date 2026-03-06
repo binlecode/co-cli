@@ -66,7 +66,13 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 **Before writing, do:**
 1. Search the codebase for relevant modules, patterns, and tests related to the feature.
 2. Read related DESIGN and TODO docs in `docs/`.
+2a. If `docs/reference/REVIEW-<scope>.md` exists for this feature area, read it. Carry forward any unresolved P0/P1 findings into the plan's Context section. A REVIEW verdict of `ACTION_REQUIRED` is a blocking pre-condition — stop and surface it rather than drafting over it:
+    ```
+    ✗ REVIEW-<scope>.md verdict is ACTION_REQUIRED.
+    Resolve P0 items before planning. Run /sync-doc or fix TODO as indicated.
+    ```
 3. If `docs/TODO-<slug>.md` already exists, read it first.
+3a. **Shipped-work check** (when the TODO already exists): For each section or phase in the existing TODO, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
 4. For each open question you intend to list, first try to answer it by reading existing source files. An open question answerable by inspection weakens the plan and will be flagged by Core Dev.
 5. **For `doc-restructure` and `doc+code` tasks**: Run a **Code Accuracy Verification** pass — read each source file referenced by the target docs and check every factual claim against the code. List inaccuracies explicitly in the Context section before proposing structure changes.
 
@@ -75,9 +81,12 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 - Each task must be atomic (single agent session, ≤5 files touched) with:
   - Stable ID (TASK-1, TASK-2…)
   - `files:` list of paths to create or modify
-  - `done_when:` a single, verifiable output (e.g. "test X passes", "file Y exists with field Z", "doc section X matches code behavior")
+  - `done_when:` a single, verifiable output (e.g. "test X passes", "file Y exists with field Z", "doc section X matches code behavior"). When `done_when` includes test stub code that captures library output (Rich console, custom fixtures, patched modules), note that the stub is a behavioral spec — Dev is responsible for adapting it to the runtime context. Do not assume plain stdlib output from a project that uses a custom theme or console wrapper. **`done_when` must reflect what the test literally checks** — if you write "registers X tools", provide a concrete check command (e.g. `assert len(agent._function_tools) == 2`). If you cannot write the check, use the simpler assertion the test actually validates.
+  - `prerequisites: [TASK-1, TASK-2]` — optional; tasks that must complete before this one.
+    Omit if there are no dependencies. Always use list syntax, even for a single dependency.
   - For `code-feature`: Red-Green-Refactor test requirement
   - For `doc-restructure`: Accuracy check requirement (grep/read the code, confirm claim is correct)
+- **Guard condition parity:** For each new tool that mirrors an existing one, list its guard conditions (e.g. `max_requests < 1`, empty-string check) and compare against the nearest existing peer tool. Note intentional divergences inline in the task — do not leave them implicit for Core Dev to catch.
 - Decisions must include rationale and alternatives considered.
 
 > **Output contract:** `files:` and `done_when:` on every task are mandatory — they are consumed by `/orchestrate-dev` to drive implementation and verification. A task missing either field will block the dev phase.
@@ -100,6 +109,9 @@ Spawn Core Dev as a subagent. It reads `docs/TODO-<slug>.md` and appends its cri
 - Tasks too large for a single agent session or missing `done_when`
 - "Hallucinated" success (outcomes assumed without validation steps)
 - Test coverage gaps
+- All `done_when:` criteria are machine-verifiable. Acceptable: `grep/test/file/doc-match`.
+  Not acceptable: subjective phrases like "code is clean", "developer is satisfied",
+  "feature works as expected" with no concrete check command.
 
 **Core Dev checklist — operational risk:**
 - Schema or data model changes without migration or rollback path
@@ -168,6 +180,8 @@ TL reads the updated workbench and processes every Core Dev issue. Decide: **ado
 Stop iterating when **either** condition is met:
 1. **`blocking_items` is empty** in the latest Core Dev JSON, OR
 2. **Diminishing returns**: `blocking_items = []` AND all remaining issues are `CD-m-*` (minor only) AND TL rejected fewer than 2 items in the last cycle.
+
+**C1 fast-path:** If Core Dev returns `blocking_items: []` on the first cycle, stop conditions apply immediately — no C2 needed. Proceed directly to the stop sequence below.
 
 **Iteration cap:** If neither condition is met after **3 cycles**, stop and escalate:
 ```

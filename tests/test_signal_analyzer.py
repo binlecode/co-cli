@@ -120,7 +120,7 @@ def test_window_with_only_tool_messages_returns_empty():
 @pytest.mark.asyncio
 async def test_analyze_correction_high_confidence():
     """Clear correction message classifies as correction with high confidence."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("don't use trailing comments in the code")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -131,7 +131,7 @@ async def test_analyze_correction_high_confidence():
 @pytest.mark.asyncio
 async def test_analyze_preference_detected():
     """Stated preference message is detected as a signal."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("I prefer shorter responses")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -141,7 +141,7 @@ async def test_analyze_preference_detected():
 @pytest.mark.asyncio
 async def test_analyze_decision_high_confidence():
     """Team decision statement is detected as high-confidence preference."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("we decided to use PostgreSQL from now on")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -151,7 +151,7 @@ async def test_analyze_decision_high_confidence():
 @pytest.mark.asyncio
 async def test_analyze_migration_high_confidence():
     """Migration statement is detected as high-confidence preference."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("we switched from REST to GraphQL last month")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -161,7 +161,7 @@ async def test_analyze_migration_high_confidence():
 @pytest.mark.asyncio
 async def test_analyze_habit_detected():
     """Habit disclosure is detected as a signal."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("I've been putting everything in one big file so far")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -170,7 +170,7 @@ async def test_analyze_habit_detected():
 @pytest.mark.asyncio
 async def test_analyze_no_signal():
     """Neutral question produces no signal."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("what time is it in Tokyo?")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is False
@@ -179,7 +179,7 @@ async def test_analyze_no_signal():
 @pytest.mark.asyncio
 async def test_inject_true_for_correction():
     """Explicit correction is classified with inject=True."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("don't use camelCase in Python code")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.found is True
@@ -189,7 +189,31 @@ async def test_inject_true_for_correction():
 @pytest.mark.asyncio
 async def test_inject_false_for_ephemeral():
     """Session-scoped decision produces inject=False."""
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     messages = [_user("let's use React for this project, just this one")]
     result = await analyze_for_signals(messages, agent.model)
     assert result.inject is False
+
+
+@pytest.mark.asyncio
+async def test_neutrality_guardrail_blocks_assistant_style():
+    """Personality-style assistant turns + neutral user produces found=False.
+
+    The guardrail in signal_analyzer.md prevents the model from treating
+    the assistant's own writing style choices (terse quips, humor) as
+    evidence of a user behavioral signal.
+    """
+    agent, _, _, _ = get_agent()
+    # Assistant turns that strongly express a personality style
+    messages = [
+        _user("what's the fastest sorting algorithm?"),
+        _assistant("Quicksort. O(n log n) average. Done."),
+        _user("and for nearly sorted data?"),
+        _assistant("Timsort. Python uses it. Ships with stdlib. Trust it."),
+        _user("ok thanks"),
+    ]
+    result = await analyze_for_signals(messages, agent.model)
+    assert result.found is False, (
+        "Neutrality guardrail failed: assistant's terse style should not "
+        "generate a signal from a neutral user acknowledgment"
+    )

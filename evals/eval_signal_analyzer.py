@@ -181,7 +181,7 @@ async def main() -> int:
     print("=" * 60)
     print()
 
-    agent, _, _ = get_agent()
+    agent, _, _, _ = get_agent()
     model = agent.model
 
     t0 = time.monotonic()

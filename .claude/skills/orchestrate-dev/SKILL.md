@@ -35,10 +35,36 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Produces `docs/DELIVERY-<slug>.
    2. TASK-2: <title> (requires TASK-1)
    3. TASK-3: <title>
    ```
+5. Run `git status`. If uncommitted changes unrelated to this plan are present, warn before proceeding:
+   ```
+   ⚠ Uncommitted changes detected. Stash or commit unrelated work first
+     if you want a clean rollback point (git reset --hard HEAD).
+   ```
 
 ---
 
 ## Phase 2 — Execute Each Task
+
+**Same-file batching:** When multiple tasks in the execution order modify the same file, read that file once before the first task that touches it. Do not re-read it between tasks — your earlier read is still valid. Make each task's edits in sequence without reloading the file between them.
+
+### Pre-flight — Validate all tasks before executing any
+
+Before writing a single line of code, validate every task in execution order:
+- The task MUST have a non-empty `files:` list
+- The task MUST have a non-empty `done_when:` criterion
+- `done_when:` must be machine-verifiable (a command that returns a result, not a subjective
+  judgment). Acceptable forms: `grep <pattern> <file>`, `test X passes`, `file <path> exists`,
+  `file <path> contains field Z`, `doc section X matches code behavior`.
+
+If any task fails validation, stop immediately with:
+```
+✗ Plan invalid: TASK-<id> missing `files:` / `done_when:` / non-verifiable done_when
+Fix the plan before running /orchestrate-dev.
+```
+
+Fail-fast: stop at the first invalid task. Do not begin implementation until all tasks pass.
+
+---
 
 For each task in execution order:
 
@@ -55,6 +81,8 @@ Read every file listed in `files:`. If a file does not exist yet (new file to cr
 ### Step 3 — Implement
 
 Write or edit only the files listed in `files:`. Do not touch files outside that list unless a prerequisite file (e.g. a new module import) makes it strictly necessary — if so, announce the extra file explicitly.
+
+---
 
 ### Step 4 — Self-review (inline Dev QA)
 
@@ -82,6 +110,12 @@ After implementing, read every changed file and check:
 - Does the implementation match the task description exactly?
 - No scope creep — features not in the task spec must not be added
 - No missing pieces — everything in the task spec must be present
+- If you added to an existing test file, scan it for assertions that hardcode counts, sets, or
+  enums your changes affect (e.g. `assert set(COMMANDS.keys()) == {...}`). Update stale
+  assertions before verifying `done_when`.
+- If `docs/reference/REVIEW-<scope>.md` exists for this feature area, cross-check changed
+  files against any P0 Code Dev findings listed there. Do not introduce or deepen an
+  inaccuracy that the REVIEW already flagged as blocking.
 
 Fix any issues found before proceeding to the next step.
 
@@ -140,17 +174,17 @@ Record: files run, number passed, number failed, any failure output.
 
 ### Step 2 — Sync docs
 
-Identify which DESIGN docs cover the modules touched in this work. Do this by checking each `docs/DESIGN-*.md` file's **Files** section — if a touched source file appears there, that DESIGN doc needs a sync check.
+Run `/sync-doc` with no args (full scope). This ensures all DESIGN docs are checked for stale refs and inaccuracies introduced by this work — not just docs covering the specific modules touched. For cross-cutting changes (renames, API changes, schema updates), unrelated docs may reference the same symbols and would be missed by a narrower scope.
 
-For each identified DESIGN doc, execute the sync-doc logic:
-- Read the doc
-- Read the source files it covers that were changed
-- Fix any inaccuracies introduced by this work (phantom features, stale flow descriptions, wrong schema, missing config entries)
-- Record what was fixed (or "clean" if nothing needed fixing)
+Record result: clean / fixed (what was fixed).
 
 ### Step 3 — TODO lifecycle
 
-For every task that reached ✓ pass, apply the lifecycle rule: remove its implementation content from `docs/TODO-<slug>.md` and update the "Current State" section to mark it shipped. Design details that belong in a DESIGN doc should be merged there (already handled by Step 2 sync). If no unshipped work remains, reduce the TODO to a minimal stub listing only deferred items.
+For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Design details that belong in a DESIGN doc should be merged there (already handled by Step 2 sync).
+
+- **All tasks shipped, no deferred items remain:** delete `docs/TODO-<slug>.md` entirely. An empty TODO is not kept.
+- **All tasks shipped, deferred items remain:** remove shipped tasks; leave only unimplemented work and any explicit "Deferred" sections.
+- **Partial delivery (some tasks blocked):** leave the blocked and unstarted tasks in place; remove only the tasks that reached ✓ pass.
 
 ### Step 4 — Fix before reporting
 
@@ -183,8 +217,7 @@ Date: <ISO 8601 date>
 - Result: pass / fail (<N> passed, <N> failed)
 
 ## Doc Sync
-- Docs checked: <list> / none (no DESIGN docs cover touched modules)
-- Result: clean / fixed (<what was fixed>)
+- Result: clean / fixed (<what was fixed>)  (full-scope sync-doc run)
 
 ## Overall: DELIVERED / BLOCKED
 <one sentence summary>
@@ -192,6 +225,15 @@ Date: <ISO 8601 date>
 
 **DELIVERED** = all tasks passed, all tests pass, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed their `done_when` criterion, or tests still failing after fix attempts.
+
+**If BLOCKED — escalation note for TL:**
+Blocked task(s): [list tasks that failed `done_when`]. Review needed:
+- If the plan is wrong (bad done_when, missing step): revise `docs/TODO-<slug>.md` and re-run
+- If the code is fixable without plan changes: fix and re-run from the blocked task
+- If the issue requires new work: open a follow-up TODO
+
+Use `git diff HEAD` to review what landed before the block. Clean up with
+`git reset --hard HEAD` if a fresh start is preferred.
 
 **Lifecycle:** This file is the artifact for Gate 2 (TL delivery check). After Gate 3 (PO acceptance), delete it — it is temporary scaffolding, not a permanent project record.
 

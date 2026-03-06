@@ -5,6 +5,8 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
+DEFAULT_OLLAMA_REASONING_MODEL = "qwen3:30b-a3b-thinking-2507-q8_0-agentic"
+DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
 # UX convenience — approval is the security boundary.
@@ -56,13 +58,27 @@ class WebPolicy(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """Configuration for a single MCP server (stdio transport)."""
-    command: str = Field(description="Executable to launch (e.g. 'npx', 'uvx', 'python')")
-    args: list[str] = Field(default_factory=list)
-    timeout: int = Field(default=10, ge=1, le=60)
-    env: dict[str, str] = Field(default_factory=dict)
+    """Configuration for a single MCP server (stdio or HTTP transport).
+
+    Stdio: set ``command`` (required). Subprocess launched by pydantic-ai.
+    HTTP:  set ``url`` instead. No subprocess — connects to a remote server.
+    Exactly one of ``command`` or ``url`` must be provided.
+    """
+    command: str | None = Field(default=None, description="Executable to launch (e.g. 'npx', 'uvx', 'python'). Required for stdio transport.")
+    url: str | None = Field(default=None, description="Remote server URL for HTTP transport (StreamableHTTP or SSE). Mutually exclusive with command.")
+    args: list[str] = Field(default_factory=list, description="Command-line arguments (stdio only)")
+    timeout: int = Field(default=5, ge=1, le=60)
+    env: dict[str, str] = Field(default_factory=dict, description="Extra environment variables passed to subprocess (stdio only)")
     approval: Literal["auto", "never"] = Field(default="auto")
     prefix: str | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _require_command_or_url(self) -> "MCPServerConfig":
+        if self.url and self.command:
+            raise ValueError("MCPServerConfig: 'url' and 'command' are mutually exclusive")
+        if not self.url and not self.command:
+            raise ValueError("MCPServerConfig requires either 'command' or 'url'")
+        return self
 
 
 # Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
@@ -86,6 +102,17 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
 }
 
 
+VALID_MODEL_ROLES: frozenset[str] = frozenset(
+    {"reasoning", "summarization", "coding", "research", "analysis"}
+)
+
+
+def get_role_head(model_roles: dict[str, list[str]], role: str) -> str:
+    """Return the head model for a role chain, or empty string if absent/empty."""
+    chain = model_roles.get(role, [])
+    return chain[0] if chain else ""
+
+
 class Settings(BaseModel):
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
@@ -106,8 +133,6 @@ class Settings(BaseModel):
     # Conversation memory
     tool_output_trim_chars: int = Field(default=2000)
     max_history_messages: int = Field(default=40)
-    # Empty = fall back to agent's primary model
-    summarization_model: str = Field(default="")
 
     # Knowledge search backend
     knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default="fts5")
@@ -123,14 +148,25 @@ class Settings(BaseModel):
     memory_max_count: int = Field(default=200, ge=10)
     memory_dedup_window_days: int = Field(default=7, ge=1)
     memory_dedup_threshold: int = Field(default=85, ge=0, le=100)
-    memory_decay_strategy: Literal["summarize", "cut"] = Field(default="summarize")
-    memory_decay_percentage: float = Field(default=0.2, ge=0.0, le=1.0)
+    # Temporal decay half-life for FTS5 recall scoring (days; larger = slower decay)
+    memory_recall_half_life_days: int = Field(default=30, ge=1)
+    # Consolidation: top-K related memories retrieved for contradiction resolution
+    memory_consolidation_top_k: int = Field(default=5, ge=1)
+    # Consolidation: per-call timeout budget (seconds) for extract_facts and resolve
+    memory_consolidation_timeout_seconds: int = Field(default=20, ge=0)
 
     # Shell limits
     shell_max_timeout: int = Field(default=600)
 
     # Shell safe commands (auto-approved without prompting)
     shell_safe_commands: list[str] = Field(default=_DEFAULT_SAFE_COMMANDS)
+
+    # Background task execution
+    background_max_concurrent: int = Field(default=5, ge=1)
+    background_task_retention_days: int = Field(default=7, ge=1)
+    background_auto_cleanup: bool = Field(default=True)
+    # Auto-cancel task if no output for N seconds; 0 = disabled
+    background_task_inactivity_timeout: int = Field(default=0, ge=0)
 
     # Web domain policy
     web_fetch_allowed_domains: list[str] = Field(default=[])
@@ -141,7 +177,7 @@ class Settings(BaseModel):
     web_http_backoff_max_seconds: float = Field(default=8.0, ge=0.5, le=120.0)
     web_http_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
 
-    # MCP servers (stdio transport)
+    # MCP servers (stdio or HTTP transport)
     mcp_servers: dict[str, MCPServerConfig] = Field(
         default_factory=lambda: _DEFAULT_MCP_SERVERS.copy()
     )
@@ -160,6 +196,20 @@ class Settings(BaseModel):
             return [s.strip().lower() for s in v.split(",") if s.strip()]
         return [s.lower() for s in v]
 
+    @field_validator("model_roles", mode="before")
+    @classmethod
+    def _parse_model_roles(cls, v: dict[str, str | list[str]] | None) -> dict[str, list[str]]:
+        if not v:
+            return {}
+        parsed: dict[str, list[str]] = {}
+        for role, models in v.items():
+            if isinstance(models, str):
+                chain = [m.strip() for m in models.split(",") if m.strip()]
+            else:
+                chain = [str(m).strip() for m in models if str(m).strip()]
+            parsed[str(role)] = chain
+        return parsed
+
     @field_validator("personality")
     @classmethod
     def _validate_personality_name(cls, v: str) -> str:
@@ -177,6 +227,36 @@ class Settings(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_reasoning_role(self) -> "Settings":
+        chain = self.model_roles.get("reasoning", [])
+        if not chain:
+            raise ValueError(
+                "model_roles.reasoning must contain at least one model"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_model_role_keys(self) -> "Settings":
+        unknown = set(self.model_roles.keys()) - VALID_MODEL_ROLES
+        if unknown:
+            raise ValueError(
+                f"Unknown model_roles keys: {sorted(unknown)}. "
+                f"Valid roles: {sorted(VALID_MODEL_ROLES)}"
+            )
+        return self
+
+    # Session persistence TTL
+    session_ttl_minutes: int = Field(default=60, ge=1)
+
+    # Approval risk classifier
+    approval_risk_enabled: bool = Field(default=False)
+    approval_auto_low_risk: bool = Field(default=False)
+
+    # Role model chains (ordered by preference within provider).
+    # Mandatory role: reasoning (main agent).
+    model_roles: dict[str, list[str]] = Field(default_factory=dict)
+
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default="ollama")
@@ -186,11 +266,11 @@ class Settings(BaseModel):
     # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 4096
     # tokens and silently lose multi-turn conversation history.
     # See docs/DESIGN-llm-models.md for Modelfile setup.
-    ollama_model: str = Field(default="qwen3:30b-a3b-thinking-2507-q8_0-agentic")
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
     ollama_num_ctx: int = Field(default=262144)
-    gemini_model: str = Field(default="gemini-2.0-flash")
+    ctx_warn_threshold: float = Field(default=0.85)
+    ctx_overflow_threshold: float = Field(default=1.0)
 
     @model_validator(mode='before')
     @classmethod
@@ -217,7 +297,6 @@ class Settings(BaseModel):
             "web_http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
-            "summarization_model": "CO_CLI_SUMMARIZATION_MODEL",
             "knowledge_search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
             "knowledge_embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
             "knowledge_embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
@@ -227,20 +306,52 @@ class Settings(BaseModel):
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
             "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
             "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",
-            "memory_decay_strategy": "CO_CLI_MEMORY_DECAY_STRATEGY",
-            "memory_decay_percentage": "CO_CLI_MEMORY_DECAY_PERCENTAGE",
+            "memory_recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
+            "memory_consolidation_top_k": "CO_MEMORY_CONSOLIDATION_TOP_K",
+            "memory_consolidation_timeout_seconds": "CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS",
+            "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
-            "ollama_model": "OLLAMA_MODEL",
             "ollama_num_ctx": "OLLAMA_NUM_CTX",
-            "gemini_model": "GEMINI_MODEL",
+            "approval_risk_enabled": "CO_CLI_APPROVAL_RISK_ENABLED",
+            "approval_auto_low_risk": "CO_CLI_APPROVAL_AUTO_LOW_RISK",
+            "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
+            "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
+            "background_max_concurrent": "CO_BACKGROUND_MAX_CONCURRENT",
+            "background_task_retention_days": "CO_BACKGROUND_TASK_RETENTION_DAYS",
+            "background_auto_cleanup": "CO_BACKGROUND_AUTO_CLEANUP",
+            "background_task_inactivity_timeout": "CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT",
         }
         
         for field, env_var in env_map.items():
             val = os.getenv(env_var)
             if val:
                 data[field] = val
+
+        # Per-role model overrides — merge per-key, not whole-dict replacement.
+        model_roles_env: dict[str, list[str]] = {}
+        for role, env_var in [
+            ("reasoning", "CO_MODEL_ROLE_REASONING"),
+            ("summarization", "CO_MODEL_ROLE_SUMMARIZATION"),
+            ("coding", "CO_MODEL_ROLE_CODING"),
+            ("research", "CO_MODEL_ROLE_RESEARCH"),
+            ("analysis", "CO_MODEL_ROLE_ANALYSIS"),
+        ]:
+            val = os.getenv(env_var)
+            if val:
+                model_roles_env[role] = [m.strip() for m in val.split(",") if m.strip()]
+        if model_roles_env:
+            existing_roles = data.get("model_roles", {})
+            data["model_roles"] = {**existing_roles, **model_roles_env}
+        elif "model_roles" not in data:
+            provider = str(data.get("llm_provider", "ollama")).lower()
+            default_model = (
+                DEFAULT_GEMINI_REASONING_MODEL
+                if provider == "gemini"
+                else DEFAULT_OLLAMA_REASONING_MODEL
+            )
+            data["model_roles"] = {"reasoning": [default_model]}
 
         mcp_env = os.getenv("CO_CLI_MCP_SERVERS")
         if mcp_env:

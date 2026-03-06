@@ -634,37 +634,68 @@ def test_ollama_listwise_rerank_reorders_results(tmp_path):
     idx.close()
 
 
-def test_local_cross_encoder_skips_gracefully_on_fastembed_import_error(tmp_path):
-    """_local_cross_encoder_rerank() falls back without exception when fastembed is not installed."""
-    import builtins
 
-    real_import = builtins.__import__
+# ---------------------------------------------------------------------------
+# TASK-2: provenance + certainty schema extension
+# ---------------------------------------------------------------------------
 
-    def _block_fastembed(name, *args, **kwargs):
-        if name == "fastembed" or name.startswith("fastembed."):
-            raise ImportError(f"Mocked: {name} not available")
-        return real_import(name, *args, **kwargs)
 
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="local",
-        reranker_model="BAAI/bge-reranker-base",
+def test_searchresult_has_provenance_and_certainty_fields(tmp_path):
+    """SearchResult dataclass has provenance and certainty fields (both default None)."""
+    r = SearchResult(
+        source="memory", kind="memory", path="/x.md",
+        title=None, snippet=None, score=0.5,
+        tags=None, category=None, created=None, updated=None,
     )
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(5)
-    ]
-    builtins.__import__ = _block_fastembed
-    try:
-        result = idx._rerank_results("test query", candidates, 5)
-    finally:
-        builtins.__import__ = real_import
-    assert len(result) == 5
-    assert result == candidates[:5]
+    assert hasattr(r, "provenance")
+    assert hasattr(r, "certainty")
+    assert r.provenance is None
+    assert r.certainty is None
+
+
+def test_index_stores_provenance_and_certainty(tmp_path):
+    """index() writes provenance and certainty into the docs table."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(
+        source="memory", kind="memory", path="/p.md",
+        title="Prov test", content="provenance certainty test content",
+        hash="h1", mtime=0.0,
+        provenance="user-told", certainty="high",
+    )
+    row = idx._conn.execute("SELECT provenance, certainty FROM docs WHERE path='/p.md'").fetchone()
+    assert row["provenance"] == "user-told"
+    assert row["certainty"] == "high"
+    idx.close()
+
+
+def test_fts_search_returns_provenance_and_certainty(tmp_path):
+    """search() FTS path returns populated provenance and certainty on SearchResult."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(
+        source="memory", kind="memory", path="/prov.md",
+        title="Prov search", content="prov-certainty-fts unique test token",
+        hash="h2", mtime=0.0,
+        provenance="detected", certainty="low",
+    )
+    results = idx.search("prov-certainty-fts")
+    assert len(results) >= 1
+    r = results[0]
+    assert r.provenance == "detected"
+    assert r.certainty == "low"
+    idx.close()
+
+
+def test_sync_dir_propagates_provenance_and_certainty(tmp_path):
+    """sync_dir() reads provenance/certainty from frontmatter and stores them."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    knowledge_dir = tmp_path / "knowledge"
+    _write_md(knowledge_dir, "001-prov.md", "sync provenance certainty test content",
+              {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
+               "tags": [], "provenance": "planted", "certainty": "medium"})
+    idx.sync_dir("memory", knowledge_dir)
+    row = idx._conn.execute("SELECT provenance, certainty FROM docs").fetchone()
+    assert row["provenance"] == "planted"
+    assert row["certainty"] == "medium"
     idx.close()
 
 

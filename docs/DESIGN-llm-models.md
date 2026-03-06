@@ -2,289 +2,127 @@
 
 ## 1. What & How
 
-Co CLI supports two LLM backends through pydantic-ai's model abstraction. The `get_agent()` factory in `agent.py` selects the model based on `settings.llm_provider`.
+Co CLI supports two providers (`ollama`, `gemini`) and one model-selection contract:
+`model_roles` role chains.
+
+- Main agent always uses `model_roles["reasoning"][0]`.
+- On terminal model error, chat loop advances the same `reasoning` chain (drops failed head, retries once).
+- Sub-agent tools use role-specific chains (`coding`, `research`, `analysis`) and take the head model.
 
 ```
-get_agent()
-  ├── provider == "ollama"   (default)
-  │   ├── OpenAIProvider(base_url="http://localhost:11434/v1")
-  │   └── OpenAIChatModel(model_name, provider)
-  │         └── Ollama /v1/chat/completions (OpenAI-compatible)
-  │
+get_agent(model_name=model_roles["reasoning"][0])
+  ├── provider == "ollama"
+  │   └── OpenAIProvider(base_url="{ollama_host}/v1") + OpenAIChatModel(model_name)
   └── provider == "gemini"
-      └── model = "google-gla:{gemini_model}"
-            └── Google GenAI API (cloud)
+      └── model = "google-gla:{model_name}"
 ```
 
-| Provider | Model class | API | ModelSettings |
-|----------|-------------|-----|---------------|
-| Ollama | `OpenAIChatModel` via `OpenAIProvider` | OpenAI-compatible `/v1` | Loaded per normalized model from `co_cli/prompts/quirks/ollama/*.md` |
-| Gemini | `"google-gla:{model_name}"` string | Google GenAI | Loaded per normalized model from `co_cli/prompts/quirks/gemini/*.md` |
+There is no separate primary/fallback settings tier.
 
 ## 2. Core Logic
 
-### Ollama: Qwen3-30B-A3B (default)
+### Provider Notes
 
-| Field | Value |
-|-------|-------|
-| Model family | Qwen3 (Alibaba) |
-| Parameter count | 30.5B total, ~3B active (MoE) |
-| Default tag | `qwen3:30b-a3b-thinking-2507-q8_0-agentic` |
-| Context window | 262K tokens |
-| License | Apache 2.0 |
+#### Ollama
 
-**Inference parameters** — from the Qwen3 model card (thinking-mode profile):
+- Provider transport is OpenAI-compatible API at `{ollama_host}/v1`.
+- Inference settings come from quirk profiles (`prompts/quirks/ollama/*.md`) by normalized model family.
+- `/model` interactive switching remains Ollama-only and updates the `reasoning` role head in-session.
+- Custom model profiles — build once, reference by name in `model_roles`:
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `temperature` | `0.6` | Thinking-mode official value; greedy (0.0) causes degenerate loops |
-| `top_p` | `0.95` | Thinking-mode official value |
-| `max_tokens` | `32768` | Official max recommended for most queries |
+  **Summarization** (`qwen3.5:35b-a3b-q4_k_m` base — 23 GB, very low temperature, bounded output):
+  ```bash
+  ollama create qwen3.5:35b-a3b-q4_k_m-summarize -f ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-summarize
+  ```
+  Set `CO_MODEL_ROLE_SUMMARIZATION=qwen3.5:35b-a3b-q4_k_m-summarize` or add to `settings.json`.
 
-**Why hardcoded, not in settings:** These parameters are model-level inference tuning coupled to the specific model. They live next to the model instantiation in `agent.py` for maintenance locality — not user-facing config.
+  > **Thinking mode:** `qwen3.5:35b-a3b-q4_k_m` has native thinking capability (Ollama reports
+  > `capabilities: thinking`). By default it enters thinking mode and exhausts `num_predict` on
+  > reasoning tokens before emitting visible output. Prompt-level directives (`/no_think`) are
+  > ignored by this architecture. `summarize_messages` detects model names matching `qwen3.5` +
+  > `summarize` and passes `extra_body={"think": False}` via Ollama's OpenAI-compat endpoint,
+  > which is the only reliable disable mechanism. Validate with:
+  > `uv run python scripts/validate_ollama_models.py`
 
-**Settings flow:**
+  **Research sub-agent** (`qwen3:30b-a3b-thinking-2507-q4_k_m` base — 18 GB, non-thinking, web synthesis):
+  ```bash
+  ollama create qwen3:30b-research -f ollama/Modelfile.qwen3-30b-research
+  ```
+  Set `CO_MODEL_ROLE_RESEARCH=qwen3:30b-research` or add to `settings.json`.
 
+  **Main reasoning agent** (`qwen3:30b-a3b-thinking-2507-q8_0` base — 32 GB, thinking, 128k context):
+  ```bash
+  ollama create qwen3:30b-a3b-thinking-2507-q8_0-agentic -f ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic
+  ```
+  Set `CO_MODEL_ROLE_REASONING=qwen3:30b-a3b-thinking-2507-q8_0-agentic` or add to `settings.json`.
+
+  **Coder** (`qwen3-coder-next:q4_k_m` base — 51 GB, deterministic tooling params, large context):
+  ```bash
+  ollama create qwen3-coder-next:q4_k_m-code -f ollama/Modelfile.qwen3-coder-next-q4_k_m-code
+  ```
+  Set `CO_MODEL_ROLE_CODING=qwen3-coder-next:q4_k_m-code` or add to `settings.json`.
+
+#### Gemini
+
+- Provider uses model string `google-gla:{model_name}`.
+- `GEMINI_API_KEY` is required when `LLM_PROVIDER=gemini`.
+- Inference settings come from quirk profiles (`prompts/quirks/gemini/*.md`) with safe defaults when no profile exists.
+
+### 2.1 Role Chains
+
+`model_roles` is `dict[str, list[str]]`:
+
+- Mandatory role: `reasoning` (`len >= 1` required by settings validation).
+- Optional roles: `summarization`, `coding`, `research`, `analysis` (empty/missing disables that role).
+- Order is preference order within the active provider.
+
+Example:
+
+```json
+{
+  "model_roles": {
+    "reasoning": ["qwen3:30b-a3b-thinking-2507-q8_0-agentic", "qwen3-coder-next:q4_k_m-code"],
+    "coding": ["qwen3-coder-next:q4_k_m-code"],
+    "research": ["qwen3:30b-a3b-thinking-2507-q8_0-agentic"],
+    "analysis": ["qwen3:30b-a3b-thinking-2507-q8_0-agentic"]
+  }
+}
 ```
-agent.py: get_agent() → (agent, model_settings)
-    ▼
-main.py: chat_loop()
-    └── run_turn(agent, ..., model_settings=model_settings)
-            └── pydantic-ai → Ollama /v1/chat/completions
-                    temperature=0.6, top_p=0.95, max_tokens=32768
-```
 
-### Ollama: Qwen3-Coder-Next (coding alternative)
+### 2.2 Sub-agent Construction
 
-| Field | Value |
-|-------|-------|
-| Model family | Qwen3-Coder-Next (Alibaba) |
-| Parameter count | 80B (MoE) |
-| Recommended tag | `qwen3-coder-next:q4_k_m-agentic` |
-| Context window | 262K tokens |
-| License | Apache 2.0 |
+Sub-agent model construction is provider-aware via `co_cli/agents/_factory.py`:
 
-**Inference parameters** (official profile + agentic sizing):
+- `ollama` -> `OpenAIChatModel(model_name, OpenAIProvider(base_url="{ollama_host}/v1"))`
+- `gemini` -> `"google-gla:{model_name}"`
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| `temperature` | `1.0` | Official recommended decoding profile |
-| `top_p` | `0.95` | Official recommended decoding profile |
-| `top_k` | `40` | Official recommended decoding profile |
-| `max_tokens` | `65536` | Long coding output budget |
-| `repeat_penalty` | `1.0` | Keep neutral to avoid GGUF repetition side-effects |
-
-### Gemini
-
-| Field | Value |
-|-------|-------|
-| Default model | `gemini-2.0-flash` |
-| Provider | Google GenAI (`google-gla:` model string) |
-| API key | `settings.gemini_api_key` / `GEMINI_API_KEY` |
-
-`ModelSettings` is built from quirk file inference parameters (temperature, top_p, max_tokens) loaded via `get_model_inference("gemini", normalized_model)`, with fallbacks of `temperature=1.0`, `top_p=0.95`, `max_tokens=65536`. Quirk files for Gemini models live in `co_cli/prompts/quirks/gemini/*.md`.
+Summarization uses `model_roles["summarization"]` head (resolved via `get_role_head()`). Falls back to the primary agent model when the role is empty.
 
 ## 3. Config
 
+Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.json > defaults`.
+
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | `"ollama"` or `"gemini"` |
-| `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server URL |
-| `ollama_model` | `OLLAMA_MODEL` | `"qwen3:30b-a3b-thinking-2507-q8_0-agentic"` | Ollama model tag |
-| `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `262144` | Context window size sent per request (note: silently ignored by Ollama's OpenAI API — set via Modelfile instead) |
-| `gemini_api_key` | `GEMINI_API_KEY` | `None` | Google GenAI API key |
-| `gemini_model` | `GEMINI_MODEL` | `"gemini-2.0-flash"` | Gemini model name |
-| `llm_fallback_models` | `CO_LLM_FALLBACK_MODELS` | `[]` | Ordered list of fallback model strings tried on HTTP error; each consumed once then removed |
-
-**Not configurable:** `temperature`, `top_p`, `max_tokens` — hardcoded in `agent.py` (model-specific tuning, not user-facing).
+| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Provider selection: `ollama` or `gemini` |
+| `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server base URL |
+| `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `262144` | Context size sent in request body |
+| `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
+| `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
+| `gemini_api_key` | `GEMINI_API_KEY` | `None` | Gemini API key |
+| `model_roles["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default | Mandatory main-agent model chain (comma-separated) |
+| `model_roles["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Optional dedicated summarization model chain for `/compact` and history compaction |
+| `model_roles["coding"]` | `CO_MODEL_ROLE_CODING` | `[]` | Optional coder sub-agent model chain |
+| `model_roles["research"]` | `CO_MODEL_ROLE_RESEARCH` | `[]` | Optional research sub-agent model chain |
+| `model_roles["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | `[]` | Optional analysis sub-agent model chain |
 
 ## 4. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/agent.py` | `get_agent()` factory — model selection + `ModelSettings` |
-| `co_cli/main.py` | Unpacks `(agent, model_settings)`, passes to `run_turn()` |
-| `co_cli/config.py` | `Settings` with LLM provider fields |
-| `co_cli/prompts/quirks/ollama/qwen3-coder-next.md` | Qwen3-Coder-Next inference profile + counter-steering |
-| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` | Qwen3 Q8_0 agentic profile |
-| `ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic` | Qwen3-Coder-Next Q4_K_M agentic profile |
-| `tests/test_llm_e2e.py` | LLM E2E tests for both providers |
-
----
-
-## Ollama Local Setup
-
-### Why Modelfiles matter
-
-Ollama ships models with a **4096-token default context window**. Agentic systems need far more — system prompts, tool schemas, conversation history, and tool outputs all compete for context space. A 4K window causes silent prompt truncation: Ollama drops input without warning, degrading tool calling and instruction following.
-
-**Critical:** Ollama's OpenAI-compatible API (`/v1/chat/completions`) **silently ignores `num_ctx`** from request parameters ([ollama#5356](https://github.com/ollama/ollama/issues/5356)). The Modelfile is the only reliable way to set context window size. The `-agentic` model tags in this repo have `num_ctx` baked in. Base tags default to 4096 tokens.
-
-Two constraints apply to thinking models:
-- **Temperature must not be 0.** Greedy decoding causes degenerate repetition loops that exhaust the output budget. Qwen3's model card explicitly warns against it.
-- **`repeat_penalty` must be exactly 1.0** for Qwen GGUF quants in this repo to avoid repetition loops.
-
-### Modelfile setup
-
-`ollama create <tag> -f Modelfile` writes only a manifest and params blob. Weight files are **shared by content hash** — an `-agentic` tag costs essentially zero additional disk space.
-
-Pre-built Modelfiles are in the `ollama/` directory. Pull the base model first, then create the `-agentic` tag:
-
-#### Qwen3-30B-A3B
-
-| Tag | Modelfile | Quant | Size |
-|-----|-----------|-------|------|
-| `qwen3:30b-a3b-thinking-2507-q8_0-agentic` | `Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic` | Q8_0 | ~32 GB |
-
-```bash
-ollama pull qwen3:30b-a3b-thinking-2507-q8_0
-ollama create qwen3:30b-a3b-thinking-2507-q8_0-agentic -f ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic
-```
-
-#### Qwen3-Coder-Next
-
-| Tag | Modelfile | Quant | Size |
-|-----|-----------|-------|------|
-| `qwen3-coder-next:q4_k_m-agentic` | `Modelfile.qwen3-coder-next-q4_k_m-agentic` | Q4_K_M | ~51 GB |
-
-```bash
-ollama pull qwen3-coder-next:q4_k_m
-ollama create qwen3-coder-next:q4_k_m-agentic -f ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic
-```
-
-Verify parameters after building:
-
-```bash
-ollama show qwen3-coder-next:q4_k_m-agentic
-```
-
-Update Co settings to use your preferred tag:
-
-```json
-{ "llm_provider": "ollama", "ollama_model": "qwen3:30b-a3b-thinking-2507-q8_0-agentic" }
-```
-
-### Modelfile parameter reference
-
-| Parameter | Qwen3 (thinking) | Qwen3-Coder-Next | Notes |
-|-----------|------------------|------------------|-------|
-| `num_ctx` | **262144** | **262144** | 262K native context for both models |
-| `num_predict` | **32768** | **65536** | Coder model gets larger output budget for code-heavy tasks |
-| `temperature` | **0.6** | **1.0** | Model-card recommended decoding profiles |
-| `top_p` | **0.95** | **0.95** | Model-card recommended decoding profiles |
-| `top_k` | **20** | **40** | Model-card recommended decoding profiles |
-| `repeat_penalty` | **1.0** | **1.0** | Fixed at 1.0 for GGUF stability |
-
-### Modelfile examples
-
-**Qwen3-30B-A3B (Q8_0):**
-
-```dockerfile
-FROM qwen3:30b-a3b-thinking-2507-q8_0
-
-PARAMETER num_ctx 262144
-PARAMETER num_predict 32768
-PARAMETER temperature 0.6
-PARAMETER top_p 0.95
-PARAMETER top_k 20
-PARAMETER repeat_penalty 1.0
-```
-
-**Qwen3-Coder-Next (Q4_K_M):**
-
-```dockerfile
-FROM qwen3-coder-next:q4_k_m
-
-PARAMETER num_ctx 262144
-PARAMETER num_predict 65536
-PARAMETER temperature 1.0
-PARAMETER top_p 0.95
-PARAMETER top_k 40
-PARAMETER repeat_penalty 1.0
-```
-
-### Sizing guide
-
-KV cache grows linearly with `num_ctx`. A 262K window with Qwen3 Q8 uses ~28 GB for KV cache alone on top of the 32 GB weights.
-
-| System RAM | Recommended `num_ctx` | Notes |
-|------------|----------------------|-------|
-| 16 GB | 8192–16384 | Tight — monitor with `ollama ps` |
-| 32 GB | 16384–32768 | Comfortable for models ≤14B |
-| 64 GB | 32768–65536 | Good headroom for 30B models |
-| 128 GB | Model native (262144) | Full context; KV cache ~28 GB for Qwen3 Q8 at 262K |
-
-Detect context truncation in Ollama server logs:
-
-```
-level=WARN source=runner.go msg="truncating input prompt" limit=4096 prompt=9383
-```
-
-### Model recommendations
-
-Models must support **tool calling** for Co's agentic workflow.
-
-| Model | Parameters | Context | Tool Calling | RAM (Q8) | Notes |
-|-------|-----------|---------|-------------|----------|-------|
-| Qwen3 30B-A3B | 30.5B (MoE) | 262K | Yes | ~60 GB | Default; thinking mode; temperature ≥ 0.6 required |
-| Qwen3-Coder-Next | 80B (MoE) | 262K | Yes | ~51 GB | Strong coding model; use `qwen3-coder-next:q4_k_m-agentic` |
-| Qwen2.5-Coder 32B | 32B | 128K | Yes | ~35 GB | Dense; strong at code |
-| Llama 3.3 70B | 70B | 128K | Yes | ~75 GB | Q4_K_M recommended; needs 64 GB+ even quantised |
-
-Verify tool calling works:
-
-```bash
-curl http://localhost:11434/api/chat -d '{
-  "model": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-  "messages": [{"role": "user", "content": "What time is it?"}],
-  "tools": [{"type": "function", "function": {"name": "get_time", "description": "Get current time", "parameters": {"type": "object", "properties": {}}}}]
-}'
-```
-
-Response should contain a `tool_calls` array, not a text answer.
-
-### Known issues and quirks
-
-**Qwen3 thinking models:**
-- Do not use `temperature=0`. Greedy decoding causes degenerate repetition in the thinking chain. Minimum safe: 0.6 (thinking mode).
-- Thinking tokens are implicit in Ollama — no separate budget control. `num_predict` caps total output including thinking tokens.
-
-**Qwen3-Coder-Next (community notes + implementation):**
-- Use the official decoding profile (`temperature=1.0`, `top_p=0.95`, `top_k=40`) and set `num_predict` high for coding tasks.
-- Tool-call reliability depends on chat template/parser alignment in serving stacks; for vLLM deployments, use the Qwen3 XML tool parser.
-- Keep tool-call output strict (valid arguments JSON, no pseudo tool calls). Counter-steering and inference for this repo live in `co_cli/prompts/quirks/ollama/qwen3-coder-next.md`.
-- Agentic Modelfile implementation is `ollama/Modelfile.qwen3-coder-next-q4_k_m-agentic`.
-
-### Server tuning
-
-Set before starting the Ollama server (e.g. `~/.zshrc` or launchd plist):
-
-| Variable | Purpose | Example |
-|----------|---------|---------|
-| `OLLAMA_NUM_PARALLEL` | Concurrent request slots | `2` |
-| `OLLAMA_MAX_LOADED_MODELS` | Models kept in memory | `1` for large models |
-| `OLLAMA_KEEP_ALIVE` | Keep model loaded | `24h` (avoids 10–30s cold-start) |
-| `OLLAMA_FLASH_ATTENTION` | Flash attention | `1` (faster, less memory) |
-
-**macOS (Apple Silicon):** Metal is used automatically. `OLLAMA_KEEP_ALIVE=24h` eliminates cold-start latency. `ollama ps` shows `100% GPU` for full offload.
-
-```bash
-export OLLAMA_KEEP_ALIVE=24h
-export OLLAMA_FLASH_ATTENTION=1
-ollama serve
-```
-
-```bash
-ollama ps                    # see loaded models and RAM usage
-ollama stop <model:tag>      # unload a specific model
-```
-
-### References
-
-- [Ollama Modelfile Reference](https://docs.ollama.com/modelfile)
-- [Ollama num_ctx silently ignored in OpenAI API](https://github.com/ollama/ollama/issues/5356)
-- [Qwen3-30B-A3B model card](https://huggingface.co/Qwen/Qwen3-30B-A3B)
-- [Qwen3-Coder-Next model card](https://huggingface.co/Qwen/Qwen3-Coder-Next)
-- [Qwen3-Coder-Next community discussion: tool-calling reliability](https://huggingface.co/Qwen/Qwen3-Coder-Next/discussions/14)
-- [Qwen3-Coder-Next community discussion: parser/template pitfalls](https://huggingface.co/Qwen/Qwen3-Coder-Next/discussions/17)
-- [vLLM tool calling documentation](https://docs.vllm.ai/en/latest/features/tool_calling/)
+| `co_cli/config.py` | `model_roles` setting, provider selection, Ollama/Gemini env var mappings |
+| `co_cli/deps.py` | `CoDeps` fields: `model_roles`, `ollama_host`, `llm_provider` |
+| `co_cli/_history.py` | `summarize_messages` — passes `think=False` for qwen3.5 summarize models |
+| `co_cli/agents/_factory.py` | `make_subagent_model` — builds `OpenAIChatModel` for Ollama or bare string for Gemini |
+| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-summarize` | Summarization model: `top_k 20`, `/no_think` in SYSTEM, `num_predict 2048` |
+| `scripts/validate_ollama_models.py` | Validates all co-cli custom models: params + `/no_think` presence in baked system prompt |

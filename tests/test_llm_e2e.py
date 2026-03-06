@@ -31,7 +31,7 @@ async def test_agent_e2e_gemini():
     if os.getenv("LLM_PROVIDER") != "gemini":
         return  # Not targeting Gemini this run
 
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     try:
         result = await agent.run("Reply with exactly 'OK'.", model_settings=model_settings)
         assert "OK" in result.output
@@ -121,7 +121,7 @@ async def test_agent_e2e_ollama():
     if os.getenv("LLM_PROVIDER") != "ollama":
         return  # Not targeting Ollama this run
 
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     deps = _make_deps("test-e2e")
     try:
         result = await agent.run(
@@ -168,7 +168,7 @@ async def test_ollama_memory_gravity():
         before = [e for e in entries_before if e.id == test_id]
         assert len(before) == 1, f"Test memory {test_id} not found after write"
 
-        agent, model_settings, _ = get_agent()
+        agent, model_settings, _, _ = get_agent()
         deps = _make_deps("test-memory-gravity")
 
         # Ask the model to search memories — unique keyword ensures our file matches.
@@ -207,7 +207,7 @@ async def test_ollama_autonomous_memory_save():
     if os.getenv("LLM_PROVIDER") != "ollama":
         return
 
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     deps = _make_deps("test-autonomous-save")
 
     # State a clear preference — no mention of save_memory or any tool
@@ -263,7 +263,7 @@ async def test_ollama_web_research_and_save():
         return
 
     _settings = get_settings()
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
 
     # Full deps with web credentials so web_search can work if Brave key exists
     deps = CoDeps(
@@ -372,7 +372,7 @@ async def test_ollama_memory_decay():
         entries_before = _load_memories(memory_dir)
         assert len(entries_before) == limit
 
-        agent, model_settings, _ = get_agent()
+        agent, model_settings, _, _ = get_agent()
         deps = CoDeps(
             shell=ShellBackend(),
             session_id="test-decay",

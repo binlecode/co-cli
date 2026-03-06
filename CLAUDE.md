@@ -123,29 +123,37 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-personality.md` — Personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning depth override
 - `docs/DESIGN-llm-models.md` — LLM model configuration (Gemini, Ollama) + Ollama local setup guide
 - `docs/DESIGN-logging-and-tracking.md` — Telemetry architecture, SQLite schema, viewers, real-time tail
-- `docs/DESIGN-context-governance.md` — Context governance (history processors, sliding window, summarisation)
-- `docs/DESIGN-prompt-design.md` — Agentic loop + prompt architecture: run_turn, approval re-entry (four-tier), tool preamble, safety policy, static/per-turn prompt layers
-- `docs/DESIGN-tools.md` — All native tool implementations: Memory, Shell (four-tier approval), Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch), Capabilities
+- `docs/DESIGN-prompt-design.md` — Agentic loop + prompt architecture + context governance: run_turn, approval re-entry (four-tier), tool preamble, safety policy, static/per-turn prompt layers, history processors, sliding-window compaction
+- `docs/DESIGN-tools.md` — Tools index: Common Conventions, approval table, docstring standard, cross-tool routing map
+- `docs/DESIGN-tools-execution.md` — Execution tools: Shell (four-tier approval), File, Background Tasks, Todo, Capabilities
+- `docs/DESIGN-tools-integrations.md` — Integration tools: Memory, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
+- `docs/DESIGN-tools-delegation.md` — Delegation tools: Coder, Research, Analysis sub-agents
+- `docs/DESIGN-skills.md` — Skills subsystem: sources/precedence, loader, dispatch pipeline (arg substitution, shell preprocessing, env injection, allowed-tools), security scanner, `/skills` commands (list/check/install/reload)
 - `docs/DESIGN-knowledge.md` — Knowledge system: flat storage, kinds, FTS5/hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay, tag/temporal filtering)
 - `docs/DESIGN-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
+
+### Reference (`docs/reference/`)
+
+Research and reference material not tied to active implementation: REVIEW-*, ROADMAP-*, FIX-*, and external reference docs. Not linked from DESIGN docs — for background reading only.
 
 ### TODO (remaining work items only — no design content, no status tracking)
 
 **Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
-- `docs/TODO-subagent-delegation.md` — Sub-agent delegation: research + analysis sub-agents, budget sharing, confidence-scored advisory outputs
-- `docs/TODO-background-execution.md` — Background task execution for long-running operations
 - `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
-- `docs/TODO-openclaw-adoption.md` — Deferred task: `/new` slash command (TASK-9, blocked on `_index_session_summary()`)
-- `docs/TODO-skills-system.md` — P3 skills gaps (Gaps 8–10): `allowed-tools` grants, shell preprocessing, `context:fork` subagent
-- `docs/TODO-gap-openclaw-analysis.md` — P3 openclaw gaps (§8–§14): MMR re-ranking, embedding provider, process registry, security audit command, skills system, cron scheduling, config includes
-- `docs/TODO-coding-tool-convergence.md` — Coding tool convergence: native file tools (read/list/find/write/edit), shell policy engine, coder subagent delegation, coding eval gates, workspace checkpoint + rewind, approval risk classifier (P0–P2)
 
 ### Skills
 
-Three skills map onto the dev workflow. Human gates are at decisions, not artifacts.
+Five skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
 ```
-PO brief
+PO brief / TL pre-check
+    ↓
+TL:  /orchestrate-review <scope>  → docs/reference/REVIEW-<scope>.md  (TL + Code Dev + Auditor)
+    ↓
+👤  TL reads verdict: HEALTHY / NEEDS_ATTENTION / ACTION_REQUIRED
+    ↓
+[optional] TL:  /orchestrate-research <scope>  → docs/reference/RESEARCH-<scope>.md  (TL + Researcher)
+[optional] 👤  TL reads research: gaps to address in design?
     ↓
 TL:  /orchestrate-plan  → docs/TODO-<slug>.md  (TL + Reviewer + Auditor)
     ↓
@@ -158,8 +166,12 @@ Dev: /orchestrate-dev   → docs/DELIVERY-<slug>.md  (implement + self-review + 
 👤  Gate 3: PO acceptance                 (does it work for the user?)
     ↓
 ship
+    ↓
+🗑  Delete DELIVERY-<slug>.md  (temporary scaffolding — not a permanent record)
 ```
 
+- `/orchestrate-review <scope>` — Co-system health check: code↔doc accuracy + TODO health → TL verdict. Run after every delivery or before planning.
+- `/orchestrate-research <scope>` — Reference system tradeoff analysis: compare co-cli design decisions against peer systems → gaps report. Run before planning a scope that involves architecture decisions.
 - `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques in parallel → TL decides → repeat until clean, produces `docs/TODO-<slug>.md`
 - `/orchestrate-dev <slug>` — Implements approved plan: execute tasks, self-review, verify done_when, run tests, sync docs, produce `docs/DELIVERY-<slug>.md`
 - `/sync-doc [doc...]` — Verify DESIGN docs against current source code and fix inaccuracies in-place. No args = all DESIGN docs. Also invoked internally by `orchestrate-dev`.

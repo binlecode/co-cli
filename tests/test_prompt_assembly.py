@@ -1,17 +1,19 @@
 """Tests for system prompt assembly and personality composition.
 
 Static prompt: soul seed + rules + counter-steering.
-Personality: expanded soul seed (identity + Core + Never) in static prompt.
-Task-specific guidance: loaded via pre-turn MindsetDeclaration classification, injected as active mindset.
+Personality: expanded soul seed (identity + Core + Never + mindsets) in static prompt.
+Task-specific guidance: all 6 mindset files loaded statically into the soul block at agent creation.
 """
 
 import time
 from pathlib import Path
 
+from co_cli._frontmatter import parse_frontmatter
 from co_cli.prompts import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._composer import (
     REQUIRED_MINDSET_TASK_TYPES,
     VALID_PERSONALITIES,
+    load_character_memories,
     load_soul_seed,
     validate_personality_files,
 )
@@ -147,6 +149,36 @@ def test_valid_personalities_derived_from_souls():
     assert len(VALID_PERSONALITIES) >= 2
 
 
+def test_role_base_memories_exist_in_flat_knowledge_dir():
+    """Built-in roles retain character base memories in .co-cli/knowledge/*.md."""
+    knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
+    assert knowledge_dir.exists(), "Missing .co-cli/knowledge directory"
+
+    builtins = ("finch", "jeff", "tars")
+    counts = {role: 0 for role in builtins}
+
+    for path in knowledge_dir.glob("*.md"):
+        raw = path.read_text(encoding="utf-8")
+        fm, _ = parse_frontmatter(raw)
+        tags = fm.get("tags", [])
+        if not isinstance(tags, list):
+            continue
+        if "character" not in tags:
+            continue
+        for role in builtins:
+            if role in tags:
+                counts[role] += 1
+
+    for role in builtins:
+        assert counts[role] > 0, (
+            f"No character base memories found for role '{role}' in .co-cli/knowledge/*.md"
+        )
+        block = load_character_memories(role, knowledge_dir)
+        assert block.startswith("## Character"), (
+            f"load_character_memories('{role}') did not produce a Character block"
+        )
+
+
 def test_static_prompt_has_no_core_traits_section():
     """Static identity rules must not define core traits — soul provides all identity."""
     identity = (
@@ -165,12 +197,20 @@ def test_identity_rule_does_not_instruct_manual_recall():
 
 
 def test_total_prompt_under_budget():
-    """Static prompt with soul seed stays under budget."""
+    """Static prompt with soul seed (including mindsets) stays under budget."""
+    from co_cli.prompts.personalities._composer import load_soul_mindsets
     for name in VALID_PERSONALITIES:
         seed = load_soul_seed(name)
+        memory_dir = Path.cwd() / ".co-cli" / "knowledge"
+        base_memories = load_character_memories(name, memory_dir)
+        if base_memories:
+            seed = seed + "\n\n" + base_memories
+        soul_mindsets = load_soul_mindsets(name)
+        if soul_mindsets:
+            seed = seed + "\n\n" + soul_mindsets
         prompt, manifest = assemble_prompt("gemini", soul_seed=seed)
-        assert manifest.total_chars < 8000, (
-            f"Static prompt for '{name}' is {manifest.total_chars} chars, expected < 8000"
+        assert manifest.total_chars < 16844, (
+            f"Static prompt for '{name}' is {manifest.total_chars} chars, expected < 16844"
         )
 
 

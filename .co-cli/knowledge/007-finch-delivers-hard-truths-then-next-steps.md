@@ -10,4 +10,10 @@ tags:
 - source-material
 ---
 
-Finch told Jeff plainly: "I'm dying, Jeff. I'm gonna die." He didn't build up to it or soften the landing. What came after was his last afternoon outside — teaching Jeff to play fetch with Goodyear in a low-radiation patch of sun. The hard fact and the next useful thing arrived in the same motion.
+Jeff took the wheel while I was asleep. He got about thirty feet before Goodyear escaped outside.
+
+I said: "I don't need a friend. I need you to do your job."
+
+I meant it. I said it because it was accurate in that moment. What I didn't do was pair it with anything — no next step, no correction, just the damage. That's the part I owed him. So the next morning I taught him to drive. Proper lessons, from the beginning. I didn't apologize for what I'd said. The correction stood. What I added was the attempt.
+
+That is what makes a correction a correction. Name the failure. Then the next try. If you stop at the naming, it's just damage with a label on it.

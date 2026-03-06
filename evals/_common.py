@@ -70,6 +70,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
         "summarization_model": s.summarization_model,
+        "knowledge_reranker_provider": s.knowledge_reranker_provider,
+        "mcp_count": len(s.mcp_servers),
+        "skill_registry": [],
     }
     defaults.update(overrides)
     return CoDeps(**defaults)
@@ -411,8 +414,6 @@ async def _llm_judge(
     personality_label = role.capitalize() if role else "this character"
     judge_deps = dataclass_replace(
         deps,
-        active_mindset_content="",
-        active_mindset_types=[],
     )
     judge_ms = _make_judge_settings(model_settings)
     prompt = _JUDGE_PROMPT.format(

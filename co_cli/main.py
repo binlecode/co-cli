@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import subprocess
 import time
 from contextlib import AsyncExitStack
@@ -19,16 +21,25 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
 from co_cli._signal_analyzer import analyze_for_signals
-from co_cli.tools.memory import _save_memory_impl
+from co_cli.memory_lifecycle import persist_memory as _persist_memory
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps
 from co_cli.shell_backend import ShellBackend
 from co_cli._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR
+from co_cli.config import settings, DATA_DIR, get_role_head
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli._banner import display_welcome_banner
-from co_cli.status import get_status, render_status_table
-from co_cli._commands import dispatch as dispatch_command, CommandContext, COMMANDS
+from co_cli.status import get_status, render_status_table, check_security, render_security_findings
+from co_cli._commands import (
+    dispatch as dispatch_command, CommandContext, COMMANDS, SKILL_COMMANDS,
+    _load_skills, _swap_model_inplace, _skills_snapshot, _build_completer_words,
+)
+from co_cli._exec_approvals import prune_stale as _prune_stale_approvals
+from co_cli.background import TaskRunner, TaskStorage
+from co_cli._session import (
+    save_session, touch_session, increment_compaction,
+)
+from co_cli._bootstrap import run_bootstrap
 from co_cli.prompts.personalities._composer import load_soul_critique
 
 # Setup Telemetry - must be done before Agent.instrument_all()
@@ -63,6 +74,8 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @app.callback()
 def _default(ctx: typer.Context):
@@ -71,7 +84,7 @@ def _default(ctx: typer.Context):
         chat()
 
 
-def create_deps() -> CoDeps:
+def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
     """Create deps from settings."""
     session_id = uuid4().hex
 
@@ -80,42 +93,75 @@ def create_deps() -> CoDeps:
     if settings.obsidian_vault_path:
         vault_path = Path(settings.obsidian_vault_path)
 
-    # Initialize knowledge index when FTS backend is active
+    # Initialize knowledge index with adaptive fallback:
+    # hybrid -> fts5 -> grep (no index).
     knowledge_index = None
+    resolved_knowledge_backend = settings.knowledge_search_backend
     if settings.knowledge_search_backend in ("fts5", "hybrid"):
         from co_cli.knowledge_index import KnowledgeIndex
-        knowledge_index = KnowledgeIndex(
-            DATA_DIR / "search.db",
-            backend=settings.knowledge_search_backend,
-            embedding_provider=settings.knowledge_embedding_provider,
-            embedding_model=settings.knowledge_embedding_model,
-            embedding_dims=settings.knowledge_embedding_dims,
-            ollama_host=settings.ollama_host,
-            gemini_api_key=settings.gemini_api_key,
-            hybrid_vector_weight=settings.knowledge_hybrid_vector_weight,
-            hybrid_text_weight=settings.knowledge_hybrid_text_weight,
-            reranker_provider=settings.knowledge_reranker_provider,
-            reranker_model=settings.knowledge_reranker_model,
-        )
-        knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
-        if knowledge_dir.exists():
+
+        def _build_index(backend: str):
+            return KnowledgeIndex(
+                DATA_DIR / "search.db",
+                backend=backend,
+                embedding_provider=settings.knowledge_embedding_provider,
+                embedding_model=settings.knowledge_embedding_model,
+                embedding_dims=settings.knowledge_embedding_dims,
+                ollama_host=settings.ollama_host,
+                gemini_api_key=settings.gemini_api_key,
+                hybrid_vector_weight=settings.knowledge_hybrid_vector_weight,
+                hybrid_text_weight=settings.knowledge_hybrid_text_weight,
+                reranker_provider=settings.knowledge_reranker_provider,
+                reranker_model=settings.knowledge_reranker_model,
+            )
+
+        if settings.knowledge_search_backend == "hybrid":
             try:
-                knowledge_index.sync_dir("memory", knowledge_dir)
-            except Exception as e:
-                import logging as _logging
-                _logging.getLogger(__name__).warning(f"Knowledge index sync failed: {e}")
-                knowledge_index.close()
+                knowledge_index = _build_index("hybrid")
+                resolved_knowledge_backend = "hybrid"
+            except Exception as e_hybrid:
+                logger.warning(
+                    "Knowledge backend 'hybrid' unavailable; falling back to 'fts5': %s",
+                    e_hybrid,
+                )
+                try:
+                    knowledge_index = _build_index("fts5")
+                    resolved_knowledge_backend = "fts5"
+                except Exception as e_fts:
+                    logger.warning(
+                        "Knowledge backend 'fts5' unavailable after hybrid fallback; "
+                        "falling back to 'grep': %s",
+                        e_fts,
+                    )
+                    knowledge_index = None
+                    resolved_knowledge_backend = "grep"
+        else:
+            try:
+                knowledge_index = _build_index("fts5")
+                resolved_knowledge_backend = "fts5"
+            except Exception as e_fts:
+                logger.warning(
+                    "Knowledge backend 'fts5' unavailable; falling back to 'grep': %s",
+                    e_fts,
+                )
                 knowledge_index = None
+                resolved_knowledge_backend = "grep"
 
     _personality_critique = (
         load_soul_critique(settings.personality) if settings.personality else ""
     )
+
+    exec_approvals_path = Path.cwd() / ".co-cli" / "exec-approvals.json"
+
+    # Prune stale exec approvals at session start (removes entries older than 90 days)
+    _prune_stale_approvals(exec_approvals_path, max_age_days=90)
 
     deps = CoDeps(
         shell=ShellBackend(),
         session_id=session_id,
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
+        exec_approvals_path=exec_approvals_path,
         shell_max_timeout=settings.shell_max_timeout,
         shell_safe_commands=settings.shell_safe_commands,
         brave_search_api_key=settings.brave_search_api_key,
@@ -131,15 +177,27 @@ def create_deps() -> CoDeps:
         memory_max_count=settings.memory_max_count,
         memory_dedup_window_days=settings.memory_dedup_window_days,
         memory_dedup_threshold=settings.memory_dedup_threshold,
-        memory_decay_strategy=settings.memory_decay_strategy,
-        memory_decay_percentage=settings.memory_decay_percentage,
+        memory_recall_half_life_days=settings.memory_recall_half_life_days,
+        memory_consolidation_top_k=settings.memory_consolidation_top_k,
+        memory_consolidation_timeout_seconds=settings.memory_consolidation_timeout_seconds,
         max_history_messages=settings.max_history_messages,
         tool_output_trim_chars=settings.tool_output_trim_chars,
-        summarization_model=settings.summarization_model,
+        summarization_model=get_role_head(settings.model_roles, "summarization"),
         doom_loop_threshold=settings.doom_loop_threshold,
         max_reflections=settings.max_reflections,
         knowledge_index=knowledge_index,
-        knowledge_search_backend=settings.knowledge_search_backend,
+        knowledge_search_backend=resolved_knowledge_backend,
+        knowledge_reranker_provider=settings.knowledge_reranker_provider,
+        mcp_count=len(settings.mcp_servers),
+        approval_risk_enabled=settings.approval_risk_enabled,
+        approval_auto_low_risk=settings.approval_auto_low_risk,
+        model_roles={k: list(v) for k, v in settings.model_roles.items()},
+        ollama_host=settings.ollama_host,
+        llm_provider=settings.llm_provider,
+        ollama_num_ctx=settings.ollama_num_ctx,
+        ctx_warn_threshold=settings.ctx_warn_threshold,
+        ctx_overflow_threshold=settings.ctx_overflow_threshold,
+        task_runner=task_runner,
     )
     # Initialize session-scoped processor state
     deps._opening_ctx_state = OpeningContextState()
@@ -152,15 +210,15 @@ async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> lis
 
     Falls back to ``{prefix}_*`` placeholders if list_tools() is unavailable.
     """
-    from pydantic_ai.mcp import MCPServerStdio
+    from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
     native_set = set(native_tool_names)
 
     for toolset in agent.toolsets:
-        # Unwrap approval wrappers to reach MCPServerStdio
+        # Unwrap approval wrappers to reach the MCPServer base instance
         inner = getattr(toolset, "wrapped", toolset)
-        if not isinstance(inner, MCPServerStdio):
+        if not isinstance(inner, MCPServer):
             continue
         try:
             tools = await inner.list_tools()
@@ -182,16 +240,50 @@ async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> lis
 
 
 async def chat_loop(verbose: bool = False):
+    reasoning_chain = list(settings.model_roles["reasoning"])
     mcp_servers = settings.mcp_servers if settings.mcp_servers else None
-    agent, model_settings, tool_names = get_agent(
+    agent, model_settings, tool_names, _ = get_agent(
         web_policy=settings.web_policy,
         mcp_servers=mcp_servers,
         personality=settings.personality,
+        model_name=reasoning_chain[0],
     )
-    deps = create_deps()
+
+    # Initialize background task runner before chat loop starts
+    tasks_dir = Path.cwd() / ".co-cli" / "tasks"
+    task_storage = TaskStorage(tasks_dir)
+    task_runner = TaskRunner(
+        storage=task_storage,
+        max_concurrent=settings.background_max_concurrent,
+        inactivity_timeout=settings.background_task_inactivity_timeout,
+        auto_cleanup=settings.background_auto_cleanup,
+        retention_days=settings.background_task_retention_days,
+    )
+
+    deps = create_deps(task_runner=task_runner)
+    deps.skills_dir = Path.cwd() / ".co-cli" / "skills"
+
+    # Load skills at startup; package-default skills always available; project-local skills override on name collision
+    skill_commands = _load_skills(deps.skills_dir, settings=settings)
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS.update(skill_commands)
+    _skills_watch_snapshot = _skills_snapshot(deps.skills_dir)
+
+    # Populate skill_registry for system prompt injection (skills with descriptions,
+    # excluding disable-model-invocation skills)
+    deps.skill_registry = [
+        {"name": s.name, "description": s.description}
+        for s in skill_commands.values()
+        if s.description and not s.disable_model_invocation
+    ]
+
     frontend = TerminalFrontend()
+    # Build completer from built-in commands + user_invocable skills
+    skill_completer_names = [
+        f"/{name}" for name, s in skill_commands.items() if s.user_invocable
+    ]
     completer = WordCompleter(
-        [f"/{name}" for name in COMMANDS],
+        [f"/{name}" for name in COMMANDS] + skill_completer_names,
         sentence=True,
     )
     session = PromptSession(
@@ -209,9 +301,10 @@ async def chat_loop(verbose: bool = False):
         console.print(f"[yellow]MCP servers unavailable ({e}) — continuing without MCP[/yellow]")
         await stack.aclose()  # clean up partially-started first agent
         stack = AsyncExitStack()
-        agent, model_settings, tool_names = get_agent(
+        agent, model_settings, tool_names, _ = get_agent(
             web_policy=settings.web_policy,
             personality=settings.personality,
+            model_name=reasoning_chain[0],
         )
         await stack.enter_async_context(agent)
         mcp_servers = None
@@ -224,10 +317,37 @@ async def chat_loop(verbose: bool = False):
         if mcp_servers:
             tool_names = await _discover_mcp_tools(agent, tool_names)
 
+        knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
+        session_path = Path.cwd() / ".co-cli" / "session.json"
+        session_data = await run_bootstrap(
+            deps,
+            frontend,
+            knowledge_dir=knowledge_dir,
+            session_path=session_path,
+            session_ttl_minutes=settings.session_ttl_minutes,
+            n_skills=len(skill_commands),
+        )
+
         info = get_status(tool_count=len(tool_names))
         display_welcome_banner(info)
 
         while True:
+            # File watcher: detect skill edits before each prompt
+            _new_snap = _skills_snapshot(deps.skills_dir)
+            if _new_snap != _skills_watch_snapshot:
+                _skills_watch_snapshot = _new_snap
+                _reloaded = _load_skills(deps.skills_dir, settings=settings)
+                SKILL_COMMANDS.clear()
+                SKILL_COMMANDS.update(_reloaded)
+                deps.skill_registry = [
+                    {"name": s.name, "description": s.description}
+                    for s in SKILL_COMMANDS.values()
+                    if s.description and not s.disable_model_invocation
+                ]
+                completer.words = _build_completer_words()
+                console.print("[dim]Skills reloaded (files changed).[/dim]")
+
+            _saved_env: dict[str, str | None] = {}
             try:
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
                 last_interrupt_time = 0.0  # Reset on successful input
@@ -243,14 +363,26 @@ async def chat_loop(verbose: bool = False):
                         deps=deps,
                         agent=agent,
                         tool_names=tool_names,
+                        completer=completer,
                     )
                     handled, new_history = await dispatch_command(user_input, cmd_ctx)
                     if handled:
                         if new_history is not None:
                             message_history = new_history
+                            # Track compaction count in session (compact cmd returns new history)
+                            if user_input.lstrip("/").split()[0] == "compact":
+                                session_data = increment_compaction(session_data)
+                                save_session(session_path, session_data)
                         if cmd_ctx.model_settings is not None:
                             model_settings = cmd_ctx.model_settings
-                        continue
+                        if cmd_ctx.skill_body is not None:
+                            # Skill dispatched — fall through to LLM turn with skill body
+                            user_input = cmd_ctx.skill_body
+                            # Save current env values and inject skill-env vars
+                            _saved_env = {k: os.environ.get(k) for k in deps.active_skill_env}
+                            os.environ.update(deps.active_skill_env)
+                        else:
+                            continue
 
                 # Join background compaction if it completed while user was typing
                 if bg_compaction_task is not None:
@@ -262,19 +394,64 @@ async def chat_loop(verbose: bool = False):
                     bg_compaction_task = None
 
                 # LLM turn — delegated to _orchestrate.run_turn()
-                frontend.on_status("Co is thinking...")
-                turn_result = await run_turn(
-                    agent=agent,
-                    user_input=user_input,
-                    deps=deps,
-                    message_history=message_history,
-                    model_settings=model_settings,
-                    max_request_limit=settings.max_request_limit,
-                    http_retries=settings.model_http_retries,
-                    verbose=verbose,
-                    frontend=frontend,
-                )
-                message_history = turn_result.messages
+                # try/finally guarantees skill-env rollback on all exit paths
+                # (normal completion, KeyboardInterrupt, CancelledError, Exception).
+                try:
+                    reasoning_chain = list(deps.model_roles.get("reasoning", reasoning_chain))
+                    # Capture pre-turn state for model fallback replay
+                    pre_turn_history = message_history[:]
+                    original_user_input = user_input
+                    frontend.on_status("Co is thinking...")
+                    turn_result = await run_turn(
+                        agent=agent,
+                        user_input=user_input,
+                        deps=deps,
+                        message_history=message_history,
+                        model_settings=model_settings,
+                        max_request_limit=settings.max_request_limit,
+                        http_retries=settings.model_http_retries,
+                        verbose=verbose,
+                        frontend=frontend,
+                    )
+                    message_history = turn_result.messages
+
+                    # Terminal error recovery: advance reasoning model chain (max once per turn).
+                    # Context-overflow will also trigger chain advance and may still fail — acceptable MVP.
+                    if turn_result.outcome == "error" and len(reasoning_chain) > 1:
+                        reasoning_chain.pop(0)
+                        next_model = reasoning_chain[0]
+                        deps.model_roles["reasoning"] = list(reasoning_chain)
+                        try:
+                            new_ms = _swap_model_inplace(
+                                agent, next_model, settings.llm_provider.lower(), settings
+                            )
+                            model_settings = new_ms
+                            frontend.on_status(f"Retrying with reasoning model: {next_model}")
+                            turn_result = await run_turn(
+                                agent=agent,
+                                user_input=original_user_input,
+                                deps=deps,
+                                message_history=pre_turn_history,
+                                model_settings=model_settings,
+                                max_request_limit=settings.max_request_limit,
+                                http_retries=settings.model_http_retries,
+                                verbose=verbose,
+                                frontend=frontend,
+                            )
+                            message_history = turn_result.messages
+                        except Exception as _fe:
+                            console.print(f"[bold red]Fallback failed:[/bold red] {_fe}")
+                finally:
+                    # Restore env vars saved before skill dispatch. No-op on non-skill turns.
+                    for k, v in _saved_env.items():
+                        if v is not None:
+                            os.environ[k] = v
+                        else:
+                            os.environ.pop(k, None)
+                    # Both clears in finally — guaranteed on all exit paths including exceptions.
+                    # Prevents stale skill grants from bleeding into the next turn.
+                    deps.active_skill_env.clear()
+                    deps.active_skill_allowed_tools.clear()
 
                 # Signal detection — CC hookify pattern, auto-triggered post-turn.
                 # LLM mini-agent classifies every completed turn; guardrails in the
@@ -287,8 +464,9 @@ async def chat_loop(verbose: bool = False):
                     if signal.found and signal.candidate and signal.tag:
                         tags = [signal.tag] + (["personality-context"] if signal.inject else [])
                         if signal.confidence == "high":
-                            await _save_memory_impl(
-                                deps, signal.candidate, tags, None
+                            await _persist_memory(
+                                deps, signal.candidate, tags, None,
+                                on_failure="skip", model=agent.model,
                             )
                             frontend.on_status(f"Learned: {signal.candidate[:80]}")
                         else:
@@ -296,12 +474,17 @@ async def chat_loop(verbose: bool = False):
                                 f"Worth remembering: {signal.candidate}"
                             )
                             if choice in ("y", "a"):
-                                await _save_memory_impl(
-                                    deps, signal.candidate, tags, None
+                                await _persist_memory(
+                                    deps, signal.candidate, tags, None,
+                                    on_failure="add", model=agent.model,
                                 )
 
                 # Clear precomputed result (consumed or stale)
                 deps.precomputed_compaction = None
+
+                # Touch session after each turn
+                session_data = touch_session(session_data)
+                save_session(session_path, session_data)
 
                 # Spawn background compaction for the next turn
                 bg_compaction_task = asyncio.create_task(
@@ -329,6 +512,7 @@ async def chat_loop(verbose: bool = False):
     finally:
         if bg_compaction_task is not None:
             bg_compaction_task.cancel()
+        await task_runner.shutdown()
         await stack.aclose()
         deps.shell.cleanup()
 
@@ -353,6 +537,8 @@ def status():
     """Show system health and tool availability."""
     info = get_status()
     console.print(render_status_table(info))
+    findings = check_security()
+    render_security_findings(findings)
 
 
 @app.command()

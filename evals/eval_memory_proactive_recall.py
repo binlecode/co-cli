@@ -171,7 +171,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 )
 
             # Build agent and deps
-            agent, model_settings, _ = get_agent()
+            agent, model_settings, _, _ = get_agent()
             deps = make_eval_deps(session_id=f"eval-recall-{case.id}")
             deps._safety_state = SafetyState()
             # Initialize opening context state (normally done by main.py)

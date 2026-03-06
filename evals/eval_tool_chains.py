@@ -92,6 +92,15 @@ CASES: list[ChainCase] = [
         ),
         expected_chain=["list_memories", "recall_memory"],
     ),
+    ChainCase(
+        id="research-and-save",
+        prompt=(
+            "Search the web for 'Python asyncio best practices 2024', fetch the "
+            "most relevant result, and save it as an article in my knowledge base."
+        ),
+        expected_chain=["web_search", "web_fetch", "save_article"],
+        requires="brave_search_api_key",
+    ),
 ]
 
 
@@ -172,7 +181,7 @@ async def main() -> int:
     print("  Eval: Multi-Step Tool Chains")
     print("=" * 60)
 
-    agent, model_settings, _ = get_agent()
+    agent, model_settings, _, _ = get_agent()
     deps = make_eval_deps(session_id="eval-tool-chains")
     deps._safety_state = SafetyState()
 

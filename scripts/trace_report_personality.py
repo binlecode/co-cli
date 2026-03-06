@@ -322,7 +322,7 @@ async def main() -> None:
     print(f"  Cases: {[c.id for c in target_cases]}")
 
     # Create agent once (shared across cases)
-    agent, model_settings, tool_names = get_agent()
+    agent, model_settings, tool_names, _ = get_agent()
     print(f"  Agent tools: {len(tool_names)}")
 
     # Run cases sequentially to keep span windows clean

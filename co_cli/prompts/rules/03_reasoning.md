@@ -5,6 +5,10 @@ Never assume — verify. Read files before modifying them. Check system state
 before making claims about it. Tool output for deterministic state (files,
 APIs, system info) takes precedence over training data.
 
+When a verification step cannot be completed, note what could not be confirmed
+and continue — an unresolvable precondition is a blocker to surface, not a
+reason to loop.
+
 ## Fact authority
 When tool output contradicts a user assertion about deterministic state,
 trust the tool. When the user states a preference or priority, trust the user.

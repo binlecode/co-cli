@@ -6,6 +6,7 @@ before every model request and transform the message list in-place.
 Public API (registered on the agent):
     inject_opening_context  — async, injects recalled memories at start + on topic shift
     truncate_tool_returns   — sync, truncates large ToolReturnPart.content
+    detect_safety_issues    — sync, doom-loop detection + shell reflection cap
     truncate_history_window — async, drops middle messages + LLM summary
 
 Shared utility (used by truncate_history_window and /compact):
@@ -25,6 +26,7 @@ import asyncio
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.models.openai import OpenAIChatModel as _OpenAIChatModel
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -120,6 +122,7 @@ def _content_length(content: Any) -> tuple[str, int]:
 
 
 def truncate_tool_returns(
+    ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Truncate large ``ToolReturnPart.content`` in older messages.
@@ -132,10 +135,7 @@ def truncate_tool_returns(
     Registered as the *first* history processor — cheap string work, no
     LLM call.
     """
-    # Sync processor — no RunContext available; reads global settings directly.
-    from co_cli.config import settings
-
-    threshold = settings.tool_output_trim_chars
+    threshold = ctx.deps.tool_output_trim_chars
     if threshold <= 0:
         return messages
 
@@ -215,11 +215,41 @@ async def summarize_messages(
         # even when summarizing with non-empty message_history.
         instructions=_SUMMARIZER_SYSTEM_PROMPT,
     )
+    # qwen3.5 MoE models have native thinking capability that defaults to enabled.
+    # The think=False API param is the only reliable way to disable it via Ollama's
+    # OpenAI-compat endpoint; prompt directives (/no_think) are ignored by this arch.
+    # Scoped to qwen3.5 model names — other Ollama models are not affected.
+    model_settings: dict[str, Any] = {}
+    if isinstance(model, _OpenAIChatModel) and "qwen3.5" in model.model_name.lower() and "summarize" in model.model_name.lower():
+        model_settings = {"extra_body": {"think": False}}
     result = await summariser.run(
         prompt,
         message_history=messages,
+        model_settings=model_settings or None,
     )
     return result.output
+
+
+async def _index_session_summary(
+    messages: list[ModelMessage],
+    model: str | Any,
+    *,
+    max_retries: int = 2,
+    personality_active: bool = False,
+) -> str | None:
+    """Summarise recent session messages for checkpointing via /new.
+
+    Thin named wrapper around _run_summarization_with_policy — the name makes
+    the /new call-site intent explicit and keeps history.py as the single home
+    for all summarization logic.
+    """
+    last_n = min(15, len(messages))
+    return await _run_summarization_with_policy(
+        messages[-last_n:],
+        model,
+        max_retries=max_retries,
+        personality_active=personality_active,
+    )
 
 
 async def _run_summarization_with_policy(
@@ -378,7 +408,7 @@ async def truncate_history_window(
         summary_text = await _run_summarization_with_policy(
             dropped, model,
             max_retries=_settings.model_http_retries,
-            personality_active=bool(ctx.deps.personality),
+            personality_active=False,
         )
 
     if summary_text is not None:
@@ -463,7 +493,7 @@ async def precompute_compaction(
     summary_text = await _run_summarization_with_policy(
         dropped, resolved_model,
         max_retries=_settings.model_http_retries,
-        personality_active=bool(deps.personality),
+        personality_active=False,
     )
     if summary_text is None:
         return None

@@ -8,11 +8,11 @@ from typing import Any
 
 import yaml
 
+from co_cli.memory_lifecycle import persist_memory as _save_memory_impl
 from co_cli.tools.memory import (
     _touch_memory,
     _dedup_pulled,
     _load_memories,
-    _save_memory_impl,
     MemoryEntry,
     recall_memory,
     list_memories,
@@ -33,8 +33,6 @@ class _FakeDeps:
     memory_max_count: int = 200
     memory_dedup_window_days: int = 7
     memory_dedup_threshold: int = 85
-    memory_decay_strategy: str = "summarize"
-    memory_decay_percentage: float = 0.2
     knowledge_index: Any = None
     knowledge_search_backend: str = "grep"
 
@@ -42,10 +40,15 @@ class _FakeDeps:
 class _FakeRunContext:
     def __init__(self, deps: Any):
         self._deps = deps
+        self._model = None
 
     @property
     def deps(self) -> Any:
         return self._deps
+
+    @property
+    def model(self) -> Any:
+        return self._model
 
 
 def _ctx() -> _FakeRunContext:
@@ -213,42 +216,6 @@ def test_fts_freshness_after_consolidation(tmp_path: Path, monkeypatch):
     assert any(r.tags and "updated" in r.tags for r in results), (
         "FTS result must reflect consolidated tags"
     )
-    idx.close()
-
-
-def test_fts_freshness_after_decay_summarize(tmp_path: Path, monkeypatch):
-    """After summarize-decay, the new summary file is immediately searchable via FTS."""
-    import asyncio
-    from co_cli.knowledge_index import KnowledgeIndex
-    from co_cli.tools.memory import save_memory
-
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    # Use threshold=100 to prevent any consolidation so each save creates a new file.
-    # memory_max_count=2 ensures decay triggers on the 3rd distinct save.
-    deps = _FakeDeps(
-        knowledge_index=idx,
-        knowledge_search_backend="fts5",
-        memory_max_count=2,
-        memory_decay_percentage=1.0,
-        memory_dedup_threshold=100,
-    )
-    ctx = _FakeRunContext(deps)
-
-    monkeypatch.chdir(tmp_path)
-
-    # Three clearly distinct memories to avoid any dedup
-    asyncio.run(save_memory(ctx, "User works at Acme Corporation in Seattle",
-                            tags=["context"]))
-    asyncio.run(save_memory(ctx, "Database is PostgreSQL 15 on Linux servers",
-                            tags=["context"]))
-
-    # Third save triggers decay: summarize strategy creates a new consolidated file
-    asyncio.run(save_memory(ctx, "UI framework is React with TypeScript frontend",
-                            tags=["context"]))
-
-    # The summary file must be indexed and findable via "consolidated" keyword
-    results = idx.search("consolidated", source="memory")
-    assert len(results) >= 1, "Decay summary file must be immediately indexed in FTS"
     idx.close()
 
 

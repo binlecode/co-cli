@@ -4,7 +4,6 @@ import json
 import sqlite3
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from rich.console import Console
 from rich.text import Text
@@ -12,22 +11,20 @@ from rich.text import Text
 from co_cli.config import DATA_DIR
 from co_cli._trace_viewer import format_duration, get_span_type
 
-# Rich style per span type (matches trace_viewer.py color scheme)
 TYPE_STYLES = {
     "agent": "cyan",
     "model": "magenta",
     "tool": "yellow",
 }
 
+# Wide enough for the longest span names (e.g. "chat qwen3:30b-a3b-thinking-2507-q8_0-agentic")
+SPAN_NAME_WIDTH = 48
+
 DB_PATH = DATA_DIR / "co-cli.db"
 
 
-def _extract_messages(attrs: dict) -> list[tuple[str, str]]:
-    """Extract output message parts from model span attributes.
-
-    Returns list of (part_type, content) tuples — e.g. ("text", "Hello ..."),
-    ("thinking", "Let me consider ...").
-    """
+def _extract_output_messages(attrs: dict) -> list[tuple[str, str]]:
+    """Return (part_type, content) pairs from gen_ai.output.messages."""
     raw = attrs.get("gen_ai.output.messages", "")
     if not raw:
         return []
@@ -35,7 +32,6 @@ def _extract_messages(attrs: dict) -> list[tuple[str, str]]:
         messages = json.loads(raw) if isinstance(raw, str) else raw
     except (json.JSONDecodeError, TypeError):
         return []
-
     parts: list[tuple[str, str]] = []
     for msg in messages:
         for part in msg.get("parts", []):
@@ -47,11 +43,12 @@ def _extract_messages(attrs: dict) -> list[tuple[str, str]]:
 
 
 def _extract_attrs(span_type: str, attrs: dict) -> str:
-    """Extract key attributes as a compact string based on span type."""
+    """Compact single-line attribute summary shown on every span."""
     parts: list[str] = []
 
     if span_type == "agent":
-        model = attrs.get("gen_ai.request.model", "")
+        # pydantic-ai stores model name under "model_name" on invoke_agent spans
+        model = attrs.get("model_name", "") or attrs.get("gen_ai.request.model", "")
         if model:
             parts.append(f"model={model}")
         input_tok = attrs.get("gen_ai.usage.input_tokens")
@@ -66,37 +63,116 @@ def _extract_attrs(span_type: str, attrs: dict) -> str:
             parts.append(f"in={input_tok}")
         if output_tok is not None:
             parts.append(f"out={output_tok}")
+        finish = attrs.get("gen_ai.response.finish_reasons", "")
+        if finish:
+            parts.append(f"finish={finish}")
 
     elif span_type == "tool":
         tool_name = attrs.get("gen_ai.tool.name", "")
         if tool_name:
             parts.append(f"tool={tool_name}")
-        tool_args = attrs.get("tool_arguments", "")
+        # pydantic-ai v3 OTel attribute name
+        tool_args = attrs.get("gen_ai.tool.call.arguments", "")
         if tool_args:
-            truncated = tool_args[:80] + ("\u2026" if len(tool_args) > 80 else "")
+            raw = tool_args if isinstance(tool_args, str) else json.dumps(tool_args)
+            truncated = raw[:80] + ("\u2026" if len(raw) > 80 else "")
             parts.append(f"args={truncated}")
 
     return "  ".join(parts)
 
 
-def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
-    """Format a single span row into Rich Text lines.
+def _vline(content: str, text_style: str = "white") -> Text:
+    t = Text()
+    t.append("           \u2502 ", style="dim")
+    t.append(content, style=text_style)
+    return t
 
-    Returns a list — normally one line, but in verbose mode model spans
-    get additional indented lines for LLM output content.
-    """
+
+def _verbose_detail_lines(span_type: str, attrs: dict) -> list[Text]:
+    """Indented detail block appended after the summary line in verbose mode."""
+    lines: list[Text] = []
+
+    if span_type == "agent":
+        final = attrs.get("final_result", "")
+        if final:
+            lines.append(_vline("[final]", text_style="dim"))
+            for tl in final.splitlines():
+                lines.append(_vline(f"  {tl}", text_style="green"))
+
+    elif span_type == "tool":
+        raw_args = attrs.get("gen_ai.tool.call.arguments", "")
+        if raw_args:
+            arg_str = raw_args if isinstance(raw_args, str) else json.dumps(raw_args)
+            try:
+                arg_str = json.dumps(json.loads(arg_str), indent=2)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            lines.append(_vline("args:", text_style="dim"))
+            for tl in arg_str.splitlines():
+                lines.append(_vline(f"  {tl}"))
+
+        result = attrs.get("gen_ai.tool.call.result", "")
+        if result:
+            result_str = result if isinstance(result, str) else json.dumps(result)
+            try:
+                result_str = json.dumps(json.loads(result_str), indent=2)
+            except (json.JSONDecodeError, TypeError):
+                pass
+            lines.append(_vline("result:", text_style="dim"))
+            for tl in result_str.splitlines():
+                lines.append(_vline(f"  {tl}"))
+
+    elif span_type == "model":
+        input_raw = attrs.get("gen_ai.input.messages", "")
+        if input_raw:
+            try:
+                input_msgs = json.loads(input_raw) if isinstance(input_raw, str) else input_raw
+                # System prompt: first line only — identifies which persona/agent is active
+                for msg in input_msgs:
+                    if msg.get("role") == "system":
+                        for part in msg.get("parts", []):
+                            if part.get("type") == "text":
+                                first_line = part.get("content", "").split("\n")[0][:120]
+                                lines.append(_vline(f"[system] {first_line}", text_style="dim"))
+                        break
+                # Last user message — what triggered this model call
+                for msg in reversed(input_msgs):
+                    if msg.get("role") == "user":
+                        lines.append(_vline("[user]", text_style="dim"))
+                        for part in msg.get("parts", []):
+                            if part.get("type") == "text":
+                                for tl in part.get("content", "").splitlines():
+                                    lines.append(_vline(f"  {tl}", text_style="cyan"))
+                        break
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        for ptype, content in _extract_output_messages(attrs):
+            if ptype == "thinking":
+                lines.append(_vline("[thinking]", text_style="dim italic"))
+                for tl in content.splitlines():
+                    lines.append(_vline(f"  {tl}", text_style="dim italic"))
+                lines.append(_vline("", text_style="dim"))
+            else:
+                lines.append(_vline("[response]", text_style="dim"))
+                for tl in content.splitlines():
+                    lines.append(_vline(f"  {tl}", text_style="white"))
+
+    return lines
+
+
+def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
+    """Format a span row into one summary line plus optional verbose detail lines."""
     name = row["name"]
     span_type = get_span_type(name)
     style = TYPE_STYLES.get(span_type, "dim")
     status_code = row["status_code"] or "UNSET"
     duration_ms = row["duration_ms"]
 
-    # Timestamp: nanoseconds epoch → local HH:MM:SS
     start_ns = row["start_time"]
     ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc).astimezone()
     ts_str = ts.strftime("%H:%M:%S")
 
-    # Parse attributes
     attrs: dict = {}
     if row["attributes"]:
         try:
@@ -107,40 +183,54 @@ def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
     attr_str = _extract_attrs(span_type, attrs)
     dur_str = format_duration(duration_ms)
 
-    # Build the header line
     line = Text()
     line.append(ts_str, style="dim")
     line.append("  ")
     line.append(f"{span_type:<6}", style=style)
     line.append(" ")
-    line.append(f"{name:<30}", style=f"bold {style}")
+    line.append(f"{name:<{SPAN_NAME_WIDTH}}", style=f"bold {style}")
     line.append(" ")
     if attr_str:
         line.append(attr_str, style="dim")
         line.append("  ")
     line.append(dur_str, style="dim")
-
     if status_code == "ERROR":
         line.append("  ")
         line.append("ERROR", style="bold red")
 
     lines = [line]
-
-    # Verbose: append LLM output for model spans
-    if verbose and span_type == "model":
-        for ptype, content in _extract_messages(attrs):
-            tag_style = "dim italic" if ptype == "thinking" else "white"
-            tag = "[thinking] " if ptype == "thinking" else ""
-            for text_line in content.splitlines():
-                vline = Text()
-                vline.append("           │ ", style="dim")
-                if tag:
-                    vline.append(tag, style="dim italic")
-                    tag = ""  # only on first line
-                vline.append(text_line, style=tag_style)
-                lines.append(vline)
+    if verbose:
+        lines.extend(_verbose_detail_lines(span_type, attrs))
 
     return lines
+
+
+def _trace_separator(trace_id: str, start_ns: int) -> Text:
+    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc).astimezone()
+    ts_str = ts.strftime("%H:%M:%S")
+    short_id = trace_id[:8] if trace_id else "?"
+    label = f" trace:{short_id}  {ts_str} "
+    bar = "\u2500" * 60
+    t = Text()
+    t.append(f"\u250c\u2500\u2500{label}{bar}", style="dim")
+    return t
+
+
+def _print_spans(
+    console: Console,
+    rows: list[sqlite3.Row],
+    verbose: bool,
+    last_trace_id: str | None = None,
+) -> str | None:
+    """Print rows with trace separators; return the last trace_id seen."""
+    for row in rows:
+        tid = row["trace_id"]
+        if tid != last_trace_id:
+            console.print(_trace_separator(tid, row["start_time"]))
+            last_trace_id = tid
+        for line in _format_span_line(row, verbose=verbose):
+            console.print(line)
+    return last_trace_id
 
 
 def _query_recent(
@@ -149,26 +239,20 @@ def _query_recent(
     trace_id: str | None,
     span_filter: str | None,
 ) -> list[sqlite3.Row]:
-    """Fetch the N most recent spans (for startup display)."""
     where_clauses = []
     params: list = []
-
     if trace_id:
         where_clauses.append("trace_id = ?")
         params.append(trace_id)
-
     if span_filter == "tools":
         where_clauses.append("name LIKE '%tool%'")
     elif span_filter == "models":
         where_clauses.append("(name LIKE '%model%' OR name LIKE '%chat%')")
-
     where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-
     rows = conn.execute(
         f"SELECT * FROM spans {where} ORDER BY start_time DESC LIMIT ?",
         params + [limit],
     ).fetchall()
-
     return list(reversed(rows))
 
 
@@ -178,21 +262,16 @@ def _query_new(
     trace_id: str | None,
     span_filter: str | None,
 ) -> list[sqlite3.Row]:
-    """Fetch spans newer than high_water_mark."""
     where_clauses = ["start_time > ?"]
     params: list = [high_water]
-
     if trace_id:
         where_clauses.append("trace_id = ?")
         params.append(trace_id)
-
     if span_filter == "tools":
         where_clauses.append("name LIKE '%tool%'")
     elif span_filter == "models":
         where_clauses.append("(name LIKE '%model%' OR name LIKE '%chat%')")
-
     where = f"WHERE {' AND '.join(where_clauses)}"
-
     return conn.execute(
         f"SELECT * FROM spans {where} ORDER BY start_time ASC",
         params,
@@ -210,32 +289,27 @@ def run_tail(
 ) -> None:
     """Main tail loop — prints recent spans then polls for new ones."""
     console = Console()
-    db_path = DB_PATH
 
-    if not db_path.exists():
+    if not DB_PATH.exists():
         console.print("[yellow]No database found. Run 'co chat' first.[/yellow]")
         return
 
-    # Determine span filter
     span_filter: str | None = None
     if tools_only:
         span_filter = "tools"
     elif models_only:
         span_filter = "models"
 
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
 
-    # Show recent spans
     recent = _query_recent(conn, last, trace_id, span_filter)
     high_water = 0
+    last_trace_id: str | None = None
 
     if recent:
-        for row in recent:
-            for line in _format_span_line(row, verbose=verbose):
-                console.print(line)
-            if row["start_time"] > high_water:
-                high_water = row["start_time"]
+        last_trace_id = _print_spans(console, recent, verbose)
+        high_water = max(row["start_time"] for row in recent)
     else:
         console.print("[dim]No spans found.[/dim]")
 
@@ -243,17 +317,14 @@ def run_tail(
         conn.close()
         return
 
-    # Follow mode
     console.print("[dim]Following new spans... (Ctrl+C to stop)[/dim]")
     try:
         while True:
             time.sleep(poll_interval)
             new_rows = _query_new(conn, high_water, trace_id, span_filter)
-            for row in new_rows:
-                for line in _format_span_line(row, verbose=verbose):
-                    console.print(line)
-                if row["start_time"] > high_water:
-                    high_water = row["start_time"]
+            if new_rows:
+                last_trace_id = _print_spans(console, new_rows, verbose, last_trace_id)
+                high_water = max(row["start_time"] for row in new_rows)
     except KeyboardInterrupt:
         console.print("\n[dim]Stopped.[/dim]")
     finally:
