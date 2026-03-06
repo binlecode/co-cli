@@ -1,15 +1,17 @@
 ---
 name: orchestrate-dev
-description: Execute a reviewed plan end-to-end as Dev: implement each task, self-review, verify done_when, run tests, sync docs, and produce a delivery report. Run after Gate 1 (PO + TL approved the plan).
+description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates and ships the delivery report. Run after Gate 1 (PO + TL approved the plan).
 ---
 
 # Dev Orchestration Workflow
 
-You are executing a reviewed, approved plan as **Dev**. Your job is to implement each task faithfully, self-review your own work, verify completion criteria, and produce a delivery report that the TL can use for Gate 2 sign-off.
+**TL leads the dev team and codes alongside Dev subagents.** TL is not an overseer — TL takes tasks, writes code, and owns the critical path. Dev subagents handle parallel workstreams. Everyone applies the same execution standard (Steps 1–6). TL coordinates task assignment, resolves cross-task blockers, and runs integration after all devs complete.
 
 **Invocation:** `/orchestrate-dev <slug>`
 
 Reads `docs/TODO-<slug>.md`. Executes each task. Produces `docs/DELIVERY-<slug>.md`.
+
+**Consumes:** docs/TODO-<slug>.md. **Produces:** docs/DELIVERY-<slug>.md (temporary)
 
 ---
 
@@ -40,10 +42,22 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Produces `docs/DELIVERY-<slug>.
    ⚠ Uncommitted changes detected. Stash or commit unrelated work first
      if you want a clean rollback point (git reset --hard HEAD).
    ```
+6. **Assess team size and assign tasks.** Group tasks by independence (tasks with no shared prerequisites can run in parallel). Assign based on scope:
+   - 1–2 tasks → TL handles all tasks alone
+   - 3+ independent task groups → TL takes the critical-path tasks; spawn one Dev subagent per additional parallel group
+   - TL takes tasks touching cross-cutting concerns (renames, schema changes, shared modules) — these benefit from TL's full plan context
+   - Announce assignments before any work begins:
+     ```
+     ## Team
+     TL:    TASK-1, TASK-3
+     Dev-1: TASK-2, TASK-4
+     ```
 
 ---
 
 ## Phase 2 — Execute Each Task
+
+Each team member (TL and every Dev subagent) executes the same Steps 1–6 for their assigned tasks. Dev subagents run in parallel with TL. TL collects all Dev results before Phase 3.
 
 **Same-file batching:** When multiple tasks in the execution order modify the same file, read that file once before the first task that touches it. Do not re-read it between tasks — your earlier read is still valid. Make each task's edits in sequence without reloading the file between them.
 
@@ -63,6 +77,8 @@ Fix the plan before running /orchestrate-dev.
 ```
 
 Fail-fast: stop at the first invalid task. Do not begin implementation until all tasks pass.
+
+If a task requires more than ~20 tool calls without clear progress, stop and report it as blocked rather than continuing — runaway tasks should escalate, not spiral.
 
 ---
 
@@ -113,9 +129,7 @@ After implementing, read every changed file and check:
 - If you added to an existing test file, scan it for assertions that hardcode counts, sets, or
   enums your changes affect (e.g. `assert set(COMMANDS.keys()) == {...}`). Update stale
   assertions before verifying `done_when`.
-- If `docs/reference/REVIEW-<scope>.md` exists for this feature area, cross-check changed
-  files against any P0 Code Dev findings listed there. Do not introduce or deepen an
-  inaccuracy that the REVIEW already flagged as blocking.
+- If `docs/REVIEW-<scope>.md` exists for this feature area, check it for P0 Code Dev findings before marking this task done — do not introduce or deepen a blocking inaccuracy it already flagged.
 
 Fix any issues found before proceeding to the next step.
 
@@ -186,13 +200,11 @@ For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Desi
 - **All tasks shipped, deferred items remain:** remove shipped tasks; leave only unimplemented work and any explicit "Deferred" sections.
 - **Partial delivery (some tasks blocked):** leave the blocked and unstarted tasks in place; remove only the tasks that reached ✓ pass.
 
-### Step 4 — Fix before reporting
-
-If any test fails or any doc sync found inaccuracies: fix those issues now, before writing the delivery report. The delivery report reflects the final state after fixes, not the intermediate state during execution.
-
 ---
 
 ## Phase 4 — Delivery Report
+
+Fix any test failures or doc sync inaccuracies before writing this report — it reflects final state after fixes, not intermediate state.
 
 Write `docs/DELIVERY-<slug>.md`:
 
@@ -232,19 +244,4 @@ Blocked task(s): [list tasks that failed `done_when`]. Review needed:
 - If the code is fixable without plan changes: fix and re-run from the blocked task
 - If the issue requires new work: open a follow-up TODO
 
-Use `git diff HEAD` to review what landed before the block. Clean up with
-`git reset --hard HEAD` if a fresh start is preferred.
-
 **Lifecycle:** This file is the artifact for Gate 2 (TL delivery check). After Gate 3 (PO acceptance), delete it — it is temporary scaffolding, not a permanent project record.
-
----
-
-## Execution Rules
-
-- Never skip a `done_when` check — every task must be verified, not assumed complete
-- Never proceed past a blocked task — total stop, including independent tasks with no prerequisites
-- Mark every unstarted task as `— skipped (blocked by TASK-N)` in the delivery report
-- Never modify files outside a task's `files:` list without announcing the addition
-- The self-review step is mandatory — do not mark a task done before completing it
-- Delivery report is written even if the result is BLOCKED — the TL needs to see what failed
-- Delete `DELIVERY-<slug>.md` after Gate 3 (PO acceptance) — it is temporary scaffolding

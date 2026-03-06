@@ -1,11 +1,15 @@
 ---
 name: sync-doc
-description: Verify DESIGN docs against current source code and fix inaccuracies in-place. Use after code changes that may have made docs stale, before a release, or when a doc/code contradiction is reported. This skill is also invoked internally by `orchestrate-dev`. Use it standalone for one-off housekeeping outside the planned dev flow.
+description: Fix doc-only inaccuracies in DESIGN docs in-place — wrong schema, stale names, phantom features. Use when the fix is docs-only and doesn't warrant a full plan→dev cycle. Also invoked automatically by orchestrate-dev after each delivery.
 ---
 
 # sync-doc
 
 Direct execution skill — no planning ceremony. Read doc → read source → diff claims → fix in-place.
+
+**When to use sync-doc vs orchestrate-dev:**
+- Use **sync-doc** when the fix is doc-only: wrong schema description, stale function name, phantom feature in a DESIGN doc. No code changes, no Gate 1 approval needed — it's a 5-minute correction, not a delivery.
+- Use **orchestrate-dev** when fixing the inaccuracy requires code changes, schema migrations, or new tests. Doc-only fixes don't warrant the full plan → dev → gates ceremony.
 
 **If invoked after `/orchestrate-review`:** pass the docs flagged as `blocking` by Code Dev as explicit args — fixes P0 items first rather than rediscovering them during a full-scope pass. Example: `/sync-doc DESIGN-knowledge DESIGN-core`.
 
@@ -14,7 +18,7 @@ Direct execution skill — no planning ceremony. Read doc → read source → di
 ```
 /sync-doc                          # all DESIGN docs
 /sync-doc DESIGN-knowledge.md     # specific doc (filename or path)
-/sync-doc DESIGN-14 DESIGN-core   # multiple docs (partial names matched)
+/sync-doc DESIGN-knowledge DESIGN-core   # multiple docs (partial names matched)
 ```
 
 If no argument is given, run against all `docs/DESIGN-*.md` files.
@@ -48,8 +52,8 @@ If a file listed in the Files section does not exist, that itself is an inaccura
 For every **Python source file** read in 2b, also scan its module-level docstring, function/class docstrings, and inline comments for stale API references. Fix stale docstrings/comments directly in the source file using the Edit tool. This is the mirror of 2c: 2c checks whether docs accurately describe code; 2b2 checks whether source-file prose accurately describes the code it lives in.
 
 Focus on:
-- Decorator names (e.g. `@agent.system_prompt` → `@agent.instructions`)
-- Function/method names referenced in docstrings
+- Stale decorator names (e.g. legacy `@agent.system_prompt` where current code uses `@agent.instructions`)
+- Function/method names referenced in docstrings that have been renamed or removed
 - Behaviour descriptions that no longer match the implementation
 
 #### 2c. Check claims — inaccuracy patterns
@@ -91,7 +95,7 @@ After processing all docs, output a table:
 | Doc | Status | Changes |
 |-----|--------|---------|
 | DESIGN-knowledge.md | fixed | Phase 2 status corrected; 5 config entries added |
-| DESIGN-14-memory-lifecycle-system.md | fixed | doc_tags section rewritten (phantom SQL table) |
+| DESIGN-knowledge.md | fixed | doc_tags section rewritten (phantom SQL table) |
 | DESIGN-core.md | clean | no inaccuracies found |
 | DESIGN-tools.md | fixed | search_knowledge tool registration corrected |
 ```
@@ -105,7 +109,7 @@ If any doc had a stale file path in its Files section (source file doesn't exist
 
 ## Scope boundaries
 
-- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or any file under `docs/reference/`. The `docs/reference/` directory contains permanent review and research records that are never edited by sync-doc.
+- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or `docs/REVIEW-*.md` / `docs/RESEARCH-*.md` files. These are permanent review and research records that are never edited by sync-doc.
 - **Factual fixes only** — never restructure sections, rename headings, or change the doc's scope
 - **No new sections** unless a shipped feature has zero coverage anywhere in the doc
 - **No code changes** — if you find a code gap (e.g., a setting in the doc that's missing from `config.py`'s env_map), document it as `*(no env var — code gap)*` in the Config table, don't fix the code. **Exception (step 2b2):** source-file docstring and comment fixes are required — when step 2b2 identifies stale API refs, decorator renames, or behaviour description mismatches in a source file's docstrings or inline comments, fix them directly in the source file using the Edit tool. Only docstring/comment text is in scope; functional logic changes remain forbidden.

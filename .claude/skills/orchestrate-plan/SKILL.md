@@ -1,13 +1,15 @@
 ---
 name: orchestrate-plan
-description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev as a parallel subagent to critique it. Both roles share docs/TODO-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
+description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev (implementation risk) and PO (scope + first principles) as parallel subagents to critique it. All roles share docs/TODO-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
 ---
 
 # Plan Orchestration Workflow
 
-**TL is the orchestrator.** Core Dev is a subagent spawned after each TL draft to critique the plan from an implementation and risk perspective. Both roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
+**TL is the orchestrator.** Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
 
 **Derive the slug** from the feature name: lowercase, hyphenated (e.g. `sqlite-fts`, `auth-refresh`, `knowledge-docs-restructure`).
+
+**Consumes:** REVIEW-<scope>.md, RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md
 
 ---
 
@@ -22,10 +24,7 @@ description: Orchestrate the planning phase. TL drafts the plan, then spawns Cor
 | `doc+code` | Doc update + corresponding code changes | Both extras |
 | `refactor` | Code reorganization without behavior change | Add regression surface check |
 
-Announce the type at the top of the TL draft:
-```
-Task type: code-feature
-```
+State the task type at the top of the TL draft (e.g. "Task type: code-feature").
 
 ---
 
@@ -45,7 +44,10 @@ Task type: code-feature
 Submitting for Core Dev review.
 
 ## Cycle C1 — Core Dev
-...critique JSON...
+...critique (assessment, blocking list, major/minor issues)...
+
+## Cycle C1 — PO
+...scope + first-principles critique (assessment, blocking list, major/minor issues)...
 
 ## Cycle C1 — Team Lead Decisions
 ...decision table...
@@ -65,14 +67,12 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 
 **Before writing, do:**
 1. Search the codebase for relevant modules, patterns, and tests related to the feature.
-2. Read related DESIGN and TODO docs in `docs/`.
-2a. If `docs/reference/REVIEW-<scope>.md` exists for this feature area, read it. Carry forward any unresolved P0/P1 findings into the plan's Context section. A REVIEW verdict of `ACTION_REQUIRED` is a blocking pre-condition — stop and surface it rather than drafting over it:
-    ```
-    ✗ REVIEW-<scope>.md verdict is ACTION_REQUIRED.
-    Resolve P0 items before planning. Run /sync-doc or fix TODO as indicated.
-    ```
-3. If `docs/TODO-<slug>.md` already exists, read it first.
-3a. **Shipped-work check** (when the TODO already exists): For each section or phase in the existing TODO, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
+2. Read related DESIGN and TODO docs in `docs/`. If `docs/REVIEW-<scope>.md` exists for this feature area, read it — carry forward any unresolved findings into the plan's Context section. A REVIEW verdict of `ACTION_REQUIRED` is a blocking pre-condition — stop and surface it rather than drafting over it:
+   ```
+   ✗ REVIEW-<scope>.md verdict is ACTION_REQUIRED.
+   Resolve P0 items before planning. Run /sync-doc or fix TODO as indicated.
+   ```
+3. If `docs/TODO-<slug>.md` already exists, read it first. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
 4. For each open question you intend to list, first try to answer it by reading existing source files. An open question answerable by inspection weakens the plan and will be flagged by Core Dev.
 5. **For `doc-restructure` and `doc+code` tasks**: Run a **Code Accuracy Verification** pass — read each source file referenced by the target docs and check every factual claim against the code. List inaccuracies explicitly in the Context section before proposing structure changes.
 
@@ -89,7 +89,7 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 - **Guard condition parity:** For each new tool that mirrors an existing one, list its guard conditions (e.g. `max_requests < 1`, empty-string check) and compare against the nearest existing peer tool. Note intentional divergences inline in the task — do not leave them implicit for Core Dev to catch.
 - Decisions must include rationale and alternatives considered.
 
-> **Output contract:** `files:` and `done_when:` on every task are mandatory — they are consumed by `/orchestrate-dev` to drive implementation and verification. A task missing either field will block the dev phase.
+> **Output contract:** `files:` and `done_when:` on every task are mandatory — they are consumed by `/orchestrate-dev` to drive implementation and verification. A task missing either field will block the dev phase. Core Dev must also verify that `prerequisites:` chains form a DAG — flag any task that transitively depends on itself as a blocking issue.
 
 **Append to `docs/TODO-<slug>.md`** (after a `---` separator and `# Audit Log` heading on first cycle):
 ```
@@ -99,9 +99,13 @@ Submitting for Core Dev review.
 
 ---
 
-## Phase 2 — Core Dev: Critique
+## Phase 2 — Core Dev + PO: Critique
 
-Spawn Core Dev as a subagent. It reads `docs/TODO-<slug>.md` and appends its critique as strict JSON under `## Cycle C1 — Core Dev`.
+Spawn Core Dev and PO as parallel subagents. Both read `docs/TODO-<slug>.md` and append their critiques — Core Dev under `## Cycle C1 — Core Dev`, PO under `## Cycle C1 — PO`.
+
+### Core Dev
+
+Core Dev critiques from an implementation and risk perspective.
 
 **Core Dev checklist — implementation quality:**
 - Missing or ambiguous steps
@@ -128,37 +132,50 @@ Spawn Core Dev as a subagent. It reads `docs/TODO-<slug>.md` and appends its cri
 
 **On C2+:** Before raising new issues, explicitly verify each blocking item from the previous cycle is resolved. Call out any that are still unaddressed — these remain blocking regardless of new findings.
 
-Output appended to the workbench:
-```json
-{
-  "cycle_id": "C1",
-  "overall_assessment": "approve|revise",
-  "summary": "<1–3 sentences>",
-  "major_issues": [
-    {
-      "id": "CD-M-1",
-      "location": "<Section X.Y or TASK-N>",
-      "description": "<what is wrong or missing>",
-      "recommendation": "<concrete, actionable change>"
-    }
-  ],
-  "minor_issues": [
-    {
-      "id": "CD-m-1",
-      "location": "<Section X.Y or TASK-N>",
-      "description": "<clarity or style issue>",
-      "recommendation": "<suggested tweak>"
-    }
-  ],
-  "blocking_items": ["CD-M-1"]
-}
+Output appended to the workbench under `## Cycle C1 — Core Dev`:
+
+```
+**Assessment:** approve | revise
+**Blocking:** CD-M-1, CD-M-2  (or "none")
+**Summary:** <1–3 sentences>
+
+**Major issues:**
+- **CD-M-1** [<Section X.Y or TASK-N>]: <what is wrong or missing>. Recommendation: <concrete, actionable change>
+
+**Minor issues:**
+- **CD-m-1** [<Section X.Y or TASK-N>]: <clarity or style issue>. Recommendation: <suggested tweak>
+```
+
+### PO
+
+PO critiques from a scope, value, and first-principles perspective. Does not re-raise implementation issues already flagged by Core Dev.
+
+**PO checklist:**
+- **Right problem?** Does the plan address the actual user need, or a proxy/assumed version of it?
+- **Correct scope?** Is the scope the minimum needed to solve the problem — no more, no less?
+- **First principles?** Does the design start from fundamentals, or does it layer complexity on top of existing complexity without necessity?
+- **Non-over-engineering?** Are any tasks, abstractions, or design choices more elaborate than the problem warrants? Flag gold-plating, premature generalization, and speculative future-proofing.
+- **Effectiveness?** Will this plan, if fully executed, actually solve the stated problem for the user?
+
+Output appended to the workbench under `## Cycle C1 — PO`:
+
+```
+**Assessment:** approve | revise
+**Blocking:** PO-M-1, PO-M-2  (or "none")
+**Summary:** <1–3 sentences>
+
+**Major issues:**
+- **PO-M-1** [<Section X.Y or TASK-N>]: <scope/value/first-principles concern>. Recommendation: <concrete change>
+
+**Minor issues:**
+- **PO-m-1** [<Section X.Y or TASK-N>]: <minor concern>. Recommendation: <suggested tweak>
 ```
 
 ---
 
 ## Phase 3 — TL: Decisions & Plan Update
 
-TL reads the updated workbench and processes every Core Dev issue. Decide: **adopt**, **modify**, or **reject** with brief rationale.
+TL reads the updated workbench and processes every Core Dev and PO issue. Decide: **adopt**, **modify**, or **reject** with brief rationale.
 
 **Append to `docs/TODO-<slug>.md`**:
 ```
@@ -169,6 +186,8 @@ TL reads the updated workbench and processes every Core Dev issue. Decide: **ado
 | CD-M-1   | adopt    | Added migration rollback step to TASK-3 |
 | CD-M-2   | modify   | Added test stub; kept scope narrow |
 | CD-m-1   | reject   | Style preference — matches existing codebase convention |
+| PO-M-1   | adopt    | Removed speculative caching layer — not needed for MVP |
+| PO-m-1   | reject   | Abstraction is justified by 3 existing callers |
 ```
 
 **Update the plan section** of `docs/TODO-<slug>.md` applying all adopted and modified changes.
@@ -177,11 +196,13 @@ TL reads the updated workbench and processes every Core Dev issue. Decide: **ado
 
 ## Stop Conditions
 
-Stop iterating when **either** condition is met:
-1. **`blocking_items` is empty** in the latest Core Dev JSON, OR
-2. **Diminishing returns**: `blocking_items = []` AND all remaining issues are `CD-m-*` (minor only) AND TL rejected fewer than 2 items in the last cycle.
+Stop iterating when **both** conditions are met:
+1. **`Blocking: none`** in the latest Core Dev output, AND
+2. **`Blocking: none`** in the latest PO output.
 
-**C1 fast-path:** If Core Dev returns `blocking_items: []` on the first cycle, stop conditions apply immediately — no C2 needed. Proceed directly to the stop sequence below.
+**Diminishing returns shortcut:** If both are `Blocking: none` and all remaining issues are minor (`CD-m-*` / `PO-m-*`) and TL rejected fewer than 2 items total in the last cycle — stop immediately.
+
+**C1 fast-path:** If both Core Dev and PO return `Blocking: none` on the first cycle, stop conditions apply immediately — no C2 needed. Proceed directly to the stop sequence below.
 
 **Iteration cap:** If neither condition is met after **3 cycles**, stop and escalate:
 ```
@@ -211,9 +232,9 @@ Plan approved.
 ## Iteration Protocol
 
 ```
-C1: TL Draft → spawn Core Dev → TL Decisions → update plan
-C2:            spawn Core Dev → TL Decisions → update plan
-C3:            spawn Core Dev → TL Decisions → update plan
+C1: TL Draft → spawn Core Dev + PO (parallel) → TL Decisions → update plan
+C2:            spawn Core Dev + PO (parallel) → TL Decisions → update plan
+C3:            spawn Core Dev + PO (parallel) → TL Decisions → update plan
     → if still blocking: escalate to human
 ```
 
