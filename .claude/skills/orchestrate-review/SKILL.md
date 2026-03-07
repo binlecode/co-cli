@@ -1,21 +1,23 @@
 ---
 name: orchestrate-review
-description: Co-system health check. TL resolves scope, spawns two parallel diagnostic subagents (Code Dev audits doc accuracy, Auditor checks TODO health), then synthesizes a verdict. Use after a delivery or before starting a new development cycle to confirm code and docs are in an honest state. For architecture tradeoff analysis against peer systems, use /orchestrate-research instead.
+description: Co-system health check. Runs two parallel diagnostic agents — Code Dev audits doc accuracy, Auditor checks TODO health — then merges outputs into a verdict. Use after a delivery or before starting a new development cycle to confirm code and docs are in an honest state. For architecture tradeoff analysis against peer systems, use the research task instead.
 ---
 
-# Review Orchestration Workflow
+# Review Workflow
 
-**TL is the orchestrator.** Two subagents run in parallel — Code Dev and Auditor — each reviewing from their domain. TL reads both outputs and writes the final synthesis to `docs/REVIEW-<scope>.md`.
+**Two agents run in parallel.** Code Dev audits doc accuracy against source. Auditor checks TODO health. Both write directly to `docs/REVIEW-<scope>.md`. The agent that finishes last appends the verdict.
 
 **Invocation:** `/orchestrate-review <scope>`
 
 `<scope>` is a feature area, module name, or `all`. Output is permanent — `docs/REVIEW-<scope>.md` is not temporary scaffolding.
 
-**Consumes:** DESIGN docs, TODO docs, source files. **Produces:** docs/REVIEW-<scope>.md
+**Consumes:** DESIGN docs, TODO docs, source files. **Produces:** `docs/REVIEW-<scope>.md`
 
 ---
 
-## Phase 1 — TL: Scope Resolution
+## Phase 1 — Scope Resolution
+
+Resolve scope before spawning agents. **Only read files within the project working directory. Do not access peer or reference repos — those are for the research task only.**
 
 **1. Resolve DESIGN docs.**
 - `scope = all`: glob `docs/DESIGN-*.md`.
@@ -25,7 +27,16 @@ description: Co-system health check. TL resolves scope, spawns two parallel diag
 
 **3. Identify source modules.** For each matched DESIGN doc, read its Files section and extract listed source paths — these are the files Code Dev checks.
 
-**Spawn Code Dev and Auditor simultaneously (Phases 2a, 2b). Wait for both before Phase 3.**
+**Create the output file** at `docs/REVIEW-<scope>.md` with a header before spawning agents:
+```
+# REVIEW: <scope> — Co-System Health Check
+_Date: <today>_
+
+## What Was Reviewed
+<list matched DESIGN docs, source modules, TODO docs>
+```
+
+**Spawn Code Dev and Auditor simultaneously. Wait for both before appending the verdict.**
 
 ---
 
@@ -53,7 +64,20 @@ Code Dev reads each in-scope DESIGN doc and checks every factual claim against s
 
 **Severity:** `blocking` — would mislead a developer implementing or debugging (wrong schema, wrong flow, phantom feature, wrong tool registration, stale status on a shipped feature; when in doubt, classify as blocking). `minor` — incomplete but not wrong (missing config entry, missing coverage of a minor feature, stale file path in an inactive section).
 
-**Return to TL:** For each finding — doc, section, pattern, what the doc claims, what the source actually shows, severity. Overall counts and a 1–3 sentence summary. If nothing found: state that all docs are clean.
+**Append to `docs/REVIEW-<scope>.md`:**
+
+```markdown
+## Code Dev — Doc Accuracy Audit
+
+| Doc | Section | Status | Finding |
+|-----|---------|--------|---------|
+...
+
+### Finding Details
+...
+
+**Overall: <N> blocking, <N> minor**
+```
 
 ---
 
@@ -74,26 +98,49 @@ Auditor checks every task in in-scope TODO docs for staleness, correctness, and 
 - `needs_cleanup` — some well-formedness issues or minor staleness, fixable before planning
 - `blocked` — a prerequisite hasn't shipped when the TODO assumes it has, or a majority of tasks are invalid
 
-**Return to TL:** Per-task findings (task title, issues found, verdict), per-doc readiness verdict, and a 1–3 sentence summary.
+**Append to `docs/REVIEW-<scope>.md`:**
+
+```markdown
+## Auditor — TODO Health
+
+| TODO doc | Task | Verdict | Key finding |
+|----------|------|---------|-------------|
+...
+
+**Overall verdict for `<doc>`: `<readiness>`**
+```
 
 ---
 
-## Phase 3 — TL: Synthesis
+## Phase 3 — Verdict (last agent to finish)
 
-TL reads both reports and writes `docs/REVIEW-<scope>.md` covering:
+Whichever agent finishes last appends the verdict. The verdict is deterministic from the two reports — no judgment needed.
 
-- What was reviewed (DESIGN docs, source modules, TODO docs)
-- Code Dev findings: a table of docs checked with status and findings; overall blocking/minor counts
-- Auditor findings: a table of TODO docs with readiness verdict and issues
-- Overall verdict: **HEALTHY** (no blocking findings, all TODO docs ready or none in scope) / **NEEDS_ATTENTION** (minor inaccuracies or TODO cleanup needed, can proceed but fix first) / **ACTION_REQUIRED** (any blocking doc finding, or a TODO blocked on a prerequisite for planned scope)
-- Recommended next step: one sentence naming what to fix and where, or "proceed to `/orchestrate-plan <slug>`" if healthy
+**Rules:**
+- **HEALTHY** — no blocking Code Dev findings, all in-scope TODO docs `ready_for_plan` or no TODO docs in scope
+- **NEEDS_ATTENTION** — minor inaccuracies or TODO cleanup needed; can proceed but fix first
+- **ACTION_REQUIRED** — any blocking Code Dev finding, or a TODO doc `blocked` on a prerequisite for planned scope
 
-Print a brief terminal summary when done: scope, verdict, output path, recommended next step.
+**Append to `docs/REVIEW-<scope>.md`:**
+
+```markdown
+## Verdict
+
+**Overall: HEALTHY / NEEDS_ATTENTION / ACTION_REQUIRED**
+
+| Priority | Action | Source |
+|----------|--------|--------|
+| P1 | <fix> | <finding id> |
+
+**Recommended next step:** <one sentence>
+```
+
+Print a brief terminal summary: scope, verdict, output path, recommended next step.
 
 ---
 
 ## Rules
 
-- **No-fix rule:** Code Dev and Auditor report only. Fixes go to `/sync-doc` or manual edits per TL verdict.
+- **No-fix rule:** Code Dev and Auditor report only. Fixes go to `/sync-doc` or manual edits per verdict.
 - **Scope mismatch stops immediately:** If Phase 1 finds no matching DESIGN docs, stop — no output file.
 - **Output is permanent:** `docs/REVIEW-<scope>.md` is not temporary scaffolding.

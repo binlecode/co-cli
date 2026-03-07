@@ -9,7 +9,7 @@ description: Orchestrate the planning phase. TL drafts the plan, then spawns Cor
 
 **Derive the slug** from the feature name: lowercase, hyphenated (e.g. `sqlite-fts`, `auth-refresh`, `knowledge-docs-restructure`).
 
-**Consumes:** REVIEW-<scope>.md, RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md
+**Consumes:** docs/REVIEW-<scope>.md, docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md
 
 ---
 
@@ -214,9 +214,20 @@ Human decision required before proceeding.
 
 When stopping normally:
 
-1. **Strip the Audit Log** — remove the `---` separator and everything from `# Audit Log` to the end of the file. The TODO file must be clean: only tasks and plan content remain.
+1. **Save the Audit Log** — before stripping, write everything from the `---` separator through
+   the end of the file to `docs/reference/PLAN-<slug>-audit.md` with this header prepended:
+   ```
+   # Plan Audit Log: <feature name>
+   _Slug: <slug> | Date: <today>_
+   ```
+   This file is permanent — not temporary scaffolding. It preserves the decision history
+   (why items were adopted, modified, or rejected across cycles) for future planning passes.
 
-2. **Append the final section** to `docs/TODO-<slug>.md`:
+2. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
+   `# Audit Log` to the end of `docs/TODO-<slug>.md`. The TODO file must be clean after
+   this step: only tasks and plan content remain.
+
+3. **Append the final section** to `docs/TODO-<slug>.md`:
 ```
 ## Final — Team Lead
 

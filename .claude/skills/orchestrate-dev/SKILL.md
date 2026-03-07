@@ -173,28 +173,64 @@ Run after all tasks have been attempted (or after the first blocked task if stop
 
 ### Step 1 — Run tests
 
-Collect all test files that were created or modified by completed tasks (tasks that reached ✓ pass). Skipped or blocked tasks do not contribute to this set.
+**Full delivery (all tasks passed):** Run the full test suite to catch cross-module regressions.
+A task can pass its own `done_when` while silently breaking an unrelated module that imports the
+changed code. Touched-files-only testing misses this.
+```
+uv run pytest -v
+```
 
-If one or more test files were touched by completed tasks, run only those:
+**Partial delivery (any task blocked or skipped):** Run only test files touched by completed
+(✓ pass) tasks — a full suite against incomplete code produces misleading failures.
 ```
 uv run pytest <test_file_1> <test_file_2> ... -v
 ```
+Collect touched test files from completed tasks only. If none were touched, skip and record
+"no tests run — no test files touched by completed tasks."
 
-If no test files were touched by any completed task, skip this step and record "no tests run — no test files touched."
+Record: command run, number passed, number failed, any failure output.
 
-Do not run the full suite after a partial execution — a full run against incomplete code would produce misleading failures.
+### Step 2 — Independent code review
 
-Record: files run, number passed, number failed, any failure output.
+Spawn a reviewer subagent. Pass it exactly:
+- The output of `git diff HEAD` scoped to files changed by completed tasks
+- The task specs (id, title, done_when) for all completed tasks
+- The CLAUDE.md anti-pattern checklist (same list from Phase 2 Step 4)
 
-### Step 2 — Sync docs
+The reviewer has no access to the implementation conversation — cold read only.
+
+**Reviewer checks:**
+- Anti-patterns from CLAUDE.md not caught by self-review (blind spots from implementation context)
+- Spec fidelity: does the diff implement exactly the task spec, no more, no less
+- Security: command injection, path traversal, SQL injection, missing input validation
+- Cross-task coherence: do the combined changes from all tasks form a consistent whole
+
+**Reviewer output** (append to `docs/DELIVERY-<slug>.md` under `## Independent Review`):
+
+```markdown
+## Independent Review
+
+| File | Finding | Severity | Task |
+|------|---------|----------|------|
+| ...  | ...     | blocking/minor | TASK-N |
+
+**Overall: clean / <N> blocking / <N> minor**
+```
+
+If any blocking findings: fix before writing the final delivery report. Minor findings:
+record and proceed — TL decides at Gate 2.
+
+Record result: clean / N blocking / N minor.
+
+### Step 3 — Sync docs
 
 Run `/sync-doc` with no args (full scope). This ensures all DESIGN docs are checked for stale refs and inaccuracies introduced by this work — not just docs covering the specific modules touched. For cross-cutting changes (renames, API changes, schema updates), unrelated docs may reference the same symbols and would be missed by a narrower scope.
 
 Record result: clean / fixed (what was fixed).
 
-### Step 3 — TODO lifecycle
+### Step 4 — TODO lifecycle
 
-For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Design details that belong in a DESIGN doc should be merged there (already handled by Step 2 sync).
+For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Design details that belong in a DESIGN doc should be merged there (already handled by Step 3 sync).
 
 - **All tasks shipped, no deferred items remain:** delete `docs/TODO-<slug>.md` entirely. An empty TODO is not kept.
 - **All tasks shipped, deferred items remain:** remove shipped tasks; leave only unimplemented work and any explicit "Deferred" sections.
@@ -225,8 +261,12 @@ Date: <ISO 8601 date>
 - `<path>` — <one-line description of change>
 
 ## Tests
-- Files run: <list> / none (no test files touched by completed tasks)
+- Scope: full suite (DELIVERED) / touched files only (partial delivery)
 - Result: pass / fail (<N> passed, <N> failed)
+
+## Independent Review
+- Result: clean / <N> blocking / <N> minor
+- (findings table here if any)
 
 ## Doc Sync
 - Result: clean / fixed (<what was fixed>)  (full-scope sync-doc run)
@@ -235,7 +275,7 @@ Date: <ISO 8601 date>
 <one sentence summary>
 ```
 
-**DELIVERED** = all tasks passed, all tests pass, doc sync clean or fixed.
+**DELIVERED** = all tasks passed, all tests pass, independent review clean or minor only, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed their `done_when` criterion, or tests still failing after fix attempts.
 
 **If BLOCKED — escalation note for TL:**

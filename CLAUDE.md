@@ -129,12 +129,13 @@ Every component DESIGN doc follows a 4-section template:
 - `docs/DESIGN-tools-integrations.md` — Integration tools: Memory, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
 - `docs/DESIGN-tools-delegation.md` — Delegation tools: Coder, Research, Analysis sub-agents
 - `docs/DESIGN-skills.md` — Skills subsystem: sources/precedence, loader, dispatch pipeline (arg substitution, shell preprocessing, env injection, allowed-tools), security scanner, `/skills` commands (list/check/install/reload)
-- `docs/DESIGN-knowledge.md` — Knowledge system: flat storage, kinds, FTS5/hybrid search, tool surface, memory lifecycle (signal detection, precision edits, dedup, decay, tag/temporal filtering)
+- `docs/DESIGN-memory.md` — Memory system: agent state lifecycle (signal detection, dedup, consolidation, retention, certainty, runtime injection), per-project scope
+- `docs/DESIGN-knowledge.md` — Knowledge system: KnowledgeIndex FTS5/hybrid search, library article lifecycle, Obsidian/Drive sources, startup sync, source namespace
 - `docs/DESIGN-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
 
 ### Reference (`docs/reference/`)
 
-Research and reference material not tied to active implementation: REVIEW-*, ROADMAP-*, FIX-*, and external reference docs. Not linked from DESIGN docs — for background reading only.
+Research and reference material not tied to active implementation: RESEARCH-*, ROADMAP-*, FIX-*, and external reference docs. Not linked from DESIGN docs — for background reading only.
 
 ### TODO (remaining work items only — no design content, no status tracking)
 
@@ -148,11 +149,11 @@ Five skills map onto the dev workflow. Human gates are at decisions, not artifac
 ```
 PO brief / TL pre-check
     ↓
-TL:  /orchestrate-review <scope>  → docs/reference/REVIEW-<scope>.md  (TL + Code Dev + Auditor)
+     /orchestrate-review <scope>  → docs/REVIEW-<scope>.md  (Code Dev + Auditor)
     ↓
 👤  TL reads verdict: HEALTHY / NEEDS_ATTENTION / ACTION_REQUIRED
     ↓
-[optional] TL:  /orchestrate-research <scope>  → docs/reference/RESEARCH-<scope>.md  (TL + Researcher)
+[optional] TL:  /research <scope>  → docs/reference/RESEARCH-<scope>.md
 [optional] 👤  TL reads research: gaps to address in design?
     ↓
 TL:  /orchestrate-plan  → docs/TODO-<slug>.md  (TL + Reviewer + Auditor)
@@ -171,7 +172,7 @@ ship
 ```
 
 - `/orchestrate-review <scope>` — Co-system health check: code↔doc accuracy + TODO health → TL verdict. Run after every delivery or before planning.
-- `/orchestrate-research <scope>` — Reference system tradeoff analysis: compare co-cli design decisions against peer systems → gaps report. Run before planning a scope that involves architecture decisions.
+- `research <scope>` — Free-form task (no skill): compare co-cli design decisions against peer systems → gaps report. Reference Repos table in this file has key files per repo. Run before planning a scope that involves architecture decisions.
 - `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques in parallel → TL decides → repeat until clean, produces `docs/TODO-<slug>.md`
 - `/orchestrate-dev <slug>` — Implements approved plan: execute tasks, self-review, verify done_when, run tests, sync docs, produce `docs/DELIVERY-<slug>.md`
 - `/sync-doc [doc...]` — Verify DESIGN docs against current source code and fix inaccuracies in-place. No args = all DESIGN docs. Also invoked internally by `orchestrate-dev`.
