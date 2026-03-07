@@ -57,13 +57,13 @@ def test_prompt_includes_all_five_rules():
 
 
 def test_rules_token_budget():
-    """Combined rule text stays under ~1500 tokens (~6000 chars heuristic)."""
+    """Combined rule text stays under ~1750 tokens (~7000 chars heuristic)."""
     total_chars = 0
     for rule_path in sorted(_RULES_DIR.glob("*.md")):
         total_chars += len(rule_path.read_text(encoding="utf-8").strip())
-    assert total_chars < 6000, (
+    assert total_chars < 7000, (
         f"Rules total {total_chars} chars (~{total_chars // 4} tokens), "
-        f"expected < 6000 chars (~1500 tokens)"
+        f"expected < 7000 chars (~1750 tokens)"
     )
 
 

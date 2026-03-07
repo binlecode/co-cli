@@ -82,7 +82,7 @@ def _make_deps(
 
 def test_update_action_sets_updated_timestamp(tmp_path: Path, monkeypatch):
     """apply_plan_atomically UPDATE refreshes the entry's updated timestamp."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     entry = _seed_memory(memory_dir, 1, "User prefers dark mode", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -104,7 +104,7 @@ def test_update_action_sets_updated_timestamp(tmp_path: Path, monkeypatch):
 
 def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path, monkeypatch):
     """DELETE removes non-protected entry; silently skips protected entry."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     non_protected = _seed_memory(memory_dir, 1, "Obsolete preference", tags=["preference"])
     protected = _seed_memory(memory_dir, 2, "Core architecture decision",
                              tags=["decision"], decay_protected=True)
@@ -130,7 +130,7 @@ def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path, mon
 
 def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path, monkeypatch):
     """Candidate matching existing memory via rapidfuzz updates timestamp, creates no new file."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -157,7 +157,7 @@ def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path, monkeypatch):
 
 def test_overflow_cut_oldest_unprotected(tmp_path: Path, monkeypatch):
     """After persist_memory, total > max_count triggers cut of oldest unprotected."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     monkeypatch.chdir(tmp_path)
 
     max_count = 5
@@ -185,13 +185,47 @@ def test_overflow_cut_oldest_unprotected(tmp_path: Path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 4b. Retention cap isolates memories — article is never evicted
+# ---------------------------------------------------------------------------
+
+
+def test_retention_cap_excludes_articles(tmp_path: Path, monkeypatch):
+    """Retention cap counts only memories; articles must never be deleted."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    monkeypatch.chdir(tmp_path)
+
+    # Seed 3 memories (oldest to newest) and 1 article
+    for i in range(1, 4):
+        _seed_memory(memory_dir, i, f"Old memory {i}", days_ago=10 - i)
+    # Seed article as a regular md file with kind:article frontmatter
+    article_path = memory_dir / "100-my-article.md"
+    import yaml as _yaml
+    article_fm = {
+        "id": 100, "kind": "article", "created": "2026-01-01T00:00:00+00:00",
+        "tags": [], "decay_protected": True, "origin_url": "https://example.com",
+    }
+    article_path.write_text(
+        f"---\n{_yaml.dump(article_fm, default_flow_style=False)}---\n\nArticle body.\n",
+        encoding="utf-8",
+    )
+
+    # max_count=3: saving one more memory should evict oldest memory, not the article
+    deps = _make_deps(max_count=3)
+    asyncio.run(persist_memory(deps, "Brand new memory triggers retention", ["test"], None))
+
+    remaining = list(memory_dir.glob("*.md"))
+    assert article_path in remaining, "Article must never be evicted by memory retention cap"
+    assert len(remaining) <= 4, f"Total files {len(remaining)} should be <= 4"
+
+
+# ---------------------------------------------------------------------------
 # 5. Explicit save fallback — timeout=0, on_failure="add" → file written
 # ---------------------------------------------------------------------------
 
 
 def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
     """With timeout=0, consolidation times out but on_failure='add' writes a file."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
@@ -221,7 +255,7 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
 
 def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path, monkeypatch):
     """With timeout=0, consolidation times out and on_failure='skip' writes nothing."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 

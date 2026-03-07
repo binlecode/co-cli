@@ -46,7 +46,8 @@ graph TB
         HTTP[HTTP / Web]
         MCPServers[MCP Servers stdio/HTTP]
         Workspace[Workspace Filesystem]
-        KnowledgeDir[.co-cli/knowledge]
+        MemoryDir[.co-cli/memory]
+        LibraryDir[~/.local/share/co-cli/library]
     end
 
     subgraph Infrastructure
@@ -160,8 +161,8 @@ Read the core system in this order: `agents + orchestration -> deps -> tools -> 
 | 1 | Agents + Orchestration | [DESIGN-prompt-design.md](DESIGN-prompt-design.md) | Deep spec for `run_turn`, approval re-entry chain, tool preamble, safety policies, prompt-layer composition, context governance, history processors, compaction |
 | 2 | Runtime Dependencies (`CoDeps`) | `DESIGN-core.md` (this doc) | Dependency injection model, runtime mutable state, session boundaries, startup bootstrap |
 | 3 | Tools | [DESIGN-tools.md](DESIGN-tools.md) — [execution](DESIGN-tools-execution.md), [integrations](DESIGN-tools-integrations.md), [delegation](DESIGN-tools-delegation.md) | Shell, files, background, todo, capabilities, Obsidian, Google, web, memory, sub-agent delegation |
-| 4 | Knowledge Substrate | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Unified `.co-cli/knowledge/` + `search.db` substrate, FTS5/hybrid retrieval, cross-source indexing |
-| 5 | Memory Lifecycle | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Memory save/recall/decay behaviors on top of the knowledge substrate |
+| 4 | Knowledge Substrate | [DESIGN-knowledge.md](DESIGN-knowledge.md) | Library + `search.db`: FTS5/hybrid retrieval, article lifecycle, Obsidian/Drive indexing |
+| 5 | Memory Lifecycle | [DESIGN-memory.md](DESIGN-memory.md) | Agent memory: signal detection, dedup, consolidation, retention, runtime injection |
 | 6 | Skills | [DESIGN-skills.md](DESIGN-skills.md) | Skills loader, dispatch, env injection, allowlists, security scanner, `/skills` commands |
 | 7 | Config Reference | `DESIGN-core.md` Section 3 | Consolidated setting/env/default reference for runtime behavior |
 
@@ -227,7 +228,7 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 | **Personality** | `personality` (role name), `personality_critique` (always-on review lens from `critique.md`) |
 | **Skills** | `skill_registry` (list of skill dicts, populated by chat_loop; drives `add_available_skills` system prompt), `active_skill_env` (per-turn env overrides from `skill-env` frontmatter; set by `dispatch()`, cleared by `chat_loop()` `finally`), `active_skill_allowed_tools` (per-turn approval grants from `allowed-tools`; set by `dispatch()`, cleared after `run_turn()`) |
 | **Model roles** | `model_roles` (dict mapping role names to ordered model lists; mandatory `reasoning` list for main-agent turns, optional `coding`/`research`/`analysis` lists for delegation; empty optional role list = disabled), `ollama_host` (Ollama server base URL, required for provider-aware sub-agent construction), `turn_usage` (`RunUsage \| None` — accumulates sub-agent request consumption across delegation tool calls in a single parent turn) |
-| **LLM / overflow** | `llm_provider` (active LLM backend), `ollama_num_ctx` (context window size — used for overflow detection), `ctx_warn_threshold` (0.85 — warn ratio), `ctx_overflow_threshold` (1.0 — overflow ratio) |
+| **LLM / overflow** | `llm_provider` (active LLM backend), `gemini_api_key` (injected from settings, used by `_preflight.py`), `ollama_num_ctx` (context window size — used for overflow detection), `ctx_warn_threshold` (0.85 — warn ratio), `ctx_overflow_threshold` (1.0 — overflow ratio) |
 | **Approval risk** | `approval_risk_enabled` (False — enable risk classifier), `approval_auto_low_risk` (False — auto-approve low-risk calls when classifier enabled) |
 | **Safety thresholds** | `doom_loop_threshold` (3), `max_reflections` (3) |
 | **Mutable state** | `drive_page_tokens` (pagination state per query), `auto_approved_tools` (per-tool session approvals), `session_todos` (session task list), `precomputed_compaction` (background summary cache) |
@@ -244,15 +245,53 @@ Flat dataclass injected into every tool via `RunContext[CoDeps]`. Contains runti
 
 **Invariant:** Tool/runtime mutable state is session-scoped in `CoDeps` (`drive_page_tokens`, approvals, todos, processor state). `SKILL_COMMANDS` is a module-level registry in `_commands.py`, reloaded at session start.
 
-### Bootstrap Phase
+### Preflight Phase
 
-Before the REPL loop starts, `run_bootstrap()` runs three startup steps in sequence, reporting each via `frontend.on_status()`:
+Before the agent is created, `run_preflight(deps, frontend)` runs two resource checks in sequence. It is called after `create_deps()` and before `get_agent()` — the agent is never started if any check fails.
 
 ```
-run_bootstrap(deps, frontend, knowledge_dir, session_path, session_ttl_minutes, n_skills):
+run_preflight(deps, frontend):
+    result = _check_llm_provider(deps.llm_provider, deps.gemini_api_key, deps.ollama_host)
+    if result.status == "error"   → raise RuntimeError(result.message)
+    if result.status == "warning" → frontend.on_status(result.message)
+
+    result = _check_model_availability(deps.llm_provider, deps.ollama_host, deps.model_roles)
+    if result.status == "error"   → raise RuntimeError(result.message)
+    if result.status == "warning" → frontend.on_status(result.message)
+    if result.model_roles is not None → deps.model_roles = result.model_roles  ← apply mutation
+```
+
+**`_check_llm_provider(llm_provider, gemini_api_key, ollama_host) → PreflightResult`** — severity rules:
+- `gemini` + key absent → `status="error"` (GEMINI_API_KEY not set — required for Gemini provider)
+- `gemini` + key present → `status="ok"`
+- `ollama` + server unreachable (`/api/tags`, 5s timeout) → `status="warning"` (soft fail)
+- non-Gemini provider + Gemini key absent → `status="warning"` (Gemini-dependent features unavailable)
+
+**`_check_model_availability(llm_provider, ollama_host, model_roles) → PreflightResult`** — Ollama-only, pure function:
+- Non-Ollama provider → `status="ok"` immediately
+- Ollama + server unreachable → `status="warning"` (soft fail)
+- Reasoning chain: no installed model found → `status="error"` (fail-fast)
+- Reasoning or optional chain pruned → `status="warning"`, updated chains returned in `result.model_roles`
+- All models present → `status="ok"`, `result.model_roles = None` (no mutation needed)
+
+**`PreflightResult`** — shared return type for both check functions:
+- `ok: bool`, `status: str` ("ok" | "warning" | "error"), `message: str`
+- `model_roles: dict[str, list[str]] | None` — set only by `_check_model_availability` when chains advance
+
+**Extension model:** future checks (new provider support, connectivity probes, config validation) are added to `_preflight.py` only — no changes to `run_bootstrap` or `chat_loop`. `status.py` calls `_check_llm_provider` and `_check_model_availability` directly to populate `StatusInfo.llm_status` — no separate inline LLM probing.
+
+Source: `co_cli/_preflight.py`
+
+### Bootstrap Phase
+
+After preflight, `run_bootstrap()` runs three startup steps in sequence, reporting each via `frontend.on_status()`:
+
+```
+run_bootstrap(deps, frontend, memory_dir, library_dir, session_path, session_ttl_minutes, n_skills):
     1. sync_knowledge
-         if deps.knowledge_index and knowledge_dir.exists():
-             deps.knowledge_index.sync_dir("memory", knowledge_dir)
+         if deps.knowledge_index and (memory_dir.exists() or library_dir.exists()):
+             mem_count = sync_dir("memory", memory_dir, kind_filter="memory")
+             art_count = sync_dir("library", library_dir, kind_filter="article")
              → reports "Knowledge synced — N item(s) (backend)"
          else:
              → reports "Knowledge index not available — skipped"
@@ -305,24 +344,26 @@ _session.py functions:
 
 ```
 chat_loop():
-    reasoning_chain = list(settings.model_roles["reasoning"])
+    frontend = TerminalFrontend()              ← step 0: hoisted; required by run_preflight
+    deps = create_deps()                       ← step 1: deps first, task_runner=None
+    deps.skills_dir = Path.cwd() / ".co-cli/skills"   ← set before preflight (needed by skills loader)
+    run_preflight(deps, frontend)              ← step 2: ALL resource checks pre-agent; raises RuntimeError on error
+    task_runner = TaskRunner(storage, max_concurrent, ...)
+    deps.task_runner = task_runner             ← injected after creation
+    skill_commands = _load_skills(deps.skills_dir, settings)
+    SKILL_COMMANDS.clear(); SKILL_COMMANDS.update(skill_commands)   ← in-place update of module-level registry
+    deps.skill_registry = [...]                ← excludes disable-model-invocation skills
+
     agent, model_settings, tool_names, _ = get_agent(
         web_policy=settings.web_policy,
         mcp_servers=settings.mcp_servers or None,
         personality=settings.personality,
-        model_name=reasoning_chain[0],
+        model_name=deps.model_roles["reasoning"][0],   ← post-preflight chain head
     )
-    deps = create_deps(task_runner)            ← prunes stale exec approvals at startup
-    deps.skills_dir = Path.cwd() / ".co-cli/skills"
-    skill_commands = _load_skills(deps.skills_dir, settings)
-    SKILL_COMMANDS = skill_commands            ← module-level registry
-    deps.skill_registry = [...]                ← excludes disable-model-invocation skills
-
-    frontend = TerminalFrontend()
     message_history = []
 
     async with agent via AsyncExitStack:       ← connects MCP servers
-        if MCP init fails: rebuild agent without MCP
+        if MCP init fails: rebuild agent without MCP using deps.model_roles["reasoning"][0]
         if MCP enabled: tool_names = _discover_mcp_tools(...)
         session_data = await run_bootstrap(deps, frontend, ...)
         display_welcome_banner(info)
@@ -524,7 +565,6 @@ Local REPL commands — bypass the LLM, execute instantly. Explicit `dict` regis
 | `/tools` | List registered tool names |
 | `/history` | Show turn/message totals |
 | `/compact` | LLM-summarise history (see [Agentic Loop & Prompting](DESIGN-prompt-design.md)) |
-| `/model [name]` | Show/switch current model (interactive picker or direct switch) |
 | `/forget <id>` | Delete memory by ID |
 | `/approvals [list\|clear [id]]` | Manage persistent exec approval patterns |
 | `/checkpoint [label]` | Create a workspace snapshot (git stash or filesystem copy) |
@@ -615,7 +655,7 @@ Detailed loop/prompt rationale and safety-policy coupling live in [DESIGN-prompt
 
 **Static** (`assemble_prompt(provider, model_name, soul_seed, soul_examples)` in `prompts/__init__.py`):
 
-1. **Soul seed + character base memories + mindsets** — identity anchor from `souls/{role}/seed.md`, personality memories from `.co-cli/knowledge/`, and static mindset blocks from `prompts/personalities/mindsets/{role}/*.md` (combined by `get_agent()`, placed first)
+1. **Soul seed + character base memories + mindsets** — identity anchor from `souls/{role}/seed.md`, personality memories from `.co-cli/memory/`, and static mindset blocks from `prompts/personalities/mindsets/{role}/*.md` (combined by `get_agent()`, placed first)
 2. **Behavioral rules** — numbered rules from `prompts/rules/*.md` (strict contiguous order)
 3. **Soul examples** — trigger→response patterns from `souls/{role}/examples.md` (when file exists, trailing rules)
 4. **Model counter-steering** — quirk corrections from `prompts/quirks/{provider}/{model}.md` (when file exists)
@@ -747,8 +787,8 @@ Stale exec approvals (older than 90 days by `last_used_at`) are pruned at `creat
 | `run_shell_command` | Yes | Arbitrary code execution. Safe-prefix commands auto-approved. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
 | `start_background_task` | Yes | Starts long-running shell command in background |
-| `save_memory` | Yes | Writes to `.co-cli/knowledge/` |
-| `save_article` | Yes | Writes to `.co-cli/knowledge/` |
+| `save_memory` | Yes | Writes to `.co-cli/memory/` (project-local) |
+| `save_article` | Yes | Writes to `~/.local/share/co-cli/library/` (user-global) |
 | `write_file` | Yes | Writes files to the workspace |
 | `edit_file` | Yes | Modifies existing workspace files |
 | `update_memory` / `append_memory` / `todo_*` | Eval-only | Deferred only when `all_approval=True`; default runtime executes without approval |
@@ -784,7 +824,7 @@ Turn execution is single-threaded for model calls (`await run_turn()` per input,
 
 <project-root>/
 └── .co-cli/
-    ├── knowledge/         # All knowledge files (kind: memory + kind: article)
+    ├── memory/            # Memory files (kind: memory); articles stored in ~/.local/share/co-cli/library/
     ├── skills/            # Project-local skill .md files (override package-default on name collision)
     ├── session.json       # Session persistence (mode 0o600): session_id, created_at, last_used_at, compaction_count
     ├── exec-approvals.json # Persistent exec approval patterns (mode 0o600)
@@ -800,7 +840,8 @@ Turn execution is single-threaded for model calls (`await run_turn()` per input,
 | 1. Agents + Orchestration | `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
 | 1. Agents + Orchestration | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| 2. Runtime Deps + Session State | `_bootstrap.py` | `run_bootstrap()` — startup: knowledge sync, session restore/create, skills count report |
+| 2. Runtime Deps + Session State | `_preflight.py` | `run_preflight()`, `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — pre-agent resource gate |
+| 2. Runtime Deps + Session State | `_bootstrap.py` | `run_bootstrap()` — three startup steps: knowledge sync, session restore/create, skills count report |
 | 2. Runtime Deps + Session State | `_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | 2. Runtime Deps + Session State | `_history.py` | History processors and `summarize_messages()` |
 | 2. Runtime Deps + Session State | `_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
@@ -834,7 +875,7 @@ Turn execution is single-threaded for model calls (`await run_turn()` per input,
 | 4. Knowledge + Memory | `memory_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |
 | 4. Knowledge + Memory | `memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
 | 4. Knowledge + Memory | `memory_retention.py` | Cut-only retention enforcement |
-| 4. Knowledge + Memory | `tools/memory.py` | Memory recall/edit tools: `save_memory`, `recall_memory`, `list_memories`, `update_memory`, `append_memory` |
+| 4. Knowledge + Memory | `tools/memory.py` | Memory recall/edit tools: `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` |
 | 4. Knowledge + Memory | `tools/personality.py` | Per-turn personality-context memory injector helper |
 | 4. Knowledge + Memory | `_frontmatter.py` | YAML frontmatter parser for skills/knowledge markdown files |
 | 4. Knowledge + Memory | `_signal_analyzer.py` | Post-turn signal detector for auto-memory capture |
@@ -921,7 +962,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `co_cli/_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
 | `co_cli/_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()`, `_parse_retry_after()` |
 | `co_cli/deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| `co_cli/_bootstrap.py` | `run_bootstrap()` — startup steps: knowledge sync, session restore, skills report |
+| `co_cli/_preflight.py` | `run_preflight()`, `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — pre-agent resource gate |
+| `co_cli/_bootstrap.py` | `run_bootstrap()` — three startup steps: knowledge sync, session restore, skills count report |
 | `co_cli/_session.py` | Session persistence functions: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | `co_cli/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `co_cli/_history.py` | `truncate_tool_returns`, `truncate_history_window`, `summarize_messages` |

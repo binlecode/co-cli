@@ -21,7 +21,7 @@ souls/{role}/seed.md        → identity declaration
                                Never: hard constraints
                              loaded via load_soul_seed() — placed first
 
-.co-cli/knowledge/          → character base memories (decay_protected, planted)
+.co-cli/memory/          → character base memories (decay_protected, planted)
                                loaded via load_character_memories() in get_agent()
                                appended to seed — placed directly after seed
 
@@ -85,7 +85,7 @@ These constraints govern every decision in the sections below:
 │                                                                 │
 │ On-demand context  (model-triggered tools)                      │
 │                                                                 │
-│   recall_memory(query)     → user experience memories           │
+│   search_memories(query)   → user experience memories           │
 │                                                                 │
 ├─────────────────────────────────────────────────────────────────┤
 │ Compaction guard  (/new only — session checkpointing)           │
@@ -119,7 +119,7 @@ join all parts with "\n\n"
 
 `get_agent()` builds the soul block and passes it to `assemble_prompt()`:
 - `load_soul_seed(personality)` → seed text from `souls/{role}/seed.md`
-- `load_character_memories(personality, memory_dir)` → base memories from `.co-cli/knowledge/`; appended to seed before passing
+- `load_character_memories(personality, memory_dir)` → base memories from `.co-cli/memory/`; appended to seed before passing
 - `load_soul_mindsets(personality)` → all 6 mindset files from `mindsets/{role}/`; appended to soul block as `## Mindsets` section
 - `load_soul_examples(personality)` → examples from `souls/{role}/examples.md`; passed separately as `soul_examples`
 
@@ -132,7 +132,7 @@ Rule file validation is strict: filenames must match `NN_rule_id.md`, numeric pr
 | **01 Identity** | `01_identity.md` | Relationship continuity, anti-sycophancy, thoroughness over speed |
 | **02 Safety** | `02_safety.md` | Credential protection, source control caution, approval philosophy, memory constraints |
 | **03 Reasoning** | `03_reasoning.md` | Verification-first; fact authority: tool output beats training data, user preference beats tool output; two kinds of unknowns: discoverable facts vs preferences |
-| **04 Tool Protocol** | `04_tool_protocol.md` | 8–12 word preamble before tool calls; bias toward action; parallel when independent, sequential when dependent; `## Memory` — base + experience memories are in the system prompt, don't call `recall_memory` at turn start |
+| **04 Tool Protocol** | `04_tool_protocol.md` | 8–12 word preamble before tool calls; bias toward action; parallel when independent, sequential when dependent; `## Memory` — base + experience memories are in the system prompt, don't call `search_memories` at turn start |
 | **05 Workflow** | `05_workflow.md` | Three-category intent: **Directive** (action, may mutate state), **Deep Inquiry** (research, no mutation), **Shallow Inquiry** (default, single-lookup) |
 
 Rules encode behavioral norms that soul files cannot — soul files define *who* co is, rules define *how it behaves under ambiguity*. The split prevents soul files from becoming policy documents. Anti-sycophancy is in Rule 01 because base models trend toward agreement; a named principle at the identity layer is harder to suppress than a buried guideline.
@@ -165,7 +165,7 @@ The static prompt is assembled once and never re-read between turns; the per-tur
 
 ### 2c. Personality: seed + mindset
 
-`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans `.co-cli/knowledge/` for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
+`load_soul_seed(role)` in `co_cli/prompts/personalities/_composer.py` reads `souls/{role}/seed.md` and returns the text. `load_soul_examples(role)` reads `souls/{role}/examples.md` and returns the text (empty string if absent). `load_character_memories(role, memory_dir)` scans `.co-cli/memory/` for entries tagged `[role, "character"]` and returns a formatted `## Character` block.
 
 `get_agent()` combines these: `soul_seed = seed + base_memories + mindsets` (passed as `soul_seed`), `soul_examples` passed separately. `assemble_prompt()` places them in the correct order.
 
@@ -237,7 +237,7 @@ The folder structure is the schema — roles are discovered by listing `souls/` 
 2. Write `souls/{name}/critique.md` — always-on self-eval lens
 3. Write `mindsets/{name}/*.md` — 6 mindset files for the 6 task types (loaded statically at agent creation)
 4. Optionally write `souls/{name}/examples.md` — trigger→response patterns; silently ignored if absent
-5. Optionally write base memories in `.co-cli/knowledge/` tagged `[name, "character"]`
+5. Optionally write base memories in `.co-cli/memory/` tagged `[name, "character"]`
 6. `VALID_PERSONALITIES` updates automatically from `souls/` folder listing
 
 **Startup file validation (non-blocking).** `validate_personality_files(role)` in
@@ -251,7 +251,7 @@ skipped by `load_soul_mindsets()` — degraded but functional.
 
 ### 2d. Character base memories
 
-Pre-planted knowledge entries in `.co-cli/knowledge/` that carry the *felt* layer of each character: specific scenes, speech patterns, relationship dynamics, and observed behaviors from the source material (2021 Apple TV+ film *Finch* for Finch and Jeff entries; *Interstellar*, 2014, dir. Christopher Nolan for TARS entries). They provide behavioral depth without bloating the system prompt.
+Pre-planted knowledge entries in `.co-cli/memory/` that carry the *felt* layer of each character: specific scenes, speech patterns, relationship dynamics, and observed behaviors from the source material (2021 Apple TV+ film *Finch* for Finch and Jeff entries; *Interstellar*, 2014, dir. Christopher Nolan for TARS entries). They provide behavioral depth without bloating the system prompt.
 
 **Structure:** standard memory files with YAML frontmatter, distinguished from user-derived memories by two fields:
 
@@ -305,7 +305,7 @@ quirks
 `_load_personality_memories()` in `co_cli/tools/personality.py`. Called by `add_personality_memories()` per turn.
 
 ```
-scan .co-cli/knowledge/*.md for tag "personality-context"
+scan .co-cli/memory/*.md for tag "personality-context"
 sort by updated (or created) descending
 take top 5
 format as "## Learned Context\n\n- {content}\n- {content}\n..."
@@ -351,7 +351,7 @@ Tool descriptions are delivered as JSON schema in the API call body — they nev
 
 | Component | Chars |
 |-----------|-------|
-| 34 registered tool docstrings | ~17,000 |
+| 35 registered tool docstrings | ~17,000 |
 | **Grand total per API call** | **~21,800–24,200** |
 
 **Session overhead comparison (20-turn conversation):**
@@ -438,7 +438,7 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/prompts/personalities/souls/{role}/critique.md` | Always-on self-eval lens; loaded at session start by `load_soul_critique()`, injected every turn as `## Review lens` |
 | `co_cli/prompts/personalities/souls/{role}/examples.md` | Optional trigger→response patterns; loaded by `load_soul_examples()`, placed after rules (3 roles: finch, jeff, tars) |
 | `co_cli/prompts/personalities/mindsets/{role}/{task_type}.md` | Soul-specific behavioral guidance per task type (18 files: 6 types × 3 roles) |
-| `.co-cli/knowledge/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–21, `decay_protected: true`, `provenance: planted`) |
+| `.co-cli/memory/` | Knowledge store: user experience memories (IDs 1–3) + character base memories (IDs 4–21, `decay_protected: true`, `provenance: planted`) |
 | `co_cli/agent.py` | `get_agent(personality=…)` — builds soul block (seed + base memories + mindsets), loads examples, assembles static prompt, registers 6 `@agent.instructions` functions (incl. critique), registers tools |
 | `co_cli/tools/personality.py` | `_load_personality_memories()` helper |
 | `co_cli/_history.py` | `_PERSONALITY_COMPACTION_ADDENDUM` — summarizer guard for personality moments |

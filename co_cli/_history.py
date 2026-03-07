@@ -554,8 +554,8 @@ async def inject_opening_context(
     """Inject recalled memories on every new user turn.
 
     Runs before every model request. Recall fires unconditionally on each
-    new user turn — no heuristic gate. recall_memory is grep-based
-    (zero LLM cost); returns empty when nothing matches.
+    new user turn — no heuristic gate. recall_memory is FTS5/BM25 or grep
+    fallback — zero LLM cost in both cases. Returns empty when nothing matches.
 
     State is stored on ctx.deps._opening_ctx_state (session-scoped).
     """

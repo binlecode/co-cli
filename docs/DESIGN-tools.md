@@ -18,8 +18,8 @@ Native agent tools: shell execution, workspace files, background tasks, todo ses
 |------|----------|-----------|
 | `run_shell_command` | Conditional | Policy in tool: DENY → terminal_error, ALLOW → execute, else `ApprovalRequired`. |
 | `create_email_draft` | Yes | Creates Gmail draft on user's behalf |
-| `save_memory` | Yes | Writes to `.co-cli/knowledge/` |
-| `save_article` | Yes | Writes to `.co-cli/knowledge/` |
+| `save_memory` | Yes | Writes to `.co-cli/memory/` (project-local) |
+| `save_article` | Yes | Writes to `~/.local/share/co-cli/library/` (user-global) |
 | `write_file` | Yes | Writes files to the workspace |
 | `edit_file` | Yes | Modifies existing workspace files |
 | `start_background_task` | Yes | Spawns a subprocess in the background; pre-execution approval gate |
@@ -66,7 +66,7 @@ Additional: CAPS reserved for safety-critical constraints only (write/delete too
 
 ```
 User says "find X"
-  ├── in memories (preferences, decisions)  → search_knowledge(kind=memory) → list_memories
+  ├── in memories (preferences, decisions)  → search_memories → list_memories
   ├── in Obsidian notes (personal notes)    → search_knowledge(source=obsidian) → list_notes → read_note
   ├── in Google Drive (cloud docs)          → search_drive_files → read_drive_file
   ├── in Gmail (emails)                     → search_emails

@@ -40,6 +40,7 @@ from co_cli._session import (
     save_session, touch_session, increment_compaction,
 )
 from co_cli._bootstrap import run_bootstrap
+from co_cli._preflight import run_preflight
 from co_cli.prompts.personalities._composer import load_soul_critique
 
 # Setup Telemetry - must be done before Agent.instrument_all()
@@ -156,6 +157,9 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
     # Prune stale exec approvals at session start (removes entries older than 90 days)
     _prune_stale_approvals(exec_approvals_path, max_age_days=90)
 
+    memory_dir = Path.cwd() / ".co-cli" / "memory"
+    library_dir = Path(settings.library_path) if settings.library_path else DATA_DIR / "library"
+
     deps = CoDeps(
         shell=ShellBackend(),
         session_id=session_id,
@@ -164,6 +168,7 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
         exec_approvals_path=exec_approvals_path,
         shell_max_timeout=settings.shell_max_timeout,
         shell_safe_commands=settings.shell_safe_commands,
+        gemini_api_key=settings.gemini_api_key,
         brave_search_api_key=settings.brave_search_api_key,
         web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
         web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
@@ -188,6 +193,8 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
         knowledge_index=knowledge_index,
         knowledge_search_backend=resolved_knowledge_backend,
         knowledge_reranker_provider=settings.knowledge_reranker_provider,
+        memory_dir=memory_dir,
+        library_dir=library_dir,
         mcp_count=len(settings.mcp_servers),
         approval_risk_enabled=settings.approval_risk_enabled,
         approval_auto_low_risk=settings.approval_auto_low_risk,
@@ -240,16 +247,21 @@ async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> lis
 
 
 async def chat_loop(verbose: bool = False):
-    reasoning_chain = list(settings.model_roles["reasoning"])
     mcp_servers = settings.mcp_servers if settings.mcp_servers else None
-    agent, model_settings, tool_names, _ = get_agent(
-        web_policy=settings.web_policy,
-        mcp_servers=mcp_servers,
-        personality=settings.personality,
-        model_name=reasoning_chain[0],
-    )
 
-    # Initialize background task runner before chat loop starts
+    # Step 0: frontend first — required by run_preflight signature
+    frontend = TerminalFrontend()
+
+    # Step 1: create_deps with no task_runner yet (optional field, injected below)
+    deps = create_deps()
+    deps.skills_dir = Path.cwd() / ".co-cli" / "skills"
+
+    # Step 2: run_preflight — ALL resource checks here, pre-agent
+    # Raises RuntimeError on error (agent is never created).
+    # Also advances deps.model_roles chains in-place if needed.
+    run_preflight(deps, frontend)
+
+    # Step 3: task runner created and injected into deps after preflight passes
     tasks_dir = Path.cwd() / ".co-cli" / "tasks"
     task_storage = TaskStorage(tasks_dir)
     task_runner = TaskRunner(
@@ -259,9 +271,7 @@ async def chat_loop(verbose: bool = False):
         auto_cleanup=settings.background_auto_cleanup,
         retention_days=settings.background_task_retention_days,
     )
-
-    deps = create_deps(task_runner=task_runner)
-    deps.skills_dir = Path.cwd() / ".co-cli" / "skills"
+    deps.task_runner = task_runner
 
     # Load skills at startup; package-default skills always available; project-local skills override on name collision
     skill_commands = _load_skills(deps.skills_dir, settings=settings)
@@ -277,7 +287,14 @@ async def chat_loop(verbose: bool = False):
         if s.description and not s.disable_model_invocation
     ]
 
-    frontend = TerminalFrontend()
+    # Step 4: get_agent with post-preflight chain head
+    agent, model_settings, tool_names, _ = get_agent(
+        web_policy=settings.web_policy,
+        mcp_servers=mcp_servers,
+        personality=settings.personality,
+        model_name=deps.model_roles["reasoning"][0],
+    )
+
     # Build completer from built-in commands + user_invocable skills
     skill_completer_names = [
         f"/{name}" for name, s in skill_commands.items() if s.user_invocable
@@ -292,7 +309,7 @@ async def chat_loop(verbose: bool = False):
         complete_while_typing=False,
     )
 
-    # Start agent context (connects MCP servers).
+    # Step 5: start agent context (connects MCP servers).
     # AsyncExitStack guarantees __aexit__ even if fallback path is taken.
     stack = AsyncExitStack()
     try:
@@ -304,7 +321,7 @@ async def chat_loop(verbose: bool = False):
         agent, model_settings, tool_names, _ = get_agent(
             web_policy=settings.web_policy,
             personality=settings.personality,
-            model_name=reasoning_chain[0],
+            model_name=deps.model_roles["reasoning"][0],
         )
         await stack.enter_async_context(agent)
         mcp_servers = None
@@ -317,12 +334,12 @@ async def chat_loop(verbose: bool = False):
         if mcp_servers:
             tool_names = await _discover_mcp_tools(agent, tool_names)
 
-        knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
         session_path = Path.cwd() / ".co-cli" / "session.json"
         session_data = await run_bootstrap(
             deps,
             frontend,
-            knowledge_dir=knowledge_dir,
+            memory_dir=deps.memory_dir,
+            library_dir=deps.library_dir,
             session_path=session_path,
             session_ttl_minutes=settings.session_ttl_minutes,
             n_skills=len(skill_commands),
@@ -373,8 +390,6 @@ async def chat_loop(verbose: bool = False):
                             if user_input.lstrip("/").split()[0] == "compact":
                                 session_data = increment_compaction(session_data)
                                 save_session(session_path, session_data)
-                        if cmd_ctx.model_settings is not None:
-                            model_settings = cmd_ctx.model_settings
                         if cmd_ctx.skill_body is not None:
                             # Skill dispatched — fall through to LLM turn with skill body
                             user_input = cmd_ctx.skill_body
@@ -397,7 +412,6 @@ async def chat_loop(verbose: bool = False):
                 # try/finally guarantees skill-env rollback on all exit paths
                 # (normal completion, KeyboardInterrupt, CancelledError, Exception).
                 try:
-                    reasoning_chain = list(deps.model_roles.get("reasoning", reasoning_chain))
                     # Capture pre-turn state for model fallback replay
                     pre_turn_history = message_history[:]
                     original_user_input = user_input
@@ -417,10 +431,9 @@ async def chat_loop(verbose: bool = False):
 
                     # Terminal error recovery: advance reasoning model chain (max once per turn).
                     # Context-overflow will also trigger chain advance and may still fail — acceptable MVP.
-                    if turn_result.outcome == "error" and len(reasoning_chain) > 1:
-                        reasoning_chain.pop(0)
-                        next_model = reasoning_chain[0]
-                        deps.model_roles["reasoning"] = list(reasoning_chain)
+                    if turn_result.outcome == "error" and len(deps.model_roles["reasoning"]) > 1:
+                        deps.model_roles["reasoning"].pop(0)
+                        next_model = deps.model_roles["reasoning"][0]
                         try:
                             new_ms = _swap_model_inplace(
                                 agent, next_model, settings.llm_provider.lower(), settings

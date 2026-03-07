@@ -1,12 +1,14 @@
 """SQLite FTS5 knowledge index for ranked search across all text sources.
 
 KnowledgeIndex is a single SQLite-backed search index (search.db) that any
-source can write to. The `source` column ('memory', 'obsidian', 'drive')
-distinguishes origin. The `kind` column ('memory', 'article') distinguishes
-knowledge file types.
+source can write to. The `source` column distinguishes origin. The `kind`
+column ('memory', 'article') distinguishes knowledge file types.
 
-All knowledge files (memories + articles) are indexed under source='memory';
-Obsidian notes under source='obsidian'; Drive docs under source='drive'.
+Source namespace:
+  source='memory'   — kind:memory files (agent memories, lifecycle-managed)
+  source='library'  — kind:article files (user-global saved references)
+  source='obsidian' — Obsidian vault notes
+  source='drive'    — Google Drive docs (indexed on read)
 
 The index is derived and rebuildable — deleting search.db and restarting
 rebuilds cleanly from files.
@@ -273,7 +275,7 @@ class KnowledgeIndex:
         self,
         query: str,
         *,
-        source: str | None = None,
+        source: str | list[str] | None = None,
         kind: str | None = None,
         tags: list[str] | None = None,
         tag_match_mode: Literal["any", "all"] = "any",
@@ -287,6 +289,11 @@ class KnowledgeIndex:
         produces no matches.
 
         In hybrid mode, falls back to FTS5 if the embedding provider fails.
+
+        Source filter shortcuts:
+          source="library"  → library articles only
+          source="memory"   → memories only (explicit override, not the default)
+          source=["library", "obsidian", "drive"] → multiple sources via IN-clause
         """
         if self._backend == "hybrid":
             return self._hybrid_search(
@@ -308,7 +315,7 @@ class KnowledgeIndex:
         self,
         query: str,
         *,
-        source: str | None,
+        source: str | list[str] | None,
         kind: str | None,
         tags: list[str] | None,
         tag_match_mode: Literal["any", "all"],
@@ -343,7 +350,7 @@ class KnowledgeIndex:
         self,
         query: str,
         *,
-        source: str | None,
+        source: str | list[str] | None,
         kind: str | None,
         tags: list[str] | None,
         tag_match_mode: Literal["any", "all"],
@@ -359,7 +366,11 @@ class KnowledgeIndex:
         sql = _SELECT_SQL
         params: list[Any] = [fts_query]
 
-        if source is not None:
+        if isinstance(source, list):
+            placeholders = ",".join("?" * len(source))
+            sql += f" AND d.source IN ({placeholders})"
+            params.extend(source)
+        elif source is not None:
             sql += " AND d.source = ?"
             params.append(source)
         if kind is not None:
@@ -420,7 +431,7 @@ class KnowledgeIndex:
         self,
         embedding: list[float],
         *,
-        source: str | None,
+        source: str | list[str] | None,
         kind: str | None,
         tags: list[str] | None,
         tag_match_mode: Literal["any", "all"],
@@ -445,7 +456,11 @@ class KnowledgeIndex:
         sql = f"SELECT rowid, source, kind, path, title, tags, category, created, updated, provenance, certainty FROM docs WHERE rowid IN ({placeholders})"
         params: list[Any] = list(rowids)
 
-        if source is not None:
+        if isinstance(source, list):
+            src_placeholders = ",".join("?" * len(source))
+            sql += f" AND source IN ({src_placeholders})"
+            params.extend(source)
+        elif source is not None:
             sql += " AND source = ?"
             params.append(source)
         if kind is not None:
@@ -807,6 +822,7 @@ class KnowledgeIndex:
         source: str,
         directory: Path,
         glob: str = "**/*.md",
+        kind_filter: str | None = None,
     ) -> int:
         """Incrementally index a directory of markdown files.
 
@@ -814,9 +830,11 @@ class KnowledgeIndex:
         (only re-indexes changed files). Removes stale entries for deleted files.
 
         Args:
-            source: Source label ('memory', 'obsidian', 'drive').
+            source: Source label ('memory', 'library', 'obsidian', 'drive').
             directory: Directory to scan.
             glob: Glob pattern for files (default '**/*.md', recursive).
+            kind_filter: When set, only index files whose frontmatter kind matches.
+                         When None, all files are indexed regardless of kind.
 
         Returns:
             Number of files indexed (new or changed).
@@ -839,6 +857,8 @@ class KnowledgeIndex:
 
                 fm, body = parse_frontmatter(raw)
                 kind = fm.get("kind", "memory")
+                if kind_filter is not None and kind != kind_filter:
+                    continue
                 title = fm.get("title") or file_path.stem
                 tags_list = fm.get("tags") or []
                 tags_str = " ".join(tags_list) if tags_list else None

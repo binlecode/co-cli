@@ -10,7 +10,7 @@ Memory tools provide cross-session knowledge persistence. The agent proactively 
 
 ```
 save_memory(content, tags?, related?)
-  ├── Load all memories from .co-cli/knowledge/
+  ├── Load all memories from .co-cli/memory/
   ├── Fuzzy-dedup check (token_sort_ratio, last N days)
   │     dup found? → update existing (consolidate in-place)
   │     no dup?   → LLM consolidation (extract_facts → resolve)
@@ -31,7 +31,7 @@ list_memories(offset=0, limit=20, kind=None)
 
 ### 2. Core Logic
 
-Memory lifecycle internals (signal detection, dedup, decay, certainty classification, file format) are documented in [DESIGN-knowledge.md](DESIGN-knowledge.md).
+Memory lifecycle internals (signal detection, dedup, decay, certainty classification, file format) are documented in [DESIGN-memory.md](DESIGN-memory.md).
 
 ### 3. Config
 
@@ -51,7 +51,7 @@ Memory lifecycle internals (signal detection, dedup, decay, certainty classifica
 | `co_cli/memory_lifecycle.py` | Write entrypoint: dedup → consolidation → write → retention |
 | `co_cli/memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
 | `co_cli/memory_retention.py` | Cut-only retention enforcement |
-| `co_cli/tools/memory.py` | `save_memory`, `recall_memory`, `list_memories`, `update_memory`, `append_memory` + shared helpers |
+| `co_cli/tools/memory.py` | `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` + shared helpers |
 | `co_cli/tools/personality.py` | Private helper: `_load_personality_memories()` for system prompt injection |
 | `co_cli/_frontmatter.py` | YAML frontmatter parser and validator for memory files |
 | `co_cli/config.py` | Memory settings with env var mappings |
@@ -339,6 +339,10 @@ web_fetch(ctx, url)
 | `web_fetch_blocked_domains` | `CO_CLI_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Always blocked. Comma-separated in env var |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `allow` = no approval, `ask` = deferred, `deny` = disabled |
 | `web_policy.fetch` | `CO_CLI_WEB_POLICY_FETCH` | `"allow"` | `allow` = no approval, `ask` = deferred, `deny` = disabled |
+| `web_http_max_retries` | `CO_CLI_WEB_HTTP_MAX_RETRIES` | `2` | Max HTTP retries for `web_fetch` (exponential backoff) |
+| `web_http_backoff_base_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS` | `1.0` | Base backoff interval (seconds) for `web_fetch` retries |
+| `web_http_backoff_max_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS` | `8.0` | Max backoff cap (seconds) for `web_fetch` retries |
+| `web_http_jitter_ratio` | `CO_CLI_WEB_HTTP_JITTER_RATIO` | `0.2` | Jitter fraction applied to backoff interval (0–1) |
 
 **Setup:** Get a Brave Search API key, then set `brave_search_api_key` in `settings.json` or via `BRAVE_SEARCH_API_KEY` env var. Verify with `uv run co status`.
 

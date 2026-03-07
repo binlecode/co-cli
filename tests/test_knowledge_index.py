@@ -365,6 +365,8 @@ def test_fts_roundtrip_save_and_recall(tmp_path):
         memory_decay_percentage: float = 0.2
         knowledge_index: Any = None
         knowledge_search_backend: str = "fts5"
+        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
 
     class _Ctx:
         def __init__(self, deps):
@@ -372,6 +374,9 @@ def test_fts_roundtrip_save_and_recall(tmp_path):
         @property
         def deps(self):
             return self._deps
+        @property
+        def model(self):
+            return None
 
     deps = _Deps(knowledge_index=idx)
     ctx = _Ctx(deps)
@@ -697,6 +702,44 @@ def test_sync_dir_propagates_provenance_and_certainty(tmp_path):
     assert row["provenance"] == "planted"
     assert row["certainty"] == "medium"
     idx.close()
+
+
+def test_sync_dir_kind_filter_skips_non_matching(tmp_path):
+    """sync_dir(kind_filter='memory') skips files whose frontmatter kind != 'memory'."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    knowledge_dir = tmp_path / "knowledge"
+    _write_md(knowledge_dir, "001-mem.md", "User prefers dark mode",
+              {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+    _write_md(knowledge_dir, "002-art.md", "Python asyncio reference guide",
+              {"id": 2, "kind": "article", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+
+    # Sync memories only
+    count = idx.sync_dir("memory", knowledge_dir, kind_filter="memory")
+    assert count == 1
+
+    rows = idx._conn.execute("SELECT path FROM docs WHERE source='memory'").fetchall()
+    assert len(rows) == 1
+    assert "001-mem" in rows[0]["path"]
+    idx.close()
+
+
+def test_sync_dir_kind_filter_article(tmp_path):
+    """sync_dir(kind_filter='article') indexes articles under 'library' source."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    knowledge_dir = tmp_path / "knowledge"
+    _write_md(knowledge_dir, "001-mem.md", "User prefers dark mode",
+              {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+    _write_md(knowledge_dir, "002-art.md", "Python asyncio reference guide",
+              {"id": 2, "kind": "article", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+
+    count = idx.sync_dir("library", knowledge_dir, kind_filter="article")
+    assert count == 1
+
+    rows = idx._conn.execute("SELECT path FROM docs WHERE source='library'").fetchall()
+    assert len(rows) == 1
+    assert "002-art" in rows[0]["path"]
+    idx.close()
+
 
 
 def test_local_cross_encoder_reranks_correctly(tmp_path):

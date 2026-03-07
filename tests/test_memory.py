@@ -1,7 +1,7 @@
 """Tests for memory gravity — touch and dedup on recall."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,7 @@ from co_cli.tools.memory import (
     list_memories,
     update_memory,
     append_memory,
+    search_memories,
 )
 
 
@@ -35,6 +36,8 @@ class _FakeDeps:
     memory_dedup_threshold: int = 85
     knowledge_index: Any = None
     knowledge_search_backend: str = "grep"
+    memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+    library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
 
 
 class _FakeRunContext:
@@ -128,7 +131,7 @@ def test_recall_touches_pulled_memories(tmp_path: Path, monkeypatch):
 
     # Patch cwd so recall_memory finds our test memories
     monkeypatch.chdir(tmp_path.parent)
-    memory_dir = tmp_path.parent / ".co-cli" / "knowledge"
+    memory_dir = tmp_path.parent / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     _write_memory(memory_dir, 1, "User prefers dark theme",
                   tags=["preference"])
@@ -152,7 +155,7 @@ def test_recall_touches_pulled_memories(tmp_path: Path, monkeypatch):
 
 def test_list_memories_pagination(tmp_path: Path, monkeypatch):
     """list_memories returns correct pages with offset/limit."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     for i in range(1, 6):
         _write_memory(memory_dir, i, f"Memory content number {i}",
                       tags=["test"])
@@ -221,7 +224,7 @@ def test_fts_freshness_after_consolidation(tmp_path: Path, monkeypatch):
 
 def test_gravity_affects_recency_order(tmp_path: Path, monkeypatch):
     """Pulled memory appears first in next recall due to gravity."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
@@ -267,7 +270,7 @@ def test_auto_save_inject_true_adds_personality_context_tag(tmp_path: Path, monk
         _save_memory_impl(deps, "User does not want trailing comments", ["correction", "personality-context"], None)
     )
 
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     entries = _load_memories(memory_dir)
     assert len(entries) == 1
     assert "personality-context" in entries[0].tags
@@ -281,7 +284,7 @@ def test_auto_save_inject_true_adds_personality_context_tag(tmp_path: Path, monk
 
 def test_update_memory_replaces_exact_match(tmp_path: Path, monkeypatch):
     """update_memory replaces old_content with new_content in the body."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -297,7 +300,7 @@ def test_update_memory_replaces_exact_match(tmp_path: Path, monkeypatch):
 
 def test_update_memory_raises_not_found(tmp_path: Path, monkeypatch):
     """update_memory raises FileNotFoundError for an unknown slug."""
-    (tmp_path / ".co-cli" / "knowledge").mkdir(parents=True)
+    (tmp_path / ".co-cli" / "memory").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
     import pytest
@@ -307,7 +310,7 @@ def test_update_memory_raises_not_found(tmp_path: Path, monkeypatch):
 
 def test_update_memory_raises_zero_occurrences(tmp_path: Path, monkeypatch):
     """update_memory raises ValueError when old_content is not in the body."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -321,7 +324,7 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path, monkeypatch):
 
 def test_update_memory_raises_ambiguous(tmp_path: Path, monkeypatch):
     """update_memory raises ValueError when old_content appears more than once."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -335,7 +338,7 @@ def test_update_memory_raises_ambiguous(tmp_path: Path, monkeypatch):
 
 def test_update_memory_rejects_line_prefix(tmp_path: Path, monkeypatch):
     """update_memory raises ValueError when old_content contains Read-tool line prefixes."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -356,7 +359,7 @@ def test_update_memory_tab_normalization(tmp_path: Path, monkeypatch):
     Body is written with those literal spaces; old_content uses the raw tab — they
     compare equal after normalisation.
     """
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     # 5 spaces at column 3: what expandtabs() produces for "foo\tbar"
     _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
     monkeypatch.chdir(tmp_path)
@@ -378,7 +381,7 @@ def test_update_memory_tab_normalization(tmp_path: Path, monkeypatch):
 
 def test_append_memory_adds_to_end(tmp_path: Path, monkeypatch):
     """append_memory appends content as a new line at the end of the body."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     monkeypatch.chdir(tmp_path)
 
@@ -394,7 +397,7 @@ def test_append_memory_adds_to_end(tmp_path: Path, monkeypatch):
 
 def test_append_memory_missing_slug_raises(tmp_path: Path, monkeypatch):
     """append_memory raises FileNotFoundError for an unknown slug."""
-    (tmp_path / ".co-cli" / "knowledge").mkdir(parents=True)
+    (tmp_path / ".co-cli" / "memory").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
     import pytest
@@ -402,11 +405,132 @@ def test_append_memory_missing_slug_raises(tmp_path: Path, monkeypatch):
         asyncio.run(append_memory(_ctx(), "999-nonexistent", "extra line"))
 
 
+def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path, monkeypatch):
+    """After dedup-on-read deletes an older file, its FTS entry is also evicted."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path)
+
+    old_time = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+    new_time = datetime.now(timezone.utc).isoformat()
+
+    # Near-duplicate pair — same pattern as test_dedup_pulled_merges_similar (which passes)
+    # ensuring similarity >= 85% so dedup fires with default threshold
+    path_old = _write_memory(
+        memory_dir, 1, "User prefers xylodedup-test pytest for testing",
+        tags=["preference"], created=old_time,
+    )
+    path_new = _write_memory(
+        memory_dir, 2, "User prefers xylodedup-test pytest for testing purposes",
+        tags=["preference"], created=new_time,
+    )
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("memory", memory_dir)
+
+    # Both paths should be findable before recall
+    before = idx.search("xylodedup")
+    before_paths = {r.path for r in before}
+    assert str(path_old) in before_paths, "Older memory should be in FTS before recall"
+    assert str(path_new) in before_paths, "Newer memory should be in FTS before recall"
+
+    @dataclass
+    class _FTSDeps:
+        memory_max_count: int = 200
+        memory_dedup_window_days: int = 7
+        memory_dedup_threshold: int = 85
+        knowledge_index: Any = idx
+        knowledge_search_backend: str = "fts5"
+        memory_recall_half_life_days: int = 30
+        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+
+    ctx = _FakeRunContext(_FTSDeps())
+    asyncio.run(recall_memory(ctx, "xylodedup", max_results=5))
+
+    # The merged-away (older) entry must be gone from FTS
+    after = idx.search("xylodedup")
+    after_paths = {r.path for r in after}
+    assert str(path_old) not in after_paths, "Dedup-deleted memory must be evicted from FTS"
+    assert not path_old.exists(), "Dedup-deleted file must be removed from disk"
+
+    # The surviving (newer) entry must still be findable
+    assert str(path_new) in after_paths, "Surviving memory must remain in FTS after dedup"
+    idx.close()
+
+
+def test_composite_bm25_decay_scoring(tmp_path: Path, monkeypatch):
+    """High-relevance older memory outranks low-relevance newer memory via composite scoring.
+
+    Uses a background corpus (10 docs) to ensure positive IDF so BM25 TF differences
+    between M1 (15 occurrences of query term) and M2 (1 occurrence) are meaningful.
+    With only a 1-day age gap, the BM25 advantage of M1 overcomes the small recency
+    edge of M2, demonstrating that composite scoring is BM25-driven, not decay-only.
+    """
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path)
+
+    # Background corpus — no query term; makes IDF positive so TF differences matter
+    for i in range(3, 13):
+        _write_memory(
+            memory_dir, i,
+            f"Background note about software development entry number {i}",
+        )
+
+    # Memory 1: 1 day old, high BM25 — query term repeated 15 times
+    old_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    _write_memory(
+        memory_dir, 1,
+        "xylobm25score " * 15 + "development",
+        tags=["preference"],
+        created=old_time,
+    )
+    # Memory 2: created today, low BM25 — query term appears once
+    new_time = datetime.now(timezone.utc).isoformat()
+    _write_memory(
+        memory_dir, 2,
+        "User occasionally uses xylobm25score for reference",
+        tags=["context"],
+        created=new_time,
+    )
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("memory", memory_dir)
+
+    @dataclass
+    class _FTSDeps:
+        memory_max_count: int = 200
+        memory_dedup_window_days: int = 7
+        memory_dedup_threshold: int = 85
+        knowledge_index: Any = idx
+        knowledge_search_backend: str = "fts5"
+        memory_recall_half_life_days: int = 30
+        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+
+    ctx = _FakeRunContext(_FTSDeps())
+    result = asyncio.run(recall_memory(ctx, "xylobm25score", max_results=5))
+
+    assert result["count"] >= 2, "Both memories should match the query"
+    # Memory 1 (id=1) must rank first: high BM25 (15 occurrences) outweighs
+    # the small recency advantage of M2 (1-day newer, decay diff ≈ 0.977 vs 1.0)
+    first_result = result["results"][0]
+    assert first_result["id"] == 1, (
+        f"High-relevance older memory (id=1) should rank first; got id={first_result['id']}"
+    )
+    idx.close()
+
+
 def test_forget_evicts_from_fts(tmp_path: Path, monkeypatch):
     """KnowledgeIndex.remove() evicts a deleted memory from FTS results."""
     from co_cli.knowledge_index import KnowledgeIndex
 
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     monkeypatch.chdir(tmp_path)
 
     # Write a uniquely-worded memory file
@@ -429,3 +553,61 @@ def test_forget_evicts_from_fts(tmp_path: Path, monkeypatch):
     assert not any(str(path) in r.path for r in results_after), "Memory should be evicted after remove()"
 
     idx.close()
+
+
+# ---------------------------------------------------------------------------
+# search_memories — dedicated memory search tool
+# ---------------------------------------------------------------------------
+
+
+def test_search_memories_finds_saved_memories(tmp_path: Path, monkeypatch):
+    """search_memories returns saved memories with source='memory'."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    monkeypatch.chdir(tmp_path)
+
+    _write_memory(memory_dir, 1, "User prefers xyloquartz-search-test framework",
+                  tags=["preference"])
+    _write_memory(memory_dir, 2, "User uses xyloquartz-search-test for all tests",
+                  tags=["context"])
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.sync_dir("memory", memory_dir)
+
+    @dataclass
+    class _Deps:
+        memory_max_count: int = 200
+        memory_dedup_window_days: int = 7
+        memory_dedup_threshold: int = 85
+        knowledge_index: Any = idx
+        knowledge_search_backend: str = "fts5"
+        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+
+    ctx = _FakeRunContext(_Deps())
+
+    result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
+    assert result["count"] >= 2
+    assert all(r["source"] == "memory" for r in result["results"])
+    idx.close()
+
+
+def test_search_memories_empty_query_returns_guard(tmp_path: Path, monkeypatch):
+    """search_memories with empty query returns guard message."""
+    monkeypatch.chdir(tmp_path)
+    result = asyncio.run(search_memories(_ctx(), "   "))
+    assert result["count"] == 0
+    assert "required" in result["display"].lower()
+
+
+def test_search_memories_grep_fallback(tmp_path: Path, monkeypatch):
+    """search_memories grep fallback (no FTS index) finds memories by keyword."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    monkeypatch.chdir(tmp_path)
+
+    _write_memory(memory_dir, 1, "User prefers xyloquartz-grep-test tools", tags=["preference"])
+
+    result = asyncio.run(search_memories(_ctx(), "xyloquartz-grep-test"))
+    assert result["count"] >= 1
+    assert all(r["source"] == "memory" for r in result["results"])

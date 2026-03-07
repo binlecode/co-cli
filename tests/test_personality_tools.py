@@ -5,7 +5,7 @@ from co_cli.tools.personality import _load_personality_memories
 
 def test_load_personality_memories_with_tagged_files(tmp_path, monkeypatch):
     """Personality-context memories return Learned Context section."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     memory_file = memory_dir / "001-user-prefers-direct.md"
     memory_file.write_text(
@@ -34,7 +34,7 @@ def test_load_personality_memories_no_dir(tmp_path, monkeypatch):
 
 def test_load_personality_memories_no_matching_tags(tmp_path, monkeypatch):
     """Memories without personality-context tag are excluded."""
-    memory_dir = tmp_path / ".co-cli" / "knowledge"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     memory_file = memory_dir / "001-unrelated.md"
     memory_file.write_text(

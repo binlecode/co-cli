@@ -24,7 +24,7 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, recall_memory, list_memories, update_memory, append_memory
+from co_cli.tools.memory import save_memory, recall_memory, list_memories, update_memory, append_memory, search_memories
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.todo import todo_write, todo_read
 from co_cli.tools.capabilities import check_capabilities
@@ -139,7 +139,7 @@ def get_agent(
             load_character_memories,
         )
         soul_seed = load_soul_seed(personality)
-        memory_dir = Path.cwd() / ".co-cli" / "knowledge"
+        memory_dir = Path.cwd() / ".co-cli" / "memory"
         base_memories = load_character_memories(personality, memory_dir)
         if base_memories:
             soul_seed = soul_seed + "\n\n" + base_memories
@@ -301,6 +301,7 @@ def get_agent(
 
     # Read-only tools — no approval needed (unless all_approval for eval)
     _register(list_memories, all_approval)
+    _register(search_memories, all_approval)
     _register(read_article_detail, all_approval)
     _register(search_knowledge, all_approval)
     _register(list_notes, all_approval)

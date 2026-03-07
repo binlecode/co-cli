@@ -2,7 +2,7 @@
 
 Personality is assembled from five sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
-- ``.co-cli/knowledge/``                     — character base memories (decay_protected, provenance=planted)
+- ``.co-cli/memory/``                        — character base memories (decay_protected, provenance=planted)
 - ``mindsets/{role}/{task_type}.md``          — task-specific behavioral guidance (static, loaded at agent creation)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by assemble_prompt)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
@@ -135,7 +135,7 @@ def load_character_memories(role: str, memory_dir: Path) -> str:
 
     Args:
         role: Personality role name (e.g., "finch", "jeff").
-        memory_dir: Path to .co-cli/knowledge/.
+        memory_dir: Path to .co-cli/memory/.
 
     Returns:
         Formatted memory block (``## Character`` header + prose entries), or empty

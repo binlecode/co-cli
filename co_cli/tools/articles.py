@@ -1,7 +1,8 @@
 """Article tools for saving and retrieving external reference material.
 
 Articles are externally-fetched knowledge items (web docs, reference material,
-research) stored as markdown files with YAML frontmatter in .co-cli/knowledge/.
+research) stored as markdown files with YAML frontmatter in the user-global library
+(~/.local/share/co-cli/library/ by default, configurable via CO_LIBRARY_PATH).
 They differ from memories in three ways:
 - kind: article (vs kind: memory)
 - origin_url: URL they were fetched from
@@ -183,12 +184,15 @@ async def search_knowledge(
     and Drive docs in a single ranked result set.
 
     Source filter shortcuts:
-    - source="memory", kind="memory" → memories only
-    - kind="article" → articles only
+    - source="library" → local articles only
+    - source="memory" → memories only (explicit override, not the default)
     - source="obsidian" → Obsidian vault notes only
 
-    Falls back to grep on knowledge files (memories + articles) when FTS unavailable.
-    Obsidian and Drive require FTS — results are knowledge-only in fallback mode.
+    Default (source=None) searches library, obsidian, and drive — memories excluded.
+    Use search_memories() for dedicated memory search.
+
+    Falls back to grep on knowledge files (articles by default) when FTS unavailable.
+    Obsidian and Drive require FTS — results are article-only in fallback mode.
 
     Returns a dict with:
     - display: formatted ranked results — show directly to the user
@@ -207,10 +211,22 @@ async def search_knowledge(
     """
     if ctx.deps.knowledge_index is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
-        if source is not None and source != "memory":
+        if source not in (None, "memory", "library"):
             return {"display": f"No results for '{query}' (source={source!r} requires FTS)", "count": 0, "results": []}
-        knowledge_dir = Path.cwd() / ".co-cli/knowledge"
-        memories = _load_memories(knowledge_dir, kind=kind)
+        # Derive effective_kind so the source="memory" escape hatch works in grep mode.
+        # Default (source=None or source="library"): library only (articles).
+        if kind is not None:
+            effective_kind = kind
+        elif source == "memory":
+            effective_kind = "memory"
+        else:
+            effective_kind = "article"
+        # Grep fallback: route to correct directory by kind
+        if effective_kind == "memory":
+            grep_dir = ctx.deps.memory_dir
+        else:
+            grep_dir = ctx.deps.library_dir
+        memories = _load_memories(grep_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
                 memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -226,8 +242,10 @@ async def search_knowledge(
         lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
         result_dicts = []
         for m in matches:
+            # Assign source matching the kind partition convention
+            result_source = "memory" if m.kind == "memory" else "library"
             lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
-            result_dicts.append({"source": "memory", "kind": m.kind, "title": m.path.stem,
+            result_dicts.append({"source": result_source, "kind": m.kind, "title": m.path.stem,
                                   "snippet": m.content[:100], "score": 0.0, "path": str(m.path)})
         return {"display": "\n".join(lines), "count": len(matches), "results": result_dicts}
 
@@ -238,10 +256,13 @@ async def search_knowledge(
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
+    # Default scope excludes source="memory" — memories are searched via search_memories.
+    # Explicit source="memory" is kept as an escape hatch for direct memory queries.
+    fts_source = source if source is not None else ["library", "obsidian", "drive"]
     try:
         results = ctx.deps.knowledge_index.search(
             query,
-            source=source,
+            source=fts_source,
             kind=kind,
             tags=tags,
             tag_match_mode=tag_match_mode,
@@ -326,11 +347,11 @@ async def save_article(
         tags: Categorization tags (e.g. ["python", "async", "reference"]).
         related: Slugs of related memories/articles for knowledge linking.
     """
-    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    library_dir = ctx.deps.library_dir
+    library_dir.mkdir(parents=True, exist_ok=True)
 
     # Dedup by origin_url exact match
-    existing = _find_article_by_url(knowledge_dir, origin_url)
+    existing = _find_article_by_url(library_dir, origin_url)
     if existing is not None:
         result = _consolidate_article(existing, content, title, tags, origin_url)
         if ctx.deps.knowledge_index is not None:
@@ -340,7 +361,7 @@ async def save_article(
                 # Use merged tags from frontmatter, not just the incoming tags arg
                 merged_tags_str = " ".join(fm2.get("tags", []))
                 ctx.deps.knowledge_index.index(
-                    source="memory",
+                    source="library",
                     kind="article",
                     path=str(existing),
                     title=title,
@@ -356,7 +377,7 @@ async def save_article(
         return result
 
     # Load all items to determine next ID
-    all_items = _load_memories(knowledge_dir)
+    all_items = _load_memories(library_dir)
     max_id = max((m.id for m in all_items), default=0)
     article_id = max_id + 1
     slug = _slugify(title[:50])
@@ -381,7 +402,7 @@ async def save_article(
         f"{content.strip()}\n"
     )
 
-    file_path = knowledge_dir / filename
+    file_path = library_dir / filename
     file_path.write_text(md_content, encoding="utf-8")
     logger.info(f"Saved article {article_id} to {file_path}")
 
@@ -389,7 +410,7 @@ async def save_article(
     if ctx.deps.knowledge_index is not None:
         try:
             ctx.deps.knowledge_index.index(
-                source="memory",
+                source="library",
                 kind="article",
                 path=str(file_path),
                 title=title,
@@ -445,14 +466,14 @@ async def recall_article(
         created_after: ISO8601 date string; only return articles created on or after this date.
         created_before: ISO8601 date string; only return articles created on or before this date.
     """
-    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    library_dir = ctx.deps.library_dir
 
     # FTS path — activates when Phase 1 ships and index is available
     if ctx.deps.knowledge_index is not None and ctx.deps.knowledge_search_backend in ("fts5", "hybrid"):
         try:
             fts_results = ctx.deps.knowledge_index.search(
                 query,
-                source="memory",
+                source="library",
                 kind="article",
                 tags=tags,
                 tag_match_mode=tag_match_mode,
@@ -507,7 +528,7 @@ async def recall_article(
             logger.warning(f"FTS search failed, falling back to grep: {e}")
 
     # Grep fallback
-    articles = _load_memories(knowledge_dir, kind="article")
+    articles = _load_memories(library_dir, kind="article")
     query_lower = query.lower()
     matches = [
         a for a in articles
@@ -593,13 +614,13 @@ async def read_article_detail(
     Args:
         slug: File stem from recall_article result (e.g. "042-python-asyncio-guide").
     """
-    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    library_dir = ctx.deps.library_dir
 
     # Find by slug (file stem)
-    candidates = list(knowledge_dir.glob(f"{slug}.md"))
+    candidates = list(library_dir.glob(f"{slug}.md"))
     if not candidates:
         # Try prefix match (slug might be partial)
-        candidates = list(knowledge_dir.glob(f"{slug}*.md"))
+        candidates = list(library_dir.glob(f"{slug}*.md"))
     if not candidates:
         return {
             "display": f"Article '{slug}' not found.",
@@ -646,6 +667,9 @@ def _find_article_by_url(knowledge_dir: Path, origin_url: str) -> Path | None:
     for path in knowledge_dir.glob("*.md"):
         try:
             raw = path.read_text(encoding="utf-8")
+            if origin_url not in raw:
+                # Fast prefilter — skip frontmatter parse if URL absent
+                continue
             fm, _ = parse_frontmatter(raw)
             if fm.get("origin_url") == origin_url:
                 return path

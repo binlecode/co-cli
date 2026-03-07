@@ -228,7 +228,13 @@ Run `/sync-doc` with no args (full scope). This ensures all DESIGN docs are chec
 
 Record result: clean / fixed (what was fixed).
 
-### Step 4 — TODO lifecycle
+### Step 4 — Coverage audit
+
+Run `/delivery-audit <slug>`. Checks whether delivered features — new agent tools, config settings, CLI commands — have DESIGN doc coverage. `sync-doc` fixes stale claims in existing doc sections; coverage-audit catches features that have no doc section at all.
+
+Record result: clean / gaps found (list missing features by name).
+
+### Step 5 — TODO lifecycle
 
 For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Design details that belong in a DESIGN doc should be merged there (already handled by Step 3 sync).
 
@@ -270,6 +276,9 @@ Date: <ISO 8601 date>
 
 ## Doc Sync
 - Result: clean / fixed (<what was fixed>)  (full-scope sync-doc run)
+
+## Coverage Audit
+- Result: clean / gaps found (<list missing features>)
 
 ## Overall: DELIVERED / BLOCKED
 <one sentence summary>

@@ -118,6 +118,8 @@ class Settings(BaseModel):
     obsidian_vault_path: Optional[str] = Field(default=None)
     brave_search_api_key: Optional[str] = Field(default=None)
     google_credentials_path: Optional[str] = Field(default=None)
+    # User-global library path (default: ~/.local/share/co-cli/library/)
+    library_path: Optional[str] = Field(default=None)
     
     # Behavior
     theme: str = Field(default="light")
@@ -280,6 +282,7 @@ class Settings(BaseModel):
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
+            "library_path": "CO_LIBRARY_PATH",
             "theme": "CO_CLI_THEME",
             "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",

@@ -1,7 +1,7 @@
 """Functional tests for article tools — save, recall, read, list filter."""
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +29,8 @@ class _FakeDeps:
     knowledge_index: Any = None
     knowledge_search_backend: str = "grep"
     obsidian_vault_path: Any = None
+    library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+    memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
 
 
 class _FakeRunContext:
@@ -38,6 +40,10 @@ class _FakeRunContext:
     @property
     def deps(self) -> Any:
         return self._deps
+
+    @property
+    def model(self) -> Any:
+        return None
 
 
 def _ctx() -> _FakeRunContext:
@@ -73,8 +79,8 @@ def test_save_article_writes_correct_frontmatter(tmp_path, monkeypatch):
     assert result["action"] == "saved"
     assert result["article_id"] is not None
 
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    files = list(knowledge_dir.glob("*.md"))
+    library_dir = tmp_path / ".co-cli" / "library"
+    files = list(library_dir.glob("*.md"))
     assert len(files) == 1
 
     raw = files[0].read_text(encoding="utf-8")
@@ -114,8 +120,8 @@ def test_save_article_dedup_by_origin_url(tmp_path, monkeypatch):
     assert result2["article_id"] == result1["article_id"]
 
     # Only one file should exist
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    files = list(knowledge_dir.glob("*.md"))
+    library_dir = tmp_path / ".co-cli" / "library"
+    files = list(library_dir.glob("*.md"))
     assert len(files) == 1
 
     raw = files[0].read_text(encoding="utf-8")
@@ -182,8 +188,8 @@ def test_read_article_detail_returns_full_body(tmp_path, monkeypatch):
         tags=["full"],
     ))
 
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    files = list(knowledge_dir.glob("*.md"))
+    library_dir = tmp_path / ".co-cli" / "library"
+    files = list(library_dir.glob("*.md"))
     slug = files[0].stem
 
     result = _run(read_article_detail(_ctx(), slug))
@@ -204,8 +210,8 @@ def test_read_article_detail_prefix_match(tmp_path, monkeypatch):
         origin_url="https://example.com/prefix-match",
         tags=[],
     ))
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    full_slug = list(knowledge_dir.glob("*.md"))[0].stem
+    library_dir = tmp_path / ".co-cli" / "library"
+    full_slug = list(library_dir.glob("*.md"))[0].stem
     partial = full_slug[:3]
     result = _run(read_article_detail(_ctx(), partial))
     assert result["content"] is not None
@@ -222,7 +228,7 @@ def test_read_article_detail_not_found(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# list_memories kind filter
+# FTS metadata parity
 # ---------------------------------------------------------------------------
 
 
@@ -260,78 +266,6 @@ def test_recall_article_fts_metadata_parity(tmp_path, monkeypatch):
         "origin_url must be populated from frontmatter in FTS mode"
     )
     idx.close()
-
-
-def test_list_memories_kind_article_filter(tmp_path, monkeypatch):
-    """list_memories(kind='article') returns only articles."""
-    monkeypatch.chdir(tmp_path)
-
-    # Save one article and one memory
-    _run(save_article(
-        _ctx(),
-        content="Reference content",
-        title="Some Article",
-        origin_url="https://example.com/ref",
-        tags=["reference"],
-    ))
-
-    # Manually write a memory file
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    memory_file = knowledge_dir / "002-user-prefers-dark-mode.md"
-    fm = {
-        "id": 2,
-        "kind": "memory",
-        "created": "2026-01-15T00:00:00+00:00",
-        "tags": ["preference"],
-        "provenance": "user-told",
-        "auto_category": "preference",
-    }
-    import yaml as _yaml
-    memory_file.write_text(
-        f"---\n{_yaml.dump(fm, default_flow_style=False)}---\n\nUser prefers dark mode\n",
-        encoding="utf-8",
-    )
-
-    from co_cli.tools.memory import list_memories as _list_memories
-    result = _run(_list_memories(_ctx(), kind="article"))
-    assert result["total"] == 1
-    assert all(m["kind"] == "article" for m in result["memories"])
-
-
-def test_list_memories_kind_memory_filter(tmp_path, monkeypatch):
-    """list_memories(kind='memory') returns only memories."""
-    monkeypatch.chdir(tmp_path)
-
-    # Save one article
-    _run(save_article(
-        _ctx(),
-        content="Reference content",
-        title="Some Article",
-        origin_url="https://example.com/ref",
-        tags=["reference"],
-    ))
-
-    # Manually write a memory file
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    memory_file = knowledge_dir / "002-user-prefers-dark-mode.md"
-    import yaml as _yaml
-    fm = {
-        "id": 2,
-        "kind": "memory",
-        "created": "2026-01-15T00:00:00+00:00",
-        "tags": ["preference"],
-        "provenance": "user-told",
-        "auto_category": "preference",
-    }
-    memory_file.write_text(
-        f"---\n{_yaml.dump(fm, default_flow_style=False)}---\n\nUser prefers dark mode\n",
-        encoding="utf-8",
-    )
-
-    from co_cli.tools.memory import list_memories as _list_memories
-    result = _run(_list_memories(_ctx(), kind="memory"))
-    assert result["total"] == 1
-    assert all(m["kind"] == "memory" for m in result["memories"])
 
 
 # ---------------------------------------------------------------------------
@@ -433,11 +367,13 @@ def test_search_knowledge_fts_kind_filter(tmp_path, monkeypatch):
         tags=["context"],
     ))
 
+    # Default scope covers local articles — kind="article" finds without source override
     article_result = _run(search_knowledge(ctx, "zygomorphic-kindfilter", kind="article"))
     assert article_result["count"] >= 1
     assert all(r["kind"] == "article" for r in article_result["results"])
 
-    memory_result = _run(search_knowledge(ctx, "zygomorphic-kindfilter", kind="memory"))
+    # Memories are excluded from default scope — must specify source="memory" explicitly
+    memory_result = _run(search_knowledge(ctx, "zygomorphic-kindfilter", source="memory", kind="memory"))
     assert memory_result["count"] >= 1
     assert all(r["kind"] == "memory" for r in memory_result["results"])
     idx.close()
@@ -480,10 +416,13 @@ def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch)
     ctx = _ctx_with_idx(idx)
     monkeypatch.chdir(tmp_path)
 
-    _run(save_memory(
+    # Use save_article — search_knowledge default scope covers local articles, not memories
+    _run(save_article(
         ctx,
-        "User prefers zygomorphic-confidence-test framework for testing",
-        tags=["preference"],
+        content="Reference on zygomorphic-confidence-test framework for testing",
+        title="Zygomorphic Confidence Test",
+        origin_url="https://example.com/zygomorphic-confidence-test",
+        tags=["reference"],
     ))
 
     result = _run(search_knowledge(ctx, "zygomorphic-confidence-test"))
@@ -504,10 +443,13 @@ def test_search_knowledge_display_contains_conf_label(tmp_path, monkeypatch):
     ctx = _ctx_with_idx(idx)
     monkeypatch.chdir(tmp_path)
 
-    _run(save_memory(
+    # Use save_article — search_knowledge default scope covers local articles, not memories
+    _run(save_article(
         ctx,
-        "User prefers zygomorphic-conf-display-test style guides",
-        tags=["preference"],
+        content="Reference on zygomorphic-conf-display-test style guides",
+        title="Zygomorphic Conf Display Test",
+        origin_url="https://example.com/zygomorphic-conf-display-test",
+        tags=["reference"],
     ))
 
     result = _run(search_knowledge(ctx, "zygomorphic-conf-display-test"))
@@ -557,8 +499,8 @@ def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
 
     # Write two memories in the same category with opposing content
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
 
     fm_a = {
         "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
@@ -570,8 +512,8 @@ def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
         "tags": ["preference"], "provenance": "user-told",
         "auto_category": "preference", "certainty": "high",
     }
-    path_a = knowledge_dir / "001-prefer-dark.md"
-    path_b = knowledge_dir / "002-no-dark.md"
+    path_a = memory_dir / "001-prefer-dark.md"
+    path_b = memory_dir / "002-no-dark.md"
     path_a.write_text(
         f"---\n{_yaml.dump(fm_a, default_flow_style=False)}---\n\nI prefer dark mode\n",
         encoding="utf-8",
@@ -581,9 +523,10 @@ def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    idx.sync_dir("memory", knowledge_dir)
+    idx.sync_dir("memory", memory_dir)
 
-    result = _run(search_knowledge(ctx, "dark mode prefer"))
+    # These are kind:memory files — must search with source="memory" (excluded from default scope)
+    result = _run(search_knowledge(ctx, "dark mode prefer", source="memory"))
     assert result["count"] >= 2
 
     # Both results in same category with opposing polarity should be flagged
@@ -603,8 +546,8 @@ def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
     ctx = _ctx_with_idx(idx)
     monkeypatch.chdir(tmp_path)
 
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
 
     fm_a = {
         "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
@@ -616,8 +559,8 @@ def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
         "tags": ["preference"], "provenance": "user-told",
         "auto_category": "preference", "certainty": "high",
     }
-    path_a = knowledge_dir / "001-dark.md"
-    path_b = knowledge_dir / "002-dark2.md"
+    path_a = memory_dir / "001-dark.md"
+    path_b = memory_dir / "002-dark2.md"
     path_a.write_text(
         f"---\n{_yaml.dump(fm_a, default_flow_style=False)}---\n\nI prefer dark mode\n",
         encoding="utf-8",
@@ -627,9 +570,10 @@ def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    idx.sync_dir("memory", knowledge_dir)
+    idx.sync_dir("memory", memory_dir)
 
-    result = _run(search_knowledge(ctx, "dark mode"))
+    # source="memory" to search memories (excluded from default search_knowledge scope)
+    result = _run(search_knowledge(ctx, "dark mode", source="memory"))
     # All results should have conflict:False (compatible statements)
     assert all(not r.get("conflict") for r in result["results"]), (
         f"No conflicts expected for compatible memories: {result['results']}"
@@ -642,9 +586,9 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
 
     # Write a memory file so grep has something to find
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
-    (knowledge_dir / "001-xylozygote-memory.md").write_text(
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "001-xylozygote-memory.md").write_text(
         "---\nid: 1\nkind: memory\ntags: []\ncreated: '2026-01-01T00:00:00+00:00'\n---\n\nxylozygote keyword memory\n",
         encoding="utf-8",
     )
@@ -656,3 +600,38 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypat
     # source='memory' with no FTS index → grep works, must find the file
     memory_result = _run(search_knowledge(_ctx(), "xylozygote", source="memory"))
     assert memory_result["count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# TASK-5: search_knowledge default scope excludes memories
+# ---------------------------------------------------------------------------
+
+
+def test_search_knowledge_default_excludes_memories(tmp_path, monkeypatch):
+    """search_knowledge with no source filter returns articles but not memories."""
+    from co_cli.knowledge_index import KnowledgeIndex
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    # Save an article (indexed at source="library") and a memory (source="memory")
+    _run(save_article(
+        ctx,
+        content="xylozygote-partition-test reference article content",
+        title="Partition Test Article",
+        origin_url="https://example.com/xylozygote-partition",
+        tags=["reference"],
+    ))
+    _run(save_memory(ctx, "xylozygote-partition-test memory entry", tags=["preference"]))
+
+    # Default scope: should find article, not memory
+    result = _run(search_knowledge(ctx, "xylozygote-partition-test"))
+    sources = {r["source"] for r in result["results"]}
+    assert "memory" not in sources, "Memories must be excluded from default search_knowledge scope"
+    assert result["count"] >= 1, "Article must be in default search results"
+
+    # Explicit source="memory" escape hatch must still work
+    mem_result = _run(search_knowledge(ctx, "xylozygote-partition-test", source="memory"))
+    assert mem_result["count"] >= 1, "Explicit source='memory' must still find memories"
+    idx.close()

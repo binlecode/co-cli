@@ -2,7 +2,7 @@
 
 This module provides tools for saving, recalling, and listing memories in the
 internal knowledge system. Memories are stored as markdown files with YAML
-frontmatter in .co-cli/knowledge/.
+frontmatter in .co-cli/memory/ (project-local).
 
 Retrieval uses FTS5 search when knowledge_search_backend is 'fts5' or 'hybrid'
 and knowledge_index is set in deps. Falls back to grep-based search otherwise.
@@ -552,7 +552,7 @@ async def recall_memory(
         created_after: ISO8601 date string; only return memories created on or after this date.
         created_before: ISO8601 date string; only return memories created on or before this date.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge"
+    memory_dir = ctx.deps.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
@@ -576,24 +576,43 @@ async def recall_memory(
                     "count": 0,
                     "results": [],
                 }
-            # Convert SearchResult → MemoryEntry for gravity + dedup + display
-            memories = _load_memories(memory_dir)
-            path_to_entry = {str(m.path): m for m in memories}
+            # Load only the FTS-pointed files — O(k) not O(N)
+            path_to_bm25: dict[str, float] = {r.path: r.score for r in fts_results}
             raw_matches: list[MemoryEntry] = []
             for r in fts_results:
-                entry = path_to_entry.get(r.path)
-                if entry is not None:
-                    raw_matches.append(entry)
-            # Apply temporal decay scoring (FTS5 path only).
-            # decay_protected entries are not penalized.
+                p = Path(r.path)
+                if not p.exists():
+                    continue
+                try:
+                    raw = p.read_text(encoding="utf-8")
+                    fm, body = parse_frontmatter(raw)
+                    validate_memory_frontmatter(fm)
+                    raw_matches.append(MemoryEntry(
+                        id=fm["id"],
+                        path=p,
+                        content=body.strip(),
+                        tags=fm.get("tags", []),
+                        created=fm["created"],
+                        updated=fm.get("updated"),
+                        decay_protected=fm.get("decay_protected", False),
+                        related=fm.get("related"),
+                        kind=fm.get("kind", "memory"),
+                    ))
+                except Exception as e:
+                    logger.warning(f"Failed to load FTS match {r.path}: {e}")
+            # Composite BM25 + decay scoring — preserves lexical signal alongside recency.
+            # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
+            # so higher bm25 = better match before combining with decay.
             half_life = ctx.deps.memory_recall_half_life_days
             scored: list[tuple[float, MemoryEntry]] = []
             for entry in raw_matches:
+                bm25 = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
                 if entry.decay_protected:
-                    weight = 1.0
+                    decay = 1.0
                 else:
-                    weight = _decay_multiplier(entry.created, half_life)
-                scored.append((weight, entry))
+                    decay = _decay_multiplier(entry.created, half_life)
+                composite = 0.6 * bm25 + 0.4 * decay
+                scored.append((composite, entry))
             scored.sort(key=lambda x: x[0], reverse=True)
             matches = [e for _, e in scored][:max_results]
         except Exception as e:
@@ -631,14 +650,26 @@ async def recall_memory(
         }
 
     # Gravity: dedup collisions among pulled results
+    before_paths = {str(m.path) for m in matches}
     matches = _dedup_pulled(matches, threshold=ctx.deps.memory_dedup_threshold)
+    after_paths = {str(m.path) for m in matches}
+    deleted_paths = before_paths - after_paths
+    if deleted_paths and ctx.deps.knowledge_index is not None:
+        for p in deleted_paths:
+            try:
+                ctx.deps.knowledge_index.remove("memory", p)
+            except Exception as e:
+                logger.warning(f"Failed to remove stale FTS entry {p}: {e}")
 
     # One-hop traversal: surface related memories (§14.1)
     match_ids = {m.id for m in matches}
-    all_by_slug: dict[str, MemoryEntry] = {}
-    for m in memories:
-        slug = m.path.stem  # e.g. "003-user-prefers-pytest"
-        all_by_slug[slug] = m
+    # Lazy full load: only when matched entries have related slugs to follow
+    has_related = any(m.related for m in matches)
+    if has_related:
+        _all_memories = _load_memories(memory_dir)
+        all_by_slug: dict[str, MemoryEntry] = {m.path.stem: m for m in _all_memories}
+    else:
+        all_by_slug: dict[str, MemoryEntry] = {}
 
     related_entries: list[MemoryEntry] = []
     for m in matches:
@@ -705,6 +736,116 @@ async def recall_memory(
     }
 
 
+async def search_memories(
+    ctx: RunContext[CoDeps],
+    query: str,
+    *,
+    limit: int = 10,
+    tags: list[str] | None = None,
+    tag_match_mode: Literal["any", "all"] = "any",
+    created_after: str | None = None,
+    created_before: str | None = None,
+) -> dict[str, Any]:
+    """Dedicated semantic search over saved memories. Use this to look up
+    preferences, decisions, corrections, and context facts saved across sessions.
+
+    For knowledge articles and external sources, use search_knowledge instead.
+
+    Returns a dict with:
+    - display: formatted ranked results — show directly to the user
+    - count: number of results
+    - results: list of {source, kind, title, snippet, score, path} dicts
+
+    Args:
+        query: Free-text search query (e.g. "python testing", "database preference").
+        limit: Max results to return (default 10).
+        tags: Tag filter list. None = no filter.
+        tag_match_mode: 'any' (OR) or 'all' (AND — doc must have every tag).
+        created_after: ISO8601 date string; only return items created on or after this date.
+        created_before: ISO8601 date string; only return items created on or before this date.
+    """
+    if not query.strip():
+        return {"display": "Query is required.", "count": 0, "results": []}
+    if limit < 1:
+        return {"display": "limit must be >= 1.", "count": 0, "results": []}
+
+    memory_dir = ctx.deps.memory_dir
+
+    # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
+    if (
+        ctx.deps.knowledge_index is not None
+        and ctx.deps.knowledge_search_backend in ("fts5", "hybrid")
+    ):
+        try:
+            results = ctx.deps.knowledge_index.search(
+                query,
+                source="memory",
+                kind="memory",
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
+            )
+            if not results:
+                return {"display": f"No memories found matching '{query}'", "count": 0, "results": []}
+
+            lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
+            result_dicts = []
+            for r in results:
+                title_str = r.title or Path(r.path).stem if r.path else "unknown"
+                lines.append(f"**{title_str}** (score: {r.score:.3f})")
+                if r.tags:
+                    lines.append(f"Tags: {r.tags}")
+                if r.snippet:
+                    lines.append(f"{r.snippet}\n")
+                result_dicts.append({
+                    "source": r.source,
+                    "kind": r.kind,
+                    "title": r.title,
+                    "snippet": r.snippet,
+                    "score": r.score,
+                    "path": r.path,
+                })
+            return {
+                "display": "\n".join(lines).rstrip(),
+                "count": len(results),
+                "results": result_dicts,
+            }
+        except Exception as e:
+            logger.warning(f"search_memories FTS error, falling back to grep: {e}")
+
+    # Grep fallback
+    memories = _load_memories(memory_dir, kind="memory")
+    if tags:
+        if tag_match_mode == "all":
+            memories = [m for m in memories if all(t in m.tags for t in tags)]
+        else:
+            memories = [m for m in memories if any(t in m.tags for t in tags)]
+    if created_after:
+        memories = [m for m in memories if m.created and m.created >= created_after]
+    if created_before:
+        memories = [m for m in memories if m.created and m.created <= created_before]
+
+    matches = _grep_recall(memories, query, limit)
+    if not matches:
+        return {"display": f"No memories found matching '{query}'", "count": 0, "results": []}
+
+    lines = [f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"]
+    result_dicts = []
+    for m in matches:
+        lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
+        result_dicts.append({
+            "source": "memory",
+            "kind": m.kind,
+            "title": m.path.stem,
+            "snippet": m.content[:100],
+            "score": 0.0,
+            "path": str(m.path),
+        })
+    return {"display": "\n".join(lines), "count": len(matches), "results": result_dicts}
+
+
 async def list_memories(
     ctx: RunContext[CoDeps],
     offset: int = 0,
@@ -740,7 +881,7 @@ async def list_memories(
               Passing kind="article" returns only saved articles.
               Passing kind="memory" returns only conversation memories.
     """
-    memory_dir = Path.cwd() / ".co-cli/knowledge"
+    memory_dir = ctx.deps.memory_dir
     memories = _load_memories(memory_dir, kind=kind)
 
     if not memories:
@@ -859,7 +1000,7 @@ async def update_memory(
         old_content: Exact passage to replace (must appear exactly once).
         new_content: Replacement text.
     """
-    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    knowledge_dir = ctx.deps.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -959,7 +1100,7 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
-    knowledge_dir = Path.cwd() / ".co-cli/knowledge"
+    knowledge_dir = ctx.deps.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")

@@ -119,10 +119,13 @@ async def _persist_memory_inner(
         _parse_created,
     )
 
-    memory_dir = Path.cwd() / ".co-cli/knowledge"
+    memory_dir = deps.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    memories = _load_memories(memory_dir)
+    # For next-id: must include all items (memories + articles share the ID sequence)
+    all_items_for_id = _load_memories(memory_dir)
+    # For dedup/consolidation candidates: memories only
+    memories = _load_memories(memory_dir, kind="memory")
 
     # When title is provided (e.g. session checkpoints), skip dedup — the
     # filename is already unique by design (timestamp-based).
@@ -155,9 +158,11 @@ async def _persist_memory_inner(
                     raw = match.path.read_text(encoding="utf-8")
                     fm, body = parse_frontmatter(raw)
                     file_hash = _hashlib.sha256(raw.encode()).hexdigest()
+                    entry_kind = fm.get("kind", "memory")
+                    entry_source = "library" if entry_kind == "article" else "memory"
                     deps.knowledge_index.index(
-                        source="memory",
-                        kind=fm.get("kind", "memory"),
+                        source=entry_source,
+                        kind=entry_kind,
                         path=str(match.path),
                         title=_slugify(content[:50]),
                         content=body.strip(),
@@ -203,7 +208,7 @@ async def _persist_memory_inner(
             logger.info("persist_memory: consolidation timeout, falling back to ADD")
 
     # Step 3: No duplicate — create new memory
-    max_id = max((m.id for m in memories), default=0)
+    max_id = max((m.id for m in all_items_for_id), default=0)
     memory_id = max_id + 1
     filename = f"{title}.md" if title else f"{memory_id:03d}-{_slugify(content[:50])}.md"
 
@@ -261,8 +266,9 @@ async def _persist_memory_inner(
         "action": "saved",
     }
 
-    # Step 4: Retention cap — trigger if strictly exceeded
-    all_memories = _load_memories(memory_dir)
+    # Step 4: Retention cap — trigger if strictly exceeded (memories only;
+    # articles are decay_protected and must not be evicted by memory pressure)
+    all_memories = _load_memories(memory_dir, kind="memory")
     total_count = len(all_memories)
 
     if total_count > deps.memory_max_count:

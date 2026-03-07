@@ -17,7 +17,7 @@ from typing import Any
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.display import console, prompt_selection
+from co_cli.display import console
 from co_cli._frontmatter import parse_frontmatter
 
 logger = logging.getLogger(__name__)
@@ -29,15 +29,13 @@ logger = logging.getLogger(__name__)
 class CommandContext:
     """Grab-bag passed to every slash-command handler.
 
-    Mutable so handlers like /model can set model_settings for the chat loop,
-    and skill dispatch can set skill_body to fall through to the LLM turn.
+    Mutable so skill dispatch can set skill_body to fall through to the LLM turn.
     """
 
     message_history: list[Any]
     deps: Any  # CoDeps — typed as Any to avoid circular import
     agent: Any  # Agent[CoDeps, ...] — same reason
     tool_names: list[str]
-    model_settings: ModelSettings | None = None
     # Set by dispatch() when a skill matches — chat_loop uses this to feed
     # the skill body as user input into the LLM turn instead of continuing.
     skill_body: str | None = None
@@ -320,12 +318,6 @@ def _swap_model_inplace(agent: Any, model_name: str, provider_name: str, setting
         raise ValueError(f"_swap_model_inplace: unknown provider '{provider_name}'")
 
 
-def _set_reasoning_model_head(model_roles: dict[str, list[str]], model_name: str) -> None:
-    """Set reasoning role head to model_name while preserving remaining order."""
-    existing = [m for m in model_roles.get("reasoning", []) if m != model_name]
-    model_roles["reasoning"] = [model_name, *existing]
-
-
 def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:
     """Build a new OpenAIChatModel, system prompt, and ModelSettings for agent.
 
@@ -354,7 +346,7 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
             )
             soul_seed = load_soul_seed(settings.personality)
             base_memories = load_character_memories(
-                settings.personality, _Path.cwd() / ".co-cli" / "knowledge"
+                settings.personality, _Path.cwd() / ".co-cli" / "memory"
             )
             if base_memories:
                 soul_seed = soul_seed + "\n\n" + base_memories
@@ -402,9 +394,9 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Memory ID must be a number.[/dim]")
         return None
 
-    memory_dir = Path.cwd() / ".co-cli/knowledge"
+    memory_dir = ctx.deps.memory_dir
     if not memory_dir.exists():
-        console.print("[dim]No knowledge directory found.[/dim]")
+        console.print("[dim]No memory directory found.[/dim]")
         return None
 
     # Find file with this ID
@@ -420,61 +412,6 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     if ctx.deps.knowledge_index is not None:
         ctx.deps.knowledge_index.remove("memory", str(file_to_delete))
     console.print(f"[success]✓ Deleted memory {memory_id}: {file_to_delete.name}[/success]")
-    return None
-
-
-async def _cmd_model(ctx: CommandContext, args: str) -> None:
-    """Switch Ollama model or show current model."""
-    from co_cli.config import settings
-
-    reasoning_chain = ctx.deps.model_roles.get("reasoning", [])
-    active_reasoning = reasoning_chain[0] if reasoning_chain else "(unset)"
-
-    if settings.llm_provider.lower() != "ollama":
-        console.print(f"[info]Provider: {settings.llm_provider} — model: {active_reasoning}[/info]")
-        console.print("[dim]Model switching is only supported for Ollama.[/dim]")
-        return None
-
-    current = getattr(ctx.agent.model, 'model_name', str(ctx.agent.model))
-
-    # Explicit name given — switch directly
-    if args.strip():
-        try:
-            ctx.model_settings = _switch_ollama_model(ctx.agent, args.strip(), settings.ollama_host)
-            _set_reasoning_model_head(ctx.deps.model_roles, args.strip())
-            console.print(f"[success]Switched to model: [accent]{args.strip()}[/accent][/success]")
-        except Exception as e:
-            console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
-        return None
-
-    # No args — interactive selection
-    console.print(f"[info]Current model: [accent]{current}[/accent][/info]")
-    try:
-        import httpx
-        resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5)
-        resp.raise_for_status()
-        models = sorted(m["name"] for m in resp.json().get("models", []))
-    except Exception as e:
-        console.print(f"[dim]Could not list models: {e}[/dim]")
-        return None
-
-    if not models:
-        console.print("[dim]No models available.[/dim]")
-        return None
-
-    selected = prompt_selection(models, title="Select model", current=current)
-    if not selected:
-        return None
-    if selected == current:
-        console.print(f"[dim]Already using {current}.[/dim]")
-        return None
-
-    try:
-        ctx.model_settings = _switch_ollama_model(ctx.agent, selected, settings.ollama_host)
-        _set_reasoning_model_head(ctx.deps.model_roles, selected)
-        console.print(f"[success]Switched to model: [accent]{selected}[/accent][/success]")
-    except Exception as e:
-        console.print(f"[bold red]Failed to switch model:[/bold red] {e}")
     return None
 
 
@@ -1091,7 +1028,6 @@ COMMANDS: dict[str, SlashCommand] = {
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
-    "model": SlashCommand("model", "Switch Ollama model or show current", _cmd_model),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
     "approvals": SlashCommand("approvals", "Manage persistent exec approval patterns", _cmd_approvals),
     "checkpoint": SlashCommand("checkpoint", "Create a workspace snapshot", _cmd_checkpoint),

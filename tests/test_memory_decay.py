@@ -66,7 +66,7 @@ def test_decay_cut_triggers():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             for i in range(1, max_count + 1):
@@ -97,7 +97,7 @@ def test_decay_protected_survives():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             for i in range(1, max_count + 1):
@@ -134,7 +134,7 @@ def test_decay_below_limit_no_trigger():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             seed_count = max_count - 5
@@ -180,7 +180,7 @@ def test_save_memory_writes_certainty_to_frontmatter():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             ctx = _make_ctx(max_count=50)
@@ -215,7 +215,7 @@ def test_update_existing_memory_reclassifies_certainty():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             # Write an existing memory file with certainty: low
@@ -257,7 +257,7 @@ def test_save_memory_normalizes_tag_case():
         orig_cwd = os.getcwd()
         try:
             os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/knowledge"
+            memory_dir = Path(tmpdir) / ".co-cli/memory"
             memory_dir.mkdir(parents=True)
 
             ctx = _make_ctx(max_count=50)

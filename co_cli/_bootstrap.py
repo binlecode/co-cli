@@ -17,13 +17,15 @@ async def run_bootstrap(
     deps: CoDeps,
     frontend: TerminalFrontend,
     *,
-    knowledge_dir: Path,
+    memory_dir: Path,
+    library_dir: Path,
     session_path: Path,
     session_ttl_minutes: int,
     n_skills: int,
 ) -> dict:
     """Run startup steps and report status.
 
+    Accepts memory_dir (for memory files) and library_dir (for article files).
     Returns session_data dict for use in subsequent touch_session/save_session calls.
     """
     tracer = trace.get_tracer("co-cli.bootstrap")
@@ -31,8 +33,10 @@ async def run_bootstrap(
     # Step 1: sync_knowledge
     with tracer.start_as_current_span("sync_knowledge") as span:
         try:
-            if deps.knowledge_index is not None and knowledge_dir.exists():
-                count = deps.knowledge_index.sync_dir("memory", knowledge_dir)
+            if deps.knowledge_index is not None and (memory_dir.exists() or library_dir.exists()):
+                mem_count = deps.knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
+                art_count = deps.knowledge_index.sync_dir("library", library_dir, kind_filter="article")
+                count = mem_count + art_count
                 backend = deps.knowledge_search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)

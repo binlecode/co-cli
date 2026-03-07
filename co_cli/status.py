@@ -11,6 +11,7 @@ from typing import Optional
 from rich.table import Table
 
 from co_cli.config import settings, DATA_DIR, project_config_path, CONFIG_DIR
+from co_cli._preflight import _check_llm_provider, _check_model_availability
 
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -64,16 +65,32 @@ def get_status(tool_count: int = 0) -> StatusInfo:
     elif provider == "gemini":
         active_model = reasoning_chain[0]
         llm_provider = f"Gemini ({active_model})"
-        llm_status = "configured" if settings.gemini_api_key else "missing key"
+        provider_check = _check_llm_provider(
+            settings.llm_provider,
+            settings.gemini_api_key,
+            settings.ollama_host,
+        )
+        llm_status = "configured" if provider_check.status == "ok" else "missing key"
     else:
         active_model = reasoning_chain[0]
         llm_provider = f"Ollama ({active_model})"
-        try:
-            import httpx
-
-            resp = httpx.get(settings.ollama_host)
-            llm_status = "online" if resp.status_code == 200 else "offline"
-        except Exception:
+        provider_check = _check_llm_provider(
+            settings.llm_provider,
+            settings.gemini_api_key,
+            settings.ollama_host,
+        )
+        model_check = _check_model_availability(
+            settings.llm_provider,
+            settings.ollama_host,
+            {k: list(v) for k, v in settings.model_roles.items()},
+        )
+        if model_check.status == "error":
+            llm_status = "misconfigured"
+        elif provider_check.status == "warning" and "Ollama" in provider_check.message:
+            llm_status = "offline"
+        elif provider_check.status == "ok":
+            llm_status = "online"
+        else:
             llm_status = "offline"
 
     # -- google credentials --

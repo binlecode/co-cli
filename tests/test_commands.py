@@ -126,7 +126,7 @@ async def test_cmd_compact():
 def test_commands_registry_complete():
     """All expected commands are registered."""
     expected = {
-        "help", "clear", "new", "status", "tools", "history", "compact", "model",
+        "help", "clear", "new", "status", "tools", "history", "compact",
         "forget", "approvals", "checkpoint", "rewind", "skills",
         "tasks", "cancel", "background",
     }
@@ -373,8 +373,8 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path, monkeypatch):
     assert handled is True
     assert new_history == [], "history must be cleared"
 
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    session_files = list(knowledge_dir.glob("session-*.md"))
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    session_files = list(memory_dir.glob("session-*.md"))
     assert len(session_files) == 1, "exactly one session file must be written"
 
     content = session_files[0].read_text(encoding="utf-8")
@@ -400,24 +400,25 @@ async def test_forget_command_evicts_fts_row(tmp_path, monkeypatch):
     from co_cli.knowledge_index import KnowledgeIndex
 
     monkeypatch.chdir(tmp_path)
-    knowledge_dir = tmp_path / ".co-cli" / "knowledge"
-    knowledge_dir.mkdir(parents=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
 
     content = (
         "---\nid: 1\nkind: memory\ncreated: '2026-01-01T00:00:00+00:00'\ntags: []\n---\n\n"
         "xyloquartz-forget-fts eviction keyword\n"
     )
-    memory_file = knowledge_dir / "001-test-forget.md"
+    memory_file = memory_dir / "001-test-forget.md"
     memory_file.write_text(content, encoding="utf-8")
 
     idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.sync_dir("memory", knowledge_dir)
+    idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
     agent, _, tool_names, _ = get_agent()
     ctx = CommandContext(
         message_history=[],
-        deps=CoDeps(shell=ShellBackend(), session_id="test-forget-fts", knowledge_index=idx),
+        deps=CoDeps(shell=ShellBackend(), session_id="test-forget-fts", knowledge_index=idx,
+                    memory_dir=memory_dir),
         agent=agent,
         tool_names=tool_names,
     )

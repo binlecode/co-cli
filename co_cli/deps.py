@@ -34,6 +34,10 @@ class CoDeps:
     # Skills directory — set in chat_loop() to match the path used by _load_skills()
     skills_dir: Path = field(default_factory=lambda: Path(".co-cli/skills"))
 
+    # Knowledge store directories — project-local memory + user-global library
+    memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+    library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+
     # Mutable per-session state
     auto_approved_tools: set[str] = field(default_factory=set)
     # Active skill-env vars for the current turn — set by dispatch(), cleared by chat_loop() finally
@@ -45,6 +49,9 @@ class CoDeps:
 
     # Shell limits
     shell_max_timeout: int = 600  # Hard ceiling for per-command timeout (seconds)
+
+    # LLM API keys — used by preflight checks and knowledge index
+    gemini_api_key: str | None = None
 
     # Batch 5: Web intelligence
     brave_search_api_key: str | None = None

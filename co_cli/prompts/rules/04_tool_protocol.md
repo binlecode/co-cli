@@ -36,5 +36,5 @@ different approach or surface the blocker rather than exhausting the budget.
 
 ## Memory
 Character base memories and user experience memories are both loaded in the
-system prompt before the first turn — do not call recall_memory at turn start.
-Use recall_memory mid-conversation to look up specific facts relevant to the current task.
+system prompt before the first turn — do not call search_memories at turn start.
+Use search_memories mid-conversation to look up specific facts relevant to the current task.

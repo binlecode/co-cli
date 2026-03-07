@@ -81,7 +81,8 @@ Internal adapters (not agent-registered): `recall_memory`, `recall_article`, `se
 ## Testing Policy
 
 - **Only pytest files in tests/** — All files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts (demos, evaluations, utilities) go in `scripts/`.
-- **Functional tests only** — no mocks or stubs. Tests hit real services. No unit tests: never test string constants, internal helpers in isolation, or assert on implementation details. Every test must exercise a real code path that a user or the agent would trigger.
+- **Functional tests only** — no mocks or stubs. Tests exercise real code paths with real services (real SQLite, real filesystem, real FTS5 index). No unit tests: never test string constants, internal helpers in isolation, or assert on implementation details. Every test must exercise a real code path that a user or the agent would trigger.
+- **`_FakeRunContext` / `_FakeDeps` are structural scaffolding, not mocks**: pydantic-ai `RunContext` cannot be instantiated outside an agent run, so test files use minimal dataclass containers (`_FakeRunContext`, `_FakeDeps`) to supply `ctx.deps`. These are allowed structural necessities — they do NOT substitute for real behavior. All actual logic (FTS search, file I/O, memory lifecycle) must run against real implementations. Any new fake/stub that substitutes for real behavior (e.g., mocking network calls, replacing SQLite with an in-memory dict) requires explicit approval.
 - **Critical functionality focus** — each test must validate behavior that matters: a tool returning correct results, a pipeline producing expected output, a safety invariant holding. Do not write tests for trivial paths (empty input → empty output), negative edge cases with no real-world trigger, or assertions that merely restate what the code does. Ask: "if this test were deleted, would a real regression go undetected?" If no, don't write it.
 - **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
@@ -144,7 +145,7 @@ Research and reference material not tied to active implementation: RESEARCH-*, R
 
 ### Skills
 
-Five skills map onto the dev workflow. Human gates are at decisions, not artifacts.
+Six skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
 ```
 PO brief / TL pre-check
@@ -160,7 +161,7 @@ TL:  /orchestrate-plan  → docs/TODO-<slug>.md  (TL + Reviewer + Auditor)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc)
+Dev: /orchestrate-dev   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit)
     ↓
 👤  Gate 2: TL reviews delivery report    (all done_when passed?)
     ↓
@@ -176,6 +177,7 @@ ship
 - `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques in parallel → TL decides → repeat until clean, produces `docs/TODO-<slug>.md`
 - `/orchestrate-dev <slug>` — Implements approved plan: execute tasks, self-review, verify done_when, run tests, sync docs, produce `docs/DELIVERY-<slug>.md`
 - `/sync-doc [doc...]` — Verify DESIGN docs against current source code and fix inaccuracies in-place. No args = all DESIGN docs. Also invoked internally by `orchestrate-dev`.
+- `/delivery-audit <scope>` — Post-delivery inverse coverage check: scans source for agent tools, config settings, and CLI commands; checks each has a DESIGN doc section; reports gaps. Also invoked automatically by `orchestrate-dev` after sync-doc. Output: `docs/reference/REVIEW-coverage-<scope>.md`.
 
 ## Reference Repos (local, for design research)
 

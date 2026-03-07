@@ -23,6 +23,7 @@ EXPECTED_TOOLS = {
     "update_memory",
     "append_memory",
     # Read-only
+    "search_memories",
     "list_memories",
     "read_article_detail",
     "search_knowledge",
