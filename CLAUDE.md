@@ -17,20 +17,7 @@ uv run pytest tests/test_tools.py            # Single test file
 uv run pytest tests/test_tools.py::test_name # Single test function
 uv run pytest --cov=co_cli                   # With coverage
 
-# Demo Scripts
-uv run python scripts/test_memory_lifecycle_movie_query.py  # Memory lifecycle demo
-
-# Evaluation Suite (evals/)
-uv run python evals/eval_tool_chains.py               # Multi-step chain completion
-uv run python evals/eval_conversation_history.py      # Multi-turn context retention
-uv run python evals/eval_safety_abort_marker.py       # Ctrl-C abort marker injection
-uv run python evals/eval_safety_grace_turn.py         # Budget exhaustion grace turn
-uv run python evals/eval_memory_proactive_recall.py   # Proactive memory injection (W1)
-uv run python evals/eval_memory_signal_detection.py   # Signal detection + contradiction (W2/W6)
-uv run python evals/eval_signal_analyzer.py           # Mini-agent classification: high/low/none confidence
-uv run python evals/eval_signal_detector_approval.py  # Approval path: high auto-save, low approve/deny, no-signal
-uv run python evals/eval_personality_behavior.py      # Personality behavior: 1-turn + multi-turn consistency (heuristic scored)
-
+# Evals: uv run python evals/eval_<name>.py  (ls evals/ for full list)
 # Tool-calling quality gate (functional pytest)
 uv run pytest tests/test_tool_calling_functional.py
 ```
@@ -46,18 +33,11 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
          + rich console
 ```
 
-See `docs/DESIGN-core.md` for module descriptions, processing flows, and approval pattern.
+See `docs/DESIGN-core.md` for system overview (architecture diagrams), agent loop internals, CoDeps, orchestration, and approval mechanics. See `docs/DESIGN-index.md` for doc navigation and config/module reference.
 
 ## Knowledge System
 
-All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt.
-
-**Current state:** All knowledge in flat `.co-cli/knowledge/*.md` (YAML frontmatter, markdown body).
-Memories (`kind: memory`) and articles (`kind: article`) coexist, distinguished by `kind` frontmatter.
-FTS5 (BM25) search via `KnowledgeIndex` in `search.db`.
-
-Agent-facing tools: `save_memory`, `update_memory`, `append_memory`, `save_article`, `search_knowledge` (cross-source, primary search), `list_memories`, `read_article_detail`, `list_notes`, `read_note`.
-Internal adapters (not agent-registered): `recall_memory`, `recall_article`, `search_notes`.
+All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt. Flat `.co-cli/knowledge/*.md` files with YAML frontmatter; memories (`kind: memory`) and articles (`kind: article`) in the same store. FTS5 (BM25) search via `KnowledgeIndex` in `search.db`. See `docs/DESIGN-knowledge.md` for full schema, tool API, and lifecycle.
 
 ## Coding Standards
 
@@ -70,36 +50,35 @@ Internal adapters (not agent-registered): `recall_memory`, `recall_article`, `se
 - **Tool approval**: Side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools
 - **Tool return type**: Tools returning data for the user MUST return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) and metadata fields (e.g. `count`, `next_page_token`). Never return raw `list[dict]`
 - **No global state in tools**: Settings are injected through `CoDeps`, not imported directly in tool files
-- **CoDeps is flat scalars only**: `CoDeps` holds flat fields (`ctx.deps.memory_max_count`, `ctx.deps.brave_search_api_key`), never config objects. `main.py` reads `Settings` once and injects scalar values into `CoDeps`. Tools never import or reference `Settings` — simple is good
-- **Pydantic-ai idiomatic**: Agent, deps, tools, and agentic flows must follow pydantic-ai's patterns — flat deps dataclass with direct field access (`ctx.deps.api_key`), `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, history processors for memory. Don't wrap, abstract over, or deviate from the SDK's conventions
+- **CoDeps is grouped, not flat**: `CoDeps` holds four sub-groups — `services` (runtime objects: `ShellBackend`, `KnowledgeIndex`, `TaskRunner`), `config` (read-only scalars from `Settings`), `session` (per-session mutable state: approvals, skill grants, todos), `runtime` (per-run transient state: compaction, usage, processor state). Access as `ctx.deps.config.memory_max_count`, `ctx.deps.services.shell`, etc. Tools never import or reference `Settings` directly. Use `make_subagent_deps(base)` to create isolated child-agent deps sharing services and config.
+- **Pydantic-ai idiomatic**: Agent, deps, tools, and agentic flows must follow pydantic-ai's patterns — `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, history processors for memory. Don't wrap, abstract over, or deviate from the SDK's conventions
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults
 - **XDG paths**: Config in `~/.config/co-cli/`, data in `~/.local/share/co-cli/`
 - **Versioning**: `MAJOR.MINOR.PATCH` — patch digit: odd = bugfix, even = feature. Bump in `pyproject.toml` only — version is read via `tomllib` from `pyproject.toml` at runtime
-- **Status checks**: All environment/health probes live in `co_cli/status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
+- **Status checks**: All environment/health probes live in `co_cli/_status.py` (`get_status() → StatusInfo` dataclass). Callers (banner, `co status` command) handle display only
 - **Display**: Use `co_cli.display.console` for all terminal output. Use semantic style names — never hardcode color names at callsites
+- **Design philosophy**: When researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design for MVP first — ship the smallest thing that solves the user problem. Use protocols/abstractions so post-MVP enhancements require zero caller changes.
 
 ## Testing Policy
 
 - **Only pytest files in tests/** — All files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts (demos, evaluations, utilities) go in `scripts/`.
 - **Functional tests only** — no mocks or stubs. Tests exercise real code paths with real services (real SQLite, real filesystem, real FTS5 index). No unit tests: never test string constants, internal helpers in isolation, or assert on implementation details. Every test must exercise a real code path that a user or the agent would trigger.
-- **`_FakeRunContext` / `_FakeDeps` are structural scaffolding, not mocks**: pydantic-ai `RunContext` cannot be instantiated outside an agent run, so test files use minimal dataclass containers (`_FakeRunContext`, `_FakeDeps`) to supply `ctx.deps`. These are allowed structural necessities — they do NOT substitute for real behavior. All actual logic (FTS search, file I/O, memory lifecycle) must run against real implementations. Any new fake/stub that substitutes for real behavior (e.g., mocking network calls, replacing SQLite with an in-memory dict) requires explicit approval.
+- **No fake deps** — `RunContext` is instantiable via `pydantic_ai._run_context.RunContext(deps=deps, model=agent.model, usage=RunUsage())`. Tests use real `CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(...))` with real `RunContext`. No custom fake dataclass scaffolding. Any deviation requires explicit approval.
+- **IO-bound tests must have explicit timeouts** — wrap `asyncio` calls to external services (LLM, network, subprocess spawning) with `asyncio.timeout(N)` so tests fail fast instead of hanging. Use adaptive values: set N = expected_worst_case + safety_margin, not a flat ceiling. Guidelines: subprocess lifecycle tests ≤ 15s, single HTTP requests ≤ 30s, HTTP with retries/backoff ≤ 30s (verify against tool retry config), LLM summarization ≤ 60s, full agent runs ≤ 120s. Local SQLite/filesystem tests need no timeout.
 - **Critical functionality focus** — each test must validate behavior that matters: a tool returning correct results, a pipeline producing expected output, a safety invariant holding. Do not write tests for trivial paths (empty input → empty output), negative edge cases with no real-world trigger, or assertions that merely restate what the code does. Ask: "if this test were deleted, would a real regression go undetected?" If no, don't write it.
 - **No skips** — tests must pass or fail, never skip. **Exception:** API-dependent tests requiring paid external credentials (Brave Search) use `pytest.mark.skipif` when the key is absent — without a valid key these tests hang on network timeouts rather than failing with a useful error.
 - **Google tests resolve credentials automatically**: explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`
+- **Test timing is always on** — `pyproject.toml` sets `addopts = "--durations=0"` so every run reports per-test wall time. When adding a test, check its timing is proportionate to what it exercises — unexpectedly slow tests indicate over-broad scope or missing `asyncio.timeout`.
+- **No conftest.py — eat your own dogfood** — tests run against the real `config.py` settings singleton, not overridden fixtures. If a test fails because of a wrong default in `config.py`, fix `config.py`. Never add `conftest.py` to inject test-only config. Tests are the first consumer of production config — if the default is broken for tests, it is broken for users too.
 - Framework: `pytest` + `pytest-asyncio`
 - Set `LLM_PROVIDER=gemini` or `LLM_PROVIDER=ollama` env var for LLM E2E tests
-
-## Design Principles
-
-- **Best practice + MVP**: When researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design for MVP first — ship the smallest thing that solves the user problem. Use protocols/abstractions so post-MVP enhancements require zero caller changes.
 
 ## Anti-Patterns
 
 - Do not use `tool_plain()` for new tools — use `agent.tool()` with `RunContext`
 - Do not import `settings` directly in tool files — use `ctx.deps`
-- Do not pass `Settings` objects into `CoDeps` — flatten to scalar fields. One access pattern, no divergence traps
+- Do not pass `Settings` objects into `CoDeps` — flatten scalar fields into `CoConfig`. Use `make_subagent_deps(base)` for sub-agent isolation, not manual field copying
 - Do not put approval prompts inside tools — use `requires_approval=True` and handle in the chat loop
-- Do not use mocks in tests — and do not write unit tests (asserting on constants, testing helpers in isolation, checking string concatenation). Every test must exercise a real functional path
 - Do not use `.env` files — use `settings.json` or env vars
 
 ## Docs
@@ -117,31 +96,11 @@ Every component DESIGN doc follows a 4-section template:
 
 **No code paste in DESIGN docs** — never copy-paste source code into design documents. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-`DESIGN-core.md` is the skeleton: system overview, agent loop, cross-cutting concerns, module/dependency tables. Detail lives in the component docs.
+Start at `docs/DESIGN-index.md` (navigation, config reference, module index). `docs/DESIGN-core.md` covers agent loop, CoDeps, orchestration, and approval. All 20+ component docs live in `docs/` — named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
 
-### Design (architecture and implementation details, kept in sync with code)
-- `docs/DESIGN-core.md` — System overview, agent loop: factory, `CoDeps`, orchestration, streaming, approval, cross-cutting concerns, modules, dependencies
-- `docs/DESIGN-personality.md` — Personality system: 4 file-driven roles, 5 traits, structural per-turn injection, reasoning depth override
-- `docs/DESIGN-llm-models.md` — LLM model configuration (Gemini, Ollama) + Ollama local setup guide
-- `docs/DESIGN-logging-and-tracking.md` — Telemetry architecture, SQLite schema, viewers, real-time tail
-- `docs/DESIGN-prompt-design.md` — Agentic loop + prompt architecture + context governance: run_turn, approval re-entry (four-tier), tool preamble, safety policy, static/per-turn prompt layers, history processors, sliding-window compaction
-- `docs/DESIGN-tools.md` — Tools index: Common Conventions, approval table, docstring standard, cross-tool routing map
-- `docs/DESIGN-tools-execution.md` — Execution tools: Shell (four-tier approval), File, Background Tasks, Todo, Capabilities
-- `docs/DESIGN-tools-integrations.md` — Integration tools: Memory, Obsidian, Google (Drive/Gmail/Calendar), Web (search + fetch)
-- `docs/DESIGN-tools-delegation.md` — Delegation tools: Coder, Research, Analysis sub-agents
-- `docs/DESIGN-skills.md` — Skills subsystem: sources/precedence, loader, dispatch pipeline (arg substitution, shell preprocessing, env injection, allowed-tools), security scanner, `/skills` commands (list/check/install/reload)
-- `docs/DESIGN-memory.md` — Memory system: agent state lifecycle (signal detection, dedup, consolidation, retention, certainty, runtime injection), per-project scope
-- `docs/DESIGN-knowledge.md` — Knowledge system: KnowledgeIndex FTS5/hybrid search, library article lifecycle, Obsidian/Drive sources, startup sync, source namespace
-- `docs/DESIGN-mcp-client.md` — MCP client: external tool servers via Model Context Protocol (stdio transport, auto-prefixing, approval inheritance)
+`docs/reference/` — research and background material (RESEARCH-*, ROADMAP-*). Not linked from DESIGN docs.
 
-### Reference (`docs/reference/`)
-
-Research and reference material not tied to active implementation: RESEARCH-*, ROADMAP-*, FIX-*, and external reference docs. Not linked from DESIGN docs — for background reading only.
-
-### TODO (remaining work items only — no design content, no status tracking)
-
-**Lifecycle rule:** When a section or item ships, remove it from the TODO doc and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work — completed sections do not stay here.
-- `docs/TODO-voice.md` — Voice-to-voice round trip (deferred)
+**TODO lifecycle:** When a section ships, remove it from `docs/TODO-<slug>.md` and merge its design into the relevant DESIGN doc. TODO docs contain only unimplemented work.
 
 ### Skills
 
@@ -172,25 +131,13 @@ ship
 🗑  Delete DELIVERY-<slug>.md  (temporary scaffolding — not a permanent record)
 ```
 
-- `/orchestrate-review <scope>` — Co-system health check: code↔doc accuracy + TODO health → TL verdict. Run after every delivery or before planning.
-- `research <scope>` — Free-form task (no skill): compare co-cli design decisions against peer systems → gaps report. Reference Repos table in this file has key files per repo. Run before planning a scope that involves architecture decisions.
-- `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques in parallel → TL decides → repeat until clean, produces `docs/TODO-<slug>.md`
-- `/orchestrate-dev <slug>` — Implements approved plan: execute tasks, self-review, verify done_when, run tests, sync docs, produce `docs/DELIVERY-<slug>.md`
-- `/sync-doc [doc...]` — Verify DESIGN docs against current source code and fix inaccuracies in-place. No args = all DESIGN docs. Also invoked internally by `orchestrate-dev`.
-- `/delivery-audit <scope>` — Post-delivery inverse coverage check: scans source for agent tools, config settings, and CLI commands; checks each has a DESIGN doc section; reports gaps. Also invoked automatically by `orchestrate-dev` after sync-doc. Output: `docs/reference/REVIEW-coverage-<scope>.md`.
+- `/orchestrate-review <scope>` — Code↔doc accuracy + TODO health → TL verdict. Run after every delivery or before planning.
+- `/orchestrate-plan <slug>` — TL drafts plan → Core Dev critiques → TL decides → produces `docs/TODO-<slug>.md`
+- `/orchestrate-dev <slug>` — Implements approved plan, produces `docs/DELIVERY-<slug>.md`
+- `/sync-doc [doc...]` — Fix DESIGN doc inaccuracies in-place. No args = all docs. Auto-invoked by `orchestrate-dev`.
+- `/delivery-audit <scope>` — Inverse coverage check: tools/settings/commands vs DESIGN docs. Auto-invoked by `orchestrate-dev`.
+- `research <scope>` — Free-form task: compare co-cli against peer systems → `docs/reference/RESEARCH-<scope>.md`. See Reference Repos in `docs/reference/` for key files per repo.
 
-## Reference Repos (local, for design research)
+## Reference Repos
 
-Peer CLI tools cloned in `~/workspace_genai/` for studying shell safety, approval flows, sandbox designs, memory architectures, and UX patterns:
-
-| Repo | Language | Key files for shell safety / approval / memory |
-|------|----------|-------------------------------------------------|
-| `codex` | Rust | `codex-rs/shell-command/src/command_safety/` — deepest: tokenizes cmds, inspects flags, recursive shell wrapper parsing. Also `codex-rs/linux-sandbox/src/bwrap.rs` — vendored bubblewrap |
-| `gemini-cli` | TypeScript | `tools.allowed` prefix matching in settings, tool executor middleware |
-| `opencode` | TypeScript | Multi-surface agentic coding tool (CLI + desktop + cloud); `packages/opencode/` — agent loop, tool execution, provider abstraction |
-| `claude-code` | TypeScript | `packages/core/src/scheduler/policy.ts` — hook-based permission engine; `packages/cli/src/config/settings.ts` — allow/deny rules (post-CVE-2025-66032); `packages/core/src/utils/sandbox.ts` |
-| `aider` | Python | Simplest model — no sandbox, `io.confirm_ask()` for everything; proves you can ship without a sandbox if approval gate is strict |
-| `openclaw` | TypeScript | `src/memory/` — production hybrid search: FTS5 + sqlite-vec + embedding cache, weighted merge, multi-provider embeddings, chunking with overlap |
-| `letta` | Python | Three-tier memory: in-context blocks (`letta/schemas/memory.py`, `block.py`) + archival passages with pgvector/tags (`letta/orm/passage.py`, `letta/services/passage_manager.py`) + summarization on overflow (`letta/services/summarizer/`). Agent-driven memory tools in `letta/functions/function_sets/base.py` (`core_memory_*`, `archival_memory_*`, `memory_rethink`). Key insight: agent decides what to archive — no auto-save, no decay, consolidation is agent-initiated |
-| `sidekick-cli` | Python | Closest peer in scope: REPL CLI, multi-provider LLM, MCP, per-project config. `src/sidekick/agent.py` — approval UX: three-option (yes/always/no) with per-tool session disable. `src/sidekick/config.py` — config + MCP server parsing. `src/sidekick/mcp/servers.py` — MCP approval callback wiring |
-| `mem0` | Python | Production memory layer: hybrid vector + knowledge graph search, cross-session persistence, LLM-driven extraction. `mem0/memory/main.py` — add/search/update/delete API. `mem0/memory/graph_memory.py` — graph store (Neo4j/Kuzu). `mem0/vector_stores/` — pluggable backends (Qdrant, Chroma, pgvector, Faiss). Key for co-cli: how fact extraction + contradiction resolution is LLM-driven, not rule-based |
+Peer CLI tools in `~/workspace_genai/` for design research. Key repos: `codex` (shell safety, sandbox), `claude-code` (permission engine), `openclaw` (hybrid memory search), `letta` (three-tier memory), `sidekick-cli` (approval UX), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, `opencode`. File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`.

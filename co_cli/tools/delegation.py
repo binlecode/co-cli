@@ -26,24 +26,24 @@ async def delegate_coder(
     """
     from co_cli.agents.coder import make_coder_agent
 
-    model_chain = ctx.deps.model_roles.get("coding", [])
-    if not model_chain:
+    model_pref_list = ctx.deps.config.role_models.get("coding", [])
+    if not model_pref_list:
         return {
-            "display": "Coder delegation is not configured. Set model_roles.coding in settings.",
+            "display": "Coder delegation is not configured. Set role_models.coding in settings.",
             "error": True,
         }
-    model = model_chain[0]
+    model_entry = model_pref_list[0]
 
-    agent = make_coder_agent(model, ctx.deps.llm_provider, ctx.deps.ollama_host)
+    agent = make_coder_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
     result = await agent.run(
         task,
         deps=make_subagent_deps(ctx.deps),
         usage_limits=UsageLimits(request_limit=max_requests),
     )
-    if ctx.deps.turn_usage is None:
-        ctx.deps.turn_usage = result.usage()
+    if ctx.deps.runtime.turn_usage is None:
+        ctx.deps.runtime.turn_usage = result.usage()
     else:
-        ctx.deps.turn_usage.incr(result.usage())
+        ctx.deps.runtime.turn_usage.incr(result.usage())
     data = result.output
     return {
         "display": f"Coder analysis complete.\n{data.summary}",
@@ -85,26 +85,26 @@ async def delegate_research(
 
     from co_cli.agents.research import make_research_agent
 
-    model_chain = ctx.deps.model_roles.get("research", [])
-    if not model_chain:
+    model_pref_list = ctx.deps.config.role_models.get("research", [])
+    if not model_pref_list:
         return {
-            "display": "Research delegation is not configured. Set model_roles.research in settings to enable research delegation.",
+            "display": "Research delegation is not configured. Set role_models.research in settings to enable research delegation.",
             "error": True,
         }
-    model = model_chain[0]
+    model_entry = model_pref_list[0]
 
     sub_deps = make_subagent_deps(ctx.deps)
-    agent = make_research_agent(model, ctx.deps.llm_provider, ctx.deps.ollama_host)
+    agent = make_research_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
     result = await agent.run(
         scoped_query,
         deps=sub_deps,
         usage_limits=UsageLimits(request_limit=max_requests),
     )
-    if ctx.deps.turn_usage is None:
-        ctx.deps.turn_usage = result.usage()
+    if ctx.deps.runtime.turn_usage is None:
+        ctx.deps.runtime.turn_usage = result.usage()
     else:
-        ctx.deps.turn_usage.incr(result.usage())
+        ctx.deps.runtime.turn_usage.incr(result.usage())
     data = result.output
 
     # Empty-result retry: rephrased query when budget remains and result is empty
@@ -116,7 +116,7 @@ async def delegate_research(
             deps=sub_deps,
             usage_limits=UsageLimits(request_limit=remaining),
         )
-        ctx.deps.turn_usage.incr(retry_result.usage())
+        ctx.deps.runtime.turn_usage.incr(retry_result.usage())
         data = retry_result.output
     # Fallback: if result still empty (retry skipped or returned nothing), mark confidence=0.0
     if not data.summary or not data.sources:
@@ -163,28 +163,28 @@ async def delegate_analysis(
 
     from co_cli.agents.analysis import make_analysis_agent
 
-    model_chain = ctx.deps.model_roles.get("analysis", [])
-    if not model_chain:
+    model_pref_list = ctx.deps.config.role_models.get("analysis", [])
+    if not model_pref_list:
         return {
-            "display": "Analysis delegation is not configured. Set model_roles.analysis in settings to enable analysis delegation.",
+            "display": "Analysis delegation is not configured. Set role_models.analysis in settings to enable analysis delegation.",
             "error": True,
         }
-    model = model_chain[0]
+    model_entry = model_pref_list[0]
 
     scoped_question = question
     if inputs:
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question
 
-    agent = make_analysis_agent(model, ctx.deps.llm_provider, ctx.deps.ollama_host)
+    agent = make_analysis_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
     result = await agent.run(
         scoped_question,
         deps=make_subagent_deps(ctx.deps),
         usage_limits=UsageLimits(request_limit=max_requests),
     )
-    if ctx.deps.turn_usage is None:
-        ctx.deps.turn_usage = result.usage()
+    if ctx.deps.runtime.turn_usage is None:
+        ctx.deps.runtime.turn_usage = result.usage()
     else:
-        ctx.deps.turn_usage.incr(result.usage())
+        ctx.deps.runtime.turn_usage.incr(result.usage())
     data = result.output
 
     evidence_text = "\n".join(f"- {e}" for e in data.evidence) if data.evidence else "No evidence"

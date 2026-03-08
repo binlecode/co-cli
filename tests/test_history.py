@@ -4,6 +4,8 @@ All tests use real objects — no mocks, no stubs.
 LLM tests require a running provider (GEMINI_API_KEY or OLLAMA_HOST).
 """
 
+import asyncio
+
 import pytest
 
 from pydantic_ai.models.function import FunctionModel
@@ -26,6 +28,10 @@ from co_cli._history import (
     truncate_tool_returns,
     truncate_history_window,
 )
+from co_cli.agent import get_agent
+
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
 # ---------------------------------------------------------------------------
@@ -47,18 +53,19 @@ def _tool_return(name: str, content: str | dict, call_id: str = "c1") -> ModelRe
     ])
 
 
-def _real_run_context(model, *, max_history_messages=40, summarization_model="", tool_output_trim_chars=2000):
+def _real_run_context(model, *, max_history_messages=40, tool_output_trim_chars=2000):
     """Build a real RunContext for history processor tests."""
     from pydantic_ai._run_context import RunContext
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-history",
-        max_history_messages=max_history_messages,
-        tool_output_trim_chars=tool_output_trim_chars,
-        summarization_model=summarization_model,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="test-history",
+            max_history_messages=max_history_messages,
+            tool_output_trim_chars=tool_output_trim_chars,
+        ),
     )
     return RunContext(
         deps=deps,
@@ -217,53 +224,17 @@ async def test_summarize_messages():
 
     Requires a running LLM provider (GEMINI_API_KEY or OLLAMA_HOST).
     """
-    from co_cli.agent import get_agent
-
-    agent, _, _, _ = get_agent()
-
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
         _assistant("Docker is a containerisation platform that uses OS-level virtualisation."),
         _user("How do I install it on Ubuntu?"),
         _assistant("Run: sudo apt-get install docker-ce docker-ce-cli containerd.io"),
     ]
-    summary = await summarize_messages(msgs, agent.model)
+    async with asyncio.timeout(60):
+        summary = await summarize_messages(msgs, _AGENT.model)
     assert isinstance(summary, str)
     assert len(summary) > 10
     assert "docker" in summary.lower() or "container" in summary.lower()
-
-
-@pytest.mark.asyncio
-async def test_summarize_messages_with_dedicated_model():
-    """summarize_messages works end-to-end with the dedicated summarization model.
-
-    Skips gracefully when the model is not installed or Ollama is unreachable.
-    Delivery is complete when the test passes (not just skips) on a machine
-    where the model is installed.
-    """
-    import httpx
-    from co_cli.agents._factory import make_subagent_model
-
-    MODEL = "qwen3.5:35b-a3b-q4_k_m-summarize"
-    try:
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
-        available = {m["name"] for m in resp.json().get("models", [])}
-        if not any(m == MODEL or m.startswith(MODEL.split(":")[0] + ":") for m in available):
-            pytest.skip(f"Model {MODEL!r} not installed")
-    except Exception:
-        pytest.skip("Ollama not reachable")
-
-    model = make_subagent_model(MODEL, "ollama", "http://localhost:11434")
-    msgs = [
-        _user("What is Docker?"),
-        _assistant("Docker is a containerisation platform that uses OS-level virtualisation."),
-        _user("How do I install it on Ubuntu?"),
-        _assistant("Run: sudo apt-get install docker-ce docker-ce-cli containerd.io"),
-    ]
-    result = await summarize_messages(msgs, model)
-    assert isinstance(result, str)
-    assert len(result) > 10
-    assert "docker" in result.lower() or "container" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -277,9 +248,6 @@ async def test_truncate_history_window_triggers_compaction():
 
     Requires a running LLM provider.
     """
-    from co_cli.agent import get_agent
-    agent, _, _, _ = get_agent()
-
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
         _assistant("Docker is a containerisation platform."),
@@ -294,8 +262,9 @@ async def test_truncate_history_window_triggers_compaction():
     ]
     assert len(msgs) == 10
 
-    ctx = _real_run_context(agent.model, max_history_messages=6)
-    result = await truncate_history_window(ctx, msgs)
+    ctx = _real_run_context(_AGENT.model, max_history_messages=6)
+    async with asyncio.timeout(60):
+        result = await truncate_history_window(ctx, msgs)
 
     assert len(result) < len(msgs)
     assert result[0] is msgs[0]
@@ -323,15 +292,14 @@ async def test_compact_produces_two_message_history():
 
     Requires a running LLM provider.
     """
-    from co_cli.agent import get_agent
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
     from co_cli._commands import dispatch, CommandContext
 
-    agent, _, tool_names, _ = get_agent()
+    _, _, tool_names, _ = get_agent()
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-compact",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(session_id="test-compact"),
     )
 
     history: list[ModelMessage] = [
@@ -345,11 +313,12 @@ async def test_compact_produces_two_message_history():
     ctx = CommandContext(
         message_history=history,
         deps=deps,
-        agent=agent,
+        agent=_AGENT,
         tool_names=tool_names,
     )
 
-    handled, new_history = await dispatch("/compact", ctx)
+    async with asyncio.timeout(60):
+        handled, new_history = await dispatch("/compact", ctx)
     assert handled is True
     assert new_history is not None
     assert len(new_history) == 2
@@ -422,17 +391,14 @@ async def test_summarize_messages_personality_active():
 
     Requires a running LLM provider (GEMINI_API_KEY or OLLAMA_HOST).
     """
-    from co_cli.agent import get_agent
-
-    agent, _, _, _ = get_agent()
-
     msgs: list[ModelMessage] = [
         _user("What is Docker?"),
         _assistant("Docker is a containerisation platform that uses OS-level virtualisation."),
         _user("I love how you explain things with analogies, keep doing that!"),
         _assistant("Thanks! I'll keep using analogies — they help make abstract concepts concrete."),
     ]
-    summary = await summarize_messages(msgs, agent.model, personality_active=True)
+    async with asyncio.timeout(60):
+        summary = await summarize_messages(msgs, _AGENT.model, personality_active=True)
     assert isinstance(summary, str)
     assert len(summary) > 10
 
@@ -451,42 +417,26 @@ def _sample_messages() -> list[ModelMessage]:
 
 
 @pytest.mark.asyncio
-async def test_policy_runner_429_retries_then_succeeds(monkeypatch):
-    """429 (rate limit) triggers backoff retry; success on second attempt."""
+@pytest.mark.parametrize(("status", "body", "expected"), [
+    (429, '{"retry-after": "0"}', "summary after retry"),
+    (400, {"error": "bad request"}, "summary after 400 retry"),
+])
+async def test_policy_runner_retryable_status_then_succeeds(status, body, expected, monkeypatch):
+    """Retryable HTTP errors (429, 400) trigger backoff retry; success on second attempt."""
     call_count = 0
 
     async def _fake_summarize(messages, model, **kwargs):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise ModelHTTPError(429, "test-model", body='{"retry-after": "0"}')
-        return "summary after retry"
+            raise ModelHTTPError(status, "test-model", body=body)
+        return expected
 
     monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
     result = await _run_summarization_with_policy(
         _sample_messages(), "test-model", max_retries=2,
     )
-    assert result == "summary after retry"
-    assert call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_policy_runner_400_retries_as_backoff(monkeypatch):
-    """400 (REFLECT) is treated as retryable backoff for tool-less summarizer."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise ModelHTTPError(400, "test-model", body={"error": "bad request"})
-        return "summary after 400 retry"
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result == "summary after 400 retry"
+    assert result == expected
     assert call_count == 2
 
 
@@ -511,50 +461,15 @@ async def test_policy_runner_network_error_retries(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_policy_runner_401_aborts_immediately(monkeypatch):
-    """401 (auth error) → ABORT, returns None without retrying."""
+@pytest.mark.parametrize("status", [401, 403, 404])
+async def test_policy_runner_aborts_on_terminal_error(status, monkeypatch):
+    """Terminal 4xx errors (401/403/404) → ABORT, returns None without retrying."""
     call_count = 0
 
     async def _fake_summarize(messages, model, **kwargs):
         nonlocal call_count
         call_count += 1
-        raise ModelHTTPError(401, "test-model", body="Unauthorized")
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result is None
-    assert call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_policy_runner_403_aborts_immediately(monkeypatch):
-    """403 (forbidden) → ABORT, returns None without retrying."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise ModelHTTPError(403, "test-model", body="Forbidden")
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result is None
-    assert call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_policy_runner_404_aborts_immediately(monkeypatch):
-    """404 (model not found) → ABORT, returns None without retrying."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise ModelHTTPError(404, "test-model", body="Not Found")
+        raise ModelHTTPError(status, "test-model", body=f"HTTP {status}")
 
     monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
     result = await _run_summarization_with_policy(

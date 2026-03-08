@@ -42,61 +42,26 @@ The `KnowledgeIndex` partitions all indexed content by `source` label:
 
 Memory and library have distinct scopes: memory is per-project (`.co-cli/` under `cwd`), library is user-global (`~/.local/share/co-cli/library/`, configurable via `CO_LIBRARY_PATH`). See [DESIGN-memory.md](DESIGN-memory.md) for the memory lifecycle.
 
-### 2.1 Library article lifecycle
+### 2.1 Article frontmatter schema
 
-Articles are knowledge — curated external references explicitly saved via `save_article`. They are not auto-saved. Library scope is user-global: the same files are visible to all co instances on the machine.
-
-**Frontmatter fields:**
+Articles (`kind: "article"`) use the following frontmatter fields:
 - `id: int`, `created: ISO8601`
 - `kind: "article"`
-- `origin_url: str` — dedup key
+- `origin_url: str` — dedup key (URL equality check on save)
 - `provenance: "web-fetch"` — always set to `web-fetch` on initial save
-- `decay_protected: true` — never auto-deleted
+- `decay_protected: true` — never auto-deleted by retention cap
 - `tags: list[str]`
 - `title: str | null`
 - `updated: ISO8601 | null` — set on re-save consolidation
 
 No `certainty` field — articles are external reference content, not user-state assertions.
 
-**`save_article` write path:**
-1. URL dedup (`_consolidate_article`): if `origin_url` already exists in `library_dir`, replaces body + title, union-merges tags, sets `updated`. Preserves `id`, `created`, `provenance`, `decay_protected`.
-2. New file write: creates `{article_id:03d}-slug.md` with `kind: article`, `decay_protected: true`, `source="library"` in the index.
-3. ID assignment uses max existing ID across all files in `library_dir` to avoid collisions.
-4. FTS reindex after save/consolidation when index exists.
+> **Full lifecycle spec:** [DESIGN-flow-knowledge-lifecycle.md](DESIGN-flow-knowledge-lifecycle.md) — backend resolution at wakeup (hybrid→fts5→grep degradation), startup sync sequence, article save/dedup write path, index write triggers by source, retrieval surfaces (`search_knowledge`, `read_article_detail`), Obsidian/Drive sources, failure and fallback behavior.
 
-**`recall_article` (internal):**
-- FTS path if index is `fts5`/`hybrid`; grep fallback otherwise.
-- Returns summary metadata (`article_id`, `title`, `origin_url`, tags, snippet, slug).
-
-**`read_article_detail(slug)` (agent-registered):**
-- Loads full article body by slug prefix match in `library_dir`.
-
-### 2.2 Startup sync
-
-`create_deps()` resolves the knowledge backend at wakeup (adaptive degradation):
-- configured `hybrid` → fallback `fts5` on hybrid init failure → fallback `grep` if FTS also fails.
-- configured `fts5` → fallback `grep` if FTS init fails.
-- Resolved backend is written to `deps.knowledge_search_backend` for runtime consistency.
-
-`run_bootstrap()` syncs both directories (knowledge sync is Step 1 of three bootstrap steps; model verification moved to `run_preflight()` in `_preflight.py`):
-1. Memory sync: `sync_dir("memory", memory_dir, kind_filter="memory")` — `.co-cli/memory/`.
-2. Library sync: `sync_dir("library", library_dir, kind_filter="article")` — `~/.local/share/co-cli/library/`.
-
-On sync failure: index is closed and disabled for the session (`deps.knowledge_index = None`), triggering grep fallback throughout.
-
-Index write/sync triggers by source:
-
-| Source | Trigger | Stored `docs.path` |
-|--------|---------|--------------------|
-| `memory` | bootstrap `sync_dir`, `save_memory`, `update_memory`, `append_memory`, `/forget` eviction | absolute filesystem path |
-| `library` | bootstrap `sync_dir`, `save_article` | absolute filesystem path |
-| `obsidian` | `search_notes` and `search_knowledge` (source `None` or `obsidian`) call `sync_dir` | absolute filesystem path |
-| `drive` | `read_drive_file` indexes content after fetch | Drive `file_id` |
-
-### 2.3 KnowledgeIndex internals
+### 2.2 KnowledgeIndex internals
 
 `KnowledgeIndex` schema:
-- `docs` table: `source`, `kind`, `path`, `title`, `content`, `tags`, `created`, `updated`, `mtime`, `hash`, `provenance`, `certainty`, `category`.
+- `docs` table: `source`, `kind`, `path`, `title`, `content`, `tags`, `created`, `updated`, `mtime`, `hash`, `provenance`, `certainty`, `category`, `chunk_id`. UNIQUE constraint is `(source, path, chunk_id)`.
 - `docs_fts` virtual table (FTS5) indexes `title`, `content`, `tags`.
 - FTS triggers keep `docs_fts` synchronized with `docs` on insert/update/delete.
 - `embedding_cache`: generated embeddings keyed by `(provider, model, content_hash)`.
@@ -104,9 +69,14 @@ Index write/sync triggers by source:
 - Hybrid mode: `docs_vec` (`sqlite-vec`) stores vectors keyed by `rowid`.
 
 Sync/index mechanics:
-- Hash-based change detection (`needs_reindex`) prevents unchanged writes.
+- Hash-based change detection (`needs_reindex`) prevents unchanged writes (anchored to `chunk_id=0`).
 - `sync_dir(source, directory, kind_filter?)` recursively scans `**/*.md`. Optional `kind_filter` skips files whose frontmatter `kind` doesn't match.
-- `remove_stale(source, current_paths, directory?)` deletes rows for disappeared files. Optional `directory` scope prevents sibling-folder eviction during partial syncs.
+- `remove_stale(source, current_paths, directory?)` deletes rows for disappeared files. Optional `directory` scope prevents sibling-folder eviction during partial syncs. Returns count of unique paths removed (not chunk rows).
+
+Chunking:
+- When `chunk_size > 0` and content exceeds `chunk_size` chars, `index()` splits content into overlapping windows (`step = chunk_size - chunk_overlap`). Each chunk is stored as a separate row with the same `path` and metadata but a unique `chunk_id` (0, 1, 2, …).
+- `search()` deduplicates results by `path`, keeping the highest-scoring chunk per document — callers always receive at most one result per source path.
+- `_fetch_reranker_texts()` fetches from `chunk_id=0` to ensure deterministic reranker input.
 
 FTS query behavior:
 - Query tokens are lowercased, stopwords removed, length > 1, AND-joined.
@@ -125,38 +95,7 @@ Reranking:
 - `ollama` / `gemini` use listwise ranking prompts and map ranking position to descending scores.
 - Reranker failures are non-fatal and fall back to unranked candidate order.
 
-### 2.4 Retrieval surfaces
-
-Agent-registered retrieval tools:
-- `search_knowledge(query, kind?, source?, limit?, tags?, tag_match_mode?, created_after?, created_before?)` — default scope: `["library", "obsidian", "drive"]` (excludes memories)
-- `read_article_detail(slug)` — full article body by slug
-
-Internal retrieval adapters (not agent-registered):
-- `recall_article(...)` — FTS or grep summary retrieval
-- `search_notes(...)` — Obsidian-specific multi-keyword search
-- `recall_memory(...)` — see [DESIGN-memory.md](DESIGN-memory.md)
-
-**`search_knowledge` behavior:**
-
-- Primary cross-source retrieval entrypoint.
-- Default scope (`source=None`): `["library", "obsidian", "drive"]` — memory is excluded by default. Pass `source="memory"` to search memories through this tool (prefer `search_memories` instead).
-- With index enabled:
-  - Optionally syncs Obsidian source before searching (`sync_dir("obsidian", ...)` when source is `None` or `"obsidian"`).
-  - Ranked index search across chosen source/kind filters. Accepts `source: str | list[str] | None` — list form builds `IN (?,?,?)` clause.
-- Without index (`knowledge_index is None`):
-  - `source=None` (default) and `source="library"` both route to `deps.library_dir` (articles).
-  - `source="memory"` routes to `deps.memory_dir`.
-  - `obsidian` and `drive` require the FTS index — return empty in fallback mode.
-  - Result `source` field follows kind partition: `"memory"` for kind:memory, `"library"` for kind:article.
-
-### 2.5 Failure and fallback
-
-- Wakeup is adaptive: `hybrid -> fts5 -> grep` (or `fts5 -> grep`) instead of hard-failing.
-- Bootstrap sync failure: index is disabled for the session; tools fall back to grep where supported.
-- `search_knowledge` without index supports memory/library grep only; Obsidian and Drive require index.
-- Hybrid search gracefully falls back to lexical results when embedding generation or vector path fails.
-
-### 2.6 Known limitations
+### 2.3 Known limitations
 
 1. `read_article_detail` prefix fallback returns the first glob match without deterministic disambiguation when multiple articles share a slug prefix.
 2. `save_article` dedup uses strict raw URL equality; equivalent normalized URLs can still produce duplicates.
@@ -175,6 +114,8 @@ Internal retrieval adapters (not agent-registered):
 | `knowledge_hybrid_text_weight` | (none) | `0.3` | Hybrid merge FTS score weight; passed directly to `KnowledgeIndex.__init__()` |
 | `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider: `none`, `local`, `ollama`, `gemini` |
 | `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
+| `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Character window per chunk; 0 = disable chunking |
+| `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Character overlap between adjacent chunks |
 
 ### 3.2 Source enablement settings
 
@@ -188,7 +129,7 @@ Internal retrieval adapters (not agent-registered):
 
 | File | Purpose |
 |------|---------|
-| `co_cli/knowledge_index.py` | Core index engine: schema, sync/index/remove/rebuild, FTS/hybrid/rerank search |
+| `co_cli/_knowledge_index.py` | Core index engine: schema, sync/index/remove/rebuild, FTS/hybrid/rerank search |
 | `co_cli/tools/articles.py` | `save_article`, `recall_article`, `read_article_detail`, `search_knowledge` cross-source retrieval |
 | `co_cli/tools/obsidian.py` | `list_notes`, `read_note`, `search_notes` plus index sync on search |
 | `co_cli/tools/google_drive.py` | Drive search/read and opportunistic index writes on file read |
@@ -196,7 +137,7 @@ Internal retrieval adapters (not agent-registered):
 | `co_cli/_bootstrap.py` | Startup sync: `sync_dir` for both `memory_dir` and `library_dir` |
 | `co_cli/main.py` | Backend resolution, bootstrap sync, `library_dir` path injection |
 | `co_cli/config.py` | `library_path` / `CO_LIBRARY_PATH` setting |
-| `co_cli/deps.py` | `library_dir: Path`, `knowledge_index`, `knowledge_search_backend` in `CoDeps` |
+| `co_cli/deps.py` | `library_dir: Path`, `knowledge_search_backend` in `CoConfig`; `knowledge_index` in `CoServices` |
 | `tests/test_knowledge_index.py` | Functional tests: schema, FTS, sync, hybrid, reranking, kind_filter |
 | `tests/test_save_article.py` | Functional tests: save, recall, search_knowledge, contradiction detection, grep fallback |
 | `tests/test_bootstrap.py` | Functional tests: startup sync, session restore, backend degradation |

@@ -1,7 +1,8 @@
-"""Pre-agent resource gate — checks LLM provider and model availability before agent startup."""
+"""Model dependency check — pre-agent gate for LLM provider and model availability."""
 
 from dataclasses import dataclass, field
 
+from co_cli.config import ModelEntry
 from co_cli.deps import CoDeps
 from co_cli.display import TerminalFrontend
 
@@ -11,9 +12,9 @@ class PreflightResult:
     ok: bool
     status: str  # "ok" | "warning" | "error"
     message: str
-    # Updated model_roles when _check_model_availability advances the chain.
-    # Caller (run_preflight) applies this to deps.model_roles. None = no change.
-    model_roles: dict[str, list[str]] | None = field(default=None)
+    # Updated role_models when _check_model_availability advances the chain.
+    # Caller (run_model_check) applies this to deps.role_models. None = no change.
+    role_models: dict[str, list[ModelEntry]] | None = field(default=None)
 
 
 def _check_llm_provider(
@@ -63,12 +64,12 @@ def _check_llm_provider(
 def _check_model_availability(
     llm_provider: str,
     ollama_host: str,
-    model_roles: dict[str, list[str]],
+    role_models: dict[str, list[ModelEntry]],
 ) -> PreflightResult:
-    """Check Ollama model availability and return updated model_roles if chains advanced.
+    """Check Ollama model availability and return updated role_models if chains advanced.
 
     Ollama-only; returns ok immediately for non-Ollama providers.
-    Pure function — does not mutate model_roles. Returns updated copy in result.model_roles
+    Pure function — does not mutate role_models. Returns updated copy in result.role_models
     when chains are advanced; caller applies mutation.
     """
     if llm_provider != "ollama":
@@ -90,29 +91,29 @@ def _check_model_availability(
             message=f"Ollama model check skipped — {err}",
         )
 
-    updated_roles = {k: list(v) for k, v in model_roles.items()}
+    updated_roles: dict[str, list[ModelEntry]] = {k: list(v) for k, v in role_models.items()}
     chain_changed = False
     status_messages: list[str] = []
 
     reasoning_chain = updated_roles.get("reasoning", [])
     if reasoning_chain:
-        available_reasoning = [m for m in reasoning_chain if m in installed]
+        available_reasoning = [e for e in reasoning_chain if e.model in installed]
         if not available_reasoning:
             return PreflightResult(
                 ok=False,
                 status="error",
-                message="No reasoning model available — check model_roles.reasoning",
+                message="No reasoning model available — check role_models.reasoning",
             )
         if available_reasoning != reasoning_chain:
             updated_roles["reasoning"] = available_reasoning
             chain_changed = True
-            status_messages.append(f"Reasoning model → {available_reasoning[0]} (chain advanced)")
+            status_messages.append(f"Reasoning model → {available_reasoning[0].model} (chain advanced)")
 
     for role in ("summarization", "coding", "research", "analysis"):
         chain = updated_roles.get(role, [])
         if not chain:
             continue
-        available = [m for m in chain if m in installed]
+        available = [e for e in chain if e.model in installed]
         if not available:
             updated_roles[role] = []
             chain_changed = True
@@ -120,29 +121,29 @@ def _check_model_availability(
         elif available != chain:
             updated_roles[role] = available
             chain_changed = True
-            status_messages.append(f"{role} chain advanced to: {available[0]}")
+            status_messages.append(f"{role} chain advanced to: {available[0].model}")
 
     if chain_changed:
         return PreflightResult(
             ok=True,
             status="warning",
             message="; ".join(status_messages) if status_messages else "Model chains advanced",
-            model_roles=updated_roles,
+            role_models=updated_roles,
         )
 
     return PreflightResult(ok=True, status="ok", message="All models available")
 
 
-def run_preflight(deps: CoDeps, frontend: TerminalFrontend) -> None:
-    """Run all pre-agent resource checks.
+def run_model_check(deps: CoDeps, frontend: TerminalFrontend) -> None:
+    """Run all pre-agent model dependency checks.
 
     Called after create_deps() and before get_agent(). Raises RuntimeError on any error
     result (agent is never created). Reports warnings via frontend.on_status().
     """
     provider_result = _check_llm_provider(
-        deps.llm_provider,
-        deps.gemini_api_key,
-        deps.ollama_host,
+        deps.config.llm_provider,
+        deps.config.gemini_api_key,
+        deps.config.ollama_host,
     )
     if provider_result.status == "error":
         raise RuntimeError(provider_result.message)
@@ -150,13 +151,13 @@ def run_preflight(deps: CoDeps, frontend: TerminalFrontend) -> None:
         frontend.on_status(f"  {provider_result.message}")
 
     model_result = _check_model_availability(
-        deps.llm_provider,
-        deps.ollama_host,
-        deps.model_roles,
+        deps.config.llm_provider,
+        deps.config.ollama_host,
+        deps.config.role_models,
     )
     if model_result.status == "error":
         raise RuntimeError(model_result.message)
     if model_result.status == "warning":
         frontend.on_status(f"  {model_result.message}")
-    if model_result.model_roles is not None:
-        deps.model_roles = model_result.model_roles
+    if model_result.role_models is not None:
+        deps.config.role_models = model_result.role_models

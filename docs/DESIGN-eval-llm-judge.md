@@ -1,6 +1,6 @@
 # DESIGN: Eval LLM-as-Judge
 
-## What & How
+## 1. What & How
 
 The personality behavior eval uses an LLM-as-judge to score whether each agent response
 demonstrates the expected behavioral pattern. For each `llm_judge` check in a case, a
@@ -26,7 +26,7 @@ run_single() loop
                          JudgeResult {passed: bool, reasoning: str}
 ```
 
-## Core Logic
+## 2. Core Logic
 
 ### Check types
 
@@ -176,7 +176,7 @@ Every `llm_judge` check result — including passing verdicts — is stored in
 so every decision is auditable. The response and checks table are rendered even when OTel
 span data is unavailable.
 
-## Config
+## 3. Config
 
 | Setting | Value | Notes |
 |---------|-------|-------|
@@ -186,7 +186,7 @@ span data is unavailable.
 | `output_type` | `JudgeResult` | Enforces `{passed, reasoning}` schema |
 | Default verdict | **Fail when uncertain** | High bar — only pass when clearly met |
 
-## Files
+## 4. Files
 
 | File | Purpose |
 |------|---------|

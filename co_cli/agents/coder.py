@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from co_cli.agents._factory import make_subagent_model
+from co_cli.config import ModelEntry
 from co_cli.deps import CoDeps
 from co_cli.tools.files import find_in_files, list_directory, read_file
 
@@ -18,7 +19,7 @@ class CoderResult(BaseModel):
 
 
 def make_coder_agent(
-    model_name: str,
+    model_entry: ModelEntry,
     provider: str,
     ollama_host: str,
 ) -> Agent[CoDeps, CoderResult]:
@@ -28,7 +29,7 @@ def make_coder_agent(
     delegation tool) and only has access to read-only file tools — no writes,
     no shell, no network.
     """
-    model = make_subagent_model(model_name, provider, ollama_host)
+    model = make_subagent_model(model_entry, provider, ollama_host)
     agent: Agent[CoDeps, CoderResult] = Agent(
         model,
         deps_type=CoDeps,

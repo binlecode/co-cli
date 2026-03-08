@@ -1,98 +1,208 @@
-# REVIEW: Voice-to-Voice System Architecture & Tech Lead Mandate (Phase 3)
+# REVIEW: Voice for Co
 
-**Document Reviewed**: `docs/TODO-voice.md`
-**Date of Review**: February 28, 2026
-**Context**: Evaluation against 2025/2026 production-grade Voice AI standards and Co-CLI system principles.
+This document replaces the earlier split between `TODO-voice.md` and the older review. It is the single source of truth for whether voice is worth shipping in co-cli, what the current codebase can support, and what 2026 best practice says we should and should not copy.
 
----
+## Verdict
 
-## PART 1: System Architecture Review
+Voice is viable for Co only as a narrow overlay on the existing text-first system, not as a primary interaction mode and not as a separate agent stack.
 
-### 1. Executive Summary
+The benefit is real but bounded:
 
-The architectural plan outlined in `TODO-voice.md` for adding voice capabilities to the Co CLI is **pragmatic, highly aligned with the project's core principles, and achievable**. 
+- accessibility and hands-busy use
+- faster short follow-ups while reading logs or docs
+- a stronger companion feel for the product vision
 
-By choosing a "Cascading Pipeline" (STT → LLM → TTS) and a "Push-to-Talk" activation model, the design deliberately trades the ultra-low latency (<500ms) of bleeding-edge Speech-to-Speech (S2S) models for absolute control, debuggability, and adherence to Co's text-first/privacy-first mandates. 
+The adoption cost is also real and likely higher than the direct product gain:
 
-While the broader voice AI industry (OpenAI Realtime, Gemini Live, LiveKit) has largely shifted to continuous-listening S2S architectures over WebRTC, Co's proposed local-first overlay is the correct technical choice for a terminal-based engineering assistant.
+- heavy optional dependencies
+- fragile cross-platform audio I/O
+- difficult interruption correctness
+- low demand for spoken interaction in a terminal-centric engineering workflow
 
-### 2. Industry State (2025-2026) vs. Co's Design
+Tech lead recommendation: keep voice deferred until background execution and file tools are mature, then ship only a tightly scoped Phase K MVP behind an optional extra.
 
-In 2026, production-grade voice agents generally fall into two categories:
+## Current Co Reality
 
-1. **Unified Speech-to-Speech (S2S)**: Models like Gemini 2.0 Flash Live API or GPT-4o Realtime that process audio-in to audio-out. They achieve <500ms latency, preserve emotional prosody, and handle native barge-in. Frameworks like **LiveKit** dominate this space.
-2. **Streaming Modular Pipelines**: Highly optimized cascading setups (STT → LLM → TTS) using frameworks like **Pipecat**, achieving 500ms-800ms latency through aggressive parallel execution (waterfalling).
+Any voice design has to fit the system that exists today:
 
-**Comparison:**
+- `co_cli/_orchestrate.py` already provides the execution primitive: `run_turn()`
+- interrupted turns are already patched with dangling tool-return repair plus an abort marker
+- `co_cli/main.py` already centralizes the REPL loop, slash-command dispatch, Ctrl-C handling, and post-turn hooks
+- `co_cli/status.py` already owns environment diagnostics, which is the natural home for future audio checks
+- OTel trace output already flows into `co-cli.db` and is surfaced through `co logs`, `co traces`, and `co tail`
 
-| Feature | 2026 Industry Standard (e.g., LiveKit/Pipecat) | Co `TODO-voice.md` Design | Assessment |
-| :--- | :--- | :--- | :--- |
-| **Pipeline Architecture** | Native S2S or Cloud Cascading | Local-first Cascading (STT→LLM→TTS) | **Appropriate.** S2S models lose explicit text transcripts, which Co needs for telemetry, debugging, and terminal rendering. |
-| **Activation / Mic** | Continuous Listening + AEC | Push-to-Talk (PTT) | **Excellent tradeoff.** PTT completely avoids the complex Acoustic Echo Cancellation (AEC) needed for terminal environments. |
-| **Target Latency** | < 500ms | ~800ms (Cloud), ~1250ms (Local) | **Acceptable risk.** 1250ms local latency borders on sluggish, but for a dev tool, predictable correctness beats conversational speed. |
-| **Barge-in / Interruption** | WebRTC Stop-and-Sync | PTT interruption / async cancel | **Solid.** The design accurately describes the "truncate buffer + preserve partial transcript" method used by top frameworks. |
+That means the right integration model is still an I/O overlay:
 
-### 3. Evaluation of Component Choices
+`mic/audio-in -> voice frontend -> text prompt -> run_turn() -> text output -> TTS/audio-out`
 
-The selection of local-first components in the document represents the best-in-class for offline, lightweight execution:
+Not acceptable:
 
-*   **VAD (Silero VAD)**: Remains the undisputed industry standard for local VAD. At 2MB and <1ms latency, it is used under the hood by nearly all major frameworks (including Pipecat).
-*   **STT (faster-whisper)**: Highly optimized. While cloud providers (Deepgram) can hit <300ms, faster-whisper base.en is the most reliable balance of speed and footprint (~150MB) for local usage.
-*   **TTS (Kokoro-82M)**: A breakthrough in local TTS. It significantly outperforms Piper in naturalness while keeping latency <300ms via ONNX.
-*   **Audio I/O (sounddevice)**: Standard, cross-platform, minimal overhead.
+- a second agent loop
+- voice-specific approval logic
+- hidden speech-only context that diverges from text history
+- any design that bypasses normal interrupt recovery
 
-**Verdict**: The component stack is mature, heavily battle-tested, and perfectly matches Co's requirement to run locally without heavy GPU dependencies.
+## 2026 Frontier Practice
 
-### 4. Architectural Deep Dive & Best Practices
+Top systems in 2026 converge on low-latency streaming voice, but not on the same deployment shape.
 
-#### The "Overlay" Pattern
-The decision to treat voice as an I/O wrapper around the existing `run_turn()` logic is the strongest architectural choice in the document. By not altering the underlying Pydantic-AI agent, tools, or approval flows, you avoid the "forked logic" trap that plagues many multimodal tools.
+### What frontier systems do
 
-#### Streaming and Waterfalling
-The document correctly identifies that streaming at every stage is mandatory. In 2026, the best practice is **Parallel Execution**:
-1. STT streams word-by-word into the LLM prompt buffer.
-2. The LLM starts generating tokens before the user finishes speaking (Speculative Inference / Early Prompting).
-3. TTS begins synthesizing the first sentence fragment while the LLM is still generating the second.
-*Recommendation*: Ensure the asyncio pipeline utilizes a pub/sub or queue-based ring buffer between these components to prevent backpressure, exactly as Pipecat handles chunking.
+- OpenAI Realtime exposes low-latency audio and recommends a direct audio path for real-time speech apps, while also explicitly documenting a chained architecture for text-centric applications where transcription remains first-class.
+- Gemini Live / Multimodal Live provides native streaming audio/video sessions and built-in tool usage, pushing the state of the art toward multimodal live sessions rather than discrete terminal turns.
+- LiveKit Agents treats turn detection, interruption, and transport as first-class concerns and recommends Silero as the default local VAD plugin for production pipelines.
+- Pipecat-style systems optimize modular cascades with aggressive queueing, interruption handling, and waterfalling between STT, LLM, and TTS.
 
-#### Barge-in Protocol
-The document accurately outlines the "Stop-and-Sync" protocol. 
-*Recommendation*: Be extremely precise with the "Preserve partial response" step. If Co is interrupted, you must calculate exactly which words were synthesized and played through `sounddevice` before the interruption, and append *only those words* to the LLM history. If you append the LLM's full generated text, the agent will hallucinate having said things the user never actually heard.
+### What Co should borrow
 
----
+- streaming pipeline stages
+- explicit turn detection
+- barge-in as a product requirement, not a nice-to-have
+- telemetry for stage latency and interruption events
+- component isolation so STT/TTS/VAD can be swapped independently
 
-## PART 2: Tech Lead Perspective & Mandate
+### What Co should reject
 
-### 1. The Reality Check: Dependency & Distribution Bloat
-The industry research highlights `faster-whisper` (~150MB model) and `kokoro-onnx` (~350MB model) as lightweight choices. However, the *model* size isn't the true problem—the *runtime* size is. 
-To run these locally, we need `ctranslate2`, `onnxruntime`, and potentially heavy numerical libraries. This will balloon our clean `uv` environment from tens of megabytes to well over 1-2 GB. 
-**Tech Lead Verdict**: Unacceptable for a default installation. Co is a fast, terminal-native tool. If we ship voice, it **must** be an optional install group (e.g., `uv tool install co-cli[voice]`). The core application must start instantly and degrade gracefully if the voice dependencies are missing. We will not punish our core text-first users with a gigabyte-scale download.
+- continuous always-on listening as the default
+- WebRTC-first architecture
+- cloud speech-to-speech as the only supported path
+- any approach that weakens transcript fidelity for traces, approvals, or history correctness
 
-### 2. The Audio I/O Support Nightmare
-The proposal casually lists `sounddevice` as a "tiny, cross-platform" wrapper. 
-**Tech Lead Verdict**: Any veteran systems engineer knows cross-platform microphone access is a minefield. On Linux, we will immediately hit PipeWire vs. PulseAudio vs. ALSA driver conflicts. On macOS, terminal microphone permissions (TCC prompts) are notoriously finicky and often require terminal restarts. Shipping this means we are inviting a massive influx of support issues completely unrelated to our core AI value proposition.
-*Mitigation*: We must strictly encapsulate the audio interface and provide a built-in diagnostic module (e.g., `co status --audio`) to debug missing permissions or dead drivers before we officially launch the feature.
+For Co, frontier voice best practice is not "copy the most advanced speech stack". It is "adopt the parts that preserve the text-grounded agent contract".
 
-### 3. Strict Testing Policy Violation
-Co's `GEMINI.md` mandates: *"Functional Testing: No mocks. Tests must verify real side effects."*
-**Tech Lead Verdict**: How do we test `sounddevice` in headless GitHub Actions? CI runners do not have sound cards or microphones. If we rely on hardware, our CI breaks. If we mock `sounddevice`, we violate our core engineering policy. 
-*Decision*: We must design a rigorous Audio HAL (Hardware Abstraction Layer). For functional tests, the "real" implementation must read from/write to `.wav` fixtures on disk, mathematically proving the audio bytes are processed correctly without needing an actual speaker/mic or a mock object.
+## Benefit vs Adoption Tradeoff
 
-### 4. The "Overlay" Pattern vs. State Management
-The research praises the "Voice as an I/O Overlay" approach, keeping the Pydantic-AI agent untouched. 
-**Tech Lead Verdict**: While theoretically clean, handling "barge-in" requires canceling active `asyncio` tasks and accurately truncating the LLM text context to *exactly* what was played out of the speaker. This is highly stateful, race-condition prone, and brittle. If the barge-in state machine fails, the conversation history gets corrupted, violating our "Privacy & Safe Execution" principles because the user can no longer trust what the Brain "thinks" happened.
-*Decision*: Before building the STT/TTS pipeline, we must build and rigorously test the "Interruption & Context Truncation" state machine using purely rapid-fire text inputs.
+| Dimension | Benefit | Cost / Risk | Assessment |
+|---|---|---|---|
+| Accessibility | High | Moderate implementation cost | Strongest reason to ship |
+| Terminal convenience | Medium | High support burden | Useful, but niche |
+| Companion/product vision | Medium | Moderate | Supports roadmap identity |
+| Core productivity for engineers | Low to medium | High | Weak ROI versus file tools/background tasks |
+| Latency perception | Medium if done well | High | Must feel responsive or users will abandon it |
+| Platform support | Broad in theory | High in practice | Main adoption drag |
 
-### 5. Strategic Priority (Is this a gimmick?)
-Co is a CLI tool for engineers. We live on keyboards. While voice is the 2026 industry darling for consumer agents, how often does a developer want to talk out loud to their terminal in a busy office?
-**Tech Lead Verdict**: Voice is a powerful accessibility and convenience feature for remote work, but it does not enhance our core loop (safe shell execution, local reasoning). It remains firmly deferred to Phase 3 or 4. We will prioritize robust Context Governance, Memory Lifecycle, and Background Execution over Voice.
+Net: voice is strategically valid, but not near the top of the backlog.
 
----
+## Architecture Recommendation
 
-## Conclusion & Mandates for Phase 3 Execution
+### Phase K MVP
 
-If/when we proceed with Voice, the following constraints are non-negotiable:
-1. **Optional Dependency Boundary**: Voice packages must be strictly isolated behind an optional `[voice]` extra in `pyproject.toml`.
-2. **File-Backed Audio Testing**: Functional tests must use bit-exact `.wav` file pipelines to maintain the "No Mocks" policy in CI.
-3. **Diagnostic Tooling**: Must ship with `co status` checks for audio hardware and OS permissions.
-4. **Text-First Truncation Testing**: The barge-in context truncation logic must be proven to be race-condition free with text before any audio bytes are synthesized.
+Ship only push-to-talk, not continuous listening.
+
+Recommended flow:
+
+1. user holds a key to capture audio
+2. local VAD gates utterance boundaries
+3. STT produces a full text transcript
+4. transcript is submitted through normal `run_turn()`
+5. assistant text is committed to history exactly as today
+6. TTS speaks only committed assistant text
+
+This is intentionally conservative. It gives Co a voice mode without changing the conversational contract.
+
+### Why not native speech-to-speech
+
+Native S2S is where frontier products are going, but it is the wrong first implementation for Co:
+
+- Co needs text transcripts as the canonical record
+- Co’s approval and safety model is built around explicit turn history
+- the CLI is not a live-call environment
+- terminal users will tolerate slightly slower speech if correctness is high
+
+Inference from frontier systems: Co should treat speech-to-speech as a possible future transport optimization, not as the foundational architecture.
+
+### Streaming policy
+
+Do not start with speculative early prompting from partial STT. It adds state complexity before the basics are proven.
+
+Start with:
+
+- stream TTS from committed assistant text chunks only
+- no partial-user-transcript submission to the LLM
+- no continuous microphone while TTS is playing
+
+That gives a simpler correctness envelope for the first version.
+
+## Interruption and History Correctness
+
+This is the hardest part and the main reason the feature remains deferred.
+
+Co already has turn interruption recovery for keyboard interrupts. Voice barge-in must build on that exact mechanism, not invent a parallel path.
+
+Non-negotiable rule:
+
+Only the assistant text that was actually played to the user may be preserved as spoken history before interruption.
+
+Implication:
+
+- generated but unsynthesized text must not be committed
+- synthesized but unplayed text must not be committed
+- interruption handling needs a playback cursor, not just a text buffer
+
+If this is wrong, Co’s internal history diverges from what the user actually heard, and the next turn becomes untrustworthy.
+
+Before real audio integration, prove this state machine with text-only tests that simulate:
+
+- assistant streaming
+- partial commit
+- mid-stream interruption
+- restart on a new user turn
+
+## Component Guidance
+
+The earlier component picks are still directionally sound, but they should be treated as candidates, not frozen decisions.
+
+Current recommendation:
+
+- VAD: Silero remains the default benchmark for local turn detection and is aligned with LiveKit guidance.
+- STT: a local Whisper-family backend is still the pragmatic starting point for transcript fidelity and offline operation.
+- TTS: use a local model only if startup time and footprint stay behind an optional dependency boundary.
+- Audio I/O: keep the hardware layer thin and replaceable.
+
+What matters more than the exact package:
+
+- lazy import and lazy model load
+- strict optional extra boundary
+- swappable provider interface
+- fixture-driven testing path independent of real hardware
+
+## Adoption Constraints
+
+If voice ships, the following are mandatory:
+
+1. Optional install only. Core `co` must stay fast and small without audio deps.
+2. Text remains canonical. Voice is an input/output surface, not a second interaction model.
+3. `co status` grows audio diagnostics before general release.
+4. Functional tests use real audio fixtures on disk, not mocks and not microphone-dependent CI.
+5. Voice spans and metrics land in existing OTel tracing, not a separate logging path.
+6. Slash-command and CLI activation must fail gracefully when voice extras are missing.
+
+## Delivery Gate
+
+Do not start implementation until these are already true:
+
+- background execution is shipped
+- file tools are shipped
+- interrupt state-machine tests exist for partial assistant commit
+- a small audio HAL design exists with fixture-backed tests
+
+## Decision
+
+Keep voice in the roadmap as a deferred Phase K capability.
+
+When it moves, the right product shape is:
+
+- push-to-talk
+- transcript-first
+- local or hybrid cascading pipeline
+- explicit interruption semantics
+- full reuse of `run_turn()`, approval flow, and OTel traces
+
+Anything more ambitious than that should be treated as a second phase after the MVP proves user demand.
+
+## External References
+
+- OpenAI Realtime API docs: real-time audio path plus documented chained alternative for text-centric apps
+- Google Gemini Live / Multimodal Live docs: live multimodal sessions with streaming audio and built-in tool use
+- LiveKit Agents docs: production voice-agent pipeline patterns and Silero VAD recommendation
+- Pipecat docs: modular streaming voice pipelines with interruption-oriented orchestration

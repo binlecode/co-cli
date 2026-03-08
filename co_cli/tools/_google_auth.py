@@ -116,11 +116,11 @@ def get_cached_google_creds(deps: Any) -> Any | None:
     Args:
         deps: CoDeps instance (typed Any to avoid circular import).
     """
-    if not deps._google_creds_resolved:
-        deps.google_creds = ensure_google_credentials(
-            deps.google_credentials_path, ALL_GOOGLE_SCOPES,
+    if not deps.session.google_creds_resolved:
+        deps.session.google_creds = ensure_google_credentials(
+            deps.config.google_credentials_path, ALL_GOOGLE_SCOPES,
         )
-        deps._google_creds_resolved = True
-    return deps.google_creds
+        deps.session.google_creds_resolved = True
+    return deps.session.google_creds
 
 

@@ -6,10 +6,10 @@ from pathlib import Path
 
 from co_cli._bootstrap import run_bootstrap
 from co_cli._session import new_session, save_session
-from co_cli.deps import CoDeps
+from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.display import TerminalFrontend
-from co_cli.knowledge_index import KnowledgeIndex
-from co_cli.shell_backend import ShellBackend
+from co_cli._knowledge_index import KnowledgeIndex
+from co_cli._shell_backend import ShellBackend
 
 
 def _write_knowledge_file(path: Path, *, mem_id: int, body: str) -> None:
@@ -62,9 +62,8 @@ def test_bootstrap_syncs_knowledge_and_restores_fresh_session(tmp_path: Path) ->
 
     idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
     deps = CoDeps(
-        shell=ShellBackend(),
-        knowledge_index=idx,
-        knowledge_search_backend="fts5",
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(knowledge_search_backend="fts5"),
     )
     frontend = TerminalFrontend()
 
@@ -79,7 +78,7 @@ def test_bootstrap_syncs_knowledge_and_restores_fresh_session(tmp_path: Path) ->
     )
 
     assert out["session_id"] == session_data["session_id"]
-    assert deps.session_id == session_data["session_id"]
+    assert deps.config.session_id == session_data["session_id"]
     results = idx.search("wakeup sync", source="memory", limit=5)
     assert results, "Expected synced knowledge to be searchable in the real index"
     assert any(r.path == str(memory_file) for r in results)
@@ -115,7 +114,7 @@ def test_bootstrap_two_pass_sync_partitions_by_kind(tmp_path: Path) -> None:
     save_session(session_path, session_data)
 
     idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
-    deps = CoDeps(shell=ShellBackend(), knowledge_index=idx, knowledge_search_backend="fts5")
+    deps = CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(knowledge_search_backend="fts5"))
     frontend = TerminalFrontend()
 
     asyncio.run(_run(deps, frontend, memory_dir=memory_dir, library_dir=library_dir, session_path=session_path))
@@ -140,9 +139,8 @@ def test_bootstrap_disables_index_when_sync_fails(tmp_path: Path) -> None:
     idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
     idx.close()
     deps = CoDeps(
-        shell=ShellBackend(),
-        knowledge_index=idx,
-        knowledge_search_backend="fts5",
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(knowledge_search_backend="fts5"),
     )
     frontend = TerminalFrontend()
 
@@ -156,7 +154,7 @@ def test_bootstrap_disables_index_when_sync_fails(tmp_path: Path) -> None:
         )
     )
 
-    assert deps.knowledge_index is None
+    assert deps.services.knowledge_index is None
 
 
 def test_bootstrap_stale_session_creates_new_session(tmp_path: Path) -> None:
@@ -171,9 +169,8 @@ def test_bootstrap_stale_session_creates_new_session(tmp_path: Path) -> None:
     save_session(session_path, stale)
 
     deps = CoDeps(
-        shell=ShellBackend(),
-        knowledge_index=None,
-        knowledge_search_backend="grep",
+        services=CoServices(shell=ShellBackend(), knowledge_index=None),
+        config=CoConfig(knowledge_search_backend="grep"),
     )
     frontend = TerminalFrontend()
 
@@ -189,7 +186,7 @@ def test_bootstrap_stale_session_creates_new_session(tmp_path: Path) -> None:
     )
 
     assert out["session_id"] != stale["session_id"]
-    assert deps.session_id == out["session_id"]
+    assert deps.config.session_id == out["session_id"]
 
 
 

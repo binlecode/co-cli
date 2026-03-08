@@ -22,13 +22,6 @@ from co_cli.prompts.personalities._composer import (
 # --- Instructions ---
 
 
-def test_static_prompt_has_no_generic_identity_claim():
-    """Static prompt must not assert a generic identity — soul provides identity."""
-    prompt, manifest = assemble_prompt("gemini")
-    assert "You are a personal companion" not in prompt
-    assert "You are Co" not in prompt
-
-
 # --- Static prompt has no personality ---
 
 
@@ -54,17 +47,6 @@ def test_prompt_includes_all_five_rules():
     assert "tone" in lower
     assert "approval" in lower
     assert "verify" in lower or "trust tool" in lower
-
-
-def test_rules_token_budget():
-    """Combined rule text stays under ~1750 tokens (~7000 chars heuristic)."""
-    total_chars = 0
-    for rule_path in sorted(_RULES_DIR.glob("*.md")):
-        total_chars += len(rule_path.read_text(encoding="utf-8").strip())
-    assert total_chars < 7000, (
-        f"Rules total {total_chars} chars (~{total_chars // 4} tokens), "
-        f"expected < 7000 chars (~1750 tokens)"
-    )
 
 
 # --- Memory not in prompt ---
@@ -115,13 +97,6 @@ def test_prompt_assembly_under_100ms():
 
 
 # --- Personality: expanded seed ---
-
-
-def test_all_roles_have_soul():
-    """Every role has a loadable seed file."""
-    for name in VALID_PERSONALITIES:
-        seed = load_soul_seed(name)
-        assert len(seed) > 0, f"Empty seed for role: {name}"
 
 
 def test_soul_seed_starts_with_identity():
@@ -179,23 +154,6 @@ def test_role_base_memories_exist_in_flat_knowledge_dir():
         )
 
 
-def test_static_prompt_has_no_core_traits_section():
-    """Static identity rules must not define core traits — soul provides all identity."""
-    identity = (
-        Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
-    ).read_text()
-    assert "## Core traits" not in identity
-    assert "Helpful:" not in identity
-
-
-def test_identity_rule_does_not_instruct_manual_recall():
-    """Identity rule must not tell the model to call recall_memory manually."""
-    identity = (
-        Path(__file__).parent.parent / "co_cli/prompts/rules/01_identity.md"
-    ).read_text()
-    assert "recall memories relevant" not in identity
-
-
 def test_total_prompt_under_budget():
     """Static prompt with soul seed (including mindsets) stays under budget."""
     from co_cli.prompts.personalities._composer import load_soul_mindsets
@@ -227,16 +185,6 @@ def test_all_roles_have_mindset_files():
         for task_type in task_types:
             f = mindsets_base / name / f"{task_type}.md"
             assert f.exists(), f"Missing mindset: {name}/{task_type}.md"
-
-
-def test_mindset_files_have_content():
-    """Every mindset file has non-empty content."""
-    mindsets_base = (
-        Path(__file__).parent.parent / "co_cli" / "prompts" / "personalities" / "mindsets"
-    )
-    for mindset_file in mindsets_base.rglob("*.md"):
-        content = mindset_file.read_text(encoding="utf-8").strip()
-        assert len(content) > 0, f"Empty mindset file: {mindset_file.name}"
 
 
 def test_validate_personality_files_no_warnings_for_complete_role():

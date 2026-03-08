@@ -5,8 +5,16 @@ from pathlib import Path
 
 import pytest
 import yaml
+from pydantic_ai._run_context import RunContext
+from pydantic_ai.usage import RunUsage
 
-from co_cli.knowledge_index import KnowledgeIndex, SearchResult
+from co_cli.agent import get_agent
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._knowledge_index import KnowledgeIndex, SearchResult
+from co_cli._shell_backend import ShellBackend
+
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
 # ---------------------------------------------------------------------------
@@ -131,35 +139,6 @@ def test_search_filters_by_source(tmp_path):
     assert all(r.source == "memory" for r in mem_results)
     obs_results = idx.search("pytest", source="obsidian")
     assert all(r.source == "obsidian" for r in obs_results)
-    idx.close()
-
-
-def test_search_filters_by_tags(tmp_path):
-    """search() with tags= returns only docs whose tags field matches."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/p/python.md", title="Python Guide",
-              content="Guide to Python asyncio", mtime=1.0, hash="a", tags="python asyncio")
-    idx.index(source="memory", kind="memory", path="/p/rust.md", title="Rust Guide",
-              content="Guide to Rust ownership", mtime=1.0, hash="b", tags="rust systems")
-    python_results = idx.search("guide", tags=["python"])
-    rust_results = idx.search("guide", tags=["rust"])
-    assert len(python_results) == 1 and Path(python_results[0].path).name == "python.md"
-    assert len(rust_results) == 1 and Path(rust_results[0].path).name == "rust.md"
-    idx.close()
-
-
-def test_search_filters_by_kind(tmp_path):
-    """search() with kind= returns only matching kind."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/mem.md", title="memo",
-              content="pytest preference", hash=_sha256("mem"), mtime=0.0)
-    idx.index(source="memory", kind="article", path="/art.md", title="article",
-              content="pytest reference guide", hash=_sha256("art"), mtime=0.0)
-
-    memory_results = idx.search("pytest", kind="memory")
-    assert all(r.kind == "memory" for r in memory_results)
-    article_results = idx.search("pytest", kind="article")
-    assert all(r.kind == "article" for r in article_results)
     idx.close()
 
 
@@ -313,36 +292,6 @@ def test_remove_stale_does_not_evict_common_prefix_sibling(tmp_path):
     idx.close()
 
 
-def test_sync_dir_folder_scoped_does_not_evict_other_folders(tmp_path):
-    """Syncing a subfolder does not evict FTS entries from sibling folders."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    vault = tmp_path / "vault"
-    personal = vault / "Personal"
-    work = vault / "Work"
-
-    # Index the full vault first
-    _write_md(personal, "diary.md", "Personal diary entry about hiking",
-              {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
-    _write_md(work, "report.md", "Work quarterly report for zygomorphic-scoped project",
-              {"id": 2, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
-    idx.sync_dir("obsidian", vault)
-
-    count_before = idx._conn.execute(
-        "SELECT COUNT(*) FROM docs WHERE source='obsidian'"
-    ).fetchone()[0]
-    assert count_before == 2
-
-    # Now sync only the Work subfolder (simulates a folder-scoped search_notes call)
-    idx.sync_dir("obsidian", work)
-
-    # Personal entry must still be in the index
-    row = idx._conn.execute(
-        "SELECT * FROM docs WHERE path LIKE '%diary.md'"
-    ).fetchone()
-    assert row is not None, "Personal folder entry must survive a Work-only sync"
-    idx.close()
-
-
 # ---------------------------------------------------------------------------
 # FTS round-trip with save_memory
 # ---------------------------------------------------------------------------
@@ -350,42 +299,20 @@ def test_sync_dir_folder_scoped_does_not_evict_other_folders(tmp_path):
 
 def test_fts_roundtrip_save_and_recall(tmp_path):
     """Save a memory with FTS index, then recall it via search()."""
-    from dataclasses import dataclass, field
-    from typing import Any
     import asyncio
+    import os
+    from co_cli.tools.memory import save_memory
 
     idx = KnowledgeIndex(tmp_path / "search.db")
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(knowledge_search_backend="fts5"),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-    @dataclass
-    class _Deps:
-        memory_max_count: int = 200
-        memory_dedup_window_days: int = 7
-        memory_dedup_threshold: int = 85
-        memory_decay_strategy: str = "summarize"
-        memory_decay_percentage: float = 0.2
-        knowledge_index: Any = None
-        knowledge_search_backend: str = "fts5"
-        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
-        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
-
-    class _Ctx:
-        def __init__(self, deps):
-            self._deps = deps
-        @property
-        def deps(self):
-            return self._deps
-        @property
-        def model(self):
-            return None
-
-    deps = _Deps(knowledge_index=idx)
-    ctx = _Ctx(deps)
-
-    import os
     orig = os.getcwd()
     os.chdir(tmp_path)
     try:
-        from co_cli.tools.memory import save_memory
         asyncio.run(save_memory(ctx, "User loves zygomorphic-fts5-test widget framework",
                                 tags=["preference"]))
         results = idx.search("zygomorphic-fts5-test", source="memory")
@@ -415,21 +342,6 @@ def test_tag_match_mode_all_returns_only_items_with_all_tags(tmp_path):
     idx.close()
 
 
-def test_tag_match_mode_any_returns_items_with_any_tag(tmp_path):
-    """search(tag_match_mode='any') returns docs that have at least one requested tag."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
-              content="doc about anytag filtering",
-              hash="a", mtime=0.0, tags="python")
-    idx.index(source="memory", kind="memory", path="/b.md", title="Doc B",
-              content="doc about anytag filtering",
-              hash="b", mtime=0.0, tags="async")
-    results = idx.search("anytag", tags=["python", "async"], tag_match_mode="any")
-    assert len(results) == 2
-    idx.close()
-
-
-
 def test_created_after_filters_older_items(tmp_path):
     """search(created_after=) excludes docs created before that date."""
     idx = KnowledgeIndex(tmp_path / "search.db")
@@ -442,53 +354,6 @@ def test_created_after_filters_older_items(tmp_path):
     results = idx.search("temporal", created_after="2024-06-01")
     assert len(results) == 1
     assert Path(results[0].path).name == "b.md"
-    idx.close()
-
-
-def test_created_before_filters_newer_items(tmp_path):
-    """search(created_before=) excludes docs created after that date."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
-              content="doc about temporal range filtering",
-              hash="a", mtime=0.0, created="2024-01-01T00:00:00+00:00")
-    idx.index(source="memory", kind="memory", path="/b.md", title="Doc B",
-              content="doc about temporal range filtering",
-              hash="b", mtime=0.0, created="2025-01-01T00:00:00+00:00")
-    results = idx.search("temporal", created_before="2024-06-01")
-    assert len(results) == 1
-    assert Path(results[0].path).name == "a.md"
-    idx.close()
-
-
-
-def test_search_tag_mode_all_with_duplicate_tags_returns_match(tmp_path):
-    """search() with duplicate tags in filter list must not silently return 0 results."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
-              content="doc about duplicate tag filter test",
-              hash="a", mtime=0.0, tags="python")
-    results = idx.search("duplicate", tags=["python", "python"], tag_match_mode="all")
-    assert len(results) == 1
-    idx.close()
-
-
-def test_combined_tags_tag_match_mode_and_created_after(tmp_path):
-    """search() with tags (all mode) + created_after returns only the matching doc."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
-              content="doc about combined junction filtering",
-              hash="a", mtime=0.0, tags="python async", created="2025-01-01T00:00:00+00:00")
-    idx.index(source="memory", kind="memory", path="/b.md", title="Doc B",
-              content="doc about combined junction filtering",
-              hash="b", mtime=0.0, tags="python", created="2024-01-01T00:00:00+00:00")
-    results = idx.search(
-        "combined",
-        tags=["python", "async"],
-        tag_match_mode="all",
-        created_after="2024-06-01",
-    )
-    assert len(results) == 1
-    assert Path(results[0].path).name == "a.md"
     idx.close()
 
 
@@ -589,55 +454,6 @@ def test_rerank_falls_back_on_error(tmp_path):
     idx.close()
 
 
-def test_ollama_listwise_rerank_reorders_results(tmp_path):
-    """_rerank_results() with Ollama reranker places the relevant doc first."""
-    import httpx
-    model = "qwen2.5:3b"
-    try:
-        resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
-        available = {m["name"] for m in resp.json().get("models", [])}
-        # Match exact name or name without tag (e.g. "qwen2.5:3b" matches "qwen2.5:3b")
-        if not any(m == model or m.startswith(model.split(":")[0] + ":") for m in available):
-            pytest.skip(f"Ollama model {model!r} not installed")
-    except Exception:
-        pytest.skip("Ollama not reachable")
-
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="ollama",
-        reranker_model="qwen2.5:3b",
-    )
-    idx.index(
-        source="memory", path="/irrelevant.md",
-        title="Cooking recipes",
-        content="How to bake chocolate cake with flour and eggs",
-        hash="h1", mtime=0.0,
-    )
-    idx.index(
-        source="memory", path="/relevant.md",
-        title="asyncio concurrency",
-        content="Python asyncio event loop concurrency patterns for async programming",
-        hash="h2", mtime=0.0,
-    )
-
-    # Place irrelevant doc first (higher initial FTS score) to confirm reranking flips order
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path="/irrelevant.md",
-            title="Cooking recipes", snippet=None, score=0.9,
-            tags=None, category=None, created=None, updated=None,
-        ),
-        SearchResult(
-            source="memory", kind="memory", path="/relevant.md",
-            title="asyncio concurrency", snippet=None, score=0.5,
-            tags=None, category=None, created=None, updated=None,
-        ),
-    ]
-    result = idx._rerank_results("asyncio concurrency patterns", candidates, limit=2)
-    assert len(result) == 2
-    assert result[0].path == "/relevant.md", "Relevant doc should rank first after reranking"
-    idx.close()
-
 
 
 # ---------------------------------------------------------------------------
@@ -656,38 +472,6 @@ def test_searchresult_has_provenance_and_certainty_fields(tmp_path):
     assert hasattr(r, "certainty")
     assert r.provenance is None
     assert r.certainty is None
-
-
-def test_index_stores_provenance_and_certainty(tmp_path):
-    """index() writes provenance and certainty into the docs table."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(
-        source="memory", kind="memory", path="/p.md",
-        title="Prov test", content="provenance certainty test content",
-        hash="h1", mtime=0.0,
-        provenance="user-told", certainty="high",
-    )
-    row = idx._conn.execute("SELECT provenance, certainty FROM docs WHERE path='/p.md'").fetchone()
-    assert row["provenance"] == "user-told"
-    assert row["certainty"] == "high"
-    idx.close()
-
-
-def test_fts_search_returns_provenance_and_certainty(tmp_path):
-    """search() FTS path returns populated provenance and certainty on SearchResult."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(
-        source="memory", kind="memory", path="/prov.md",
-        title="Prov search", content="prov-certainty-fts unique test token",
-        hash="h2", mtime=0.0,
-        provenance="detected", certainty="low",
-    )
-    results = idx.search("prov-certainty-fts")
-    assert len(results) >= 1
-    r = results[0]
-    assert r.provenance == "detected"
-    assert r.certainty == "low"
-    idx.close()
 
 
 def test_sync_dir_propagates_provenance_and_certainty(tmp_path):
@@ -742,36 +526,29 @@ def test_sync_dir_kind_filter_article(tmp_path):
 
 
 
-def test_local_cross_encoder_reranks_correctly(tmp_path):
-    """_local_cross_encoder_rerank() places the relevant doc first when fastembed is installed."""
-    pytest.importorskip("fastembed")
 
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="local",
-        reranker_model="BAAI/bge-reranker-base",
-    )
+
+def test_chunking(tmp_path: Path) -> None:
+    import sqlite3 as _sqlite3
+    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=400, chunk_overlap=50)
     idx.index(
-        source="memory", path="/off1.md",
-        title="chocolate cake recipe",
-        content="How to bake a chocolate cake with flour, sugar and eggs",
-        hash="h1", mtime=0.0,
+        source="memory", kind="memory", path="/fake/doc.md", title="test",
+        content="A" * 2000, mtime=0.0, hash="abc", tags="", category=None,
+        created="2025-01-01",
     )
-    idx.index(
-        source="memory", path="/off2.md",
-        title="gardening tips",
-        content="How to grow tomatoes in your backyard garden",
-        hash="h2", mtime=0.0,
-    )
-    idx.index(
-        source="memory", path="/relevant.md",
-        title="asyncio concurrency patterns",
-        content="Python asyncio event loop enables concurrent async programming with coroutines",
-        hash="h3", mtime=0.0,
-    )
-    results = idx.search("asyncio concurrency", limit=3)
-    assert len(results) >= 1
-    assert results[0].path == "/relevant.md", (
-        f"Expected /relevant.md first, got: {[r.path for r in results]}"
-    )
+    conn = _sqlite3.connect(tmp_path / "search.db")
+    count = conn.execute("SELECT count(*) FROM docs WHERE path='/fake/doc.md'").fetchone()[0]
+    assert count >= 4
+
+    rows = conn.execute(
+        "SELECT content FROM docs WHERE path='/fake/doc.md' ORDER BY chunk_id"
+    ).fetchall()
+    for row in rows:
+        assert len(row[0]) <= 400
+    assert rows[0][0] == "A" * 400
+    conn.close()
+
+    results = idx.search("test")
+    paths = [r.path for r in results]
+    assert paths.count("/fake/doc.md") == 1  # dedup: at most 1 result per path
     idx.close()

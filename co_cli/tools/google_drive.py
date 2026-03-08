@@ -76,7 +76,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
 
         # Look up stored page token for pages > 1
         if page > 1:
-            tokens = ctx.deps.drive_page_tokens.get(query, [])
+            tokens = ctx.deps.session.drive_page_tokens.get(query, [])
             token_index = page - 2  # page 2 -> index 0, page 3 -> index 1
             if token_index >= len(tokens):
                 raise ModelRetry(
@@ -95,9 +95,9 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")
         if next_token:
-            if query not in ctx.deps.drive_page_tokens:
-                ctx.deps.drive_page_tokens[query] = []
-            tokens = ctx.deps.drive_page_tokens[query]
+            if query not in ctx.deps.session.drive_page_tokens:
+                ctx.deps.session.drive_page_tokens[query] = []
+            tokens = ctx.deps.session.drive_page_tokens[query]
             # Ensure token is stored at the right index
             target_index = page - 1  # page 1 result -> index 0 stores token for page 2
             if len(tokens) <= target_index:
@@ -156,10 +156,10 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
         text = content.decode("utf-8")
 
         # FTS index — opportunistically cache Drive content after full fetch
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.services.knowledge_index is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.services.knowledge_index.index(
                     source="drive",
                     path=file_id,
                     title=file.get("name"),

@@ -18,18 +18,20 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli._history import SafetyState, detect_safety_issues
 from co_cli.agent import get_agent
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
+from co_cli._shell_backend import ShellBackend
 
 
 def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-doom-loop",
-        doom_loop_threshold=threshold,
-        max_reflections=3,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="test-doom-loop",
+            doom_loop_threshold=threshold,
+            max_reflections=3,
+        ),
+        runtime=CoRuntimeState(safety_state=SafetyState()),
     )
-    deps._safety_state = SafetyState()
     agent, _, _, _ = get_agent()
     return RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
@@ -182,8 +184,8 @@ def test_shell_reflection_does_not_trigger_on_broken_streak():
     triggers the reflection injection.
     """
     ctx = _make_ctx(threshold=3)
-    ctx.deps.max_reflections = 3
-    ctx.deps._safety_state = SafetyState()
+    ctx.deps.config.max_reflections = 3
+    ctx.deps.runtime.safety_state = SafetyState()
     messages = [
         ModelRequest(parts=[UserPromptPart(content="run the tests")]),
         # 3 old shell errors
@@ -219,8 +221,8 @@ def test_shell_reflection_false_positive_on_informational_error_word():
     reflection cap incorrectly.
     """
     ctx = _make_ctx(threshold=3)
-    ctx.deps.max_reflections = 3
-    ctx.deps._safety_state = SafetyState()
+    ctx.deps.config.max_reflections = 3
+    ctx.deps.runtime.safety_state = SafetyState()
     messages = [
         ModelRequest(parts=[UserPromptPart(content="run the tests")]),
         # 3 successful shell returns — output mentions 'error' as a noun, not a failure

@@ -139,7 +139,7 @@ async def run_chain_case(
 ) -> dict[str, Any]:
     """Run a single chain case through run_turn()."""
     frontend = SilentFrontend(approval_response="y")
-    deps._safety_state = SafetyState()
+    deps.runtime.safety_state = SafetyState()
 
     t0 = time.monotonic()
     result = await run_turn(
@@ -183,7 +183,7 @@ async def main() -> int:
 
     agent, model_settings, _, _ = get_agent()
     deps = make_eval_deps(session_id="eval-tool-chains")
-    deps._safety_state = SafetyState()
+    deps.runtime.safety_state = SafetyState()
 
     # Determine which cases to run based on available credentials
     runnable: list[ChainCase] = []

@@ -79,9 +79,9 @@ _Date: 2026-03-06_
 
 **Overall: GAPS_FOUND**
 
-| Priority | Action | Source |
-|----------|--------|--------|
-| P1 | Add tracking for article chunking before planning next knowledge iteration | GAP-1: Chunking for long-document sources |
-| P2 | Consider Obsidian background watch before next Obsidian-facing feature | GAP-2: No real-time sync for external sources |
+| Priority | Action | Source | Status |
+|----------|--------|--------|--------|
+| P1 | Add tracking for article chunking before planning next knowledge iteration | GAP-1: Chunking for long-document sources | DONE — `docs/TODO-chunking-rrf.md` |
+| P2 | Consider Obsidian background watch before next Obsidian-facing feature | GAP-2: No real-time sync for external sources | open |
 
-**Recommended next step:** Track both gaps before the next knowledge iteration. P1 (chunking) is the higher priority — `kind: article` hybrid search quality degrades materially for long documents while `kind: memory` entries are unaffected. P2 (external sync) is borderline significant (1 peer converges) but the user-facing failure mode — stale Obsidian results with no staleness indicator — is real and low-effort to mitigate.
+**Recommended next step:** P1 (chunking) is tracked and planned — see `docs/TODO-chunking-rrf.md`. P2 (external sync) remains open — borderline significant (1 peer converges) but the user-facing failure mode is real: stale Obsidian results with no staleness indicator.

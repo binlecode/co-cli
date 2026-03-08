@@ -2,10 +2,10 @@
 
 from dataclasses import dataclass
 
-from co_cli.knowledge_index import KnowledgeIndex
+from co_cli._knowledge_index import KnowledgeIndex
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli.shell_backend import ShellBackend
-from co_cli.deps import CoDeps
+from co_cli._shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
 
 
 @dataclass
@@ -23,9 +23,8 @@ def test_search_notes(tmp_path):
     (tmp_path / "projector.md").write_text("# Equipment\nThe projector needs repair.")
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path, session_id="test"),
     ))
 
     # Single keyword - word boundary (should NOT match "projector")
@@ -63,9 +62,8 @@ def test_search_notes_folder_filter(tmp_path):
     (personal / "journal.md").write_text("# Journal\nWorking on project at home.")
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path, session_id="test"),
     ))
 
     # Without folder — finds both
@@ -95,9 +93,8 @@ def test_search_notes_tag_filter(tmp_path):
     )
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path, session_id="test"),
     ))
 
     # Filter by frontmatter tag
@@ -121,9 +118,8 @@ def test_list_notes_pagination(tmp_path):
         (tmp_path / f"note-{i:02d}.md").write_text(f"# Note {i}\nContent {i}")
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path, session_id="test"),
     ))
 
     # Page 1: offset=0, limit=2
@@ -157,9 +153,8 @@ def test_obsidian_list_and_read(tmp_path):
     (subdir / "Old.md").write_text("Archived content")
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=tmp_path,
-        session_id="test",
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path, session_id="test"),
     ))
 
     # Test list_notes
@@ -202,10 +197,8 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=vault,
-        knowledge_index=idx,
-        session_id="test",
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(obsidian_vault_path=vault, session_id="test"),
     ))
 
     result = search_notes(ctx, keyword, folder="Work")
@@ -234,10 +227,8 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=vault,
-        knowledge_index=idx,
-        session_id="test",
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(obsidian_vault_path=vault, session_id="test"),
     ))
 
     result = search_notes(ctx, keyword, folder="Work")
@@ -264,10 +255,8 @@ def test_fts_tag_filter_works_with_index(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        shell=ShellBackend(),
-        obsidian_vault_path=vault,
-        knowledge_index=idx,
-        session_id="test",
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        config=CoConfig(obsidian_vault_path=vault, session_id="test"),
     ))
 
     result = search_notes(ctx, "xylofts-tag-test", tag="#active")

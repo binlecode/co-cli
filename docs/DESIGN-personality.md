@@ -42,7 +42,7 @@ quirks/{provider}/{model}.md → model-specific counter-steering (when present)
 
 ### Session state
 
-Two fields on `CoDeps` control personality composition at runtime:
+Two fields in `CoConfig` control personality composition at runtime:
 
 | Field | Controls | Source | Default | Scope |
 |-------|----------|--------|---------|-------|
@@ -157,9 +157,9 @@ Six `@agent.instructions` functions registered in `get_agent()` in `co_cli/agent
 | `add_current_date` | 1 | Always | `"Today is {date}."` |
 | `add_shell_guidance` | 2 | Always | Shell approval hint |
 | `add_project_instructions` | 3 | `.co-cli/instructions.md` exists | Project-specific instructions |
-| `add_personality_memories` | 4 | `ctx.deps.personality` is set | `## Learned Context` section (top 5 personality-context memories by recency) |
-| `inject_personality_critique` | 5 | `ctx.deps.personality_critique` non-empty | `## Review lens` — always-on self-eval lens from `souls/{role}/critique.md` |
-| `add_available_skills` | 6 | `ctx.deps.skill_registry` non-empty | `## Available Skills` listing `/name — description` entries from loaded skills; capped at 2 KB |
+| `add_personality_memories` | 4 | `ctx.deps.config.personality` is set | `## Learned Context` section (top 5 personality-context memories by recency) |
+| `inject_personality_critique` | 5 | `ctx.deps.config.personality_critique` non-empty | `## Review lens` — always-on self-eval lens from `souls/{role}/critique.md` |
+| `add_available_skills` | 6 | `ctx.deps.session.skill_registry` non-empty | `## Available Skills` listing `/name — description` entries from loaded skills; capped at 2 KB |
 
 The static prompt is assembled once and never re-read between turns; the per-turn functions read from `ctx.deps` on every call. `personality_critique` is loaded at session start in `create_deps()` via `load_soul_critique()`. All 6 mindset files are loaded statically into the soul block by `load_soul_mindsets()` in `get_agent()` — no per-turn injection required.
 
@@ -432,7 +432,7 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/prompts/model_quirks.py` | Quirk file loader, counter-steering, inference params |
 | `co_cli/prompts/rules/01..05_*.md` | 5 behavioral rules in filename order |
 | `co_cli/prompts/quirks/{provider}/{model}.md` | Model-specific quirk files (YAML frontmatter + body) |
-| `co_cli/deps.py` | `CoDeps` dataclass — `personality` (config-backed), `personality_critique` |
+| `co_cli/deps.py` | `personality`, `personality_critique` in `CoConfig` |
 | `co_cli/prompts/personalities/_composer.py` | `load_soul_seed(role)`, `load_soul_examples(role)`, `load_soul_mindsets(role)`, `load_character_memories(role, memory_dir)`, `VALID_PERSONALITIES` |
 | `co_cli/prompts/personalities/souls/{role}/seed.md` | Identity anchor: identity declaration + Core trait essence + Never list (3 roles: finch, jeff, tars) |
 | `co_cli/prompts/personalities/souls/{role}/critique.md` | Always-on self-eval lens; loaded at session start by `load_soul_critique()`, injected every turn as `## Review lens` |

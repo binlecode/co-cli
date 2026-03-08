@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.background import TaskRunner, TaskStorage, TaskStatus, _make_task_id
+from co_cli._background import TaskRunner, TaskStorage, TaskStatus, _make_task_id
 
 
 # ---------------------------------------------------------------------------
@@ -161,15 +161,15 @@ def test_storage_cleanup_skips_running(storage: TaskStorage):
 @pytest.mark.asyncio
 async def test_runner_start_and_complete(runner: TaskRunner):
     """Start a real echo command, wait for completion."""
-    task_id = await runner.start_task("echo hello_world", str(Path.cwd()))
-    assert task_id.startswith("task_")
+    async with asyncio.timeout(10):
+        task_id = await runner.start_task("echo hello_world", str(Path.cwd()))
+        assert task_id.startswith("task_")
 
-    # Poll until completed (max 5s)
-    for _ in range(50):
-        await asyncio.sleep(0.1)
-        meta = runner.get_task(task_id)
-        if meta and meta["status"] in (TaskStatus.completed.value, TaskStatus.failed.value):
-            break
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            meta = runner.get_task(task_id)
+            if meta and meta["status"] in (TaskStatus.completed.value, TaskStatus.failed.value):
+                break
 
     meta = runner.get_task(task_id)
     assert meta is not None
@@ -184,13 +184,14 @@ async def test_runner_start_and_complete(runner: TaskRunner):
 @pytest.mark.asyncio
 async def test_runner_failed_command(runner: TaskRunner):
     """Non-zero exit sets status=failed."""
-    task_id = await runner.start_task("false", str(Path.cwd()))
+    async with asyncio.timeout(10):
+        task_id = await runner.start_task("false", str(Path.cwd()))
 
-    for _ in range(30):
-        await asyncio.sleep(0.1)
-        meta = runner.get_task(task_id)
-        if meta and meta["status"] == TaskStatus.failed.value:
-            break
+        for _ in range(30):
+            await asyncio.sleep(0.1)
+            meta = runner.get_task(task_id)
+            if meta and meta["status"] == TaskStatus.failed.value:
+                break
 
     meta = runner.get_task(task_id)
     assert meta["status"] == TaskStatus.failed.value
@@ -200,72 +201,76 @@ async def test_runner_failed_command(runner: TaskRunner):
 @pytest.mark.asyncio
 async def test_runner_cancel_running_task(runner: TaskRunner):
     """Cancel a running sleep — status becomes cancelled."""
-    task_id = await runner.start_task("sleep 60", str(Path.cwd()))
+    async with asyncio.timeout(10):
+        task_id = await runner.start_task("sleep 60", str(Path.cwd()))
 
-    # Give process time to start
-    for _ in range(20):
-        await asyncio.sleep(0.1)
+        # Give process time to start
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            meta = runner.get_task(task_id)
+            if meta and meta["status"] == TaskStatus.running.value:
+                break
+
+        cancelled = await runner.cancel_task(task_id)
+        assert cancelled is True
+
         meta = runner.get_task(task_id)
-        if meta and meta["status"] == TaskStatus.running.value:
-            break
-
-    cancelled = await runner.cancel_task(task_id)
-    assert cancelled is True
-
-    meta = runner.get_task(task_id)
-    assert meta["status"] == TaskStatus.cancelled.value
+        assert meta["status"] == TaskStatus.cancelled.value
 
 
 @pytest.mark.asyncio
 async def test_runner_cancel_nonexistent(runner: TaskRunner):
-    cancelled = await runner.cancel_task("task_nonexistent_12345")
+    async with asyncio.timeout(10):
+        cancelled = await runner.cancel_task("task_nonexistent_12345")
     assert cancelled is False
 
 
 @pytest.mark.asyncio
 async def test_runner_shutdown_kills_running(tmp_tasks_dir: Path):
     """Shutdown kills live tasks and marks them cancelled."""
-    r = TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=5,
-        auto_cleanup=False,
-    )
-    task_id = await r.start_task("sleep 60", str(Path.cwd()))
+    async with asyncio.timeout(10):
+        r = TaskRunner(
+            storage=TaskStorage(tmp_tasks_dir),
+            max_concurrent=5,
+            auto_cleanup=False,
+        )
+        task_id = await r.start_task("sleep 60", str(Path.cwd()))
 
-    for _ in range(20):
-        await asyncio.sleep(0.1)
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            meta = r.get_task(task_id)
+            if meta and meta["status"] == TaskStatus.running.value:
+                break
+
+        await r.shutdown()
+
         meta = r.get_task(task_id)
-        if meta and meta["status"] == TaskStatus.running.value:
-            break
-
-    await r.shutdown()
-
-    meta = r.get_task(task_id)
-    assert meta["status"] == TaskStatus.cancelled.value
+        assert meta["status"] == TaskStatus.cancelled.value
 
 
 @pytest.mark.asyncio
 async def test_runner_concurrency_limit(tmp_tasks_dir: Path):
     """When max_concurrent=1, second task is queued as pending."""
-    r = TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=1,
-        auto_cleanup=False,
-    )
-    tid1 = await r.start_task("sleep 10", str(Path.cwd()))
-    tid2 = await r.start_task("echo queued", str(Path.cwd()))
+    async with asyncio.timeout(10):
+        r = TaskRunner(
+            storage=TaskStorage(tmp_tasks_dir),
+            max_concurrent=1,
+            auto_cleanup=False,
+        )
+        tid1 = await r.start_task("sleep 10", str(Path.cwd()))
+        tid2 = await r.start_task("echo queued", str(Path.cwd()))
 
-    # tid1 should be running, tid2 should be pending
-    for _ in range(20):
-        await asyncio.sleep(0.1)
-        meta1 = r.get_task(tid1)
-        if meta1 and meta1["status"] == TaskStatus.running.value:
-            break
+        # tid1 should be running, tid2 should be pending
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            meta1 = r.get_task(tid1)
+            if meta1 and meta1["status"] == TaskStatus.running.value:
+                break
 
-    meta2 = r.get_task(tid2)
-    assert meta2["status"] == TaskStatus.pending.value
+        meta2 = r.get_task(tid2)
+        assert meta2["status"] == TaskStatus.pending.value
 
-    await r.shutdown()
+        await r.shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -295,40 +300,41 @@ def test_orphan_recovery(tmp_tasks_dir: Path):
 async def test_slash_background_command(tmp_tasks_dir: Path):
     """Slash /background spawns a task and prints task_id."""
     from co_cli._commands import CommandContext, COMMANDS
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
-    runner = TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=5,
-        auto_cleanup=False,
-    )
-    deps = CoDeps(shell=ShellBackend(), task_runner=runner)
-    ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
+    async with asyncio.timeout(10):
+        runner = TaskRunner(
+            storage=TaskStorage(tmp_tasks_dir),
+            max_concurrent=5,
+            auto_cleanup=False,
+        )
+        deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
+        ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
-    # Run /background echo test
-    await COMMANDS["background"].handler(ctx, "echo slash_test")
+        # Run /background echo test
+        await COMMANDS["background"].handler(ctx, "echo slash_test")
 
-    # At least one task should now exist
-    tasks = runner.list_tasks()
-    assert len(tasks) == 1
-    assert tasks[0]["command"] == "echo slash_test"
-    await runner.shutdown()
+        # At least one task should now exist
+        tasks = runner.list_tasks()
+        assert len(tasks) == 1
+        assert tasks[0]["command"] == "echo slash_test"
+        await runner.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_slash_tasks_command(tmp_tasks_dir: Path):
     """Slash /tasks lists tasks; filtering by status works."""
     from co_cli._commands import CommandContext, COMMANDS
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
     s = TaskStorage(tmp_tasks_dir)
     runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)
     s.create("task_done_x", "echo done", "/tmp")
     s.update("task_done_x", status=TaskStatus.completed.value)
 
-    deps = CoDeps(shell=ShellBackend(), task_runner=runner)
+    deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
     ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
     # Should not raise
@@ -340,45 +346,46 @@ async def test_slash_tasks_command(tmp_tasks_dir: Path):
 async def test_slash_cancel_command(tmp_tasks_dir: Path):
     """Slash /cancel cancels a running task."""
     from co_cli._commands import CommandContext, COMMANDS
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
-    runner = TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=5,
-        auto_cleanup=False,
-    )
-    task_id = await runner.start_task("sleep 60", str(Path.cwd()))
+    async with asyncio.timeout(10):
+        runner = TaskRunner(
+            storage=TaskStorage(tmp_tasks_dir),
+            max_concurrent=5,
+            auto_cleanup=False,
+        )
+        task_id = await runner.start_task("sleep 60", str(Path.cwd()))
 
-    for _ in range(20):
-        await asyncio.sleep(0.1)
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            meta = runner.get_task(task_id)
+            if meta and meta["status"] == TaskStatus.running.value:
+                break
+
+        deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
+        ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
+
+        await COMMANDS["cancel"].handler(ctx, task_id)
+
         meta = runner.get_task(task_id)
-        if meta and meta["status"] == TaskStatus.running.value:
-            break
-
-    deps = CoDeps(shell=ShellBackend(), task_runner=runner)
-    ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
-
-    await COMMANDS["cancel"].handler(ctx, task_id)
-
-    meta = runner.get_task(task_id)
-    assert meta["status"] == TaskStatus.cancelled.value
-    await runner.shutdown()
+        assert meta["status"] == TaskStatus.cancelled.value
+        await runner.shutdown()
 
 
 @pytest.mark.asyncio
 async def test_slash_status_with_task_id(tmp_tasks_dir: Path):
     """Slash /status <task_id> displays task metadata without error."""
     from co_cli._commands import CommandContext, COMMANDS
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
     s = TaskStorage(tmp_tasks_dir)
     runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)
     s.create("task_status_test", "echo x", "/tmp")
     s.update("task_status_test", status=TaskStatus.completed.value)
 
-    deps = CoDeps(shell=ShellBackend(), task_runner=runner)
+    deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
     ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
     # Should not raise

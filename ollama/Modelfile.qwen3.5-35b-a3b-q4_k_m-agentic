@@ -1,0 +1,27 @@
+FROM qwen3.5:35b-a3b
+
+# Qwen3.5-35B-A3B agentic reasoning profile on Ollama's current Q4_K_M 35B tag.
+# Sources:
+# - https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+# - https://ollama.com/library/qwen3.5:35b-a3b
+# - https://docs.ollama.com/modelfile
+#
+# Speed/performance tradeoff:
+# - Qwen recommends keeping at least 128K context to preserve thinking capability.
+# - 128K materially reduces KV-cache cost versus 256K while staying within upstream
+#   best practice for complex agentic turns and multi-step tool use.
+# - Qwen recommends 32,768 output tokens for most queries; higher limits are mainly
+#   for benchmark-style hard math/coding tasks.
+#
+# Qwen3.5 official thinking-mode decoding guidance for general tasks:
+# temperature 1.0, top_p 0.95, top_k 20, min_p 0.0,
+# presence_penalty 1.5, repetition_penalty 1.0
+
+PARAMETER num_ctx 131072
+PARAMETER num_predict 32768
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER min_p 0
+PARAMETER presence_penalty 1.5
+PARAMETER repeat_penalty 1.0

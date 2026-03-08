@@ -1,0 +1,21 @@
+FROM qwen3.5:35b-a3b
+
+# Qwen3.5-35B-A3B general non-thinking profile.
+# Sources:
+# - https://huggingface.co/Qwen/Qwen3.5-35B-A3B
+# - https://ollama.com/library/qwen3.5:35b-a3b
+#
+# Bakes in non-thinking mode for direct-response tasks. co-cli keeps task shaping
+# in app-level role prompts, so this profile stays general-purpose rather than
+# encoding research/summarization-specific instructions.
+
+PARAMETER num_ctx 32768
+PARAMETER num_predict 32768
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0
+PARAMETER presence_penalty 1.5
+PARAMETER repeat_penalty 1.0
+
+SYSTEM """/no_think"""

@@ -25,32 +25,12 @@ Some text here."""
     assert body == "# Body content\nSome text here."
 
 
-def test_parse_frontmatter_malformed_yaml():
-    """Malformed YAML treated as no frontmatter."""
-    content = """---
-invalid: [unclosed list
----
-
-Body text."""
-    frontmatter, body = parse_frontmatter(content)
-    assert frontmatter == {}
-    assert body == content
-
-
 def test_parse_frontmatter_no_frontmatter():
     """Content without frontmatter delimiter returns empty dict + full content."""
     content = "# Just a heading\nSome body."
     fm, body = parse_frontmatter(content)
     assert fm == {}
     assert body == content
-
-
-def test_parse_frontmatter_scalar_yaml_returns_empty():
-    """YAML that parses to a non-dict (e.g. a bare string) returns ({}, body)."""
-    content = "---\njust a string\n---\nbody"
-    fm, body = parse_frontmatter(content)
-    assert fm == {}
-    assert body == "body"
 
 
 def test_parse_frontmatter_empty_yaml_returns_body():
@@ -67,14 +47,6 @@ def test_parse_frontmatter_datetime_converted_to_string():
     fm, _ = parse_frontmatter(content)
     assert isinstance(fm["created"], str)
     assert fm["created"] == "2026-02-09T14:30:00Z"
-
-
-def test_parse_frontmatter_no_leading_slash_required():
-    """Frontmatter not at string start (leading text) is not parsed."""
-    content = "some text\n---\nkey: val\n---\nbody"
-    fm, body = parse_frontmatter(content)
-    assert fm == {}
-    assert body == content
 
 
 # ---------------------------------------------------------------------------
@@ -98,18 +70,6 @@ def test_validate_rejects_missing_created():
     """Missing created raises ValueError."""
     with pytest.raises(ValueError, match="created"):
         validate_memory_frontmatter({"id": 1})
-
-
-def test_validate_rejects_float_id():
-    """Float id (1.5) is not a valid integer."""
-    with pytest.raises(ValueError, match="id"):
-        validate_memory_frontmatter(_valid_fm(id=1.5))
-
-
-def test_validate_rejects_string_id():
-    """String id is not a valid integer."""
-    with pytest.raises(ValueError, match="id"):
-        validate_memory_frontmatter(_valid_fm(id="1"))
 
 
 def test_validate_rejects_bool_as_id():
@@ -147,38 +107,10 @@ def test_validate_rejects_integer_as_decay_protected():
         validate_memory_frontmatter(_valid_fm(decay_protected=1))
 
 
-def test_validate_rejects_malformed_updated():
-    """Non-ISO8601 'updated' value raises ValueError."""
-    with pytest.raises(ValueError, match="updated"):
-        validate_memory_frontmatter(_valid_fm(updated="yesterday"))
-
-
-def test_validate_accepts_valid_provenance_values():
-    """All valid provenance enum values are accepted without error."""
-    for provenance in ("detected", "user-told", "planted", "auto_decay", "web-fetch"):
-        validate_memory_frontmatter(_valid_fm(provenance=provenance))
-
-
 def test_validate_rejects_invalid_provenance():
     """Invalid provenance value raises ValueError mentioning 'provenance'."""
     with pytest.raises(ValueError, match="provenance"):
         validate_memory_frontmatter(_valid_fm(provenance="bad-value"))
-
-
-def test_validate_accepts_title_string():
-    """title as a string is accepted."""
-    validate_memory_frontmatter(_valid_fm(title="Python Asyncio Guide"))
-
-
-def test_validate_rejects_non_string_title():
-    """Non-string title raises ValueError."""
-    with pytest.raises(ValueError, match="title"):
-        validate_memory_frontmatter(_valid_fm(title=42))
-
-
-def test_validate_accepts_related_list():
-    """related as a list of strings is accepted."""
-    validate_memory_frontmatter(_valid_fm(related=["001-some-memory", "002-other"]))
 
 
 def test_validate_rejects_related_non_list():

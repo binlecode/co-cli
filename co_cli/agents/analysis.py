@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from co_cli.agents._factory import make_subagent_model
+from co_cli.config import ModelEntry
 from co_cli.deps import CoDeps
 from co_cli.tools.articles import search_knowledge
 from co_cli.tools.google_drive import search_drive_files
@@ -18,7 +19,7 @@ class AnalysisResult(BaseModel):
 
 
 def make_analysis_agent(
-    model_name: str,
+    model_entry: ModelEntry,
     provider: str,
     ollama_host: str,
 ) -> Agent[CoDeps, AnalysisResult]:
@@ -29,7 +30,7 @@ def make_analysis_agent(
     no shell, no network. Use this for synthesis, comparison, and evaluation
     tasks against internal knowledge.
     """
-    model = make_subagent_model(model_name, provider, ollama_host)
+    model = make_subagent_model(model_entry, provider, ollama_host)
     agent: Agent[CoDeps, AnalysisResult] = Agent(
         model,
         deps_type=CoDeps,

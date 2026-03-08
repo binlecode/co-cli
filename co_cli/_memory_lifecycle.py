@@ -16,7 +16,7 @@ from opentelemetry import trace as otel_trace
 
 from co_cli._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
-from co_cli.memory_retention import enforce_retention
+from co_cli._memory_retention import enforce_retention
 
 _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def _persist_memory_inner(
         _parse_created,
     )
 
-    memory_dir = deps.memory_dir
+    memory_dir = deps.config.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     # For next-id: must include all items (memories + articles share the ID sequence)
@@ -132,7 +132,7 @@ async def _persist_memory_inner(
     if title is None:
         # Step 1: Check for duplicates in recent memories
         cutoff = datetime.now(timezone.utc) - timedelta(
-            days=deps.memory_dedup_window_days
+            days=deps.config.memory_dedup_window_days
         )
         recent = sorted(
             [m for m in memories if _parse_created(m.created) >= cutoff],
@@ -141,7 +141,7 @@ async def _persist_memory_inner(
         )[:10]
 
         is_dup, match, similarity = _check_duplicate(
-            content, recent, threshold=deps.memory_dedup_threshold
+            content, recent, threshold=deps.config.memory_dedup_threshold
         )
 
         # Step 2: If duplicate found, update existing memory
@@ -152,7 +152,7 @@ async def _persist_memory_inner(
             )
             result = _update_existing_memory(match, content, tags)
             result["similarity"] = similarity
-            if deps.knowledge_index is not None:
+            if deps.services.knowledge_index is not None:
                 try:
                     import hashlib as _hashlib
                     raw = match.path.read_text(encoding="utf-8")
@@ -160,7 +160,7 @@ async def _persist_memory_inner(
                     file_hash = _hashlib.sha256(raw.encode()).hexdigest()
                     entry_kind = fm.get("kind", "memory")
                     entry_source = "library" if entry_kind == "article" else "memory"
-                    deps.knowledge_index.index(
+                    deps.services.knowledge_index.index(
                         source=entry_source,
                         kind=entry_kind,
                         path=str(match.path),
@@ -180,13 +180,13 @@ async def _persist_memory_inner(
     # Step 2b: LLM consolidation (when model is provided)
     if model is not None:
         try:
-            from co_cli.memory_consolidator import extract_facts, resolve, build_alias_map
+            from co_cli._memory_consolidator import extract_facts, resolve, build_alias_map
 
-            timeout = deps.memory_consolidation_timeout_seconds
+            timeout = deps.config.memory_consolidation_timeout_seconds
             facts = await extract_facts(content, model, timeout_seconds=timeout)
             candidates = sorted(
                 memories, key=lambda m: m.created, reverse=True
-            )[:deps.memory_consolidation_top_k]
+            )[:deps.config.memory_consolidation_top_k]
             plan = await resolve(facts, candidates, model, timeout_seconds=timeout)
             alias_map = build_alias_map(candidates)
             apply_plan_atomically(plan, alias_map, deps)
@@ -238,10 +238,10 @@ async def _persist_memory_inner(
     logger.info(f"Saved memory {memory_id} to {file_path}")
 
     # FTS index integration — no-op when knowledge_index is None
-    if deps.knowledge_index is not None:
+    if deps.services.knowledge_index is not None:
         try:
             import hashlib as _hashlib
-            deps.knowledge_index.index(
+            deps.services.knowledge_index.index(
                 source="memory",
                 kind="memory",
                 path=str(file_path),
@@ -271,9 +271,9 @@ async def _persist_memory_inner(
     all_memories = _load_memories(memory_dir, kind="memory")
     total_count = len(all_memories)
 
-    if total_count > deps.memory_max_count:
+    if total_count > deps.config.memory_max_count:
         logger.info(
-            f"Memory limit exceeded ({total_count}/{deps.memory_max_count}) "
+            f"Memory limit exceeded ({total_count}/{deps.config.memory_max_count}) "
             f"- triggering retention cut"
         )
         decay_result = await enforce_retention(memory_dir, deps, all_memories)
@@ -286,10 +286,10 @@ async def _persist_memory_inner(
         )
 
         # FTS: remove stale entries for deleted files
-        if deps.knowledge_index is not None:
+        if deps.services.knowledge_index is not None:
             try:
                 current_paths = {str(p) for p in memory_dir.rglob("*.md")}
-                deps.knowledge_index.remove_stale(
+                deps.services.knowledge_index.remove_stale(
                     "memory", current_paths, directory=memory_dir
                 )
             except Exception as e:

@@ -66,7 +66,7 @@ def get_agent(
 
     model_settings: ModelSettings | None = None
 
-    active_model_name = model_name or settings.model_roles["reasoning"][0]
+    active_model_name = model_name or settings.role_models["reasoning"][0].model
 
     if provider_name == "gemini":
         api_key = settings.gemini_api_key
@@ -228,7 +228,7 @@ def get_agent(
     @agent.instructions
     def add_personality_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject personality-context memories for relationship continuity."""
-        if not ctx.deps.personality:
+        if not ctx.deps.config.personality:
             return ""
         from co_cli.tools.personality import _load_personality_memories
         return _load_personality_memories()
@@ -236,17 +236,17 @@ def get_agent(
     @agent.instructions
     def inject_personality_critique(ctx: RunContext[CoDeps]) -> str:
         """Inject always-on soul critique from souls/{role}/critique.md."""
-        if not ctx.deps.personality_critique:
+        if not ctx.deps.config.personality_critique:
             return ""
-        return f"\n## Review lens\n\n{ctx.deps.personality_critique}"
+        return f"\n## Review lens\n\n{ctx.deps.config.personality_critique}"
 
     @agent.instructions
     def add_available_skills(ctx: RunContext[CoDeps]) -> str:
         """Inject the list of available skills so the model can route /skill commands."""
-        if not ctx.deps.skill_registry:
+        if not ctx.deps.session.skill_registry:
             return ""
         lines = ["## Available Skills"]
-        for entry in ctx.deps.skill_registry:
+        for entry in ctx.deps.session.skill_registry:
             lines.append(f"/{entry['name']} — {entry['description']}")
         text = "\n".join(lines)
         # Cap at 2KB; append truncation notice if needed
@@ -255,7 +255,7 @@ def get_agent(
             budget = 2048 - 40
             truncated = text[:budget]
             shown = truncated.count("\n")
-            remaining = len(ctx.deps.skill_registry) - shown
+            remaining = len(ctx.deps.session.skill_registry) - shown
             text = truncated + f"\n(+{remaining} more — type / to see all)"
         return text
 

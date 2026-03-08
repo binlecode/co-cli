@@ -49,7 +49,7 @@ Built on pydantic-ai's first-class MCP support — `MCPServerStdio` for local su
 │  │                            ▼                                         │
 │  │                    DeferredToolRequests ──▶ user approve/deny        │
 │  │                                                                      │
-│  └── status.py:get_status() ──▶ cfg.url? → "remote (url)"              │
+│  └── _status.py:get_status() ──▶ cfg.url? → "remote (url)"             │
 │                                  shutil.which(cfg.command)               │
 │                                  └── "ready" | "<cmd> not found"        │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -161,7 +161,7 @@ Example — mark filesystem server as read-only:
 
 `co status` checks each configured MCP server. URL-based servers report `"remote (url)"` (no local binary needed). Stdio servers check command availability via `shutil.which()` — reports `"ready"` when on PATH, or `"<command> not found"` otherwise.
 
-`deps.mcp_count` is set to `len(settings.mcp_servers)` at `create_deps()` time. The `check_capabilities` tool reads this field for capability introspection — it is not the count of successfully-connected servers, only the count of configured servers.
+`deps.config.mcp_count` is set to `len(settings.mcp_servers)` at `create_deps()` time. The `check_capabilities` tool reads this field for capability introspection — it is not the count of successfully-connected servers, only the count of configured servers.
 
 ### Env Var Merge Semantics
 
@@ -193,6 +193,5 @@ Three layers affect MCP server configuration. Each uses **replacement**, not dee
 | `co_cli/config.py` | `MCPServerConfig` model, `_DEFAULT_MCP_SERVERS`, `mcp_servers` field on `Settings` |
 | `co_cli/agent.py` | Build MCP toolsets from config (stdio or HTTP transport), approval wrapping, GitHub token resolution |
 | `co_cli/main.py` | `async with agent` lifecycle, `_discover_mcp_tools()` for tool name enumeration |
-| `co_cli/deps.py` | `CoDeps.mcp_count` — count of configured MCP servers for capability introspection |
-| `co_cli/status.py` | MCP server health check via `shutil.which()` in `get_status()` |
-| `tests/test_mcp.py` | Config validation, agent wiring (stdio + HTTP), approval, E2E server lifecycle tests |
+| `co_cli/deps.py` | `mcp_count` in `CoConfig` — count of configured MCP servers for capability introspection |
+| `co_cli/_status.py` | MCP server health check via `shutil.which()` in `get_status()` |

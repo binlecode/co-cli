@@ -10,8 +10,8 @@ import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, FinalResultEvent
 
 from co_cli._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from pydantic_ai._agent_graph import GraphAgentState
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
@@ -110,7 +110,7 @@ async def test_stream_events_preserves_text_from_part_start_event():
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta="lo")),
     ])
 
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _, streamed_text = await _stream_events(
         agent,
@@ -138,7 +138,7 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
         PartDeltaEvent(index=0, delta=ThinkingPartDelta(content_delta=", thing")),
     ])
 
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _, streamed_text = await _stream_events(
         agent,
@@ -167,7 +167,7 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta=" sky")),
     ])
 
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _, streamed_text = await _stream_events(
         agent,
@@ -207,7 +207,7 @@ async def test_run_turn_emits_truncation_status_on_finish_reason_length():
     result = _make_agent_run_result("partial answer", finish_reason="length")
     frontend = RecordingFrontend()
     agent = StaticEventAgent([AgentRunResultEvent(result=result)])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     turn = await run_turn(
         agent=agent,
@@ -229,7 +229,7 @@ async def test_run_turn_silent_on_normal_finish_reason():
     result = _make_agent_run_result("complete answer", finish_reason="stop")
     frontend = RecordingFrontend()
     agent = StaticEventAgent([AgentRunResultEvent(result=result)])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     turn = await run_turn(
         agent=agent,
@@ -251,7 +251,7 @@ async def test_stream_events_injects_status_before_first_tool_call():
     frontend = RecordingFrontend()
     tool_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")
     agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="hello", deps=deps, message_history=[],
@@ -276,7 +276,7 @@ async def test_stream_events_no_status_when_text_preceded_tool():
         PartStartEvent(index=0, part=TextPart(content="Let me check.")),
         FunctionToolCallEvent(part=tool_part),
     ])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="hello", deps=deps, message_history=[],
@@ -306,7 +306,7 @@ async def test_stream_events_preamble_emitted_exactly_once_for_multiple_tools():
         FunctionToolCallEvent(part=tool1),
         FunctionToolCallEvent(part=tool2),
     ])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="hello", deps=deps, message_history=[],
@@ -423,7 +423,7 @@ async def test_stream_events_shell_result_uses_command_as_title():
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
     ])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="list files", deps=deps, message_history=[],
@@ -455,7 +455,7 @@ async def test_stream_events_empty_tool_result_not_shown():
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
     ])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="hi", deps=deps, message_history=[],
@@ -487,7 +487,7 @@ async def test_stream_events_dict_result_without_display_not_shown():
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
     ])
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     await _stream_events(
         agent, user_input="hi", deps=deps, message_history=[],
@@ -498,4 +498,23 @@ async def test_stream_events_dict_result_without_display_not_shown():
     result_events = [e for e in frontend.events if e[0] == "tool_result"]
     assert result_events == [], (
         f"Expected no tool_result event for dict without 'display', got: {result_events}"
+    )
+
+
+def test_skill_grant_log(caplog: pytest.LogCaptureFixture) -> None:
+    import logging as _logging
+    from co_cli._orchestrate import _check_skill_grant
+    from co_cli.deps import CoSessionState
+
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(skill_tool_grants={"run_shell_command"}),
+    )
+    with caplog.at_level(_logging.DEBUG, logger="co_cli._orchestrate"):
+        result = _check_skill_grant("run_shell_command", deps)
+    assert result is True
+    assert any(
+        "Skill grant" in r.message and "run_shell_command" in r.message
+        for r in caplog.records
     )

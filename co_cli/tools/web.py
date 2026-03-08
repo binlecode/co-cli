@@ -66,7 +66,7 @@ def _is_domain_allowed(
 
 def _get_api_key(ctx: RunContext[CoDeps]) -> str:
     """Extract and validate Brave Search API key from context."""
-    key = ctx.deps.brave_search_api_key
+    key = ctx.deps.config.brave_search_api_key
     if not key:
         raise ModelRetry(
             "Web search not configured. Set BRAVE_SEARCH_API_KEY in settings or env."
@@ -206,7 +206,7 @@ async def web_search(
         max_results: Number of results to return (default 5, max 8).
         domains: Restrict to these domains (e.g. ["github.com", "stackoverflow.com"]).
     """
-    if ctx.deps.web_policy.search == "deny":
+    if ctx.deps.config.web_policy.search == "deny":
         raise ModelRetry("web_search: web access disabled by policy.")
 
     if not query or not query.strip():
@@ -232,10 +232,10 @@ async def web_search(
                 "X-Subscription-Token": api_key,
             },
             params={"q": effective_query, "count": capped},
-            max_retries=ctx.deps.web_http_max_retries,
-            backoff_base_seconds=ctx.deps.web_http_backoff_base_seconds,
-            backoff_max_seconds=ctx.deps.web_http_backoff_max_seconds,
-            backoff_jitter_ratio=ctx.deps.web_http_jitter_ratio,
+            max_retries=ctx.deps.config.web_http_max_retries,
+            backoff_base_seconds=ctx.deps.config.web_http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.config.web_http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
         )
     if isinstance(resp_or_error, dict):
         return resp_or_error
@@ -294,7 +294,7 @@ async def web_fetch(
     Args:
         url: Full URL to fetch (must start with http:// or https://).
     """
-    if ctx.deps.web_policy.fetch == "deny":
+    if ctx.deps.config.web_policy.fetch == "deny":
         raise ModelRetry("web_fetch: web access disabled by policy.")
 
     if not url or not re.match(r"https?://", url.strip()):
@@ -305,8 +305,8 @@ async def web_fetch(
     hostname = urlparse(url).hostname
     if hostname and not _is_domain_allowed(
         hostname,
-        ctx.deps.web_fetch_allowed_domains,
-        ctx.deps.web_fetch_blocked_domains,
+        ctx.deps.config.web_fetch_allowed_domains,
+        ctx.deps.config.web_fetch_blocked_domains,
     ):
         raise ModelRetry(f"web_fetch blocked: domain '{hostname}' not allowed by policy.")
 
@@ -325,10 +325,10 @@ async def web_fetch(
             url=url,
             headers=_build_fetch_headers(hostname),
             params=None,
-            max_retries=ctx.deps.web_http_max_retries,
-            backoff_base_seconds=ctx.deps.web_http_backoff_base_seconds,
-            backoff_max_seconds=ctx.deps.web_http_backoff_max_seconds,
-            backoff_jitter_ratio=ctx.deps.web_http_jitter_ratio,
+            max_retries=ctx.deps.config.web_http_max_retries,
+            backoff_base_seconds=ctx.deps.config.web_http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.config.web_http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
             cf_fallback_headers=_CF_FALLBACK_HEADERS,
         )
     if isinstance(resp_or_error, dict):

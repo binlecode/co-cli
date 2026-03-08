@@ -1,6 +1,5 @@
 """Functional tests for the delegate_coder, delegate_research, and delegate_analysis tool wiring."""
 
-import os
 import pytest
 from dataclasses import dataclass, field
 
@@ -10,26 +9,37 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agents.analysis import AnalysisResult, make_analysis_agent
 from co_cli.agents.coder import CoderResult, make_coder_agent
 from co_cli.agents.research import ResearchResult, make_research_agent
+from co_cli.config import ModelEntry
 from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research
 
 
 @dataclass
-class FakeDeps:
-    model_roles: dict = field(default_factory=dict)
+class FakeConfig:
+    role_models: dict = field(default_factory=dict)
     llm_provider: str = "ollama"
     ollama_host: str = "http://localhost:11434"
+
+
+@dataclass
+class FakeRuntime:
     turn_usage: RunUsage | None = None
 
 
+@dataclass
+class FakeDeps:
+    config: FakeConfig = field(default_factory=FakeConfig)
+    runtime: FakeRuntime = field(default_factory=FakeRuntime)
+
+
 class FakeCtx:
-    def __init__(self, model_roles: dict | None = None) -> None:
-        self.deps = FakeDeps(model_roles=model_roles or {})
+    def __init__(self, role_models: dict | None = None) -> None:
+        self.deps = FakeDeps(config=FakeConfig(role_models=role_models or {}))
 
 
 @pytest.mark.asyncio
 async def test_delegate_coder_no_model() -> None:
-    """Returns error dict when model_roles.coding is not set."""
-    ctx = FakeCtx(model_roles={})
+    """Returns error dict when role_models.coding is not set."""
+    ctx = FakeCtx(role_models={})
     result = await delegate_coder(ctx, "analyze foo")
     assert result.get("error") is True
     assert "not configured" in result["display"]
@@ -49,47 +59,56 @@ def test_coder_result_model() -> None:
 
 def test_make_coder_agent_registers_file_tools() -> None:
     """make_coder_agent should register 3 read-only file tools without raising."""
-    agent = make_coder_agent("gemini-2.0-flash", "gemini", "")
+    agent = make_coder_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
     assert agent is not None
 
 
 def test_make_subagent_deps_resets_session_state() -> None:
-    """make_subagent_deps resets 7 mutable session fields; scalar config is preserved."""
-    from co_cli.deps import CoDeps, make_subagent_deps
-    from co_cli.shell_backend import ShellBackend
+    """make_subagent_deps() resets session/runtime groups; shares services/config."""
+    from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
+    from co_cli._shell_backend import ShellBackend
 
     dirty = CoDeps(
-        shell=ShellBackend(),
-        session_id="parent-session",
-        brave_search_api_key="test-key",
-        auto_approved_tools={"run_shell_command", "write_file"},
-        active_skill_env={"MY_VAR": "value"},
-        active_skill_allowed_tools={"web_search"},
-        drive_page_tokens={"folder": ["tok1"]},
-        session_todos=[{"task": "do something"}],
-        skill_registry=[{"name": "my-skill"}],
-        precomputed_compaction="some-cached-summary",
-        memory_max_count=500,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="parent-session",
+            brave_search_api_key="test-key",
+            memory_max_count=500,
+        ),
+        session=CoSessionState(
+            session_tool_approvals={"run_shell_command", "write_file"},
+            active_skill_env={"MY_VAR": "value"},
+            skill_tool_grants={"web_search"},
+            drive_page_tokens={"folder": ["tok1"]},
+            session_todos=[{"task": "do something"}],
+            skill_registry=[{"name": "my-skill"}],
+        ),
+        runtime=CoRuntimeState(
+            precomputed_compaction="some-cached-summary",
+        ),
     )
 
     isolated = make_subagent_deps(dirty)
 
-    # Mutable session state must be reset to clean defaults
-    assert isolated.auto_approved_tools == set()
-    assert isolated.active_skill_env == {}
-    assert isolated.active_skill_allowed_tools == set()
-    assert isolated.drive_page_tokens == {}
-    assert isolated.session_todos == []
-    assert isolated.skill_registry == []
-    assert isolated.precomputed_compaction is None
+    # Session resets to clean defaults
+    assert isolated.session.session_tool_approvals == set()
+    assert isolated.session.active_skill_env == {}
+    assert isolated.session.skill_tool_grants == set()
+    assert isolated.session.drive_page_tokens == {}
+    assert isolated.session.session_todos == []
+    assert isolated.session.skill_registry == []
 
-    # Mutable session state: turn_usage reset to None
-    assert isolated.turn_usage is None
+    # Runtime resets to clean defaults
+    assert isolated.runtime.precomputed_compaction is None
+    assert isolated.runtime.turn_usage is None
 
-    # Scalar config must be inherited from parent
-    assert isolated.brave_search_api_key == "test-key"
-    assert isolated.memory_max_count == 500
-    assert isolated.session_id == "parent-session"
+    # Config inherited from parent
+    assert isolated.config.brave_search_api_key == "test-key"
+    assert isolated.config.memory_max_count == 500
+    assert isolated.config.session_id == "parent-session"
+
+    # Services shared (same object)
+    assert isolated.services is dirty.services
 
 
 def test_research_result_model() -> None:
@@ -106,14 +125,14 @@ def test_research_result_model() -> None:
 
 def test_make_research_agent_registers_web_tools() -> None:
     """make_research_agent registers web_search and web_fetch without raising."""
-    agent = make_research_agent("gemini-2.0-flash", "gemini", "")
+    agent = make_research_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
     assert agent is not None
 
 
 @pytest.mark.asyncio
 async def test_delegate_research_no_model() -> None:
-    """Returns error dict when model_roles.research is not set."""
-    ctx = FakeCtx(model_roles={})
+    """Returns error dict when role_models.research is not set."""
+    ctx = FakeCtx(role_models={})
     result = await delegate_research(ctx, "latest Python news")
     assert result.get("error") is True
     assert "not configured" in result["display"]
@@ -124,7 +143,7 @@ async def test_delegate_research_max_requests_guard() -> None:
     """max_requests < 1 raises ModelRetry."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
-    ctx = FakeCtx(model_roles={"coding": ["some-model"]})
+    ctx = FakeCtx(role_models={"coding": [ModelEntry(model="some-model")]})
     with pytest.raises(_ModelRetry, match="max_requests must be at least 1"):
         await delegate_research(ctx, "any query", max_requests=0)
 
@@ -143,14 +162,14 @@ def test_analysis_result_model() -> None:
 
 def test_make_analysis_agent_returns_agent() -> None:
     """make_analysis_agent returns a non-None agent without raising."""
-    agent = make_analysis_agent("gemini-2.0-flash", "gemini", "")
+    agent = make_analysis_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
     assert agent is not None
 
 
 @pytest.mark.asyncio
 async def test_delegate_analysis_no_model() -> None:
-    """Returns error dict when model_roles.analysis is not set."""
-    ctx = FakeCtx(model_roles={})
+    """Returns error dict when role_models.analysis is not set."""
+    ctx = FakeCtx(role_models={})
     result = await delegate_analysis(ctx, "compare these documents")
     assert result.get("error") is True
     assert "not configured" in result["display"]
@@ -164,30 +183,3 @@ def test_confidence_out_of_range_fails_validation() -> None:
         CoderResult(summary="ok", diff_preview="", files_touched=[], confidence=-0.1)
 
 
-@pytest.mark.skipif(not os.getenv("LLM_PROVIDER"), reason="requires LLM_PROVIDER env var")
-@pytest.mark.asyncio
-async def test_delegate_research_budget_no_overflow() -> None:
-    """delegate_research never consumes more requests than max_requests."""
-    from co_cli.config import get_settings
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
-
-    _settings = get_settings()
-    if not _settings.model_roles.get("research"):
-        pytest.skip("model_roles.research not configured")
-
-    class RealCtx:
-        def __init__(self, deps: CoDeps) -> None:
-            self.deps = deps
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        llm_provider=_settings.llm_provider,
-        model_roles=_settings.model_roles,
-        brave_search_api_key=_settings.brave_search_api_key,
-        ollama_host=_settings.ollama_host,
-    )
-    ctx = RealCtx(deps)
-    await delegate_research(ctx, "What is pydantic-ai?", max_requests=1)
-    assert ctx.deps.turn_usage is not None
-    assert ctx.deps.turn_usage.requests <= 1

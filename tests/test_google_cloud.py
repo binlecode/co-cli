@@ -9,8 +9,8 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.config import settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 
 
 @dataclass
@@ -21,9 +21,11 @@ class Context:
 
 def _make_ctx() -> Context:
     return Context(deps=CoDeps(
-        shell=ShellBackend(),
-        session_id="test",
-        google_credentials_path=settings.google_credentials_path,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="test",
+            google_credentials_path=settings.google_credentials_path,
+        ),
     ))
 
 

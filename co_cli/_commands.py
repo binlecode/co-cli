@@ -66,7 +66,7 @@ class SkillCommand:
     requires: dict = field(default_factory=dict)
     skill_env: dict[str, str] = field(default_factory=dict)
     # Per-skill tool grants — auto-approve listed tools during this skill's LLM turn.
-    # Turn-scoped: propagated to CoDeps.active_skill_allowed_tools by dispatch().
+    # Turn-scoped: propagated to CoDeps.session.skill_tool_grants by dispatch().
     allowed_tools: list[str] = field(default_factory=list)
 
 
@@ -191,7 +191,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
     task_id = args.strip()
     if task_id:
         # Route to task lookup
-        runner = getattr(ctx.deps, "task_runner", None)
+        runner = ctx.deps.services.task_runner
         if runner is None:
             console.print("[bold red]Task runner not available.[/bold red]")
             return None
@@ -214,7 +214,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
                 console.print(line)
         return None
 
-    from co_cli.status import get_status, render_status_table, check_security, render_security_findings
+    from co_cli._status import get_status, render_status_table, check_security, render_security_findings
 
     info = get_status(tool_count=len(ctx.tool_names))
     console.print(render_status_table(info))
@@ -254,17 +254,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    # Use dedicated summarization model when configured; otherwise fall back to
-    # the active agent model.
-    model = ctx.agent.model
-    if ctx.deps.summarization_model:
-        from co_cli.agents._factory import make_subagent_model
-
-        model = make_subagent_model(
-            ctx.deps.summarization_model,
-            ctx.deps.llm_provider,
-            ctx.deps.ollama_host,
-        )
+    from co_cli._history import _resolve_summarization_model
+    model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.agent.model)
     summary = await _run_summarization_with_policy(
         ctx.message_history, model,
         max_retries=settings.model_http_retries,
@@ -394,7 +385,7 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Memory ID must be a number.[/dim]")
         return None
 
-    memory_dir = ctx.deps.memory_dir
+    memory_dir = ctx.deps.config.memory_dir
     if not memory_dir.exists():
         console.print("[dim]No memory directory found.[/dim]")
         return None
@@ -409,8 +400,8 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     # Delete file
     file_to_delete = matching_files[0]
     file_to_delete.unlink()
-    if ctx.deps.knowledge_index is not None:
-        ctx.deps.knowledge_index.remove("memory", str(file_to_delete))
+    if ctx.deps.services.knowledge_index is not None:
+        ctx.deps.services.knowledge_index.remove("memory", str(file_to_delete))
     console.print(f"[success]✓ Deleted memory {memory_id}: {file_to_delete.name}[/success]")
     return None
 
@@ -418,16 +409,18 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
     from co_cli._history import _index_session_summary
-    from co_cli.memory_lifecycle import persist_memory as _save_memory_impl
+    from co_cli._memory_lifecycle import persist_memory as _save_memory_impl
 
     if not ctx.message_history:
         console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
         return None
 
+    from co_cli._history import _resolve_summarization_model
+    model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.agent.model)
     summary = await _index_session_summary(
         ctx.message_history,
-        ctx.agent.model,
-        personality_active=bool(ctx.deps.personality),
+        model,
+        personality_active=bool(ctx.deps.config.personality),
     )
 
     if summary is None:
@@ -450,7 +443,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
 
 async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
     """Create a workspace snapshot."""
-    from co_cli.workspace_checkpoint import create_checkpoint
+    from co_cli._workspace_checkpoint import create_checkpoint
 
     label = args.strip()
     try:
@@ -463,7 +456,7 @@ async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_rewind(ctx: CommandContext, args: str) -> None:
     """Restore a workspace snapshot."""
-    from co_cli.workspace_checkpoint import list_checkpoints, restore_checkpoint
+    from co_cli._workspace_checkpoint import list_checkpoints, restore_checkpoint
 
     target = args.strip()
     if not target or target == "last":
@@ -517,7 +510,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         from co_cli.config import settings as _settings
 
         default_dir = Path(__file__).parent / "skills"
-        project_dir = ctx.deps.skills_dir
+        project_dir = ctx.deps.config.skills_dir
 
         all_paths: list[Path] = []
         if default_dir.exists():
@@ -557,10 +550,10 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     elif subcmd == "reload":
         from co_cli.config import settings as _settings
         # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
-        new_skills = _load_skills(ctx.deps.skills_dir, _settings)
+        new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
         # Scan only files that successfully loaded — avoids warnings for requires-gated skills
         default_dir = Path(__file__).parent / "skills"
-        project_dir = ctx.deps.skills_dir
+        project_dir = ctx.deps.config.skills_dir
         all_paths = (sorted(default_dir.glob("*.md")) if default_dir.exists() else []) + \
                     (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
         for p in all_paths:
@@ -572,7 +565,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                     pass
         SKILL_COMMANDS.clear()
         SKILL_COMMANDS.update(new_skills)
-        ctx.deps.skill_registry = [
+        ctx.deps.session.skill_registry = [
             {"name": s.name, "description": s.description}
             for s in SKILL_COMMANDS.values()
             if s.description and not s.disable_model_invocation
@@ -641,7 +634,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
             return
 
     # Confirm overwrite if file already exists (skip when force=True)
-    dest = ctx.deps.skills_dir / filename
+    dest = ctx.deps.config.skills_dir / filename
     if dest.exists() and not force:
         answer = console.input(f"Overwrite existing skill '{filename}'? [y/N] ")
         if answer.strip().lower() != "y":
@@ -649,16 +642,16 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
             return
 
     # Write to skills_dir
-    ctx.deps.skills_dir.mkdir(parents=True, exist_ok=True)
+    ctx.deps.config.skills_dir.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
 
     # Reload in-session: package-default + updated project dir
-    new_skills = _load_skills(ctx.deps.skills_dir, _settings)
+    new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
     SKILL_COMMANDS.clear()
     SKILL_COMMANDS.update(new_skills)
 
     # Update skill_registry so agent prompt reflects the new skill
-    ctx.deps.skill_registry = [
+    ctx.deps.session.skill_registry = [
         {"name": s.name, "description": s.description}
         for s in SKILL_COMMANDS.values()
         if s.description and not s.disable_model_invocation
@@ -677,7 +670,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if name not in SKILL_COMMANDS:
         console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
         return
-    skill_file = ctx.deps.skills_dir / f"{name}.md"
+    skill_file = ctx.deps.config.skills_dir / f"{name}.md"
     if not skill_file.exists():
         console.print(f"[bold red]Skill '{name}' not found in project skills dir.[/bold red]")
         return
@@ -694,7 +687,7 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
     """Manage persistent exec approval patterns."""
     from co_cli._exec_approvals import load_approvals, save_approvals
 
-    path = ctx.deps.exec_approvals_path
+    path = ctx.deps.config.exec_approvals_path
     sub = args.strip().split(maxsplit=1)
     subcmd = sub[0].lower() if sub else "list"
     subargs = sub[1] if len(sub) > 1 else ""
@@ -751,7 +744,7 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Example: /background uv run pytest[/dim]")
         return None
 
-    runner = getattr(ctx.deps, "task_runner", None)
+    runner = ctx.deps.services.task_runner
     if runner is None:
         console.print("[bold red]Task runner not available.[/bold red]")
         return None
@@ -767,7 +760,7 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
     """List background tasks. Usage: /tasks [status]"""
-    runner = getattr(ctx.deps, "task_runner", None)
+    runner = ctx.deps.services.task_runner
     if runner is None:
         console.print("[bold red]Task runner not available.[/bold red]")
         return None
@@ -801,7 +794,7 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         console.print("[bold red]Usage:[/bold red] /cancel <task_id>")
         return None
 
-    runner = getattr(ctx.deps, "task_runner", None)
+    runner = ctx.deps.services.task_runner
     if runner is None:
         console.print("[bold red]Task runner not available.[/bold red]")
         return None
@@ -811,7 +804,7 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         console.print(f"[bold red]Task not found:[/bold red] {task_id}")
         return None
 
-    from co_cli.background import TaskStatus
+    from co_cli._background import TaskStatus
     if meta.get("status") != TaskStatus.running.value:
         console.print(f"[dim]Task {task_id} is not running (status={meta.get('status')}).[/dim]")
         return None
@@ -1070,13 +1063,13 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
     skill = SKILL_COMMANDS.get(name)
     if skill is not None:
         # Warn if env from a previous skill dispatch wasn't cleared (double dispatch guard)
-        if ctx.deps.active_skill_env:
+        if ctx.deps.session.active_skill_env:
             logger.warning(
                 "dispatch: active_skill_env non-empty at skill match — double dispatch in one turn?"
             )
-        ctx.deps.active_skill_env = dict(skill.skill_env)
+        ctx.deps.session.active_skill_env = dict(skill.skill_env)
         # Propagate per-skill tool grants — cleared by chat_loop() after run_turn()
-        ctx.deps.active_skill_allowed_tools = set(skill.allowed_tools)
+        ctx.deps.session.skill_tool_grants = set(skill.allowed_tools)
         body = skill.body
         if args:
             args_list = args.split()

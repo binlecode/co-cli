@@ -4,7 +4,7 @@ from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 
 from co_cli._exec_approvals import find_approved, load_approvals, update_last_used
 from co_cli.deps import CoDeps
-from co_cli.shell_policy import ShellDecision, evaluate_shell_command
+from co_cli._shell_policy import ShellDecision, evaluate_shell_command
 from co_cli.tools._errors import terminal_error
 
 
@@ -38,21 +38,21 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
                  long scripts (e.g. 300). Capped by shell_max_timeout.
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → check persistent or defer
-    policy = evaluate_shell_command(cmd, ctx.deps.shell_safe_commands)
+    policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
     if policy.decision == ShellDecision.DENY:
         return terminal_error(policy.reason)
     if policy.decision == ShellDecision.REQUIRE_APPROVAL:
-        entries = load_approvals(ctx.deps.exec_approvals_path)
+        entries = load_approvals(ctx.deps.config.exec_approvals_path)
         found = find_approved(cmd, entries)
         if found:
-            update_last_used(ctx.deps.exec_approvals_path, found["id"])
+            update_last_used(ctx.deps.config.exec_approvals_path, found["id"])
         elif not ctx.tool_call_approved:
             raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW, persistent approval, or tool_call_approved: fall through to execution
 
-    effective = min(timeout, ctx.deps.shell_max_timeout)
+    effective = min(timeout, ctx.deps.config.shell_max_timeout)
     try:
-        return await ctx.deps.shell.run_command(cmd, timeout=effective)
+        return await ctx.deps.services.shell.run_command(cmd, timeout=effective)
     except RuntimeError as e:
         msg = str(e)
         if "timed out" in msg.lower():

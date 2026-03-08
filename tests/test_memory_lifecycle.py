@@ -7,6 +7,7 @@ and timeout-driven on_failure behavior (timeout=0 via CoDeps, no mocks).
 import asyncio
 import os
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -14,11 +15,23 @@ from typing import Any
 import yaml
 
 from co_cli.agent import get_agent
-from co_cli.deps import CoDeps
-from co_cli.memory_consolidator import ConsolidationPlan, MemoryAction, build_alias_map
-from co_cli.memory_lifecycle import apply_plan_atomically, persist_memory
-from co_cli.shell_backend import ShellBackend
+from co_cli.config import settings
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._memory_consolidator import ConsolidationPlan, MemoryAction, build_alias_map
+from co_cli._memory_lifecycle import apply_plan_atomically, persist_memory
+from co_cli._shell_backend import ShellBackend
+from co_cli._signal_analyzer import SignalResult
+from co_cli.main import _handle_signal
 from co_cli.tools.memory import MemoryEntry, _load_memories
+
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
+
+_CONFIG = CoConfig(
+    role_models={k: list(v) for k, v in settings.role_models.items()},
+    llm_provider=settings.llm_provider,
+    ollama_host=settings.ollama_host,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +81,13 @@ def _make_deps(
     timeout: int = 20,
 ) -> CoDeps:
     return CoDeps(
-        shell=ShellBackend(),
-        session_id="test-lifecycle",
-        memory_max_count=max_count,
-        memory_consolidation_timeout_seconds=timeout,
+        services=CoServices(shell=ShellBackend()),
+        config=replace(
+            _CONFIG,
+            session_id="test-lifecycle",
+            memory_max_count=max_count,
+            memory_consolidation_timeout_seconds=timeout,
+        ),
     )
 
 
@@ -229,7 +245,6 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
     memory_dir.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
-    agent, _, _, _ = get_agent()
     deps = _make_deps(timeout=0)
 
     before_count = len(list(memory_dir.glob("*.md")))
@@ -238,7 +253,7 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
         persist_memory(
             deps, "Unique xylophone-fallback-test memory",
             ["preference"], None,
-            on_failure="add", model=agent.model,
+            on_failure="add", model=_AGENT.model,
         )
     )
 
@@ -259,7 +274,6 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path, monkeypatch):
     memory_dir.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
 
-    agent, _, _, _ = get_agent()
     deps = _make_deps(timeout=0)
 
     before_count = len(list(memory_dir.glob("*.md")))
@@ -268,7 +282,7 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path, monkeypatch):
         persist_memory(
             deps, "Signal candidate xylophone-skip-test memory",
             None, None,
-            on_failure="skip", model=agent.model,
+            on_failure="skip", model=_AGENT.model,
         )
     )
 
@@ -277,3 +291,40 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path, monkeypatch):
         "on_failure='skip' must NOT write a file when consolidation times out"
     )
     assert result["action"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Admission policy tests
+# ---------------------------------------------------------------------------
+
+
+class _NoOpFrontend:
+    def on_status(self, msg: str) -> None:
+        pass
+
+    def prompt_approval(self, msg: str) -> str:
+        return "n"
+
+
+def test_admission_policy(tmp_path: Path) -> None:
+    mem_dir = tmp_path / "memory"
+    mem_dir.mkdir()
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(memory_auto_save_tags=["preference"], memory_dir=mem_dir),
+    )
+    frontend = _NoOpFrontend()
+
+    # correction tag — should be suppressed (not in allowlist)
+    asyncio.run(_handle_signal(
+        SignalResult(found=True, candidate="user corrected X", tag="correction", confidence="high"),
+        deps, frontend, None,
+    ))
+    assert len(list(mem_dir.glob("*.md"))) == 0
+
+    # preference tag — should save (in allowlist)
+    asyncio.run(_handle_signal(
+        SignalResult(found=True, candidate="user prefers Y", tag="preference", confidence="high"),
+        deps, frontend, None,
+    ))
+    assert len(list(mem_dir.glob("*.md"))) == 1

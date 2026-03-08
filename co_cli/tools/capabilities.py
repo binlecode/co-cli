@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic_ai import RunContext
 
+from co_cli._doctor import run_doctor
 from co_cli.deps import CoDeps
 
 
@@ -22,52 +23,58 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     - obsidian: True if Obsidian vault path is configured
     - brave: True if Brave Search API key is set
     - mcp_count: number of MCP servers configured
+    - checks: list of {"name", "status", "detail"} for each doctor check
     """
-    lines: list[str] = []
+    result = run_doctor(ctx.deps)
 
-    # Knowledge search backend
-    if ctx.deps.knowledge_index is not None:
-        knowledge_backend = ctx.deps.knowledge_search_backend
-        lines.append(f"Knowledge search: {knowledge_backend} (active)")
-    else:
-        knowledge_backend = "grep"
-        lines.append("Knowledge search: grep (FTS5 index unavailable)")
+    # Integration status derived from doctor checks
+    google_item = result.by_name("google")
+    google = google_item is not None and google_item.status == "ok"
 
-    # Reranker
-    reranker = ctx.deps.knowledge_reranker_provider
+    obsidian_item = result.by_name("obsidian")
+    obsidian = obsidian_item is not None and obsidian_item.status == "ok"
+
+    brave_item = result.by_name("brave")
+    brave = brave_item is not None and brave_item.status == "ok"
+
+    # Knowledge backend from config (unchanged)
+    knowledge_backend = ctx.deps.config.knowledge_search_backend
+
+    # Reranker from config
+    reranker = ctx.deps.config.knowledge_reranker_provider
+
+    # MCP count from config
+    mcp_count = ctx.deps.config.mcp_count
+
+    # Reasoning model chain from config
+    reasoning_chain = ctx.deps.config.role_models.get("reasoning", [])
+
+    # Build display: doctor summary lines + reranker, reasoning, session lines
+    lines: list[str] = result.summary_lines()
+
     if reranker == "none":
         lines.append("Search reranker: disabled (search quality may be degraded)")
     else:
         lines.append(f"Search reranker: {reranker}")
 
-    # Google
-    google = ctx.deps.google_credentials_path is not None
-    lines.append(f"Google (Drive/Gmail/Calendar): {'configured' if google else 'not configured'}")
-
-    # Obsidian
-    obsidian = ctx.deps.obsidian_vault_path is not None
-    lines.append(f"Obsidian notes: {'configured' if obsidian else 'not configured'}")
-
-    # Brave web search
-    brave = ctx.deps.brave_search_api_key is not None
-    lines.append(f"Web search (Brave): {'configured' if brave else 'not configured'}")
-
-    # MCP servers
-    mcp_count = ctx.deps.mcp_count
-    lines.append(f"MCP servers: {mcp_count} configured")
-
-    # Main reasoning role (mandatory for model invocation)
-    reasoning_chain = ctx.deps.model_roles.get("reasoning", [])
     if reasoning_chain:
-        lines.append(f"Reasoning models: {', '.join(reasoning_chain)}")
+        lines.append(f"Reasoning models: {', '.join(e.model for e in reasoning_chain)}")
     else:
         lines.append("Reasoning models: not configured (doctor fail-fast)")
 
-    # Session info
-    if ctx.deps.session_id:
-        lines.append(f"Session: {ctx.deps.session_id[:8]}...")
+    if ctx.deps.config.session_id:
+        lines.append(f"Session: {ctx.deps.config.session_id[:8]}...")
+
+    skill_grants = sorted(ctx.deps.session.skill_tool_grants)
+    if skill_grants:
+        lines.append(f"Active skill grants: {', '.join(skill_grants)}")
 
     display = "\n".join(lines)
+
+    checks = [
+        {"name": c.name, "status": c.status, "detail": c.detail}
+        for c in result.checks
+    ]
 
     return {
         "display": display,
@@ -79,4 +86,6 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
         "mcp_count": mcp_count,
         "reasoning_models": reasoning_chain,
         "reasoning_ready": bool(reasoning_chain),
+        "checks": checks,
+        "skill_grants": skill_grants,
     }

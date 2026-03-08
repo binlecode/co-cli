@@ -3,6 +3,9 @@
 All tests use real agent/deps — no mocks, no stubs.
 """
 
+import asyncio
+from dataclasses import replace
+
 import pytest
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
@@ -11,17 +14,23 @@ from pydantic_ai.usage import UsageLimits
 from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from co_cli._commands import dispatch, CommandContext, COMMANDS, _cmd_skills
+
+_CONFIG = CoConfig(
+    role_models={k: list(v) for k, v in settings.role_models.items()},
+    llm_provider=settings.llm_provider,
+    ollama_host=settings.ollama_host,
+)
 
 
 def _make_ctx(message_history: list | None = None) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
     agent, _, tool_names, _ = get_agent()
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-commands",
+        services=CoServices(shell=ShellBackend()),
+        config=replace(_CONFIG, session_id="test-commands"),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -35,8 +44,8 @@ def _make_agent_and_deps(container_name: str = "co-test-approval"):
     """Build a real agent + deps for approval flow tests."""
     agent, model_settings, _, _ = get_agent()
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-approval",
+        services=CoServices(shell=ShellBackend()),
+        config=replace(_CONFIG, session_id="test-approval"),
     )
     return agent, model_settings, deps
 
@@ -114,7 +123,8 @@ async def test_cmd_compact():
         ModelRequest(parts=[UserPromptPart(content="What is Docker?")]),
     ]
     ctx = _make_ctx(message_history=msgs)
-    handled, new_history = await dispatch("/compact", ctx)
+    async with asyncio.timeout(60):
+        handled, new_history = await dispatch("/compact", ctx)
     assert handled is True
     assert isinstance(new_history, list)
     assert len(new_history) > 0
@@ -181,7 +191,7 @@ async def test_skills_install_local(tmp_path, monkeypatch):
     monkeypatch.setattr(_cmds, "console", _Console(file=buf, no_color=True))
 
     ctx = _make_ctx()
-    ctx.deps.skills_dir = skills_dir
+    ctx.deps.config.skills_dir = skills_dir
     SKILL_COMMANDS.clear()
     try:
         await _cmd_skills(ctx, f"install {src}")
@@ -211,7 +221,7 @@ async def test_skills_install_url_error(tmp_path, monkeypatch):
     monkeypatch.setattr(_cmds, "console", _Console(file=buf, no_color=True))
 
     ctx = _make_ctx()
-    ctx.deps.skills_dir = tmp_path / ".co-cli" / "skills"
+    ctx.deps.config.skills_dir = tmp_path / ".co-cli" / "skills"
 
     result = await _cmd_skills(ctx, "install http://127.0.0.1:1/skill.md")
     assert result is None
@@ -231,40 +241,41 @@ async def test_approval_approve():
     agent, model_settings, deps = _make_agent_and_deps("co-test-approve")
     turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
-        result = await _trigger_shell_call(agent, deps, model_settings)
+        async with asyncio.timeout(60):
+            result = await _trigger_shell_call(agent, deps, model_settings)
 
-        approvals = DeferredToolResults()
-        for call in result.output.approvals:
-            approvals.approvals[call.tool_call_id] = True
+            approvals = DeferredToolResults()
+            for call in result.output.approvals:
+                approvals.approvals[call.tool_call_id] = True
 
-        resumed = await agent.run(
-            None,
-            deps=deps,
-            message_history=result.all_messages(),
-            deferred_tool_results=approvals,
-            model_settings=model_settings,
-            usage_limits=turn_limits,
-            usage=result.usage(),
-        )
-
-        while isinstance(resumed.output, DeferredToolRequests):
-            more_approvals = DeferredToolResults()
-            for call in resumed.output.approvals:
-                more_approvals.approvals[call.tool_call_id] = True
             resumed = await agent.run(
                 None,
                 deps=deps,
-                message_history=resumed.all_messages(),
-                deferred_tool_results=more_approvals,
+                message_history=result.all_messages(),
+                deferred_tool_results=approvals,
                 model_settings=model_settings,
                 usage_limits=turn_limits,
-                usage=resumed.usage(),
+                usage=result.usage(),
             )
+
+            while isinstance(resumed.output, DeferredToolRequests):
+                more_approvals = DeferredToolResults()
+                for call in resumed.output.approvals:
+                    more_approvals.approvals[call.tool_call_id] = True
+                resumed = await agent.run(
+                    None,
+                    deps=deps,
+                    message_history=resumed.all_messages(),
+                    deferred_tool_results=more_approvals,
+                    model_settings=model_settings,
+                    usage_limits=turn_limits,
+                    usage=resumed.usage(),
+                )
 
         assert isinstance(resumed.output, str)
         assert len(resumed.all_messages()) > 0
     finally:
-        deps.shell.cleanup()
+        deps.services.shell.cleanup()
 
 
 @pytest.mark.asyncio
@@ -276,39 +287,40 @@ async def test_approval_deny():
     agent, model_settings, deps = _make_agent_and_deps("co-test-deny")
     turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
-        result = await _trigger_shell_call(agent, deps, model_settings)
+        async with asyncio.timeout(60):
+            result = await _trigger_shell_call(agent, deps, model_settings)
 
-        approvals = DeferredToolResults()
-        for call in result.output.approvals:
-            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+            approvals = DeferredToolResults()
+            for call in result.output.approvals:
+                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 
-        resumed = await agent.run(
-            None,
-            deps=deps,
-            message_history=result.all_messages(),
-            deferred_tool_results=approvals,
-            model_settings=model_settings,
-            usage_limits=turn_limits,
-            usage=result.usage(),
-        )
-
-        while isinstance(resumed.output, DeferredToolRequests):
-            deny_approvals = DeferredToolResults()
-            for call in resumed.output.approvals:
-                deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
             resumed = await agent.run(
                 None,
                 deps=deps,
-                message_history=resumed.all_messages(),
-                deferred_tool_results=deny_approvals,
+                message_history=result.all_messages(),
+                deferred_tool_results=approvals,
                 model_settings=model_settings,
                 usage_limits=turn_limits,
-                usage=resumed.usage(),
+                usage=result.usage(),
             )
+
+            while isinstance(resumed.output, DeferredToolRequests):
+                deny_approvals = DeferredToolResults()
+                for call in resumed.output.approvals:
+                    deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+                resumed = await agent.run(
+                    None,
+                    deps=deps,
+                    message_history=resumed.all_messages(),
+                    deferred_tool_results=deny_approvals,
+                    model_settings=model_settings,
+                    usage_limits=turn_limits,
+                    usage=resumed.usage(),
+                )
 
         assert isinstance(resumed.output, str)
     finally:
-        deps.shell.cleanup()
+        deps.services.shell.cleanup()
 
 
 @pytest.mark.asyncio
@@ -321,31 +333,32 @@ async def test_approval_budget_cumulative():
     budget = settings.max_request_limit
     turn_limits = UsageLimits(request_limit=budget)
     try:
-        result = await agent.run(
-            "Run this exact shell command: echo budget_test",
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=turn_limits,
-        )
-
-        while isinstance(result.output, DeferredToolRequests):
-            approvals = DeferredToolResults()
-            for call in result.output.approvals:
-                approvals.approvals[call.tool_call_id] = True
+        async with asyncio.timeout(60):
             result = await agent.run(
-                None,
+                "Run this exact shell command: echo budget_test",
                 deps=deps,
-                message_history=result.all_messages(),
-                deferred_tool_results=approvals,
                 model_settings=model_settings,
                 usage_limits=turn_limits,
-                usage=result.usage(),
             )
+
+            while isinstance(result.output, DeferredToolRequests):
+                approvals = DeferredToolResults()
+                for call in result.output.approvals:
+                    approvals.approvals[call.tool_call_id] = True
+                result = await agent.run(
+                    None,
+                    deps=deps,
+                    message_history=result.all_messages(),
+                    deferred_tool_results=approvals,
+                    model_settings=model_settings,
+                    usage_limits=turn_limits,
+                    usage=result.usage(),
+                )
 
         assert result.usage().requests <= budget
         assert isinstance(result.output, str)
     finally:
-        deps.shell.cleanup()
+        deps.services.shell.cleanup()
 
 
 # --- /new session checkpoint ---
@@ -368,7 +381,8 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path, monkeypatch):
         ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
     ]
     ctx = _make_ctx(message_history=msgs)
-    handled, new_history = await dispatch("/new", ctx)
+    async with asyncio.timeout(60):
+        handled, new_history = await dispatch("/new", ctx)
 
     assert handled is True
     assert new_history == [], "history must be cleared"
@@ -397,7 +411,7 @@ async def test_cmd_new_empty_history_noop():
 @pytest.mark.asyncio
 async def test_forget_command_evicts_fts_row(tmp_path, monkeypatch):
     """/forget removes the file and evicts the FTS row in the same session."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     monkeypatch.chdir(tmp_path)
     memory_dir = tmp_path / ".co-cli" / "memory"
@@ -417,8 +431,10 @@ async def test_forget_command_evicts_fts_row(tmp_path, monkeypatch):
     agent, _, tool_names, _ = get_agent()
     ctx = CommandContext(
         message_history=[],
-        deps=CoDeps(shell=ShellBackend(), session_id="test-forget-fts", knowledge_index=idx,
-                    memory_dir=memory_dir),
+        deps=CoDeps(
+            services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+            config=CoConfig(session_id="test-forget-fts", memory_dir=memory_dir),
+        ),
         agent=agent,
         tool_names=tool_names,
     )

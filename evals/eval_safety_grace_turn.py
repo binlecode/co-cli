@@ -51,7 +51,7 @@ async def main() -> int:
 
     agent, model_settings, _, _ = get_agent()
     deps = make_eval_deps(session_id="e2e-grace-turn")
-    deps._safety_state = SafetyState()
+    deps.runtime.safety_state = SafetyState()
     frontend = _CapturingFrontend()
 
     # Limit of 2: model gets one request to start + one tool call.

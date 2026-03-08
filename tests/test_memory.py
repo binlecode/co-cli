@@ -1,19 +1,22 @@
 """Tests for memory gravity — touch and dedup on recall."""
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic_ai._run_context import RunContext
+from pydantic_ai.usage import RunUsage
 
-from co_cli.memory_lifecycle import persist_memory as _save_memory_impl
+from co_cli.agent import get_agent
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._memory_lifecycle import persist_memory as _save_memory_impl
+from co_cli._shell_backend import ShellBackend
 from co_cli.tools.memory import (
     _touch_memory,
     _dedup_pulled,
     _load_memories,
-    MemoryEntry,
     recall_memory,
     list_memories,
     update_memory,
@@ -26,36 +29,21 @@ from co_cli.tools.memory import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-@dataclass
-class _FakeDeps:
-    """Minimal deps for memory tool tests."""
-
-    memory_max_count: int = 200
-    memory_dedup_window_days: int = 7
-    memory_dedup_threshold: int = 85
-    knowledge_index: Any = None
-    knowledge_search_backend: str = "grep"
-    memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
-    library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
-class _FakeRunContext:
-    def __init__(self, deps: Any):
-        self._deps = deps
-        self._model = None
-
-    @property
-    def deps(self) -> Any:
-        return self._deps
-
-    @property
-    def model(self) -> Any:
-        return self._model
+def _make_ctx(*, knowledge_index: Any = None, knowledge_search_backend: str = "grep") -> RunContext:
+    """Return a real RunContext with real CoDeps for memory tool tests."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), knowledge_index=knowledge_index),
+        config=CoConfig(knowledge_search_backend=knowledge_search_backend),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def _ctx() -> _FakeRunContext:
-    return _FakeRunContext(_FakeDeps())
+def _ctx() -> RunContext:
+    return _make_ctx()
 
 
 def _write_memory(memory_dir: Path, memory_id: int, content: str,
@@ -195,12 +183,11 @@ def test_list_memories_pagination(tmp_path: Path, monkeypatch):
 def test_fts_freshness_after_consolidation(tmp_path: Path, monkeypatch):
     """FTS returns updated content after a near-duplicate memory is consolidated."""
     import asyncio
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
     from co_cli.tools.memory import save_memory
 
     idx = KnowledgeIndex(tmp_path / "search.db")
-    deps = _FakeDeps(knowledge_index=idx, knowledge_search_backend="fts5")
-    ctx = _FakeRunContext(deps)
+    ctx = _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
 
     monkeypatch.chdir(tmp_path)
 
@@ -265,7 +252,7 @@ def test_gravity_affects_recency_order(tmp_path: Path, monkeypatch):
 def test_auto_save_inject_true_adds_personality_context_tag(tmp_path: Path, monkeypatch):
     """When tags include personality-context, the saved file retains that tag."""
     monkeypatch.chdir(tmp_path)
-    deps = _FakeDeps()
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     asyncio.run(
         _save_memory_impl(deps, "User does not want trailing comments", ["correction", "personality-context"], None)
     )
@@ -407,7 +394,7 @@ def test_append_memory_missing_slug_raises(tmp_path: Path, monkeypatch):
 
 def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path, monkeypatch):
     """After dedup-on-read deletes an older file, its FTS entry is also evicted."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -436,18 +423,7 @@ def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path, monkeypatch):
     assert str(path_old) in before_paths, "Older memory should be in FTS before recall"
     assert str(path_new) in before_paths, "Newer memory should be in FTS before recall"
 
-    @dataclass
-    class _FTSDeps:
-        memory_max_count: int = 200
-        memory_dedup_window_days: int = 7
-        memory_dedup_threshold: int = 85
-        knowledge_index: Any = idx
-        knowledge_search_backend: str = "fts5"
-        memory_recall_half_life_days: int = 30
-        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
-        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
-
-    ctx = _FakeRunContext(_FTSDeps())
+    ctx = _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
     asyncio.run(recall_memory(ctx, "xylodedup", max_results=5))
 
     # The merged-away (older) entry must be gone from FTS
@@ -469,7 +445,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path, monkeypatch):
     With only a 1-day age gap, the BM25 advantage of M1 overcomes the small recency
     edge of M2, demonstrating that composite scoring is BM25-driven, not decay-only.
     """
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -502,18 +478,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path, monkeypatch):
     idx = KnowledgeIndex(tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
 
-    @dataclass
-    class _FTSDeps:
-        memory_max_count: int = 200
-        memory_dedup_window_days: int = 7
-        memory_dedup_threshold: int = 85
-        knowledge_index: Any = idx
-        knowledge_search_backend: str = "fts5"
-        memory_recall_half_life_days: int = 30
-        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
-        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
-
-    ctx = _FakeRunContext(_FTSDeps())
+    ctx = _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
     result = asyncio.run(recall_memory(ctx, "xylobm25score", max_results=5))
 
     assert result["count"] >= 2, "Both memories should match the query"
@@ -528,7 +493,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path, monkeypatch):
 
 def test_forget_evicts_from_fts(tmp_path: Path, monkeypatch):
     """KnowledgeIndex.remove() evicts a deleted memory from FTS results."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     monkeypatch.chdir(tmp_path)
@@ -562,7 +527,7 @@ def test_forget_evicts_from_fts(tmp_path: Path, monkeypatch):
 
 def test_search_memories_finds_saved_memories(tmp_path: Path, monkeypatch):
     """search_memories returns saved memories with source='memory'."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     monkeypatch.chdir(tmp_path)
@@ -575,17 +540,7 @@ def test_search_memories_finds_saved_memories(tmp_path: Path, monkeypatch):
     idx = KnowledgeIndex(tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
 
-    @dataclass
-    class _Deps:
-        memory_max_count: int = 200
-        memory_dedup_window_days: int = 7
-        memory_dedup_threshold: int = 85
-        knowledge_index: Any = idx
-        knowledge_search_backend: str = "fts5"
-        memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
-        library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
-
-    ctx = _FakeRunContext(_Deps())
+    ctx = _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
 
     result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
     assert result["count"] >= 2

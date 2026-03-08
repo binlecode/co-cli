@@ -5,6 +5,7 @@ import subprocess
 import time
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import typer
@@ -20,27 +21,27 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
-from co_cli._signal_analyzer import analyze_for_signals
-from co_cli.memory_lifecycle import persist_memory as _persist_memory
+from co_cli._signal_analyzer import analyze_for_signals, SignalResult
+from co_cli._memory_lifecycle import persist_memory as _persist_memory
 from co_cli.agent import get_agent
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState
+from co_cli._shell_backend import ShellBackend
 from co_cli._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR, get_role_head
+from co_cli.config import settings, DATA_DIR
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli._banner import display_welcome_banner
-from co_cli.status import get_status, render_status_table, check_security, render_security_findings
+from co_cli._status import get_status, render_status_table, check_security, render_security_findings
 from co_cli._commands import (
     dispatch as dispatch_command, CommandContext, COMMANDS, SKILL_COMMANDS,
     _load_skills, _swap_model_inplace, _skills_snapshot, _build_completer_words,
 )
 from co_cli._exec_approvals import prune_stale as _prune_stale_approvals
-from co_cli.background import TaskRunner, TaskStorage
+from co_cli._background import TaskRunner, TaskStorage
 from co_cli._session import (
     save_session, touch_session, increment_compaction,
 )
 from co_cli._bootstrap import run_bootstrap
-from co_cli._preflight import run_preflight
+from co_cli._model_check import run_model_check
 from co_cli.prompts.personalities._composer import load_soul_critique
 
 # Setup Telemetry - must be done before Agent.instrument_all()
@@ -99,7 +100,7 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
     knowledge_index = None
     resolved_knowledge_backend = settings.knowledge_search_backend
     if settings.knowledge_search_backend in ("fts5", "hybrid"):
-        from co_cli.knowledge_index import KnowledgeIndex
+        from co_cli._knowledge_index import KnowledgeIndex
 
         def _build_index(backend: str):
             return KnowledgeIndex(
@@ -114,6 +115,8 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
                 hybrid_text_weight=settings.knowledge_hybrid_text_weight,
                 reranker_provider=settings.knowledge_reranker_provider,
                 reranker_model=settings.knowledge_reranker_model,
+                chunk_size=settings.knowledge_chunk_size,
+                chunk_overlap=settings.knowledge_chunk_overlap,
             )
 
         if settings.knowledge_search_backend == "hybrid":
@@ -160,8 +163,12 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
     memory_dir = Path.cwd() / ".co-cli" / "memory"
     library_dir = Path(settings.library_path) if settings.library_path else DATA_DIR / "library"
 
-    deps = CoDeps(
+    services = CoServices(
         shell=ShellBackend(),
+        knowledge_index=knowledge_index,
+        task_runner=task_runner,
+    )
+    config = CoConfig(
         session_id=session_id,
         obsidian_vault_path=vault_path,
         google_credentials_path=settings.google_credentials_path,
@@ -185,31 +192,28 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
         memory_recall_half_life_days=settings.memory_recall_half_life_days,
         memory_consolidation_top_k=settings.memory_consolidation_top_k,
         memory_consolidation_timeout_seconds=settings.memory_consolidation_timeout_seconds,
+        memory_auto_save_tags=settings.memory_auto_save_tags,
         max_history_messages=settings.max_history_messages,
         tool_output_trim_chars=settings.tool_output_trim_chars,
-        summarization_model=get_role_head(settings.model_roles, "summarization"),
         doom_loop_threshold=settings.doom_loop_threshold,
         max_reflections=settings.max_reflections,
-        knowledge_index=knowledge_index,
         knowledge_search_backend=resolved_knowledge_backend,
         knowledge_reranker_provider=settings.knowledge_reranker_provider,
         memory_dir=memory_dir,
         library_dir=library_dir,
         mcp_count=len(settings.mcp_servers),
-        approval_risk_enabled=settings.approval_risk_enabled,
-        approval_auto_low_risk=settings.approval_auto_low_risk,
-        model_roles={k: list(v) for k, v in settings.model_roles.items()},
+        role_models={k: list(v) for k, v in settings.role_models.items()},
         ollama_host=settings.ollama_host,
         llm_provider=settings.llm_provider,
         ollama_num_ctx=settings.ollama_num_ctx,
         ctx_warn_threshold=settings.ctx_warn_threshold,
         ctx_overflow_threshold=settings.ctx_overflow_threshold,
-        task_runner=task_runner,
     )
-    # Initialize session-scoped processor state
-    deps._opening_ctx_state = OpeningContextState()
-    deps._safety_state = SafetyState()
-    return deps
+    runtime = CoRuntimeState(
+        opening_ctx_state=OpeningContextState(),
+        safety_state=SafetyState(),
+    )
+    return CoDeps(services=services, config=config, runtime=runtime)
 
 
 async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list[str]:
@@ -246,22 +250,53 @@ async def _discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> lis
     return native_tool_names + sorted(mcp_tool_names)
 
 
+async def _handle_signal(
+    signal: SignalResult,
+    deps: CoDeps,
+    frontend: Any,
+    model: Any,
+) -> None:
+    """Apply admission policy then persist or prompt for a detected signal."""
+    if not signal.found or not signal.candidate or not signal.tag:
+        return
+    if signal.tag not in deps.config.memory_auto_save_tags:
+        logger.debug(
+            "Memory signal suppressed by policy: tag=%s not in memory_auto_save_tags",
+            signal.tag,
+        )
+        return
+    tags = [signal.tag] + (["personality-context"] if signal.inject else [])
+    if signal.confidence == "high":
+        await _persist_memory(
+            deps, signal.candidate, tags, None,
+            on_failure="skip", model=model,
+        )
+        frontend.on_status(f"Learned: {signal.candidate[:80]}")
+    else:
+        choice = frontend.prompt_approval(f"Worth remembering: {signal.candidate}")
+        if choice in ("y", "a"):
+            await _persist_memory(
+                deps, signal.candidate, tags, None,
+                on_failure="add", model=model,
+            )
+
+
 async def chat_loop(verbose: bool = False):
     mcp_servers = settings.mcp_servers if settings.mcp_servers else None
 
-    # Step 0: frontend first — required by run_preflight signature
+    # Step 0: frontend first — required by run_model_check signature
     frontend = TerminalFrontend()
 
     # Step 1: create_deps with no task_runner yet (optional field, injected below)
     deps = create_deps()
-    deps.skills_dir = Path.cwd() / ".co-cli" / "skills"
+    deps.config.skills_dir = Path.cwd() / ".co-cli" / "skills"
 
-    # Step 2: run_preflight — ALL resource checks here, pre-agent
+    # Step 2: run_model_check — ALL resource checks here, pre-agent
     # Raises RuntimeError on error (agent is never created).
-    # Also advances deps.model_roles chains in-place if needed.
-    run_preflight(deps, frontend)
+    # Also advances deps.role_models pref lists in-place if needed.
+    run_model_check(deps, frontend)
 
-    # Step 3: task runner created and injected into deps after preflight passes
+    # Step 3: task runner created and injected into deps after model check passes
     tasks_dir = Path.cwd() / ".co-cli" / "tasks"
     task_storage = TaskStorage(tasks_dir)
     task_runner = TaskRunner(
@@ -271,28 +306,28 @@ async def chat_loop(verbose: bool = False):
         auto_cleanup=settings.background_auto_cleanup,
         retention_days=settings.background_task_retention_days,
     )
-    deps.task_runner = task_runner
+    deps.services.task_runner = task_runner
 
     # Load skills at startup; package-default skills always available; project-local skills override on name collision
-    skill_commands = _load_skills(deps.skills_dir, settings=settings)
+    skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
     SKILL_COMMANDS.clear()
     SKILL_COMMANDS.update(skill_commands)
-    _skills_watch_snapshot = _skills_snapshot(deps.skills_dir)
+    _skills_watch_snapshot = _skills_snapshot(deps.config.skills_dir)
 
     # Populate skill_registry for system prompt injection (skills with descriptions,
     # excluding disable-model-invocation skills)
-    deps.skill_registry = [
+    deps.session.skill_registry = [
         {"name": s.name, "description": s.description}
         for s in skill_commands.values()
         if s.description and not s.disable_model_invocation
     ]
 
-    # Step 4: get_agent with post-preflight chain head
+    # Step 4: get_agent with post-model-check chain head
     agent, model_settings, tool_names, _ = get_agent(
         web_policy=settings.web_policy,
         mcp_servers=mcp_servers,
         personality=settings.personality,
-        model_name=deps.model_roles["reasoning"][0],
+        model_name=deps.config.role_models["reasoning"][0].model,
     )
 
     # Build completer from built-in commands + user_invocable skills
@@ -321,7 +356,7 @@ async def chat_loop(verbose: bool = False):
         agent, model_settings, tool_names, _ = get_agent(
             web_policy=settings.web_policy,
             personality=settings.personality,
-            model_name=deps.model_roles["reasoning"][0],
+            model_name=deps.config.role_models["reasoning"][0].model,
         )
         await stack.enter_async_context(agent)
         mcp_servers = None
@@ -338,8 +373,8 @@ async def chat_loop(verbose: bool = False):
         session_data = await run_bootstrap(
             deps,
             frontend,
-            memory_dir=deps.memory_dir,
-            library_dir=deps.library_dir,
+            memory_dir=deps.config.memory_dir,
+            library_dir=deps.config.library_dir,
             session_path=session_path,
             session_ttl_minutes=settings.session_ttl_minutes,
             n_skills=len(skill_commands),
@@ -350,13 +385,13 @@ async def chat_loop(verbose: bool = False):
 
         while True:
             # File watcher: detect skill edits before each prompt
-            _new_snap = _skills_snapshot(deps.skills_dir)
+            _new_snap = _skills_snapshot(deps.config.skills_dir)
             if _new_snap != _skills_watch_snapshot:
                 _skills_watch_snapshot = _new_snap
-                _reloaded = _load_skills(deps.skills_dir, settings=settings)
+                _reloaded = _load_skills(deps.config.skills_dir, settings=settings)
                 SKILL_COMMANDS.clear()
                 SKILL_COMMANDS.update(_reloaded)
-                deps.skill_registry = [
+                deps.session.skill_registry = [
                     {"name": s.name, "description": s.description}
                     for s in SKILL_COMMANDS.values()
                     if s.description and not s.disable_model_invocation
@@ -394,8 +429,8 @@ async def chat_loop(verbose: bool = False):
                             # Skill dispatched — fall through to LLM turn with skill body
                             user_input = cmd_ctx.skill_body
                             # Save current env values and inject skill-env vars
-                            _saved_env = {k: os.environ.get(k) for k in deps.active_skill_env}
-                            os.environ.update(deps.active_skill_env)
+                            _saved_env = {k: os.environ.get(k) for k in deps.session.active_skill_env}
+                            os.environ.update(deps.session.active_skill_env)
                         else:
                             continue
 
@@ -403,9 +438,9 @@ async def chat_loop(verbose: bool = False):
                 if bg_compaction_task is not None:
                     try:
                         result = await bg_compaction_task
-                        deps.precomputed_compaction = result
+                        deps.runtime.precomputed_compaction = result
                     except Exception:
-                        deps.precomputed_compaction = None
+                        deps.runtime.precomputed_compaction = None
                     bg_compaction_task = None
 
                 # LLM turn — delegated to _orchestrate.run_turn()
@@ -431,15 +466,15 @@ async def chat_loop(verbose: bool = False):
 
                     # Terminal error recovery: advance reasoning model chain (max once per turn).
                     # Context-overflow will also trigger chain advance and may still fail — acceptable MVP.
-                    if turn_result.outcome == "error" and len(deps.model_roles["reasoning"]) > 1:
-                        deps.model_roles["reasoning"].pop(0)
-                        next_model = deps.model_roles["reasoning"][0]
+                    if turn_result.outcome == "error" and len(deps.config.role_models["reasoning"]) > 1:
+                        deps.config.role_models["reasoning"].pop(0)
+                        next_model_entry = deps.config.role_models["reasoning"][0]
                         try:
                             new_ms = _swap_model_inplace(
-                                agent, next_model, settings.llm_provider.lower(), settings
+                                agent, next_model_entry.model, settings.llm_provider.lower(), settings
                             )
                             model_settings = new_ms
-                            frontend.on_status(f"Retrying with reasoning model: {next_model}")
+                            frontend.on_status(f"Retrying with reasoning model: {next_model_entry.model}")
                             turn_result = await run_turn(
                                 agent=agent,
                                 user_input=original_user_input,
@@ -463,8 +498,8 @@ async def chat_loop(verbose: bool = False):
                             os.environ.pop(k, None)
                     # Both clears in finally — guaranteed on all exit paths including exceptions.
                     # Prevents stale skill grants from bleeding into the next turn.
-                    deps.active_skill_env.clear()
-                    deps.active_skill_allowed_tools.clear()
+                    deps.session.active_skill_env.clear()
+                    deps.session.skill_tool_grants.clear()
 
                 # Signal detection — CC hookify pattern, auto-triggered post-turn.
                 # LLM mini-agent classifies every completed turn; guardrails in the
@@ -473,27 +508,15 @@ async def chat_loop(verbose: bool = False):
                     not turn_result.interrupted
                     and turn_result.outcome != "error"
                 ):
-                    signal = await analyze_for_signals(message_history, agent.model)
-                    if signal.found and signal.candidate and signal.tag:
-                        tags = [signal.tag] + (["personality-context"] if signal.inject else [])
-                        if signal.confidence == "high":
-                            await _persist_memory(
-                                deps, signal.candidate, tags, None,
-                                on_failure="skip", model=agent.model,
-                            )
-                            frontend.on_status(f"Learned: {signal.candidate[:80]}")
-                        else:
-                            choice = frontend.prompt_approval(
-                                f"Worth remembering: {signal.candidate}"
-                            )
-                            if choice in ("y", "a"):
-                                await _persist_memory(
-                                    deps, signal.candidate, tags, None,
-                                    on_failure="add", model=agent.model,
-                                )
+                    signal = await analyze_for_signals(
+                        message_history,
+                        agent.model,
+                        config=deps.config,
+                    )
+                    await _handle_signal(signal, deps, frontend, agent.model)
 
                 # Clear precomputed result (consumed or stale)
-                deps.precomputed_compaction = None
+                deps.runtime.precomputed_compaction = None
 
                 # Touch session after each turn
                 session_data = touch_session(session_data)
@@ -527,7 +550,7 @@ async def chat_loop(verbose: bool = False):
             bg_compaction_task.cancel()
         await task_runner.shutdown()
         await stack.aclose()
-        deps.shell.cleanup()
+        deps.services.shell.cleanup()
 
 
 @app.command()

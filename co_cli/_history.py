@@ -26,7 +26,6 @@ import asyncio
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
-from pydantic_ai.models.openai import OpenAIChatModel as _OpenAIChatModel
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -135,7 +134,7 @@ def truncate_tool_returns(
     Registered as the *first* history processor — cheap string work, no
     LLM call.
     """
-    threshold = ctx.deps.tool_output_trim_chars
+    threshold = ctx.deps.config.tool_output_trim_chars
     if threshold <= 0:
         return messages
 
@@ -195,6 +194,12 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
+def _resolve_summarization_model(config: Any, fallback: Any) -> Any:
+    """Return the summarization model from config, or fallback if unconfigured."""
+    from co_cli.agents._factory import resolve_role_model
+    return resolve_role_model(config, "summarization", fallback)
+
+
 async def summarize_messages(
     messages: list[ModelMessage],
     model: str | Any,
@@ -215,17 +220,9 @@ async def summarize_messages(
         # even when summarizing with non-empty message_history.
         instructions=_SUMMARIZER_SYSTEM_PROMPT,
     )
-    # qwen3.5 MoE models have native thinking capability that defaults to enabled.
-    # The think=False API param is the only reliable way to disable it via Ollama's
-    # OpenAI-compat endpoint; prompt directives (/no_think) are ignored by this arch.
-    # Scoped to qwen3.5 model names — other Ollama models are not affected.
-    model_settings: dict[str, Any] = {}
-    if isinstance(model, _OpenAIChatModel) and "qwen3.5" in model.model_name.lower() and "summarize" in model.model_name.lower():
-        model_settings = {"extra_body": {"think": False}}
     result = await summariser.run(
         prompt,
         message_history=messages,
-        model_settings=model_settings or None,
     )
     return result.output
 
@@ -280,7 +277,8 @@ async def _run_summarization_with_policy(
     while True:
         try:
             return await summarize_messages(
-                messages, model, personality_active=personality_active,
+                messages, model,
+                personality_active=personality_active,
             )
         except (ModelHTTPError, ModelAPIError) as e:
             action, msg, delay = classify_provider_error(e)
@@ -351,13 +349,13 @@ async def truncate_history_window(
         marker on failure)
 
     If a pre-computed ``CompactionResult`` is available on
-    ``ctx.deps.precomputed_compaction`` and the message count matches
+    ``ctx.deps.runtime.precomputed_compaction`` and the message count matches
     (not stale), the pre-computed summary is used directly — skipping
     the inline LLM call.
 
     Registered as the last history processor.
     """
-    max_msgs = ctx.deps.max_history_messages
+    max_msgs = ctx.deps.config.max_history_messages
     token_estimate = _estimate_message_tokens(messages)
     token_threshold = int(_DEFAULT_TOKEN_BUDGET * 0.85)
 
@@ -384,9 +382,7 @@ async def truncate_history_window(
     dropped_count = len(dropped)
 
     # Check for pre-computed compaction result (background compaction)
-    precomputed: CompactionResult | None = getattr(
-        ctx.deps, "precomputed_compaction", None
-    )
+    precomputed: CompactionResult | None = ctx.deps.runtime.precomputed_compaction
     summary_text: str | None = None
 
     if (
@@ -403,8 +399,7 @@ async def truncate_history_window(
     else:
         # Fall through to inline summarization
         from co_cli.config import settings as _settings
-
-        model = ctx.deps.summarization_model or ctx.model
+        model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.model)
         summary_text = await _run_summarization_with_policy(
             dropped, model,
             max_retries=_settings.model_http_retries,
@@ -452,7 +447,7 @@ async def precompute_compaction(
     Returns ``None`` if history is not close enough to the threshold or
     if summarization fails.
     """
-    max_msgs = deps.max_history_messages
+    max_msgs = deps.config.max_history_messages
     token_estimate = _estimate_message_tokens(messages)
     token_threshold = int(_DEFAULT_TOKEN_BUDGET * 0.85)
 
@@ -488,8 +483,7 @@ async def precompute_compaction(
     dropped = messages[head_end:tail_start]
 
     from co_cli.config import settings as _settings
-
-    resolved_model = deps.summarization_model or model
+    resolved_model = _resolve_summarization_model(deps.config, fallback=model)
     summary_text = await _run_summarization_with_policy(
         dropped, resolved_model,
         max_retries=_settings.model_http_retries,
@@ -540,7 +534,7 @@ class OpeningContextState:
     """Session-scoped state for inject_opening_context.
 
     Persists across turns to debounce recall per user turn. Initialized once
-    per session in create_deps(), stored on CoDeps._opening_ctx_state.
+    per session in create_deps(), stored on CoDeps.runtime.opening_ctx_state.
     """
     recall_count: int = 0
     model_request_count: int = 0
@@ -557,9 +551,9 @@ async def inject_opening_context(
     new user turn — no heuristic gate. recall_memory is FTS5/BM25 or grep
     fallback — zero LLM cost in both cases. Returns empty when nothing matches.
 
-    State is stored on ctx.deps._opening_ctx_state (session-scoped).
+    State is stored on ctx.deps.runtime.opening_ctx_state (session-scoped).
     """
-    state: OpeningContextState = ctx.deps._opening_ctx_state
+    state: OpeningContextState = ctx.deps.runtime.opening_ctx_state
     if state is None:
         return messages
 
@@ -608,7 +602,7 @@ async def inject_opening_context(
 class SafetyState:
     """Turn-scoped state for safety checks.
 
-    Created fresh per turn by run_turn(), stored on CoDeps._safety_state.
+    Created fresh per turn by run_turn(), stored on CoDeps.runtime.safety_state.
     """
     doom_loop_injected: bool = False
     reflection_injected: bool = False
@@ -620,17 +614,17 @@ def detect_safety_issues(
 ) -> list[ModelMessage]:
     """Scan recent tool calls for doom loops and shell error streaks.
 
-    State is stored on ctx.deps._safety_state (turn-scoped, reset per turn).
-    Thresholds from ctx.deps.doom_loop_threshold and ctx.deps.max_reflections.
+    State is stored on ctx.deps.runtime.safety_state (turn-scoped, reset per turn).
+    Thresholds from ctx.deps.config.doom_loop_threshold and ctx.deps.config.max_reflections.
     """
-    state: SafetyState | None = ctx.deps._safety_state
+    state: SafetyState | None = ctx.deps.runtime.safety_state
     if state is None:
         return messages
     if state.doom_loop_injected and state.reflection_injected:
         return messages
 
-    doom_threshold = ctx.deps.doom_loop_threshold
-    max_refl = ctx.deps.max_reflections
+    doom_threshold = ctx.deps.config.doom_loop_threshold
+    max_refl = ctx.deps.config.max_reflections
 
     # Scan recent messages in reverse to measure the most-recent contiguous streak
     # for each safety check.

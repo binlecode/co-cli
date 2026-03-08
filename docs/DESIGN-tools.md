@@ -26,6 +26,9 @@ Native agent tools: shell execution, workspace files, background tasks, todo ses
 | `update_memory`, `append_memory` | No | Writes to existing memory files; currently registered without approval |
 | `todo_write`, `todo_read` | No | In-memory session state only — no external side effects |
 | `check_task_status`, `cancel_background_task`, `list_background_tasks` | No | Read-only or self-contained task ops |
+| `web_search` | Conditional | Policy via `web_policy.search`: `allow` → execute, `ask` → deferred approval, `deny` → terminal_error |
+| `web_fetch` | Conditional | Policy via `web_policy.fetch`: `allow` → execute, `ask` → deferred approval, `deny` → terminal_error |
+| `delegate_coder`, `delegate_research`, `delegate_analysis` | No | Spawn isolated sub-agents; `requires_approval=False` — sub-agent tool calls are governed by their own tool registrations |
 | Most other native tools | No | Read-only operations |
 
 **Docstring standard:** Every tool docstring addresses four dimensions:

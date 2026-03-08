@@ -17,12 +17,85 @@ from typing import Any
 
 import httpx
 
-# Expected co-cli custom models and their key inference parameters.
-# Source of truth: ollama/Modelfile.* in this repo.
+# Expected co-cli custom Ollama models and their key inference parameters.
+# Source of truth: the shipped ollama/Modelfile.* files in this repo.
 CUSTOM_MODELS: list[dict[str, Any]] = [
     {
+        "name": "qwen3:30b-q4_k_m-agentic",
+        "role": "reasoning",
+        "modelfile": "ollama/Modelfile.qwen3-30b-q4_k_m-agentic",
+        "params": {
+            "num_ctx": 131072,
+            "num_predict": 32768,
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "repeat_penalty": 1.0,
+        },
+    },
+    {
+        "name": "qwen3.5:35b-a3b-q4_k_m-nothink",
+        "role": "nothink",
+        "modelfile": "ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-nothink",
+        "no_think": True,
+        "params": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+            "num_predict": 32768,
+            "num_ctx": 32768,
+        },
+    },
+    {
+        "name": "qwen3.5:35b-a3b-q4_k_m-agentic",
+        "role": "reasoning-fallback",
+        "modelfile": "ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-agentic",
+        "params": {
+            "num_ctx": 131072,
+            "num_predict": 32768,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0,
+            "presence_penalty": 1.5,
+            "repeat_penalty": 1.0,
+        },
+    },
+    {
+        "name": "qwen3:30b-q4_k_m-nothink",
+        "role": "nothink-alt",
+        "modelfile": "ollama/Modelfile.qwen3-30b-q4_k_m-nothink",
+        "no_think": True,
+        "params": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "min_p": 0,
+            "num_predict": 32768,
+            "num_ctx": 32768,
+        },
+    },
+    {
+        "name": "qwen3.5:35b-a3b-q4_k_m-research",
+        "role": "research",
+        "modelfile": "ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-research",
+        "no_think": True,
+        "params": {
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "top_k": 20,
+            "presence_penalty": 1.5,
+            "num_predict": 2048,
+            "num_ctx": 32768,
+        },
+    },
+    {
         "name": "qwen3.5:35b-a3b-q4_k_m-summarize",
-        "role": "summarization",
+        "role": "summarize",
         "modelfile": "ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-summarize",
         "no_think": True,
         "params": {
@@ -31,32 +104,6 @@ CUSTOM_MODELS: list[dict[str, Any]] = [
             "top_k": 20,
             "repeat_penalty": 1.1,
             "presence_penalty": 1.5,
-            "num_predict": 2048,
-            "num_ctx": 32768,
-        },
-    },
-    {
-        "name": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-        "role": "reasoning",
-        "modelfile": "ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q8_0-agentic",
-        "params": {
-            "num_ctx": 131072,
-            "num_predict": 32768,
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "top_k": 20,
-            "repeat_penalty": 1.0,
-        },
-    },
-    {
-        "name": "qwen3:30b-research",
-        "role": "research",
-        "modelfile": "ollama/Modelfile.qwen3-30b-research",
-        "params": {
-            "temperature": 0.6,
-            "top_p": 0.9,
-            "top_k": 20,
-            "repeat_penalty": 1.05,
             "num_predict": 2048,
             "num_ctx": 32768,
         },

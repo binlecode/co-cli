@@ -26,7 +26,7 @@ from pydantic_ai import RunContext
 
 from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.deps import CoDeps
-from co_cli.knowledge_index import SearchResult
+from co_cli._knowledge_index import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
 
 logger = logging.getLogger(__name__)
@@ -209,7 +209,7 @@ async def search_knowledge(
         created_after: ISO8601 date string; only return items created on or after this date.
         created_before: ISO8601 date string; only return items created on or before this date.
     """
-    if ctx.deps.knowledge_index is None:
+    if ctx.deps.services.knowledge_index is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
             return {"display": f"No results for '{query}' (source={source!r} requires FTS)", "count": 0, "results": []}
@@ -223,9 +223,9 @@ async def search_knowledge(
             effective_kind = "article"
         # Grep fallback: route to correct directory by kind
         if effective_kind == "memory":
-            grep_dir = ctx.deps.memory_dir
+            grep_dir = ctx.deps.config.memory_dir
         else:
-            grep_dir = ctx.deps.library_dir
+            grep_dir = ctx.deps.config.library_dir
         memories = _load_memories(grep_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
@@ -250,9 +250,9 @@ async def search_knowledge(
         return {"display": "\n".join(lines), "count": len(matches), "results": result_dicts}
 
     # Sync Obsidian vault into index before searching
-    if ctx.deps.obsidian_vault_path and source in (None, "obsidian"):
+    if ctx.deps.config.obsidian_vault_path and source in (None, "obsidian"):
         try:
-            ctx.deps.knowledge_index.sync_dir("obsidian", ctx.deps.obsidian_vault_path)
+            ctx.deps.services.knowledge_index.sync_dir("obsidian", ctx.deps.config.obsidian_vault_path)
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
@@ -260,7 +260,7 @@ async def search_knowledge(
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
     try:
-        results = ctx.deps.knowledge_index.search(
+        results = ctx.deps.services.knowledge_index.search(
             query,
             source=fts_source,
             kind=kind,
@@ -278,7 +278,7 @@ async def search_knowledge(
         return {"display": f"No results found for '{query}'", "count": 0, "results": []}
 
     # Compute confidence for each result (post-retrieval, tool layer)
-    half_life_days = ctx.deps.memory_recall_half_life_days or 0
+    half_life_days = ctx.deps.config.memory_recall_half_life_days or 0
     for r in results:
         r.confidence = _compute_confidence(r, half_life_days)
 
@@ -347,20 +347,20 @@ async def save_article(
         tags: Categorization tags (e.g. ["python", "async", "reference"]).
         related: Slugs of related memories/articles for knowledge linking.
     """
-    library_dir = ctx.deps.library_dir
+    library_dir = ctx.deps.config.library_dir
     library_dir.mkdir(parents=True, exist_ok=True)
 
     # Dedup by origin_url exact match
     existing = _find_article_by_url(library_dir, origin_url)
     if existing is not None:
         result = _consolidate_article(existing, content, title, tags, origin_url)
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.services.knowledge_index is not None:
             try:
                 updated_raw = existing.read_text(encoding="utf-8")
                 fm2, body2 = parse_frontmatter(updated_raw)
                 # Use merged tags from frontmatter, not just the incoming tags arg
                 merged_tags_str = " ".join(fm2.get("tags", []))
-                ctx.deps.knowledge_index.index(
+                ctx.deps.services.knowledge_index.index(
                     source="library",
                     kind="article",
                     path=str(existing),
@@ -407,9 +407,9 @@ async def save_article(
     logger.info(f"Saved article {article_id} to {file_path}")
 
     # FTS integration point — activates when Phase 1 ships
-    if ctx.deps.knowledge_index is not None:
+    if ctx.deps.services.knowledge_index is not None:
         try:
-            ctx.deps.knowledge_index.index(
+            ctx.deps.services.knowledge_index.index(
                 source="library",
                 kind="article",
                 path=str(file_path),
@@ -466,12 +466,12 @@ async def recall_article(
         created_after: ISO8601 date string; only return articles created on or after this date.
         created_before: ISO8601 date string; only return articles created on or before this date.
     """
-    library_dir = ctx.deps.library_dir
+    library_dir = ctx.deps.config.library_dir
 
     # FTS path — activates when Phase 1 ships and index is available
-    if ctx.deps.knowledge_index is not None and ctx.deps.knowledge_search_backend in ("fts5", "hybrid"):
+    if ctx.deps.services.knowledge_index is not None and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
-            fts_results = ctx.deps.knowledge_index.search(
+            fts_results = ctx.deps.services.knowledge_index.search(
                 query,
                 source="library",
                 kind="article",
@@ -614,7 +614,7 @@ async def read_article_detail(
     Args:
         slug: File stem from recall_article result (e.g. "042-python-asyncio-guide").
     """
-    library_dir = ctx.deps.library_dir
+    library_dir = ctx.deps.config.library_dir
 
     # Find by slug (file stem)
     candidates = list(library_dir.glob(f"{slug}.md"))

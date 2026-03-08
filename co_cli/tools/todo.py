@@ -1,7 +1,7 @@
 """Session-scoped task tracking tools.
 
 Provides a lightweight todo list the model uses to track sub-goals within a
-session. State lives in CoDeps.session_todos — it is not persisted to disk and
+session. State lives in CoDeps.session.session_todos — it is not persisted to disk and
 is cleared when the session ends.
 
 Pattern follows OpenCode (session/todo.ts) and Claude Code (TodoWrite tool):
@@ -89,7 +89,7 @@ def todo_write(
             "errors": errors,
         }
 
-    ctx.deps.session_todos = validated
+    ctx.deps.session.session_todos = validated
 
     pending = sum(1 for t in validated if t["status"] == "pending")
     in_progress = sum(1 for t in validated if t["status"] == "in_progress")
@@ -145,7 +145,7 @@ def todo_read(
 
     Args: (none)
     """
-    todos = ctx.deps.session_todos
+    todos = ctx.deps.session.session_todos
 
     if not todos:
         return {

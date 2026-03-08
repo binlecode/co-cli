@@ -130,8 +130,8 @@ def test_instructions_reevaluated_on_turn2():
     current-date instructions from @agent.instructions, confirming the
     channel is not stale.
     """
-    from co_cli.deps import CoDeps
-    from co_cli.shell_backend import ShellBackend
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli._shell_backend import ShellBackend
 
     captured: list[str | None] = []
 
@@ -141,7 +141,7 @@ def test_instructions_reevaluated_on_turn2():
 
     agent, _, _, _ = get_agent()
     agent._model = FunctionModel(capture_model)
-    deps = CoDeps(shell=ShellBackend())
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     # Turn 1
     r1 = asyncio.run(agent.run("turn 1", deps=deps))

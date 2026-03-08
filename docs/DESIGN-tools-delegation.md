@@ -10,15 +10,15 @@ Sub-agent spawning tools: coder (code analysis), research (web synthesis), and a
 
 ```
 delegate_coder(ctx, task, max_requests=10)
-  ├── ctx.deps.model_roles.get("coding") empty? → return error dict (disabled)
-  ├── model_name = model_roles["coding"][0]
+  ├── ctx.deps.config.role_models.get("coding") empty? → return error dict (disabled)
+  ├── model_name = role_models["coding"][0]
   └── make_coder_agent(model_name, provider, ollama_host) → agent.run(task, UsageLimits(request_limit))
            └── CoderResult {summary, diff_preview, files_touched, confidence}
 ```
 
 ### 2. Core Logic
 
-**`delegate_coder(ctx, task, max_requests) → dict`** — When `ctx.deps.model_roles.get("coding")` is empty, returns an error dict without raising (clean disable-by-config). Otherwise selects `model_roles["coding"][0]`, spawns `make_coder_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `summary`, `diff_preview`, `files_touched`, `confidence`.
+**`delegate_coder(ctx, task, max_requests) → dict`** — When `ctx.deps.config.role_models.get("coding")` is empty, returns an error dict without raising (clean disable-by-config). Otherwise selects `role_models["coding"][0]`, spawns `make_coder_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `summary`, `diff_preview`, `files_touched`, `confidence`.
 
 **`make_coder_agent(model_name, provider, ollama_host) → Agent[CoDeps, CoderResult]`** — Calls `make_subagent_model(model_name, provider, ollama_host)` to build the provider-aware model object, then creates a fresh `Agent` with `output_type=CoderResult`. Registers only the three read-only file tools. No write tools, no shell — strict read-only delegation.
 
@@ -26,7 +26,7 @@ delegate_coder(ctx, task, max_requests=10)
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `model_roles["coding"]` | `CO_MODEL_ROLE_CODING` | `[]` | Coder sub-agent model chain within the active provider. Empty = disabled; head model is used |
+| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | `[]` | Coder sub-agent model chain within the active provider. Empty = disabled; head model is used |
 
 ### 4. Files
 
@@ -36,8 +36,8 @@ delegate_coder(ctx, task, max_requests=10)
 | `co_cli/agents/coder.py` | `CoderResult` schema, `make_coder_agent(model_name, provider, ollama_host)` factory |
 | `co_cli/tools/delegation.py` | `delegate_coder` tool |
 | `co_cli/agent.py` | Registration: `_register(delegate_coder, False)` |
-| `co_cli/config.py` | `model_roles` setting |
-| `co_cli/deps.py` | `model_roles` dict field, `ollama_host` field |
+| `co_cli/config.py` | `role_models` setting |
+| `co_cli/deps.py` | `role_models`, `ollama_host` in `CoConfig` |
 
 ---
 
@@ -49,15 +49,15 @@ delegate_coder(ctx, task, max_requests=10)
 
 ```
 delegate_research(ctx, query, domains?, max_requests=8)
-  ├── ctx.deps.model_roles.get("research") empty? → return error dict (disabled)
-  ├── model_name = model_roles["research"][0]
+  ├── ctx.deps.config.role_models.get("research") empty? → return error dict (disabled)
+  ├── model_name = role_models["research"][0]
   └── make_research_agent(model_name, provider, ollama_host) → agent.run(query, deps=sub_deps, UsageLimits(request_limit))
            └── ResearchResult {summary, sources, confidence}
 ```
 
 ### 2. Core Logic
 
-**`delegate_research(ctx, query, domains, max_requests) → dict`** — When `ctx.deps.model_roles.get("research")` is empty, returns an error dict without raising (clean disable-by-config). No fallback to the coding role — research is independently gated. Otherwise selects `model_roles["research"][0]`, creates isolated deps via `make_subagent_deps(ctx.deps)`, spawns `make_research_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `summary`, `sources`, `confidence`.
+**`delegate_research(ctx, query, domains, max_requests) → dict`** — When `ctx.deps.config.role_models.get("research")` is empty, returns an error dict without raising (clean disable-by-config). No fallback to the coding role — research is independently gated. Otherwise selects `role_models["research"][0]`, creates isolated deps via `make_subagent_deps(ctx.deps)`, spawns `make_research_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `summary`, `sources`, `confidence`.
 
 **`make_research_agent(model_name, provider, ollama_host) → Agent[CoDeps, ResearchResult]`** — Calls `make_subagent_model(model_name, provider, ollama_host)` to build the provider-aware model object, then creates a fresh `Agent` with `output_type=ResearchResult`. Registers only `web_search` and `web_fetch`. No write tools, no shell, no file access — strict read-only delegation. Caller passes isolated deps via `make_subagent_deps(ctx.deps)` at run time.
 
@@ -71,7 +71,7 @@ delegate_research(ctx, query, domains?, max_requests=8)
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `model_roles["research"]` | `CO_MODEL_ROLE_RESEARCH` | `[]` | Research sub-agent model chain within the active provider. Empty = disabled; head model is used |
+| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | `[]` | Research sub-agent model chain within the active provider. Empty = disabled; head model is used |
 
 ### 4. Files
 
@@ -92,15 +92,15 @@ delegate_research(ctx, query, domains?, max_requests=8)
 
 ```
 delegate_analysis(ctx, question, inputs?, max_requests=8)
-  ├── ctx.deps.model_roles.get("analysis") empty? → return error dict (disabled)
-  ├── model_name = model_roles["analysis"][0]
+  ├── ctx.deps.config.role_models.get("analysis") empty? → return error dict (disabled)
+  ├── model_name = role_models["analysis"][0]
   └── make_analysis_agent(model_name, provider, ollama_host) → agent.run(scoped_question, deps=sub_deps, UsageLimits(request_limit))
            └── AnalysisResult {conclusion, evidence, reasoning}
 ```
 
 ### 2. Core Logic
 
-**`delegate_analysis(ctx, question, inputs, max_requests) → dict`** — When `ctx.deps.model_roles.get("analysis")` is empty, returns an error dict without raising (clean disable-by-config). `max_requests < 1` raises `ModelRetry("max_requests must be at least 1")`. If `inputs` is provided, prepends `"Context:\n" + "\n".join(inputs) + "\n\nQuestion: "` to `question` before running. Selects `model_roles["analysis"][0]`, creates isolated deps via `make_subagent_deps(ctx.deps)`, spawns `make_analysis_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `conclusion`, `evidence`, `reasoning`.
+**`delegate_analysis(ctx, question, inputs, max_requests) → dict`** — When `ctx.deps.config.role_models.get("analysis")` is empty, returns an error dict without raising (clean disable-by-config). `max_requests < 1` raises `ModelRetry("max_requests must be at least 1")`. If `inputs` is provided, prepends `"Context:\n" + "\n".join(inputs) + "\n\nQuestion: "` to `question` before running. Selects `role_models["analysis"][0]`, creates isolated deps via `make_subagent_deps(ctx.deps)`, spawns `make_analysis_agent(model_name, provider, ollama_host)`, and runs it with `UsageLimits(request_limit=max_requests)`. Returns `display`, `conclusion`, `evidence`, `reasoning`.
 
 **`make_analysis_agent(model_name, provider, ollama_host) → Agent[CoDeps, AnalysisResult]`** — Calls `make_subagent_model(model_name, provider, ollama_host)` to build the provider-aware model object, then creates a fresh `Agent` with `output_type=AnalysisResult`. Registers only `search_knowledge` and `search_drive_files`. No write tools, no shell, no network — strict read-only delegation. Caller passes isolated deps via `make_subagent_deps(ctx.deps)` at run time.
 
@@ -110,7 +110,7 @@ delegate_analysis(ctx, question, inputs?, max_requests=8)
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `model_roles["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | `[]` | Analysis sub-agent model chain within the active provider. Empty = disabled; head model is used |
+| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | `[]` | Analysis sub-agent model chain within the active provider. Empty = disabled; head model is used |
 
 ### 4. Files
 
@@ -120,5 +120,5 @@ delegate_analysis(ctx, question, inputs?, max_requests=8)
 | `co_cli/agents/analysis.py` | `AnalysisResult` schema, `make_analysis_agent(model_name, provider, ollama_host)` factory |
 | `co_cli/tools/delegation.py` | `delegate_analysis` tool (extends delegation module) |
 | `co_cli/agent.py` | Registration: `_register(delegate_analysis, False)` |
-| `co_cli/config.py` | `model_roles` setting, `CO_MODEL_ROLE_ANALYSIS` env var |
-| `co_cli/deps.py` | `model_roles` dict field, `ollama_host` field |
+| `co_cli/config.py` | `role_models` setting, `CO_MODEL_ROLE_ANALYSIS` env var |
+| `co_cli/deps.py` | `role_models`, `ollama_host` in `CoConfig` |

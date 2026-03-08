@@ -27,7 +27,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from co_cli.knowledge_index import KnowledgeIndex, SearchResult
+from co_cli._knowledge_index import KnowledgeIndex, SearchResult
 
 
 # ---------------------------------------------------------------------------

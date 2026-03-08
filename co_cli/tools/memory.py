@@ -491,7 +491,7 @@ async def save_memory(
         related: Slugs of related memories for knowledge linking
                  (e.g. ["003-user-prefers-pytest"]).
     """
-    from co_cli.memory_lifecycle import persist_memory
+    from co_cli._memory_lifecycle import persist_memory
 
     with _TRACER.start_as_current_span("co.memory.save") as span:
         span.set_attribute("memory.tags", ",".join(tags or []))
@@ -552,15 +552,15 @@ async def recall_memory(
         created_after: ISO8601 date string; only return memories created on or after this date.
         created_before: ISO8601 date string; only return memories created on or before this date.
     """
-    memory_dir = ctx.deps.memory_dir
+    memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.knowledge_index is not None
-        and ctx.deps.knowledge_search_backend in ("fts5", "hybrid")
+        ctx.deps.services.knowledge_index is not None
+        and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            fts_results = ctx.deps.knowledge_index.search(
+            fts_results = ctx.deps.services.knowledge_index.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -603,7 +603,7 @@ async def recall_memory(
             # Composite BM25 + decay scoring — preserves lexical signal alongside recency.
             # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
             # so higher bm25 = better match before combining with decay.
-            half_life = ctx.deps.memory_recall_half_life_days
+            half_life = ctx.deps.config.memory_recall_half_life_days
             scored: list[tuple[float, MemoryEntry]] = []
             for entry in raw_matches:
                 bm25 = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
@@ -651,13 +651,13 @@ async def recall_memory(
 
     # Gravity: dedup collisions among pulled results
     before_paths = {str(m.path) for m in matches}
-    matches = _dedup_pulled(matches, threshold=ctx.deps.memory_dedup_threshold)
+    matches = _dedup_pulled(matches, threshold=ctx.deps.config.memory_dedup_threshold)
     after_paths = {str(m.path) for m in matches}
     deleted_paths = before_paths - after_paths
-    if deleted_paths and ctx.deps.knowledge_index is not None:
+    if deleted_paths and ctx.deps.services.knowledge_index is not None:
         for p in deleted_paths:
             try:
-                ctx.deps.knowledge_index.remove("memory", p)
+                ctx.deps.services.knowledge_index.remove("memory", p)
             except Exception as e:
                 logger.warning(f"Failed to remove stale FTS entry {p}: {e}")
 
@@ -769,15 +769,15 @@ async def search_memories(
     if limit < 1:
         return {"display": "limit must be >= 1.", "count": 0, "results": []}
 
-    memory_dir = ctx.deps.memory_dir
+    memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.knowledge_index is not None
-        and ctx.deps.knowledge_search_backend in ("fts5", "hybrid")
+        ctx.deps.services.knowledge_index is not None
+        and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            results = ctx.deps.knowledge_index.search(
+            results = ctx.deps.services.knowledge_index.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -881,7 +881,7 @@ async def list_memories(
               Passing kind="article" returns only saved articles.
               Passing kind="memory" returns only conversation memories.
     """
-    memory_dir = ctx.deps.memory_dir
+    memory_dir = ctx.deps.config.memory_dir
     memories = _load_memories(memory_dir, kind=kind)
 
     if not memories:
@@ -895,7 +895,7 @@ async def list_memories(
             "offset": offset,
             "limit": limit,
             "has_more": False,
-            "capacity": ctx.deps.memory_max_count,
+            "capacity": ctx.deps.config.memory_max_count,
             "memories": [],
         }
 
@@ -930,7 +930,7 @@ async def list_memories(
     has_more = offset + limit < total
 
     # Format as markdown list with lifecycle indicators
-    lines = [f"Total memories: {total}/{ctx.deps.memory_max_count}\n"]
+    lines = [f"Total memories: {total}/{ctx.deps.config.memory_max_count}\n"]
 
     for md in memory_dicts:
         # Format dates
@@ -968,7 +968,7 @@ async def list_memories(
         "offset": offset,
         "limit": limit,
         "has_more": has_more,
-        "capacity": ctx.deps.memory_max_count,
+        "capacity": ctx.deps.config.memory_max_count,
         "memories": memory_dicts,
     }
 
@@ -1000,7 +1000,7 @@ async def update_memory(
         old_content: Exact passage to replace (must appear exactly once).
         new_content: Replacement text.
     """
-    knowledge_dir = ctx.deps.memory_dir
+    knowledge_dir = ctx.deps.config.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -1055,10 +1055,10 @@ async def update_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.services.knowledge_index is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.services.knowledge_index.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),
@@ -1100,7 +1100,7 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
-    knowledge_dir = ctx.deps.memory_dir
+    knowledge_dir = ctx.deps.config.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -1120,10 +1120,10 @@ async def append_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.services.knowledge_index is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.services.knowledge_index.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),

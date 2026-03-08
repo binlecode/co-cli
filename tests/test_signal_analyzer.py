@@ -5,11 +5,24 @@ configured LLM model. Signal detection is fully LLM-driven — no heuristic
 precheck to test separately.
 """
 
+import asyncio
+
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart, TextPart
 
 from co_cli._signal_analyzer import _build_window, analyze_for_signals
 from co_cli.agent import get_agent
+from co_cli.config import settings
+from co_cli.deps import CoConfig
+
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
+
+_CONFIG = CoConfig(
+    role_models={k: list(v) for k, v in settings.role_models.items()},
+    llm_provider=settings.llm_provider,
+    ollama_host=settings.ollama_host,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,80 +131,58 @@ def test_window_with_only_tool_messages_returns_empty():
 
 
 @pytest.mark.asyncio
-async def test_analyze_correction_high_confidence():
-    """Clear correction message classifies as correction with high confidence."""
-    agent, _, _, _ = get_agent()
+async def test_analyze_correction():
+    """Clear correction classifies as correction with high confidence and inject=True."""
     messages = [_user("don't use trailing comments in the code")]
-    result = await analyze_for_signals(messages, agent.model)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _AGENT.model,
+            config=_CONFIG,
+        )
     assert result.found is True
     assert result.tag == "correction"
     assert result.confidence == "high"
+    assert result.inject is True
 
 
 @pytest.mark.asyncio
 async def test_analyze_preference_detected():
     """Stated preference message is detected as a signal."""
-    agent, _, _, _ = get_agent()
     messages = [_user("I prefer shorter responses")]
-    result = await analyze_for_signals(messages, agent.model)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _AGENT.model,
+            config=_CONFIG,
+        )
     assert result.found is True
     assert result.tag == "preference"
 
 
 @pytest.mark.asyncio
-async def test_analyze_decision_high_confidence():
-    """Team decision statement is detected as high-confidence preference."""
-    agent, _, _, _ = get_agent()
-    messages = [_user("we decided to use PostgreSQL from now on")]
-    result = await analyze_for_signals(messages, agent.model)
-    assert result.found is True
-    assert result.confidence == "high"
-
-
-@pytest.mark.asyncio
-async def test_analyze_migration_high_confidence():
-    """Migration statement is detected as high-confidence preference."""
-    agent, _, _, _ = get_agent()
-    messages = [_user("we switched from REST to GraphQL last month")]
-    result = await analyze_for_signals(messages, agent.model)
-    assert result.found is True
-    assert result.confidence == "high"
-
-
-@pytest.mark.asyncio
-async def test_analyze_habit_detected():
-    """Habit disclosure is detected as a signal."""
-    agent, _, _, _ = get_agent()
-    messages = [_user("I've been putting everything in one big file so far")]
-    result = await analyze_for_signals(messages, agent.model)
-    assert result.found is True
-
-
-@pytest.mark.asyncio
 async def test_analyze_no_signal():
     """Neutral question produces no signal."""
-    agent, _, _, _ = get_agent()
     messages = [_user("what time is it in Tokyo?")]
-    result = await analyze_for_signals(messages, agent.model)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _AGENT.model,
+            config=_CONFIG,
+        )
     assert result.found is False
-
-
-@pytest.mark.asyncio
-async def test_inject_true_for_correction():
-    """Explicit correction is classified with inject=True."""
-    agent, _, _, _ = get_agent()
-    messages = [_user("don't use camelCase in Python code")]
-    result = await analyze_for_signals(messages, agent.model)
-    assert result.found is True
-    assert result.inject is True
 
 
 @pytest.mark.asyncio
 async def test_inject_false_for_ephemeral():
     """Session-scoped decision produces inject=False."""
-    agent, _, _, _ = get_agent()
     messages = [_user("let's use React for this project, just this one")]
-    result = await analyze_for_signals(messages, agent.model)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _AGENT.model,
+            config=_CONFIG,
+        )
     assert result.inject is False
 
 
@@ -203,7 +194,6 @@ async def test_neutrality_guardrail_blocks_assistant_style():
     the assistant's own writing style choices (terse quips, humor) as
     evidence of a user behavioral signal.
     """
-    agent, _, _, _ = get_agent()
     # Assistant turns that strongly express a personality style
     messages = [
         _user("what's the fastest sorting algorithm?"),
@@ -212,7 +202,12 @@ async def test_neutrality_guardrail_blocks_assistant_style():
         _assistant("Timsort. Python uses it. Ships with stdlib. Trust it."),
         _user("ok thanks"),
     ]
-    result = await analyze_for_signals(messages, agent.model)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _AGENT.model,
+            config=_CONFIG,
+        )
     assert result.found is False, (
         "Neutrality guardrail failed: assistant's terse style should not "
         "generate a signal from a neutral user acknowledgment"

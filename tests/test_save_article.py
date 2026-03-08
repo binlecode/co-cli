@@ -1,13 +1,17 @@
 """Functional tests for article tools — save, recall, read, list filter."""
 
 import asyncio
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic_ai._run_context import RunContext
+from pydantic_ai.usage import RunUsage
 
+from co_cli.agent import get_agent
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.memory import list_memories, save_memory
 from co_cli._frontmatter import parse_frontmatter
@@ -17,42 +21,26 @@ from co_cli._frontmatter import parse_frontmatter
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-@dataclass
-class _FakeDeps:
-    memory_max_count: int = 200
-    memory_dedup_window_days: int = 7
-    memory_dedup_threshold: int = 85
-    memory_decay_strategy: str = "summarize"
-    memory_decay_percentage: float = 0.2
-    memory_recall_half_life_days: int = 30
-    knowledge_index: Any = None
-    knowledge_search_backend: str = "grep"
-    obsidian_vault_path: Any = None
-    library_dir: Path = field(default_factory=lambda: Path(".co-cli/library"))
-    memory_dir: Path = field(default_factory=lambda: Path(".co-cli/memory"))
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
-class _FakeRunContext:
-    def __init__(self, deps: Any):
-        self._deps = deps
-
-    @property
-    def deps(self) -> Any:
-        return self._deps
-
-    @property
-    def model(self) -> Any:
-        return None
+def _make_ctx(*, knowledge_index: Any = None, knowledge_search_backend: str = "grep") -> RunContext:
+    """Return a real RunContext with real CoDeps for article tool tests."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), knowledge_index=knowledge_index),
+        config=CoConfig(knowledge_search_backend=knowledge_search_backend),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def _ctx() -> _FakeRunContext:
-    return _FakeRunContext(_FakeDeps())
+def _ctx() -> RunContext:
+    return _make_ctx()
 
 
-def _ctx_with_idx(idx: Any) -> _FakeRunContext:
-    """Return a fake context with FTS5 backend and the given KnowledgeIndex."""
-    return _FakeRunContext(_FakeDeps(knowledge_index=idx, knowledge_search_backend="fts5"))
+def _ctx_with_idx(idx: Any) -> RunContext:
+    """Return a real RunContext with FTS5 backend and the given KnowledgeIndex."""
+    return _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
 
 
 def _run(coro):
@@ -234,19 +222,10 @@ def test_read_article_detail_not_found(tmp_path, monkeypatch):
 
 def test_recall_article_fts_metadata_parity(tmp_path, monkeypatch):
     """recall_article via FTS returns article_id and origin_url (not None)."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
-    deps = _FakeDeps(knowledge_index=idx, knowledge_search_backend="fts5")
-
-    class _CtxWithIdx:
-        def __init__(self, d):
-            self._deps = d
-        @property
-        def deps(self):
-            return self._deps
-
-    ctx = _CtxWithIdx(deps)
+    ctx = _ctx_with_idx(idx)
     monkeypatch.chdir(tmp_path)
 
     _run(save_article(
@@ -279,7 +258,7 @@ def test_fts_article_consolidated_tags_indexed(tmp_path, monkeypatch):
     Saving the same origin_url twice merges tags on disk AND in the FTS index.
     Both the retained tag and the new tag must be discoverable via tag search.
     """
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)
@@ -315,7 +294,7 @@ def test_recall_article_fts_return_contract(tmp_path, monkeypatch):
     Validates schema parity: article_id (int), origin_url (str),
     tags (list[str]), snippet (str), slug (str).
     """
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)
@@ -348,7 +327,7 @@ def test_search_knowledge_fts_kind_filter(tmp_path, monkeypatch):
     Saves one article and one memory both matching the query keyword.
     kind='article' returns only articles; kind='memory' returns only memories.
     """
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)
@@ -410,7 +389,7 @@ def test_search_knowledge_fallback_grep_kind_filter(tmp_path, monkeypatch):
 
 def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch):
     """search_knowledge FTS path populates confidence in each result dict."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)
@@ -437,7 +416,7 @@ def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch)
 
 def test_search_knowledge_display_contains_conf_label(tmp_path, monkeypatch):
     """search_knowledge display string shows 'conf:' for FTS results."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)
@@ -460,7 +439,7 @@ def test_search_knowledge_display_contains_conf_label(tmp_path, monkeypatch):
 
 def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
     """_compute_confidence: user-told+high scores higher than detected+medium at same base score."""
-    from co_cli.knowledge_index import SearchResult
+    from co_cli._knowledge_index import SearchResult
     from co_cli.tools.articles import _compute_confidence
 
     created = datetime.now(timezone.utc).isoformat()
@@ -491,7 +470,7 @@ def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
 
 def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
     """search_knowledge marks both memories conflict:True when same category has opposing polarity."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
     import yaml as _yaml
 
     idx = KnowledgeIndex(tmp_path / "search.db")
@@ -539,7 +518,7 @@ def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
 
 def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
     """search_knowledge returns conflict:False when results are compatible."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
     import yaml as _yaml
 
     idx = KnowledgeIndex(tmp_path / "search.db")
@@ -609,7 +588,7 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypat
 
 def test_search_knowledge_default_excludes_memories(tmp_path, monkeypatch):
     """search_knowledge with no source filter returns articles but not memories."""
-    from co_cli.knowledge_index import KnowledgeIndex
+    from co_cli._knowledge_index import KnowledgeIndex
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     ctx = _ctx_with_idx(idx)

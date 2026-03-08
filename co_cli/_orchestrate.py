@@ -6,6 +6,7 @@ functions. The chat loop in main.py delegates all LLM interaction here.
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -26,15 +27,23 @@ from opentelemetry import trace as otel_trace
 TurnOutcome = Literal["continue", "stop", "error", "compact"]
 
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
+logger = logging.getLogger(__name__)
 
-from co_cli._exec_approvals import add_approval
+from co_cli._exec_approvals import add_approval, derive_pattern
 from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
 from co_cli.deps import CoDeps
 
 
 def _check_skill_grant(tool_name: str, deps: CoDeps) -> bool:
     """Return True if tool_name is granted by the active skill's allowed-tools."""
-    return tool_name in deps.active_skill_allowed_tools
+    if tool_name in deps.session.skill_tool_grants:
+        logger.debug(
+            "Skill grant: tool=%s active_grants=%s",
+            tool_name,
+            sorted(deps.session.skill_tool_grants),
+        )
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +91,7 @@ class FrontendProtocol(Protocol):
         ...
 
     def prompt_approval(self, description: str) -> str:
-        """Prompt user for approval. Returns 'y' or 'n'."""
+        """Prompt user for approval. Returns 'y', 'n', or 'a'."""
         ...
 
     def cleanup(self) -> None:
@@ -411,19 +420,13 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
             continue
 
         # Per-tool session auto-approve: skip prompt if user previously chose "a"
-        if call.tool_name in deps.auto_approved_tools:
+        if call.tool_name in deps.session.session_tool_approvals:
             approvals.approvals[call.tool_call_id] = True
             continue
 
-        # Risk classifier: auto-approve LOW risk, annotate HIGH risk in prompt
-        if deps.approval_risk_enabled:
-            from co_cli._approval_risk import classify_tool_call, ApprovalRisk
-            risk = classify_tool_call(call.tool_name, args)
-            if risk == ApprovalRisk.LOW and deps.approval_auto_low_risk:
-                approvals.approvals[call.tool_call_id] = True
-                continue
-            if risk == ApprovalRisk.HIGH:
-                desc = f"[HIGH RISK] {desc}"
+        if call.tool_name == "run_shell_command":
+            pattern_hint = derive_pattern(args.get("cmd", ""))
+            desc = f"{desc}\n  [always → will remember: {pattern_hint}]"
 
         if frontend is not None:
             choice = frontend.prompt_approval(desc)
@@ -435,9 +438,9 @@ async def _handle_approvals(agent: Agent, deps: CoDeps, result,
             if choice == "a":
                 if call.tool_name == "run_shell_command":
                     cmd = args.get("cmd", "")
-                    add_approval(deps.exec_approvals_path, cmd, call.tool_name)
+                    add_approval(deps.config.exec_approvals_path, cmd, call.tool_name)
                 else:
-                    deps.auto_approved_tools.add(call.tool_name)
+                    deps.session.session_tool_approvals.add(call.tool_name)
         else:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 
@@ -479,7 +482,7 @@ async def run_turn(
     """
     # Reset turn-scoped safety state (doom loop + shell reflection tracking)
     from co_cli._history import SafetyState
-    deps._safety_state = SafetyState()
+    deps.runtime.safety_state = SafetyState()
 
     result = None
     streamed_text = False
@@ -522,20 +525,20 @@ async def run_turn(
             # Context overflow detection: Ollama truncates silently when input_tokens > num_ctx.
             # Gemini enforces its own hard limit via HTTP 400 — skip check for Gemini.
             # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-            if turn_usage is not None and deps.llm_provider == "ollama" and deps.ollama_num_ctx > 0:
-                ratio = turn_usage.input_tokens / deps.ollama_num_ctx
+            if turn_usage is not None and deps.config.llm_provider == "ollama" and deps.config.ollama_num_ctx > 0:
+                ratio = turn_usage.input_tokens / deps.config.ollama_num_ctx
                 with _TRACER.start_as_current_span("ctx_overflow_check") as span:
                     span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)
-                    span.set_attribute("ctx.num_ctx", deps.ollama_num_ctx)
+                    span.set_attribute("ctx.num_ctx", deps.config.ollama_num_ctx)
                     span.set_attribute("ctx.ratio", ratio)
-                    if ratio >= deps.ctx_overflow_threshold:
+                    if ratio >= deps.config.ctx_overflow_threshold:
                         frontend.on_status(
-                            f"Context limit reached ({turn_usage.input_tokens:,} / {deps.ollama_num_ctx:,} tokens)"
+                            f"Context limit reached ({turn_usage.input_tokens:,} / {deps.config.ollama_num_ctx:,} tokens)"
                             " — Ollama likely truncated the prompt. Use /compact or /new."
                         )
-                    elif ratio >= deps.ctx_warn_threshold:
+                    elif ratio >= deps.config.ctx_warn_threshold:
                         frontend.on_status(
-                            f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.ollama_num_ctx:,} tokens)."
+                            f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.config.ollama_num_ctx:,} tokens)."
                             " Consider /compact to free space."
                         )
 

@@ -17,9 +17,12 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.config import Settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from co_cli.tools.memory import _classify_certainty, _detect_category, _detect_provenance, save_memory
+
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
 def _seed_memory(
@@ -51,12 +54,13 @@ def _seed_memory(
 
 def _make_ctx(max_count: int = 10) -> RunContext:
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-memory-decay",
-        memory_max_count=max_count,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="test-memory-decay",
+            memory_max_count=max_count,
+        ),
     )
-    agent, _, _, _ = get_agent()
-    return RunContext(deps=deps, model=agent.model, usage=RunUsage())
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 def test_decay_cut_triggers():

@@ -10,8 +10,8 @@ import pytest
 from pydantic_ai import ModelRetry
 
 from co_cli.tools.shell import run_shell_command
-from co_cli.shell_backend import ShellBackend
-from co_cli.deps import CoDeps
+from co_cli._shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
 
 
 from dataclasses import dataclass
@@ -24,11 +24,11 @@ class Context:
     tool_call_approved: bool = True
 
 
-def _make_ctx(**overrides) -> Context:
+def _make_ctx(**config_overrides) -> Context:
+    shell = config_overrides.pop("shell", ShellBackend())
     return Context(deps=CoDeps(
-        shell=ShellBackend(),
-        session_id="test",
-        **overrides,
+        services=CoServices(shell=shell),
+        config=CoConfig(session_id="test", **config_overrides),
     ))
 
 
@@ -165,8 +165,8 @@ async def test_shell_workspace_dir_param():
     """ShellBackend respects custom workspace_dir."""
     backend = ShellBackend(workspace_dir="/tmp")
     ctx = Context(deps=CoDeps(
-        shell=backend,
-        session_id="test",
+        services=CoServices(shell=backend),
+        config=CoConfig(session_id="test"),
     ))
 
     result = await run_shell_command(ctx, "pwd")

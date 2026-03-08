@@ -8,7 +8,10 @@ the memory is saved automatically (high) or surfaced for user approval (low).
 
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from co_cli.deps import CoConfig
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
@@ -76,7 +79,12 @@ def _build_window(messages: list) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def analyze_for_signals(messages: list, model: Any) -> SignalResult:
+async def analyze_for_signals(
+    messages: list,
+    model: Any,
+    *,
+    config: "CoConfig",
+) -> SignalResult:
     """Run the signal analyzer mini-agent on the conversation window.
 
     Loads the signal_analyzer.md system prompt, builds a conversation window
@@ -85,7 +93,8 @@ async def analyze_for_signals(messages: list, model: Any) -> SignalResult:
 
     Args:
         messages: Full message history after run_turn() completes.
-        model: pydantic-ai model instance from agent.model (reuses main model).
+        model: pydantic-ai model instance from agent.model (fallback if no analysis role).
+        config: CoConfig for role_models lookup and provider settings.
 
     Returns:
         SignalResult with found/candidate/tag/confidence fields.
@@ -94,6 +103,9 @@ async def analyze_for_signals(messages: list, model: Any) -> SignalResult:
     if not window.strip():
         return SignalResult(found=False)
 
+    from co_cli.agents._factory import resolve_role_model
+    resolved_model: Any = resolve_role_model(config, "analysis", fallback=model)
+
     try:
         prompt_path = (
             Path(__file__).parent / "prompts" / "agents" / "signal_analyzer.md"
@@ -101,7 +113,7 @@ async def analyze_for_signals(messages: list, model: Any) -> SignalResult:
         system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
         signal_agent: Agent[None, SignalResult] = Agent(
-            model=model,
+            model=resolved_model,
             output_type=SignalResult,
             system_prompt=system_prompt,
         )

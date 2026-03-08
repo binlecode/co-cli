@@ -10,7 +10,7 @@ from co_cli.config import settings
 from co_cli.display import console
 
 if TYPE_CHECKING:
-    from co_cli.status import StatusInfo
+    from co_cli._status import StatusInfo
 
 ASCII_ART = {
     "dark": [

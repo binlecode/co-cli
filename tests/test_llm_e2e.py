@@ -1,6 +1,8 @@
+import asyncio
 import os
 import shutil
 import tempfile
+from dataclasses import replace
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -17,10 +19,16 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
-from co_cli.config import get_settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.config import settings
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from co_cli.tools.memory import _load_memories
+
+_CONFIG = CoConfig(
+    role_models={k: list(v) for k, v in settings.role_models.items()},
+    llm_provider=settings.llm_provider,
+    ollama_host=settings.ollama_host,
+)
 
 
 @pytest.mark.asyncio
@@ -33,16 +41,17 @@ async def test_agent_e2e_gemini():
 
     agent, model_settings, _, _ = get_agent()
     try:
-        result = await agent.run("Reply with exactly 'OK'.", model_settings=model_settings)
+        async with asyncio.timeout(60):
+            result = await agent.run("Reply with exactly 'OK'.", model_settings=model_settings)
         assert "OK" in result.output
+    except TimeoutError:
+        pytest.fail("Gemini E2E timed out after 30s — is the API reachable?")
     except Exception as e:
         pytest.fail(f"Gemini E2E failed: {e}")
 
 
 def test_gemini_api_key_overrides_env():
     """Regression: settings gemini_api_key must overwrite a pre-existing GEMINI_API_KEY env var."""
-    from co_cli.config import settings
-
     original_env = os.environ.get("GEMINI_API_KEY")
     original_key = settings.gemini_api_key
     original_provider = settings.llm_provider
@@ -68,9 +77,8 @@ def test_gemini_api_key_overrides_env():
 def _make_deps(session_id: str = "test", personality: str = "finch") -> CoDeps:
     """Create minimal CoDeps for E2E tests."""
     return CoDeps(
-        shell=ShellBackend(),
-        session_id=session_id,
-        personality=personality,
+        services=CoServices(shell=ShellBackend()),
+        config=replace(_CONFIG, session_id=session_id, personality=personality),
     )
 
 
@@ -124,12 +132,15 @@ async def test_agent_e2e_ollama():
     agent, model_settings, _, _ = get_agent()
     deps = _make_deps("test-e2e")
     try:
-        result = await agent.run(
-            "Reply with exactly 'OK'.",
-            deps=deps,
-            model_settings=model_settings,
-        )
+        async with asyncio.timeout(60):
+            result = await agent.run(
+                "Reply with exactly 'OK'.",
+                deps=deps,
+                model_settings=model_settings,
+            )
         assert "OK" in result.output
+    except TimeoutError:
+        pytest.fail("Ollama E2E timed out after 30s — is Ollama running?")
     except Exception as e:
         pytest.fail(f"Ollama E2E failed: {e}")
 
@@ -138,7 +149,7 @@ async def test_agent_e2e_ollama():
 async def test_ollama_memory_gravity():
     """Model retrieves memory through the agent toolchain and references it.
 
-    The agent-facing memory retrieval tool is search_knowledge. This test
+    The agent-facing memory retrieval tool is search_memories. This test
     verifies that a unique memory can be found and reflected in the model
     response via real tool execution.
     Requires LLM_PROVIDER=ollama and Ollama server running.
@@ -146,7 +157,7 @@ async def test_ollama_memory_gravity():
     if os.getenv("LLM_PROVIDER") != "ollama":
         return
 
-    memory_dir = Path.cwd() / ".co-cli" / "knowledge"
+    memory_dir = Path.cwd() / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     # Write a test memory with a unique keyword no other memory would contain
@@ -172,15 +183,16 @@ async def test_ollama_memory_gravity():
         deps = _make_deps("test-memory-gravity")
 
         # Ask the model to search memories — unique keyword ensures our file matches.
-        result = await agent.run(
-            "Search my saved memories for 'zygomorphic-widget'.",
-            deps=deps,
-            model_settings=model_settings,
-        )
+        async with asyncio.timeout(60):
+            result = await agent.run(
+                "Search my saved memories for 'zygomorphic-widget'.",
+                deps=deps,
+                model_settings=model_settings,
+            )
 
         tool_calls = _extract_tool_calls(result)
-        assert "search_knowledge" in tool_calls, (
-            f"Model did not call search_knowledge. Tool calls: {tool_calls}"
+        assert "search_memories" in tool_calls, (
+            f"Model did not call search_memories. Tool calls: {tool_calls}"
         )
 
         # Verify response references the memory content
@@ -211,12 +223,13 @@ async def test_ollama_autonomous_memory_save():
     deps = _make_deps("test-autonomous-save")
 
     # State a clear preference — no mention of save_memory or any tool
-    result = await agent.run(
-        "I always prefer pytest over unittest for Python testing. "
-        "Keep this in mind for our future conversations.",
-        deps=deps,
-        model_settings=model_settings,
-    )
+    async with asyncio.timeout(60):
+        result = await agent.run(
+            "I always prefer pytest over unittest for Python testing. "
+            "Keep this in mind for our future conversations.",
+            deps=deps,
+            model_settings=model_settings,
+        )
 
     # save_memory requires approval → must return DeferredToolRequests
     assert isinstance(result.output, DeferredToolRequests), (
@@ -267,21 +280,27 @@ async def test_ollama_web_research_and_save():
 
     # Full deps with web credentials so web_search can work if Brave key exists
     deps = CoDeps(
-        shell=ShellBackend(),
-        session_id="test-web-research",
-        personality="finch",
-        brave_search_api_key=_settings.brave_search_api_key,
-        web_policy=_settings.web_policy,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            session_id="test-web-research",
+            personality="finch",
+            brave_search_api_key=_settings.brave_search_api_key,
+            web_policy=_settings.web_policy,
+            role_models=_settings.role_models,
+            llm_provider=_settings.llm_provider,
+            ollama_host=_settings.ollama_host,
+        ),
     )
 
     # Natural prompt — no mention of specific tools
-    result = await agent.run(
-        "Go online and learn from Wikipedia about the movie Finch. "
-        "Save a short summary of what you learn to memory.",
-        deps=deps,
-        model_settings=model_settings,
-        usage_limits=UsageLimits(request_limit=25),
-    )
+    async with asyncio.timeout(60):
+        result = await agent.run(
+            "Go online and learn from Wikipedia about the movie Finch. "
+            "Save a short summary of what you learn to memory.",
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=25),
+        )
 
     # Collect all tool calls from the conversation
     tool_calls = _extract_tool_calls(result)
@@ -350,7 +369,7 @@ async def test_ollama_memory_decay():
 
     # Isolated temp project root so we don't touch real memories
     test_root = Path(tempfile.mkdtemp(prefix="co-cli-test-decay-"))
-    memory_dir = test_root / ".co-cli" / "knowledge"
+    memory_dir = test_root / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     original_cwd = os.getcwd()
 
@@ -373,20 +392,28 @@ async def test_ollama_memory_decay():
         assert len(entries_before) == limit
 
         agent, model_settings, _, _ = get_agent()
+        _s = get_settings()
         deps = CoDeps(
-            shell=ShellBackend(),
-            session_id="test-decay",
-            personality="finch",
-            memory_max_count=limit,
+            services=CoServices(shell=ShellBackend()),
+            config=CoConfig(
+                session_id="test-decay",
+                personality="finch",
+                memory_max_count=limit,
+                memory_dir=memory_dir,
+                role_models=_s.role_models,
+                llm_provider=_s.llm_provider,
+                ollama_host=_s.ollama_host,
+            ),
         )
 
         # Ask model to save a preference — triggers save_memory
-        result = await agent.run(
-            "I prefer dark mode for all editors. Save this to memory.",
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=15),
-        )
+        async with asyncio.timeout(60):
+            result = await agent.run(
+                "I prefer dark mode for all editors. Save this to memory.",
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=15),
+            )
 
         tool_calls = _extract_tool_calls(result)
         assert isinstance(result.output, DeferredToolRequests), (

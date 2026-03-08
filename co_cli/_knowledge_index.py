@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS docs (
     updated    TEXT,
     provenance TEXT,
     certainty  TEXT,
-    UNIQUE(source, path)
+    chunk_id   INTEGER DEFAULT 0,
+    UNIQUE(source, path, chunk_id)
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
@@ -157,6 +158,8 @@ class KnowledgeIndex:
         hybrid_text_weight: float = 0.3,
         reranker_provider: str = "none",
         reranker_model: str = "",
+        chunk_size: int = 600,
+        chunk_overlap: int = 80,
     ) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
@@ -170,6 +173,8 @@ class KnowledgeIndex:
         self._hybrid_text_weight = hybrid_text_weight
         self._reranker_provider = reranker_provider
         self._reranker_model = reranker_model
+        self._chunk_size = chunk_size
+        self._chunk_overlap = max(0, min(chunk_overlap, chunk_size - 1)) if chunk_size > 0 else 0
         if not self._reranker_model:
             if self._reranker_provider == "gemini":
                 self._reranker_model = "gemini-2.0-flash"
@@ -193,6 +198,8 @@ class KnowledgeIndex:
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+        self._migrate_chunk_id()
+
         if self._backend == "hybrid":
             try:
                 self._load_sqlite_vec()
@@ -212,6 +219,51 @@ class KnowledgeIndex:
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
+
+    def _migrate_chunk_id(self) -> None:
+        """Rebuild docs table to add chunk_id + new UNIQUE(source, path, chunk_id) if absent."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(docs)").fetchall()}
+        if "chunk_id" in cols:
+            return
+
+        self._conn.executescript("""
+            DROP TRIGGER IF EXISTS docs_ai;
+            DROP TRIGGER IF EXISTS docs_ad;
+            DROP TRIGGER IF EXISTS docs_au;
+            DROP TABLE IF EXISTS docs_fts;
+            ALTER TABLE docs RENAME TO docs_old;
+            CREATE TABLE docs (
+                source TEXT NOT NULL, kind TEXT, path TEXT NOT NULL,
+                title TEXT, content TEXT, mtime REAL, hash TEXT,
+                tags TEXT, category TEXT, created TEXT, updated TEXT,
+                provenance TEXT, certainty TEXT, chunk_id INTEGER DEFAULT 0,
+                UNIQUE(source, path, chunk_id)
+            );
+            CREATE VIRTUAL TABLE docs_fts USING fts5(
+                title, content, tags,
+                tokenize='porter unicode61', content='docs', content_rowid='rowid'
+            );
+            CREATE TRIGGER docs_ai AFTER INSERT ON docs BEGIN
+                INSERT INTO docs_fts(rowid, title, content, tags)
+                VALUES (new.rowid, new.title, new.content, new.tags);
+            END;
+            CREATE TRIGGER docs_ad AFTER DELETE ON docs BEGIN
+                INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
+                VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+            END;
+            CREATE TRIGGER docs_au AFTER UPDATE ON docs BEGIN
+                INSERT INTO docs_fts(docs_fts, rowid, title, content, tags)
+                VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+                INSERT INTO docs_fts(rowid, title, content, tags)
+                VALUES (new.rowid, new.title, new.content, new.tags);
+            END;
+            INSERT INTO docs (source, kind, path, title, content, mtime, hash,
+                              tags, category, created, updated, provenance, certainty, chunk_id)
+                SELECT source, kind, path, title, content, mtime, hash,
+                       tags, category, created, updated, provenance, certainty, 0
+                FROM docs_old;
+            DROP TABLE docs_old;
+        """)
 
     def index(
         self,
@@ -236,23 +288,34 @@ class KnowledgeIndex:
         Uses INSERT OR REPLACE for upsert semantics.
         """
         existing = self._conn.execute(
-            "SELECT hash FROM docs WHERE source = ? AND path = ?",
+            "SELECT hash FROM docs WHERE source = ? AND path = ? AND chunk_id = 0",
             (source, path),
         ).fetchone()
 
         if hash is not None and existing is not None and existing["hash"] == hash:
             return  # unchanged
 
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO docs
-                (source, kind, path, title, content, mtime, hash, tags, category, created, updated,
-                 provenance, certainty)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (source, kind, path, title, content, mtime, hash, tags, category, created, updated,
-             provenance, certainty),
-        )
+        # Delete existing rows for this path (handles re-indexing with different chunk count)
+        self._conn.execute("DELETE FROM docs WHERE source = ? AND path = ?", (source, path))
+
+        # Generate chunks
+        content_str = content or ""
+        if self._chunk_size > 0 and len(content_str) > self._chunk_size:
+            step = self._chunk_size - self._chunk_overlap
+            chunks = [content_str[i:i + self._chunk_size]
+                      for i in range(0, len(content_str), step)]
+        else:
+            chunks = [content_str]
+
+        for chunk_id, chunk_text in enumerate(chunks):
+            self._conn.execute(
+                """INSERT INTO docs
+                       (source, kind, path, title, content, mtime, hash, tags, category,
+                        created, updated, provenance, certainty, chunk_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (source, kind, path, title, chunk_text, mtime, hash, tags, category,
+                 created, updated, provenance, certainty, chunk_id),
+            )
         self._conn.commit()
 
         if self._backend == "hybrid":
@@ -260,7 +323,7 @@ class KnowledgeIndex:
             emb = self._embed_cached(text)
             if emb is not None:
                 row = self._conn.execute(
-                    "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
+                    "SELECT rowid FROM docs WHERE source=? AND path=? AND chunk_id=0", (source, path)
                 ).fetchone()
                 if row:
                     self._conn.execute("DELETE FROM docs_vec WHERE rowid=?", (row["rowid"],))
@@ -341,6 +404,12 @@ class KnowledgeIndex:
                     fts_results, vec_results,
                     self._hybrid_vector_weight, self._hybrid_text_weight,
                 )
+                # Deduplicate by path keeping highest score
+                seen: dict[str, SearchResult] = {}
+                for r in merged:
+                    if r.path not in seen or r.score > seen[r.path].score:
+                        seen[r.path] = r
+                merged = sorted(seen.values(), key=lambda r: r.score, reverse=True)
                 return self._rerank_results(query, merged, limit)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
@@ -425,7 +494,15 @@ class KnowledgeIndex:
                 provenance=row["provenance"],
                 certainty=row["certainty"],
             ))
-        return results
+
+        # Deduplicate by path keeping highest score (chunks produce multiple rows per doc)
+        seen: dict[str, SearchResult] = {}
+        for r in results:
+            if r.path not in seen or r.score > seen[r.path].score:
+                seen[r.path] = r
+        results = list(seen.values())
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:limit]
 
     def _vec_search(
         self,
@@ -658,7 +735,7 @@ class KnowledgeIndex:
         paths = [r.path for r in candidates]
         placeholders = ",".join("?" * len(paths))
         rows = self._conn.execute(
-            f"SELECT path, title, content FROM docs WHERE path IN ({placeholders})",
+            f"SELECT path, title, content FROM docs WHERE path IN ({placeholders}) AND chunk_id = 0",
             paths,
         ).fetchall()
         by_path = {row["path"]: row for row in rows}
@@ -810,7 +887,7 @@ class KnowledgeIndex:
     def needs_reindex(self, source: str, path: str, current_hash: str) -> bool:
         """Return True if the file at path needs re-indexing (hash changed or absent)."""
         row = self._conn.execute(
-            "SELECT hash FROM docs WHERE source = ? AND path = ?",
+            "SELECT hash FROM docs WHERE source = ? AND path = ? AND chunk_id = 0",
             (source, path),
         ).fetchone()
         if row is None:
@@ -931,7 +1008,8 @@ class KnowledgeIndex:
             dir_prefix = str(directory)
             rows = [r for r in rows if r["path"].startswith(dir_prefix + "/") or r["path"] == dir_prefix]
 
-        to_delete = [row["path"] for row in rows if row["path"] not in current_paths]
+        # counts unique paths, not chunk rows — intentional
+        to_delete = list({row["path"] for row in rows if row["path"] not in current_paths})
         if not to_delete:
             return 0
 

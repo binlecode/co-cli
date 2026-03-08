@@ -1,7 +1,7 @@
 """Functional tests for the shell policy engine in shell_policy.py."""
 
 from co_cli.config import _DEFAULT_SAFE_COMMANDS
-from co_cli.shell_policy import ShellDecision, evaluate_shell_command
+from co_cli._shell_policy import ShellDecision, evaluate_shell_command
 
 
 def test_allow_safe_prefix() -> None:

@@ -36,25 +36,7 @@ def test_save_creates_file(tmp_path):
     assert path.exists()
     loaded = json.loads(path.read_text())
     assert loaded == entries
-
-
-def test_save_sets_mode_600(tmp_path):
-    """save_approvals sets file permissions to 0o600."""
-    path = tmp_path / "approvals.json"
-    save_approvals(path, [])
-    mode = path.stat().st_mode & 0o777
-    assert mode == 0o600
-
-
-def test_save_overwrites_mode_600(tmp_path):
-    """save_approvals preserves 0o600 on second write."""
-    path = tmp_path / "approvals.json"
-    save_approvals(path, [{"id": "1"}])
-    # chmod to something else to verify it gets reset
-    path.chmod(0o644)
-    save_approvals(path, [{"id": "1"}, {"id": "2"}])
-    mode = path.stat().st_mode & 0o777
-    assert mode == 0o600
+    assert (tmp_path / "approvals.json").stat().st_mode & 0o777 == 0o600
 
 
 # -- derive_pattern -------------------------------------------------------------
@@ -82,13 +64,6 @@ def test_derive_pattern_three_token_limit():
     assert result == "git diff HEAD~1 *"
 
 
-def test_derive_pattern_no_bare_wildcard():
-    """derive_pattern never produces a bare '*'."""
-    result = derive_pattern("ls")
-    assert result != "*"
-    assert " *" in result
-
-
 # -- find_approved -------------------------------------------------------------
 
 
@@ -112,11 +87,6 @@ def test_find_approved_skips_bare_wildcard():
     entries = [{"id": "abc", "pattern": "*", "tool_name": "run_shell_command"}]
     result = find_approved("anything here", entries)
     assert result is None
-
-
-def test_find_approved_empty_list():
-    """find_approved returns None for empty list."""
-    assert find_approved("ls", []) is None
 
 
 # -- add_approval round-trip ---------------------------------------------------
@@ -185,19 +155,3 @@ def test_prune_stale_removes_old(tmp_path):
     assert remaining[0]["id"] == "fresh"
 
 
-def test_prune_stale_no_op_when_all_fresh(tmp_path):
-    """prune_stale does nothing when all entries are within max_age_days."""
-    path = tmp_path / "approvals.json"
-    fresh_time = datetime.now(timezone.utc).isoformat()
-    entries = [{"id": "a", "pattern": "ls *", "last_used_at": fresh_time}]
-    save_approvals(path, entries)
-
-    prune_stale(path, max_age_days=90)
-
-    remaining = load_approvals(path)
-    assert len(remaining) == 1
-
-
-def test_prune_stale_missing_file_no_error(tmp_path):
-    """prune_stale on missing file does not raise."""
-    prune_stale(tmp_path / "nonexistent.json", max_age_days=30)

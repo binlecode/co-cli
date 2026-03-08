@@ -16,8 +16,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 
 from co_cli._orchestrate import run_turn
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from tests.test_orchestrate import RecordingFrontend, StaticEventAgent
 
 
@@ -43,11 +43,13 @@ def _make_deps(
     ctx_overflow_threshold: float = 1.0,
 ) -> CoDeps:
     return CoDeps(
-        shell=ShellBackend(),
-        llm_provider=llm_provider,
-        ollama_num_ctx=ollama_num_ctx,
-        ctx_warn_threshold=ctx_warn_threshold,
-        ctx_overflow_threshold=ctx_overflow_threshold,
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(
+            llm_provider=llm_provider,
+            ollama_num_ctx=ollama_num_ctx,
+            ctx_warn_threshold=ctx_warn_threshold,
+            ctx_overflow_threshold=ctx_overflow_threshold,
+        ),
     )
 
 

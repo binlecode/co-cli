@@ -1,11 +1,18 @@
 import os
 import json
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
-DEFAULT_OLLAMA_REASONING_MODEL = "qwen3:30b-a3b-thinking-2507-q8_0-agentic"
+DEFAULT_OLLAMA_REASONING_MODELS = [
+    "qwen3:30b-q4_k_m-agentic",
+    "qwen3.5:35b-a3b-q4_k_m-agentic",
+]
+DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3.5:35b-a3b-q4_k_m-nothink"
+DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3.5:35b-a3b-q4_k_m-nothink"
+DEFAULT_OLLAMA_CODING_MODEL = "qwen3-coder-next:q4_k_m-code"
+DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-q4_k_m-research"
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
@@ -102,15 +109,17 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
 }
 
 
-VALID_MODEL_ROLES: frozenset[str] = frozenset(
+class ModelEntry(BaseModel):
+    """A single model entry in a role chain, with optional API parameters."""
+
+    model: str
+    api_params: dict[str, Any] = Field(default_factory=dict)
+
+
+VALID_ROLE_NAMES: frozenset[str] = frozenset(
     {"reasoning", "summarization", "coding", "research", "analysis"}
 )
 
-
-def get_role_head(model_roles: dict[str, list[str]], role: str) -> str:
-    """Return the head model for a role chain, or empty string if absent/empty."""
-    chain = model_roles.get(role, [])
-    return chain[0] if chain else ""
 
 
 class Settings(BaseModel):
@@ -156,6 +165,12 @@ class Settings(BaseModel):
     memory_consolidation_top_k: int = Field(default=5, ge=1)
     # Consolidation: per-call timeout budget (seconds) for extract_facts and resolve
     memory_consolidation_timeout_seconds: int = Field(default=20, ge=0)
+    # Auto-save allowlist: only signals with these tags are saved without prompting
+    memory_auto_save_tags: list[str] = Field(default=["correction", "preference"])
+
+    # Knowledge chunking
+    knowledge_chunk_size: int = Field(default=600, ge=0)
+    knowledge_chunk_overlap: int = Field(default=80, ge=0)
 
     # Shell limits
     shell_max_timeout: int = Field(default=600)
@@ -184,6 +199,13 @@ class Settings(BaseModel):
         default_factory=lambda: _DEFAULT_MCP_SERVERS.copy()
     )
 
+    @field_validator("memory_auto_save_tags", mode="before")
+    @classmethod
+    def _parse_memory_auto_save_tags(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return v
+
     @field_validator("shell_safe_commands", mode="before")
     @classmethod
     def _parse_safe_commands(cls, v: str | list[str]) -> list[str]:
@@ -198,18 +220,32 @@ class Settings(BaseModel):
             return [s.strip().lower() for s in v.split(",") if s.strip()]
         return [s.lower() for s in v]
 
-    @field_validator("model_roles", mode="before")
+    @field_validator("role_models", mode="before")
     @classmethod
-    def _parse_model_roles(cls, v: dict[str, str | list[str]] | None) -> dict[str, list[str]]:
+    def _parse_role_models(cls, v: dict[str, Any] | None) -> dict[str, list[dict]]:
         if not v:
             return {}
-        parsed: dict[str, list[str]] = {}
+        parsed: dict[str, list[dict]] = {}
         for role, models in v.items():
+            entries: list[dict] = []
             if isinstance(models, str):
-                chain = [m.strip() for m in models.split(",") if m.strip()]
+                # Comma-separated string of model names
+                for m in models.split(","):
+                    m = m.strip()
+                    if m:
+                        entries.append({"model": m})
             else:
-                chain = [str(m).strip() for m in models if str(m).strip()]
-            parsed[str(role)] = chain
+                for m in models:
+                    if isinstance(m, str):
+                        m = m.strip()
+                        if m:
+                            entries.append({"model": m})
+                    elif isinstance(m, dict):
+                        entries.append(m)
+                    else:
+                        # Already a ModelEntry instance (re-validation path)
+                        entries.append(m.model_dump() if hasattr(m, "model_dump") else {"model": str(m)})
+            parsed[str(role)] = entries
         return parsed
 
     @field_validator("personality")
@@ -231,33 +267,29 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_reasoning_role(self) -> "Settings":
-        chain = self.model_roles.get("reasoning", [])
+        chain = self.role_models.get("reasoning", [])
         if not chain:
             raise ValueError(
-                "model_roles.reasoning must contain at least one model"
+                "role_models.reasoning must contain at least one model"
             )
         return self
 
     @model_validator(mode="after")
     def _validate_model_role_keys(self) -> "Settings":
-        unknown = set(self.model_roles.keys()) - VALID_MODEL_ROLES
+        unknown = set(self.role_models.keys()) - VALID_ROLE_NAMES
         if unknown:
             raise ValueError(
-                f"Unknown model_roles keys: {sorted(unknown)}. "
-                f"Valid roles: {sorted(VALID_MODEL_ROLES)}"
+                f"Unknown role_models keys: {sorted(unknown)}. "
+                f"Valid roles: {sorted(VALID_ROLE_NAMES)}"
             )
         return self
 
     # Session persistence TTL
     session_ttl_minutes: int = Field(default=60, ge=1)
 
-    # Approval risk classifier
-    approval_risk_enabled: bool = Field(default=False)
-    approval_auto_low_risk: bool = Field(default=False)
-
     # Role model chains (ordered by preference within provider).
     # Mandatory role: reasoning (main agent).
-    model_roles: dict[str, list[str]] = Field(default_factory=dict)
+    role_models: dict[str, list[ModelEntry]] = Field(default_factory=dict)
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
@@ -312,13 +344,14 @@ class Settings(BaseModel):
             "memory_recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
             "memory_consolidation_top_k": "CO_MEMORY_CONSOLIDATION_TOP_K",
             "memory_consolidation_timeout_seconds": "CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS",
+            "memory_auto_save_tags": "CO_CLI_MEMORY_AUTO_SAVE_TAGS",
+            "knowledge_chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
+            "knowledge_chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
             "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
             "ollama_num_ctx": "OLLAMA_NUM_CTX",
-            "approval_risk_enabled": "CO_CLI_APPROVAL_RISK_ENABLED",
-            "approval_auto_low_risk": "CO_CLI_APPROVAL_AUTO_LOW_RISK",
             "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
             "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
             "background_max_concurrent": "CO_BACKGROUND_MAX_CONCURRENT",
@@ -333,7 +366,8 @@ class Settings(BaseModel):
                 data[field] = val
 
         # Per-role model overrides — merge per-key, not whole-dict replacement.
-        model_roles_env: dict[str, list[str]] = {}
+        # Plain strings from env vars are coerced to ModelEntry by _parse_role_models.
+        role_models_env: dict[str, list[str]] = {}
         for role, env_var in [
             ("reasoning", "CO_MODEL_ROLE_REASONING"),
             ("summarization", "CO_MODEL_ROLE_SUMMARIZATION"),
@@ -343,18 +377,22 @@ class Settings(BaseModel):
         ]:
             val = os.getenv(env_var)
             if val:
-                model_roles_env[role] = [m.strip() for m in val.split(",") if m.strip()]
-        if model_roles_env:
-            existing_roles = data.get("model_roles", {})
-            data["model_roles"] = {**existing_roles, **model_roles_env}
-        elif "model_roles" not in data:
+                role_models_env[role] = [m.strip() for m in val.split(",") if m.strip()]
+        if role_models_env:
+            existing_roles = data.get("role_models", {})
+            data["role_models"] = {**existing_roles, **role_models_env}
+        elif "role_models" not in data:
             provider = str(data.get("llm_provider", "ollama")).lower()
-            default_model = (
-                DEFAULT_GEMINI_REASONING_MODEL
-                if provider == "gemini"
-                else DEFAULT_OLLAMA_REASONING_MODEL
-            )
-            data["model_roles"] = {"reasoning": [default_model]}
+            if provider == "gemini":
+                data["role_models"] = {"reasoning": [DEFAULT_GEMINI_REASONING_MODEL]}
+            else:
+                data["role_models"] = {
+                    "reasoning": list(DEFAULT_OLLAMA_REASONING_MODELS),
+                    "summarization": [DEFAULT_OLLAMA_SUMMARIZATION_MODEL],
+                    "analysis": [DEFAULT_OLLAMA_ANALYSIS_MODEL],
+                    "coding": [DEFAULT_OLLAMA_CODING_MODEL],
+                    "research": [{"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}}],
+                }
 
         mcp_env = os.getenv("CO_CLI_MCP_SERVERS")
         if mcp_env:

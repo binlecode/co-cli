@@ -48,14 +48,14 @@ Memory lifecycle internals (signal detection, dedup, decay, certainty classifica
 
 | File | Purpose |
 |------|---------|
-| `co_cli/memory_lifecycle.py` | Write entrypoint: dedup → consolidation → write → retention |
-| `co_cli/memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
-| `co_cli/memory_retention.py` | Cut-only retention enforcement |
+| `co_cli/_memory_lifecycle.py` | Write entrypoint: dedup → consolidation → write → retention |
+| `co_cli/_memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
+| `co_cli/_memory_retention.py` | Cut-only retention enforcement |
 | `co_cli/tools/memory.py` | `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` + shared helpers |
 | `co_cli/tools/personality.py` | Private helper: `_load_personality_memories()` for system prompt injection |
 | `co_cli/_frontmatter.py` | YAML frontmatter parser and validator for memory files |
 | `co_cli/config.py` | Memory settings with env var mappings |
-| `co_cli/deps.py` | `CoDeps` memory scalar fields |
+| `co_cli/deps.py` | Memory scalar fields in `CoConfig` (accessed via `deps.config.*`) |
 | `tests/test_memory_lifecycle.py` | Functional tests: consolidation, dedup, retention, on_failure fallback |
 | `tests/test_memory.py` | Functional tests: save, recall, dedup, gravity |
 
@@ -90,7 +90,7 @@ Agent → list_notes(tag="#project") → read_note(filename)
 
 **`read_note(filename) → str`** — Read full content of a note. Path traversal protection prevents reading outside the vault.
 
-**`search_notes(query, limit=10, folder=None, tag=None) → dict`** (internal, not agent-registered) — Multi-keyword AND search with word boundaries (`\bproject\b`). Dual path: FTS5 via `KnowledgeIndex.sync_dir("obsidian", search_root)` when `ctx.deps.knowledge_index` is set (falls through to regex on exception); regex scan of `*.md` otherwise. Optional `folder` narrows search root; optional `tag` checks YAML frontmatter tags and inline content. Returns `{"display": "...", "count": N, "has_more": bool}`. Empty results return `count: 0` (not `ModelRetry`).
+**`search_notes(query, limit=10, folder=None, tag=None) → dict`** (internal, not agent-registered) — Multi-keyword AND search with word boundaries (`\bproject\b`). Dual path: FTS5 via `KnowledgeIndex.sync_dir("obsidian", search_root)` when `ctx.deps.services.knowledge_index` is set (falls through to regex on exception); regex scan of `*.md` otherwise. Optional `folder` narrows search root; optional `tag` checks YAML frontmatter tags and inline content. Returns `{"display": "...", "count": N, "has_more": bool}`. Empty results return `count: 0` (not `ModelRetry`).
 
 **Error handling (`list_notes`, `read_note`):**
 
@@ -121,7 +121,7 @@ All tools are read-only — no write or delete operations.
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
-| `co_cli/deps.py` | `CoDeps` with `obsidian_vault_path` |
+| `co_cli/deps.py` | `obsidian_vault_path` in `CoConfig` |
 | `tests/test_obsidian.py` | Functional tests |
 
 ---
@@ -160,7 +160,7 @@ ensure_google_credentials(credentials_path, scopes):
   5. None of the above → Return None
 ```
 
-`get_cached_google_creds()` wraps `ensure_google_credentials()`, caches the result on `deps.google_creds` — one resolution per session.
+`get_cached_google_creds()` wraps `ensure_google_credentials()`, caches the result on `deps.session.google_creds` — one resolution per session.
 
 **Drive tools:**
 
@@ -237,7 +237,7 @@ When a Google tool is first called in chat, auth bootstrap can run `gcloud auth 
 | `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
 | `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `co_cli/tools/_errors.py` | Shared helpers: `terminal_error()`, `http_status_code()` |
-| `co_cli/deps.py` | `CoDeps` with `google_credentials_path`, `google_creds` fields |
+| `co_cli/deps.py` | `google_credentials_path` in `CoConfig`; `google_creds` in `CoSessionState` |
 | `tests/test_google_cloud.py` | Functional tests |
 
 ---
@@ -251,7 +251,7 @@ Two tools: `web_search` queries Brave Search for structured results; `web_fetch`
 ```
 web_search(ctx, query, max_results, domains?)
   ├── web_policy.search == "deny" → ModelRetry
-  ├── api_key = ctx.deps.brave_search_api_key
+  ├── api_key = ctx.deps.config.brave_search_api_key
   ├── prepend site: operators (if domains provided)
   └── httpx.get(BRAVE_SEARCH_URL) → display + metadata
 
@@ -354,8 +354,8 @@ web_fetch(ctx, url)
 | `co_cli/tools/_http_retry.py` | Shared HTTP retry: error classification, backoff, Retry-After parsing |
 | `co_cli/tools/_url_safety.py` | SSRF protection: blocked networks/hostnames, `is_url_safe()` |
 | `co_cli/config.py` | `brave_search_api_key`, domain lists, `web_policy` settings |
-| `co_cli/deps.py` | `CoDeps` fields: `brave_search_api_key`, domain lists, `web_policy` |
+| `co_cli/deps.py` | `brave_search_api_key`, domain lists, `web_policy` in `CoConfig` |
 | `co_cli/main.py` | Wires web settings in `create_deps()`, passes `web_policy` to `get_agent()` |
 | `co_cli/agent.py` | Registers web tools with conditional `requires_approval` based on `web_policy` |
-| `co_cli/status.py` | Web tools status row |
+| `co_cli/_status.py` | Web tools status row |
 | `tests/test_web.py` | Functional tests: search, fetch, SSRF, policy gates, error handling |

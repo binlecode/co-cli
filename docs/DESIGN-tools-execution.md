@@ -6,7 +6,7 @@ Local host execution tools: todo session state, shell subprocess, workspace file
 
 ### 1. What & How
 
-`todo_write` / `todo_read` give the model a session-scoped task list for multi-step directives. State lives in `CoDeps.session_todos` (in-memory, not persisted). The model replaces the full list to update status, then reads it back to verify completeness before ending a turn. Rule 05 mandates this check — the model must not respond as done while any `pending` or `in_progress` items remain.
+`todo_write` / `todo_read` give the model a session-scoped task list for multi-step directives. State lives in `CoDeps.session.session_todos` (in-memory, not persisted). The model replaces the full list to update status, then reads it back to verify completeness before ending a turn. Rule 05 mandates this check — the model must not respond as done while any `pending` or `in_progress` items remain.
 
 ```
 todo_write(todos)
@@ -14,10 +14,10 @@ todo_write(todos)
   ├── status ∈ {pending, in_progress, completed, cancelled}
   ├── priority ∈ {high, medium, low} (default: medium)
   ├── Validation error? → return error dict, do not write
-  └── Replace ctx.deps.session_todos → return counts
+  └── Replace ctx.deps.session.session_todos → return counts
 
 todo_read()
-  └── Return current session_todos
+  └── Return current session.session_todos
         └── pending > 0 or in_progress > 0?
               → signal "work is not complete" in display
 ```
@@ -37,7 +37,7 @@ todo_read()
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/todo.py` | `todo_write`, `todo_read` |
-| `co_cli/deps.py` | `CoDeps.session_todos` — session list field, default empty |
+| `co_cli/deps.py` | `CoSessionState.session_todos` — session list field, default empty |
 | `co_cli/agent.py` | Registration: both tools, `requires_approval=False` |
 | `co_cli/prompts/rules/05_workflow.md` | `## Completeness` directive |
 
@@ -81,16 +81,16 @@ User: "list files"
 
 ```
 run_shell_command(ctx, cmd, timeout=120):
-    policy = evaluate_shell_command(cmd, ctx.deps.shell_safe_commands)
+    policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
     DENY  → return terminal_error(policy.reason)            # never deferred, never executed
     REQUIRE_APPROVAL:
         found = find_approved(cmd, load_approvals(exec_approvals_path))
         if found → update_last_used; fall through to execution
         elif not ctx.tool_call_approved → raise ApprovalRequired(metadata={"cmd": cmd})
     ALLOW / persistent approval / tool_call_approved → fall through
-    effective = min(timeout, ctx.deps.shell_max_timeout)
+    effective = min(timeout, ctx.deps.config.shell_max_timeout)
     try:
-        return ctx.deps.shell.run_command(cmd, effective)
+        return ctx.deps.services.shell.run_command(cmd, effective)
     on timeout         → ModelRetry("timed out, use shorter command or increase timeout")
     on permission denied → terminal_error dict (no retry — model sees error, picks different tool)
     on other RuntimeError → ModelRetry("command failed, try different approach")
@@ -112,15 +112,13 @@ if found → update_last_used; fall through to execution
 
 `derive_pattern(cmd)` collects consecutive non-flag tokens from the start (up to 3), stopping at the first flag, then appends ` *` (e.g. `git commit -m "msg"` → `git commit *`). Bare `"*"` is never auto-approved.
 
-**Tier 4 — Skill allowed-tools grants** (`deps.active_skill_allowed_tools`): auto-approves when the active skill's `allowed-tools` frontmatter grants this tool for the current turn.
+**Tier 1 — Skill allowed-tools grants** (`deps.session.skill_tool_grants`): auto-approves when the active skill's `allowed-tools` frontmatter grants this tool for the current turn.
 
-**Tier 5 — Per-session auto-approve** (`deps.auto_approved_tools`, non-shell tools only).
+**Tier 2 — Per-session auto-approve** (`deps.session.session_tool_approvals`, non-shell tools only).
 
-**Tier 6 — Risk classifier** (optional, `deps.approval_risk_enabled`): `ApprovalRisk.LOW` auto-approves when `deps.approval_auto_low_risk` is set; `ApprovalRisk.HIGH` prepends `[HIGH RISK]` to the approval prompt.
+**Tier 3 — User prompt** — `[y/n/a]`.
 
-**Tier 7 — User prompt** — `[y/n/a]`.
-
-**`"a"` persistence:** for `run_shell_command`, `_handle_approvals` derives and saves a pattern to `.co-cli/exec-approvals.json` (cross-session). For other tools, adds to `deps.auto_approved_tools` (session-only).
+**`"a"` persistence:** for `run_shell_command`, `_handle_approvals` derives and saves a pattern to `.co-cli/exec-approvals.json` (cross-session). For other tools, adds to `deps.session.session_tool_approvals` (session-only).
 
 `/approvals list` and `/approvals clear [id]` manage stored patterns at the REPL.
 
@@ -210,14 +208,14 @@ The subprocess runs as the user with read-write access to local files. This is a
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/shell.py` | Tool function — delegates to shell backend, `ModelRetry` on error |
-| `co_cli/shell_backend.py` | `ShellBackend` — subprocess execution with `restricted_env()` |
-| `co_cli/shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL pre-screening |
+| `co_cli/_shell_backend.py` | `ShellBackend` — subprocess execution with `restricted_env()` |
+| `co_cli/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL pre-screening |
 | `co_cli/_approval.py` | `_is_safe_command()` — safe-prefix classification (called by `shell_policy`) |
 | `co_cli/_exec_approvals.py` | Persistent exec approvals (tier 3, evaluated inside `run_shell_command`): `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `co_cli/_shell_env.py` | `restricted_env()` and `kill_process_tree()` |
-| `co_cli/deps.py` | `CoDeps` — holds `shell`, `shell_safe_commands`, `shell_max_timeout`, `exec_approvals_path`, `auto_approved_tools` |
+| `co_cli/deps.py` | `shell` in `CoServices`; `shell_safe_commands`, `shell_max_timeout`, `exec_approvals_path` in `CoConfig`; `session_tool_approvals`, `skill_tool_grants` in `CoSessionState` |
 | `co_cli/config.py` | Shell settings with env var mappings |
-| `co_cli/_orchestrate.py` | `_handle_approvals()` — four-tier approval chain (skill grants → per-session → risk → user prompt) |
+| `co_cli/_orchestrate.py` | `_handle_approvals()` — three-tier approval chain (skill grants → per-session → user prompt) |
 | `co_cli/agent.py` | Tool registration (`requires_approval=False`) + shell system prompt injection |
 | `tests/test_shell.py` | Functional tests — subprocess execution, env sanitization, timeout, cwd |
 | `tests/test_commands.py` | Safe-command classification tests — prefix matching, chaining rejection |
@@ -324,11 +322,11 @@ list_background_tasks(status_filter?)
 
 | File | Purpose |
 |------|---------|
-| `co_cli/background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager, orphan recovery, shutdown) |
+| `co_cli/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager, orphan recovery, shutdown) |
 | `co_cli/tools/task_control.py` | Four agent tools: start, check, cancel, list |
 | `co_cli/agent.py` | Registration: `start_background_task` with approval, others without |
 | `co_cli/config.py` | Background settings fields |
-| `co_cli/deps.py` | `task_runner: Any \| None` field |
+| `co_cli/deps.py` | `task_runner: Any \| None` in `CoServices` |
 | `co_cli/main.py` | `TaskRunner` init before `chat_loop()`, injected into `create_deps()`, `shutdown()` in `try/finally` |
 | `co_cli/_commands.py` | `/background`, `/tasks`, `/cancel` handlers; `/status <task_id>` branch |
 | `tests/test_background.py` | Functional tests: storage, runner lifecycle, cancellation, orphan recovery, slash commands |
@@ -343,15 +341,17 @@ list_background_tasks(status_filter?)
 
 ### 2. Core Logic
 
-**`check_capabilities(ctx) → dict`** — Returns a formatted summary of active integrations:
+**`check_capabilities(ctx) → dict`** — Delegates to `run_doctor(ctx.deps)` and returns a structured summary:
 
 - `knowledge_backend`: active search backend (`"fts5"`, `"hybrid"`, or `"grep"` when index unavailable)
-- `reranker`: active reranker provider name from `ctx.deps.knowledge_reranker_provider`
-- `google`: `True` if `google_credentials_path` is set on `CoDeps`
-- `obsidian`: `True` if `obsidian_vault_path` is set on `CoDeps`
-- `brave`: `True` if `brave_search_api_key` is set on `CoDeps`
-- `mcp_count`: count of configured MCP servers from `ctx.deps.mcp_count`
-- `display`: human-readable formatted summary
+- `reranker`: active reranker provider name from `ctx.deps.config.knowledge_reranker_provider`
+- `google`: `True` if Google credentials resolve (explicit file, token.json, or ADC found on disk)
+- `obsidian`: `True` if vault path is set and the directory exists on disk
+- `brave`: `True` if Brave API key is set and non-empty
+- `mcp_count`: count of configured MCP servers from `ctx.deps.config.mcp_count`
+- `skill_grants`: sorted list of tool names currently granted by the active skill's allowed-tools (`[]` when no skill is active)
+- `checks`: list of `{"name", "status", "detail"}` dicts from the full doctor sweep
+- `display`: human-readable formatted summary (doctor summary lines + reranker, reasoning, session; includes "Active skill grants: ..." line when grants are non-empty)
 
 ### 3. Files
 

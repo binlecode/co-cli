@@ -1,7 +1,6 @@
 """Environment / health checks and status table rendering."""
 
 import os
-import shutil
 import subprocess
 import tomllib
 from dataclasses import dataclass
@@ -10,8 +9,9 @@ from typing import Optional
 
 from rich.table import Table
 
+from co_cli._doctor import run_doctor
 from co_cli.config import settings, DATA_DIR, project_config_path, CONFIG_DIR
-from co_cli._preflight import _check_llm_provider, _check_model_availability
+from co_cli._model_check import _check_llm_provider, _check_model_availability
 
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -58,12 +58,12 @@ def get_status(tool_count: int = 0) -> StatusInfo:
 
     # -- llm --
     provider = settings.llm_provider.lower()
-    reasoning_chain = settings.model_roles.get("reasoning", [])
+    reasoning_chain = settings.role_models.get("reasoning", [])
     if not reasoning_chain:
         llm_provider = f"{provider.title()} (no reasoning model configured)"
         llm_status = "misconfigured"
     elif provider == "gemini":
-        active_model = reasoning_chain[0]
+        active_model = reasoning_chain[0].model
         llm_provider = f"Gemini ({active_model})"
         provider_check = _check_llm_provider(
             settings.llm_provider,
@@ -72,7 +72,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         )
         llm_status = "configured" if provider_check.status == "ok" else "missing key"
     else:
-        active_model = reasoning_chain[0]
+        active_model = reasoning_chain[0].model
         llm_provider = f"Ollama ({active_model})"
         provider_check = _check_llm_provider(
             settings.llm_provider,
@@ -82,7 +82,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         model_check = _check_model_availability(
             settings.llm_provider,
             settings.ollama_host,
-            {k: list(v) for k, v in settings.model_roles.items()},
+            {k: list(v) for k, v in settings.role_models.items()},
         )
         if model_check.status == "error":
             llm_status = "misconfigured"
@@ -93,45 +93,38 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         else:
             llm_status = "offline"
 
-    # -- google credentials --
-    from co_cli.tools._google_auth import GOOGLE_TOKEN_PATH, ADC_PATH
+    # -- integrations via run_doctor --
+    doctor = run_doctor()
 
-    if (
-        settings.google_credentials_path
-        and os.path.exists(os.path.expanduser(settings.google_credentials_path))
-    ):
-        google = "configured"
-        google_detail = settings.google_credentials_path
-    elif GOOGLE_TOKEN_PATH.exists():
-        google = "configured"
-        google_detail = str(GOOGLE_TOKEN_PATH)
-    elif ADC_PATH.exists():
-        google = "adc"
-        google_detail = str(ADC_PATH)
+    google_item = doctor.by_name("google")
+    if google_item and google_item.status == "ok":
+        if "ADC" in google_item.detail:
+            google = "adc"
+        else:
+            google = "configured"
+        google_detail = google_item.extra
     else:
         google = "not found"
         google_detail = "Run 'co chat' to auto-setup or install gcloud"
 
-    # -- obsidian --
-    obsidian_path = settings.obsidian_vault_path
-    obsidian = (
-        "configured"
-        if obsidian_path and os.path.exists(obsidian_path)
-        else "not found"
-    )
+    obsidian_item = doctor.by_name("obsidian")
+    obsidian = "configured" if obsidian_item and obsidian_item.status == "ok" else "not found"
 
-    # -- web search --
-    web_search = "configured" if settings.brave_search_api_key else "not configured"
+    brave_item = doctor.by_name("brave")
+    web_search = "configured" if brave_item and brave_item.status == "ok" else "not configured"
 
-    # -- mcp servers --
-    mcp_status = []
-    for name, cfg in settings.mcp_servers.items():
-        if cfg.url:
-            mcp_status.append((name, "remote (url)"))
-        elif shutil.which(cfg.command):
-            mcp_status.append((name, "ready"))
+    mcp_status: list[tuple[str, str]] = []
+    for item in doctor.checks:
+        if not item.name.startswith("mcp:"):
+            continue
+        server_name = item.name[4:]
+        if item.detail == "remote url":
+            status_str = "remote (url)"
+        elif item.status == "ok":
+            status_str = "ready"
         else:
-            mcp_status.append((name, f"{cfg.command} not found"))
+            status_str = item.detail
+        mcp_status.append((server_name, status_str))
 
     # -- db size --
     db_path = DATA_DIR / "co-cli.db"

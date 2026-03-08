@@ -3,7 +3,7 @@ import json
 import pytest
 from pathlib import Path
 
-from co_cli.workspace_checkpoint import (
+from co_cli._workspace_checkpoint import (
     create_checkpoint,
     list_checkpoints,
     restore_checkpoint,

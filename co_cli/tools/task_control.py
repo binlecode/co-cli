@@ -1,7 +1,7 @@
 """Agent tools for background task management.
 
 All four tools follow the standard pattern: RunContext[CoDeps], return dict[str, Any]
-with a display field. Access TaskRunner via ctx.deps.task_runner.
+with a display field. Access TaskRunner via ctx.deps.services.task_runner.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ async def start_background_task(
         description: Human-readable description of what this task does.
         working_directory: Working directory for the command. Defaults to cwd.
     """
-    runner = ctx.deps.task_runner
+    runner = ctx.deps.services.task_runner
     if runner is None:
         raise ModelRetry("Background task runner is not available in this session.")
 
@@ -79,7 +79,7 @@ async def check_task_status(
         task_id: The task ID returned by start_background_task.
         tail_lines: Number of output lines to return (default 20).
     """
-    runner = ctx.deps.task_runner
+    runner = ctx.deps.services.task_runner
     if runner is None:
         raise ModelRetry("Background task runner is not available in this session.")
 
@@ -152,7 +152,7 @@ async def cancel_background_task(
     Args:
         task_id: The task ID to cancel.
     """
-    runner = ctx.deps.task_runner
+    runner = ctx.deps.services.task_runner
     if runner is None:
         raise ModelRetry("Background task runner is not available in this session.")
 
@@ -161,7 +161,7 @@ async def cancel_background_task(
         return {"display": f"Task not found: {task_id}", "task_id": task_id, "status": "not_found"}
 
     status = meta.get("status")
-    from co_cli.background import TaskStatus
+    from co_cli._background import TaskStatus
     if status != TaskStatus.running.value:
         return {
             "display": f"Task already completed (status={status})",
@@ -189,7 +189,7 @@ async def list_background_tasks(
         status_filter: Optional status to filter by: "pending", "running",
                        "completed", "failed", "cancelled". None = all tasks.
     """
-    runner = ctx.deps.task_runner
+    runner = ctx.deps.services.task_runner
     if runner is None:
         raise ModelRetry("Background task runner is not available in this session.")
 

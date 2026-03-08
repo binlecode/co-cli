@@ -55,7 +55,7 @@ from pydantic_ai.usage import UsageLimits  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 from co_cli.config import get_settings, WebPolicy  # noqa: E402
 from co_cli.deps import CoDeps  # noqa: E402
-from co_cli.shell_backend import ShellBackend  # noqa: E402
+from co_cli._shell_backend import ShellBackend  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

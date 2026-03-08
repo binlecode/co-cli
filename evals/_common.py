@@ -16,9 +16,9 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.settings import ModelSettings
 
 from co_cli._orchestrate import FrontendProtocol
-from co_cli.config import settings, get_settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.config import settings, get_settings, get_role_head
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli._shell_backend import ShellBackend
 
 
 # ---------------------------------------------------------------------------
@@ -29,10 +29,11 @@ from co_cli.shell_backend import ShellBackend
 def detect_model_tag() -> str:
     """Auto-detect a model tag from the current LLM config."""
     provider = settings.llm_provider.lower()
+    model = get_role_head(settings.model_roles, "reasoning")
     if provider == "gemini":
-        return f"gemini-{settings.gemini_model}"
+        return f"gemini-{model}" if model else "gemini"
     if provider == "ollama":
-        return f"ollama-{settings.ollama_model}"
+        return f"ollama-{model}" if model else "ollama"
     return provider
 
 
@@ -44,12 +45,21 @@ def detect_model_tag() -> str:
 def make_eval_deps(**overrides: Any) -> CoDeps:
     """Build a CoDeps suitable for evals, pulling defaults from settings.
 
-    Pass keyword overrides to customise any field, e.g.
+    Pass keyword overrides to customise any CoConfig field, e.g.
     ``make_eval_deps(session_id="my-eval", brave_search_api_key=None)``.
+    Service fields (shell, knowledge_index, task_runner) and session fields
+    (skill_registry) can also be passed as overrides and are extracted before
+    building CoConfig.
     """
     s = get_settings()
-    defaults: dict[str, Any] = {
-        "shell": ShellBackend(),
+
+    # Extract non-config fields before building CoConfig
+    shell = overrides.pop("shell", ShellBackend())
+    knowledge_index = overrides.pop("knowledge_index", None)
+    task_runner = overrides.pop("task_runner", None)
+    skill_registry = overrides.pop("skill_registry", [])
+
+    config_defaults: dict[str, Any] = {
         "session_id": "eval",
         "obsidian_vault_path": None,
         "google_credentials_path": None,
@@ -65,17 +75,27 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "memory_max_count": s.memory_max_count,
         "memory_dedup_window_days": s.memory_dedup_window_days,
         "memory_dedup_threshold": s.memory_dedup_threshold,
-        "memory_decay_strategy": s.memory_decay_strategy,
-        "memory_decay_percentage": s.memory_decay_percentage,
         "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
-        "summarization_model": s.summarization_model,
+        "summarization_model": get_role_head(s.model_roles, "summarization"),
         "knowledge_reranker_provider": s.knowledge_reranker_provider,
         "mcp_count": len(s.mcp_servers),
-        "skill_registry": [],
+        "model_roles": {k: list(v) for k, v in s.model_roles.items()},
+        "llm_provider": s.llm_provider,
+        "ollama_host": s.ollama_host,
+        "ollama_num_ctx": s.ollama_num_ctx,
     }
-    defaults.update(overrides)
-    return CoDeps(**defaults)
+    config_defaults.update(overrides)
+
+    return CoDeps(
+        services=CoServices(
+            shell=shell,
+            knowledge_index=knowledge_index,
+            task_runner=task_runner,
+        ),
+        config=CoConfig(**config_defaults),
+        session=CoSessionState(skill_registry=skill_registry),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +429,7 @@ async def _llm_judge(
     additional character context. Active mindset is stripped — it is the task
     mindset for generating responses, not for evaluating them.
     """
-    role = deps.personality or ""
+    role = deps.config.personality or ""
     character_rules = _load_character_judge(role)
     personality_label = role.capitalize() if role else "this character"
     judge_deps = dataclass_replace(

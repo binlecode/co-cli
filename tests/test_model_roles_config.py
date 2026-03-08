@@ -1,74 +1,93 @@
-"""Config + status tests for role-based model chains."""
+"""Config + status tests for role-based model pref lists."""
 
 import pytest
 
-from co_cli.config import Settings
-from co_cli.status import get_status
+from co_cli.config import Settings, ModelEntry
+from co_cli._status import get_status
 
 
 def test_settings_reject_empty_reasoning_role() -> None:
-    """model_roles.reasoning must contain at least one model."""
-    with pytest.raises(ValueError, match="model_roles.reasoning"):
-        Settings.model_validate({"model_roles": {"reasoning": []}})
+    """role_models.reasoning must contain at least one model."""
+    with pytest.raises(ValueError, match="role_models.reasoning"):
+        Settings.model_validate({"role_models": {"reasoning": []}})
 
 
 def test_settings_parses_role_model_env_lists(monkeypatch) -> None:
-    """Per-role env vars parse as ordered model chains."""
+    """Per-role env vars parse as ordered model pref lists."""
     monkeypatch.setenv("CO_MODEL_ROLE_REASONING", "model-a, model-b")
     monkeypatch.setenv("CO_MODEL_ROLE_CODING", "coder-a,coder-b")
     parsed = Settings.model_validate({})
-    assert parsed.model_roles["reasoning"] == ["model-a", "model-b"]
-    assert parsed.model_roles["coding"] == ["coder-a", "coder-b"]
+    assert parsed.role_models["reasoning"][0].model == "model-a"
+    assert parsed.role_models["reasoning"][1].model == "model-b"
+    assert parsed.role_models["coding"][0].model == "coder-a"
+    assert parsed.role_models["coding"][1].model == "coder-b"
 
 
 def test_settings_reject_unknown_role_key() -> None:
-    """Unknown model_roles keys are rejected at validation."""
+    """Unknown role_models keys are rejected at validation."""
     with pytest.raises(ValueError, match="bogus"):
-        Settings.model_validate({"model_roles": {"reasoning": ["x"], "bogus": ["y"]}})
+        Settings.model_validate({"role_models": {"reasoning": ["x"], "bogus": ["y"]}})
 
 
 def test_settings_parses_summarization_role_env(monkeypatch) -> None:
-    """CO_MODEL_ROLE_SUMMARIZATION parsed as a role chain."""
+    """CO_MODEL_ROLE_SUMMARIZATION parsed as a role pref list."""
     monkeypatch.setenv("CO_MODEL_ROLE_REASONING", "main-model")
     monkeypatch.setenv("CO_MODEL_ROLE_SUMMARIZATION", "sum-a,sum-b")
     parsed = Settings.model_validate({})
-    assert parsed.model_roles["summarization"] == ["sum-a", "sum-b"]
+    assert parsed.role_models["summarization"][0].model == "sum-a"
+    assert parsed.role_models["summarization"][1].model == "sum-b"
 
 
-def test_create_deps_derives_summarization_model_from_role() -> None:
-    """create_deps() populates summarization_model from model_roles[summarization] head."""
+def test_create_deps_role_models_has_model_entry() -> None:
+    """create_deps() populates role_models with ModelEntry objects."""
     from co_cli.main import create_deps, settings
 
-    original_roles = {k: list(v) for k, v in settings.model_roles.items()}
+    original_roles = {k: list(v) for k, v in settings.role_models.items()}
     original_backend = settings.knowledge_search_backend
     try:
-        settings.model_roles = {
-            "reasoning": ["main-model"],
-            "summarization": ["sum-head", "sum-fallback"],
+        settings.role_models = {
+            "reasoning": [ModelEntry(model="main-model")],
+            "summarization": [ModelEntry(model="sum-head"), ModelEntry(model="sum-fallback")],
         }
-        # Deterministic no-index mode for this test.
         settings.knowledge_search_backend = "grep"
         deps = create_deps()
-        assert deps.summarization_model == "sum-head"
-        assert deps.knowledge_index is None
-        assert deps.knowledge_search_backend == "grep"
+        assert isinstance(deps.config.role_models["reasoning"][0], ModelEntry)
+        assert deps.config.role_models["summarization"][0].model == "sum-head"
+        assert deps.services.knowledge_index is None
+        assert deps.config.knowledge_search_backend == "grep"
     finally:
-        settings.model_roles = original_roles
+        settings.role_models = original_roles
         settings.knowledge_search_backend = original_backend
 
 
 def test_status_fast_fails_without_reasoning_models() -> None:
     """Healthcheck reports misconfigured when reasoning role is empty."""
-    from co_cli.status import settings as status_settings
+    from co_cli._status import settings as status_settings
 
-    original_roles = {k: list(v) for k, v in status_settings.model_roles.items()}
+    original_roles = {k: list(v) for k, v in status_settings.role_models.items()}
     try:
-        status_settings.model_roles = {}
+        status_settings.role_models = {}
         info = get_status()
         assert info.llm_status == "misconfigured"
         assert "no reasoning model configured" in info.llm_provider
     finally:
-        status_settings.model_roles = original_roles
+        status_settings.role_models = original_roles
+
+
+def test_model_entry_api_params_coercion() -> None:
+    """Plain string coerces to ModelEntry; dict with api_params parses correctly."""
+    # Plain string coercion
+    s = Settings.model_validate({"role_models": {"reasoning": ["x"]}})
+    assert isinstance(s.role_models["reasoning"][0], ModelEntry)
+    assert s.role_models["reasoning"][0].model == "x"
+    assert s.role_models["reasoning"][0].api_params == {}
+
+    # Explicit ModelEntry dict with api_params
+    s2 = Settings.model_validate({
+        "role_models": {"reasoning": [{"model": "y", "api_params": {"think": False}}]}
+    })
+    assert s2.role_models["reasoning"][0].model == "y"
+    assert s2.role_models["reasoning"][0].api_params == {"think": False}
 
 
 @pytest.mark.parametrize(
@@ -89,11 +108,11 @@ def test_create_deps_backend_resolution_real_runtime(
     try:
         settings.knowledge_search_backend = configured_backend
         deps = create_deps()
-        assert deps.knowledge_search_backend in allowed_resolved
-        if deps.knowledge_search_backend == "grep":
-            assert deps.knowledge_index is None
+        assert deps.config.knowledge_search_backend in allowed_resolved
+        if deps.config.knowledge_search_backend == "grep":
+            assert deps.services.knowledge_index is None
         else:
-            assert deps.knowledge_index is not None
-            deps.knowledge_index.close()
+            assert deps.services.knowledge_index is not None
+            deps.services.knowledge_index.close()
     finally:
         settings.knowledge_search_backend = original_backend

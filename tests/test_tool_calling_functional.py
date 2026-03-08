@@ -8,8 +8,10 @@ Covers:
 - error_recovery after tool failure
 """
 
+import asyncio
 import json
 import os
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -19,11 +21,17 @@ from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps
-from co_cli.shell_backend import ShellBackend
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 
 _AGENTIC_OLLAMA_MODEL = "qwen3:30b-a3b-thinking-2507-q8_0-agentic"
 _AGENTIC_OLLAMA_NUM_CTX = 262144
+
+_CONFIG = CoConfig(
+    role_models={k: list(v) for k, v in settings.role_models.items()},
+    llm_provider=settings.llm_provider,
+    ollama_host=settings.ollama_host,
+)
 
 
 def _is_ollama_provider() -> bool:
@@ -33,9 +41,8 @@ def _is_ollama_provider() -> bool:
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
-        shell=ShellBackend(),
-        session_id=session_id,
-        personality="finch",
+        services=CoServices(shell=ShellBackend()),
+        config=replace(_CONFIG, session_id=session_id, personality="finch"),
     )
 
 
@@ -75,13 +82,13 @@ def _force_agentic_ollama_model():
         return
 
     orig_provider = settings.llm_provider
-    orig_roles = dict(settings.model_roles)
+    orig_roles = {k: list(v) for k, v in settings.role_models.items()}
     orig_num_ctx = settings.ollama_num_ctx
     orig_env_reasoning = os.getenv("CO_MODEL_ROLE_REASONING")
     orig_env_num_ctx = os.getenv("OLLAMA_NUM_CTX")
 
     settings.llm_provider = "ollama"
-    settings.model_roles = {**settings.model_roles, "reasoning": [_AGENTIC_OLLAMA_MODEL]}
+    settings.role_models = {**settings.role_models, "reasoning": [_AGENTIC_OLLAMA_MODEL]}
     settings.ollama_num_ctx = _AGENTIC_OLLAMA_NUM_CTX
     os.environ["CO_MODEL_ROLE_REASONING"] = _AGENTIC_OLLAMA_MODEL
     os.environ["OLLAMA_NUM_CTX"] = str(_AGENTIC_OLLAMA_NUM_CTX)
@@ -90,7 +97,7 @@ def _force_agentic_ollama_model():
         yield
     finally:
         settings.llm_provider = orig_provider
-        settings.model_roles = orig_roles
+        settings.role_models = orig_roles
         settings.ollama_num_ctx = orig_num_ctx
         if orig_env_reasoning is None:
             os.environ.pop("CO_MODEL_ROLE_REASONING", None)
@@ -140,54 +147,65 @@ async def test_tool_selection_and_arg_extraction(
     deps = _make_deps(f"test-tool-{expected_tool}")
 
     last_details = "no run executed"
-    for _ in range(3):
-        try:
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                model_settings=model_settings,
-                usage_limits=UsageLimits(request_limit=2),
-            )
-        except Exception as e:
-            last_details = f"agent.run error: {type(e).__name__}: {e}"
-            continue
-        if not isinstance(result.output, DeferredToolRequests):
-            last_details = f"expected deferred tool call, got {type(result.output).__name__}"
-            continue
-        tool_name, args = _extract_first_deferred_call(result.output)
-        if expected_tool == "search_knowledge_or_list_memories":
-            if tool_name == "search_knowledge":
-                actual = str(args.get("query", "")).lower()
-                if "database preferences" in actual:
-                    return
+    # 120s: up to 3 retries × ~30s per LLM call with thinking model
+    async with asyncio.timeout(60):
+        for _ in range(3):
+            try:
+                result = await agent.run(
+                    prompt,
+                    deps=deps,
+                    model_settings=model_settings,
+                    usage_limits=UsageLimits(request_limit=2),
+                )
+            except Exception as e:
+                last_details = f"agent.run error: {type(e).__name__}: {e}"
+                continue
+            if not isinstance(result.output, DeferredToolRequests):
+                last_details = f"expected deferred tool call, got {type(result.output).__name__}"
+                continue
+            tool_name, args = _extract_first_deferred_call(result.output)
+            if expected_tool == "search_knowledge_or_list_memories":
+                if tool_name == "search_knowledge":
+                    actual = str(args.get("query", "")).lower()
+                    if "database preferences" in actual:
+                        return
+                    last_details = (
+                        f"tool={tool_name!r}, missing arg fragment "
+                        f"'database preferences' in query={args.get('query')!r}"
+                    )
+                    continue
+                if tool_name == "search_memories":
+                    actual = str(args.get("query", "")).lower()
+                    if "database preferences" in actual:
+                        return
+                    last_details = (
+                        f"tool={tool_name!r}, missing arg fragment "
+                        f"'database preferences' in query={args.get('query')!r}"
+                    )
+                    continue
+                if tool_name == "list_memories":
+                    kind = args.get("kind")
+                    if kind in (None, "memory"):
+                        return
+                    last_details = f"tool={tool_name!r}, unexpected kind={kind!r}, args={args!r}"
+                    continue
                 last_details = (
-                    f"tool={tool_name!r}, missing arg fragment "
-                    f"'database preferences' in query={args.get('query')!r}"
+                    f"tool={tool_name!r}, expected one of "
+                    f"('search_knowledge', 'search_memories', 'list_memories'), args={args!r}"
                 )
                 continue
-            if tool_name == "list_memories":
-                kind = args.get("kind")
-                if kind in (None, "memory"):
-                    return
-                last_details = f"tool={tool_name!r}, unexpected kind={kind!r}, args={args!r}"
+            if tool_name != expected_tool:
+                last_details = f"tool={tool_name!r}, expected={expected_tool!r}, args={args!r}"
                 continue
+            actual = str(args.get(arg_key, "")).lower()
+            if arg_contains.lower() in actual:
+                return
             last_details = (
-                f"tool={tool_name!r}, expected one of "
-                f"('search_knowledge', 'list_memories'), args={args!r}"
+                f"tool={tool_name!r}, missing arg fragment "
+                f"{arg_contains!r} in {arg_key}={args.get(arg_key)!r}"
             )
-            continue
-        if tool_name != expected_tool:
-            last_details = f"tool={tool_name!r}, expected={expected_tool!r}, args={args!r}"
-            continue
-        actual = str(args.get(arg_key, "")).lower()
-        if arg_contains.lower() in actual:
-            return
-        last_details = (
-            f"tool={tool_name!r}, missing arg fragment "
-            f"{arg_contains!r} in {arg_key}={args.get(arg_key)!r}"
-        )
 
-    pytest.fail(f"Tool selection/arg extraction failed: {last_details}")
+        pytest.fail(f"Tool selection/arg extraction failed: {last_details}")
 
 
 @pytest.mark.asyncio
@@ -198,12 +216,13 @@ async def test_refusal_no_tool_for_simple_math():
     agent, model_settings, _, _ = get_agent(all_approval=True)
     _assert_agentic_model(agent)
     deps = _make_deps("test-refusal")
-    result = await agent.run(
-        "What is 17 times 23?",
-        deps=deps,
-        model_settings=model_settings,
-        usage_limits=UsageLimits(request_limit=2),
-    )
+    async with asyncio.timeout(60):
+        result = await agent.run(
+            "What is 17 times 23?",
+            deps=deps,
+            model_settings=model_settings,
+            usage_limits=UsageLimits(request_limit=2),
+        )
 
     assert not isinstance(result.output, DeferredToolRequests), (
         f"Expected text-only refusal path, got tool approvals: {result.output!r}"
@@ -234,28 +253,30 @@ async def test_intent_routing_observation_vs_directive(
 
     last_tool: str | None = None
     last_details = "no run executed"
-    for _ in range(3):
-        try:
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                model_settings=model_settings,
-                # Extra budget: model may read files before calling run_shell_command
-                usage_limits=UsageLimits(request_limit=6),
-            )
-        except Exception as e:
-            last_details = f"agent.run error: {type(e).__name__}: {e}"
-            continue
-        if isinstance(result.output, DeferredToolRequests):
-            tool_name, _ = _extract_first_deferred_call(result.output)
-        else:
-            tool_name = None
-        last_tool = tool_name
-        last_details = f"tool={tool_name!r}"
-        if tool_name == expected_tool:
-            return
+    # 120s: up to 3 retries × ~30s per LLM call with thinking model
+    async with asyncio.timeout(60):
+        for _ in range(3):
+            try:
+                result = await agent.run(
+                    prompt,
+                    deps=deps,
+                    model_settings=model_settings,
+                    # Extra budget: model may read files before calling run_shell_command
+                    usage_limits=UsageLimits(request_limit=6),
+                )
+            except Exception as e:
+                last_details = f"agent.run error: {type(e).__name__}: {e}"
+                continue
+            if isinstance(result.output, DeferredToolRequests):
+                tool_name, _ = _extract_first_deferred_call(result.output)
+            else:
+                tool_name = None
+            last_tool = tool_name
+            last_details = f"tool={tool_name!r}"
+            if tool_name == expected_tool:
+                return
 
-    assert last_tool == expected_tool, (
-        f"Intent routing mismatch for prompt={prompt!r}: "
-        f"expected {expected_tool!r}, got {last_tool!r} — {last_details}"
-    )
+        assert last_tool == expected_tool, (
+            f"Intent routing mismatch for prompt={prompt!r}: "
+            f"expected {expected_tool!r}, got {last_tool!r} — {last_details}"
+        )

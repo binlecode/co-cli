@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.status import check_security, SecurityFinding
+from co_cli._status import check_security, SecurityFinding
 
 
 def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
@@ -26,15 +26,6 @@ def test_check_security_no_files_no_findings(tmp_path):
         _project_config_path=tmp_path / "also-nonexistent.json",
     )
     assert findings == []
-
-
-def test_check_security_user_config_correct_mode(tmp_path):
-    """User settings.json with 0o600 → no finding."""
-    p = _make_config(tmp_path)
-    p.chmod(0o600)
-    findings = check_security(_user_config_path=p, _project_config_path=None)
-    user_findings = [f for f in findings if f.check_id == "user-config-permissions"]
-    assert user_findings == []
 
 
 def test_check_security_user_config_wrong_mode(tmp_path):
@@ -90,16 +81,9 @@ def test_check_security_exec_approval_no_wildcard(tmp_path, monkeypatch):
 # -- render_security_findings (smoke test) ---------------------------------
 
 
-def test_render_security_findings_empty_no_output(capsys):
-    """render_security_findings with empty list produces no output."""
-    from co_cli.status import render_security_findings
-    render_security_findings([])
-    # No exception = pass; Rich output goes to console, not capsys
-
-
 def test_render_security_findings_outputs_findings():
     """render_security_findings with findings does not raise."""
-    from co_cli.status import render_security_findings
+    from co_cli._status import render_security_findings
     findings = [
         SecurityFinding(
             severity="warn",

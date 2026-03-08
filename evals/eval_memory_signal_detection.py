@@ -183,8 +183,8 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
             # Build agent and deps
             agent, model_settings, _, _ = get_agent()
             deps = make_eval_deps(session_id=f"eval-signal-{case.id}")
-            deps._safety_state = SafetyState()
-            deps._opening_ctx_state = OpeningContextState()
+            deps.runtime.safety_state = SafetyState()
+            deps.runtime.opening_ctx_state = OpeningContextState()
 
             frontend = SilentFrontend()
 
