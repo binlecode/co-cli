@@ -71,7 +71,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults.
 - **XDG paths**: config in `~/.config/co-cli/`; data in `~/.local/share/co-cli/`.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch digit odd = bugfix, even = feature. Bump only in `pyproject.toml`; version is read via `tomllib` from `pyproject.toml` at runtime.
-- **Status checks**: all environment/health probes live in `co_cli/_status.py` (`get_status() -> StatusInfo` dataclass). Callers such as the banner and `co status` handle display only.
+- **Status checks**: status assembly lives in `co_cli/_status.py` (`get_status() -> StatusInfo` dataclass). Integration health checks live in `co_cli/_doctor.py` and are consumed by status, bootstrap, and capability flows. Callers such as the banner and `co status` handle display only.
 - **Do not use `.env` files**: use `settings.json` or env vars.
 
 ### Testing
@@ -139,7 +139,7 @@ TODO lifecycle:
 
 ### Skills and Workflow
 
-Six skills map onto the dev workflow. Human gates are at decisions, not artifacts.
+The workflow skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
 ```text
 PO brief / TL pre-check
