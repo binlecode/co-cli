@@ -61,12 +61,15 @@ No `certainty` field — articles are external reference content, not user-state
 ### 2.2 KnowledgeIndex internals
 
 `KnowledgeIndex` schema:
-- `docs` table: `source`, `kind`, `path`, `title`, `content`, `tags`, `created`, `updated`, `mtime`, `hash`, `provenance`, `certainty`, `category`, `chunk_id`. UNIQUE constraint is `(source, path, chunk_id)`.
-- `docs_fts` virtual table (FTS5) indexes `title`, `content`, `tags`.
+- `docs` table: `source`, `kind`, `path`, `title`, `content`, `tags`, `created`, `updated`, `mtime`, `hash`, `provenance`, `certainty`, `category`, `chunk_id`. UNIQUE constraint is `(source, path, chunk_id)`. Used for memory source and as the metadata anchor for all sources.
+- `docs_fts` virtual table (FTS5) indexes `title`, `content`, `tags` from `docs`. Used for memory search only.
 - FTS triggers keep `docs_fts` synchronized with `docs` on insert/update/delete.
+- `chunks` table: `source`, `doc_path`, `chunk_index`, `content`, `start_line`, `end_line`, `hash`. PRIMARY KEY is `(source, doc_path, chunk_index)`. Stores paragraph-boundary chunks for non-memory sources.
+- `chunks_fts` virtual table (FTS5) indexes `content` from `chunks`. Used for non-memory (library, obsidian, drive) search.
+- FTS triggers keep `chunks_fts` synchronized with `chunks` on insert/update/delete.
 - `embedding_cache`: generated embeddings keyed by `(provider, model, content_hash)`.
 - Tag filtering is done in-process by string-splitting the space-separated `docs.tags` column; no junction table exists.
-- Hybrid mode: `docs_vec` (`sqlite-vec`) stores vectors keyed by `rowid`.
+- Hybrid mode: `docs_vec` (`sqlite-vec`) stores memory embeddings keyed by `rowid`. `chunks_vec` stores chunk embeddings for non-memory sources, keyed by chunk rowid.
 
 Sync/index mechanics:
 - Hash-based change detection (`needs_reindex`) prevents unchanged writes (anchored to `chunk_id=0`).
@@ -74,20 +77,24 @@ Sync/index mechanics:
 - `remove_stale(source, current_paths, directory?)` deletes rows for disappeared files. Optional `directory` scope prevents sibling-folder eviction during partial syncs. Returns count of unique paths removed (not chunk rows).
 
 Chunking:
-- When `chunk_size > 0` and content exceeds `chunk_size` chars, `index()` splits content into overlapping windows (`step = chunk_size - chunk_overlap`). Each chunk is stored as a separate row with the same `path` and metadata but a unique `chunk_id` (0, 1, 2, …).
+- Non-memory sources (library, obsidian, drive) are chunked via `_chunker.chunk_text()`, which uses token estimation (`len/4`) and respects paragraph > line > character split priority. Memory source is never chunked.
+- Chunks are stored in a separate `chunks` table (keyed by `source`, `doc_path`, `chunk_index`) with a `chunks_fts` FTS5 virtual table for lexical search and, in hybrid mode, `chunks_vec` for vector search.
+- `index_chunks(source, doc_path, chunks)` writes chunk rows atomically (replaces all existing chunks for the path). Raises `ValueError` if called with source `"memory"`.
+- `remove_chunks(source, path)` removes all chunk rows (and any `chunks_vec` entries) for a given path.
 - `search()` deduplicates results by `path`, keeping the highest-scoring chunk per document — callers always receive at most one result per source path.
-- `_fetch_reranker_texts()` fetches from `chunk_id=0` to ensure deterministic reranker input.
+- `_fetch_reranker_texts()` fetches from `chunk_id=0` (docs table) to ensure deterministic reranker input.
 
 FTS query behavior:
 - Query tokens are lowercased, stopwords removed, length > 1, AND-joined.
 - If all tokens are filtered out, search returns empty.
+- Source routing: memory queries run against `docs_fts`; non-memory queries (library, obsidian, drive) run against `chunks_fts`. A mixed or `None` source runs both legs and unions results by path.
 - Tag filters are exact token membership checks against space-separated `docs.tags`.
 - Temporal filters (`created_after`, `created_before`) filter `docs.created`.
 - Tag match mode `"all"` requires all requested tags; `"any"` requires at least one.
 
 Scoring:
 - FTS BM25 rank converted to `score = 1 / (1 + abs(rank))`.
-- Hybrid merge: `vector_weight * vec_score + text_weight * fts_score`.
+- Hybrid merge uses Reciprocal Rank Fusion (RRF) with `k=60` (Cormack 2009). Each document contributes `1/(k + rank + 1)` from each list. The `vector_weight` / `text_weight` parameters are retained in the signature for backward compatibility but are ignored — RRF is rank-based, not score-based.
 
 Reranking:
 - Provider options: `none`, `local`, `ollama`, `gemini`.
@@ -110,8 +117,8 @@ Reranking:
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid mode: `ollama`, `gemini`, `none` |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name sent to provider |
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding dimensionality for `docs_vec` |
-| `knowledge_hybrid_vector_weight` | (none) | `0.7` | Hybrid merge vector score weight; passed directly to `KnowledgeIndex.__init__()` |
-| `knowledge_hybrid_text_weight` | (none) | `0.3` | Hybrid merge FTS score weight; passed directly to `KnowledgeIndex.__init__()` |
+| `knowledge_hybrid_vector_weight` | (none) | `0.7` | Retained for backward compatibility; passed to `KnowledgeIndex.__init__()` but ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
+| `knowledge_hybrid_text_weight` | (none) | `0.3` | Retained for backward compatibility; passed to `KnowledgeIndex.__init__()` but ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
 | `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider: `none`, `local`, `ollama`, `gemini` |
 | `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
 | `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Character window per chunk; 0 = disable chunking |
@@ -129,7 +136,8 @@ Reranking:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/_knowledge_index.py` | Core index engine: schema, sync/index/remove/rebuild, FTS/hybrid/rerank search |
+| `co_cli/_knowledge_index.py` | Core index engine: schema, sync/index/remove/rebuild, FTS/hybrid/rerank search, `index_chunks`, `remove_chunks` |
+| `co_cli/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation, line/char fallback, and overlap prefix |
 | `co_cli/tools/articles.py` | `save_article`, `recall_article`, `read_article_detail`, `search_knowledge` cross-source retrieval |
 | `co_cli/tools/obsidian.py` | `list_notes`, `read_note`, `search_notes` plus index sync on search |
 | `co_cli/tools/google_drive.py` | Drive search/read and opportunistic index writes on file read |

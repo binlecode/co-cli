@@ -1,6 +1,6 @@
 # Co CLI — System Bootstrap Design
 
-Canonical startup flow for co-cli. This doc covers the full wakeup sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the four-step bootstrap initialization sweep.
+Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the four-step bootstrap initialization sweep.
 
 ```mermaid
 flowchart TD
@@ -38,7 +38,7 @@ Three-layer merge, later layers win:
 
 ```text
 Layer 1: ~/.config/co-cli/settings.json
-Layer 2: <cwd>/.co-cli/settings.json
+Layer 2: <cwd>/.co-cli/settings.json via `_deep_merge_settings()`
 Layer 3: env vars via fill_from_env model_validator
 ```
 
@@ -47,6 +47,8 @@ Layer 3: env vars via fill_from_env model_validator
 `role_models` defaults:
 - `gemini`: reasoning chain only -> `gemini-3-flash-preview`; all other roles empty
 - `ollama`: all five roles populated with hardcoded defaults in `config.py`
+
+Merge order is provider defaults for missing roles, then explicit config values, then env var overrides.
 
 The `reasoning` role is validated post-construction. Missing or empty raises `ValueError` at startup.
 
@@ -83,10 +85,21 @@ create_deps():
     memory_dir = Path.cwd() / ".co-cli/memory"
     library_dir = Path(settings.library_path) if set else DATA_DIR / "library"
 
-    registry = ModelRegistry.from_config(config_snapshot)
+    config = dataclasses.replace(
+        CoConfig.from_settings(settings),  # bulk copy for pure Settings-backed fields
+        session_id=session_id,
+        exec_approvals_path=exec_approvals_path,
+        memory_dir=memory_dir,
+        library_dir=library_dir,
+        skills_dir=Path.cwd() / ".co-cli/skills",
+        personality_critique=personality_critique,
+        knowledge_search_backend=resolved_knowledge_backend,
+        mcp_count=len(settings.mcp_servers),
+    )
+
+    registry = ModelRegistry.from_config(config)
     services = CoServices(shell=ShellBackend(), knowledge_index=..., task_runner=None,
                           model_registry=registry)
-    config = CoConfig(..., knowledge_search_backend=resolved_knowledge_backend, ...)
     runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
 
     return CoDeps(services=services, config=config, runtime=runtime)
@@ -95,6 +108,7 @@ create_deps():
 Key transformation:
 - `settings.knowledge_search_backend` is the configured backend
 - `deps.config.knowledge_search_backend` is the resolved backend after degradation
+- `CoConfig.from_settings()` copies pure config fields only; runtime-resolved and session-scoped fields are applied afterward via `dataclasses.replace()`
 
 ### `CoDeps` Group Semantics
 
@@ -295,6 +309,9 @@ Session dict fields:
 - `compaction_count`
 
 The returned `session_data` stays in `chat_loop()` local state and is reused for turn-by-turn persistence.
+- After each completed LLM turn: `touch_session(session_data)` then `save_session()`
+- On `/compact`: `increment_compaction(session_data)` then `save_session()`
+- On exit: no extra save; cleanup only
 
 ### Step 3 - Skills Loaded Report
 
@@ -351,7 +368,7 @@ deps.session.skill_registry = [
 
 `disable_model_invocation: true` skills stay available to the REPL but are hidden from the model-facing `skill_registry`.
 
-Live skill reloading is not a bootstrap concern after startup; it is part of the main loop and is covered in [DESIGN-core-loop.md](DESIGN-core-loop.md).
+Live skill reloading happens after startup in the main loop: before each REPL prompt, `.co-cli/skills/` mtimes are checked, `_load_skills()` reruns when files changed, and the tab-completer is refreshed. That post-startup path is covered in [DESIGN-core-loop.md](DESIGN-core-loop.md).
 
 ### Knowledge Backend Resolution
 
@@ -381,6 +398,7 @@ begin REPL loop
 ```
 
 The banner marks the boundary between startup and interactive use.
+All status messages from model check, bootstrap, and skills loading appear above it.
 
 ### State Mutations Summary
 

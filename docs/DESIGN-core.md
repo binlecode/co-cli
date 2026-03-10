@@ -374,7 +374,7 @@ Memory files are YAML-frontmatter markdown in `.co-cli/memory/` — per-project 
 
 ## 7. Knowledge System
 
-`KnowledgeIndex` provides full-text and hybrid search across all knowledge sources. Sources: `.co-cli/knowledge/` (local knowledge files), `~/.local/share/co-cli/library/` (saved articles), Obsidian vault, and Google Drive (when configured).
+`KnowledgeIndex` provides full-text and hybrid search across all knowledge sources. Sources: `.co-cli/memory/` (agent memories, project-local), `~/.local/share/co-cli/library/` (saved articles, user-global), Obsidian vault, and Google Drive (when configured).
 
 **Primary retrieval tool:** `search_knowledge` — cross-source search, the agent's main knowledge access path. Library-specific tools: `save_article` (deferred), `read_article_detail`.
 
@@ -396,7 +396,7 @@ Four phases run in order at startup, then the REPL loop takes over:
 
 | Phase | Owner | What it does | Flow doc |
 |-------|-------|-------------|----------|
-| **Bootstrap** | `run_model_check()` in `_model_check.py` + `run_bootstrap()` in `_bootstrap.py` | Model dependency check (provider + models), knowledge sync, session restore (or create), skill count report, integration health sweep (Step 4) | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) |
+| **Bootstrap** | `run_model_check()` in `_model_check.py` + `run_bootstrap()` in `_bootstrap.py` | Model dependency check (provider + models), knowledge sync, session restore (or create), skill count report, integration health sweep (Step 4) | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
 | **Chat loop** | `chat_loop()` in `main.py` | REPL input dispatch, pre/post-turn bookkeeping, skill-env lifecycle, reasoning-chain retry | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | **Turn** | `run_turn()` in `_orchestrate.py` | Streaming, approval chaining, provider retry/backoff, interrupt recovery → `TurnResult` | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 

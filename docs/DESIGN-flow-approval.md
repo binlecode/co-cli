@@ -8,7 +8,7 @@ flowchart TD
     B -->|Yes| C[shell_policy.evaluate_shell_command]
     C -->|DENY| D[terminal_error — no prompt, no execution]
     C -->|ALLOW| E[Execute silently]
-    C -->|REQUIRE| F[Three-tier decision chain]
+    C -->|REQUIRE_APPROVAL| F[Three-tier decision chain]
     B -->|No, requires_approval=True| F
     B -->|MCP approval=auto| F
     F --> G{Tier 1: skill_tool_grants?}
@@ -55,7 +55,7 @@ run_shell_command(ctx, cmd, timeout):
 
   2. Tier 2 — ALLOW  (_is_safe_command in _approval.py)
        rejects: shell chaining operators (; & | > < ` $( \n)
-       then prefix-matches against deps.shell_safe_commands (longest prefix first)
+       then prefix-matches against ctx.deps.config.shell_safe_commands (longest prefix first)
        result: fall through to execution silently
 
   3. Tier 3 — Persistent cross-session approvals  (_tool_approvals.py)
@@ -209,7 +209,7 @@ MCP tools are identified by their prefixed name (e.g. `github_create_issue`). If
 | `co_cli/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/_approval.py` | `_is_safe_command()` — safe-prefix classification |
 | `co_cli/_exec_approvals.py` | `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()` — persistent shell approvals |
-| `co_cli/_tool_approvals.py` | `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()` — approval helpers centralized here |
+| `co_cli/_tool_approvals.py` | `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `approval_remember_hint()` — approval helpers centralized here |
 | `co_cli/_commands.py` | `dispatch()` — sets `deps.session.skill_tool_grants` before LLM turn (Tier 1) |
 | `co_cli/deps.py` | `CoSessionState.session_tool_approvals`, `CoSessionState.skill_tool_grants`; `CoConfig.exec_approvals_path` |
 | `co_cli/agent.py` | Tool registration with `requires_approval` flags; MCP server approval wrapping |

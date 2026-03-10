@@ -19,7 +19,7 @@ What is your question?
     │       └─▶  Layer 2 — Workflow docs
     │               flow-core-turn
     │               flow-approval
-    │               flow-bootstrap  (canonical startup: model check + bootstrap)
+    │               system-bootstrap  (canonical startup: model check + bootstrap)
     │               flow-context-governance
     │
     ├── changing a subsystem (memory, tools, knowledge, skills)?
@@ -55,19 +55,19 @@ System overview and architecture diagrams live in [DESIGN-core.md](DESIGN-core.m
 
 Read a flow doc when you have a **runtime question about a specific workflow** — debugging a bug, tracing execution, or understanding how two modules interact during a user turn.
 
-Each flow doc is self-contained: entry conditions → ordered steps → branching → state mutations → failure paths → owning source files.
+Each workflow doc is self-contained: entry conditions → ordered steps → branching → state mutations → failure paths → owning source files.
 
 | If you're asking... | Read |
 |---------------------|------|
 | What happens from the moment a user types to the LLM responding? | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | Why did a tool not get approved / what's the approval decision chain? | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) |
-| What runs at startup before the first user message? | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) |
+| What runs at startup before the first user message? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
 | How is the system prompt assembled and how does history compaction work? | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) |
 
 | Workflow | Doc | What it covers |
 |----------|-----|----------------|
 | One user turn (end-to-end) | [DESIGN-core-loop.md](DESIGN-core-loop.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
-| Startup (canonical) | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
+| Startup (canonical) | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
 | Tool approval | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) | three-tier decision chain, shell policy path, skill grants, session auto-approve, `"a"` persistence |
 | Context governance | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) | prompt assembly, per-turn layers, memory injection, tool output trimming, history summarization, precomputed compaction |
 
@@ -246,7 +246,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `agents/coder.py` | Read-only coder sub-agent: `CoderResult`, `make_coder_agent(resolved_model: ResolvedModel)` |
 | 3. Tool Layer | `agents/research.py` | Read-only research sub-agent: `ResearchResult`, `make_research_agent(resolved_model: ResolvedModel)` |
 | 3. Tool Layer | `agents/analysis.py` | Read-only analysis sub-agent: `AnalysisResult`, `make_analysis_agent(resolved_model: ResolvedModel)` |
-| 4. Knowledge + Memory | `_knowledge_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search |
+| 4. Knowledge + Memory | `_knowledge_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
+| 4. Knowledge + Memory | `_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |
 | 4. Knowledge + Memory | `_memory_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |
 | 4. Knowledge + Memory | `_memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |

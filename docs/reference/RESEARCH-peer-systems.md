@@ -44,6 +44,8 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 | `Letta` | Memory is product-central; typed in-context vs archival memory; async memory maintenance | co has a strong local memory substrate, but it is still flatter and less visibly typed | Borrow typed memory tiers and async maintenance ideas. Do not adopt a framework dependency wholesale. |
 | `Mem0` | Explicit add/update/delete/none memory semantics; graph memory; multimodal memory | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and user-model structure | Borrow explicit memory mutation semantics and stronger contradiction handling. Do not default to graph-heavy infrastructure. |
 | `Sidekick CLI` / `OpenCode` | Durable workflow, approvals, orchestration, and practical session control without heavyweight framework assumptions | co is directionally aligned and already has tasks, approvals, and skills, but can improve workflow polish and state continuity | Borrow lightweight workflow patterns and background-consolidation ideas. Do not add orchestration machinery for its own sake. |
+| `nanobot` | Ultra-lightweight OpenClaw alternative (~4k lines); broad chat-app integration (Telegram, Discord, Feishu); native heartbeat/cron tasks | co has background tasks and CLI focus, but narrower external channel integration | Borrow lightweight heartbeat/cron execution patterns and chat-app integration ideas. Do not abandon CLI-first origins for a purely chat-bot focus. |
+| `TinyClaw` | Multi-agent teams via queue-based message passing; purely file-based workspaces; bash-driven heartbeat | co has sub-agent delegation but lacks multi-agent fan-out/fan-in conversations and continuous background heartbeats | Borrow queue-based teammate handoff and simple file-driven heartbeats. Do not adopt the black-box CLI wrapper architecture. |
 
 ---
 
@@ -60,6 +62,7 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 | Google | Multimodal, cross-device assistance | https://deepmind.google/technologies/project-astra/<br>https://deepmind.google/en/models/project-astra/ | The assistant frontier is becoming multimodal, proactive, and persistent across devices. |
 | Letta | Typed memory blocks and async memory upkeep | https://docs.letta.com/letta-code/memory | Typed, inspectable memory blocks are stronger than opaque flat recall, and asynchronous memory maintenance is becoming standard. |
 | Mem0 | Structured memory operations | https://docs.mem0.ai/overview<br>https://docs.mem0.ai/core-concepts/memory-operations/add<br>https://docs.mem0.ai/platform/features/graph-memory<br>https://docs.mem0.ai/open-source/features/multimodal-support<br>https://docs.mem0.ai/open-source/features/custom-update-memory-prompt | Frontier memory systems increasingly treat memory as a structured evolving knowledge layer, not a bag of notes. |
+| nanobot | Transparent async scheduling and broad channel continuity | https://github.com/HKUDS/nanobot | Simple, LLM-driven background tasks (heartbeat via markdown) and multi-channel messaging are achievable with very little code overhead. |
 
 # 4. Convergences that matter
 
@@ -85,6 +88,7 @@ Strong evidence:
 
 - OpenAI agent supports tasks that run 5-30 minutes and recurring schedules
 - Letta sleeptime agents
+- nanobot native heartbeat loop (wakes up via reading a `HEARTBEAT.md` file) and robust cron capabilities
 
 Design implication for co:
 
@@ -110,11 +114,12 @@ Strong evidence:
 
 - Anthropic subagents
 - OpenAI unified agent workflows with multiple tool modes
+- TinyClaw queue-based teammate message passing and isolated file workspaces
 
 Design implication for co:
 
 - current delegation work is aligned
-- the gap is not existence of subagents, but making them useful for long-running bounded workflows
+- the gap is not existence of subagents, but making them useful for long-running bounded workflows, potentially using queue-based fan-out like TinyClaw
 
 ## 4.5 Multimodal and cross-surface continuity is rising fast
 
@@ -123,6 +128,7 @@ Strong evidence:
 - Google Project Astra
 - OpenAI Atlas and agent/browser integration
 - Mem0 multimodal memory
+- nanobot multi-channel chat-app messaging bus (Telegram, Discord, Feishu, QQ, etc.)
 
 Design implication for co:
 
@@ -213,7 +219,7 @@ That is a better design center than maximizing recall count or extraction aggres
 
 ## 6.2 Asynchronous autonomy
 
-co has background subprocesses, but not yet recurring plans, deferred follow-up, or task graphs that combine tools, memory updates, and approvals over time.
+co has background subprocesses, but not yet recurring plans, deferred follow-up, or task graphs that combine tools, memory updates, and approvals over time. The explicit, file-backed `HEARTBEAT.md` loop pattern seen in `nanobot` illustrates a highly transparent, local-first way to implement recurring tasks without rigid framework scheduling.
 
 ## 6.3 Memory legibility
 
@@ -250,12 +256,14 @@ Examples:
 - from Claude Code: adopt scoped specialist contexts, not coding-first product scope
 - from Letta: adopt typed memory visibility, not a framework dependency
 - from Mem0: adopt explicit memory update semantics, not graph-heavy architecture by default
+- from nanobot: adopt transparent heartbeat tasks and channel event bus, not a pure chatbot architecture
+- from TinyClaw: adopt teammate message passing logic and file-driven heartbeat triggers, not the CLI wrapper architecture
 - from OpenAI/Google frontier products: adopt direction-of-travel signals, not cloud-scale breadth
 ---
 
 # 8. Recommended strategic direction for co
 
-## 7.1 Double down on "trusted local operator"
+## 8.1 Double down on "trusted local operator"
 
 Do not compete by breadth. Compete by:
 
@@ -265,7 +273,7 @@ Do not compete by breadth. Compete by:
 - reversible actions
 - project-aware continuity
 
-## 7.2 Evolve memory into a typed personal state layer
+## 8.2 Evolve memory into a typed personal state layer
 
 Recommended next moves:
 
@@ -274,7 +282,7 @@ Recommended next moves:
 - expose edit/review tools for the user model
 - move more extraction/consolidation into background flows
 
-## 7.3 Turn background execution into bounded agent workflows
+## 8.3 Turn background execution into bounded agent workflows
 
 Recommended next moves:
 
@@ -283,7 +291,7 @@ Recommended next moves:
 - approval checkpoints inside long plans
 - delegated specialists that can run under task control
 
-## 7.4 Treat multimodal/cross-surface work as a medium-term requirement
+## 8.4 Treat multimodal/cross-surface work as a medium-term requirement
 
 Recommended next moves:
 
@@ -291,7 +299,7 @@ Recommended next moves:
 - document and screenshot ingestion
 - tighter browser or browser-adjacent action loops
 
-## 7.5 Reframe personality as working style, not product thesis
+## 8.5 Reframe personality as working style, not product thesis
 
 Personality can still matter, but frontier systems win by:
 

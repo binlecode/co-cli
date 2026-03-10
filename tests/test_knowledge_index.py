@@ -129,11 +129,14 @@ def test_search_stopword_only_returns_empty(tmp_path):
 
 def test_search_filters_by_source(tmp_path):
     """search() with source= returns only matching source."""
+    from co_cli._chunker import Chunk
     idx = KnowledgeIndex(tmp_path / "search.db")
     idx.index(source="memory", path="/mem.md", title="memo", content="pytest memory item",
               hash=_sha256("pytest memory"), mtime=0.0)
     idx.index(source="obsidian", path="/obs.md", title="obsidian", content="pytest obsidian note",
               hash=_sha256("pytest obsidian"), mtime=0.0)
+    # Non-memory sources must also have chunks for routing to find them
+    idx.index_chunks("obsidian", "/obs.md", [Chunk(index=0, content="pytest obsidian note", start_line=0, end_line=0)])
 
     mem_results = idx.search("pytest", source="memory")
     assert all(r.source == "memory" for r in mem_results)
@@ -528,27 +531,157 @@ def test_sync_dir_kind_filter_article(tmp_path):
 
 
 
-def test_chunking(tmp_path: Path) -> None:
-    import sqlite3 as _sqlite3
-    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=400, chunk_overlap=50)
-    idx.index(
-        source="memory", kind="memory", path="/fake/doc.md", title="test",
-        content="A" * 2000, mtime=0.0, hash="abc", tags="", category=None,
-        created="2025-01-01",
-    )
-    conn = _sqlite3.connect(tmp_path / "search.db")
-    count = conn.execute("SELECT count(*) FROM docs WHERE path='/fake/doc.md'").fetchone()[0]
-    assert count >= 4
+# ---------------------------------------------------------------------------
+# Chunking scenarios (scenarios 8–15)
+# ---------------------------------------------------------------------------
 
-    rows = conn.execute(
-        "SELECT content FROM docs WHERE path='/fake/doc.md' ORDER BY chunk_id"
-    ).fetchall()
-    for row in rows:
-        assert len(row[0]) <= 400
-    assert rows[0][0] == "A" * 400
-    conn.close()
 
-    results = idx.search("test")
-    paths = [r.path for r in results]
-    assert paths.count("/fake/doc.md") == 1  # dedup: at most 1 result per path
+def test_chunks_and_chunks_fts_tables_exist(tmp_path):
+    """Scenario 8: chunks and chunks_fts tables are created on KnowledgeIndex init."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    tables = {
+        row[0]
+        for row in idx._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'shadow', 'view')"
+        ).fetchall()
+    }
+    assert "chunks" in tables, f"chunks table missing. Tables: {tables}"
+    assert "chunks_fts" in tables, f"chunks_fts table missing. Tables: {tables}"
     idx.close()
+
+
+def test_index_chunks_inserts_correct_row_count(tmp_path):
+    """Scenario 9: index_chunks inserts correct number of rows into chunks table."""
+    from co_cli._chunker import Chunk
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="library", path="/art.md", title="Test Article", content="body", hash="h", mtime=0.0)
+    chunks = [
+        Chunk(index=0, content="First paragraph content", start_line=0, end_line=2),
+        Chunk(index=1, content="Second paragraph content", start_line=4, end_line=6),
+        Chunk(index=2, content="Third paragraph content", start_line=8, end_line=10),
+    ]
+    idx.index_chunks("library", "/art.md", chunks)
+    count = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source='library' AND doc_path='/art.md'"
+    ).fetchone()[0]
+    assert count == 3
+    idx.close()
+
+
+def test_chunks_fts_finds_phrase_in_second_half_of_article(tmp_path):
+    """Scenario 10: FTS search on non-memory source retrieves phrase only in second half."""
+    from co_cli._chunker import Chunk
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="library", path="/long.md", title="Long Article", content="intro text", hash="h1", mtime=0.0)
+    idx.index_chunks("library", "/long.md", [
+        Chunk(index=0, content="The first half discusses general concepts", start_line=0, end_line=5),
+        Chunk(index=1, content="The second half covers zygomorphic-deep-phrase retrieval patterns", start_line=7, end_line=12),
+    ])
+    results = idx.search("zygomorphic-deep-phrase", source="library")
+    assert len(results) >= 1, "Phrase in second chunk must be retrievable via chunks_fts"
+    assert results[0].path == "/long.md"
+    idx.close()
+
+
+def test_remove_also_removes_chunk_rows(tmp_path):
+    """Scenario 11: remove() on a library article also removes its chunk rows."""
+    from co_cli._chunker import Chunk
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="library", path="/del.md", title="Delete Test", content="content", hash="h2", mtime=0.0)
+    idx.index_chunks("library", "/del.md", [
+        Chunk(index=0, content="chunk content zygomorphic-remove-cascade", start_line=0, end_line=0),
+    ])
+
+    count_before = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE doc_path='/del.md'"
+    ).fetchone()[0]
+    assert count_before == 1
+
+    idx.remove("library", "/del.md")
+
+    count_after = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE doc_path='/del.md'"
+    ).fetchone()[0]
+    assert count_after == 0, "Chunk rows must be removed when the doc is removed"
+    idx.close()
+
+
+def test_sync_dir_library_emits_chunk_rows(tmp_path):
+    """Scenario 12a: sync_dir for library source writes rows into chunks table."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    knowledge_dir = tmp_path / "library"
+    _write_md(knowledge_dir, "001-art.md",
+              "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
+              {"id": 1, "kind": "article", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+
+    idx.sync_dir("library", knowledge_dir)
+
+    count = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source='library'"
+    ).fetchone()[0]
+    assert count >= 1, "sync_dir for library must produce at least one chunk row"
+    idx.close()
+
+
+def test_sync_dir_memory_emits_no_chunk_rows(tmp_path):
+    """Scenario 12b: sync_dir for memory source must not write any chunk rows."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    knowledge_dir = tmp_path / "memory"
+    _write_md(knowledge_dir, "001-mem.md", "User preference note content",
+              {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
+
+    idx.sync_dir("memory", knowledge_dir)
+
+    count = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source='memory'"
+    ).fetchone()[0]
+    assert count == 0, "Memory source must never produce chunk rows"
+    idx.close()
+
+
+def test_recall_memory_queries_docs_fts_not_chunks(tmp_path):
+    """Scenario 13: memory search queries docs_fts; chunks table remains empty for memory."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="memory", kind="memory", path="/m.md", title="mem",
+              content="zygomorphic-recall-memory-test content", hash="hm", mtime=0.0)
+
+    results = idx.search("zygomorphic-recall-memory-test", source="memory")
+    assert len(results) >= 1, "Memory search must find content via docs_fts"
+
+    chunk_count = idx._conn.execute(
+        "SELECT COUNT(*) FROM chunks WHERE source='memory'"
+    ).fetchone()[0]
+    assert chunk_count == 0, "Memory content must not appear in chunks table"
+    idx.close()
+
+
+def test_index_chunks_memory_raises_value_error(tmp_path):
+    """Scenario 14: index_chunks with source='memory' raises ValueError."""
+    from co_cli._chunker import Chunk
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    with pytest.raises(ValueError, match="memory"):
+        idx.index_chunks("memory", "/m.md", [Chunk(index=0, content="x", start_line=0, end_line=0)])
+    idx.close()
+
+
+def test_global_search_returns_both_memory_and_nonmemory(tmp_path):
+    """Scenario 15: source=None search returns results from both memory and non-memory."""
+    from co_cli._chunker import Chunk
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    # Index a memory item
+    idx.index(source="memory", kind="memory", path="/mem15.md", title="Global search memory",
+              content="zygomorphic-global-union memory entry", hash="hg1", mtime=0.0)
+    # Index a library article with chunk
+    idx.index(source="library", kind="article", path="/lib15.md", title="Global search library",
+              content="intro", hash="hg2", mtime=0.0)
+    idx.index_chunks("library", "/lib15.md", [
+        Chunk(index=0, content="zygomorphic-global-union library chunk content", start_line=0, end_line=0),
+    ])
+
+    results = idx.search("zygomorphic-global-union")
+    sources_found = {r.source for r in results}
+    assert "memory" in sources_found, "Global search must include memory results"
+    assert "library" in sources_found, "Global search must include library/chunk results"
+    idx.close()
+
+

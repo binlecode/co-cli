@@ -13,9 +13,9 @@ Source namespace:
 The index is derived and rebuildable — deleting search.db and restarting
 rebuilds cleanly from files.
 
-Phase 1: FTS5 BM25 ranking.
-Phase 2: + sqlite-vec vector similarity. Enabled when backend='hybrid'.
-         Falls back to FTS5-only if embedding provider is unavailable.
+FTS5 BM25 ranking on docs_fts (memory) and chunks_fts (non-memory sources).
+Hybrid mode adds sqlite-vec vector similarity (docs_vec / chunks_vec) merged via RRF.
+Falls back to FTS5-only if embedding provider is unavailable.
 """
 
 import hashlib
@@ -99,9 +99,42 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     created      TEXT NOT NULL,
     PRIMARY KEY (provider, model, content_hash)
 );
+
+CREATE TABLE IF NOT EXISTS chunks (
+    source      TEXT NOT NULL,
+    doc_path    TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content     TEXT,
+    start_line  INTEGER,
+    end_line    INTEGER,
+    hash        TEXT,
+    PRIMARY KEY (source, doc_path, chunk_index)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    content,
+    tokenize='porter unicode61',
+    content='chunks',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content)
+    VALUES ('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, content)
+    VALUES ('delete', old.rowid, old.content);
+    INSERT INTO chunks_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
 """
 
-_SELECT_SQL = """
+_MEMORY_FTS_SQL = """
 SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updated,
        d.provenance, d.certainty,
        snippet(docs_fts, 1, '>', '<', '...', 40) AS snippet,
@@ -109,7 +142,46 @@ SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updat
   FROM docs_fts
   JOIN docs d ON d.rowid = docs_fts.rowid
  WHERE docs_fts MATCH ?
+   AND d.source = 'memory'
 """
+
+_CHUNKS_FTS_SQL = """
+SELECT c.source, c.doc_path AS path,
+       snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
+       bm25(chunks_fts) AS rank,
+       d.kind, d.title, d.tags, d.category, d.created, d.updated, d.provenance, d.certainty
+  FROM chunks_fts
+  JOIN chunks c ON c.rowid = chunks_fts.rowid
+  JOIN docs d ON d.source = c.source AND d.path = c.doc_path AND d.chunk_id = 0
+ WHERE chunks_fts MATCH ?
+"""
+
+
+def _uses_memory_leg(source: str | list[str] | None) -> bool:
+    """True when the memory (docs_fts) leg should be queried."""
+    if source is None:
+        return True
+    if isinstance(source, str):
+        return source == "memory"
+    return "memory" in source
+
+
+def _uses_chunks_leg(source: str | list[str] | None) -> bool:
+    """True when the non-memory (chunks_fts/chunks_vec) leg should be queried."""
+    if source is None:
+        return True
+    if isinstance(source, str):
+        return source != "memory"
+    return any(s != "memory" for s in source)
+
+
+def _nonmemory_sources(source: str | list[str] | None) -> list[str] | None:
+    """Return non-memory sources for the chunks leg, or None for all non-memory."""
+    if source is None:
+        return None
+    if isinstance(source, str):
+        return [source] if source != "memory" else []
+    return [s for s in source if s != "memory"]
 
 
 @dataclass
@@ -206,6 +278,9 @@ class KnowledgeIndex:
                 self._conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS docs_vec USING vec0(embedding float[{embedding_dims}])"
                 )
+                self._conn.execute(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[{embedding_dims}])"
+                )
                 self._conn.commit()
             except Exception as e:
                 raise RuntimeError(
@@ -295,27 +370,18 @@ class KnowledgeIndex:
         if hash is not None and existing is not None and existing["hash"] == hash:
             return  # unchanged
 
-        # Delete existing rows for this path (handles re-indexing with different chunk count)
+        # Delete existing rows for this path
         self._conn.execute("DELETE FROM docs WHERE source = ? AND path = ?", (source, path))
 
-        # Generate chunks
         content_str = content or ""
-        if self._chunk_size > 0 and len(content_str) > self._chunk_size:
-            step = self._chunk_size - self._chunk_overlap
-            chunks = [content_str[i:i + self._chunk_size]
-                      for i in range(0, len(content_str), step)]
-        else:
-            chunks = [content_str]
-
-        for chunk_id, chunk_text in enumerate(chunks):
-            self._conn.execute(
-                """INSERT INTO docs
-                       (source, kind, path, title, content, mtime, hash, tags, category,
-                        created, updated, provenance, certainty, chunk_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (source, kind, path, title, chunk_text, mtime, hash, tags, category,
-                 created, updated, provenance, certainty, chunk_id),
-            )
+        self._conn.execute(
+            """INSERT INTO docs
+                   (source, kind, path, title, content, mtime, hash, tags, category,
+                    created, updated, provenance, certainty, chunk_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+            (source, kind, path, title, content_str, mtime, hash, tags, category,
+             created, updated, provenance, certainty),
+        )
         self._conn.commit()
 
         if self._backend == "hybrid":
@@ -333,6 +399,91 @@ class KnowledgeIndex:
                         (row["rowid"], blob),
                     )
                     self._conn.commit()
+
+    def index_chunks(
+        self,
+        source: str,
+        doc_path: str,
+        chunks: list[Any],
+    ) -> None:
+        """Write paragraph chunks to chunks/chunks_fts (and chunks_vec in hybrid mode).
+
+        Replaces all existing chunks for (source, doc_path) atomically.
+        Memory source is not allowed — raises ValueError.
+
+        Args:
+            source: Source label ('library', 'obsidian', 'drive'). Not 'memory'.
+            doc_path: Path key matching the docs.path for this document.
+            chunks: List of Chunk objects from _chunker.chunk_text().
+        """
+        if source == "memory":
+            raise ValueError("memory source must not be chunked")
+
+        if self._backend == "hybrid":
+            existing_rowids = [
+                row[0] for row in
+                self._conn.execute(
+                    "SELECT rowid FROM chunks WHERE source=? AND doc_path=?",
+                    (source, doc_path),
+                ).fetchall()
+            ]
+            if existing_rowids:
+                placeholders = ",".join("?" * len(existing_rowids))
+                self._conn.execute(
+                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    existing_rowids,
+                )
+
+        self._conn.execute(
+            "DELETE FROM chunks WHERE source=? AND doc_path=?",
+            (source, doc_path),
+        )
+
+        for chunk in chunks:
+            self._conn.execute(
+                """INSERT INTO chunks (source, doc_path, chunk_index, content, start_line, end_line)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (source, doc_path, chunk.index, chunk.content, chunk.start_line, chunk.end_line),
+            )
+
+        if self._backend == "hybrid":
+            for chunk in chunks:
+                emb = self._embed_cached(chunk.content or "")
+                if emb is not None:
+                    row = self._conn.execute(
+                        "SELECT rowid FROM chunks WHERE source=? AND doc_path=? AND chunk_index=?",
+                        (source, doc_path, chunk.index),
+                    ).fetchone()
+                    if row:
+                        blob = struct.pack(f"{len(emb)}f", *emb)
+                        self._conn.execute(
+                            "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+                            (row["rowid"], blob),
+                        )
+
+        self._conn.commit()
+
+    def remove_chunks(self, source: str, path: str) -> None:
+        """Remove all chunk rows for (source, path), including FTS and vec entries."""
+        if self._backend == "hybrid":
+            rowids = [
+                row[0] for row in
+                self._conn.execute(
+                    "SELECT rowid FROM chunks WHERE source=? AND doc_path=?",
+                    (source, path),
+                ).fetchall()
+            ]
+            if rowids:
+                placeholders = ",".join("?" * len(rowids))
+                self._conn.execute(
+                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    rowids,
+                )
+        self._conn.execute(
+            "DELETE FROM chunks WHERE source=? AND doc_path=?",
+            (source, path),
+        )
+        self._conn.commit()
 
     def search(
         self,
@@ -427,57 +578,49 @@ class KnowledgeIndex:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """BM25 FTS5 search. Returns empty list for stopword-only queries."""
+        """BM25 FTS5 search with source routing.
+
+        Memory sources → docs_fts leg.
+        Non-memory sources (library, obsidian, drive) → chunks_fts leg.
+        source=None or mixed → both legs, union by path.
+        """
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
 
-        sql = _SELECT_SQL
-        params: list[Any] = [fts_query]
-
-        if isinstance(source, list):
-            placeholders = ",".join("?" * len(source))
-            sql += f" AND d.source IN ({placeholders})"
-            params.extend(source)
-        elif source is not None:
-            sql += " AND d.source = ?"
-            params.append(source)
-        if kind is not None:
-            sql += " AND d.kind = ?"
-            params.append(kind)
         tags = list(dict.fromkeys(tags)) if tags else tags
-        if created_after is not None:
-            sql += " AND d.created >= ?"
-            params.append(created_after)
-        if created_before is not None:
-            sql += " AND d.created <= ?"
-            params.append(created_before)
+        fetch_limit = limit * 20 if tags else limit
 
-        sql += " ORDER BY rank LIMIT ?"
-        params.append(limit * 20 if tags else limit)
+        all_rows: list[tuple[Any, str]] = []
 
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"FTS search error for query '{query}': {e}")
-            return []
+        if _uses_memory_leg(source):
+            all_rows.extend(self._run_memory_fts(
+                fts_query, kind=kind, created_after=created_after,
+                created_before=created_before, limit=fetch_limit,
+            ))
+
+        if _uses_chunks_leg(source):
+            nonmem = _nonmemory_sources(source)
+            all_rows.extend(self._run_chunks_fts(
+                fts_query, sources=nonmem, kind=kind, created_after=created_after,
+                created_before=created_before, limit=fetch_limit,
+            ))
 
         if tags:
             tag_set = set(tags)
             if tag_match_mode == "all":
-                rows = [
-                    r for r in rows
-                    if tag_set <= {t for t in (r["tags"] or "").split() if t}
+                all_rows = [
+                    (row, leg) for row, leg in all_rows
+                    if tag_set <= {t for t in (row["tags"] or "").split() if t}
                 ]
-            else:  # "any"
-                rows = [
-                    r for r in rows
-                    if tag_set & {t for t in (r["tags"] or "").split() if t}
+            else:
+                all_rows = [
+                    (row, leg) for row, leg in all_rows
+                    if tag_set & {t for t in (row["tags"] or "").split() if t}
                 ]
-            rows = rows[:limit]
 
-        results = []
-        for row in rows:
+        results: list[SearchResult] = []
+        for row, _leg in all_rows:
             rank = row["rank"]
             score = 1.0 / (1.0 + abs(rank))
             results.append(SearchResult(
@@ -495,14 +638,81 @@ class KnowledgeIndex:
                 certainty=row["certainty"],
             ))
 
-        # Deduplicate by path keeping highest score (chunks produce multiple rows per doc)
+        # Deduplicate by path, keep highest score per document
         seen: dict[str, SearchResult] = {}
         for r in results:
             if r.path not in seen or r.score > seen[r.path].score:
                 seen[r.path] = r
-        results = list(seen.values())
-        results.sort(key=lambda r: r.score, reverse=True)
-        return results[:limit]
+        sorted_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
+        return sorted_results[:limit]
+
+    def _run_memory_fts(
+        self,
+        fts_query: str,
+        *,
+        kind: str | None,
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> list[tuple[Any, str]]:
+        """Execute docs_fts (memory) leg. Returns (row, 'memory') tuples."""
+        sql = _MEMORY_FTS_SQL
+        params: list[Any] = [fts_query]
+        if kind is not None:
+            sql += " AND d.kind = ?"
+            params.append(kind)
+        if created_after is not None:
+            sql += " AND d.created >= ?"
+            params.append(created_after)
+        if created_before is not None:
+            sql += " AND d.created <= ?"
+            params.append(created_before)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Memory FTS search error: {e}")
+            return []
+        return [(row, "memory") for row in rows]
+
+    def _run_chunks_fts(
+        self,
+        fts_query: str,
+        *,
+        sources: list[str] | None,
+        kind: str | None,
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> list[tuple[Any, str]]:
+        """Execute chunks_fts (non-memory) leg. Returns (row, 'chunks') tuples."""
+        sql = _CHUNKS_FTS_SQL
+        params: list[Any] = [fts_query]
+        if sources is not None and len(sources) == 1:
+            sql += " AND c.source = ?"
+            params.append(sources[0])
+        elif sources is not None and len(sources) > 1:
+            placeholders = ",".join("?" * len(sources))
+            sql += f" AND c.source IN ({placeholders})"
+            params.extend(sources)
+        if kind is not None:
+            sql += " AND d.kind = ?"
+            params.append(kind)
+        if created_after is not None:
+            sql += " AND d.created >= ?"
+            params.append(created_after)
+        if created_before is not None:
+            sql += " AND d.created <= ?"
+            params.append(created_before)
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        try:
+            rows = self._conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as e:
+            logger.warning(f"Chunks FTS search error: {e}")
+            return []
+        return [(row, "chunks") for row in rows]
 
     def _vec_search(
         self,
@@ -516,30 +726,64 @@ class KnowledgeIndex:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """Cosine vector search via sqlite-vec. Returns SearchResult list."""
+        """Vector search with source routing.
+
+        Memory sources → docs_vec leg.
+        Non-memory sources → chunks_vec leg.
+        source=None or mixed → both legs, union by path.
+        """
         blob = struct.pack(f"{len(embedding)}f", *embedding)
+        results: list[SearchResult] = []
+
+        if _uses_memory_leg(source):
+            results.extend(self._vec_docs_search(
+                blob, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
+                created_after=created_after, created_before=created_before, limit=limit * 4,
+            ))
+
+        if _uses_chunks_leg(source):
+            nonmem = _nonmemory_sources(source)
+            results.extend(self._vec_chunks_search(
+                blob, sources=nonmem, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
+                created_after=created_after, created_before=created_before, limit=limit * 4,
+            ))
+
+        # Deduplicate by path, keep highest score
+        seen: dict[str, SearchResult] = {}
+        for r in results:
+            if r.path not in seen or r.score > seen[r.path].score:
+                seen[r.path] = r
+        sorted_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
+        return sorted_results[:limit]
+
+    def _vec_docs_search(
+        self,
+        blob: bytes,
+        *,
+        kind: str | None,
+        tags: list[str] | None,
+        tag_match_mode: Literal["any", "all"],
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> list[SearchResult]:
+        """Vector search against docs_vec (memory sources only)."""
         vec_rows = self._conn.execute(
             "SELECT rowid, distance FROM docs_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (blob, limit * 4),
+            (blob, limit),
         ).fetchall()
-
         if not vec_rows:
             return []
 
         rowid_to_distance = {row["rowid"]: row["distance"] for row in vec_rows}
         rowids = list(rowid_to_distance.keys())
-
         placeholders = ",".join("?" * len(rowids))
-        sql = f"SELECT rowid, source, kind, path, title, tags, category, created, updated, provenance, certainty FROM docs WHERE rowid IN ({placeholders})"
+        sql = (
+            f"SELECT rowid, source, kind, path, title, tags, category, created, updated, "
+            f"provenance, certainty FROM docs WHERE rowid IN ({placeholders})"
+            f" AND source = 'memory'"
+        )
         params: list[Any] = list(rowids)
-
-        if isinstance(source, list):
-            src_placeholders = ",".join("?" * len(source))
-            sql += f" AND source IN ({src_placeholders})"
-            params.extend(source)
-        elif source is not None:
-            sql += " AND source = ?"
-            params.append(source)
         if kind is not None:
             sql += " AND kind = ?"
             params.append(kind)
@@ -551,41 +795,119 @@ class KnowledgeIndex:
             params.append(created_before)
 
         doc_rows = self._conn.execute(sql, params).fetchall()
-
         if tags:
             tag_set = set(tags)
             if tag_match_mode == "all":
-                doc_rows = [
-                    r for r in doc_rows
-                    if tag_set <= {t for t in (r["tags"] or "").split() if t}
-                ]
+                doc_rows = [r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
             else:
-                doc_rows = [
-                    r for r in doc_rows
-                    if tag_set & {t for t in (r["tags"] or "").split() if t}
-                ]
+                doc_rows = [r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
 
-        results = []
-        for row in doc_rows:
-            distance = rowid_to_distance.get(row["rowid"], 1.0)
-            score = max(0.0, 1.0 - distance)
-            results.append(SearchResult(
+        return [
+            SearchResult(
                 source=row["source"],
                 kind=row["kind"],
                 path=row["path"],
                 title=row["title"],
                 snippet=None,
-                score=score,
+                score=max(0.0, 1.0 - rowid_to_distance.get(row["rowid"], 1.0)),
                 tags=row["tags"],
                 category=row["category"],
                 created=row["created"],
                 updated=row["updated"],
                 provenance=row["provenance"],
                 certainty=row["certainty"],
-            ))
+            )
+            for row in doc_rows
+        ]
 
-        results.sort(key=lambda r: r.score, reverse=True)
-        return results[:limit]
+    def _vec_chunks_search(
+        self,
+        blob: bytes,
+        *,
+        sources: list[str] | None,
+        kind: str | None,
+        tags: list[str] | None,
+        tag_match_mode: Literal["any", "all"],
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> list[SearchResult]:
+        """Vector search against chunks_vec (non-memory sources)."""
+        vec_rows = self._conn.execute(
+            "SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            (blob, limit),
+        ).fetchall()
+        if not vec_rows:
+            return []
+
+        rowid_to_distance = {row["rowid"]: row["distance"] for row in vec_rows}
+        rowids = list(rowid_to_distance.keys())
+        placeholders = ",".join("?" * len(rowids))
+        chunk_sql = f"SELECT rowid, source, doc_path FROM chunks WHERE rowid IN ({placeholders})"
+        chunk_params: list[Any] = list(rowids)
+        if sources is not None and len(sources) == 1:
+            chunk_sql += " AND source = ?"
+            chunk_params.append(sources[0])
+        elif sources is not None and len(sources) > 1:
+            src_ph = ",".join("?" * len(sources))
+            chunk_sql += f" AND source IN ({src_ph})"
+            chunk_params.extend(sources)
+
+        chunk_rows = self._conn.execute(chunk_sql, chunk_params).fetchall()
+        if not chunk_rows:
+            return []
+
+        # Group by doc_path, keep best (lowest distance) chunk per doc
+        best_by_path: dict[str, tuple[str, float]] = {}
+        for row in chunk_rows:
+            dist = rowid_to_distance.get(row["rowid"], 1.0)
+            path = row["doc_path"]
+            if path not in best_by_path or dist < best_by_path[path][1]:
+                best_by_path[path] = (row["source"], dist)
+
+        # Fetch metadata from docs
+        paths = list(best_by_path.keys())
+        doc_ph = ",".join("?" * len(paths))
+        doc_sql = (
+            f"SELECT source, kind, path, title, tags, category, created, updated, "
+            f"provenance, certainty FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
+        )
+        doc_params: list[Any] = paths
+        if kind is not None:
+            doc_sql += " AND kind = ?"
+            doc_params.append(kind)
+        if created_after is not None:
+            doc_sql += " AND created >= ?"
+            doc_params.append(created_after)
+        if created_before is not None:
+            doc_sql += " AND created <= ?"
+            doc_params.append(created_before)
+
+        doc_rows = self._conn.execute(doc_sql, doc_params).fetchall()
+        if tags:
+            tag_set = set(tags)
+            if tag_match_mode == "all":
+                doc_rows = [r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
+            else:
+                doc_rows = [r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
+
+        return [
+            SearchResult(
+                source=row["source"],
+                kind=row["kind"],
+                path=row["path"],
+                title=row["title"],
+                snippet=None,
+                score=max(0.0, 1.0 - best_by_path[row["path"]][1]),
+                tags=row["tags"],
+                category=row["category"],
+                created=row["created"],
+                updated=row["updated"],
+                provenance=row["provenance"],
+                certainty=row["certainty"],
+            )
+            for row in doc_rows
+        ]
 
     def _hybrid_merge(
         self,
@@ -594,38 +916,39 @@ class KnowledgeIndex:
         vector_weight: float,
         text_weight: float,
     ) -> list[SearchResult]:
-        """Weighted score merge of FTS and vector results, union by path."""
-        by_path: dict[str, dict[str, Any]] = {}
+        """Reciprocal Rank Fusion (RRF) merge of FTS and vector results.
 
-        for r in fts:
-            by_path[r.path] = {
-                "result": r,
-                "fts_score": r.score,
-                "vec_score": 0.0,
-            }
+        vector_weight and text_weight are ignored — RRF is rank-based, not score-based.
+        Both parameters are kept in the signature for backward compatibility with callers.
 
-        for r in vec:
-            if r.path in by_path:
-                by_path[r.path]["vec_score"] = r.score
-            else:
-                by_path[r.path] = {
-                    "result": r,
-                    "fts_score": 0.0,
-                    "vec_score": r.score,
-                }
+        k=60 is the standard constant from Cormack 2009, robust across corpora.
+        A doc at rank i contributes 1/(k + i + 1) to its RRF score (1-based rank).
+        """
+        k = 60
+        rrf_scores: dict[str, float] = {}
+        fts_by_path: dict[str, SearchResult] = {}
+        vec_by_path: dict[str, SearchResult] = {}
+
+        for i, r in enumerate(fts):
+            rrf_scores[r.path] = rrf_scores.get(r.path, 0.0) + 1.0 / (k + i + 1)
+            fts_by_path[r.path] = r
+
+        for j, r in enumerate(vec):
+            rrf_scores[r.path] = rrf_scores.get(r.path, 0.0) + 1.0 / (k + j + 1)
+            vec_by_path[r.path] = r
 
         merged = []
-        for entry in by_path.values():
-            combined = vector_weight * entry["vec_score"] + text_weight * entry["fts_score"]
-            r = entry["result"]
+        for path, score in rrf_scores.items():
+            # Prefer FTS result for snippet; vec-only entries get snippet=None
+            r = fts_by_path.get(path) or vec_by_path[path]
+            snippet = fts_by_path[path].snippet if path in fts_by_path else None
             merged.append(SearchResult(
                 source=r.source,
                 kind=r.kind,
-                path=r.path,
+                path=path,
                 title=r.title,
-                # Prefer FTS snippet when available (vec results have no snippet)
-                snippet=r.snippet if entry["fts_score"] > 0.0 else None,
-                score=combined,
+                snippet=snippet,
+                score=score,
                 tags=r.tags,
                 category=r.category,
                 created=r.created,
@@ -919,6 +1242,11 @@ class KnowledgeIndex:
         if not directory.exists():
             return 0
 
+        if source != "memory":
+            from co_cli._chunker import chunk_text as _chunk_text
+        else:
+            _chunk_text = None
+
         current_paths: set[str] = set()
         indexed = 0
 
@@ -956,6 +1284,13 @@ class KnowledgeIndex:
                     provenance=fm.get("provenance"),
                     certainty=fm.get("certainty"),
                 )
+                if _chunk_text is not None:
+                    text_chunks = _chunk_text(
+                        body.strip(),
+                        chunk_size=self._chunk_size,
+                        overlap=self._chunk_overlap,
+                    )
+                    self.index_chunks(source, path_str, text_chunks)
                 indexed += 1
             except Exception as e:
                 logger.warning(f"Failed to index {file_path}: {e}")
@@ -967,8 +1302,11 @@ class KnowledgeIndex:
         """Remove a single document from the index by path.
 
         The docs_ad trigger fires on DELETE, handling docs_fts cleanup automatically.
-        In hybrid mode, also cleans the docs_vec entry.
+        In hybrid mode, also cleans the docs_vec and chunks_vec entries.
         """
+        # Remove chunk rows first (rowid references must be cleaned before parent rows)
+        self.remove_chunks(source, path)
+
         if self._backend == "hybrid":
             row = self._conn.execute(
                 "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
@@ -1014,6 +1352,8 @@ class KnowledgeIndex:
             return 0
 
         for path in to_delete:
+            # Remove chunk rows before docs rows
+            self.remove_chunks(source, path)
             if self._backend == "hybrid":
                 row = self._conn.execute(
                     "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
@@ -1043,6 +1383,21 @@ class KnowledgeIndex:
         Returns:
             Number of files indexed.
         """
+        # Clean chunk rows before doc rows to avoid orphaned vec references
+        if self._backend == "hybrid":
+            chunk_rowids = [
+                row[0] for row in
+                self._conn.execute(
+                    "SELECT rowid FROM chunks WHERE source = ?", (source,)
+                ).fetchall()
+            ]
+            if chunk_rowids:
+                placeholders = ",".join("?" * len(chunk_rowids))
+                self._conn.execute(
+                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    chunk_rowids,
+                )
+        self._conn.execute("DELETE FROM chunks WHERE source = ?", (source,))
         self._conn.execute("DELETE FROM docs WHERE source = ?", (source,))
         self._conn.commit()
         return self.sync_dir(source, directory, glob)

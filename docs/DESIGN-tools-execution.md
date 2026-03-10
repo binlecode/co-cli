@@ -344,7 +344,7 @@ list_background_tasks(status_filter?)
 
 **`check_capabilities(ctx) → dict`** — Delegates to `run_doctor(ctx.deps)` and returns a structured summary:
 
-- `knowledge_backend`: active search backend (`"fts5"`, `"hybrid"`, or `"grep"` when index unavailable)
+- `knowledge_backend`: configured search backend from `ctx.deps.config.knowledge_search_backend`
 - `reranker`: active reranker provider name from `ctx.deps.config.knowledge_reranker_provider`
 - `google`: `True` if Google credentials resolve (explicit file, token.json, or ADC found on disk)
 - `obsidian`: `True` if vault path is set and the directory exists on disk

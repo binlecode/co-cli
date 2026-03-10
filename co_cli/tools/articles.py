@@ -372,6 +372,15 @@ async def save_article(
                     created=fm2.get("created"),
                     updated=fm2.get("updated"),
                 )
+                from co_cli._chunker import chunk_text
+                consolidated_chunks = chunk_text(
+                    body2.strip(),
+                    chunk_size=ctx.deps.config.knowledge_chunk_size,
+                    overlap=ctx.deps.config.knowledge_chunk_overlap,
+                )
+                ctx.deps.services.knowledge_index.index_chunks(
+                    "library", str(existing), consolidated_chunks
+                )
             except Exception as e:
                 logger.warning(f"Failed to reindex consolidated article: {e}")
         return result
@@ -406,7 +415,6 @@ async def save_article(
     file_path.write_text(md_content, encoding="utf-8")
     logger.info(f"Saved article {article_id} to {file_path}")
 
-    # FTS integration point — activates when Phase 1 ships
     if ctx.deps.services.knowledge_index is not None:
         try:
             ctx.deps.services.knowledge_index.index(
@@ -419,6 +427,15 @@ async def save_article(
                 hash=_content_hash(md_content),
                 tags=" ".join(tags or []),
                 created=frontmatter["created"],
+            )
+            from co_cli._chunker import chunk_text
+            article_chunks = chunk_text(
+                content,
+                chunk_size=ctx.deps.config.knowledge_chunk_size,
+                overlap=ctx.deps.config.knowledge_chunk_overlap,
+            )
+            ctx.deps.services.knowledge_index.index_chunks(
+                "library", str(file_path), article_chunks
             )
         except Exception as e:
             logger.warning(f"Failed to index article {article_id}: {e}")
@@ -468,7 +485,6 @@ async def recall_article(
     """
     library_dir = ctx.deps.config.library_dir
 
-    # FTS path — activates when Phase 1 ships and index is available
     if ctx.deps.services.knowledge_index is not None and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
             fts_results = ctx.deps.services.knowledge_index.search(

@@ -341,7 +341,7 @@ run_shell_command(ctx, cmd, timeout):
        if not approved and not ctx.tool_call_approved -> raise ApprovalRequired(metadata={"cmd": cmd})
 ```
 
-The ALLOW classification itself comes from `_is_safe_command()` inside `_shell_policy.py`, which rejects shell chaining operators and validates the command against the configured safe-prefix list.
+The ALLOW classification itself comes from `_is_safe_command()` in `_approval.py`, which rejects shell chaining operators and validates the command against the configured safe-prefix list. `_shell_policy.py` imports and calls it.
 
 This is not "self-approval" in the sense of bypassing approval. The tool is only self-classifying:
 - `DENY` means block immediately

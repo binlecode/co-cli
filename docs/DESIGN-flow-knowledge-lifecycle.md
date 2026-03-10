@@ -23,6 +23,7 @@ flowchart TD
         A2 -->|No| A4[Write new .md file to library_dir]
         A4 --> A5[knowledge_index.index source=library]
         A3 --> A5
+        A5 --> A6[index_chunks — write paragraph chunks to chunks/chunks_fts]
     end
 
     subgraph Retrieve["Retrieval — search_knowledge"]
@@ -94,12 +95,14 @@ STEP 1a — Memory sync:
       compute hash of content
       if hash matches existing docs row: skip (no-op)
       else: index docs row (source, kind, path, title, content, tags, ...)
+      (memory source: no chunk indexing — chunks are for non-memory sources only)
     remove_stale(source="memory", current_paths, directory=memory_dir):
       delete docs rows for files no longer present in memory_dir
 
 STEP 1b — Library sync:
   knowledge_index.sync_dir(source="library", directory=library_dir, kind_filter="article")
     same mechanics as memory sync, kind_filter="article"
+    for each changed file: index docs row, then call index_chunks() to write paragraph chunks
     scopes eviction to library_dir (prevents cross-directory row deletion)
 
 on sync failure (any exception):
@@ -131,7 +134,8 @@ STEP 1 — URL dedup:
       union-merge tags (deduplicated, lowercased)
       set updated timestamp
       preserve: id, created, provenance ("web-fetch"), decay_protected (true)
-      reindex in knowledge_index
+      reindex in knowledge_index.index(...)
+      call index_chunks("library", path, chunk_text(new_content, ...)) to update chunks
       return (no new file written)
 
 STEP 2 — New file write:
@@ -151,6 +155,8 @@ STEP 2 — New file write:
 STEP 3 — FTS reindex:
   knowledge_index.index(source="library", path, title, content, tags, ...)
     when knowledge_index exists
+  index_chunks("library", path, chunk_text(content, chunk_size, chunk_overlap))
+    splits content into paragraph-boundary chunks and writes to chunks/chunks_fts
 ```
 
 Articles have `decay_protected: true` — they are never auto-deleted by any retention process.
@@ -202,12 +208,16 @@ STEP 3a — With index (FTS5 or hybrid):
   FTS5 path:
     query tokenization: lowercase, stopwords removed, tokens len > 1, AND-joined
     if all tokens filtered → return empty (no search)
-    ranked BM25 search on docs_fts filtered by source IN scope + optional kind + tags
+    source routing:
+      memory sources  → docs_fts leg (memory is not chunked)
+      non-memory sources (library, obsidian, drive) → chunks_fts leg (paragraph chunks)
+      mixed/None scope → both legs, union by path, deduplicate keeping highest score
     score = 1 / (1 + abs(bm25_rank))
   Hybrid path (adds vector layer):
     generate embedding for query via knowledge_embedding_provider
-    vector similarity search in docs_vec
-    merge: vector_weight * vec_score + text_weight * fts_score (default 0.7/0.3)
+    source routing mirrors FTS routing:
+      memory → docs_vec; non-memory → chunks_vec
+    merge via Reciprocal Rank Fusion (RRF, k=60): rank-based, not score-weighted
     on embedding failure: fall back to FTS5 results
   Reranker (when knowledge_reranker_provider != "none"):
     "local": fastembed cross-encoder (if installed); passthrough if not
@@ -277,6 +287,7 @@ Drive docs are indexed opportunistically at read time:
 read_drive_file(file_id):
   fetch content from Drive API
   knowledge_index.index(source="drive", path=file_id, content=text_content, ...)
+  index_chunks("drive", file_id, chunk_text(text_content, chunk_size, chunk_overlap))
   return content
 
 search_drive_files(query):
@@ -354,18 +365,19 @@ state (preferences, corrections), not reference content. Use `search_memories` o
 
 | File | Role |
 |------|------|
-| `co_cli/_knowledge_index.py` | Core index engine: schema, `sync_dir`, `index`, `remove`, `remove_stale`, FTS/hybrid/rerank search |
+| `co_cli/_knowledge_index.py` | Core index engine: schema, `sync_dir`, `index`, `index_chunks`, `remove`, `remove_chunks`, `remove_stale`, FTS/hybrid/rerank search |
+| `co_cli/_chunker.py` | `chunk_text()` — paragraph-boundary chunker used by all non-memory index paths |
 | `co_cli/tools/articles.py` | `save_article`, `recall_article`, `read_article_detail`, `search_knowledge` |
 | `co_cli/tools/obsidian.py` | `list_notes`, `read_note`, `search_notes`; Obsidian `sync_dir` trigger |
-| `co_cli/tools/google_drive.py` | Drive search/read; opportunistic index write on `read_drive_file` |
+| `co_cli/tools/google_drive.py` | Drive search/read; opportunistic index write on `read_drive_file` (index + index_chunks) |
 | `co_cli/_bootstrap.py` | `run_bootstrap()`: startup `sync_dir` for memory and library |
 | `co_cli/main.py` | `create_deps()`: backend resolution, `library_dir` path injection |
-| `co_cli/config.py` | `library_path`, `knowledge_search_backend`, embedding/reranker settings |
+| `co_cli/config.py` | `library_path`, `knowledge_search_backend`, embedding/reranker settings, `knowledge_chunk_size`, `knowledge_chunk_overlap` |
 | `co_cli/deps.py` | `CoConfig.library_dir`, `CoConfig.knowledge_search_backend`; `CoServices.knowledge_index` |
 | `co_cli/_frontmatter.py` | Frontmatter parsing used by all knowledge files |
 
 ## See Also
 
 - `docs/DESIGN-knowledge.md` — authoritative deep spec: `KnowledgeIndex` internals, FTS schema, hybrid merge, reranking
-- `docs/DESIGN-flow-bootstrap.md` — full startup sequence (canonical: model check + bootstrap)
+- `docs/DESIGN-system-bootstrap.md` — full startup sequence (canonical: model check + bootstrap)
 - `docs/DESIGN-flow-memory-lifecycle.md` — memory write/recall/signal paths (distinct subsystem)

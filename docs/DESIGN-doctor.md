@@ -2,7 +2,9 @@
 
 ## 1. What & How
 
-The Doctor module provides system-wide integration health checks — a single sweep that probes every external dependency co-cli may rely on (Google credentials, Obsidian vault, Brave Search API key, MCP server binaries, knowledge index, loaded skills) and returns a structured result. It runs at three callsites: bootstrap Step 4 (runtime sweep with full `CoDeps`), the `check_capabilities` tool (agent-facing introspection), and `_status.py`/`get_status()` (static sweep without a running agent).
+The Doctor module provides system-wide integration health checks — a single sweep that probes every external dependency co-cli may rely on (Google credentials, Obsidian vault, Brave Search API key, MCP server binaries, knowledge index, loaded skills) and returns a structured result. It runs at three callsites: bootstrap Step 4 (automatic startup sweep with full `CoDeps`), the `check_capabilities` tool (runtime introspection with full `CoDeps`), and `_status.py`/`get_status()` (static sweep without a running agent).
+
+The user-facing `/doctor` flow is not a separate health engine and not a bootstrap command. It is a skill prompt in `co_cli/skills/doctor.md` that tells the agent to call `check_capabilities`. That means `/doctor` and any other mid-turn capability check use the same runtime path: `check_capabilities(ctx)` -> `run_doctor(ctx.deps)`. Bootstrap uses the same underlying `run_doctor(...)` function, but for a different purpose: automatic startup visibility, not an on-demand user workflow.
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -35,6 +37,18 @@ via frontend.on_status    checks field
 ```
 
 ## 2. Core Logic
+
+### Relationship between the three surfaces
+
+Doctor appears in three different product surfaces, but only one underlying probe engine exists:
+
+| Surface | User trigger | Code path | Purpose | Runtime context |
+|---------|--------------|-----------|---------|-----------------|
+| Bootstrap system check | automatic during session startup | `_bootstrap.py` Step 4 -> `run_doctor(deps)` | Emit startup health lines so the user sees problems immediately | Full `CoDeps` available |
+| Runtime system check | agent calls capability introspection mid-turn | `check_capabilities(ctx)` -> `run_doctor(ctx.deps)` | Give the running agent structured health/capability data | Full `CoDeps` available |
+| `/doctor` skill | user types `/doctor` | `co_cli/skills/doctor.md` -> agent invokes `check_capabilities(ctx)` -> `run_doctor(ctx.deps)` | User-facing UX layer over the runtime system check | Full `CoDeps` available |
+
+`/doctor` therefore does not bypass the agent and does not talk to `_doctor.py` directly. It is a thin prompt relay over `check_capabilities`.
 
 ### Data model
 
@@ -97,7 +111,7 @@ Resolves Google credential availability using the same three-path chain as `_goo
 - `backend` is the configured search backend string (e.g. `"fts5"`, `"hybrid"`)
 - `index_active` is `True` when `KnowledgeIndex` was successfully initialized
 - If `index_active` → `"ok"` with detail `"{backend} active"`
-- Otherwise → `"warn"` (index unavailable, search tools will degrade to grep fallback)
+- Otherwise → `"warn"` with detail `"grep fallback (FTS5 unavailable)"`
 
 **`check_skills(count) -> CheckItem`**
 
@@ -122,7 +136,7 @@ run_doctor(deps: CoDeps | None = None) -> DoctorResult:
     ))
     checks.append(check_obsidian(s.obsidian_vault_path))
     checks.append(check_brave(s.brave_search_api_key))
-    for name, cfg in s.mcp_servers.items():
+    for name, cfg in (s.mcp_servers or {}).items():
         checks.append(check_mcp_server(name, cfg.command, cfg.url))
 
     # Runtime — requires live deps
@@ -154,7 +168,7 @@ System-owned callers run as part of startup or CLI infrastructure — no agent i
 
 Agent-owned callers run mid-turn with the full runtime already live.
 
-**`capabilities.py`** calls `run_doctor(ctx.deps)` inside the `check_capabilities` tool. The tool return dict includes `checks` (list of `{name, status, detail}` dicts — one per doctor check) alongside other capability fields (`display`, `knowledge_backend`, `reranker`, `mcp_count`, `reasoning_models`, `reasoning_ready`, `skill_grants`, `google`, `obsidian`, `brave`), enabling the agent to reason about integration health on demand. This path is accessible via the existing `/doctor` skill (`co_cli/skills/doctor.md`) or triggered by the LLM during a turn.
+**`capabilities.py`** calls `run_doctor(ctx.deps)` inside the `check_capabilities` tool. The tool return dict includes `checks` (list of `{name, status, detail}` dicts — one per doctor check) alongside other capability fields (`display`, `knowledge_backend`, `reranker`, `mcp_count`, `reasoning_models`, `reasoning_ready`, `skill_grants`, `google`, `obsidian`, `brave`), enabling the agent to reason about integration health on demand. This path is reachable in two ways: the user explicitly invokes `/doctor`, whose skill body instructs the agent to call `check_capabilities`, or the model decides to call `check_capabilities` during a normal turn.
 
 The `deps=None` path (system callers) runs only the four static checks plus one MCP check per configured server. The `deps` path (agent callers) adds knowledge and skills checks on top. Doctor stays reusable across both call paths — it is not a bootstrap-internal helper.
 

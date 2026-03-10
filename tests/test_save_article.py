@@ -614,3 +614,37 @@ def test_search_knowledge_default_excludes_memories(tmp_path, monkeypatch):
     mem_result = _run(search_knowledge(ctx, "xylozygote-partition-test", source="memory"))
     assert mem_result["count"] >= 1, "Explicit source='memory' must still find memories"
     idx.close()
+
+
+# ---------------------------------------------------------------------------
+# Scenario 20: chunks FTS end-to-end via save_article
+# ---------------------------------------------------------------------------
+
+
+def test_save_article_long_article_second_half_retrievable(tmp_path, monkeypatch):
+    """Scenario 20: save a long article; phrase only in second half must be retrievable via chunks FTS."""
+    from co_cli._knowledge_index import KnowledgeIndex
+
+    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=100, chunk_overlap=10)
+    ctx = _ctx_with_idx(idx)
+    monkeypatch.chdir(tmp_path)
+
+    # Construct article >2 x chunk_size tokens: ~100 tokens = 400 chars
+    # First half has no target phrase; second half has it
+    first_half = "This is the opening section. " * 20
+    second_half = "This section discusses zygomorphic-second-half-retrieval patterns in depth. " * 20
+    long_content = first_half + "\n\n" + second_half
+
+    _run(save_article(
+        ctx,
+        content=long_content,
+        title="Long Article Chunking Test",
+        origin_url="https://example.com/zygomorphic-second-half-retrieval",
+        tags=["test"],
+    ))
+
+    results = idx.search("zygomorphic-second-half-retrieval", source="library")
+    assert len(results) >= 1, (
+        "Phrase only in second half of article must be retrievable via chunks FTS"
+    )
+    idx.close()

@@ -166,6 +166,13 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
                     content=text,
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
+                from co_cli._chunker import chunk_text
+                drive_chunks = chunk_text(
+                    text,
+                    chunk_size=ctx.deps.config.knowledge_chunk_size,
+                    overlap=ctx.deps.config.knowledge_chunk_overlap,
+                )
+                ctx.deps.services.knowledge_index.index_chunks("drive", file_id, drive_chunks)
             except Exception:
                 pass
 
