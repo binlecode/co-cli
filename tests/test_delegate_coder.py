@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 from pydantic_ai.usage import RunUsage
 
+from co_cli.agents._factory import ResolvedModel
 from co_cli.agents.analysis import AnalysisResult, make_analysis_agent
 from co_cli.agents.coder import CoderResult, make_coder_agent
 from co_cli.agents.research import ResearchResult, make_research_agent
@@ -26,9 +27,15 @@ class FakeRuntime:
 
 
 @dataclass
+class FakeServices:
+    model_registry: object | None = None
+
+
+@dataclass
 class FakeDeps:
     config: FakeConfig = field(default_factory=FakeConfig)
     runtime: FakeRuntime = field(default_factory=FakeRuntime)
+    services: FakeServices = field(default_factory=FakeServices)
 
 
 class FakeCtx:
@@ -59,7 +66,7 @@ def test_coder_result_model() -> None:
 
 def test_make_coder_agent_registers_file_tools() -> None:
     """make_coder_agent should register 3 read-only file tools without raising."""
-    agent = make_coder_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
+    agent = make_coder_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
     assert agent is not None
 
 
@@ -125,7 +132,7 @@ def test_research_result_model() -> None:
 
 def test_make_research_agent_registers_web_tools() -> None:
     """make_research_agent registers web_search and web_fetch without raising."""
-    agent = make_research_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
+    agent = make_research_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
     assert agent is not None
 
 
@@ -162,7 +169,7 @@ def test_analysis_result_model() -> None:
 
 def test_make_analysis_agent_returns_agent() -> None:
     """make_analysis_agent returns a non-None agent without raising."""
-    agent = make_analysis_agent(ModelEntry(model="gemini-2.0-flash"), "gemini", "")
+    agent = make_analysis_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
     assert agent is not None
 
 

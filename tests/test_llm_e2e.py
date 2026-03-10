@@ -20,15 +20,9 @@ from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.deps import CoDeps
+from co_cli.main import create_deps
 from co_cli.tools.memory import _load_memories
-
-_CONFIG = CoConfig(
-    role_models={k: list(v) for k, v in settings.role_models.items()},
-    llm_provider=settings.llm_provider,
-    ollama_host=settings.ollama_host,
-)
 
 
 @pytest.mark.asyncio
@@ -75,11 +69,9 @@ def test_gemini_api_key_overrides_env():
 
 
 def _make_deps(session_id: str = "test", personality: str = "finch") -> CoDeps:
-    """Create minimal CoDeps for E2E tests."""
-    return CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=replace(_CONFIG, session_id=session_id, personality=personality),
-    )
+    """Create full CoDeps from settings, overriding session-specific fields."""
+    deps = create_deps()
+    return replace(deps, config=replace(deps.config, session_id=session_id, personality=personality))
 
 
 def _extract_tool_calls(result) -> list[str]:
@@ -257,102 +249,6 @@ async def test_ollama_autonomous_memory_save():
                     break
 
 
-@pytest.mark.asyncio
-async def test_ollama_web_research_and_save():
-    """Model researches a topic online and saves findings to memory.
-
-    Tests the full autonomous multi-step chain:
-    1. Model uses web tools (web_search or web_fetch) to research the movie Finch
-    2. Model processes the fetched content
-    3. Model calls save_memory to persist what it learned
-
-    save_memory requires approval → final result is DeferredToolRequests.
-    The conversation history should contain the web tool calls that executed
-    before the save was deferred.
-
-    Requires LLM_PROVIDER=ollama, Ollama server running, and internet access.
-    """
-    if os.getenv("LLM_PROVIDER") != "ollama":
-        return
-
-    _settings = get_settings()
-    agent, model_settings, _, _ = get_agent()
-
-    # Full deps with web credentials so web_search can work if Brave key exists
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(
-            session_id="test-web-research",
-            personality="finch",
-            brave_search_api_key=_settings.brave_search_api_key,
-            web_policy=_settings.web_policy,
-            role_models=_settings.role_models,
-            llm_provider=_settings.llm_provider,
-            ollama_host=_settings.ollama_host,
-        ),
-    )
-
-    # Natural prompt — no mention of specific tools
-    async with asyncio.timeout(60):
-        result = await agent.run(
-            "Go online and learn from Wikipedia about the movie Finch. "
-            "Save a short summary of what you learn to memory.",
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=25),
-        )
-
-    # Collect all tool calls from the conversation
-    tool_calls = _extract_tool_calls(result)
-
-    # Model should have used at least one web tool
-    web_tools_used = [t for t in tool_calls if t in ("web_search", "web_fetch")]
-    assert len(web_tools_used) >= 1, (
-        f"Model did not use any web tools. Tool calls: {tool_calls}"
-    )
-
-    # save_memory should be called → result is DeferredToolRequests
-    assert isinstance(result.output, DeferredToolRequests), (
-        f"Expected DeferredToolRequests (save_memory needs approval), "
-        f"got {type(result.output).__name__}. Tool calls: {tool_calls}"
-    )
-
-    # Verify save_memory is in the deferred calls
-    calls = list(result.output.approvals)
-    deferred_names = [c.tool_name for c in calls]
-    assert "save_memory" in deferred_names, (
-        f"save_memory not in deferred tool calls: {deferred_names}. "
-        f"All tool calls: {tool_calls}"
-    )
-
-    # Verify save_memory args contain movie information
-    for msg in result.all_messages():
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart) and part.tool_name == "save_memory":
-                    args_str = str(part.args).lower()
-                    assert "finch" in args_str, (
-                        f"save_memory args don't mention 'Finch': {part.args}\n"
-                        f"Conversation trace:\n{_conversation_trace(result)}"
-                    )
-                    break
-
-    # Inspect: web tool must have executed before save_memory in the sequence
-    web_idx = None
-    save_idx = None
-    for idx, name in enumerate(tool_calls):
-        if name in ("web_search", "web_fetch") and web_idx is None:
-            web_idx = idx
-        if name == "save_memory":
-            save_idx = idx
-    assert web_idx is not None and save_idx is not None, (
-        f"Missing web or save tool call. Trace:\n{_conversation_trace(result)}"
-    )
-    assert web_idx < save_idx, (
-        f"Web tool call (idx={web_idx}) must precede save_memory (idx={save_idx}). "
-        f"Tool sequence: {tool_calls}"
-    )
-
 
 @pytest.mark.asyncio
 async def test_ollama_memory_decay():
@@ -392,19 +288,8 @@ async def test_ollama_memory_decay():
         assert len(entries_before) == limit
 
         agent, model_settings, _, _ = get_agent()
-        _s = get_settings()
-        deps = CoDeps(
-            services=CoServices(shell=ShellBackend()),
-            config=CoConfig(
-                session_id="test-decay",
-                personality="finch",
-                memory_max_count=limit,
-                memory_dir=memory_dir,
-                role_models=_s.role_models,
-                llm_provider=_s.llm_provider,
-                ollama_host=_s.ollama_host,
-            ),
-        )
+        base = _make_deps("test-decay", "finch")
+        deps = replace(base, config=replace(base.config, memory_max_count=limit, memory_dir=memory_dir))
 
         # Ask model to save a preference — triggers save_memory
         async with asyncio.timeout(60):

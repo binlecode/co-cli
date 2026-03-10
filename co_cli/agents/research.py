@@ -3,8 +3,7 @@
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from co_cli.agents._factory import make_subagent_model
-from co_cli.config import ModelEntry
+from co_cli.agents._factory import ResolvedModel
 from co_cli.deps import CoDeps
 from co_cli.tools.web import web_fetch, web_search
 
@@ -17,19 +16,16 @@ class ResearchResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_research_agent(
-    model_entry: ModelEntry,
-    provider: str,
-    ollama_host: str,
-) -> Agent[CoDeps, ResearchResult]:
+def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ResearchResult]:
     """Create a read-only research sub-agent with web tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and only
     has access to web_search and web_fetch — no write tools, no shell, no memory.
+
+    Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    model = make_subagent_model(model_entry, provider, ollama_host)
     agent: Agent[CoDeps, ResearchResult] = Agent(
-        model,
+        resolved_model.model,
         deps_type=CoDeps,
         output_type=ResearchResult,
         system_prompt=(

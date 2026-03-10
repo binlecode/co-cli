@@ -5,6 +5,7 @@ from typing import Any
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import UsageLimits
 
+from co_cli.agents._factory import ResolvedModel
 from co_cli.deps import CoDeps, make_subagent_deps
 
 
@@ -26,19 +27,19 @@ async def delegate_coder(
     """
     from co_cli.agents.coder import make_coder_agent
 
-    model_pref_list = ctx.deps.config.role_models.get("coding", [])
-    if not model_pref_list:
+    registry = ctx.deps.services.model_registry
+    if not registry or not registry.is_configured("coding"):
         return {
             "display": "Coder delegation is not configured. Set role_models.coding in settings.",
             "error": True,
         }
-    model_entry = model_pref_list[0]
-
-    agent = make_coder_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
+    rm = registry.get("coding", ResolvedModel(model=ctx.model, settings=None))
+    agent = make_coder_agent(rm)
     result = await agent.run(
         task,
         deps=make_subagent_deps(ctx.deps),
         usage_limits=UsageLimits(request_limit=max_requests),
+        model_settings=rm.settings,
     )
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()
@@ -85,21 +86,21 @@ async def delegate_research(
 
     from co_cli.agents.research import make_research_agent
 
-    model_pref_list = ctx.deps.config.role_models.get("research", [])
-    if not model_pref_list:
+    registry = ctx.deps.services.model_registry
+    if not registry or not registry.is_configured("research"):
         return {
             "display": "Research delegation is not configured. Set role_models.research in settings to enable research delegation.",
             "error": True,
         }
-    model_entry = model_pref_list[0]
-
+    rm = registry.get("research", ResolvedModel(model=ctx.model, settings=None))
     sub_deps = make_subagent_deps(ctx.deps)
-    agent = make_research_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
+    agent = make_research_agent(rm)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
     result = await agent.run(
         scoped_query,
         deps=sub_deps,
         usage_limits=UsageLimits(request_limit=max_requests),
+        model_settings=rm.settings,
     )
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()
@@ -115,6 +116,7 @@ async def delegate_research(
             retry_query,
             deps=sub_deps,
             usage_limits=UsageLimits(request_limit=remaining),
+            model_settings=rm.settings,
         )
         ctx.deps.runtime.turn_usage.incr(retry_result.usage())
         data = retry_result.output
@@ -163,23 +165,23 @@ async def delegate_analysis(
 
     from co_cli.agents.analysis import make_analysis_agent
 
-    model_pref_list = ctx.deps.config.role_models.get("analysis", [])
-    if not model_pref_list:
+    registry = ctx.deps.services.model_registry
+    if not registry or not registry.is_configured("analysis"):
         return {
             "display": "Analysis delegation is not configured. Set role_models.analysis in settings to enable analysis delegation.",
             "error": True,
         }
-    model_entry = model_pref_list[0]
-
+    rm = registry.get("analysis", ResolvedModel(model=ctx.model, settings=None))
     scoped_question = question
     if inputs:
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question
 
-    agent = make_analysis_agent(model_entry, ctx.deps.config.llm_provider, ctx.deps.config.ollama_host)
+    agent = make_analysis_agent(rm)
     result = await agent.run(
         scoped_question,
         deps=make_subagent_deps(ctx.deps),
         usage_limits=UsageLimits(request_limit=max_requests),
+        model_settings=rm.settings,
     )
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()

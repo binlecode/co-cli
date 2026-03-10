@@ -247,18 +247,18 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
     from co_cli._history import _run_summarization_with_policy
-    from co_cli.config import settings
+    from co_cli.agents._factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    from co_cli._history import _resolve_summarization_model
-    model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.agent.model)
+    fallback = ResolvedModel(model=ctx.agent.model, settings=None)
+    rm = ctx.deps.services.model_registry.get("summarization", fallback)
     summary = await _run_summarization_with_policy(
-        ctx.message_history, model,
-        max_retries=settings.model_http_retries,
+        ctx.message_history, rm,
+        max_retries=ctx.deps.config.model_http_retries,
     )
 
     if summary is None:
@@ -410,17 +410,19 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
     from co_cli._history import _index_session_summary
     from co_cli._memory_lifecycle import persist_memory as _save_memory_impl
+    from co_cli.agents._factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
         return None
 
-    from co_cli._history import _resolve_summarization_model
-    model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.agent.model)
+    fallback = ResolvedModel(model=ctx.agent.model, settings=None)
+    rm = ctx.deps.services.model_registry.get("summarization", fallback)
     summary = await _index_session_summary(
         ctx.message_history,
-        model,
+        rm,
         personality_active=bool(ctx.deps.config.personality),
+        max_retries=ctx.deps.config.model_http_retries,
     )
 
     if summary is None:

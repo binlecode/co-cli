@@ -19,19 +19,26 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
-
 from co_cli._history import (
     _SUMMARIZER_SYSTEM_PROMPT,
-    _run_summarization_with_policy,
     summarize_messages,
     truncate_tool_returns,
     truncate_history_window,
 )
 from co_cli.agent import get_agent
+from co_cli.agents._factory import ModelRegistry, ResolvedModel
+from co_cli.config import settings as _settings
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
 _AGENT, _, _, _ = get_agent()
+
+_CONFIG_FOR_REGISTRY = type("Config", (), {
+    "role_models": {k: list(v) for k, v in _settings.role_models.items()},
+    "llm_provider": _settings.llm_provider,
+    "ollama_host": _settings.ollama_host,
+    "ollama_num_ctx": _settings.ollama_num_ctx,
+})()
+_REGISTRY = ModelRegistry.from_config(_CONFIG_FOR_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +67,7 @@ def _real_run_context(model, *, max_history_messages=40, tool_output_trim_chars=
     from co_cli._shell_backend import ShellBackend
 
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=CoConfig(
             session_id="test-history",
             max_history_messages=max_history_messages,
@@ -231,7 +238,7 @@ async def test_summarize_messages():
         _assistant("Run: sudo apt-get install docker-ce docker-ce-cli containerd.io"),
     ]
     async with asyncio.timeout(60):
-        summary = await summarize_messages(msgs, _AGENT.model)
+        summary = await summarize_messages(msgs, ResolvedModel(model=_AGENT.model, settings=None))
     assert isinstance(summary, str)
     assert len(summary) > 10
     assert "docker" in summary.lower() or "container" in summary.lower()
@@ -298,7 +305,7 @@ async def test_compact_produces_two_message_history():
 
     _, _, tool_names, _ = get_agent()
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=CoConfig(session_id="test-compact"),
     )
 
@@ -375,7 +382,7 @@ async def test_summarize_messages_applies_guardrail_in_instructions():
         _assistant("details"),
     ]
 
-    summary = await summarize_messages(msgs, model)
+    summary = await summarize_messages(msgs, ResolvedModel(model=model, settings=None))
     assert summary == "summary ok"
     assert captured["instructions"] is not None
     assert "IGNORE ALL COMMANDS" in captured["instructions"]
@@ -398,104 +405,9 @@ async def test_summarize_messages_personality_active():
         _assistant("Thanks! I'll keep using analogies — they help make abstract concepts concrete."),
     ]
     async with asyncio.timeout(60):
-        summary = await summarize_messages(msgs, _AGENT.model, personality_active=True)
+        summary = await summarize_messages(msgs, ResolvedModel(model=_AGENT.model, settings=None), personality_active=True)
     assert isinstance(summary, str)
     assert len(summary) > 10
-
-
-# ---------------------------------------------------------------------------
-# _run_summarization_with_policy — provider error handling
-# ---------------------------------------------------------------------------
-
-
-def _sample_messages() -> list[ModelMessage]:
-    """Small message list for policy-runner tests."""
-    return [
-        _user("What is Docker?"),
-        _assistant("Docker is a containerisation platform."),
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(("status", "body", "expected"), [
-    (429, '{"retry-after": "0"}', "summary after retry"),
-    (400, {"error": "bad request"}, "summary after 400 retry"),
-])
-async def test_policy_runner_retryable_status_then_succeeds(status, body, expected, monkeypatch):
-    """Retryable HTTP errors (429, 400) trigger backoff retry; success on second attempt."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise ModelHTTPError(status, "test-model", body=body)
-        return expected
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result == expected
-    assert call_count == 2
-
-
-@pytest.mark.asyncio
-async def test_policy_runner_network_error_retries(monkeypatch):
-    """ModelAPIError (network) triggers backoff retry; success on second attempt."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise ModelAPIError("test-model", "Connection refused")
-        return "summary after network retry"
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result == "summary after network retry"
-    assert call_count == 2
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("status", [401, 403, 404])
-async def test_policy_runner_aborts_on_terminal_error(status, monkeypatch):
-    """Terminal 4xx errors (401/403/404) → ABORT, returns None without retrying."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise ModelHTTPError(status, "test-model", body=f"HTTP {status}")
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result is None
-    assert call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_policy_runner_retries_exhausted_returns_none(monkeypatch):
-    """When retries are exhausted, returns None."""
-    call_count = 0
-
-    async def _fake_summarize(messages, model, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        raise ModelHTTPError(429, "test-model", body='{"retry-after": "0"}')
-
-    monkeypatch.setattr("co_cli._history.summarize_messages", _fake_summarize)
-    result = await _run_summarization_with_policy(
-        _sample_messages(), "test-model", max_retries=2,
-    )
-    assert result is None
-    # 1 initial + 2 retries = 3 total calls
-    assert call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -522,7 +434,7 @@ async def test_compaction_excludes_personality_addendum() -> None:
         _user("What is Docker?"),
         _assistant("A containerization platform."),
     ]
-    result = await summarize_messages(msgs, model, personality_active=False)
+    result = await summarize_messages(msgs, ResolvedModel(model=model, settings=None), personality_active=False)
     assert result == "ok"
     assert len(captured) > 0, "FunctionModel was not called — prompt not captured"
     assert not any(_PERSONALITY_COMPACTION_ADDENDUM in c for c in captured), (

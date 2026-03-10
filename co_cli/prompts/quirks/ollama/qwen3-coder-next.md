@@ -2,15 +2,15 @@
 flags: [lazy, verbose]
 inference:
   # Source: https://huggingface.co/Qwen/Qwen3-Coder-Next
-  # Recommended decoding profile: temperature=1.0, top_p=0.95, top_k=40.
-  # Agentic context must be baked via Modelfile because Ollama OpenAI API ignores num_ctx.
-  temperature: 1.0
-  top_p: 0.95
-  max_tokens: 65536
-  num_ctx: 262144
+  # Coding tooling profile — deterministic, lower temp than chat defaults.
+  # num_ctx/num_predict baked in Modelfile (Ollama OpenAI API ignores request-side num_ctx).
+  temperature: 0.6
+  top_p: 0.8
+  max_tokens: 32768
   extra_body:
-    top_k: 40
-    repeat_penalty: 1.0
+    top_k: 20
+    min_p: 0.01
+    repeat_penalty: 1.05
 ---
 CRITICAL: Tool call output must be strictly valid. If tools are available and you need one, emit exactly one <tool_call> block per call with valid JSON for arguments. No markdown code fences. No trailing commas. No pseudo-JSON.
 

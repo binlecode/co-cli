@@ -5,14 +5,20 @@
 Co CLI supports two providers (`ollama`, `gemini`) and one model-selection contract:
 `role_models` role chains. Main agent always uses `role_models["reasoning"][0]`. On terminal
 model error, the chat loop advances the chain (drops failed head, retries with next). Sub-agent
-tools take the head model from their role-specific chain.
+tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
 
 ```
-get_agent(model_name=role_models["reasoning"][0])
-  ├── provider == "ollama"
-  │   └── OpenAIProvider(base_url="{ollama_host}/v1", api_key="ollama") + OpenAIChatModel(model_name)
-  └── provider == "gemini"
-      └── model = "google-gla:{model_name}"
+ModelRegistry.from_config(config) → session-scoped registry
+  for each role in config.role_models:
+    build_model(role_models[role][0], provider, ollama_host)
+      ├── provider == "ollama"
+      │   └── OpenAIProvider(base_url="{ollama_host}/v1", api_key="ollama") + OpenAIChatModel
+      └── provider == "gemini"
+          └── model = "google-gla:{model_name}"
+    → ResolvedModel(model, settings) stored in registry
+
+registry.get(role, fallback) → ResolvedModel
+registry.is_configured(role) → bool
 ```
 
 There is no separate primary/fallback settings tier.
@@ -46,15 +52,19 @@ When `role_models` is not configured, provider defaults are injected for all rol
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
 - `ollama`: all five roles populated — reasoning → `qwen3.5:35b-a3b-q4_k_m-agentic`, then `qwen3:30b-a3b-thinking-2507-q4_k_m-agentic`; summarization and analysis → `qwen3:30b-a3b-instruct-2507-q4_k_m`; coding → `qwen3-coder-next:q4_k_m-code`; research → `qwen3.5:35b-a3b-q4_k_m-agentic`
 
-### Sub-agent Construction
+### ModelRegistry and ResolvedModel
 
-Sub-agent model construction is provider-aware via `co_cli/agents/_factory.py`:
+`ModelRegistry` is a session-scoped registry of pre-built `ResolvedModel` objects keyed by role. It is built once from `CoConfig` at session start via `ModelRegistry.from_config(config)` and stored on `CoServices.model_registry`. All components look up models by role using `registry.get(role, fallback)` at runtime.
+
+`ResolvedModel` is a dataclass pairing a pre-built model object (`Any`) with its `ModelSettings | None`. Agent factories and summarization functions receive a `ResolvedModel` directly.
+
+Sub-agent model construction is provider-aware via `build_model()` in `co_cli/agents/_factory.py`:
 
 - `ollama` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{ollama_host}/v1", api_key="ollama"))`
 - `gemini` → `"google-gla:{model_name}"`
 - Any other provider → `ValueError` raised.
 
-Role head is resolved by indexing `role_models[role][0].model` — the first `ModelEntry` in the chain. Summarization falls back to the primary agent model when the role is absent or empty. The `_resolve_summarization_model(config, fallback)` helper in `_history.py` implements this fallback for the summarization role specifically.
+Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Summarization and compaction pass the main agent's model as the `fallback` argument so absent roles degrade gracefully.
 
 ### Model Dependency Checks
 
@@ -111,10 +121,11 @@ role_models:
 
 3. **`/no_think` SYSTEM directive** — baked into a Modelfile (e.g. the `-nothink` backup). Works for `qwen3` thinking models; `qwen3.5` ignores prompt-level directives and requires `api_params` instead.
 
-`make_subagent_model` in `_factory.py` bakes non-empty `api_params` into the `OpenAIChatModel`
-constructor as `settings={"extra_body": api_params}` — applied to every request through that
-model instance without any call-site changes. `resolve_role_model(config, role, fallback)` is
-the single helper for looking up a role's head entry and constructing the model.
+`build_model()` in `_factory.py` bakes non-empty `api_params` into the `ModelSettings.extra_body`
+returned alongside the model — applied to every request through the `ResolvedModel` at call sites.
+`ModelRegistry.from_config(config)` is the single entry point for constructing all role models
+at session startup. Individual consumers call `registry.get(role, fallback)` to retrieve a
+`ResolvedModel` without any per-call construction overhead.
 
 Important backend distinction:
 
@@ -168,11 +179,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | File | Purpose |
 |------|---------|
 | `co_cli/config.py` | `role_models` setting, `ModelEntry` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
-| `co_cli/deps.py` | `role_models`, `ollama_host`, `llm_provider` in `CoConfig` |
+| `co_cli/deps.py` | `role_models`, `ollama_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
 | `co_cli/_model_check.py` | `_check_llm_provider`, `_check_model_availability`, `run_model_check`, `PreflightResult` — pre-agent model dependency check gate |
-| `co_cli/_commands.py` | `_swap_model_inplace`, `_switch_ollama_model` — in-place model swap used by error-recovery chain advancement in `main.py` |
-| `co_cli/_history.py` | `summarize_messages`; `_resolve_summarization_model(config, fallback)` — thin wrapper around `resolve_role_model` for the summarization role |
-| `co_cli/agents/_factory.py` | `make_subagent_model(model_entry, provider, ollama_host)` — builds `OpenAIChatModel` (baking `api_params` into construction-time `settings`) or bare string for Gemini; `resolve_role_model(config, role, fallback)` — looks up a role's head `ModelEntry` and constructs the model |
+| `co_cli/_commands.py` | `_swap_model_inplace`, `_switch_ollama_model` — in-place model swap used by error-recovery chain advancement in `main.py`; uses `registry.get("summarization", fallback)` for `/compact` and `/new` |
+| `co_cli/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
+| `co_cli/agents/_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, ollama_host, ollama_num_ctx)` — builds provider-aware model and `ModelSettings` |
 | `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-agentic` | Primary reasoning/research model — thinking enabled, 128K ctx |
 | `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-agentic` | Reasoning fallback — thinking enabled, 128K ctx |
 | `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-nothink` | Backup nothink variant — `/no_think` SYSTEM directive, 128K ctx |

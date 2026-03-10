@@ -20,18 +20,18 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
+from co_cli.agents._factory import ModelRegistry
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli._shell_backend import ShellBackend
-
-_AGENTIC_OLLAMA_MODEL = "qwen3:30b-a3b-thinking-2507-q8_0-agentic"
-_AGENTIC_OLLAMA_NUM_CTX = 262144
 
 _CONFIG = CoConfig(
     role_models={k: list(v) for k, v in settings.role_models.items()},
     llm_provider=settings.llm_provider,
     ollama_host=settings.ollama_host,
+    ollama_num_ctx=settings.ollama_num_ctx,
 )
+_REGISTRY = ModelRegistry.from_config(_CONFIG)
 
 
 def _is_ollama_provider() -> bool:
@@ -41,7 +41,7 @@ def _is_ollama_provider() -> bool:
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(_CONFIG, session_id=session_id, personality="finch"),
     )
 
@@ -68,45 +68,6 @@ def _extract_first_deferred_call(output: DeferredToolRequests) -> tuple[str | No
         except json.JSONDecodeError:
             args = {}
     return call.tool_name, args or {}
-
-
-def _assert_agentic_model(agent: Any) -> None:
-    model_name = str(getattr(agent.model, "model_name", "")).lower()
-    assert "agentic" in model_name, f"Expected an agentic Ollama model, got {model_name!r}"
-
-
-@pytest.fixture(autouse=True)
-def _force_agentic_ollama_model():
-    if not _is_ollama_provider():
-        yield
-        return
-
-    orig_provider = settings.llm_provider
-    orig_roles = {k: list(v) for k, v in settings.role_models.items()}
-    orig_num_ctx = settings.ollama_num_ctx
-    orig_env_reasoning = os.getenv("CO_MODEL_ROLE_REASONING")
-    orig_env_num_ctx = os.getenv("OLLAMA_NUM_CTX")
-
-    settings.llm_provider = "ollama"
-    settings.role_models = {**settings.role_models, "reasoning": [_AGENTIC_OLLAMA_MODEL]}
-    settings.ollama_num_ctx = _AGENTIC_OLLAMA_NUM_CTX
-    os.environ["CO_MODEL_ROLE_REASONING"] = _AGENTIC_OLLAMA_MODEL
-    os.environ["OLLAMA_NUM_CTX"] = str(_AGENTIC_OLLAMA_NUM_CTX)
-
-    try:
-        yield
-    finally:
-        settings.llm_provider = orig_provider
-        settings.role_models = orig_roles
-        settings.ollama_num_ctx = orig_num_ctx
-        if orig_env_reasoning is None:
-            os.environ.pop("CO_MODEL_ROLE_REASONING", None)
-        else:
-            os.environ["CO_MODEL_ROLE_REASONING"] = orig_env_reasoning
-        if orig_env_num_ctx is None:
-            os.environ.pop("OLLAMA_NUM_CTX", None)
-        else:
-            os.environ["OLLAMA_NUM_CTX"] = orig_env_num_ctx
 
 
 @pytest.mark.asyncio
@@ -143,7 +104,6 @@ async def test_tool_selection_and_arg_extraction(
         return
 
     agent, model_settings, _, _ = get_agent(all_approval=True)
-    _assert_agentic_model(agent)
     deps = _make_deps(f"test-tool-{expected_tool}")
 
     last_details = "no run executed"
@@ -214,7 +174,6 @@ async def test_refusal_no_tool_for_simple_math():
         return
 
     agent, model_settings, _, _ = get_agent(all_approval=True)
-    _assert_agentic_model(agent)
     deps = _make_deps("test-refusal")
     async with asyncio.timeout(60):
         result = await agent.run(
@@ -248,7 +207,6 @@ async def test_intent_routing_observation_vs_directive(
         return
 
     agent, model_settings, _, _ = get_agent(all_approval=True)
-    _assert_agentic_model(agent)
     deps = _make_deps("test-intent-routing")
 
     last_tool: str | None = None

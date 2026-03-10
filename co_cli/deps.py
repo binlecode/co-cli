@@ -1,11 +1,14 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.usage import RunUsage
 
 from co_cli.config import ModelEntry, WebPolicy
 from co_cli._shell_backend import ShellBackend
+
+if TYPE_CHECKING:
+    from co_cli.agents._factory import ModelRegistry
 
 
 @dataclass
@@ -20,6 +23,7 @@ class CoServices:
     shell: ShellBackend
     knowledge_index: Any | None = field(default=None, repr=False)
     task_runner: Any | None = field(default=None, repr=False)
+    model_registry: "ModelRegistry | None" = field(default=None, repr=False)
 
 
 @dataclass
@@ -72,6 +76,7 @@ class CoConfig:
     ollama_num_ctx: int = 262144
     ctx_warn_threshold: float = 0.85
     ctx_overflow_threshold: float = 1.0
+    model_http_retries: int = 2
 
 
 @dataclass

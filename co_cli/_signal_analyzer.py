@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from co_cli.deps import CoConfig
+    from co_cli.deps import CoServices
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
@@ -83,7 +83,7 @@ async def analyze_for_signals(
     messages: list,
     model: Any,
     *,
-    config: "CoConfig",
+    services: "CoServices",
 ) -> SignalResult:
     """Run the signal analyzer mini-agent on the conversation window.
 
@@ -94,7 +94,7 @@ async def analyze_for_signals(
     Args:
         messages: Full message history after run_turn() completes.
         model: pydantic-ai model instance from agent.model (fallback if no analysis role).
-        config: CoConfig for role_models lookup and provider settings.
+        services: CoServices for registry lookup.
 
     Returns:
         SignalResult with found/candidate/tag/confidence fields.
@@ -103,8 +103,9 @@ async def analyze_for_signals(
     if not window.strip():
         return SignalResult(found=False)
 
-    from co_cli.agents._factory import resolve_role_model
-    resolved_model: Any = resolve_role_model(config, "analysis", fallback=model)
+    from co_cli.agents._factory import ResolvedModel
+    fallback = ResolvedModel(model=model, settings=None)
+    rm = services.model_registry.get("analysis", fallback)
 
     try:
         prompt_path = (
@@ -113,12 +114,12 @@ async def analyze_for_signals(
         system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
         signal_agent: Agent[None, SignalResult] = Agent(
-            model=resolved_model,
+            model=rm.model,
             output_type=SignalResult,
             system_prompt=system_prompt,
         )
 
-        result = await signal_agent.run(window)
+        result = await signal_agent.run(window, model_settings=rm.settings)
         return result.output
     except Exception:
         logger.debug("Signal analyzer failed", exc_info=True)

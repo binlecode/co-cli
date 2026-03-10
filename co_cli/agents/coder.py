@@ -3,8 +3,7 @@
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from co_cli.agents._factory import make_subagent_model
-from co_cli.config import ModelEntry
+from co_cli.agents._factory import ResolvedModel
 from co_cli.deps import CoDeps
 from co_cli.tools.files import find_in_files, list_directory, read_file
 
@@ -18,20 +17,17 @@ class CoderResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_coder_agent(
-    model_entry: ModelEntry,
-    provider: str,
-    ollama_host: str,
-) -> Agent[CoDeps, CoderResult]:
+def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult]:
     """Create a read-only coder sub-agent with file tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps in the
     delegation tool) and only has access to read-only file tools — no writes,
     no shell, no network.
+
+    Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    model = make_subagent_model(model_entry, provider, ollama_host)
     agent: Agent[CoDeps, CoderResult] = Agent(
-        model,
+        resolved_model.model,
         deps_type=CoDeps,
         output_type=CoderResult,
         system_prompt=(

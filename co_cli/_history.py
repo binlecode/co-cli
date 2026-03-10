@@ -37,6 +37,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.agents._factory import ResolvedModel
 from co_cli.deps import CoDeps
 
 log = logging.getLogger(__name__)
@@ -194,15 +195,9 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
-def _resolve_summarization_model(config: Any, fallback: Any) -> Any:
-    """Return the summarization model from config, or fallback if unconfigured."""
-    from co_cli.agents._factory import resolve_role_model
-    return resolve_role_model(config, "summarization", fallback)
-
-
 async def summarize_messages(
     messages: list[ModelMessage],
-    model: str | Any,
+    resolved_model: ResolvedModel,
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
 ) -> str:
@@ -214,7 +209,7 @@ async def summarize_messages(
     if personality_active:
         prompt = prompt + _PERSONALITY_COMPACTION_ADDENDUM
     summariser: Agent[None, str] = Agent(
-        model,
+        resolved_model.model,
         output_type=str,
         # Use instructions (not system_prompt) so the guardrail is applied
         # even when summarizing with non-empty message_history.
@@ -223,13 +218,14 @@ async def summarize_messages(
     result = await summariser.run(
         prompt,
         message_history=messages,
+        model_settings=resolved_model.settings,
     )
     return result.output
 
 
 async def _index_session_summary(
     messages: list[ModelMessage],
-    model: str | Any,
+    resolved_model: ResolvedModel,
     *,
     max_retries: int = 2,
     personality_active: bool = False,
@@ -243,7 +239,7 @@ async def _index_session_summary(
     last_n = min(15, len(messages))
     return await _run_summarization_with_policy(
         messages[-last_n:],
-        model,
+        resolved_model,
         max_retries=max_retries,
         personality_active=personality_active,
     )
@@ -251,7 +247,7 @@ async def _index_session_summary(
 
 async def _run_summarization_with_policy(
     messages: list[ModelMessage],
-    model: str | Any,
+    resolved_model: ResolvedModel,
     *,
     max_retries: int = 2,
     personality_active: bool = False,
@@ -277,7 +273,7 @@ async def _run_summarization_with_policy(
     while True:
         try:
             return await summarize_messages(
-                messages, model,
+                messages, resolved_model,
                 personality_active=personality_active,
             )
         except (ModelHTTPError, ModelAPIError) as e:
@@ -398,11 +394,11 @@ async def truncate_history_window(
         )
     else:
         # Fall through to inline summarization
-        from co_cli.config import settings as _settings
-        model = _resolve_summarization_model(ctx.deps.config, fallback=ctx.model)
+        fallback = ResolvedModel(model=ctx.model, settings=None)
+        rm = ctx.deps.services.model_registry.get("summarization", fallback)
         summary_text = await _run_summarization_with_policy(
-            dropped, model,
-            max_retries=_settings.model_http_retries,
+            dropped, rm,
+            max_retries=ctx.deps.config.model_http_retries,
             personality_active=False,
         )
 
@@ -482,11 +478,11 @@ async def precompute_compaction(
 
     dropped = messages[head_end:tail_start]
 
-    from co_cli.config import settings as _settings
-    resolved_model = _resolve_summarization_model(deps.config, fallback=model)
+    fallback = ResolvedModel(model=model, settings=None)
+    rm = deps.services.model_registry.get("summarization", fallback)
     summary_text = await _run_summarization_with_policy(
-        dropped, resolved_model,
-        max_retries=_settings.model_http_retries,
+        dropped, rm,
+        max_retries=deps.config.model_http_retries,
         personality_active=False,
     )
     if summary_text is None:

@@ -252,9 +252,10 @@ corrections, and behavioral signals.
 ### Signal detection sequence
 
 ```
-analyze_for_signals(conversation_window, model):
-  input: last up to 10 lines of User/Co exchange
-  runs LLM mini-agent with signal_analyzer.md prompt
+analyze_for_signals(messages, model, *, services: CoServices):
+  input: last up to 10 lines of User/Co exchange built from messages
+  resolves rm = services.model_registry.get("analysis", ResolvedModel(model, None))
+  runs LLM mini-agent with signal_analyzer.md prompt using rm
   output schema:
     {
       found: bool,

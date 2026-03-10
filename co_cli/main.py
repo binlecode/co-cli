@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
+from co_cli.agents._factory import ModelRegistry
 from co_cli._orchestrate import run_turn, _patch_dangling_tool_calls
 from co_cli._history import OpeningContextState, SafetyState, precompute_compaction
 from co_cli._signal_analyzer import analyze_for_signals, SignalResult
@@ -208,7 +209,9 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
         ollama_num_ctx=settings.ollama_num_ctx,
         ctx_warn_threshold=settings.ctx_warn_threshold,
         ctx_overflow_threshold=settings.ctx_overflow_threshold,
+        model_http_retries=settings.model_http_retries,
     )
+    services.model_registry = ModelRegistry.from_config(config)
     runtime = CoRuntimeState(
         opening_ctx_state=OpeningContextState(),
         safety_state=SafetyState(),
@@ -511,7 +514,7 @@ async def chat_loop(verbose: bool = False):
                     signal = await analyze_for_signals(
                         message_history,
                         agent.model,
-                        config=deps.config,
+                        services=deps.services,
                     )
                     await _handle_signal(signal, deps, frontend, agent.model)
 

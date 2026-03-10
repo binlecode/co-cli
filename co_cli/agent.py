@@ -2,15 +2,12 @@ import os
 from datetime import date
 from pathlib import Path
 
-import httpx
-
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import settings, WebPolicy, MCPServerConfig
-from co_cli.deps import CoDeps
+from co_cli.agents._factory import build_model
+from co_cli.config import ModelEntry as _ModelEntry, settings, WebPolicy, MCPServerConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli._history import (
     inject_opening_context,
     truncate_tool_returns,
@@ -45,6 +42,7 @@ def get_agent(
     mcp_servers: dict[str, MCPServerConfig] | None = None,
     personality: str | None = None,
     model_name: str | None = None,
+    config: CoConfig | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str], dict[str, bool]]:
     """Factory function to create the Pydantic AI Agent.
 
@@ -61,72 +59,34 @@ def get_agent(
         personality: Active soul name (e.g., "finch", "jeff"). The soul seed
             (identity declaration) is extracted and placed at the top of the
             static system prompt — the model's first context is always the soul.
+        config: Injected CoConfig from deps. When provided (main chat flow),
+            all settings are read from deps.config — the authoritative post-bootstrap
+            source. When absent (tests/evals without deps), falls back to the
+            global settings singleton.
     """
-    provider_name = settings.llm_provider.lower()
+    # _cfg resolves the config source: deps.config in the live chat flow (authoritative),
+    # global settings singleton in tests/evals that call get_agent() without deps.
+    _cfg: CoConfig = config if config is not None else settings  # type: ignore[assignment]
 
-    model_settings: ModelSettings | None = None
+    provider_name = _cfg.llm_provider.lower()
 
-    active_model_name = model_name or settings.role_models["reasoning"][0].model
-
+    # Gemini: set API key env var before building model (pydantic-ai reads it from environment)
     if provider_name == "gemini":
-        api_key = settings.gemini_api_key
+        api_key = _cfg.gemini_api_key
         if not api_key:
             raise ValueError("gemini_api_key is required in settings when llm_provider is 'gemini'.")
-
-        # pydantic-ai reads GEMINI_API_KEY from the environment.
-        # Direct assignment so the settings value always wins over a stale env var.
         os.environ["GEMINI_API_KEY"] = api_key
-        model = f"google-gla:{active_model_name}"
 
-        # Model-specific inference parameters from quirk database.
-        # Fallback defaults keep Gemini on a thinking-safe profile even when
-        # no model-specific quirk file exists.
-        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
-        inf = get_model_inference("gemini", _normalize(active_model_name))
-        model_settings = ModelSettings(
-            temperature=inf.get("temperature", 1.0),
-            top_p=inf.get("top_p", 0.95),
-            max_tokens=inf.get("max_tokens", 65536),
-        )
-    elif provider_name == "ollama":
-        ollama_host = settings.ollama_host
+    # model_name override (eval/test path) builds a bare entry with no api_params;
+    # the configured reasoning entry carries full api_params in the live chat flow.
+    _raw_entry = model_name or _cfg.role_models["reasoning"][0]
+    reasoning_entry = _raw_entry if isinstance(_raw_entry, _ModelEntry) else _ModelEntry(model=_raw_entry)
+    model, model_settings = build_model(
+        reasoning_entry, provider_name, _cfg.ollama_host, _cfg.ollama_num_ctx
+    )
 
-        # Ollama's OpenAI-compatible API is at /v1
-        base_url = f"{ollama_host}/v1"
-
-        # Explicit timeout: default openai-sdk read timeout is 600s, but large local
-        # models can exceed that on slow hardware. 300s covers realistic local inference
-        # while failing fast enough to surface real problems.
-        _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
-        )
-        provider = OpenAIProvider(base_url=base_url, api_key="ollama", http_client=_http_client)
-        model = OpenAIChatModel(
-            model_name=active_model_name,
-            provider=provider
-        )
-
-        # Model-specific inference parameters from quirk database
-        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
-        inf = get_model_inference("ollama", _normalize(active_model_name))
-        num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
-        extra: dict = {"num_ctx": num_ctx}
-        extra.update(inf.get("extra_body", {}))
-
-        model_settings = ModelSettings(
-            temperature=inf.get("temperature", 0.7),
-            top_p=inf.get("top_p", 1.0),
-            max_tokens=inf.get("max_tokens", 16384),
-            extra_body=extra,
-        )
-    else:
-        raise ValueError(
-            f"Unknown llm_provider: '{provider_name}'. Use 'gemini' or 'ollama'."
-        )
-
-    # Normalize model name for quirk lookup (strips quantization tags like ":q4_k_m")
     from co_cli.prompts.model_quirks import normalize_model_name
-    normalized_model = normalize_model_name(active_model_name)
+    normalized_model = normalize_model_name(reasoning_entry.model)
 
     # Soul block — seed + character base memories first; examples trail the rules
     soul_seed: str | None = None

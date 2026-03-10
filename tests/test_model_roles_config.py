@@ -2,6 +2,7 @@
 
 import pytest
 
+from co_cli.agents._factory import ModelRegistry, ResolvedModel
 from co_cli.config import Settings, ModelEntry
 from co_cli._status import get_status
 
@@ -116,3 +117,36 @@ def test_create_deps_backend_resolution_real_runtime(
             deps.services.knowledge_index.close()
     finally:
         settings.knowledge_search_backend = original_backend
+
+
+def test_model_registry_builds_from_config() -> None:
+    """ModelRegistry.from_config() populates entries for configured roles."""
+    from co_cli.deps import CoConfig
+    from co_cli.config import settings as _settings
+
+    config = CoConfig(
+        role_models={"reasoning": [ModelEntry(model=_settings.role_models["reasoning"][0].model)]},
+        llm_provider=_settings.llm_provider,
+        ollama_host=_settings.ollama_host,
+        ollama_num_ctx=_settings.ollama_num_ctx,
+    )
+    fallback_rm = ResolvedModel(model="fallback", settings=None)
+    registry = ModelRegistry.from_config(config)
+
+    result = registry.get("reasoning", fallback_rm)
+    # Entry was built — not the fallback
+    assert result is not fallback_rm
+    # Has a non-None model
+    assert result.model is not None
+    assert registry.is_configured("reasoning") is True
+
+
+def test_model_registry_get_fallback_when_unconfigured() -> None:
+    """ModelRegistry.get() returns fallback when role is absent."""
+    config_empty = type("Config", (), {"role_models": {}, "llm_provider": "ollama", "ollama_host": "", "ollama_num_ctx": 4096})()
+    registry = ModelRegistry.from_config(config_empty)
+
+    fallback_rm = ResolvedModel(model="fallback", settings=None)
+    result = registry.get("analysis", fallback_rm)
+    assert result is fallback_rm
+    assert registry.is_configured("analysis") is False

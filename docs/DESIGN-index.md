@@ -241,10 +241,10 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
 | 3. Tool Layer | `_workspace_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
 | 3. Tool Layer | `agents/__init__.py` | Sub-agent package init |
-| 3. Tool Layer | `agents/_factory.py` | Provider-aware sub-agent model factory: `make_subagent_model(model_entry, provider, ollama_host)`, `resolve_role_model(config, role, fallback)` |
-| 3. Tool Layer | `agents/coder.py` | Read-only coder sub-agent: `CoderResult`, `make_coder_agent(model_entry, provider, ollama_host)` |
-| 3. Tool Layer | `agents/research.py` | Read-only research sub-agent: `ResearchResult`, `make_research_agent(model_entry, provider, ollama_host)` |
-| 3. Tool Layer | `agents/analysis.py` | Read-only analysis sub-agent: `AnalysisResult`, `make_analysis_agent(model_entry, provider, ollama_host)` |
+| 3. Tool Layer | `agents/_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, ollama_host, ollama_num_ctx)` — provider-aware model factory |
+| 3. Tool Layer | `agents/coder.py` | Read-only coder sub-agent: `CoderResult`, `make_coder_agent(resolved_model: ResolvedModel)` |
+| 3. Tool Layer | `agents/research.py` | Read-only research sub-agent: `ResearchResult`, `make_research_agent(resolved_model: ResolvedModel)` |
+| 3. Tool Layer | `agents/analysis.py` | Read-only analysis sub-agent: `AnalysisResult`, `make_analysis_agent(resolved_model: ResolvedModel)` |
 | 4. Knowledge + Memory | `_knowledge_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |
 | 4. Knowledge + Memory | `_memory_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |

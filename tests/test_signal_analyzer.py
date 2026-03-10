@@ -12,8 +12,10 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, Tool
 
 from co_cli._signal_analyzer import _build_window, analyze_for_signals
 from co_cli.agent import get_agent
+from co_cli.agents._factory import ModelRegistry
 from co_cli.config import settings
-from co_cli.deps import CoConfig
+from co_cli.deps import CoConfig, CoServices
+from co_cli._shell_backend import ShellBackend
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
 _AGENT, _, _, _ = get_agent()
@@ -22,7 +24,10 @@ _CONFIG = CoConfig(
     role_models={k: list(v) for k, v in settings.role_models.items()},
     llm_provider=settings.llm_provider,
     ollama_host=settings.ollama_host,
+    ollama_num_ctx=settings.ollama_num_ctx,
 )
+_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_SERVICES = CoServices(shell=ShellBackend(), model_registry=_REGISTRY)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +143,7 @@ async def test_analyze_correction():
         result = await analyze_for_signals(
             messages,
             _AGENT.model,
-            config=_CONFIG,
+            services=_SERVICES,
         )
     assert result.found is True
     assert result.tag == "correction"
@@ -154,7 +159,7 @@ async def test_analyze_preference_detected():
         result = await analyze_for_signals(
             messages,
             _AGENT.model,
-            config=_CONFIG,
+            services=_SERVICES,
         )
     assert result.found is True
     assert result.tag == "preference"
@@ -168,7 +173,7 @@ async def test_analyze_no_signal():
         result = await analyze_for_signals(
             messages,
             _AGENT.model,
-            config=_CONFIG,
+            services=_SERVICES,
         )
     assert result.found is False
 
@@ -181,7 +186,7 @@ async def test_inject_false_for_ephemeral():
         result = await analyze_for_signals(
             messages,
             _AGENT.model,
-            config=_CONFIG,
+            services=_SERVICES,
         )
     assert result.inject is False
 
@@ -206,7 +211,7 @@ async def test_neutrality_guardrail_blocks_assistant_style():
         result = await analyze_for_signals(
             messages,
             _AGENT.model,
-            config=_CONFIG,
+            services=_SERVICES,
         )
     assert result.found is False, (
         "Neutrality guardrail failed: assistant's terse style should not "

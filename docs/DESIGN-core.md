@@ -201,6 +201,7 @@ graph TD
     CoServices --> S1[shell: ShellBackend]
     CoServices --> S2[knowledge_index: KnowledgeIndex]
     CoServices --> S3[task_runner: TaskRunner]
+    CoServices --> S4[model_registry: ModelRegistry]
 
     CoConfig --> C1["session_id, paths, API keys,\nlimits, web_policy, role_models\n(read-only — set at bootstrap)"]
 
@@ -211,8 +212,8 @@ graph TD
 
 | Sub-dataclass | Field Group | Key Fields |
 |---------------|-------------|------------|
-| `CoServices` | Service handles | `shell` (ShellBackend), `knowledge_index` (KnowledgeIndex or None), `task_runner` (Any or None) |
-| `CoConfig` | Read-only config | `session_id`, `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `exec_approvals_path`, `skills_dir`, `memory_dir`, `library_dir`, `gemini_api_key`, `brave_search_api_key`, `web_policy`, `memory_max_count` (200), `memory_dedup_*`, `memory_auto_save_tags` (["correction","preference"]), `personality`, `personality_critique`, `max_history_messages` (40), `tool_output_trim_chars` (2000), `doom_loop_threshold` (3), `max_reflections` (3), `knowledge_search_backend` (`"fts5"` default), `knowledge_reranker_provider`, `knowledge_chunk_size` (600), `knowledge_chunk_overlap` (80), `role_models` (dict of role → `list[ModelEntry]`), `llm_provider`, `ollama_host`, `ollama_num_ctx`, `ctx_warn_threshold` (0.85), `ctx_overflow_threshold` (1.0) |
+| `CoServices` | Service handles | `shell` (ShellBackend), `knowledge_index` (KnowledgeIndex or None), `task_runner` (Any or None), `model_registry` (ModelRegistry or None) |
+| `CoConfig` | Read-only config | `session_id`, `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `exec_approvals_path`, `skills_dir`, `memory_dir`, `library_dir`, `gemini_api_key`, `brave_search_api_key`, `web_policy`, `memory_max_count` (200), `memory_dedup_*`, `memory_auto_save_tags` (["correction","preference"]), `personality`, `personality_critique`, `max_history_messages` (40), `tool_output_trim_chars` (2000), `doom_loop_threshold` (3), `max_reflections` (3), `knowledge_search_backend` (`"fts5"` default), `knowledge_reranker_provider`, `knowledge_chunk_size` (600), `knowledge_chunk_overlap` (80), `role_models` (dict of role → `list[ModelEntry]`), `llm_provider`, `ollama_host`, `ollama_num_ctx`, `ctx_warn_threshold` (0.85), `ctx_overflow_threshold` (1.0), `model_http_retries` (2) |
 | `CoSessionState` | Mutable session state | `google_creds` (lazy-resolved), `google_creds_resolved`, `session_tool_approvals` (per-tool session auto-approvals), `active_skill_env` (per-turn env overrides), `skill_tool_grants` (per-turn allowed-tools grants), `drive_page_tokens`, `session_todos`, `skill_registry` (list of skill dicts for system prompt) |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction` (background summary cache), `turn_usage` (RunUsage or None), `opening_ctx_state` (session-scoped), `safety_state` (turn-scoped, reset per turn) |
 
