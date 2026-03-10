@@ -1,0 +1,24 @@
+FROM qwen3:30b-a3b-instruct-2507-q4_K_M
+
+# Qwen3-30B-A3B-Instruct-2507 non-thinking profile.
+# Sources:
+# - https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507
+# - https://ollama.com/library/qwen3:30b-a3b-instruct-2507-q4_K_M
+#
+# Native instruct variant — thinking is permanently disabled at the model level.
+# No /no_think system prompt or enable_thinking=False parameter needed.
+#
+# Sampling params from official Qwen guidance (instruct mode):
+# temperature 0.7, top_p 0.8, top_k 20, min_p 0.
+#
+# num_ctx: 128K is the practical speed/memory sweet spot for agentic use.
+# Model natively supports 256K; reduce to 32768 if OOM.
+# num_predict: 16384 per official instruct recommendation (not 32768).
+
+PARAMETER num_ctx 131072
+PARAMETER num_predict 16384
+PARAMETER temperature 0.7
+PARAMETER top_p 0.8
+PARAMETER top_k 20
+PARAMETER min_p 0
+PARAMETER repeat_penalty 1.0

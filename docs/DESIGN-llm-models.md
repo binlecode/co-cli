@@ -33,18 +33,18 @@ Example:
 ```json
 {
   "role_models": {
-    "reasoning": ["qwen3:30b-q4_k_m-agentic", "qwen3.5:35b-a3b-q4_k_m-agentic"],
+    "reasoning": ["qwen3.5:35b-a3b-q4_k_m-agentic", "qwen3:30b-a3b-thinking-2507-q4_k_m-agentic"],
     "coding": ["qwen3-coder-next:q4_k_m-code"],
-    "research": ["qwen3.5:35b-a3b-q4_k_m-research"],
-    "summarization": ["qwen3.5:35b-a3b-q4_k_m-nothink"],
-    "analysis": ["qwen3.5:35b-a3b-q4_k_m-nothink"]
+    "research": ["qwen3.5:35b-a3b-q4_k_m-agentic"],
+    "summarization": ["qwen3:30b-a3b-instruct-2507-q4_k_m"],
+    "analysis": ["qwen3:30b-a3b-instruct-2507-q4_k_m"]
   }
 }
 ```
 
 When `role_models` is not configured, provider defaults are injected for all roles:
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama`: all five roles populated — reasoning → `qwen3:30b-q4_k_m-agentic`, then `qwen3.5:35b-a3b-q4_k_m-agentic`; summarization and analysis → `qwen3.5:35b-a3b-q4_k_m-nothink`; coding → `qwen3-coder-next:q4_k_m-code`; research → `qwen3.5:35b-a3b-q4_k_m-research` (with `think: false`)
+- `ollama`: all five roles populated — reasoning → `qwen3.5:35b-a3b-q4_k_m-agentic`, then `qwen3:30b-a3b-thinking-2507-q4_k_m-agentic`; summarization and analysis → `qwen3:30b-a3b-instruct-2507-q4_k_m`; coding → `qwen3-coder-next:q4_k_m-code`; research → `qwen3.5:35b-a3b-q4_k_m-agentic`
 
 ### Sub-agent Construction
 
@@ -96,19 +96,20 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 
 Some Ollama MoE models (e.g. `qwen3.5`) have native thinking capability. By default they enter
 thinking mode and exhaust `num_predict` on reasoning tokens before emitting visible output.
-Prompt-level directives (`/no_think`) are ignored by this architecture.
 
-To disable thinking, set `api_params: {think: false}` on the `ModelEntry` in `role_models`:
+Three mechanisms exist to suppress thinking, in order of preference:
+
+1. **Native instruct variant** — use a dedicated instruct model (e.g. `qwen3:30b-a3b-instruct-2507-q4_k_m`) where thinking is disabled at the model level. No config needed. Preferred for fixed non-thinking roles.
+2. **`api_params: {think: false}`** — request-level override on any `ModelEntry`. Use when pointing a non-thinking role at a thinking model without a dedicated instruct variant:
 
 ```
 role_models:
-  research:
-    - model: qwen3.5:35b-a3b-q4_k_m-research
+  summarization:
+    - model: qwen3.5:35b-a3b-q4_k_m-agentic
       api_params: {think: false}
 ```
 
-For fixed non-thinking roles on Ollama, co-cli can also use baked `-nothink` Modelfile variants.
-This avoids repeating `api_params: {think: false}` in config when the role should never think.
+3. **`/no_think` SYSTEM directive** — baked into a Modelfile (e.g. the `-nothink` backup). Works for `qwen3` thinking models; `qwen3.5` ignores prompt-level directives and requires `api_params` instead.
 
 `make_subagent_model` in `_factory.py` bakes non-empty `api_params` into the `OpenAIChatModel`
 constructor as `settings={"extra_body": api_params}` — applied to every request through that
@@ -133,8 +134,34 @@ issue ollama/ollama#5356). Base model tags default to 4096 tokens and silently t
 conversation history.
 
 For models requiring a larger context window, `num_ctx` must be set via `PARAMETER num_ctx` in the
-Modelfile. The `-agentic` Modelfile variants in `ollama/` include this parameter. The `ollama_num_ctx`
-setting is forwarded as a client-side hint for future-proofing but is not enforced by Ollama today.
+Modelfile. All custom Modelfiles in `ollama/` bake this parameter. The `ollama_num_ctx` setting is
+forwarded as a client-side hint for future-proofing but is not enforced by Ollama today.
+
+### Modelfile Parameters Reference
+
+All custom Ollama model tags in `ollama/` and their baked parameters:
+
+| Modelfile | Role | num_ctx | num_predict | temp | top_p | top_k | presence_p | repeat_p |
+|-----------|------|--------:|------------:|-----:|------:|------:|-----------:|---------:|
+| `qwen3.5-35b-a3b-q4_k_m-agentic` | reasoning, research | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
+| `qwen3-30b-a3b-thinking-2507-q4_k_m-agentic` | reasoning (fallback) | 128K | 32K | 0.6 | 0.95 | 20 | — | 1.0 |
+| `qwen3-30b-a3b-thinking-2507-q4_k_m-nothink` | backup only | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
+| `qwen3-30b-a3b-instruct-2507-q4_k_m` | summarization, analysis | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
+| `qwen3-coder-next-q4_k_m-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
+
+**num_ctx rationale:**
+- Agentic/thinking models: 128K — sweet spot for long multi-turn tool workflows without the KV cache cost of 256K. Native context is 256K; reduce to 32K if OOM.
+- Coder model: 64K — 51GB model weights leave limited headroom; 64K fits large multi-file edits without memory pressure.
+
+**num_predict rationale:**
+- Thinking models (32K): chain-of-thought `<think>` tokens consume output budget before the visible answer; 32K prevents truncation.
+- Instruct/nothink models (16K): no thinking tokens, direct response only; 16K is ample and avoids wasteful allocation.
+- Coder model (32K): 50/50 split with num_ctx — 32K output budget, 32K input headroom for prompt + tool context.
+
+**Sampling params rationale:**
+- `qwen3.5` thinking mode uses `temperature 1.0` (official Qwen3.5 guidance) — distinct from `qwen3` thinking mode which uses `0.6`.
+- `presence_penalty 1.5` on the 35b model: official Qwen3.5 recommendation to suppress repetitions in long thinking traces.
+- `repeat_penalty 1.05` on the coder: slightly above 1.0 to discourage repetitive boilerplate in generated code.
 
 ## 5. Files
 
@@ -146,9 +173,11 @@ setting is forwarded as a client-side hint for future-proofing but is not enforc
 | `co_cli/_commands.py` | `_swap_model_inplace`, `_switch_ollama_model` — in-place model swap used by error-recovery chain advancement in `main.py` |
 | `co_cli/_history.py` | `summarize_messages`; `_resolve_summarization_model(config, fallback)` — thin wrapper around `resolve_role_model` for the summarization role |
 | `co_cli/agents/_factory.py` | `make_subagent_model(model_entry, provider, ollama_host)` — builds `OpenAIChatModel` (baking `api_params` into construction-time `settings`) or bare string for Gemini; `resolve_role_model(config, role, fallback)` — looks up a role's head `ModelEntry` and constructs the model |
-| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-nothink` | Shared general non-thinking model for fixed non-thinking roles such as summarization and analysis |
-| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-research` | Focused research model with baked `/no_think` system prompt and bounded output |
-| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-summarize` | Focused summarization model retained as a specialized non-thinking profile |
+| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-agentic` | Primary reasoning/research model — thinking enabled, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-agentic` | Reasoning fallback — thinking enabled, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-nothink` | Backup nothink variant — `/no_think` SYSTEM directive, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-instruct-2507-q4_k_m` | Summarization/analysis — native instruct (thinking off at model level), 128K ctx |
+| `ollama/Modelfile.qwen3-coder-next-q4_k_m-code` | Coding sub-agent — deterministic params, 64K ctx / 32K output |
 | `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and `/no_think` directives; not invoked at startup |
 
 ## 6. Testing Boundary

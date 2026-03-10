@@ -1,21 +1,18 @@
 FROM qwen3.5:35b-a3b
 
-# Qwen3.5-35B-A3B agentic reasoning profile on Ollama's current Q4_K_M 35B tag.
+# Qwen3.5-35B-A3B reasoning/tool-calling profile.
 # Sources:
 # - https://huggingface.co/Qwen/Qwen3.5-35B-A3B
 # - https://ollama.com/library/qwen3.5:35b-a3b
-# - https://docs.ollama.com/modelfile
 #
-# Speed/performance tradeoff:
-# - Qwen recommends keeping at least 128K context to preserve thinking capability.
-# - 128K materially reduces KV-cache cost versus 256K while staying within upstream
-#   best practice for complex agentic turns and multi-step tool use.
-# - Qwen recommends 32,768 output tokens for most queries; higher limits are mainly
-#   for benchmark-style hard math/coding tasks.
+# co-cli depends on long multi-turn context, and Ollama's OpenAI API ignores
+# request-side num_ctx. Bake it into the model.
+# 128K is the practical speed/memory sweet spot for agentic use. It avoids
+# the extra KV-cache cost of 256K while preserving long-turn tool workflows.
 #
-# Qwen3.5 official thinking-mode decoding guidance for general tasks:
-# temperature 1.0, top_p 0.95, top_k 20, min_p 0.0,
-# presence_penalty 1.5, repetition_penalty 1.0
+# Qwen3.5 official thinking-mode decoding guidance (general tasks):
+# temperature 1.0, top_p 0.95, top_k 20, min_p 0, presence_penalty 1.5.
+# NOTE: temperature 1.0 differs from Qwen3-2507 thinking (0.6) — intentional.
 
 PARAMETER num_ctx 131072
 PARAMETER num_predict 32768

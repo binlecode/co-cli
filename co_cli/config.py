@@ -6,13 +6,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
 DEFAULT_OLLAMA_REASONING_MODELS = [
-    "qwen3:30b-q4_k_m-agentic",
     "qwen3.5:35b-a3b-q4_k_m-agentic",
+    "qwen3:30b-a3b-thinking-2507-q4_k_m-agentic",
 ]
-DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3.5:35b-a3b-q4_k_m-nothink"
-DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3.5:35b-a3b-q4_k_m-nothink"
+DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3:30b-a3b-instruct-2507-q4_k_m"
+DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3:30b-a3b-instruct-2507-q4_k_m"
 DEFAULT_OLLAMA_CODING_MODEL = "qwen3-coder-next:q4_k_m-code"
-DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-q4_k_m-research"
+DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-q4_k_m-agentic"
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.

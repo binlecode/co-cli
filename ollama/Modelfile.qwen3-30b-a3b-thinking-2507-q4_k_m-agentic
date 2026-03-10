@@ -1,4 +1,4 @@
-FROM qwen3:30b
+FROM qwen3:30b-a3b-thinking-2507-q4_k_m
 
 # Qwen3-30B reasoning/tool-calling profile on Ollama's current 30B tag.
 # Sources:
