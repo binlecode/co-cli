@@ -7,7 +7,7 @@ that records all events for assertions.
 from typing import Any
 
 import pytest
-from pydantic_ai import AgentRunResult, AgentRunResultEvent, FinalResultEvent
+from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
 
 from co_cli._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
@@ -39,7 +39,7 @@ from pydantic_ai.usage import UsageLimits
 class RecordingFrontend:
     """Records all frontend events as (event_type, payload) tuples.
 
-    Configurable approval_policy: "approve" | "deny".
+    Configurable approval_policy: "approve" | "deny" | "always".
     """
 
     def __init__(self, approval_policy: str = "approve") -> None:
@@ -74,6 +74,8 @@ class RecordingFrontend:
         self.events.append(("prompt_approval", description))
         if self.approval_policy == "approve":
             return "y"
+        if self.approval_policy == "always":
+            return "a"
         return "n"
 
     def cleanup(self) -> None:
@@ -93,6 +95,20 @@ class StaticEventAgent:
 
     async def run_stream_events(self, *_: Any, **__: Any):
         for event in self._events:
+            yield event
+
+
+class SequenceEventAgent:
+    """Event source that returns a different event batch on each run."""
+
+    def __init__(self, runs: list[list[Any]]) -> None:
+        self._runs = runs
+        self._index = 0
+
+    async def run_stream_events(self, *_: Any, **__: Any):
+        events = self._runs[self._index]
+        self._index += 1
+        for event in events:
             yield event
 
 
@@ -199,6 +215,19 @@ def _make_agent_run_result(text: str, finish_reason: str) -> AgentRunResult:
         ModelResponse(parts=[TextPart(content=text)], finish_reason=finish_reason),
     ])
     return AgentRunResult(output=text, _state=state)
+
+
+def _make_deferred_result(tool_name: str, args: dict[str, Any], tool_call_id: str) -> AgentRunResult:
+    """Construct a minimal AgentRunResult that requests deferred approval."""
+    call = ToolCallPart(tool_name=tool_name, args=args, tool_call_id=tool_call_id)
+    state = GraphAgentState(message_history=[
+        ModelRequest(parts=[UserPromptPart(content="hi")]),
+        ModelResponse(parts=[call]),
+    ])
+    return AgentRunResult(
+        output=DeferredToolRequests(approvals=[call]),
+        _state=state,
+    )
 
 
 @pytest.mark.asyncio
@@ -501,20 +530,63 @@ async def test_stream_events_dict_result_without_display_not_shown():
     )
 
 
-def test_skill_grant_log(caplog: pytest.LogCaptureFixture) -> None:
-    import logging as _logging
-    from co_cli._orchestrate import _check_skill_grant
-    from co_cli.deps import CoSessionState
-
+@pytest.mark.asyncio
+async def test_run_turn_shell_always_remembers_pattern(tmp_path) -> None:
+    """Choosing 'a' for a shell approval persists a remembered exec pattern."""
+    approval_result = _make_deferred_result(
+        "run_shell_command",
+        {"cmd": "git commit -m 'fix'"},
+        "shell1",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    agent = SequenceEventAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        [AgentRunResultEvent(result=final_result)],
+    ])
+    frontend = RecordingFrontend(approval_policy="always")
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
-        config=CoConfig(),
-        session=CoSessionState(skill_tool_grants={"run_shell_command"}),
+        config=CoConfig(exec_approvals_path=tmp_path / "exec-approvals.json"),
     )
-    with caplog.at_level(_logging.DEBUG, logger="co_cli._orchestrate"):
-        result = _check_skill_grant("run_shell_command", deps)
-    assert result is True
-    assert any(
-        "Skill grant" in r.message and "run_shell_command" in r.message
-        for r in caplog.records
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="commit it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
     )
+
+    assert turn.outcome == "continue"
+    prompt_events = [payload for kind, payload in frontend.events if kind == "prompt_approval"]
+    assert any("will remember: git commit *" in payload for payload in prompt_events)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_non_shell_always_sets_session_auto_approval() -> None:
+    """Choosing 'a' for a non-shell tool stores a session-scoped tool approval."""
+    approval_result = _make_deferred_result(
+        "save_memory",
+        {"text": "remember this"},
+        "mem1",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    agent = SequenceEventAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        [AgentRunResultEvent(result=final_result)],
+    ])
+    frontend = RecordingFrontend(approval_policy="always")
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="save it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    assert "save_memory" in deps.session.session_tool_approvals

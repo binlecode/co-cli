@@ -4,7 +4,7 @@
 
 This doc is the canonical spec for co-cli's **prompt composition** — how the system prompt is assembled at agent creation, how per-turn instruction layers are built before each model request, and the design principles that govern what goes into the prompt vs what is kept tool-loaded.
 
-Runtime execution (loop topology, approval, context governance) has moved to dedicated flow docs. See [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md), [DESIGN-flow-approval.md](DESIGN-flow-approval.md), and [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md).
+Runtime execution (loop topology, approval, context governance) has moved to dedicated docs. See [DESIGN-core-loop.md](DESIGN-core-loop.md), [DESIGN-flow-approval.md](DESIGN-flow-approval.md), and [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md).
 
 `DESIGN-core.md` remains the system skeleton and nav map.
 
@@ -23,7 +23,7 @@ graph TD
 
     A --> T[tool calls]
     T -->|requires_approval| D[DeferredToolRequests]
-    D --> AP[_handle_approvals]
+    D --> AP[_collect_deferred_tool_approvals]
     AP --> A
 
     A --> R[final result]
@@ -40,7 +40,7 @@ graph TD
 
 These are runtime execution concerns — they now live in dedicated flow docs:
 
-> - **Turn execution:** [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) — `run_turn` state machine, streaming, approval re-entry loop, doom loop / grace turn / shell reflection, error handling, interrupt recovery, turn outcome contract
+> - **Turn execution:** [DESIGN-core-loop.md](DESIGN-core-loop.md) — `run_turn` state machine, streaming, approval re-entry loop, doom loop / grace turn / shell reflection, error handling, interrupt recovery, turn outcome contract
 > - **Approval:** [DESIGN-flow-approval.md](DESIGN-flow-approval.md) — three-tier decision chain, shell inline policy, `"a"` persistence semantics, MCP approval inheritance
 
 ### Prompt Architecture
@@ -74,7 +74,7 @@ For the deep spec on prompt composition (assembly order, per-turn layers, budget
 
 When the model emits no text delta before its first tool call, `_stream_events()` auto-injects a dim status message via `frontend.on_status()` — fires at most once per `_stream_events()` call. Maps tool names to context-appropriate messages (`recall_memory` → "Checking saved context before answering.", `web_search` → "Looking up current sources.", etc.).
 
-> **Streaming detail:** [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) §Streaming Phase — how `_stream_events` dispatches events and when the preamble fires.
+> **Streaming detail:** [DESIGN-core-loop.md](DESIGN-core-loop.md) §4.4 — how `_stream_events` dispatches events and when the preamble fires.
 
 ### Context Governance
 
@@ -102,7 +102,7 @@ History processors registered on the agent prevent context overflow. Context gov
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level tool retry limit |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per ToolReturnPart in older messages. `0` disables |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for sliding-window compaction. `0` disables |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Summarization model chain; head used for auto-compaction and `/compact`. Empty falls back to primary |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for ollama; primary model for gemini) | Summarization model chain; head used for auto-compaction and `/compact`. Falls back to primary if unset |
 | `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality preset for per-turn personality layer |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL (minutes) |
 | `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider default for `reasoning` | Role model chains (comma-separated per env var); `reasoning` is main-agent role |
@@ -112,7 +112,7 @@ History processors registered on the agent prevent context overflow. Context gov
 | File | Purpose |
 |------|---------|
 | `co_cli/main.py` | Session loop, slash dispatch, run_turn integration, background compaction trigger |
-| `co_cli/_orchestrate.py` | `run_turn`, `_stream_events`, `_handle_approvals`, tool preamble injection, interrupt patching |
+| `co_cli/_orchestrate.py` | `run_turn`, `_stream_events`, `_collect_deferred_tool_approvals`, tool preamble injection, interrupt patching |
 | `co_cli/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | `co_cli/agent.py` | Agent factory, static prompt assembly call, per-turn `@agent.instructions` layers |
 | `co_cli/prompts/__init__.py` | Static prompt assembly (`instructions` + ordered rules + quirks) |

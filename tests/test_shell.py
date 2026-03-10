@@ -7,8 +7,9 @@ Tests run on any system (no Docker required).
 import os
 import pytest
 
-from pydantic_ai import ModelRetry
+from pydantic_ai import ApprovalRequired, ModelRetry
 
+from co_cli._exec_approvals import add_approval
 from co_cli.tools.shell import run_shell_command
 from co_cli._shell_backend import ShellBackend
 from co_cli.deps import CoDeps, CoServices, CoConfig
@@ -42,6 +43,21 @@ async def test_shell_basic_exec():
 
     result = await run_shell_command(ctx, "echo hello")
     assert "hello" in result
+
+
+@pytest.mark.asyncio
+async def test_shell_safe_command_runs_without_deferred_approval():
+    """Safe-prefix commands execute even when orchestration approval is absent."""
+    ctx = Context(
+        deps=CoDeps(
+            services=CoServices(shell=ShellBackend()),
+            config=CoConfig(session_id="test", shell_safe_commands=["pwd"]),
+        ),
+        tool_call_approved=False,
+    )
+
+    result = await run_shell_command(ctx, "pwd")
+    assert result.strip()
 
 
 @pytest.mark.asyncio
@@ -81,6 +97,35 @@ async def test_shell_timeout_clamped():
 async def test_shell_pipe():
     """Pipes work in shell backend."""
     ctx = _make_ctx()
+
+    result = await run_shell_command(ctx, "echo hello world | wc -w")
+    assert result.strip() == "2"
+
+
+@pytest.mark.asyncio
+async def test_shell_requires_deferred_approval_for_unknown_command():
+    """Commands outside the safe allowlist raise ApprovalRequired before execution."""
+    ctx = Context(
+        deps=CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig(session_id="test")),
+        tool_call_approved=False,
+    )
+
+    with pytest.raises(ApprovalRequired):
+        await run_shell_command(ctx, "echo hello world | wc -w")
+
+
+@pytest.mark.asyncio
+async def test_shell_persistent_approval_bypasses_deferred_prompt(tmp_path):
+    """Remembered shell approvals allow later matching commands to execute directly."""
+    path = tmp_path / "exec-approvals.json"
+    add_approval(path, "echo hello world | wc -w", "run_shell_command")
+    ctx = Context(
+        deps=CoDeps(
+            services=CoServices(shell=ShellBackend()),
+            config=CoConfig(session_id="test", exec_approvals_path=path),
+        ),
+        tool_call_approved=False,
+    )
 
     result = await run_shell_command(ctx, "echo hello world | wc -w")
     assert result.strip() == "2"

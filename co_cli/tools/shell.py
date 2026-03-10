@@ -2,7 +2,7 @@ from typing import Any
 
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 
-from co_cli._exec_approvals import find_approved, load_approvals, update_last_used
+from co_cli._tool_approvals import is_shell_command_persistently_approved
 from co_cli.deps import CoDeps
 from co_cli._shell_policy import ShellDecision, evaluate_shell_command
 from co_cli.tools._errors import terminal_error
@@ -42,11 +42,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     if policy.decision == ShellDecision.DENY:
         return terminal_error(policy.reason)
     if policy.decision == ShellDecision.REQUIRE_APPROVAL:
-        entries = load_approvals(ctx.deps.config.exec_approvals_path)
-        found = find_approved(cmd, entries)
-        if found:
-            update_last_used(ctx.deps.config.exec_approvals_path, found["id"])
-        elif not ctx.tool_call_approved:
+        if not is_shell_command_persistently_approved(cmd, ctx.deps) and not ctx.tool_call_approved:
             raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW, persistent approval, or tool_call_approved: fall through to execution
 

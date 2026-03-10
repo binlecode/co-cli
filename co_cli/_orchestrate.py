@@ -5,13 +5,12 @@ functions. The chat loop in main.py delegates all LLM interaction here.
 """
 
 import asyncio
-import json
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic_ai import Agent, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, FinishReason, ToolDenied
+from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, FinishReason
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
@@ -29,8 +28,13 @@ TurnOutcome = Literal["continue", "stop", "error", "compact"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-from co_cli._exec_approvals import add_approval, derive_pattern
 from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
+from co_cli._tool_approvals import (
+    decode_tool_args,
+    format_tool_call_description,
+    is_session_auto_approved,
+    record_approval_choice,
+)
 from co_cli.deps import CoDeps
 
 
@@ -395,62 +399,50 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
 
 
 # ---------------------------------------------------------------------------
-# _handle_approvals — extracted from main.py
+# _collect_deferred_tool_approvals — approval collection without resumption
 # ---------------------------------------------------------------------------
 
 
-async def _handle_approvals(agent: Agent, deps: CoDeps, result,
-                            model_settings: dict, usage_limits: UsageLimits,
-                            usage=None, verbose: bool = False,
-                            frontend: FrontendProtocol | None = None):
-    """Prompt user [y/n] for each pending tool call, then resume."""
+async def _collect_deferred_tool_approvals(
+    result: AgentRunResult,
+    deps: CoDeps,
+    frontend: FrontendProtocol | None,
+) -> DeferredToolResults:
+    """Collect approval decisions for all pending deferred tool requests.
+
+    Returns DeferredToolResults without resuming the stream.
+    run_turn() resumes via _stream_events() as a separate step.
+    """
     approvals = DeferredToolResults()
 
     for call in result.output.approvals:
-        args = call.args
-        if isinstance(args, str):
-            args = json.loads(args)
-        args = args or {}
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-        desc = f"{call.tool_name}({args_str})"
+        args = decode_tool_args(call.args)
 
-        # Skill-granted tool: auto-approve if in active skill's allowed-tools
+        # Tier 1: skill grant — auto-approve if in active skill's allowed-tools
         if _check_skill_grant(call.tool_name, deps):
             approvals.approvals[call.tool_call_id] = True
             continue
 
-        # Per-tool session auto-approve: skip prompt if user previously chose "a"
-        if call.tool_name in deps.session.session_tool_approvals:
+        # Tier 2: session auto-approval — skip prompt if user previously chose "a"
+        if is_session_auto_approved(call.tool_name, deps):
             approvals.approvals[call.tool_call_id] = True
             continue
 
-        if call.tool_name == "run_shell_command":
-            pattern_hint = derive_pattern(args.get("cmd", ""))
-            desc = f"{desc}\n  [always → will remember: {pattern_hint}]"
+        # Tier 3: user prompt
+        desc = format_tool_call_description(call.tool_name, args)
+        choice = frontend.prompt_approval(desc) if frontend is not None else "n"
 
-        if frontend is not None:
-            choice = frontend.prompt_approval(desc)
-        else:
-            choice = "n"
+        record_approval_choice(
+            approvals,
+            tool_call_id=call.tool_call_id,
+            approved=choice in ("y", "a"),
+            tool_name=call.tool_name,
+            args=args,
+            deps=deps,
+            remember=choice == "a",
+        )
 
-        if choice in ("y", "a"):
-            approvals.approvals[call.tool_call_id] = True
-            if choice == "a":
-                if call.tool_name == "run_shell_command":
-                    cmd = args.get("cmd", "")
-                    add_approval(deps.config.exec_approvals_path, cmd, call.tool_name)
-                else:
-                    deps.session.session_tool_approvals.add(call.tool_name)
-        else:
-            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-
-    return await _stream_events(
-        agent, user_input=None, deps=deps,
-        message_history=result.all_messages(),
-        model_settings=model_settings, usage_limits=usage_limits,
-        usage=usage, deferred_tool_results=approvals, verbose=verbose,
-        frontend=frontend,
-    )
+    return approvals
 
 
 # ---------------------------------------------------------------------------
@@ -502,11 +494,14 @@ async def run_turn(
             )
             turn_usage = result.usage()
 
-            # Handle deferred tool approvals (loop: resumed run may trigger more)
+            # Approval re-entry loop: collect decisions then resume stream separately
             while isinstance(result.output, DeferredToolRequests):
-                result, streamed_text = await _handle_approvals(
-                    agent, deps, result, model_settings,
-                    turn_limits, usage=turn_usage,
+                approvals = await _collect_deferred_tool_approvals(result, deps, frontend)
+                result, streamed_text = await _stream_events(
+                    agent, user_input=None, deps=deps,
+                    message_history=result.all_messages(),
+                    model_settings=model_settings, usage_limits=turn_limits,
+                    usage=turn_usage, deferred_tool_results=approvals,
                     verbose=verbose, frontend=frontend,
                 )
                 turn_usage = result.usage()

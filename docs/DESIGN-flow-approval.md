@@ -58,18 +58,18 @@ run_shell_command(ctx, cmd, timeout):
        then prefix-matches against deps.shell_safe_commands (longest prefix first)
        result: fall through to execution silently
 
-  3. Tier 3 — Persistent cross-session approvals  (_exec_approvals.py)
-       find_approved(cmd, load_approvals(exec_approvals_path))  ← fnmatch pattern match
-       if found → update_last_used(); fall through to execution
-       if not found AND ctx.tool_call_approved → fall through to execution
-       if not found AND NOT ctx.tool_call_approved → raise ApprovalRequired(metadata={"cmd": cmd})
+  3. Tier 3 — Persistent cross-session approvals  (_tool_approvals.py)
+       is_shell_command_persistently_approved(cmd, deps)  ← fnmatch via find_approved + update_last_used
+       if approved → fall through to execution
+       if not approved AND ctx.tool_call_approved → fall through to execution
+       if not approved AND NOT ctx.tool_call_approved → raise ApprovalRequired(metadata={"cmd": cmd})
 ```
 
 Pattern derivation: `derive_pattern(cmd)` collects the first three consecutive non-flag tokens, then appends ` *`. Example: `git commit -m "msg"` → `git commit *`. Bare `"*"` is never stored as a pattern.
 
 Note: when the user selects "a" for a shell command, the approval prompt displays the derived fnmatch pattern (e.g. `[always → will remember: git commit *]`) before the user answers, so the grant is informed.
 
-DENY and ALLOW decisions are made entirely within the tool. `_handle_approvals()` never sees shell commands that were denied or auto-allowed — only commands that reach `ApprovalRequired`.
+DENY and ALLOW decisions are made entirely within the tool. `_collect_deferred_tool_approvals()` never sees shell commands that were denied or auto-allowed — only commands that reach `ApprovalRequired`.
 
 ## Deferred Tool Request Path
 
@@ -80,8 +80,8 @@ run_turn(agent, deps, user_input, ...):
     result = _stream_events(agent, user_input, ...)
 
     while result.output is DeferredToolRequests:
-        decisions = _handle_approvals(agent, deps, result, model_settings, limits, frontend)
-        result = _stream_events(
+        decisions = await _collect_deferred_tool_approvals(result, deps, frontend)
+        result, _ = await _stream_events(
             agent,
             user_input=None,
             message_history=result.all_messages(),
@@ -97,23 +97,24 @@ Each iteration of the while loop may itself return more `DeferredToolRequests` i
 
 ## Three-Tier Decision Chain
 
-`_handle_approvals()` iterates over each pending tool call in `result.output.approvals` and resolves a decision. The tiers run in order; the first match short-circuits.
+`_collect_deferred_tool_approvals()` iterates over each pending tool call in `result.output.approvals` and resolves a decision. The tiers run in order; the first match short-circuits.
 
 ```text
-_handle_approvals(agent, deps, result, model_settings, limits, frontend, verbose=False, usage=None):
-    approvals = []
+_collect_deferred_tool_approvals(result, deps, frontend) -> DeferredToolResults:
+    approvals = DeferredToolResults()
 
     for each call in result.output.approvals:
-        args = json.loads(call.args) if str else call.args
-        desc = format("{tool_name}(k=v, ...)")
+        args = decode_tool_args(call.args)
+        desc = format_tool_call_description(call.tool_name, args)
         approved = False
+        remember = False
 
         # Tier 1: Skill allowed-tools grant
-        if call.tool_name in deps.session.skill_tool_grants:
+        if _check_skill_grant(call.tool_name, deps):
             approved = True
 
         # Tier 2: Per-session auto-approve
-        elif call.tool_name in deps.session.session_tool_approvals:
+        elif is_session_auto_approved(call.tool_name, deps):
             approved = True
 
         # Tier 3: User prompt
@@ -123,23 +124,17 @@ _handle_approvals(agent, deps, result, model_settings, limits, frontend, verbose
                 approved = True
             elif choice == "a":
                 approved = True
-                if call.tool_name == "run_shell_command":
-                    cmd = args["cmd"]
-                    add_approval(deps.config.exec_approvals_path, cmd, call.tool_name)   ← cross-session persistent
-                else:
-                    deps.session.session_tool_approvals.add(call.tool_name)  ← session-only
+                remember = True   ← remember_tool_approval called via record_approval_choice
             elif choice == "n":
-                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+                record_approval_choice(approvals, approved=False, ...)
                 continue
 
-        approvals.approvals[call.tool_call_id] = approved
+        record_approval_choice(approvals, approved=approved, remember=remember, ...)
 
-    return _stream_events(agent, user_input=None,
-        message_history=result.all_messages(),
-        deferred_tool_results=approvals, ...)
+    return approvals  ← DeferredToolResults; caller passes to _stream_events
 ```
 
-Note: The inline shell policy (DENY/ALLOW/persistent) lives inside `run_shell_command` before any deferral. The three-tier decision chain (Tiers 1–3) lives in `_handle_approvals()`. Shell safety policy is never bypassed by orchestration-level grants.
+Note: The inline shell policy (DENY/ALLOW/persistent) lives inside `run_shell_command` before any deferral. The three-tier decision chain (Tiers 1–3) lives in `_collect_deferred_tool_approvals()`. Shell safety policy is never bypassed by orchestration-level grants.
 
 ## "a" Persistence Semantics by Tool Class
 
@@ -180,7 +175,7 @@ MCP tools use the same `DeferredToolRequests` pipeline — no MCP-specific appro
 Per-server config (settings.json):
     approval = "auto"   → server wrapped in ApprovalRequiredToolset
                           every tool call from this server becomes a DeferredToolRequest
-                          flows through _handle_approvals() Tiers 1–3 like any native tool
+                          flows through _collect_deferred_tool_approvals() Tiers 1–3 like any native tool
 
     approval = "never"  → server passed unwrapped
                           all tool calls from this server execute without prompting
@@ -209,11 +204,12 @@ MCP tools are identified by their prefixed name (e.g. `github_create_issue`). If
 
 | File | Role |
 |------|------|
-| `co_cli/_orchestrate.py` | `run_turn()` approval loop, `_handle_approvals()` three-tier chain |
+| `co_cli/_orchestrate.py` | `run_turn()` approval loop, `_collect_deferred_tool_approvals()` three-tier chain |
 | `co_cli/tools/shell.py` | `run_shell_command()` — inline DENY/ALLOW/persistent policy, `ApprovalRequired` raise |
 | `co_cli/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/_approval.py` | `_is_safe_command()` — safe-prefix classification |
 | `co_cli/_exec_approvals.py` | `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()` — persistent shell approvals |
+| `co_cli/_tool_approvals.py` | `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()` — approval helpers centralized here |
 | `co_cli/_commands.py` | `dispatch()` — sets `deps.session.skill_tool_grants` before LLM turn (Tier 1) |
 | `co_cli/deps.py` | `CoSessionState.session_tool_approvals`, `CoSessionState.skill_tool_grants`; `CoConfig.exec_approvals_path` |
 | `co_cli/agent.py` | Tool registration with `requires_approval` flags; MCP server approval wrapping |

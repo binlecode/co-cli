@@ -165,9 +165,9 @@ Example — mark filesystem server as read-only:
 
 ### Env Var Merge Semantics
 
-Three layers affect MCP server configuration. Each uses **replacement**, not deep merge, consistent with the rest of co-cli's config system:
+Three layers affect MCP server configuration:
 
-1. **Project config overrides user config** — If project `.co-cli/settings.json` contains `mcp_servers`, it replaces the entire user-level `mcp_servers` dict (shallow `|=` merge on top-level keys). To keep defaults alongside project servers, redeclare them in the project config.
+1. **Project config deep-merges with user config** — `load_config()` uses `_deep_merge_settings` for project config. Because `mcp_servers` is a dict, project-level entries are merged key-by-key on top of user-level entries. A project config with only `{"mcp_servers": {"context7": {...}}}` adds that server while preserving the user's default servers. To override a specific server, include only that server's key in the project config.
 
 2. **`CO_CLI_MCP_SERVERS` env var overrides file config** — Setting this env var (JSON string) replaces the entire `mcp_servers` dict from files. To add a server without losing defaults, include all desired servers in the JSON.
 

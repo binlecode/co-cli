@@ -14,8 +14,11 @@ from co_cli.deps import CoDeps
 def decode_tool_args(raw_args: str | dict[str, Any] | None) -> dict[str, Any]:
     """Normalize deferred-tool args into a dict for approval handling."""
     if isinstance(raw_args, str):
-        decoded = json.loads(raw_args)
-        return decoded if isinstance(decoded, dict) else {}
+        try:
+            decoded = json.loads(raw_args)
+            return decoded if isinstance(decoded, dict) else {}
+        except json.JSONDecodeError:
+            return {}
     return raw_args or {}
 
 

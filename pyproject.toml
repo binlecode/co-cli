@@ -41,4 +41,4 @@ reranker = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--durations=0"
+addopts = "-x --durations=0"

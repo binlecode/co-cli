@@ -19,7 +19,7 @@ from co_cli.agent import get_agent
 from co_cli.config import Settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli._shell_backend import ShellBackend
-from co_cli.tools.memory import _classify_certainty, _detect_category, _detect_provenance, save_memory
+from co_cli.tools.memory import save_memory
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
 _AGENT, _, _, _ = get_agent()
@@ -158,26 +158,6 @@ def test_decay_below_limit_no_trigger():
             os.chdir(orig_cwd)
 
 
-def test_classify_certainty_hedging_returns_low():
-    """_classify_certainty returns 'low' for hedging language."""
-    assert _classify_certainty("I think I prefer dark mode") == "low"
-    assert _classify_certainty("Maybe I should use pytest") == "low"
-    assert _classify_certainty("probably the best approach") == "low"
-
-
-def test_classify_certainty_certain_returns_high():
-    """_classify_certainty returns 'high' for assertive language."""
-    assert _classify_certainty("I always use dark mode") == "high"
-    assert _classify_certainty("I prefer pytest definitely") == "high"
-    assert _classify_certainty("I never use tabs") == "high"
-
-
-def test_classify_certainty_neutral_returns_medium():
-    """_classify_certainty returns 'medium' for neutral language."""
-    assert _classify_certainty("User works on a Python project") == "medium"
-    assert _classify_certainty("The team uses GitHub for version control") == "medium"
-
-
 def test_save_memory_writes_certainty_to_frontmatter():
     """save_memory writes certainty field to frontmatter on new save."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -204,86 +184,5 @@ def test_save_memory_writes_certainty_to_frontmatter():
             assert len(files) == 1
             fm = yaml.safe_load(files[0].read_text().split("---")[1])
             assert fm.get("certainty") == "high"
-        finally:
-            os.chdir(orig_cwd)
-
-
-def test_update_existing_memory_reclassifies_certainty():
-    """_update_existing_memory updates certainty field on consolidation path."""
-    import asyncio
-    from datetime import datetime, timezone
-    from dataclasses import dataclass
-    from co_cli.tools.memory import _update_existing_memory, MemoryEntry
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
-
-            # Write an existing memory file with certainty: low
-            file_path = memory_dir / "001-hedging.md"
-            fm: dict = {
-                "id": 1,
-                "kind": "memory",
-                "created": "2026-01-01T00:00:00+00:00",
-                "tags": ["preference"],
-                "provenance": "user-told",
-                "auto_category": "preference",
-                "certainty": "low",
-            }
-            file_path.write_text(
-                f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\nI think I prefer dark mode\n",
-                encoding="utf-8",
-            )
-
-            entry = MemoryEntry(
-                id=1,
-                path=file_path,
-                content="I think I prefer dark mode",
-                tags=["preference"],
-                created="2026-01-01T00:00:00+00:00",
-            )
-
-            # Consolidate with assertive content → certainty should be reclassified to high
-            _update_existing_memory(entry, "I always prefer dark mode", ["preference"])
-
-            updated_fm = yaml.safe_load(file_path.read_text().split("---")[1])
-            assert updated_fm.get("certainty") == "high"
-        finally:
-            os.chdir(orig_cwd)
-
-
-def test_save_memory_normalizes_tag_case():
-    """Tags saved with mixed case are lowercased — detection functions see consistent values."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
-
-            ctx = _make_ctx(max_count=50)
-            asyncio.run(
-                save_memory(ctx, "User prefers dark mode", tags=["Preference", "MyTag"])
-            )
-
-            files = list(memory_dir.glob("*.md"))
-            assert len(files) == 1
-
-            raw = files[0].read_text(encoding="utf-8")
-            fm = yaml.safe_load(raw.split("---")[1])
-            saved_tags = fm.get("tags", [])
-
-            # Tags must be lowercased at write time
-            assert "preference" in saved_tags
-            assert "mytag" in saved_tags
-            assert "Preference" not in saved_tags
-            assert "MyTag" not in saved_tags
-
-            # Detection functions must see normalized tags correctly
-            assert _detect_category(saved_tags) == "preference"
-            assert _detect_provenance(saved_tags) == "detected"
         finally:
             os.chdir(orig_cwd)

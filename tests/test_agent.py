@@ -108,8 +108,9 @@ def test_web_search_ask_requires_approval():
 
 
 def test_all_approval_gates_precision_write_tools():
-    """all_approval=True forces update_memory and append_memory to require approval."""
+    """all_approval=True forces deferred-only behavior for side-effectful tools."""
     _, _, _, tool_approval = get_agent(all_approval=True)
+    assert tool_approval["run_shell_command"] is True
     assert tool_approval["update_memory"] is True
     assert tool_approval["append_memory"] is True
 

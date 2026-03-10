@@ -27,11 +27,7 @@ from co_cli.tools.memory import MemoryEntry, _load_memories
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
 _AGENT, _, _, _ = get_agent()
 
-_CONFIG = CoConfig(
-    role_models={k: list(v) for k, v in settings.role_models.items()},
-    llm_provider=settings.llm_provider,
-    ollama_host=settings.ollama_host,
-)
+_CONFIG = CoConfig.from_settings(settings)
 
 
 # ---------------------------------------------------------------------------

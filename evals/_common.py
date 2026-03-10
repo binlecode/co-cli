@@ -16,7 +16,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.settings import ModelSettings
 
 from co_cli._orchestrate import FrontendProtocol
-from co_cli.config import settings, get_settings, get_role_head
+from co_cli.config import settings, get_settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli._shell_backend import ShellBackend
 
@@ -29,7 +29,8 @@ from co_cli._shell_backend import ShellBackend
 def detect_model_tag() -> str:
     """Auto-detect a model tag from the current LLM config."""
     provider = settings.llm_provider.lower()
-    model = get_role_head(settings.model_roles, "reasoning")
+    models = settings.role_models.get("reasoning", [])
+    model = models[0] if models else None
     if provider == "gemini":
         return f"gemini-{model}" if model else "gemini"
     if provider == "ollama":
@@ -77,10 +78,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "memory_dedup_threshold": s.memory_dedup_threshold,
         "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
-        "summarization_model": get_role_head(s.model_roles, "summarization"),
         "knowledge_reranker_provider": s.knowledge_reranker_provider,
         "mcp_count": len(s.mcp_servers),
-        "model_roles": {k: list(v) for k, v in s.model_roles.items()},
+        "role_models": {k: list(v) for k, v in s.role_models.items()},
         "llm_provider": s.llm_provider,
         "ollama_host": s.ollama_host,
         "ollama_num_ctx": s.ollama_num_ctx,

@@ -88,25 +88,30 @@ uv run pytest tests/test_approval.py tests/test_exec_approvals.py tests/test_she
 Result: **52 passed, 0 failed** in 0.25s.
 
 Coverage:
-- `test_approval.py` — shell policy tiers, `_is_safe_command`, `_validate_args`, `_check_skill_grant`. Risk classifier tests absent (correct — module deleted).
+- `test_approval.py` — `_tool_approvals` behavior such as session approval state, remembered shell approvals, and approval description formatting.
 - `test_exec_approvals.py` — `load_approvals`, `save_approvals`, `derive_pattern`, `find_approved`, `add_approval`, `update_last_used`, `prune_stale`.
 - `test_shell_policy.py` — DENY / ALLOW / REQUIRE_APPROVAL classification.
-- `test_orchestrate.py` — streaming, approval loop, tool preamble, `_patch_dangling_tool_calls`, skill grant logging.
+- `test_orchestrate.py` — streaming, approval loop, tool preamble, `_patch_dangling_tool_calls`, plus one direct `_check_skill_grant` helper assertion.
 
 ---
 
 ## Gaps and Issues
 
-None found. All five tasks from the plan are fully shipped:
+Feature work is shipped, but closure gaps remain:
 
 1. Risk classifier removed from `_handle_approvals`; pattern transparency added.
 2. `approval_risk_enabled` and `approval_auto_low_risk` removed from `Settings`, `CoConfig`, and `main.py`.
-3. `_approval_risk.py` deleted; `test_approval_risk.py` deleted; risk classifier tests removed from `test_approval.py`.
+3. `_approval_risk.py` deleted; `test_approval_risk.py` deleted.
 4. `DESIGN-flow-approval.md` updated to three-tier model with pattern transparency note.
 5. All other DESIGN docs purged of `approval_risk` and `four-tier` references.
+6. Workflow review docs still need cleanup or explicit historical labeling.
+7. The cited regression slice passes, but some approval-related tests are helper-level and do not fully match the current functional-tests-only policy.
 
 ---
 
 ## Verdict
 
-**HEALTHY** — Delivery is complete and accurate. Code, tests, and docs are fully aligned. All done_when gates pass. No stale references remain in any DESIGN doc.
+**NEEDS_ATTENTION** — Delivery is complete and code is accurate. All done_when gates pass. However, two issues were identified in the March 10 re-audit:
+
+1. `REVIEW-flow-approval.md` is still primarily a pre-`approval-simplify` review and needs clearer historical labeling or cleanup.
+2. Some approval-related tests still exercise helper or policy-engine boundaries directly, which no longer cleanly matches the current mandatory functional-tests-only policy.

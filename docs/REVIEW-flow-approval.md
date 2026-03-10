@@ -1,5 +1,20 @@
 # Review: Approval Flow
 
+> **Historical review:** This document records a pre-`approval-simplify` assessment of the
+> approval system. It is intentionally preserved as workflow history, not as a description of the
+> current implementation.
+>
+> **Current state (2026-03-10):**
+> - The risk classifier (`_approval_risk.py`, `approval_risk_enabled`) is removed.
+> - The live deferred approval path is three-tier: `skill_tool_grants` →
+>   `session_tool_approvals` → user prompt.
+> - Current implementation and DESIGN behavior are documented in
+>   [docs/DESIGN-flow-approval.md](/Users/binle/workspace_genai/co-cli/docs/DESIGN-flow-approval.md)
+>   and rechecked in
+>   [docs/REVIEW-delivery-approval-simplify.md](/Users/binle/workspace_genai/co-cli/docs/REVIEW-delivery-approval-simplify.md).
+>
+> Treat any deleted-file references or four-tier analysis below as historical context only.
+
 ## Verdict
 
 **Short answer**

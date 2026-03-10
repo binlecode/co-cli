@@ -246,9 +246,10 @@ def get_agent(
     _register(write_file, True)
     _register(edit_file, True)
 
-    # Shell: policy (DENY/ALLOW/REQUIRE_APPROVAL) is evaluated inside the tool.
-    # DENY and ALLOW are decided before any deferral; only REQUIRE_APPROVAL defers.
-    _register(run_shell_command, False)
+    # Shell: in normal chat flow, fine-grained shell policy lives inside the tool.
+    # In eval/test "all_approval" mode, shell must defer at the agent layer so
+    # safe commands do not execute and every tool call is observable.
+    _register(run_shell_command, all_approval)
     _register(create_email_draft, True)
     _register(save_memory, True)
     _register(save_article, True)

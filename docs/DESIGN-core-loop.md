@@ -7,7 +7,7 @@
 This doc is the canonical design for the agent main loop. It covers what happens from the moment the interactive session starts accepting input through one user turn completing: slash-command dispatch, skill expansion, `run_turn()`, streaming, shell policy checks, approval re-entry, retries, interrupt recovery, post-turn hooks, and the runtime contracts that keep the loop stable across turns.
 
 Scope boundary:
-- In scope: `chat_loop()`, `run_turn()`, `_stream_events()`, `_handle_approvals()`, shell approval gating, turn outcomes, runtime safety guards, REPL-facing control flow
+- In scope: `chat_loop()`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()`, shell approval gating, turn outcomes, runtime safety guards, REPL-facing control flow
 - Out of scope: startup/bootstrap sequencing in [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md), and broad system architecture in [DESIGN-system.md](DESIGN-system.md)
 
 ## 2. Component In System Architecture
@@ -24,7 +24,7 @@ graph LR
     subgraph Orchestration ["Orchestration (_orchestrate.py)"]
         RunTurn["run_turn()"]
         Stream["_stream_events()"]
-        Approve["_handle_approvals()"]
+        Approve["_collect_deferred_tool_approvals()"]
     end
 
     subgraph Agent ["Agent (agent.py)"]
@@ -74,7 +74,7 @@ Cross-component touchpoints:
 Approval-specific touchpoints:
 - `run_shell_command()` can deny, allow, or defer before orchestration sees the request
 - MCP tools configured with approval wrapping enter the same deferred approval loop as native tools
-- skill `allowed-tools` grants and session approvals feed directly into `_handle_approvals()`
+- skill `allowed-tools` grants and session approvals feed directly into `_collect_deferred_tool_approvals()`
 
 ## 3. Flows
 
@@ -98,7 +98,7 @@ flowchart TD
         STRM["_stream_events(user_input, history)"] --> CHK
         CHK{result.output}
         CHK -- DeferredToolRequests --> AP
-        AP["_handle_approvals()\nskill grant -> session auto -> prompt y/n/a"] --> RESUME
+        AP["_collect_deferred_tool_approvals()\nskill grant -> session auto -> prompt y/n/a"] --> RESUME
         RESUME["_stream_events(None, deferred_results)"] --> CHK
         CHK -- str or done --> DONE["finish checks\nctx ratio checks\nreturn TurnResult"]
         STRM -.->|UsageLimitExceeded| GR["grace summary turn\nreturn continue"]
@@ -170,9 +170,9 @@ Ordered approval phases:
 1. A tool call is emitted by the model.
 2. Shell commands first pass inline DENY/ALLOW checks in `run_shell_command()`.
 3. If the shell policy result is `REQUIRE_APPROVAL`, the shell tool checks persistent exec approvals and `ctx.tool_call_approved`.
-4. Deferred calls enter `_handle_approvals()` and run the three-tier decision chain.
-5. `_handle_approvals()` records the approval outcomes as `DeferredToolResults`.
-6. `_handle_approvals()` then resumes `_stream_events(None, deferred_tool_results=...)` directly; co-cli does not insert any separate user-to-LLM step between the approval answer and the approved continuation.
+4. Deferred calls enter `_collect_deferred_tool_approvals()` and run the three-tier decision chain.
+5. `_collect_deferred_tool_approvals()` records the approval outcomes as `DeferredToolResults`.
+6. `run_turn()` then resumes by calling `_stream_events(None, deferred_tool_results=...)` directly; co-cli does not insert any separate user-to-LLM step between the approval answer and the approved continuation.
 7. The same turn can re-enter approval multiple times if the resumed run emits more deferred calls.
 
 Failure and fallback inline:
@@ -234,7 +234,8 @@ enter retry loop (up to model_http_retries):
     turn_usage = result.usage()
 
     while result.output is DeferredToolRequests:
-        result = _handle_approvals(...)
+        approvals = _collect_deferred_tool_approvals(result, deps, frontend)
+        result, streamed_text = await _stream_events(None, deferred_results=approvals)
         turn_usage = result.usage()
 
     if non-streaming string result:
@@ -285,7 +286,7 @@ Required state:
 - `deps.session.session_tool_approvals` and `deps.session.skill_tool_grants` are populated for the current turn
 - `deps.config.exec_approvals_path` resolves to `.co-cli/exec-approvals.json` when shell persistence is used
 
-When the model emits `DeferredToolRequests`, `_handle_approvals()` resolves each request in order:
+When the model emits `DeferredToolRequests`, `_collect_deferred_tool_approvals()` resolves each request in order:
 
 ```text
 for each deferred tool request:
@@ -296,19 +297,20 @@ for each deferred tool request:
     else:
         prompt user for y / n / a
 
-build DeferredToolResults
-return await _stream_events(None, deferred_results)
+build and return DeferredToolResults
 ```
+
+`run_turn()` then calls `_stream_events(None, deferred_results=approvals)` to resume the turn.
 
 Approval-chain semantics:
 - active skill grants only apply during the current skill-expanded turn
 - session approvals persist for the current REPL session
 - `"a"` can persist shell approval patterns to the approval store
-- shell DENY and ALLOW decisions happen inside `run_shell_command()` before `_handle_approvals()` is involved
+- shell DENY and ALLOW decisions happen inside `run_shell_command()` before `_collect_deferred_tool_approvals()` is involved
 
 Clarification on the resume boundary:
-- `_handle_approvals()` does not send the user's approval text back to the model as a new user message
-- co-cli hands `DeferredToolResults` back to the SDK and resumes the same turn
+- `_collect_deferred_tool_approvals()` does not send the user's approval text back to the model as a new user message
+- co-cli hands `DeferredToolResults` back to the SDK via `_stream_events()` and resumes the same turn
 - from the co-cli layer, the approved tool continuation happens without any extra app-level LLM decision step between approval input and the approved execution path
 - the exact internal ordering between tool execution and model continuation after `DeferredToolResults` are passed back is SDK-managed, but the resulting tool outputs are what feed the continued turn
 
@@ -332,11 +334,11 @@ run_shell_command(ctx, cmd, timeout):
        ALLOW -> execute silently
        REQUIRE_APPROVAL -> continue below
 
-  2. Persistent cross-session approvals  (_exec_approvals.py)
-       find_approved(cmd, load_approvals(exec_approvals_path))
-       if found -> update_last_used(); execute
-       if not found and ctx.tool_call_approved -> execute
-       if not found and not ctx.tool_call_approved -> raise ApprovalRequired(metadata={"cmd": cmd})
+  2. Persistent cross-session approvals  (_tool_approvals.py)
+       is_shell_command_persistently_approved(cmd, ctx.deps)
+       if approved -> execute
+       if not approved and ctx.tool_call_approved -> execute
+       if not approved and not ctx.tool_call_approved -> raise ApprovalRequired(metadata={"cmd": cmd})
 ```
 
 The ALLOW classification itself comes from `_is_safe_command()` inside `_shell_policy.py`, which rejects shell chaining operators and validates the command against the configured safe-prefix list.
@@ -351,45 +353,42 @@ Pattern derivation:
 - example: `git commit -m "msg"` becomes `git commit *`
 - bare `*` is never stored
 
-When the user selects `"a"` for a shell command, `_handle_approvals()` stores a new derived pattern through `add_approval(...)`. The approval prompt displays that derived pattern before the user answers.
+When the user selects `"a"` for a shell command, `_collect_deferred_tool_approvals()` stores a new derived pattern through `remember_tool_approval()` in `_tool_approvals.py`. The approval prompt displays that derived pattern before the user answers.
 
-### 4.7 Three-Tier Decision Chain In `_handle_approvals()`
+### 4.7 Three-Tier Decision Chain In `_collect_deferred_tool_approvals()`
 
-`_handle_approvals()` iterates over each pending tool call in `result.output.approvals`. The tiers run in order and the first match short-circuits.
+`_collect_deferred_tool_approvals()` iterates over each pending tool call in `result.output.approvals`. The tiers run in order and the first match short-circuits. Arg decoding, description formatting, and persistence dispatch are delegated to `_tool_approvals.py`.
 
 ```text
-_handle_approvals(...):
-    approvals = []
+_collect_deferred_tool_approvals(result, deps, frontend):
+    approvals = DeferredToolResults()
 
     for each call in result.output.approvals:
-        args = json.loads(call.args) if str else call.args
-        desc = format("{tool_name}(k=v, ...)")
-        approved = False
+        args = decode_tool_args(call.args)          # normalize str | dict | None → dict
 
         if call.tool_name in deps.session.skill_tool_grants:
-            approved = True
-        elif call.tool_name in deps.session.session_tool_approvals:
-            approved = True
+            approvals[call.tool_call_id] = True
+            continue
 
-        if not approved:
-            choice = frontend.prompt_approval(desc) if frontend is not None else "n"
-            if choice == "y":
-                approved = True
-            elif choice == "a":
-                approved = True
-                if call.tool_name == "run_shell_command":
-                    cmd = args["cmd"]
-                    add_approval(deps.config.exec_approvals_path, cmd, call.tool_name)
-                else:
-                    deps.session.session_tool_approvals.add(call.tool_name)
-            elif choice == "n":
-                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-                continue
+        if is_session_auto_approved(call.tool_name, deps):
+            approvals[call.tool_call_id] = True
+            continue
 
-        approvals.approvals[call.tool_call_id] = approved
+        desc = format_tool_call_description(call.tool_name, args)  # includes shell hint
+        choice = frontend.prompt_approval(desc) if frontend else "n"
+
+        record_approval_choice(
+            approvals,
+            tool_call_id=call.tool_call_id,
+            approved=(choice in ("y", "a")),
+            tool_name=call.tool_name, args=args, deps=deps,
+            remember=(choice == "a"),
+        )
+
+    return approvals
 ```
 
-The inline shell policy is never bypassed by orchestration-level grants. `_handle_approvals()` only sees shell commands that have already reached `ApprovalRequired`.
+The inline shell policy is never bypassed by orchestration-level grants. `_collect_deferred_tool_approvals()` only sees shell commands that have already reached `ApprovalRequired`.
 
 ### 4.8 `"a"` Persistence Semantics By Tool Class
 
@@ -406,7 +405,7 @@ The `while result.output is DeferredToolRequests` loop in `run_turn()` supports 
 - the agent calls several tools requiring approval in parallel
 - after one batch is approved and executed, the agent calls another tool requiring approval
 
-Each hop resumes the stream from inside `_handle_approvals()`. The outer `while isinstance(result.output, DeferredToolRequests)` loop in `run_turn()` is bounded only by the model's tool-call behavior.
+Each hop collects approvals via `_collect_deferred_tool_approvals()` and then resumes the stream via `_stream_events()` directly. The outer `while isinstance(result.output, DeferredToolRequests)` loop in `run_turn()` is bounded only by the model's tool-call behavior.
 
 Important boundary:
 - each approval hop is a continuation of the same run, not a new user turn
@@ -432,7 +431,7 @@ MCP tools use the same `DeferredToolRequests` pipeline. No separate MCP approval
 Per-server config:
     approval = "auto"  -> server wrapped in ApprovalRequiredToolset
                           every tool call becomes a DeferredToolRequest
-                          flows through _handle_approvals() like a native tool
+                          flows through _collect_deferred_tool_approvals() like a native tool
 
     approval = "never" -> server passed unwrapped
                           tool calls execute without prompting
@@ -559,7 +558,7 @@ Recovery behavior:
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell error threshold before intervention |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per older tool return |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for sliding-window compaction |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Summarization model chain for compaction |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for ollama; primary model for gemini) | Summarization model chain for compaction |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL |
 
 ## 6. Files
@@ -567,11 +566,12 @@ Recovery behavior:
 | File | Purpose |
 |------|---------|
 | `co_cli/main.py` | `chat_loop()`, REPL dispatch, background compaction trigger |
-| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_handle_approvals()`, interrupt patching |
+| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()`, interrupt patching |
 | `co_cli/tools/shell.py` | `run_shell_command()` inline DENY/ALLOW/persistent approval gate |
 | `co_cli/_shell_policy.py` | Shell DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/_approval.py` | Safe-prefix shell classification |
 | `co_cli/_exec_approvals.py` | Persistent shell approval pattern derivation and storage |
+| `co_cli/_tool_approvals.py` | Extracted approval helpers: session auto-approval, shell remembered-approval routing, approval formatting |
 | `co_cli/_history.py` | Compaction helpers and safety processors consulted during turns |
 | `co_cli/_commands.py` | Slash command handlers and skill dispatch |
 | `co_cli/_session.py` | Session persistence touched on every completed turn |

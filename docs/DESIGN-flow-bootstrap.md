@@ -38,14 +38,14 @@ flowchart TD
 
 ```text
 Layer 1: ~/.config/co-cli/settings.json          ← user config (base)
-Layer 2: <cwd>/.co-cli/settings.json             ← project config (shallow merge via |=)
+Layer 2: <cwd>/.co-cli/settings.json             ← project config (deep merge via _deep_merge_settings)
 Layer 3: env vars (fill_from_env model_validator) ← highest precedence
 ```
 
 `fill_from_env` runs as a `model_validator(mode='before')` — env vars are injected directly into the raw dict before Pydantic validation, so they override both config files.
 
-**`role_models` defaults** are injected by `fill_from_env` when neither config file nor env vars specify `role_models`:
-- `gemini`: reasoning chain only → `gemini-3-flash-preview`; all other roles empty
+**`role_models` defaults** are injected by `fill_from_env` for any role not explicitly set in config or env vars. Merge order: provider defaults supply missing roles → explicit config overrides defaults → env var overrides override config.
+- `gemini`: reasoning chain only → `gemini-3-flash-preview`; all other roles empty (no gemini defaults for optional roles)
 - `ollama`: all five roles populated with hardcoded defaults (`DEFAULT_OLLAMA_*` constants in `config.py`)
 
 The `reasoning` role is validated post-construction: missing or empty → `ValueError` raised at startup.
@@ -96,15 +96,19 @@ create_deps():
         task_runner=None,   ← injected later in chat_loop after model check passes
     )
 
-    config = CoConfig(
+    config = dataclasses.replace(
+        CoConfig.from_settings(settings),             ← canonical factory; copies all Settings fields
         session_id=session_id,
-        ...30+ scalar fields copied from settings...,
-        knowledge_search_backend=resolved_knowledge_backend,  ← may differ from settings value
+        exec_approvals_path=exec_approvals_path,
         memory_dir=memory_dir,
         library_dir=library_dir,
+        skills_dir=Path.cwd() / ".co-cli/skills",
         personality_critique=personality_critique,
-        role_models={k: list(v) for k, v in settings.role_models.items()},  ← shallow copy
+        knowledge_search_backend=resolved_knowledge_backend,  ← may differ from settings value
+        mcp_count=len(settings.mcp_servers),
     )
+
+    services.model_registry = ModelRegistry.from_config(config)  ← built here, inside create_deps()
 
     runtime = CoRuntimeState(
         opening_ctx_state=OpeningContextState(),
@@ -223,8 +227,7 @@ Bootstrap runs once per `chat_loop()` startup after the model dependency check h
 ```text
 chat_loop():
     frontend = TerminalFrontend()
-    deps = create_deps()
-    deps.config.skills_dir = Path.cwd() / ".co-cli/skills"
+    deps = create_deps()                                    ← skills_dir set here via dataclasses.replace()
     run_model_check(deps, frontend)                     ← validates provider + models
     task_runner = TaskRunner(storage, max_concurrent, inactivity_timeout)
     deps.services.task_runner = task_runner
@@ -445,6 +448,7 @@ The welcome banner marks the boundary between startup and interactive use. All s
 | `deps.services.knowledge_index` | Step 1 (on error) | `None` — disables FTS for session |
 | `deps.config.session_id` | Step 2 | Restored or new UUID hex |
 | `deps.config.role_models` | Model dependency check (not bootstrap) | Pruned chain (if Ollama models missing) |
+| `deps.services.model_registry` | `create_deps()` (deps initialization) | `ModelRegistry` built from `CoConfig` via `ModelRegistry.from_config(config)` |
 | `deps.services.task_runner` | Pre-bootstrap (main.py) | `TaskRunner` instance |
 | `deps.session.skill_registry` | Pre-bootstrap (main.py) | List of non-hidden skill dicts |
 | `SKILL_COMMANDS` | Pre-bootstrap (main.py) | Module-level dict of all skills |

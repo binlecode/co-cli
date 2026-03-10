@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 import os
 import subprocess
@@ -91,11 +92,6 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
     """Create deps from settings."""
     session_id = uuid4().hex
 
-    # Resolve obsidian vault path
-    vault_path = None
-    if settings.obsidian_vault_path:
-        vault_path = Path(settings.obsidian_vault_path)
-
     # Initialize knowledge index with adaptive fallback:
     # hybrid -> fts5 -> grep (no index).
     knowledge_index = None
@@ -169,47 +165,16 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
         knowledge_index=knowledge_index,
         task_runner=task_runner,
     )
-    config = CoConfig(
+    config = dataclasses.replace(
+        CoConfig.from_settings(settings),
         session_id=session_id,
-        obsidian_vault_path=vault_path,
-        google_credentials_path=settings.google_credentials_path,
         exec_approvals_path=exec_approvals_path,
-        shell_max_timeout=settings.shell_max_timeout,
-        shell_safe_commands=settings.shell_safe_commands,
-        gemini_api_key=settings.gemini_api_key,
-        brave_search_api_key=settings.brave_search_api_key,
-        web_fetch_allowed_domains=settings.web_fetch_allowed_domains,
-        web_fetch_blocked_domains=settings.web_fetch_blocked_domains,
-        web_policy=settings.web_policy,
-        web_http_max_retries=settings.web_http_max_retries,
-        web_http_backoff_base_seconds=settings.web_http_backoff_base_seconds,
-        web_http_backoff_max_seconds=settings.web_http_backoff_max_seconds,
-        web_http_jitter_ratio=settings.web_http_jitter_ratio,
-        personality=settings.personality,
-        personality_critique=_personality_critique,
-        memory_max_count=settings.memory_max_count,
-        memory_dedup_window_days=settings.memory_dedup_window_days,
-        memory_dedup_threshold=settings.memory_dedup_threshold,
-        memory_recall_half_life_days=settings.memory_recall_half_life_days,
-        memory_consolidation_top_k=settings.memory_consolidation_top_k,
-        memory_consolidation_timeout_seconds=settings.memory_consolidation_timeout_seconds,
-        memory_auto_save_tags=settings.memory_auto_save_tags,
-        max_history_messages=settings.max_history_messages,
-        tool_output_trim_chars=settings.tool_output_trim_chars,
-        doom_loop_threshold=settings.doom_loop_threshold,
-        max_reflections=settings.max_reflections,
-        knowledge_search_backend=resolved_knowledge_backend,
-        knowledge_reranker_provider=settings.knowledge_reranker_provider,
         memory_dir=memory_dir,
         library_dir=library_dir,
+        skills_dir=Path.cwd() / ".co-cli" / "skills",
+        personality_critique=_personality_critique,
+        knowledge_search_backend=resolved_knowledge_backend,
         mcp_count=len(settings.mcp_servers),
-        role_models={k: list(v) for k, v in settings.role_models.items()},
-        ollama_host=settings.ollama_host,
-        llm_provider=settings.llm_provider,
-        ollama_num_ctx=settings.ollama_num_ctx,
-        ctx_warn_threshold=settings.ctx_warn_threshold,
-        ctx_overflow_threshold=settings.ctx_overflow_threshold,
-        model_http_retries=settings.model_http_retries,
     )
     services.model_registry = ModelRegistry.from_config(config)
     runtime = CoRuntimeState(
@@ -292,7 +257,6 @@ async def chat_loop(verbose: bool = False):
 
     # Step 1: create_deps with no task_runner yet (optional field, injected below)
     deps = create_deps()
-    deps.config.skills_dir = Path.cwd() / ".co-cli" / "skills"
 
     # Step 2: run_model_check — ALL resource checks here, pre-agent
     # Raises RuntimeError on error (agent is never created).

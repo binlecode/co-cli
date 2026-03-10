@@ -196,7 +196,7 @@ grants are always cleared after a skill turn. No leaked state between skill invo
 `deps.session.skill_tool_grants` is checked in the approval three-tier chain before the user prompt
 tier. Skills can pre-authorize tools for their LLM turn.
 
-### Grant check in _handle_approvals
+### Grant check in _collect_deferred_tool_approvals
 
 ```
 _check_skill_grant(tool_name: str, deps: CoDeps) → bool:
@@ -205,14 +205,14 @@ _check_skill_grant(tool_name: str, deps: CoDeps) → bool:
     return True
   return False
 
-In _handle_approvals() (tier 1, runs before session auto-approve):
+In _collect_deferred_tool_approvals() (tier 1, runs before session auto-approve):
   if _check_skill_grant(tool_name, deps):
     auto-approve this call (no user prompt shown)
     continue to next pending call
 ```
 
 The grant is tool-name exact-match. Wildcards are not supported. The grant is active only for
-the duration of the skill's `run_turn()` — cleared by the `finally` block immediately after.
+the duration of the skill's `run_turn()` — cleared by the `finally` block in `chat_loop()` immediately after.
 
 If `allowed-tools` is not set in the skill frontmatter, `deps.session.skill_tool_grants` remains
 empty and normal approval rules apply.

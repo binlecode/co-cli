@@ -184,7 +184,7 @@ Rules:
 
 ### 4.1 Agent Factory
 
-`get_agent(all_approval, web_policy, mcp_servers, personality, model_name?) -> (agent, model_settings, tool_names, tool_approval)` selects the LLM model, assembles the system prompt, registers tools with approval policies, and registers MCP toolsets.
+`get_agent(all_approval, web_policy, mcp_servers, personality, model_name?, config: CoConfig | None = None) -> (agent, model_settings, tool_names, tool_approval)` selects the LLM model, assembles the system prompt, registers tools with approval policies, and registers MCP toolsets.
 
 ```text
 get_agent(...) -> (agent, model_settings, tool_names, tool_approval):
@@ -422,7 +422,7 @@ System-relevant settings called out here:
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Main provider selection |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider default for `reasoning` | Role model chains |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (ollama) or reasoning-only (gemini) | Role model chains |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Provider/network retry budget per turn |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` approval policy |
@@ -437,7 +437,7 @@ System-relevant settings called out here:
 | `co_cli/agent.py` | `get_agent()`, prompt assembly wiring, native tool and MCP registration |
 | `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
 | `co_cli/main.py` | `create_deps()`, `chat_loop()`, startup assembly, REPL |
-| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_handle_approvals()` |
+| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
 | `co_cli/_history.py` | History processors and compaction |
 | `co_cli/_model_check.py` | Model/provider preflight checks used during bootstrap |
 | `co_cli/_commands.py` | Slash commands and skill dispatch surface |

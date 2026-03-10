@@ -20,12 +20,7 @@ from co_cli._shell_backend import ShellBackend
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
 _AGENT, _, _, _ = get_agent()
 
-_CONFIG = CoConfig(
-    role_models={k: list(v) for k, v in settings.role_models.items()},
-    llm_provider=settings.llm_provider,
-    ollama_host=settings.ollama_host,
-    ollama_num_ctx=settings.ollama_num_ctx,
-)
+_CONFIG = CoConfig.from_settings(settings)
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _SERVICES = CoServices(shell=ShellBackend(), model_registry=_REGISTRY)
 

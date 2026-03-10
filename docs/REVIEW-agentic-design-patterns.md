@@ -62,16 +62,13 @@ What exists now:
 - Session-scoped tool approvals exist.
 - Persistent shell approvals exist through `_exec_approvals.py`.
 - Skills can grant turn-scoped approvals for listed tools.
-- There is now an optional approval-risk classifier in
-  `co_cli/_approval_risk.py` with `LOW / MEDIUM / HIGH` buckets.
+- Persistent shell approvals exist through `_exec_approvals.py`.
 
 Important nuance:
 
-- The classifier exists, but it is config-gated and disabled by default unless
-  `approval_risk_enabled` is turned on.
-- This means approval policy is stronger than the old review suggested, but it
-  is still primarily a deterministic policy engine, not a model-based risk
-  system.
+- The risk classifier (`_approval_risk.py`, `approval_risk_enabled`) was removed in the
+  `approval-simplify` delivery (March 2026). Approval policy is now a deterministic
+  three-tier chain: skill grants → session tool approvals → user prompt.
 
 This is a canonical fit for the book’s human-in-the-loop pattern. The main
 future improvement is not “add approvals” but “make risk-sensitive approval

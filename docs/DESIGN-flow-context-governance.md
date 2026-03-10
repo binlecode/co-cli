@@ -288,7 +288,7 @@ unmatched calls.
 
 ```
 approved tools:
-  _handle_approvals() resumes agent with DeferredToolResults
+  run_turn() passes DeferredToolResults to _stream_events() to resume agent
   pydantic-ai re-runs → ToolCallPart + ToolReturnPart pair added naturally
 
 denied tools:
@@ -332,7 +332,7 @@ interrupted during approval loop:
 | `message_history` (chat_loop local) | After each turn, after `/clear`, after `/compact`, after `/new` | `chat_loop` in `main.py` |
 | `deps.runtime.precomputed_compaction` | Written after background task join; cleared in `chat_loop` after turn (between signal detection and `touch_session`) — NOT inside `truncate_history_window` | `chat_loop` (write and clear) |
 | Memory file `updated` timestamps | On every `inject_opening_context` recall (gravity) | `recall_memory` → `_touch_memory` |
-| `deps.session.session_tool_approvals` | When user selects `"a"` for a non-shell tool | `_handle_approvals` in `_orchestrate.py` |
+| `deps.session.session_tool_approvals` | When user selects `"a"` for a non-shell tool | `remember_tool_approval` in `_tool_approvals.py` |
 
 ---
 

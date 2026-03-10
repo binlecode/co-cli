@@ -28,7 +28,7 @@ graph TD
     HP --> S[summary agent]
 
     A --> T[tool calls]
-    T --> AP[_handle_approvals]
+    T --> AP[_collect_deferred_tool_approvals]
     AP --> A
 
     A --> H[message_history]
@@ -279,7 +279,7 @@ Known limitations:
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level tool retry limit |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per older `ToolReturnPart`; `0` disables trimming |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for sliding-window compaction; `0` disables |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Summarization model chain; head used for auto-compaction, fallback is primary |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for ollama; primary model for gemini) | Summarization model chain; head used for auto-compaction, fallback is primary |
 | `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality preset used for soul content and learned-context injection |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL in minutes |
 | `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider default for `reasoning` | Role model chains; `reasoning` is the main-agent role |

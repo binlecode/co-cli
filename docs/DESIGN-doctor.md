@@ -154,7 +154,7 @@ System-owned callers run as part of startup or CLI infrastructure — no agent i
 
 Agent-owned callers run mid-turn with the full runtime already live.
 
-**`capabilities.py`** calls `run_doctor(ctx.deps)` inside the `check_capabilities` tool. The result's `checks` list is serialized to the tool return dict alongside other capability fields (`knowledge_backend`, `reranker`, `mcp_count`, `reasoning_models`, `reasoning_ready`, `skill_grants`, `google`, `obsidian`, `brave`), enabling the agent to reason about integration health on demand. This path is accessible via the existing `/doctor` skill (`co_cli/skills/doctor.md`) or triggered by the LLM during a turn.
+**`capabilities.py`** calls `run_doctor(ctx.deps)` inside the `check_capabilities` tool. The tool return dict includes `checks` (list of `{name, status, detail}` dicts — one per doctor check) alongside other capability fields (`display`, `knowledge_backend`, `reranker`, `mcp_count`, `reasoning_models`, `reasoning_ready`, `skill_grants`, `google`, `obsidian`, `brave`), enabling the agent to reason about integration health on demand. This path is accessible via the existing `/doctor` skill (`co_cli/skills/doctor.md`) or triggered by the LLM during a turn.
 
 The `deps=None` path (system callers) runs only the four static checks plus one MCP check per configured server. The `deps` path (agent callers) adds knowledge and skills checks on top. Doctor stays reusable across both call paths — it is not a bootstrap-internal helper.
 

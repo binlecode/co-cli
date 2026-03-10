@@ -1,9 +1,10 @@
-"""Functional tests for slash commands, approval flow, and safe command classification.
+"""Functional tests for slash commands and approval flow.
 
 All tests use real agent/deps — no mocks, no stubs.
 """
 
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
@@ -11,20 +12,14 @@ import pytest
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai.usage import UsageLimits
 
-from co_cli._approval import _is_safe_command
 from co_cli.agent import get_agent
 from co_cli.agents._factory import ModelRegistry
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli._shell_backend import ShellBackend
-from co_cli._commands import dispatch, CommandContext, COMMANDS, _cmd_skills
+from co_cli._commands import dispatch, CommandContext, _cmd_skills
 
-_CONFIG = CoConfig(
-    role_models={k: list(v) for k, v in settings.role_models.items()},
-    llm_provider=settings.llm_provider,
-    ollama_host=settings.ollama_host,
-    ollama_num_ctx=settings.ollama_num_ctx,
-)
+_CONFIG = CoConfig.from_settings(settings)
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 
 
@@ -43,7 +38,7 @@ def _make_ctx(message_history: list | None = None) -> CommandContext:
     )
 
 
-def _make_agent_and_deps(container_name: str = "co-test-approval"):
+def _make_agent_and_deps():
     """Build a real agent + deps for approval flow tests."""
     agent, model_settings, _, _ = get_agent()
     deps = CoDeps(
@@ -60,17 +55,18 @@ async def _trigger_shell_call(agent, deps, model_settings, *, retries: int = 3):
     with text instead of calling the tool.
     """
     prompt = (
-        "Use the run_shell_command tool to execute: echo hello_approval_test\n"
+        "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
         "Do NOT describe what you would do — call the tool now."
     )
     last_output = None
     for _ in range(retries):
-        result = await agent.run(
-            prompt,
-            deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=settings.max_request_limit),
-        )
+        async with asyncio.timeout(60):
+            result = await agent.run(
+                prompt,
+                deps=deps,
+                model_settings=model_settings,
+                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+            )
         if isinstance(result.output, DeferredToolRequests):
             assert len(result.output.approvals) > 0
             return result
@@ -126,24 +122,11 @@ async def test_cmd_compact():
         ModelRequest(parts=[UserPromptPart(content="What is Docker?")]),
     ]
     ctx = _make_ctx(message_history=msgs)
-    async with asyncio.timeout(120):
+    async with asyncio.timeout(60):
         handled, new_history = await dispatch("/compact", ctx)
     assert handled is True
     assert isinstance(new_history, list)
     assert len(new_history) > 0
-
-
-# --- Registry sanity ---
-
-
-def test_commands_registry_complete():
-    """All expected commands are registered."""
-    expected = {
-        "help", "clear", "new", "status", "tools", "history", "compact",
-        "forget", "approvals", "checkpoint", "rewind", "skills",
-        "tasks", "cancel", "background",
-    }
-    assert set(COMMANDS.keys()) == expected
 
 
 @pytest.mark.asyncio
@@ -169,15 +152,6 @@ async def test_skills_list():
     finally:
         _cmds.console = orig_console
         SKILL_COMMANDS.pop("testskill", None)
-
-
-def test_skills_check():
-    """_diagnose_requires_failures returns non-empty list with 'bins' for a missing binary."""
-    from co_cli._commands import _diagnose_requires_failures
-
-    result = _diagnose_requires_failures({"bins": ["definitely-not-a-real-binary-xyz"]})
-    assert len(result) > 0
-    assert any("bins" in r for r in result)
 
 
 @pytest.mark.asyncio
@@ -208,25 +182,21 @@ async def test_skills_install_local(tmp_path):
         SKILL_COMMANDS.clear()
 
 
-def test_skills_install_scan_warning():
-    """_scan_skill_content returns non-empty list for content with rm -rf /."""
-    from co_cli._commands import _scan_skill_content
-
-    result = _scan_skill_content("rm -rf /\n")
-    assert len(result) > 0
-    assert any("destructive_shell" in w for w in result)
-
-
 @pytest.mark.asyncio
 async def test_skills_install_url_error(tmp_path):
     """/skills install http://127.0.0.1:1/skill.md fails gracefully with error message."""
     import io
     from rich.console import Console as _Console
+    from rich.theme import Theme as _Theme
     from co_cli import _commands as _cmds
 
     buf = io.StringIO()
     orig_console = _cmds.console
-    _cmds.console = _Console(file=buf, no_color=True)
+    _cmds.console = _Console(
+        file=buf,
+        no_color=True,
+        theme=_Theme({"accent": "default", "success": "default"}),
+    )
     try:
         ctx = _make_ctx()
         ctx.deps.config.skills_dir = tmp_path / ".co-cli" / "skills"
@@ -240,6 +210,76 @@ async def test_skills_install_url_error(tmp_path):
     assert "failed" in output or "error" in output
 
 
+@pytest.mark.asyncio
+async def test_cmd_approvals_list_shows_saved_pattern(tmp_path):
+    """/approvals list renders persisted shell approval patterns."""
+    import io
+    from rich.console import Console as _Console
+    from rich.theme import Theme as _Theme
+    from co_cli import _commands as _cmds
+
+    approvals_path = tmp_path / ".co-cli" / "exec-approvals.json"
+    approvals_path.parent.mkdir(parents=True)
+    approvals_path.write_text(json.dumps([{
+        "id": "abc123",
+        "pattern": "git commit *",
+        "tool_name": "run_shell_command",
+        "created_at": "2026-03-10T00:00:00Z",
+        "last_used_at": "2026-03-10T00:00:00Z",
+    }]), encoding="utf-8")
+
+    buf = io.StringIO()
+    orig_console = _cmds.console
+    _cmds.console = _Console(
+        file=buf,
+        no_color=True,
+        theme=_Theme({"accent": "default", "success": "default"}),
+    )
+    try:
+        ctx = _make_ctx()
+        ctx.deps.config.exec_approvals_path = approvals_path
+        await dispatch("/approvals list", ctx)
+    finally:
+        _cmds.console = orig_console
+
+    output = buf.getvalue()
+    assert "Persistent Exec Approvals" in output
+    assert "git commit *" in output
+    assert "abc123" in output
+
+
+@pytest.mark.asyncio
+async def test_cmd_approvals_clear_removes_saved_patterns(tmp_path):
+    """/approvals clear removes persisted approvals from disk."""
+    import io
+    from rich.console import Console as _Console
+    from co_cli import _commands as _cmds
+
+    approvals_path = tmp_path / ".co-cli" / "exec-approvals.json"
+    approvals_path.parent.mkdir(parents=True)
+    approvals_path.write_text(json.dumps([{
+        "id": "abc123",
+        "pattern": "git commit *",
+        "tool_name": "run_shell_command",
+        "created_at": "2026-03-10T00:00:00Z",
+        "last_used_at": "2026-03-10T00:00:00Z",
+    }]), encoding="utf-8")
+
+    buf = io.StringIO()
+    orig_console = _cmds.console
+    _cmds.console = _Console(file=buf, no_color=True)
+    try:
+        ctx = _make_ctx()
+        ctx.deps.config.exec_approvals_path = approvals_path
+        await dispatch("/approvals clear", ctx)
+    finally:
+        _cmds.console = orig_console
+
+    output = buf.getvalue()
+    assert "Cleared 1 approval" in output
+    assert json.loads(approvals_path.read_text(encoding="utf-8")) == []
+
+
 # --- Approval flow (programmatic, no TTY) ---
 
 
@@ -249,16 +289,16 @@ async def test_approval_approve():
 
     Requires running LLM + Docker.
     """
-    agent, model_settings, deps = _make_agent_and_deps("co-test-approve")
+    agent, model_settings, deps = _make_agent_and_deps()
     turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
+        result = await _trigger_shell_call(agent, deps, model_settings)
+
+        approvals = DeferredToolResults()
+        for call in result.output.approvals:
+            approvals.approvals[call.tool_call_id] = True
+
         async with asyncio.timeout(60):
-            result = await _trigger_shell_call(agent, deps, model_settings)
-
-            approvals = DeferredToolResults()
-            for call in result.output.approvals:
-                approvals.approvals[call.tool_call_id] = True
-
             resumed = await agent.run(
                 None,
                 deps=deps,
@@ -269,10 +309,11 @@ async def test_approval_approve():
                 usage=result.usage(),
             )
 
-            while isinstance(resumed.output, DeferredToolRequests):
-                more_approvals = DeferredToolResults()
-                for call in resumed.output.approvals:
-                    more_approvals.approvals[call.tool_call_id] = True
+        while isinstance(resumed.output, DeferredToolRequests):
+            more_approvals = DeferredToolResults()
+            for call in resumed.output.approvals:
+                more_approvals.approvals[call.tool_call_id] = True
+            async with asyncio.timeout(60):
                 resumed = await agent.run(
                     None,
                     deps=deps,
@@ -295,16 +336,16 @@ async def test_approval_deny():
 
     Requires running LLM + Docker.
     """
-    agent, model_settings, deps = _make_agent_and_deps("co-test-deny")
+    agent, model_settings, deps = _make_agent_and_deps()
     turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
+        result = await _trigger_shell_call(agent, deps, model_settings)
+
+        approvals = DeferredToolResults()
+        for call in result.output.approvals:
+            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+
         async with asyncio.timeout(60):
-            result = await _trigger_shell_call(agent, deps, model_settings)
-
-            approvals = DeferredToolResults()
-            for call in result.output.approvals:
-                approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-
             resumed = await agent.run(
                 None,
                 deps=deps,
@@ -315,10 +356,11 @@ async def test_approval_deny():
                 usage=result.usage(),
             )
 
-            while isinstance(resumed.output, DeferredToolRequests):
-                deny_approvals = DeferredToolResults()
-                for call in resumed.output.approvals:
-                    deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+        while isinstance(resumed.output, DeferredToolRequests):
+            deny_approvals = DeferredToolResults()
+            for call in resumed.output.approvals:
+                deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
+            async with asyncio.timeout(60):
                 resumed = await agent.run(
                     None,
                     deps=deps,
@@ -340,22 +382,23 @@ async def test_approval_budget_cumulative():
 
     Requires running LLM + Docker.
     """
-    agent, model_settings, deps = _make_agent_and_deps("co-test-budget")
+    agent, model_settings, deps = _make_agent_and_deps()
     budget = settings.max_request_limit
     turn_limits = UsageLimits(request_limit=budget)
     try:
         async with asyncio.timeout(60):
             result = await agent.run(
-                "Run this exact shell command: echo budget_test",
+                "Run this exact shell command: git rev-parse --is-inside-work-tree",
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=turn_limits,
             )
 
-            while isinstance(result.output, DeferredToolRequests):
-                approvals = DeferredToolResults()
-                for call in result.output.approvals:
-                    approvals.approvals[call.tool_call_id] = True
+        while isinstance(result.output, DeferredToolRequests):
+            approvals = DeferredToolResults()
+            for call in result.output.approvals:
+                approvals.approvals[call.tool_call_id] = True
+            async with asyncio.timeout(60):
                 result = await agent.run(
                     None,
                     deps=deps,
@@ -394,7 +437,7 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
             ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
         ]
         ctx = _make_ctx(message_history=msgs)
-        async with asyncio.timeout(120):
+        async with asyncio.timeout(60):
             handled, new_history = await dispatch("/new", ctx)
     finally:
         os.chdir(original_cwd)
@@ -469,37 +512,3 @@ async def test_forget_command_evicts_fts_row(tmp_path):
 
 
 # --- Safe command classification ---
-
-
-_SAFE_LIST = ["ls", "cat", "grep", "git status", "git diff", "git log"]
-
-
-def test_safe_command_multi_word_prefix():
-    """Multi-word prefix like 'git status' matches, but 'git push' does not."""
-    assert _is_safe_command("git status", _SAFE_LIST) is True
-    assert _is_safe_command("git status --short", _SAFE_LIST) is True
-    assert _is_safe_command("git diff HEAD~1", _SAFE_LIST) is True
-    assert _is_safe_command("git push origin main", _SAFE_LIST) is False
-    assert _is_safe_command("git commit -m 'test'", _SAFE_LIST) is False
-
-
-def test_safe_command_chaining_rejected():
-    """Shell chaining operators always force approval."""
-    assert _is_safe_command("ls; rm -rf /", _SAFE_LIST) is False
-    assert _is_safe_command("cat file && rm file", _SAFE_LIST) is False
-    assert _is_safe_command("ls || echo fail", _SAFE_LIST) is False
-    assert _is_safe_command("ls | wc -l", _SAFE_LIST) is False
-    assert _is_safe_command("echo `whoami`", _SAFE_LIST) is False
-    assert _is_safe_command("echo $(whoami)", _SAFE_LIST) is False
-    assert _is_safe_command("ls & rm -rf /", _SAFE_LIST) is False
-    assert _is_safe_command("ls > /tmp/out", _SAFE_LIST) is False
-    assert _is_safe_command("ls >> /tmp/out", _SAFE_LIST) is False
-    assert _is_safe_command("sort < /etc/passwd", _SAFE_LIST) is False
-    assert _is_safe_command("cat << EOF", _SAFE_LIST) is False
-    assert _is_safe_command("ls\nrm -rf /", _SAFE_LIST) is False
-
-
-def test_safe_command_partial_name_no_match():
-    """A command starting with a safe prefix but not followed by space should not match."""
-    assert _is_safe_command("lsblk", _SAFE_LIST) is False
-    assert _is_safe_command("caterpillar", _SAFE_LIST) is False

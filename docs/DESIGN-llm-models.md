@@ -95,10 +95,10 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
 | `gemini_api_key` | `GEMINI_API_KEY` | `None` | Gemini API key (required when `llm_provider=gemini`) |
 | `role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model chain (comma-separated) |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Optional dedicated summarization model chain for `/compact` and history compaction |
-| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | `[]` | Optional coder sub-agent model chain |
-| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | `[]` | Optional research sub-agent model chain |
-| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | `[]` | Optional analysis sub-agent model chain |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model chain for `/compact` and history compaction |
+| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model chain |
+| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model chain |
+| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model chain |
 
 ## 4. Provider Quirks
 

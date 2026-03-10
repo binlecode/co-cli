@@ -107,7 +107,7 @@ graph LR
     subgraph Orchestration ["Orchestration (_orchestrate.py)"]
         RunTurn["run_turn()"]
         Stream["_stream_events()"]
-        Approve["_handle_approvals()"]
+        Approve["_collect_deferred_tool_approvals()"]
     end
 
     subgraph Agent ["Agent (agent.py)"]
@@ -216,6 +216,8 @@ graph TD
 | `CoConfig` | Read-only config | `session_id`, `obsidian_vault_path`, `google_credentials_path`, `shell_safe_commands`, `shell_max_timeout` (600), `exec_approvals_path`, `skills_dir`, `memory_dir`, `library_dir`, `gemini_api_key`, `brave_search_api_key`, `web_policy`, `memory_max_count` (200), `memory_dedup_*`, `memory_auto_save_tags` (["correction","preference"]), `personality`, `personality_critique`, `max_history_messages` (40), `tool_output_trim_chars` (2000), `doom_loop_threshold` (3), `max_reflections` (3), `knowledge_search_backend` (`"fts5"` default), `knowledge_reranker_provider`, `knowledge_chunk_size` (600), `knowledge_chunk_overlap` (80), `role_models` (dict of role → `list[ModelEntry]`), `llm_provider`, `ollama_host`, `ollama_num_ctx`, `ctx_warn_threshold` (0.85), `ctx_overflow_threshold` (1.0), `model_http_retries` (2) |
 | `CoSessionState` | Mutable session state | `google_creds` (lazy-resolved), `google_creds_resolved`, `session_tool_approvals` (per-tool session auto-approvals), `active_skill_env` (per-turn env overrides), `skill_tool_grants` (per-turn allowed-tools grants), `drive_page_tokens`, `session_todos`, `skill_registry` (list of skill dicts for system prompt) |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction` (background summary cache), `turn_usage` (RunUsage or None), `opening_ctx_state` (session-scoped), `safety_state` (turn-scoped, reset per turn) |
+
+**`CoConfig.from_settings(s: Settings) → CoConfig`** — factory classmethod that copies all pure-copy fields from `Settings` into a new `CoConfig`. Intentionally excludes eight computed/session fields that must be resolved at bootstrap and applied via `dataclasses.replace()` afterward: `session_id` (generated UUID), `exec_approvals_path`, `skills_dir`, `memory_dir`, `library_dir` (all path-derived from XDG roots or CWD), `personality_critique` (loaded from file), `knowledge_search_backend` (probed at startup), and `mcp_count` (counted from server list). Callers must not assume these fields are populated by `from_settings()` — they are left at dataclass defaults and overridden by `main.py:create_deps()` using `dataclasses.replace()`.
 
 Sub-agents created by delegation tools receive `make_subagent_deps(base)`: shares `services` and `config` by reference (safe — handles are stateless or thread-safe; config is read-only), but resets `session` and `runtime` to clean defaults so the sub-agent does not inherit the parent's approval grants, pagination tokens, todos, compaction cache, or turn usage.
 
@@ -395,8 +397,8 @@ Four phases run in order at startup, then the REPL loop takes over:
 | Phase | Owner | What it does | Flow doc |
 |-------|-------|-------------|----------|
 | **Bootstrap** | `run_model_check()` in `_model_check.py` + `run_bootstrap()` in `_bootstrap.py` | Model dependency check (provider + models), knowledge sync, session restore (or create), skill count report, integration health sweep (Step 4) | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) |
-| **Chat loop** | `chat_loop()` in `main.py` | REPL input dispatch, pre/post-turn bookkeeping, skill-env lifecycle, reasoning-chain retry | [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) |
-| **Turn** | `run_turn()` in `_orchestrate.py` | Streaming, approval chaining, provider retry/backoff, interrupt recovery → `TurnResult` | [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) |
+| **Chat loop** | `chat_loop()` in `main.py` | REPL input dispatch, pre/post-turn bookkeeping, skill-env lifecycle, reasoning-chain retry | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
+| **Turn** | `run_turn()` in `_orchestrate.py` | Streaming, approval chaining, provider retry/backoff, interrupt recovery → `TurnResult` | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 
 ### Multi-Session State
 
@@ -473,7 +475,7 @@ Local REPL commands — bypass the LLM, execute instantly. Explicit `dict` regis
 
 Provider errors (HTTP 400/429/5xx, network), tool errors (`ModelRetry` vs `terminal_error`), and interrupt recovery (`_patch_dangling_tool_calls` + abort marker) are all part of the core turn flow.
 
-> **Full spec:** [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) §Error Handling, §Interrupt Recovery — provider error table, reasoning-chain advance on terminal error, tool error patterns, dangling call patching, Ctrl+C routing.
+> **Full spec:** [DESIGN-core-loop.md](DESIGN-core-loop.md) §4.12, §4.13 — provider error table, reasoning-chain advance on terminal error, tool error patterns, dangling call patching, Ctrl+C routing.
 
 ---
 
@@ -484,7 +486,7 @@ Provider errors (HTTP 400/429/5xx, network), tool errors (`ModelRetry` vs `termi
 XDG-compliant configuration with project-level overrides. Resolution order (highest wins):
 
 1. Environment variables (`fill_from_env` model validator)
-2. `.co-cli/settings.json` in cwd (project — shallow `|=` merge)
+2. `.co-cli/settings.json` in cwd (project — deep merge via `_deep_merge_settings`)
 3. `~/.config/co-cli/settings.json` (user)
 4. Default values (Pydantic `Field(default=...)`)
 

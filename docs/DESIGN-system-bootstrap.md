@@ -184,8 +184,7 @@ Bootstrap runs once per `chat_loop()` startup after the model dependency check h
 ```text
 chat_loop():
     frontend = TerminalFrontend()
-    deps = create_deps()
-    deps.config.skills_dir = Path.cwd() / ".co-cli/skills"
+    deps = create_deps()                                    ← skills_dir set here via dataclasses.replace()
     run_model_check(deps, frontend)
 
     task_runner = TaskRunner(storage, max_concurrent, inactivity_timeout,

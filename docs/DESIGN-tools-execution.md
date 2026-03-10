@@ -84,9 +84,9 @@ run_shell_command(ctx, cmd, timeout=120):
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
     DENY  → return terminal_error(policy.reason)            # never deferred, never executed
     REQUIRE_APPROVAL:
-        found = find_approved(cmd, load_approvals(exec_approvals_path))
-        if found → update_last_used; fall through to execution
-        elif not ctx.tool_call_approved → raise ApprovalRequired(metadata={"cmd": cmd})
+        if not is_shell_command_persistently_approved(cmd, ctx.deps) and not ctx.tool_call_approved:
+            raise ApprovalRequired(metadata={"cmd": cmd})
+        # persistent approval or tool_call_approved → fall through to execution
     ALLOW / persistent approval / tool_call_approved → fall through
     effective = min(timeout, ctx.deps.config.shell_max_timeout)
     try:
@@ -97,17 +97,17 @@ run_shell_command(ctx, cmd, timeout=120):
     on any other exception → ModelRetry("unexpected error, try different approach")
 ```
 
-**Policy tiers** — DENY, ALLOW, and persistent approvals evaluated inside `run_shell_command`; tiers 4–7 in `_handle_approvals()`:
+**Policy tiers** — DENY, ALLOW, and persistent approvals evaluated inside `run_shell_command`; three-tier orchestration chain in `_collect_deferred_tool_approvals()`:
 
 **Tier 1 — DENY** (`shell_policy.evaluate_shell_command()`): blocks control chars, heredoc `<<`, env-injection `VAR=$(...)`, absolute-path destruction `rm -rf /~`. Returns `terminal_error` immediately — no deferral, no prompt.
 
 **Tier 2 — ALLOW** (`_approval._is_safe_command`): rejects shell chaining operators (`;`, `&`, `|`, `>`, `<`, `` ` ``, `$(`, `\n`), then prefix-matches against `safe_commands` (longest prefix first). Auto-executes without prompting.
 
-**Tier 3 — Persistent cross-session approvals** (`_exec_approvals`), evaluated inside the tool:
+**Tier 3 — Persistent cross-session approvals** (`_tool_approvals.is_shell_command_persistently_approved`), evaluated inside the tool:
 
 ```
-found = find_approved(cmd, load_approvals(.co-cli/exec-approvals.json))  ← fnmatch pattern matching
-if found → update_last_used; fall through to execution
+is_shell_command_persistently_approved(cmd, ctx.deps)  ← fnmatch via find_approved + update_last_used
+if approved → fall through to execution
 ```
 
 `derive_pattern(cmd)` collects consecutive non-flag tokens from the start (up to 3), stopping at the first flag, then appends ` *` (e.g. `git commit -m "msg"` → `git commit *`). Bare `"*"` is never auto-approved.
@@ -118,7 +118,7 @@ if found → update_last_used; fall through to execution
 
 **Tier 3 — User prompt** — `[y/n/a]`.
 
-**`"a"` persistence:** for `run_shell_command`, `_handle_approvals` derives and saves a pattern to `.co-cli/exec-approvals.json` (cross-session). For other tools, adds to `deps.session.session_tool_approvals` (session-only).
+**`"a"` persistence:** for `run_shell_command`, `remember_tool_approval` in `_tool_approvals.py` derives and saves a pattern to `.co-cli/exec-approvals.json` (cross-session). For other tools, adds to `deps.session.session_tool_approvals` (session-only).
 
 `/approvals list` and `/approvals clear [id]` manage stored patterns at the REPL.
 
@@ -215,7 +215,8 @@ The subprocess runs as the user with read-write access to local files. This is a
 | `co_cli/_shell_env.py` | `restricted_env()` and `kill_process_tree()` |
 | `co_cli/deps.py` | `shell` in `CoServices`; `shell_safe_commands`, `shell_max_timeout`, `exec_approvals_path` in `CoConfig`; `session_tool_approvals`, `skill_tool_grants` in `CoSessionState` |
 | `co_cli/config.py` | Shell settings with env var mappings |
-| `co_cli/_orchestrate.py` | `_handle_approvals()` — three-tier approval chain (skill grants → per-session → user prompt) |
+| `co_cli/_orchestrate.py` | `_collect_deferred_tool_approvals()` — three-tier approval chain (skill grants → per-session → user prompt) |
+| `co_cli/_tool_approvals.py` | `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()` — approval helpers |
 | `co_cli/agent.py` | Tool registration (`requires_approval=False`) + shell system prompt injection |
 | `tests/test_shell.py` | Functional tests — subprocess execution, env sanitization, timeout, cwd |
 | `tests/test_commands.py` | Safe-command classification tests — prefix matching, chaining rejection |

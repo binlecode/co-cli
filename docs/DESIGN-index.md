@@ -59,14 +59,14 @@ Each flow doc is self-contained: entry conditions → ordered steps → branchin
 
 | If you're asking... | Read |
 |---------------------|------|
-| What happens from the moment a user types to the LLM responding? | [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) |
+| What happens from the moment a user types to the LLM responding? | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | Why did a tool not get approved / what's the approval decision chain? | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) |
 | What runs at startup before the first user message? | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) |
 | How is the system prompt assembled and how does history compaction work? | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) |
 
 | Workflow | Doc | What it covers |
 |----------|-----|----------------|
-| One user turn (end-to-end) | [DESIGN-flow-core-turn.md](DESIGN-flow-core-turn.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
+| One user turn (end-to-end) | [DESIGN-core-loop.md](DESIGN-core-loop.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
 | Startup (canonical) | [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
 | Tool approval | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) | three-tier decision chain, shell policy path, skill grants, session auto-approve, `"a"` persistence |
 | Context governance | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) | prompt assembly, per-turn layers, memory injection, tool output trimming, history summarization, precomputed compaction |
@@ -137,7 +137,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `50` | Caps LLM round-trips per user turn |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider default for `reasoning` | Ordered model chains per role (`reasoning` required; other roles optional) |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (ollama) or reasoning-only (gemini) | Ordered model chains per role (`reasoning` required; other roles optional) |
 | `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Provider selection (`gemini` or `ollama`) |
 | `gemini_api_key` | `GEMINI_API_KEY` | `null` | Gemini credential (required when provider is `gemini`) |
 | `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server base URL |
@@ -148,7 +148,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error threshold for reflection-cap warning |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Sliding window threshold |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Truncate old tool outputs |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | `[]` | Optional summarization model chain; head used for `/compact` and history compaction (empty = primary model) |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional summarization model chain; head used for `/compact` and history compaction (absent = falls back to primary model) |
 | `shell_max_timeout` | `CO_CLI_SHELL_MAX_TIMEOUT` | `600` | Hard cap for `run_shell_command` timeout seconds |
 | `shell_safe_commands` | `CO_CLI_SHELL_SAFE_COMMANDS` | built-in list | Safe-prefix auto-approval allowlist |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` policy (`allow`, `ask`, `deny`) |
@@ -213,7 +213,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 |-------|--------|---------|
 | 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup, `create_deps()` |
 | 1. Agents + Orchestration | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
-| 1. Agents + Orchestration | `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_handle_approvals()` |
+| 1. Agents + Orchestration | `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
+| 1. Agents + Orchestration | `_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
 | 1. Agents + Orchestration | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
 | 2. Runtime Deps + Session State | `_model_check.py` | `run_model_check()`, `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — pre-agent resource gate |

@@ -215,13 +215,14 @@ Human decision required before proceeding.
 When stopping normally:
 
 1. **Save the Audit Log** — before stripping, write everything from the `---` separator through
-   the end of the file to `docs/reference/PLAN-<slug>-audit.md` with this header prepended:
+   the end of the file to `docs/PLAN-<slug>-audit.md` with this header prepended:
    ```
    # Plan Audit Log: <feature name>
    _Slug: <slug> | Date: <today>_
    ```
    This file is permanent — not temporary scaffolding. It preserves the decision history
    (why items were adopted, modified, or rejected across cycles) for future planning passes.
+   It lives in `docs/` alongside other workflow artifacts, not in `docs/reference/`.
 
 2. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
    `# Audit Log` to the end of `docs/TODO-<slug>.md`. The TODO file must be clean after

@@ -85,6 +85,89 @@ def test_web_policy_from_config(tmp_path, monkeypatch):
     assert settings.web_policy.fetch == "ask"
 
 
+def test_project_config_partially_overrides_nested_web_policy(tmp_path, monkeypatch):
+    """Project config can override one nested web_policy field without redefining all fields."""
+    user_settings = tmp_path / "user" / "settings.json"
+    user_settings.parent.mkdir(parents=True)
+    user_settings.write_text(json.dumps({
+        "web_policy": {"search": "deny", "fetch": "allow"},
+    }))
+
+    project_dir = tmp_path / "project" / ".co-cli"
+    project_dir.mkdir(parents=True)
+    (project_dir / "settings.json").write_text(json.dumps({
+        "web_policy": {"fetch": "ask"},
+    }))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", user_settings)
+    monkeypatch.chdir(tmp_path / "project")
+
+    settings = load_config()
+    assert settings.web_policy.search == "deny"
+    assert settings.web_policy.fetch == "ask"
+
+
+def test_project_config_partially_overrides_mcp_server(tmp_path, monkeypatch):
+    """Project config can override one MCP server field without redefining the whole server."""
+    user_settings = tmp_path / "user" / "settings.json"
+    user_settings.parent.mkdir(parents=True)
+    user_settings.write_text(json.dumps({
+        "mcp_servers": {
+            "github": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-github"],
+                "approval": "auto",
+            }
+        }
+    }))
+
+    project_dir = tmp_path / "project" / ".co-cli"
+    project_dir.mkdir(parents=True)
+    (project_dir / "settings.json").write_text(json.dumps({
+        "mcp_servers": {
+            "github": {
+                "approval": "never",
+            }
+        }
+    }))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", user_settings)
+    monkeypatch.chdir(tmp_path / "project")
+
+    settings = load_config()
+    github = settings.mcp_servers["github"]
+    assert github.command == "npx"
+    assert github.args == ["-y", "@modelcontextprotocol/server-github"]
+    assert github.approval == "never"
+
+
+def test_project_config_partially_overrides_role_models(tmp_path, monkeypatch):
+    """Project config can override one role_models entry without redefining all roles."""
+    user_settings = tmp_path / "user" / "settings.json"
+    user_settings.parent.mkdir(parents=True)
+    user_settings.write_text(json.dumps({
+        "role_models": {
+            "reasoning": ["base-reasoning"],
+            "coding": ["base-coding"],
+        }
+    }))
+
+    project_dir = tmp_path / "project" / ".co-cli"
+    project_dir.mkdir(parents=True)
+    (project_dir / "settings.json").write_text(json.dumps({
+        "role_models": {
+            "coding": ["project-coding"],
+        }
+    }))
+
+    monkeypatch.setattr("co_cli.config.SETTINGS_FILE", user_settings)
+    monkeypatch.chdir(tmp_path / "project")
+
+    settings = load_config()
+    assert [entry.model for entry in settings.role_models["reasoning"]] == ["base-reasoning"]
+    assert [entry.model for entry in settings.role_models["coding"]] == ["project-coding"]
+
+
 def test_env_overrides_web_policy(tmp_path, monkeypatch):
     """CO_CLI_WEB_POLICY_SEARCH/FETCH override file values."""
     monkeypatch.setattr("co_cli.config.SETTINGS_FILE", tmp_path / "nonexistent.json")
@@ -130,4 +213,3 @@ def test_load_config_surfaces_personality_file_warnings(tmp_path, monkeypatch, c
         "Warning: Personality 'finch' missing mindset file: "
         "mindsets/finch/quick.md" in out
     )
-

@@ -21,7 +21,7 @@ flowchart LR
     G --> L{Server approval=auto?}
     L -->|Yes| H
     L -->|No| K
-    H --> M[_handle_approvals three-tier chain — Path B]
+    H --> M[_collect_deferred_tool_approvals three-tier chain — Path B]
     M --> N{Approved?}
     N -->|Yes| K
     N -->|No| O[ToolDenied — LLM can propose alternative]
@@ -140,7 +140,7 @@ MCP tools are auto-registered from external server definitions. Their approval f
 the server's configured approval mode. Each MCP tool name is auto-prefixed with the server name
 to prevent collisions.
 
-### Three-tier approval decision chain (per pending call in _handle_approvals)
+### Three-tier approval decision chain (per pending call in _collect_deferred_tool_approvals)
 
 ```
 tier 1: skill allowed-tools grant
@@ -179,7 +179,7 @@ existing files only, lower risk than creating new memories). They are only defer
 ### Path B — Side-effectful deferred
 
 Registration: `requires_approval=True`. Returns `DeferredToolRequests`. Chat loop prompts user.
-On approval: `_handle_approvals` resumes with `DeferredToolResults`. Tool executes.
+On approval: `run_turn()` calls `_stream_events(None, deferred_results=approvals)`. Tool executes.
 On denial: `ToolDenied` injected, model sees synthetic return, can offer alternative.
 
 Tools: `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task`,
@@ -295,7 +295,7 @@ pydantic-ai `tool_retries` default: 3.
 |------|------|
 | `co_cli/tools/*.py` | All native tool implementations |
 | `co_cli/agent.py` | `_register()` function, `get_agent()` tool registration loop, `tool_names` / `tool_approval` return |
-| `co_cli/_orchestrate.py` | `_handle_approvals()` three-tier decision chain, tool result display, `_check_skill_grant()` |
+| `co_cli/_orchestrate.py` | `_collect_deferred_tool_approvals()` three-tier decision chain, tool result display, `_check_skill_grant()` |
 | `co_cli/_exec_approvals.py` | Persistent shell exec approvals: `derive_pattern`, `find_approved`, `add_approval` |
 | `co_cli/deps.py` | `CoSessionState.session_tool_approvals`, `CoSessionState.skill_tool_grants`, `CoSessionState.active_skill_env`, `CoSessionState.session_todos` |
 
