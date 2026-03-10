@@ -1,23 +1,24 @@
 import os
 import json
 from pathlib import Path
+from copy import deepcopy
 from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 APP_NAME = "co-cli"
 DEFAULT_OLLAMA_REASONING_MODELS = [
-    "qwen3.5:35b-a3b-q4_k_m-agentic",
-    "qwen3:30b-a3b-thinking-2507-q4_k_m-agentic",
+    "qwen3.5:35b-a3b-agentic",
+    "qwen3:30b-a3b-thinking-2507-agentic",
 ]
-DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3:30b-a3b-instruct-2507-q4_k_m"
-DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3:30b-a3b-instruct-2507-q4_k_m"
-DEFAULT_OLLAMA_CODING_MODEL = "qwen3-coder-next:q4_k_m-code"
-DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-q4_k_m-agentic"
+DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3:30b-a3b-instruct-2507"
+DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3:30b-a3b-instruct-2507"
+DEFAULT_OLLAMA_CODING_MODEL = "qwen3-coder-next:code"
+DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-agentic"
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
 # UX convenience — approval is the security boundary.
-_DEFAULT_SAFE_COMMANDS: list[str] = [
+DEFAULT_SHELL_SAFE_COMMANDS: list[str] = [
     # Filesystem listing
     "ls", "tree", "find", "fd",
     # File reading
@@ -47,6 +48,22 @@ def _ensure_dirs() -> None:
     """Create config and data directories (idempotent)."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge nested settings dicts.
+
+    Scalar and list values are replaced wholesale by ``override``.
+    Dict values are merged key-by-key so partial nested overrides work.
+    """
+    merged = deepcopy(base)
+    for key, override_value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(override_value, dict):
+            merged[key] = _deep_merge_settings(base_value, override_value)
+            continue
+        merged[key] = deepcopy(override_value)
+    return merged
 
 
 def _validate_personality(personality: str) -> list[str]:
@@ -120,6 +137,49 @@ VALID_ROLE_NAMES: frozenset[str] = frozenset(
     {"reasoning", "summarization", "coding", "research", "analysis"}
 )
 
+# Named defaults for Settings fields — used by Settings field definitions and
+# CoConfig in deps.py so both share the same ground-truth values.
+DEFAULT_THEME = "light"
+DEFAULT_PERSONALITY = "finch"
+DEFAULT_TOOL_RETRIES = 3
+DEFAULT_MODEL_HTTP_RETRIES = 2
+DEFAULT_MAX_REQUEST_LIMIT = 50
+DEFAULT_DOOM_LOOP_THRESHOLD = 3
+DEFAULT_MAX_REFLECTIONS = 3
+DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
+DEFAULT_MAX_HISTORY_MESSAGES = 40
+DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "fts5"
+DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "ollama"
+DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
+DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 256
+DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT = 0.7
+DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT = 0.3
+DEFAULT_KNOWLEDGE_RERANKER_PROVIDER = "local"
+DEFAULT_KNOWLEDGE_RERANKER_MODEL = ""
+DEFAULT_MEMORY_MAX_COUNT = 200
+DEFAULT_MEMORY_DEDUP_WINDOW_DAYS = 7
+DEFAULT_MEMORY_DEDUP_THRESHOLD = 85
+DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS = 30
+DEFAULT_MEMORY_CONSOLIDATION_TOP_K = 5
+DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS = 20
+DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["correction", "preference"]
+DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
+DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
+DEFAULT_SHELL_MAX_TIMEOUT = 600
+DEFAULT_BACKGROUND_MAX_CONCURRENT = 5
+DEFAULT_BACKGROUND_TASK_RETENTION_DAYS = 7
+DEFAULT_BACKGROUND_AUTO_CLEANUP = True
+DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT = 0
+DEFAULT_WEB_HTTP_MAX_RETRIES = 2
+DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS = 1.0
+DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS = 8.0
+DEFAULT_WEB_HTTP_JITTER_RATIO = 0.2
+DEFAULT_SESSION_TTL_MINUTES = 60
+DEFAULT_LLM_PROVIDER = "ollama"
+DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_OLLAMA_NUM_CTX = 262144
+DEFAULT_CTX_WARN_THRESHOLD = 0.85
+DEFAULT_CTX_OVERFLOW_THRESHOLD = 1.0
 
 
 class Settings(BaseModel):
@@ -131,68 +191,68 @@ class Settings(BaseModel):
     library_path: Optional[str] = Field(default=None)
     
     # Behavior
-    theme: str = Field(default="light")
-    personality: str = Field(default="finch")
-    tool_retries: int = Field(default=3)
-    model_http_retries: int = Field(default=2)
-    max_request_limit: int = Field(default=50)
+    theme: str = Field(default=DEFAULT_THEME)
+    personality: str = Field(default=DEFAULT_PERSONALITY)
+    tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
+    model_http_retries: int = Field(default=DEFAULT_MODEL_HTTP_RETRIES)
+    max_request_limit: int = Field(default=DEFAULT_MAX_REQUEST_LIMIT)
 
     # Safety
-    doom_loop_threshold: int = Field(default=3, ge=2, le=10)
-    max_reflections: int = Field(default=3, ge=1, le=10)
+    doom_loop_threshold: int = Field(default=DEFAULT_DOOM_LOOP_THRESHOLD, ge=2, le=10)
+    max_reflections: int = Field(default=DEFAULT_MAX_REFLECTIONS, ge=1, le=10)
 
     # Conversation memory
-    tool_output_trim_chars: int = Field(default=2000)
-    max_history_messages: int = Field(default=40)
+    tool_output_trim_chars: int = Field(default=DEFAULT_TOOL_OUTPUT_TRIM_CHARS)
+    max_history_messages: int = Field(default=DEFAULT_MAX_HISTORY_MESSAGES)
 
     # Knowledge search backend
-    knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default="fts5")
-    knowledge_embedding_provider: Literal["ollama", "gemini", "none"] = Field(default="ollama")
-    knowledge_embedding_model: str = Field(default="embeddinggemma")
-    knowledge_embedding_dims: int = Field(default=256, ge=1)
-    knowledge_hybrid_vector_weight: float = Field(default=0.7, ge=0.0, le=1.0)
-    knowledge_hybrid_text_weight: float = Field(default=0.3, ge=0.0, le=1.0)
-    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local"] = Field(default="local")
-    knowledge_reranker_model: str = Field(default="")
+    knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND)
+    knowledge_embedding_provider: Literal["ollama", "gemini", "none"] = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER)
+    knowledge_embedding_model: str = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_MODEL)
+    knowledge_embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
+    knowledge_hybrid_vector_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT, ge=0.0, le=1.0)
+    knowledge_hybrid_text_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT, ge=0.0, le=1.0)
+    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local"] = Field(default=DEFAULT_KNOWLEDGE_RERANKER_PROVIDER)
+    knowledge_reranker_model: str = Field(default=DEFAULT_KNOWLEDGE_RERANKER_MODEL)
 
     # Memory lifecycle (notes with gravity)
-    memory_max_count: int = Field(default=200, ge=10)
-    memory_dedup_window_days: int = Field(default=7, ge=1)
-    memory_dedup_threshold: int = Field(default=85, ge=0, le=100)
+    memory_max_count: int = Field(default=DEFAULT_MEMORY_MAX_COUNT, ge=10)
+    memory_dedup_window_days: int = Field(default=DEFAULT_MEMORY_DEDUP_WINDOW_DAYS, ge=1)
+    memory_dedup_threshold: int = Field(default=DEFAULT_MEMORY_DEDUP_THRESHOLD, ge=0, le=100)
     # Temporal decay half-life for FTS5 recall scoring (days; larger = slower decay)
-    memory_recall_half_life_days: int = Field(default=30, ge=1)
+    memory_recall_half_life_days: int = Field(default=DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS, ge=1)
     # Consolidation: top-K related memories retrieved for contradiction resolution
-    memory_consolidation_top_k: int = Field(default=5, ge=1)
+    memory_consolidation_top_k: int = Field(default=DEFAULT_MEMORY_CONSOLIDATION_TOP_K, ge=1)
     # Consolidation: per-call timeout budget (seconds) for extract_facts and resolve
-    memory_consolidation_timeout_seconds: int = Field(default=20, ge=0)
+    memory_consolidation_timeout_seconds: int = Field(default=DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS, ge=0)
     # Auto-save allowlist: only signals with these tags are saved without prompting
-    memory_auto_save_tags: list[str] = Field(default=["correction", "preference"])
+    memory_auto_save_tags: list[str] = Field(default=DEFAULT_MEMORY_AUTO_SAVE_TAGS)
 
     # Knowledge chunking
-    knowledge_chunk_size: int = Field(default=600, ge=0)
-    knowledge_chunk_overlap: int = Field(default=80, ge=0)
+    knowledge_chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
+    knowledge_chunk_overlap: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, ge=0)
 
     # Shell limits
-    shell_max_timeout: int = Field(default=600)
+    shell_max_timeout: int = Field(default=DEFAULT_SHELL_MAX_TIMEOUT)
 
     # Shell safe commands (auto-approved without prompting)
-    shell_safe_commands: list[str] = Field(default=_DEFAULT_SAFE_COMMANDS)
+    shell_safe_commands: list[str] = Field(default=DEFAULT_SHELL_SAFE_COMMANDS)
 
     # Background task execution
-    background_max_concurrent: int = Field(default=5, ge=1)
-    background_task_retention_days: int = Field(default=7, ge=1)
-    background_auto_cleanup: bool = Field(default=True)
+    background_max_concurrent: int = Field(default=DEFAULT_BACKGROUND_MAX_CONCURRENT, ge=1)
+    background_task_retention_days: int = Field(default=DEFAULT_BACKGROUND_TASK_RETENTION_DAYS, ge=1)
+    background_auto_cleanup: bool = Field(default=DEFAULT_BACKGROUND_AUTO_CLEANUP)
     # Auto-cancel task if no output for N seconds; 0 = disabled
-    background_task_inactivity_timeout: int = Field(default=0, ge=0)
+    background_task_inactivity_timeout: int = Field(default=DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT, ge=0)
 
     # Web domain policy
     web_fetch_allowed_domains: list[str] = Field(default=[])
     web_fetch_blocked_domains: list[str] = Field(default=[])
     web_policy: WebPolicy = Field(default_factory=WebPolicy)
-    web_http_max_retries: int = Field(default=2, ge=0, le=10)
-    web_http_backoff_base_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
-    web_http_backoff_max_seconds: float = Field(default=8.0, ge=0.5, le=120.0)
-    web_http_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    web_http_max_retries: int = Field(default=DEFAULT_WEB_HTTP_MAX_RETRIES, ge=0, le=10)
+    web_http_backoff_base_seconds: float = Field(default=DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS, ge=0.0, le=30.0)
+    web_http_backoff_max_seconds: float = Field(default=DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS, ge=0.5, le=120.0)
+    web_http_jitter_ratio: float = Field(default=DEFAULT_WEB_HTTP_JITTER_RATIO, ge=0.0, le=1.0)
 
     # MCP servers (stdio or HTTP transport)
     mcp_servers: dict[str, MCPServerConfig] = Field(
@@ -285,7 +345,7 @@ class Settings(BaseModel):
         return self
 
     # Session persistence TTL
-    session_ttl_minutes: int = Field(default=60, ge=1)
+    session_ttl_minutes: int = Field(default=DEFAULT_SESSION_TTL_MINUTES, ge=1)
 
     # Role model chains (ordered by preference within provider).
     # Mandatory role: reasoning (main agent).
@@ -293,8 +353,8 @@ class Settings(BaseModel):
 
     # LLM Settings (Gemini / Ollama)
     gemini_api_key: Optional[str] = Field(default=None)
-    llm_provider: str = Field(default="ollama")
-    ollama_host: str = Field(default="http://localhost:11434")
+    llm_provider: str = Field(default=DEFAULT_LLM_PROVIDER)
+    ollama_host: str = Field(default=DEFAULT_OLLAMA_HOST)
     # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
     # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
     # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 4096
@@ -302,9 +362,9 @@ class Settings(BaseModel):
     # See docs/DESIGN-llm-models.md for Modelfile setup.
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
-    ollama_num_ctx: int = Field(default=262144)
-    ctx_warn_threshold: float = Field(default=0.85)
-    ctx_overflow_threshold: float = Field(default=1.0)
+    ollama_num_ctx: int = Field(default=DEFAULT_OLLAMA_NUM_CTX)
+    ctx_warn_threshold: float = Field(default=DEFAULT_CTX_WARN_THRESHOLD)
+    ctx_overflow_threshold: float = Field(default=DEFAULT_CTX_OVERFLOW_THRESHOLD)
 
     @model_validator(mode='before')
     @classmethod
@@ -378,21 +438,20 @@ class Settings(BaseModel):
             val = os.getenv(env_var)
             if val:
                 role_models_env[role] = [m.strip() for m in val.split(",") if m.strip()]
-        if role_models_env:
-            existing_roles = data.get("role_models", {})
-            data["role_models"] = {**existing_roles, **role_models_env}
-        elif "role_models" not in data:
-            provider = str(data.get("llm_provider", "ollama")).lower()
-            if provider == "gemini":
-                data["role_models"] = {"reasoning": [DEFAULT_GEMINI_REASONING_MODEL]}
-            else:
-                data["role_models"] = {
-                    "reasoning": list(DEFAULT_OLLAMA_REASONING_MODELS),
-                    "summarization": [DEFAULT_OLLAMA_SUMMARIZATION_MODEL],
-                    "analysis": [DEFAULT_OLLAMA_ANALYSIS_MODEL],
-                    "coding": [DEFAULT_OLLAMA_CODING_MODEL],
-                    "research": [{"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}}],
-                }
+        provider = str(data.get("llm_provider", "ollama")).lower()
+        if provider == "gemini":
+            role_defaults: dict = {"reasoning": [DEFAULT_GEMINI_REASONING_MODEL]}
+        else:
+            role_defaults = {
+                "reasoning": list(DEFAULT_OLLAMA_REASONING_MODELS),
+                "summarization": [DEFAULT_OLLAMA_SUMMARIZATION_MODEL],
+                "analysis": [DEFAULT_OLLAMA_ANALYSIS_MODEL],
+                "coding": [DEFAULT_OLLAMA_CODING_MODEL],
+                "research": [{"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}}],
+            }
+        # Merge: defaults supply missing roles; explicit config and env vars override.
+        existing_roles = data.get("role_models", {})
+        data["role_models"] = {**role_defaults, **existing_roles, **role_models_env}
 
         mcp_env = os.getenv("CO_CLI_MCP_SERVERS")
         if mcp_env:
@@ -423,7 +482,7 @@ def find_project_config() -> Path | None:
 
 
 def load_config() -> Settings:
-    data: dict = {}
+    data: dict[str, Any] = {}
 
     # Layer 1: User config (~/.config/co-cli/settings.json)
     if SETTINGS_FILE.exists():
@@ -433,12 +492,12 @@ def load_config() -> Settings:
             except Exception as e:
                 print(f"Error loading settings.json: {e}. Using defaults.")
 
-    # Layer 2: Project config (<cwd>/.co-cli/settings.json) — shallow merge
+    # Layer 2: Project config (<cwd>/.co-cli/settings.json) — deep merge
     project_config = find_project_config()
     if project_config is not None:
         with open(project_config, "r") as f:
             try:
-                data |= json.load(f)
+                data = _deep_merge_settings(data, json.load(f))
             except Exception as e:
                 print(f"Error loading project config {project_config}: {e}. Skipping.")
 

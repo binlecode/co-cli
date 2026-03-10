@@ -39,18 +39,18 @@ Example:
 ```json
 {
   "role_models": {
-    "reasoning": ["qwen3.5:35b-a3b-q4_k_m-agentic", "qwen3:30b-a3b-thinking-2507-q4_k_m-agentic"],
-    "coding": ["qwen3-coder-next:q4_k_m-code"],
-    "research": ["qwen3.5:35b-a3b-q4_k_m-agentic"],
-    "summarization": ["qwen3:30b-a3b-instruct-2507-q4_k_m"],
-    "analysis": ["qwen3:30b-a3b-instruct-2507-q4_k_m"]
+    "reasoning": ["qwen3.5:35b-a3b-agentic", "qwen3:30b-a3b-thinking-2507-agentic"],
+    "coding": ["qwen3-coder-next:code"],
+    "research": ["qwen3.5:35b-a3b-agentic"],
+    "summarization": ["qwen3:30b-a3b-instruct-2507"],
+    "analysis": ["qwen3:30b-a3b-instruct-2507"]
   }
 }
 ```
 
 When `role_models` is not configured, provider defaults are injected for all roles:
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama`: all five roles populated — reasoning → `qwen3.5:35b-a3b-q4_k_m-agentic`, then `qwen3:30b-a3b-thinking-2507-q4_k_m-agentic`; summarization and analysis → `qwen3:30b-a3b-instruct-2507-q4_k_m`; coding → `qwen3-coder-next:q4_k_m-code`; research → `qwen3.5:35b-a3b-q4_k_m-agentic`
+- `ollama`: all five roles populated — reasoning → `qwen3.5:35b-a3b-agentic`, then `qwen3:30b-a3b-thinking-2507-agentic`; summarization and analysis → `qwen3:30b-a3b-instruct-2507`; coding → `qwen3-coder-next:code`; research → `qwen3.5:35b-a3b-agentic`
 
 ### ModelRegistry and ResolvedModel
 
@@ -109,13 +109,13 @@ thinking mode and exhaust `num_predict` on reasoning tokens before emitting visi
 
 Three mechanisms exist to suppress thinking, in order of preference:
 
-1. **Native instruct variant** — use a dedicated instruct model (e.g. `qwen3:30b-a3b-instruct-2507-q4_k_m`) where thinking is disabled at the model level. No config needed. Preferred for fixed non-thinking roles.
+1. **Native instruct variant** — use a dedicated instruct model (e.g. `qwen3:30b-a3b-instruct-2507`) where thinking is disabled at the model level. No config needed. Preferred for fixed non-thinking roles.
 2. **`api_params: {think: false}`** — request-level override on any `ModelEntry`. Use when pointing a non-thinking role at a thinking model without a dedicated instruct variant:
 
 ```
 role_models:
   summarization:
-    - model: qwen3.5:35b-a3b-q4_k_m-agentic
+    - model: qwen3.5:35b-a3b-agentic
       api_params: {think: false}
 ```
 
@@ -154,11 +154,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 
 | Modelfile | Role | num_ctx | num_predict | temp | top_p | top_k | presence_p | repeat_p |
 |-----------|------|--------:|------------:|-----:|------:|------:|-----------:|---------:|
-| `qwen3.5-35b-a3b-q4_k_m-agentic` | reasoning, research | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
-| `qwen3-30b-a3b-thinking-2507-q4_k_m-agentic` | reasoning (fallback) | 128K | 32K | 0.6 | 0.95 | 20 | — | 1.0 |
-| `qwen3-30b-a3b-thinking-2507-q4_k_m-nothink` | backup only | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
-| `qwen3-30b-a3b-instruct-2507-q4_k_m` | summarization, analysis | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
-| `qwen3-coder-next-q4_k_m-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
+| `qwen3.5-35b-a3b-agentic` | reasoning, research | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
+| `qwen3-30b-a3b-thinking-2507-agentic` | reasoning (fallback) | 128K | 32K | 0.6 | 0.95 | 20 | — | 1.0 |
+| `qwen3-30b-a3b-thinking-2507-nothink` | backup only | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
+| `qwen3-30b-a3b-instruct-2507` | summarization, analysis | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
+| `qwen3-coder-next-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
 
 **num_ctx rationale:**
 - Agentic/thinking models: 128K — sweet spot for long multi-turn tool workflows without the KV cache cost of 256K. Native context is 256K; reduce to 32K if OOM.
@@ -184,11 +184,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/_commands.py` | `_swap_model_inplace`, `_switch_ollama_model` — in-place model swap used by error-recovery chain advancement in `main.py`; uses `registry.get("summarization", fallback)` for `/compact` and `/new` |
 | `co_cli/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
 | `co_cli/agents/_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, ollama_host, ollama_num_ctx)` — builds provider-aware model and `ModelSettings` |
-| `ollama/Modelfile.qwen3.5-35b-a3b-q4_k_m-agentic` | Primary reasoning/research model — thinking enabled, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-agentic` | Reasoning fallback — thinking enabled, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-q4_k_m-nothink` | Backup nothink variant — `/no_think` SYSTEM directive, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-instruct-2507-q4_k_m` | Summarization/analysis — native instruct (thinking off at model level), 128K ctx |
-| `ollama/Modelfile.qwen3-coder-next-q4_k_m-code` | Coding sub-agent — deterministic params, 64K ctx / 32K output |
+| `ollama/Modelfile.qwen3.5-35b-a3b-agentic` | Primary reasoning/research model — thinking enabled, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-agentic` | Reasoning fallback — thinking enabled, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-nothink` | Backup nothink variant — `/no_think` SYSTEM directive, 128K ctx |
+| `ollama/Modelfile.qwen3-30b-a3b-instruct-2507` | Summarization/analysis — native instruct (thinking off at model level), 128K ctx |
+| `ollama/Modelfile.qwen3-coder-next-code` | Coding sub-agent — deterministic params, 64K ctx / 32K output |
 | `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and `/no_think` directives; not invoked at startup |
 
 ## 6. Testing Boundary
