@@ -25,7 +25,9 @@ Resolve scope before spawning agents. **Only read files within the project worki
 
 **2. Resolve TODO docs.** Same prefix/substring match against `docs/TODO-*.md`, then same content fallback. A scope may match DESIGN docs but no TODO docs — that is valid.
 
-**3. Identify source modules.** For each matched DESIGN doc, read its Files section and extract listed source paths — these are the files Code Dev checks.
+**3. Resolve DELIVERY docs.** Same prefix/substring match against `docs/DELIVERY-*.md`, then same content fallback. A scope may match DESIGN docs but no DELIVERY docs — that is valid.
+
+**4. Identify source modules.** For each matched DESIGN doc, read its Files section and extract listed source paths — these are the files Code Dev checks.
 
 **Create the output file** at `docs/REVIEW-<scope>.md` with a header before spawning agents:
 ```
@@ -33,7 +35,7 @@ Resolve scope before spawning agents. **Only read files within the project worki
 _Date: <today>_
 
 ## What Was Reviewed
-<list matched DESIGN docs, source modules, TODO docs>
+<list matched DESIGN docs, source modules, TODO docs, DELIVERY docs>
 ```
 
 **Spawn Code Dev and Auditor simultaneously. Wait for both before appending the verdict.**
@@ -81,9 +83,9 @@ Code Dev reads each in-scope DESIGN doc and checks every factual claim against s
 
 ---
 
-## Phase 2b — Auditor: TODO Health
+## Phase 2b — Auditor: Workflow Artifact Health
 
-Auditor checks every task in in-scope TODO docs for staleness, correctness, and readiness. **Reports only — does not modify TODO docs.**
+Auditor checks every task in in-scope TODO docs for staleness, correctness, and readiness, and checks in-scope DELIVERY docs for stale temporary scaffolding. **Reports only — does not modify TODO or DELIVERY docs.**
 
 **If no TODO doc matched scope:** Check if a `docs/DELIVERY-<scope>.md` exists — if so, spot-check 2–3 source files against its shipped claims. Scan active `docs/TODO-*.md` for prerequisite dependencies on the shipped feature. If neither exists, note "No TODO docs in scope — feature fully shipped."
 
@@ -98,6 +100,16 @@ Auditor checks every task in in-scope TODO docs for staleness, correctness, and 
 - `needs_cleanup` — some well-formedness issues or minor staleness, fixable before planning
 - `blocked` — a prerequisite hasn't shipped when the TODO assumes it has, or a majority of tasks are invalid
 
+**For each in-scope DELIVERY doc, check:**
+- **Still active?** If Gate 2 review is still pending or the delivery is blocked, the file may remain.
+- **Stale temporary scaffolding?** If the DELIVERY doc says `DELIVERED`, the source spot-check matches, and no active TODO still depends on it, the file should have been deleted after Gate 3.
+- **Workflow contradiction?** If the file is acting as long-lived recordkeeping despite being marked temporary, flag workflow drift.
+
+**Lifecycle verdict per DELIVERY doc:**
+- `active` — still needed for Gate 2 / Gate 3 or blocked follow-up
+- `stale_scaffolding` — shipped temporary artifact should have been deleted
+- `blocked` — the report is inconsistent with source or active TODO dependencies
+
 **Append to `docs/REVIEW-<scope>.md`:**
 
 ```markdown
@@ -108,6 +120,14 @@ Auditor checks every task in in-scope TODO docs for staleness, correctness, and 
 ...
 
 **Overall verdict for `<doc>`: `<readiness>`**
+
+## Auditor — Delivery Artifact Lifecycle
+
+| DELIVERY doc | Verdict | Key finding |
+|--------------|---------|-------------|
+...
+
+**Overall delivery lifecycle: clean / stale_scaffolding / blocked**
 ```
 
 ---
@@ -117,9 +137,9 @@ Auditor checks every task in in-scope TODO docs for staleness, correctness, and 
 Whichever agent finishes last appends the verdict. The verdict is deterministic from the two reports — no judgment needed.
 
 **Rules:**
-- **HEALTHY** — no blocking Code Dev findings, all in-scope TODO docs `ready_for_plan` or no TODO docs in scope
-- **NEEDS_ATTENTION** — minor inaccuracies or TODO cleanup needed; can proceed but fix first
-- **ACTION_REQUIRED** — any blocking Code Dev finding, or a TODO doc `blocked` on a prerequisite for planned scope
+- **HEALTHY** — no blocking Code Dev findings, all in-scope TODO docs `ready_for_plan` or no TODO docs in scope, and no DELIVERY doc is `stale_scaffolding` or `blocked`
+- **NEEDS_ATTENTION** — minor inaccuracies, TODO cleanup needed, or one or more DELIVERY docs are `stale_scaffolding`
+- **ACTION_REQUIRED** — any blocking Code Dev finding, any TODO doc `blocked` on a prerequisite for planned scope, or any DELIVERY doc `blocked`
 
 **Append to `docs/REVIEW-<scope>.md`:**
 
@@ -141,6 +161,6 @@ Print a brief terminal summary: scope, verdict, output path, recommended next st
 
 ## Rules
 
-- **No-fix rule:** Code Dev and Auditor report only. Fixes go to `/sync-doc` or manual edits per verdict.
+- **No-fix rule:** Code Dev and Auditor report only. Fixes go to `/sync-doc`, `/orchestrate-dev`, or manual edits per verdict.
 - **Scope mismatch stops immediately:** If Phase 1 finds no matching DESIGN docs, stop — no output file.
 - **Output is permanent:** `docs/REVIEW-<scope>.md` is not temporary scaffolding.

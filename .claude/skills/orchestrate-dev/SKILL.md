@@ -9,7 +9,7 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 **Invocation:** `/orchestrate-dev <slug>`
 
-Reads `docs/TODO-<slug>.md`. Executes each task. Produces `docs/DELIVERY-<slug>.md`.
+Reads `docs/TODO-<slug>.md`. Executes each task. Prunes or deletes the TODO based on shipped work. Produces `docs/DELIVERY-<slug>.md`.
 
 **Consumes:** docs/TODO-<slug>.md. **Produces:** docs/DELIVERY-<slug>.md (temporary)
 
@@ -241,6 +241,8 @@ For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Desi
 - **All tasks shipped, no deferred items remain:** delete `docs/TODO-<slug>.md` entirely. An empty TODO is not kept.
 - **All tasks shipped, deferred items remain:** remove shipped tasks; leave only unimplemented work and any explicit "Deferred" sections.
 - **Partial delivery (some tasks blocked):** leave the blocked and unstarted tasks in place; remove only the tasks that reached ✓ pass.
+- Apply this cleanup before writing the delivery report. The report must describe the post-cleanup TODO state, not the pre-cleanup state.
+- If a shipped task still appears in `docs/TODO-<slug>.md`, the delivery is incomplete. Fix the TODO file before proceeding.
 
 ---
 
@@ -280,6 +282,14 @@ Date: <ISO 8601 date>
 ## Coverage Audit
 - Result: clean / gaps found (<list missing features>)
 
+## Artifact Lifecycle
+- TODO status: deleted / retained with only unshipped work
+- DELIVERY status: keep for Gate 2 and Gate 3 only
+
+## Gate 3 Cleanup
+- After PO acceptance, delete `docs/DELIVERY-<slug>.md` in the same session.
+- If PO acceptance is not part of this run, stop after writing this report and surface that delete action as the next step.
+
 ## Overall: DELIVERED / BLOCKED
 <one sentence summary>
 ```
@@ -293,4 +303,4 @@ Blocked task(s): [list tasks that failed `done_when`]. Review needed:
 - If the code is fixable without plan changes: fix and re-run from the blocked task
 - If the issue requires new work: open a follow-up TODO
 
-**Lifecycle:** This file is the artifact for Gate 2 (TL delivery check). After Gate 3 (PO acceptance), delete it — it is temporary scaffolding, not a permanent project record.
+**Lifecycle:** This file is the artifact for Gate 2 (TL delivery check) and Gate 3 (PO acceptance). It must include an explicit `## Gate 3 Cleanup` section. After Gate 3, delete `docs/DELIVERY-<slug>.md` in the same session — it is temporary scaffolding, not a permanent project record.
