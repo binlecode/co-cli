@@ -58,7 +58,7 @@ class ModelInference(TypedDict, total=False):
         temperature: Sampling temperature.
         top_p: Nucleus sampling threshold.
         max_tokens: Maximum output tokens.
-        num_ctx: Context window size (overrides settings.ollama_num_ctx).
+        num_ctx: Context window size (overrides settings.llm_num_ctx).
         extra_body: Additional body params (top_k, repeat_penalty, etc.).
     """
 

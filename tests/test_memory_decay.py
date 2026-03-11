@@ -5,8 +5,6 @@ Deterministic — no LLM calls.
 """
 
 import asyncio
-import os
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,39 +50,34 @@ def _seed_memory(
     return path
 
 
-def _make_ctx(max_count: int = 10) -> RunContext:
+def _make_ctx(memory_dir: Path, max_count: int = 10) -> RunContext:
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
             session_id="test-memory-decay",
             memory_max_count=max_count,
+            memory_dir=memory_dir,
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def test_decay_cut_triggers():
+def test_decay_cut_triggers(tmp_path: Path):
     """Seed max_count memories, save one more — cut-only retention fires, no consolidation file created."""
     max_count = 10
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
 
-            for i in range(1, max_count + 1):
-                _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10)
+    for i in range(1, max_count + 1):
+        _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10)
 
-            ctx = _make_ctx(max_count=max_count)
-            asyncio.run(save_memory(ctx, "Brand new important memory", tags=["test"]))
+    ctx = _make_ctx(memory_dir, max_count=max_count)
+    asyncio.run(save_memory(ctx, "Brand new important memory", tags=["test"]))
 
-            after = list(memory_dir.glob("*.md"))
-            assert len(after) <= max_count, f"Total {len(after)} > max {max_count}"
-            has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
-            assert not has_consolidated, "Consolidated file found (summarize path should be gone)"
-        finally:
-            os.chdir(orig_cwd)
+    after = list(memory_dir.glob("*.md"))
+    assert len(after) <= max_count, f"Total {len(after)} > max {max_count}"
+    has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
+    assert not has_consolidated, "Consolidated file found (summarize path should be gone)"
 
 
 def test_settings_ignores_removed_decay_fields():
@@ -94,95 +87,77 @@ def test_settings_ignores_removed_decay_fields():
     assert not hasattr(s, "memory_decay_strategy")
 
 
-def test_decay_protected_survives():
+def test_decay_protected_survives(tmp_path: Path):
     """Protected memories survive decay even when they are the oldest."""
     max_count = 10
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
 
-            for i in range(1, max_count + 1):
-                protected = i <= 2
-                _seed_memory(
-                    memory_dir, i,
-                    f"Memory {i} {'PROTECTED' if protected else 'normal'}",
-                    days_ago=max_count - i + 10,
-                    decay_protected=protected,
-                )
+    for i in range(1, max_count + 1):
+        protected = i <= 2
+        _seed_memory(
+            memory_dir, i,
+            f"Memory {i} {'PROTECTED' if protected else 'normal'}",
+            days_ago=max_count - i + 10,
+            decay_protected=protected,
+        )
 
-            ctx = _make_ctx(max_count=max_count)
-            asyncio.run(save_memory(ctx, "New memory triggering decay", tags=["test"]))
+    ctx = _make_ctx(memory_dir, max_count=max_count)
+    asyncio.run(save_memory(ctx, "New memory triggering decay", tags=["test"]))
 
-            after = list(memory_dir.glob("*.md"))
-            remaining_ids: set[int] = set()
-            for p in after:
-                content = p.read_text(encoding="utf-8")
-                if "---" in content:
-                    fm = yaml.safe_load(content.split("---")[1])
-                    if isinstance(fm, dict) and "id" in fm:
-                        remaining_ids.add(fm["id"])
+    after = list(memory_dir.glob("*.md"))
+    remaining_ids: set[int] = set()
+    for p in after:
+        content = p.read_text(encoding="utf-8")
+        if "---" in content:
+            fm = yaml.safe_load(content.split("---")[1])
+            if isinstance(fm, dict) and "id" in fm:
+                remaining_ids.add(fm["id"])
 
-            missing = {1, 2} - remaining_ids
-            assert not missing, f"Protected memories {missing} were incorrectly decayed"
-        finally:
-            os.chdir(orig_cwd)
+    missing = {1, 2} - remaining_ids
+    assert not missing, f"Protected memories {missing} were incorrectly decayed"
 
 
-def test_decay_below_limit_no_trigger():
+def test_decay_below_limit_no_trigger(tmp_path: Path):
     """Below capacity — save completes without triggering decay or creating consolidated file."""
     max_count = 10
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
 
-            seed_count = max_count - 5
-            for i in range(1, seed_count + 1):
-                _seed_memory(memory_dir, i, f"Memory number {i}", days_ago=10 - i)
+    seed_count = max_count - 5
+    for i in range(1, seed_count + 1):
+        _seed_memory(memory_dir, i, f"Memory number {i}", days_ago=10 - i)
 
-            ctx = _make_ctx(max_count=max_count)
-            asyncio.run(save_memory(ctx, "New memory within budget", tags=["test"]))
+    ctx = _make_ctx(memory_dir, max_count=max_count)
+    asyncio.run(save_memory(ctx, "New memory within budget", tags=["test"]))
 
-            after = list(memory_dir.glob("*.md"))
-            assert len(after) == seed_count + 1, (
-                f"Expected {seed_count + 1} memories, got {len(after)}"
-            )
-            has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
-            assert not has_consolidated, "Decay triggered below capacity limit"
-        finally:
-            os.chdir(orig_cwd)
+    after = list(memory_dir.glob("*.md"))
+    assert len(after) == seed_count + 1, (
+        f"Expected {seed_count + 1} memories, got {len(after)}"
+    )
+    has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
+    assert not has_consolidated, "Decay triggered below capacity limit"
 
 
-def test_save_memory_writes_certainty_to_frontmatter():
+def test_save_memory_writes_certainty_to_frontmatter(tmp_path: Path):
     """save_memory writes certainty field to frontmatter on new save."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        orig_cwd = os.getcwd()
-        try:
-            os.chdir(tmpdir)
-            memory_dir = Path(tmpdir) / ".co-cli/memory"
-            memory_dir.mkdir(parents=True)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
 
-            ctx = _make_ctx(max_count=50)
+    ctx = _make_ctx(memory_dir, max_count=50)
 
-            # Hedging content → low
-            asyncio.run(save_memory(ctx, "I think I prefer dark mode", tags=["preference"]))
-            files = list(memory_dir.glob("*.md"))
-            assert len(files) == 1
-            fm = yaml.safe_load(files[0].read_text().split("---")[1])
-            assert fm.get("certainty") == "low"
+    # Hedging content → low
+    asyncio.run(save_memory(ctx, "I think I prefer dark mode", tags=["preference"]))
+    files = list(memory_dir.glob("*.md"))
+    assert len(files) == 1
+    fm = yaml.safe_load(files[0].read_text().split("---")[1])
+    assert fm.get("certainty") == "low"
 
-            # Remove and test certain content
-            files[0].unlink()
+    # Remove and test certain content
+    files[0].unlink()
 
-            asyncio.run(save_memory(ctx, "I always use dark mode", tags=["preference"]))
-            files = list(memory_dir.glob("*.md"))
-            assert len(files) == 1
-            fm = yaml.safe_load(files[0].read_text().split("---")[1])
-            assert fm.get("certainty") == "high"
-        finally:
-            os.chdir(orig_cwd)
+    asyncio.run(save_memory(ctx, "I always use dark mode", tags=["preference"]))
+    files = list(memory_dir.glob("*.md"))
+    assert len(files) == 1
+    fm = yaml.safe_load(files[0].read_text().split("---")[1])
+    assert fm.get("certainty") == "high"

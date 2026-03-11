@@ -124,15 +124,15 @@ def test_valid_personalities_derived_from_souls():
     assert len(VALID_PERSONALITIES) >= 2
 
 
-def test_role_base_memories_exist_in_flat_knowledge_dir():
-    """Built-in roles retain character base memories in .co-cli/knowledge/*.md."""
-    knowledge_dir = Path.cwd() / ".co-cli" / "knowledge"
-    assert knowledge_dir.exists(), "Missing .co-cli/knowledge directory"
+def test_role_base_memories_exist_in_flat_memory_dir():
+    """Built-in roles retain character base memories in .co-cli/memory/*.md."""
+    memory_dir = Path.cwd() / ".co-cli" / "memory"
+    assert memory_dir.exists(), "Missing .co-cli/memory directory"
 
     builtins = ("finch", "jeff", "tars")
     counts = {role: 0 for role in builtins}
 
-    for path in knowledge_dir.glob("*.md"):
+    for path in memory_dir.glob("*.md"):
         raw = path.read_text(encoding="utf-8")
         fm, _ = parse_frontmatter(raw)
         tags = fm.get("tags", [])
@@ -146,9 +146,9 @@ def test_role_base_memories_exist_in_flat_knowledge_dir():
 
     for role in builtins:
         assert counts[role] > 0, (
-            f"No character base memories found for role '{role}' in .co-cli/knowledge/*.md"
+            f"No character base memories found for role '{role}' in .co-cli/memory/*.md"
         )
-        block = load_character_memories(role, knowledge_dir)
+        block = load_character_memories(role, memory_dir)
         assert block.startswith("## Character"), (
             f"load_character_memories('{role}') did not produce a Character block"
         )
@@ -159,7 +159,7 @@ def test_total_prompt_under_budget():
     from co_cli.prompts.personalities._composer import load_soul_mindsets
     for name in VALID_PERSONALITIES:
         seed = load_soul_seed(name)
-        memory_dir = Path.cwd() / ".co-cli" / "knowledge"
+        memory_dir = Path.cwd() / ".co-cli" / "memory"
         base_memories = load_character_memories(name, memory_dir)
         if base_memories:
             seed = seed + "\n\n" + base_memories
@@ -192,7 +192,7 @@ def test_validate_personality_files_no_warnings_for_complete_role():
     assert validate_personality_files("finch") == []
 
 
-def test_validate_personality_files_warns_on_missing_mindset(tmp_path, monkeypatch):
+def test_validate_personality_files_warns_on_missing_mindset(tmp_path):
     """Missing mindset files return startup-safe warnings."""
     personalities_dir = tmp_path
     (personalities_dir / "souls" / "finch").mkdir(parents=True)
@@ -209,12 +209,7 @@ def test_validate_personality_files_warns_on_missing_mindset(tmp_path, monkeypat
             encoding="utf-8",
         )
 
-    monkeypatch.setattr(
-        "co_cli.prompts.personalities._composer._PERSONALITIES_DIR",
-        personalities_dir,
-    )
-
-    warnings = validate_personality_files("finch")
+    warnings = validate_personality_files("finch", _personalities_dir=personalities_dir)
     assert warnings == [
         "Personality 'finch' missing mindset file: mindsets/finch/memory.md"
     ]

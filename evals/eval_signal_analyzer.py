@@ -23,25 +23,15 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
-
-from pydantic_ai.messages import ModelRequest, UserPromptPart  # noqa: E402
-
 from co_cli._signal_analyzer import SignalResult, analyze_for_signals  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
+
+from evals._fixtures import single_user_turn  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -154,13 +144,8 @@ CASES: list[SignalCase] = [
 # ---------------------------------------------------------------------------
 
 
-def _make_history(user_text: str) -> list:
-    """Build a minimal one-turn message history for the mini-agent."""
-    return [ModelRequest(parts=[UserPromptPart(content=user_text)])]
-
-
 async def run_case(case: SignalCase, model: Any) -> dict[str, Any]:
-    messages = _make_history(case.user_message)
+    messages = single_user_turn(case.user_message)
     result: SignalResult = await analyze_for_signals(messages, model)
     return {
         "found": result.found,

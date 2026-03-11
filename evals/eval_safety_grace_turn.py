@@ -16,32 +16,15 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 import time
-
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
 
 from co_cli._history import SafetyState  # noqa: E402
 from co_cli._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
-from evals._common import SilentFrontend, make_eval_deps  # noqa: E402
-
-
-class _CapturingFrontend(SilentFrontend):
-    """Extends SilentFrontend with status printing for diagnostics."""
-
-    def on_status(self, message: str) -> None:
-        super().on_status(message)
-        print(f"    STATUS: {message}")
+from evals._common import make_eval_deps  # noqa: E402
+from evals._frontend import CapturingFrontend  # noqa: E402
 
 
 async def main() -> int:
@@ -52,7 +35,7 @@ async def main() -> int:
     agent, model_settings, _, _ = get_agent()
     deps = make_eval_deps(session_id="e2e-grace-turn")
     deps.runtime.safety_state = SafetyState()
-    frontend = _CapturingFrontend()
+    frontend = CapturingFrontend(verbose=True)
 
     # Limit of 2: model gets one request to start + one tool call.
     # The multi-step prompt guarantees the model cannot finish in 2 requests,

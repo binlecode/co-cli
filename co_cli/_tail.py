@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from rich.console import Console
 from rich.text import Text
 
-from co_cli.config import DATA_DIR
+from co_cli.config import LOGS_DB
 from co_cli._trace_viewer import format_duration, get_span_type
 
 TYPE_STYLES = {
@@ -20,7 +20,7 @@ TYPE_STYLES = {
 # Wide enough for the longest span names (e.g. "chat qwen3:30b-a3b-thinking-2507-q8_0-agentic")
 SPAN_NAME_WIDTH = 48
 
-DB_PATH = DATA_DIR / "co-cli.db"
+DB_PATH = LOGS_DB
 
 
 def _extract_output_messages(attrs: dict) -> list[tuple[str, str]]:

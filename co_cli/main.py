@@ -29,7 +29,7 @@ from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState
 from co_cli._shell_backend import ShellBackend
 from co_cli._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR
+from co_cli.config import settings, DATA_DIR, SEARCH_DB, LOGS_DB
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli._banner import display_welcome_banner
 from co_cli._status import get_status, render_status_table, check_security, render_security_findings
@@ -101,13 +101,15 @@ def create_deps(task_runner: TaskRunner | None = None) -> CoDeps:
 
         def _build_index(backend: str):
             return KnowledgeIndex(
-                DATA_DIR / "search.db",
+                SEARCH_DB,
                 backend=backend,
                 embedding_provider=settings.knowledge_embedding_provider,
                 embedding_model=settings.knowledge_embedding_model,
                 embedding_dims=settings.knowledge_embedding_dims,
                 ollama_host=settings.ollama_host,
                 gemini_api_key=settings.gemini_api_key,
+                embed_api_url=settings.knowledge_embed_api_url,
+                rerank_api_url=settings.knowledge_rerank_api_url,
                 hybrid_vector_weight=settings.knowledge_hybrid_vector_weight,
                 hybrid_text_weight=settings.knowledge_hybrid_text_weight,
                 reranker_provider=settings.knowledge_reranker_provider,
@@ -290,7 +292,7 @@ async def chat_loop(verbose: bool = False):
     ]
 
     # Step 4: get_agent with post-model-check chain head
-    agent, model_settings, tool_names, _ = get_agent(
+    agent, model_settings, tool_names, tool_approvals = get_agent(
         web_policy=settings.web_policy,
         mcp_servers=mcp_servers,
         personality=settings.personality,
@@ -320,7 +322,7 @@ async def chat_loop(verbose: bool = False):
         console.print(f"[yellow]MCP servers unavailable ({e}) — continuing without MCP[/yellow]")
         await stack.aclose()  # clean up partially-started first agent
         stack = AsyncExitStack()
-        agent, model_settings, tool_names, _ = get_agent(
+        agent, model_settings, tool_names, tool_approvals = get_agent(
             web_policy=settings.web_policy,
             personality=settings.personality,
             model_name=deps.config.role_models["reasoning"][0].model,
@@ -335,6 +337,10 @@ async def chat_loop(verbose: bool = False):
         # MCP tools discovered after context entry — update tool_names
         if mcp_servers:
             tool_names = await _discover_mcp_tools(agent, tool_names)
+
+        # Persist final resolved tool surface into session state
+        deps.session.tool_names = tool_names
+        deps.session.tool_approvals = tool_approvals
 
         session_path = Path.cwd() / ".co-cli" / "session.json"
         session_data = await run_bootstrap(
@@ -467,6 +473,7 @@ async def chat_loop(verbose: bool = False):
                     # Prevents stale skill grants from bleeding into the next turn.
                     deps.session.active_skill_env.clear()
                     deps.session.skill_tool_grants.clear()
+                    deps.session.active_skill_name = None
 
                 # Signal detection — CC hookify pattern, auto-triggered post-turn.
                 # LLM mini-agent classifies every completed turn; guardrails in the
@@ -549,7 +556,7 @@ def logs():
     """Launch a local dashboard (Datasette) to inspect agent traces."""
     import webbrowser
 
-    db_path = DATA_DIR / "co-cli.db"
+    db_path = LOGS_DB
     if not db_path.exists():
         console.print("[yellow]No logs found yet.[/yellow]")
         return
@@ -582,7 +589,7 @@ def traces():
     import webbrowser
     from co_cli._trace_viewer import write_trace_html
 
-    db_path = DATA_DIR / "co-cli.db"
+    db_path = LOGS_DB
     if not db_path.exists():
         console.print("[yellow]No traces found yet. Run 'co chat' first.[/yellow]")
         return

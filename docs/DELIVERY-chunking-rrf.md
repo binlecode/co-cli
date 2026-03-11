@@ -41,7 +41,12 @@ Date: 2026-03-10
 - TODO status: deleted — all tasks shipped, no deferred work remains
 - DELIVERY status: keep for Gate 2 and Gate 3 only
 
-## Gate 3 Cleanup
+## Gate 2 — TL Review
+- Verdict: APPROVED
+- Fix shipped: `_fts_search()` now uses `chunks_fetch_limit = limit * 20` for the chunks leg (`_knowledge_index.py:605`), fetching an oversized pool before Python-side doc-level dedup runs. A single long article can no longer crowd out other matching documents.
+- Regression test: `tests/test_knowledge_index.py::test_chunks_fts_multi_document_crowding` (scenario 16) covers the exact crowding case from the prior REVISE verdict. `uv run pytest tests/test_knowledge_index.py::test_chunks_fts_multi_document_crowding -x` passes.
+
+## Gate 3 — PO Acceptance
 - After PO acceptance, delete `docs/DELIVERY-chunking-rrf.md` in the same session.
 
 ## Overall: DELIVERED

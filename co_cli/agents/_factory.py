@@ -48,7 +48,7 @@ class ModelRegistry:
             if not pref_list:
                 continue
             model, settings = build_model(
-                pref_list[0], config.llm_provider, config.ollama_host, config.ollama_num_ctx
+                pref_list[0], config.llm_provider, config.ollama_host
             )
             registry._entries[role] = ResolvedModel(model=model, settings=settings)
         return registry
@@ -66,7 +66,6 @@ def build_model(
     model_entry: ModelEntry,
     provider: str,
     ollama_host: str,
-    ollama_num_ctx: int = 4096,
 ) -> tuple[OpenAIChatModel | str, ModelSettings | None]:
     """Construct a pydantic-ai model object and merged ModelSettings for the given provider.
 
@@ -85,8 +84,10 @@ def build_model(
 
     if provider == "ollama":
         inf = get_model_inference("ollama", normalized)
-        num_ctx = inf.get("num_ctx", ollama_num_ctx)
-        extra: dict[str, Any] = {"num_ctx": num_ctx}
+        extra: dict[str, Any] = {}
+        num_ctx = inf.get("num_ctx")
+        if num_ctx is not None:
+            extra["num_ctx"] = num_ctx
         extra.update(inf.get("extra_body", {}))
         if model_entry.api_params:
             extra.update(model_entry.api_params)

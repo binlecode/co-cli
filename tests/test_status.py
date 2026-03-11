@@ -49,7 +49,7 @@ def test_check_security_project_config_wrong_mode(tmp_path):
     assert proj_findings[0].severity == "warn"
 
 
-def test_check_security_exec_approval_wildcard(tmp_path, monkeypatch):
+def test_check_security_exec_approval_wildcard(tmp_path):
     """Exec-approvals file with '*' pattern → WARN finding."""
     approvals_file = tmp_path / ".co-cli" / "exec-approvals.json"
     approvals_file.parent.mkdir(parents=True)
@@ -57,14 +57,16 @@ def test_check_security_exec_approval_wildcard(tmp_path, monkeypatch):
         {"id": "abc", "pattern": "*", "tool_name": "run_shell_command"},
     ]))
 
-    monkeypatch.chdir(tmp_path)
-    findings = check_security(_user_config_path=None, _project_config_path=None)
+    findings = check_security(
+        _user_config_path=None, _project_config_path=None,
+        _approvals_path=approvals_file,
+    )
     wildcard_findings = [f for f in findings if f.check_id == "exec-approval-wildcard"]
     assert len(wildcard_findings) == 1
     assert wildcard_findings[0].severity == "warn"
 
 
-def test_check_security_exec_approval_no_wildcard(tmp_path, monkeypatch):
+def test_check_security_exec_approval_no_wildcard(tmp_path):
     """Exec-approvals file with no '*' pattern → no wildcard finding."""
     approvals_file = tmp_path / ".co-cli" / "exec-approvals.json"
     approvals_file.parent.mkdir(parents=True)
@@ -72,8 +74,10 @@ def test_check_security_exec_approval_no_wildcard(tmp_path, monkeypatch):
         {"id": "abc", "pattern": "ls *", "tool_name": "run_shell_command"},
     ]))
 
-    monkeypatch.chdir(tmp_path)
-    findings = check_security(_user_config_path=None, _project_config_path=None)
+    findings = check_security(
+        _user_config_path=None, _project_config_path=None,
+        _approvals_path=approvals_file,
+    )
     wildcard_findings = [f for f in findings if f.check_id == "exec-approval-wildcard"]
     assert wildcard_findings == []
 

@@ -20,30 +20,18 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
 import time
 from dataclasses import dataclass
 from typing import Any
 
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
-
 from co_cli._history import SafetyState  # noqa: E402
 from co_cli._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
-from evals._common import (  # noqa: E402
-    SilentFrontend,
-    extract_tool_calls,
-    make_eval_deps,
-)
+from evals._common import make_eval_deps  # noqa: E402
+from evals._frontend import SilentFrontend  # noqa: E402
+from evals._tools import extract_tool_calls, is_ordered_subsequence  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +95,6 @@ CASES: list[ChainCase] = [
 # ---------------------------------------------------------------------------
 # Scoring
 # ---------------------------------------------------------------------------
-
-
-def is_ordered_subsequence(expected: list[str], actual: list[str]) -> bool:
-    """Check if ``expected`` appears as an ordered subsequence of ``actual``."""
-    it = iter(actual)
-    return all(tool in it for tool in expected)
 
 
 def score_case(

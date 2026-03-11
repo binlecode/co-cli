@@ -436,7 +436,7 @@ def _switch_model(agent, model_name: str):
     agent.system_prompt = new_prompt
 
     inf = get_model_inference("ollama", normalized)
-    num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
+    num_ctx = inf.get("num_ctx", settings.llm_num_ctx)
     extra: dict = {"num_ctx": num_ctx}
     extra.update(inf.get("extra_body", {}))
 

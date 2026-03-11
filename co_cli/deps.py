@@ -12,6 +12,8 @@ from co_cli.config import (
     DEFAULT_TOOL_OUTPUT_TRIM_CHARS,
     DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_KNOWLEDGE_RERANKER_PROVIDER,
+    DEFAULT_KNOWLEDGE_EMBED_API_URL,
+    DEFAULT_KNOWLEDGE_RERANK_API_URL,
     DEFAULT_MEMORY_MAX_COUNT,
     DEFAULT_MEMORY_DEDUP_WINDOW_DAYS,
     DEFAULT_MEMORY_DEDUP_THRESHOLD,
@@ -70,6 +72,7 @@ class CoConfig:
     """
 
     session_id: str = ""
+    workspace_root: Path | None = None
     obsidian_vault_path: Path | None = None
     google_credentials_path: str | None = None
     shell_safe_commands: list[str] = field(default_factory=list)
@@ -104,11 +107,13 @@ class CoConfig:
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
     knowledge_search_backend: str = "fts5"
     knowledge_reranker_provider: str = DEFAULT_KNOWLEDGE_RERANKER_PROVIDER
+    knowledge_embed_api_url: str = DEFAULT_KNOWLEDGE_EMBED_API_URL
+    knowledge_rerank_api_url: str = DEFAULT_KNOWLEDGE_RERANK_API_URL
     mcp_count: int = 0
     role_models: dict[str, list[ModelEntry]] = field(default_factory=dict)
     ollama_host: str = DEFAULT_OLLAMA_HOST
     llm_provider: str = DEFAULT_LLM_PROVIDER
-    ollama_num_ctx: int = DEFAULT_OLLAMA_NUM_CTX
+    llm_num_ctx: int = DEFAULT_OLLAMA_NUM_CTX
     ctx_warn_threshold: float = DEFAULT_CTX_WARN_THRESHOLD
     ctx_overflow_threshold: float = DEFAULT_CTX_OVERFLOW_THRESHOLD
     model_http_retries: int = DEFAULT_MODEL_HTTP_RETRIES
@@ -150,10 +155,12 @@ class CoConfig:
             doom_loop_threshold=s.doom_loop_threshold,
             max_reflections=s.max_reflections,
             knowledge_reranker_provider=s.knowledge_reranker_provider,
+            knowledge_embed_api_url=s.knowledge_embed_api_url,
+            knowledge_rerank_api_url=s.knowledge_rerank_api_url,
             role_models={k: list(v) for k, v in s.role_models.items()},
             ollama_host=s.ollama_host,
             llm_provider=s.llm_provider,
-            ollama_num_ctx=s.ollama_num_ctx,
+            llm_num_ctx=s.llm_num_ctx,
             ctx_warn_threshold=s.ctx_warn_threshold,
             ctx_overflow_threshold=s.ctx_overflow_threshold,
             model_http_retries=s.model_http_retries,
@@ -176,6 +183,9 @@ class CoSessionState:
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
     skill_registry: list[dict] = field(default_factory=list)
+    tool_names: list[str] = field(default_factory=list)
+    tool_approvals: dict[str, bool] = field(default_factory=dict)
+    active_skill_name: str | None = None
 
 
 @dataclass

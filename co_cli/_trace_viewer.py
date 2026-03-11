@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from co_cli.config import DATA_DIR
+from co_cli.config import LOGS_DB
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -431,7 +431,7 @@ def render_span(span: dict, depth: int, trace_start: int, trace_duration: float)
 
 def generate_trace_html() -> str:
     """Generate complete HTML for trace viewer."""
-    db_path = DATA_DIR / "co-cli.db"
+    db_path = LOGS_DB
     if not db_path.exists():
         return HTML_TEMPLATE.format(
             trace_count=0,

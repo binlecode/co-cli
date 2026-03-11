@@ -1,6 +1,7 @@
 """Functional tests for KnowledgeIndex — FTS5 search, sync, rebuild."""
 
 import hashlib
+import struct
 from pathlib import Path
 
 import pytest
@@ -303,26 +304,23 @@ def test_remove_stale_does_not_evict_common_prefix_sibling(tmp_path):
 def test_fts_roundtrip_save_and_recall(tmp_path):
     """Save a memory with FTS index, then recall it via search()."""
     import asyncio
-    import os
     from co_cli.tools.memory import save_memory
 
     idx = KnowledgeIndex(tmp_path / "search.db")
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), knowledge_index=idx),
-        config=CoConfig(knowledge_search_backend="fts5"),
+        config=CoConfig(
+            knowledge_search_backend="fts5",
+            memory_dir=tmp_path / ".co-cli" / "memory",
+        ),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-    orig = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        asyncio.run(save_memory(ctx, "User loves zygomorphic-fts5-test widget framework",
-                                tags=["preference"]))
-        results = idx.search("zygomorphic-fts5-test", source="memory")
-        assert len(results) >= 1, "FTS should find the saved memory"
-    finally:
-        os.chdir(orig)
-        idx.close()
+    asyncio.run(save_memory(ctx, "User loves zygomorphic-fts5-test widget framework",
+                            tags=["preference"]))
+    results = idx.search("zygomorphic-fts5-test", source="memory")
+    assert len(results) >= 1, "FTS should find the saved memory"
+    idx.close()
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +680,511 @@ def test_global_search_returns_both_memory_and_nonmemory(tmp_path):
     sources_found = {r.source for r in results}
     assert "memory" in sources_found, "Global search must include memory results"
     assert "library" in sources_found, "Global search must include library/chunk results"
+    idx.close()
+
+
+def test_chunks_fts_multi_document_crowding(tmp_path):
+    """Scenario 16: a long article (many chunks) must not crowd out a second matching article.
+
+    Before the fix, _run_chunks_fts used LIMIT at chunk-row granularity, so a single
+    article with N matching chunks consumed the full limit and suppressed other documents.
+    """
+    from co_cli._chunker import Chunk
+
+    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=50, chunk_overlap=5)
+
+    # Article A: 10 matching chunks — more than the search limit of 5.
+    idx.index(source="library", kind="article", path="/crowding-a.md",
+              title="Crowding Article A", content="intro", hash="hca1", mtime=0.0)
+    idx.index_chunks("library", "/crowding-a.md", [
+        Chunk(index=i, content=f"zygomorphic-crowding-token repeated text segment number {i}",
+              start_line=i, end_line=i)
+        for i in range(10)
+    ])
+
+    # Article B: 1 matching chunk — should still appear despite Article A's 10 chunks.
+    idx.index(source="library", kind="article", path="/crowding-b.md",
+              title="Crowding Article B", content="intro", hash="hcb1", mtime=0.0)
+    idx.index_chunks("library", "/crowding-b.md", [
+        Chunk(index=0, content="zygomorphic-crowding-token second document entry",
+              start_line=0, end_line=0),
+    ])
+
+    results = idx.search("zygomorphic-crowding-token", source="library", limit=5)
+    paths_found = {r.path for r in results}
+    assert "/crowding-a.md" in paths_found, "High-chunk article must appear in results"
+    assert "/crowding-b.md" in paths_found, (
+        "Second document must not be crowded out by the first article's many chunks"
+    )
+    idx.close()
+
+
+# ---------------------------------------------------------------------------
+# Chunk-level RRF fix tests (Divergence 1, 2, 3)
+# ---------------------------------------------------------------------------
+
+
+def test_searchresult_has_chunk_fields(tmp_path):
+    """SearchResult has chunk_index, start_line, end_line fields defaulting to None."""
+    r = SearchResult(
+        source="memory", kind="memory", path="/x.md",
+        title=None, snippet=None, score=0.5,
+        tags=None, category=None, created=None, updated=None,
+    )
+    assert hasattr(r, "chunk_index")
+    assert hasattr(r, "start_line")
+    assert hasattr(r, "end_line")
+    assert r.chunk_index is None
+    assert r.start_line is None
+    assert r.end_line is None
+
+
+def test_fts_search_chunk_result_carries_chunk_index(tmp_path):
+    """FTS search on non-memory source populates chunk_index, start_line, end_line."""
+    from co_cli._chunker import Chunk
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="library", kind="article", path="/art.md",
+              title="Article", content="intro", hash="h1", mtime=0.0)
+    idx.index_chunks("library", "/art.md", [
+        Chunk(index=0, content="first chunk content placeholder", start_line=0, end_line=2),
+        Chunk(index=1, content="zygomorphic-chunk-index-test phrase here", start_line=4, end_line=6),
+    ])
+
+    results = idx.search("zygomorphic-chunk-index-test", source="library")
+    assert len(results) >= 1
+    r = results[0]
+    assert r.chunk_index is not None, "chunk_index must be set for non-memory FTS result"
+    assert r.start_line is not None, "start_line must be set for non-memory FTS result"
+    assert r.end_line is not None, "end_line must be set for non-memory FTS result"
+    idx.close()
+
+
+def test_fts_search_memory_result_chunk_fields_none(tmp_path):
+    """FTS search on memory source leaves chunk fields as None."""
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="memory", kind="memory", path="/mem.md",
+              title="Memory", content="zygomorphic-mem-chunk-fields content",
+              hash="hm", mtime=0.0)
+
+    results = idx.search("zygomorphic-mem-chunk-fields", source="memory")
+    assert len(results) >= 1
+    r = results[0]
+    assert r.chunk_index is None, "chunk_index must be None for memory results"
+    assert r.start_line is None, "start_line must be None for memory results"
+    assert r.end_line is None, "end_line must be None for memory results"
+    idx.close()
+
+
+def test_hybrid_rrf_multi_chunk_doc_scores_higher(tmp_path):
+    """Doc with 3 matching chunks accumulates higher RRF score than doc with 1 chunk."""
+    from co_cli._knowledge_index import KnowledgeIndex
+
+    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+
+    # Doc A: 3 matching chunks
+    idx.index(source="library", kind="article", path="/doc-a.md",
+              title="Doc A", content="intro", hash="ha", mtime=0.0)
+    from co_cli._chunker import Chunk
+    idx.index_chunks("library", "/doc-a.md", [
+        Chunk(index=0, content="zygomorphic-rrf-test alpha section content", start_line=0, end_line=2),
+        Chunk(index=1, content="zygomorphic-rrf-test beta section content", start_line=4, end_line=6),
+        Chunk(index=2, content="zygomorphic-rrf-test gamma section content", start_line=8, end_line=10),
+    ])
+
+    # Doc B: 1 matching chunk
+    idx.index(source="library", kind="article", path="/doc-b.md",
+              title="Doc B", content="intro", hash="hb", mtime=0.0)
+    idx.index_chunks("library", "/doc-b.md", [
+        Chunk(index=0, content="zygomorphic-rrf-test single entry only", start_line=0, end_line=2),
+    ])
+
+    # Use _fts_chunks_raw + _hybrid_merge directly to test RRF accumulation
+    fts_mem, fts_chunks = idx._fts_chunks_raw(
+        "zygomorphic-rrf-test", source="library", kind=None,
+        tags=None, tag_match_mode="any", created_after=None,
+        created_before=None, limit=20,
+    )
+    merged = idx._hybrid_merge(fts_mem, fts_chunks, [], [],
+                               idx._hybrid_vector_weight, idx._hybrid_text_weight)
+
+    scores_by_path = {r.path: r.score for r in merged}
+    assert "/doc-a.md" in scores_by_path, "Doc A must appear in merged results"
+    assert "/doc-b.md" in scores_by_path, "Doc B must appear in merged results"
+    assert scores_by_path["/doc-a.md"] > scores_by_path["/doc-b.md"], (
+        "Doc A with 3 matching chunks must accumulate higher RRF score than Doc B with 1"
+    )
+    idx.close()
+
+
+def test_hybrid_merge_winning_chunk_metadata_propagated(tmp_path):
+    """After _hybrid_merge, the winning chunk's chunk_index and snippet are on the doc result."""
+    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli._chunker import Chunk
+
+    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx.index(source="library", kind="article", path="/merge-test.md",
+              title="Merge Test", content="intro", hash="hmt", mtime=0.0)
+    idx.index_chunks("library", "/merge-test.md", [
+        Chunk(index=0, content="ordinary content not relevant here", start_line=0, end_line=2),
+        Chunk(index=1, content="zygomorphic-merge-winner best matching chunk content", start_line=5, end_line=8),
+    ])
+
+    fts_mem, fts_chunks = idx._fts_chunks_raw(
+        "zygomorphic-merge-winner", source="library", kind=None,
+        tags=None, tag_match_mode="any", created_after=None,
+        created_before=None, limit=20,
+    )
+    merged = idx._hybrid_merge(fts_mem, fts_chunks, [], [],
+                               idx._hybrid_vector_weight, idx._hybrid_text_weight)
+
+    assert len(merged) >= 1
+    result = merged[0]
+    assert result.path == "/merge-test.md"
+    # The winning chunk (index=1) should be propagated
+    assert result.chunk_index == 1, f"Expected winning chunk_index=1, got {result.chunk_index}"
+    assert result.start_line == 5, f"Expected start_line=5, got {result.start_line}"
+    assert result.snippet is not None, "Snippet from FTS chunk must be propagated"
+    idx.close()
+
+
+def test_fetch_reranker_texts_uses_chunk_content(tmp_path):
+    """_fetch_reranker_texts returns chunk content for chunk_index candidates, not doc preamble."""
+    from co_cli._chunker import Chunk
+
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx.index(source="library", kind="article", path="/rerank-test.md",
+              title="Rerank Test Doc",
+              content="This is the document preamble introduction text.",
+              hash="hrt", mtime=0.0)
+    chunk_content = "This is chunk 5 deep content zygomorphic-reranker-chunk-test unique"
+    idx.index_chunks("library", "/rerank-test.md", [
+        Chunk(index=i, content=f"chunk {i} filler content text here",
+              start_line=i * 3, end_line=i * 3 + 2)
+        for i in range(5)
+    ] + [
+        Chunk(index=5, content=chunk_content, start_line=15, end_line=17)
+    ])
+
+    candidate = SearchResult(
+        source="library", kind="article", path="/rerank-test.md",
+        title="Rerank Test Doc", snippet=None, score=0.8,
+        tags=None, category=None, created=None, updated=None,
+        chunk_index=5, start_line=15, end_line=17,
+    )
+    texts = idx._fetch_reranker_texts([candidate])
+    assert len(texts) == 1
+    assert "zygomorphic-reranker-chunk-test" in texts[0], (
+        "Reranker text must contain chunk 5 content, not just the doc preamble"
+    )
+    assert "preamble" not in texts[0], (
+        "Reranker text must not contain the doc preamble for chunk-level candidates"
+    )
+    idx.close()
+
+
+def test_hybrid_fallback_collapses_chunks_to_doc_level(tmp_path):
+    """Hybrid search with embedding_provider=none falls back to FTS and returns one result per doc."""
+    from co_cli._chunker import Chunk
+
+    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx.index(source="library", kind="article", path="/fallback-doc.md",
+              title="Fallback Doc", content="intro", hash="hfd", mtime=0.0)
+    idx.index_chunks("library", "/fallback-doc.md", [
+        Chunk(index=i, content=f"zygomorphic-fallback-collapse chunk {i} content",
+              start_line=i * 3, end_line=i * 3 + 2)
+        for i in range(4)
+    ])
+
+    results = idx.search("zygomorphic-fallback-collapse", source="library")
+    paths = [r.path for r in results]
+    assert paths.count("/fallback-doc.md") == 1, (
+        "Fallback path must collapse chunks to doc level — each doc appears once"
+    )
+    idx.close()
+
+
+# ---------------------------------------------------------------------------
+# Group 4 — Vector injection tests (Stream A)
+# ---------------------------------------------------------------------------
+
+
+def test_vec_docs_search_closest_embedding_ranked_first(tmp_path):
+    """2 docs injected at [1,0,0,0] and [0,1,0,0]; query [1,0,0,0] → doc1 first, chunk_index=None."""
+    dims = 4
+    idx = KnowledgeIndex(
+        tmp_path / "search.db", backend="hybrid",
+        embedding_provider="none", embedding_dims=dims,
+    )
+    idx.index(source="memory", kind="memory", path="/doc1.md",
+              title="Doc1", content="content one", hash="h1", mtime=0.0)
+    idx.index(source="memory", kind="memory", path="/doc2.md",
+              title="Doc2", content="content two", hash="h2", mtime=0.0)
+
+    row1 = idx._conn.execute(
+        "SELECT rowid FROM docs WHERE path=? AND chunk_id=0", ("/doc1.md",)
+    ).fetchone()
+    row2 = idx._conn.execute(
+        "SELECT rowid FROM docs WHERE path=? AND chunk_id=0", ("/doc2.md",)
+    ).fetchone()
+    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+                      (row1["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
+    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+                      (row2["rowid"], struct.pack(f"{dims}f", 0.0, 1.0, 0.0, 0.0)))
+    idx._conn.commit()
+
+    blob = struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)
+    results = idx._vec_docs_search(
+        blob, kind=None, tags=None, tag_match_mode="any",
+        created_after=None, created_before=None, limit=10,
+    )
+    assert len(results) >= 2
+    assert results[0].path == "/doc1.md", "Doc with closest embedding must rank first"
+    assert all(r.chunk_index is None for r in results), "docs_vec results must have chunk_index=None"
+    idx.close()
+
+
+def test_vec_chunks_search_returns_chunk_level_results(tmp_path):
+    """chunk_index=2 injected into chunks_vec; result has chunk_index=2, start_line populated."""
+    from co_cli._chunker import Chunk
+
+    dims = 4
+    idx = KnowledgeIndex(
+        tmp_path / "search.db", backend="hybrid",
+        embedding_provider="none", embedding_dims=dims,
+    )
+    idx.index(source="library", kind="article", path="/art.md",
+              title="Article", content="intro", hash="h1", mtime=0.0)
+    idx.index_chunks("library", "/art.md", [
+        Chunk(index=0, content="chunk zero", start_line=0, end_line=2),
+        Chunk(index=1, content="chunk one", start_line=4, end_line=6),
+        Chunk(index=2, content="chunk two zygomorphic-vec-chunk-test", start_line=8, end_line=10),
+    ])
+
+    row = idx._conn.execute(
+        "SELECT rowid FROM chunks WHERE source='library' AND doc_path='/art.md' AND chunk_index=2"
+    ).fetchone()
+    idx._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
+    idx._conn.commit()
+
+    blob = struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)
+    results = idx._vec_chunks_search(
+        blob, sources=["library"], kind=None, tags=None, tag_match_mode="any",
+        created_after=None, created_before=None, limit=10,
+    )
+    assert len(results) >= 1
+    r = results[0]
+    assert r.chunk_index == 2, f"Expected chunk_index=2, got {r.chunk_index}"
+    assert r.start_line == 8, f"Expected start_line=8, got {r.start_line}"
+    idx.close()
+
+
+def test_hybrid_vec_only_match_appears_in_merged_results(tmp_path):
+    """Doc content unrelated to FTS query; close embedding injected; doc appears in mem_results."""
+    dims = 4
+    idx = KnowledgeIndex(
+        tmp_path / "search.db", backend="hybrid",
+        embedding_provider="none", embedding_dims=dims,
+    )
+    idx.index(source="memory", kind="memory", path="/vec-only.md",
+              title="Unrelated Topic", content="bananas and oranges",
+              hash="hvo", mtime=0.0)
+
+    row = idx._conn.execute(
+        "SELECT rowid FROM docs WHERE path='/vec-only.md' AND chunk_id=0"
+    ).fetchone()
+    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
+    idx._conn.commit()
+
+    query_blob = struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)
+    embedding = list(struct.unpack(f"{dims}f", query_blob))
+    vec_mem, vec_chunks = idx._vec_search(
+        embedding, source="memory", kind=None, tags=None, tag_match_mode="any",
+        created_after=None, created_before=None, limit=10,
+    )
+    paths_in_vec_mem = {r.path for r in vec_mem}
+    assert "/vec-only.md" in paths_in_vec_mem, "Vec-only doc must appear in mem_results"
+    assert vec_chunks == [], "Memory source search must not populate chunk_results"
+    idx.close()
+
+
+def test_hybrid_rrf_both_legs_boost_same_chunk(tmp_path):
+    """Same (path, chunk_index) present in fts_chunks + vec_chunks; combined RRF > either leg alone."""
+    from co_cli._chunker import Chunk
+
+    dims = 4
+    idx = KnowledgeIndex(
+        tmp_path / "search.db", backend="hybrid",
+        embedding_provider="none", embedding_dims=dims,
+    )
+    idx.index(source="library", kind="article", path="/boost.md",
+              title="Boost Doc", content="intro", hash="hb", mtime=0.0)
+    idx.index_chunks("library", "/boost.md", [
+        Chunk(index=0, content="zygomorphic-rrf-boost-test unique phrase here",
+              start_line=0, end_line=2),
+    ])
+
+    row = idx._conn.execute(
+        "SELECT rowid FROM chunks WHERE source='library' AND doc_path='/boost.md' AND chunk_index=0"
+    ).fetchone()
+    idx._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
+    idx._conn.commit()
+
+    # FTS leg
+    fts_mem, fts_chunks = idx._fts_chunks_raw(
+        "zygomorphic-rrf-boost-test", source="library", kind=None,
+        tags=None, tag_match_mode="any", created_after=None, created_before=None, limit=20,
+    )
+    # Vec leg
+    embedding = [1.0, 0.0, 0.0, 0.0]
+    vec_mem, vec_chunks = idx._vec_search(
+        embedding, source="library", kind=None, tags=None, tag_match_mode="any",
+        created_after=None, created_before=None, limit=20,
+    )
+
+    # Scores from each leg alone
+    fts_only_score = sum(
+        1.0 / (60 + i + 1) for i, r in enumerate(fts_chunks) if r.path == "/boost.md"
+    )
+    vec_only_score = sum(
+        1.0 / (60 + j + 1) for j, r in enumerate(vec_chunks) if r.path == "/boost.md"
+    )
+
+    merged = idx._hybrid_merge(
+        fts_mem, fts_chunks, vec_mem, vec_chunks,
+        idx._hybrid_vector_weight, idx._hybrid_text_weight,
+    )
+    combined_score = next((r.score for r in merged if r.path == "/boost.md"), 0.0)
+
+    assert combined_score > fts_only_score, "Combined RRF must exceed FTS-only score"
+    assert combined_score > vec_only_score, "Combined RRF must exceed vec-only score"
+    idx.close()
+
+
+def test_hybrid_memory_uses_docs_vec_not_chunks_vec(tmp_path):
+    """Memory source vec search returns results in mem_results; chunk_results empty; chunk_index=None."""
+    dims = 4
+    idx = KnowledgeIndex(
+        tmp_path / "search.db", backend="hybrid",
+        embedding_provider="none", embedding_dims=dims,
+    )
+    idx.index(source="memory", kind="memory", path="/mem-vec.md",
+              title="Memory Vec Doc", content="memory only vec test content",
+              hash="hmv", mtime=0.0)
+
+    row = idx._conn.execute(
+        "SELECT rowid FROM docs WHERE path='/mem-vec.md' AND chunk_id=0"
+    ).fetchone()
+    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
+    idx._conn.commit()
+
+    embedding = [1.0, 0.0, 0.0, 0.0]
+    vec_mem, vec_chunks = idx._vec_search(
+        embedding, source="memory", kind=None, tags=None, tag_match_mode="any",
+        created_after=None, created_before=None, limit=10,
+    )
+    assert any(r.path == "/mem-vec.md" for r in vec_mem), "Memory doc must appear in mem_results"
+    assert vec_chunks == [], "chunk_results must be empty for memory-only source"
+    assert all(r.chunk_index is None for r in vec_mem), "Memory vec results must have chunk_index=None"
+    idx.close()
+
+
+# ---------------------------------------------------------------------------
+# Group 5 — TEI provider tests (Stream B)
+# ---------------------------------------------------------------------------
+
+
+def test_tei_embed_provider_calls_embed_endpoint(tmp_path):
+    """POST /embed called with {'inputs': text}; result stored in embedding_cache."""
+    import respx
+    import httpx as httpx_lib
+
+    dims = 4
+    fake_embedding = [0.1, 0.2, 0.3, 0.4]
+
+    with respx.mock:
+        respx.post("http://127.0.0.1:8283/embed").mock(
+            return_value=httpx_lib.Response(200, json=[fake_embedding])
+        )
+        idx = KnowledgeIndex(
+            tmp_path / "search.db", backend="hybrid",
+            embedding_provider="tei", embedding_dims=dims,
+            embed_api_url="http://127.0.0.1:8283",
+        )
+        result = idx._embed_cached("test input text")
+
+    assert result == fake_embedding, "TEI embed result must match returned embedding"
+
+    # Verify it was stored in embedding_cache
+    content_hash = _sha256("test input text")
+    row = idx._conn.execute(
+        "SELECT embedding FROM embedding_cache WHERE provider='tei' AND content_hash=?",
+        (content_hash,),
+    ).fetchone()
+    assert row is not None, "Embedding must be stored in embedding_cache"
+    idx.close()
+
+
+def test_tei_rerank_provider_scores_candidates(tmp_path):
+    """POST /rerank called with query + texts; returned scores applied; results sorted correctly."""
+    import respx
+    import httpx as httpx_lib
+
+    idx = KnowledgeIndex(
+        tmp_path / "search.db",
+        reranker_provider="tei",
+        rerank_api_url="http://127.0.0.1:8282",
+    )
+    # doc0 is worst, doc2 is best according to TEI response
+    candidates = [
+        SearchResult(
+            source="memory", kind="memory", path=f"/doc{i}.md",
+            title=f"Doc {i}", snippet=None, score=float(i),
+            tags=None, category=None, created=None, updated=None,
+        )
+        for i in range(3)
+    ]
+    tei_response = [
+        {"index": 2, "score": 0.95},
+        {"index": 0, "score": 0.60},
+        {"index": 1, "score": 0.30},
+    ]
+
+    with respx.mock:
+        respx.post("http://127.0.0.1:8282/rerank").mock(
+            return_value=httpx_lib.Response(200, json=tei_response)
+        )
+        result = idx._rerank_results("query", candidates, limit=3)
+
+    assert result[0].path == "/doc2.md", "Highest-scored candidate must rank first"
+    assert result[1].path == "/doc0.md"
+    assert result[2].path == "/doc1.md"
+    assert abs(result[0].score - 0.95) < 1e-6
+    idx.close()
+
+
+def test_tei_rerank_falls_back_on_connection_error(tmp_path):
+    """Dead TEI rerank host → fallback to candidates[:limit], no exception raised."""
+    idx = KnowledgeIndex(
+        tmp_path / "search.db",
+        reranker_provider="tei",
+        rerank_api_url="http://127.0.0.1:19999",
+    )
+    candidates = [
+        SearchResult(
+            source="memory", kind="memory", path=f"/doc{i}.md",
+            title=f"Doc {i}", snippet=None, score=float(i),
+            tags=None, category=None, created=None, updated=None,
+        )
+        for i in range(5)
+    ]
+    result = idx._rerank_results("query", candidates, limit=3)
+    assert len(result) == 3
+    assert result == candidates[:3]
     idx.close()
 
 

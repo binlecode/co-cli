@@ -82,7 +82,7 @@ Chunking:
 - `index_chunks(source, doc_path, chunks)` writes chunk rows atomically (replaces all existing chunks for the path). Raises `ValueError` if called with source `"memory"`.
 - `remove_chunks(source, path)` removes all chunk rows (and any `chunks_vec` entries) for a given path.
 - `search()` deduplicates results by `path`, keeping the highest-scoring chunk per document — callers always receive at most one result per source path.
-- `_fetch_reranker_texts()` fetches from `chunk_id=0` (docs table) to ensure deterministic reranker input.
+- `_fetch_reranker_texts()` fetches reranker input text per candidate type: doc-level candidates (memory results, `chunk_index=None`) fetch `docs.content[:200]` preamble via `chunk_id=0`; chunk-level candidates (library/obsidian/drive, `chunk_index` set) fetch the exact `chunks.content` for that chunk. Ensures the reranker sees the actual matched text, not a document preamble, for chunked sources.
 
 FTS query behavior:
 - Query tokens are lowercased, stopwords removed, length > 1, AND-joined.
@@ -97,10 +97,17 @@ Scoring:
 - Hybrid merge uses Reciprocal Rank Fusion (RRF) with `k=60` (Cormack 2009). Each document contributes `1/(k + rank + 1)` from each list. The `vector_weight` / `text_weight` parameters are retained in the signature for backward compatibility but are ignored — RRF is rank-based, not score-based.
 
 Reranking:
-- Provider options: `none`, `local`, `ollama`, `gemini`.
+- Provider options: `none`, `local`, `ollama`, `gemini`, `tei`.
 - `local` uses fastembed cross-encoder (if installed); graceful passthrough otherwise.
 - `ollama` / `gemini` use listwise ranking prompts and map ranking position to descending scores.
+- `tei` calls `POST {tei_rerank_url}/rerank` with `{"query": "...", "texts": [...]}`. TEI returns `[{"index": i, "score": f}, ...]` sorted by score descending; scores are applied directly to candidates and the list is re-sorted. The model is `BAAI/bge-reranker-v2-m3` (cross-encoder only — cannot produce embeddings).
 - Reranker failures are non-fatal and fall back to unranked candidate order.
+
+TEI embedding provider:
+- When `embedding_provider = "tei"`, `_generate_embedding()` calls `POST {tei_embed_url}/embed` with `{"inputs": text}`. TEI returns `[[float, ...]]`; the first element is used.
+- The TEI service pair at the default URLs uses `BAAI/bge-m3` (bi-encoder, 1024 dims) for embeddings and `BAAI/bge-reranker-v2-m3` (cross-encoder) for reranking.
+- Default embedding dims for TEI is 1024 (changed from the legacy 256-dim Ollama embeddinggemma default).
+- Switching providers or dims requires deleting or rebuilding `search.db` because `docs_vec` and `chunks_vec` virtual tables are created with a fixed `float[N]` size at index creation time.
 
 ### 2.3 Known limitations
 
@@ -114,13 +121,15 @@ Reranking:
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | Retrieval backend: `grep`, `fts5`, `hybrid` |
-| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid mode: `ollama`, `gemini`, `none` |
+| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid mode: `ollama`, `gemini`, `tei`, `none` |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name sent to provider |
-| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding dimensionality for `docs_vec` |
+| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding dimensionality for `docs_vec` / `chunks_vec` (1024 = bge-m3; 256 = legacy Ollama embeddinggemma) |
+| `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | Base URL for TEI embed service (`POST /embed`). Used when `embedding_provider = "tei"`. |
 | `knowledge_hybrid_vector_weight` | (none) | `0.7` | Retained for backward compatibility; passed to `KnowledgeIndex.__init__()` but ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
 | `knowledge_hybrid_text_weight` | (none) | `0.3` | Retained for backward compatibility; passed to `KnowledgeIndex.__init__()` but ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
-| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider: `none`, `local`, `ollama`, `gemini` |
+| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider: `none`, `local`, `ollama`, `gemini`, `tei` |
 | `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
+| `knowledge_rerank_api_url` | `CO_KNOWLEDGE_RERANK_API_URL` | `"http://127.0.0.1:8282"` | Base URL for TEI rerank service (`POST /rerank`). Used when `reranker_provider = "tei"`. |
 | `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Character window per chunk; 0 = disable chunking |
 | `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Character overlap between adjacent chunks |
 

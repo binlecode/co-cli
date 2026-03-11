@@ -1,9 +1,14 @@
 """Functional tests for native file tools."""
 
 import pytest
-from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic_ai._run_context import RunContext
+from pydantic_ai.usage import RunUsage
+
+from co_cli.agent import get_agent
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli._shell_backend import ShellBackend
 from co_cli.tools.files import (
     list_directory,
     read_file,
@@ -12,34 +17,30 @@ from co_cli.tools.files import (
     edit_file,
 )
 
-
-@dataclass
-class FakeDeps:
-    pass
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _, _ = get_agent()
 
 
-class FakeCtx:
-    deps = FakeDeps()
-
-
-@pytest.fixture
-def workspace(tmp_path, monkeypatch):
-    """Change cwd to a fresh tmp_path so all path resolution is scoped there."""
-    monkeypatch.chdir(tmp_path)
-    return tmp_path
+def _make_ctx(workspace: Path) -> RunContext:
+    """Return a real RunContext scoped to a workspace directory."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(workspace_root=workspace),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 # --- list_directory ---
 
 
 @pytest.mark.asyncio
-async def test_list_directory_basic(workspace):
+async def test_list_directory_basic(tmp_path):
     """Lists files and subdirectories in a workspace directory."""
-    (workspace / "a.py").write_text("hello")
-    (workspace / "b.txt").write_text("world")
-    (workspace / "subdir").mkdir()
+    (tmp_path / "a.py").write_text("hello")
+    (tmp_path / "b.txt").write_text("world")
+    (tmp_path / "subdir").mkdir()
 
-    result = await list_directory(FakeCtx(), path=".")
+    result = await list_directory(_make_ctx(tmp_path), path=".")
 
     assert not result.get("error")
     assert result["count"] >= 3
@@ -50,13 +51,13 @@ async def test_list_directory_basic(workspace):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_pattern(workspace):
+async def test_list_directory_pattern(tmp_path):
     """Pattern filter restricts results to matching files only."""
-    (workspace / "main.py").write_text("")
-    (workspace / "util.py").write_text("")
-    (workspace / "readme.txt").write_text("")
+    (tmp_path / "main.py").write_text("")
+    (tmp_path / "util.py").write_text("")
+    (tmp_path / "readme.txt").write_text("")
 
-    result = await list_directory(FakeCtx(), path=".", pattern="*.py")
+    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="*.py")
 
     assert not result.get("error")
     names = [e["name"] for e in result["entries"]]
@@ -66,19 +67,19 @@ async def test_list_directory_pattern(workspace):
 
 
 @pytest.mark.asyncio
-async def test_list_directory_not_found(workspace):
+async def test_list_directory_not_found(tmp_path):
     """Returns error dict when path does not exist."""
-    result = await list_directory(FakeCtx(), path="nonexistent_dir")
+    result = await list_directory(_make_ctx(tmp_path), path="nonexistent_dir")
 
     assert result.get("error") is True
 
 
 @pytest.mark.asyncio
-async def test_list_directory_not_a_dir(workspace):
+async def test_list_directory_not_a_dir(tmp_path):
     """Returns error dict when path points to a file, not a directory."""
-    (workspace / "afile.txt").write_text("content")
+    (tmp_path / "afile.txt").write_text("content")
 
-    result = await list_directory(FakeCtx(), path="afile.txt")
+    result = await list_directory(_make_ctx(tmp_path), path="afile.txt")
 
     assert result.get("error") is True
 
@@ -87,11 +88,11 @@ async def test_list_directory_not_a_dir(workspace):
 
 
 @pytest.mark.asyncio
-async def test_read_file_full(workspace):
+async def test_read_file_full(tmp_path):
     """Reads complete file content and returns it in display."""
-    (workspace / "hello.txt").write_text("hello\nworld\n")
+    (tmp_path / "hello.txt").write_text("hello\nworld\n")
 
-    result = await read_file(FakeCtx(), path="hello.txt")
+    result = await read_file(_make_ctx(tmp_path), path="hello.txt")
 
     assert not result.get("error")
     assert "hello" in result["display"]
@@ -100,12 +101,12 @@ async def test_read_file_full(workspace):
 
 
 @pytest.mark.asyncio
-async def test_read_file_line_range(workspace):
+async def test_read_file_line_range(tmp_path):
     """Reads only the requested line range (1-indexed, inclusive)."""
     lines = [f"line{i}\n" for i in range(1, 11)]
-    (workspace / "numbered.txt").write_text("".join(lines))
+    (tmp_path / "numbered.txt").write_text("".join(lines))
 
-    result = await read_file(FakeCtx(), path="numbered.txt", start_line=3, end_line=7)
+    result = await read_file(_make_ctx(tmp_path), path="numbered.txt", start_line=3, end_line=7)
 
     assert not result.get("error")
     assert result["lines"] == 10
@@ -119,19 +120,19 @@ async def test_read_file_line_range(workspace):
 
 
 @pytest.mark.asyncio
-async def test_read_file_not_found(workspace):
+async def test_read_file_not_found(tmp_path):
     """Returns error dict when file does not exist."""
-    result = await read_file(FakeCtx(), path="missing.txt")
+    result = await read_file(_make_ctx(tmp_path), path="missing.txt")
 
     assert result.get("error") is True
 
 
 @pytest.mark.asyncio
-async def test_read_file_path_is_dir(workspace):
+async def test_read_file_path_is_dir(tmp_path):
     """Returns error dict when path points to a directory."""
-    (workspace / "adir").mkdir()
+    (tmp_path / "adir").mkdir()
 
-    result = await read_file(FakeCtx(), path="adir")
+    result = await read_file(_make_ctx(tmp_path), path="adir")
 
     assert result.get("error") is True
 
@@ -140,13 +141,13 @@ async def test_read_file_path_is_dir(workspace):
 
 
 @pytest.mark.asyncio
-async def test_find_in_files(workspace):
+async def test_find_in_files(tmp_path):
     """Finds regex matches across files; only files containing pattern are returned."""
-    (workspace / "alpha.txt").write_text("foo bar\nbaz\n")
-    (workspace / "beta.txt").write_text("hello foo\n")
-    (workspace / "gamma.txt").write_text("nothing here\n")
+    (tmp_path / "alpha.txt").write_text("foo bar\nbaz\n")
+    (tmp_path / "beta.txt").write_text("hello foo\n")
+    (tmp_path / "gamma.txt").write_text("nothing here\n")
 
-    result = await find_in_files(FakeCtx(), pattern="foo")
+    result = await find_in_files(_make_ctx(tmp_path), pattern="foo")
 
     assert not result.get("error")
     assert result["count"] == 2
@@ -157,19 +158,19 @@ async def test_find_in_files(workspace):
 
 
 @pytest.mark.asyncio
-async def test_find_in_files_invalid_regex(workspace):
+async def test_find_in_files_invalid_regex(tmp_path):
     """Returns error dict for malformed regex patterns."""
-    result = await find_in_files(FakeCtx(), pattern="[unclosed")
+    result = await find_in_files(_make_ctx(tmp_path), pattern="[unclosed")
 
     assert result.get("error") is True
 
 
 @pytest.mark.asyncio
-async def test_find_in_files_no_matches(workspace):
+async def test_find_in_files_no_matches(tmp_path):
     """Returns zero count and empty matches list when nothing matches."""
-    (workspace / "sample.txt").write_text("no match here\n")
+    (tmp_path / "sample.txt").write_text("no match here\n")
 
-    result = await find_in_files(FakeCtx(), pattern="zzz_will_never_match")
+    result = await find_in_files(_make_ctx(tmp_path), pattern="zzz_will_never_match")
 
     assert not result.get("error")
     assert result["count"] == 0
@@ -180,41 +181,41 @@ async def test_find_in_files_no_matches(workspace):
 
 
 @pytest.mark.asyncio
-async def test_write_file_creates_dirs(workspace):
+async def test_write_file_creates_dirs(tmp_path):
     """Creates parent directories automatically when writing to nested path."""
-    result = await write_file(FakeCtx(), path="deep/nested/dir/file.txt", content="test content")
+    result = await write_file(_make_ctx(tmp_path), path="deep/nested/dir/file.txt", content="test content")
 
     assert not result.get("error")
-    written = workspace / "deep" / "nested" / "dir" / "file.txt"
+    written = tmp_path / "deep" / "nested" / "dir" / "file.txt"
     assert written.exists()
     assert written.read_text() == "test content"
 
 
 @pytest.mark.asyncio
-async def test_write_file_overwrites_existing(workspace):
+async def test_write_file_overwrites_existing(tmp_path):
     """Overwrites file content when file already exists."""
-    (workspace / "existing.txt").write_text("old content")
+    (tmp_path / "existing.txt").write_text("old content")
 
-    result = await write_file(FakeCtx(), path="existing.txt", content="new content")
+    result = await write_file(_make_ctx(tmp_path), path="existing.txt", content="new content")
 
     assert not result.get("error")
-    assert (workspace / "existing.txt").read_text() == "new content"
+    assert (tmp_path / "existing.txt").read_text() == "new content"
 
 
 @pytest.mark.asyncio
-async def test_write_file_returns_byte_count(workspace):
+async def test_write_file_returns_byte_count(tmp_path):
     """Returned byte count matches actual written bytes."""
     content = "hello"
-    result = await write_file(FakeCtx(), path="bytes.txt", content=content)
+    result = await write_file(_make_ctx(tmp_path), path="bytes.txt", content=content)
 
     assert not result.get("error")
     assert result["bytes"] == len(content.encode("utf-8"))
 
 
 @pytest.mark.asyncio
-async def test_write_file_path_escape(workspace):
+async def test_write_file_path_escape(tmp_path):
     """Returns error dict when path escapes the workspace root."""
-    result = await write_file(FakeCtx(), path="../../etc/passwd", content="evil")
+    result = await write_file(_make_ctx(tmp_path), path="../../etc/passwd", content="evil")
 
     assert result.get("error") is True
 
@@ -223,52 +224,52 @@ async def test_write_file_path_escape(workspace):
 
 
 @pytest.mark.asyncio
-async def test_edit_file_single(workspace):
+async def test_edit_file_single(tmp_path):
     """Replaces a unique search string in a file."""
-    (workspace / "config.txt").write_text("host=localhost\nport=8080\n")
+    (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
 
-    result = await edit_file(FakeCtx(), path="config.txt", search="localhost", replacement="example.com")
+    result = await edit_file(_make_ctx(tmp_path), path="config.txt", search="localhost", replacement="example.com")
 
     assert not result.get("error")
     assert result["replacements"] == 1
-    assert (workspace / "config.txt").read_text() == "host=example.com\nport=8080\n"
+    assert (tmp_path / "config.txt").read_text() == "host=example.com\nport=8080\n"
 
 
 @pytest.mark.asyncio
-async def test_edit_file_not_found(workspace):
+async def test_edit_file_not_found(tmp_path):
     """Raises ValueError when search string is absent from the file."""
-    (workspace / "notes.txt").write_text("some content here\n")
+    (tmp_path / "notes.txt").write_text("some content here\n")
 
     with pytest.raises(ValueError, match="Search string not found"):
-        await edit_file(FakeCtx(), path="notes.txt", search="absent_string", replacement="x")
+        await edit_file(_make_ctx(tmp_path), path="notes.txt", search="absent_string", replacement="x")
 
 
 @pytest.mark.asyncio
-async def test_edit_file_multiple_no_replace_all(workspace):
+async def test_edit_file_multiple_no_replace_all(tmp_path):
     """Raises ValueError when search string appears multiple times without replace_all=True."""
-    (workspace / "repeat.txt").write_text("foo\nfoo\nbar\n")
+    (tmp_path / "repeat.txt").write_text("foo\nfoo\nbar\n")
 
     with pytest.raises(ValueError, match="Found 2 occurrences"):
-        await edit_file(FakeCtx(), path="repeat.txt", search="foo", replacement="baz")
+        await edit_file(_make_ctx(tmp_path), path="repeat.txt", search="foo", replacement="baz")
 
 
 @pytest.mark.asyncio
-async def test_edit_file_replace_all(workspace):
+async def test_edit_file_replace_all(tmp_path):
     """Replaces all occurrences when replace_all=True."""
-    (workspace / "multi.txt").write_text("foo\nfoo\nbar\n")
+    (tmp_path / "multi.txt").write_text("foo\nfoo\nbar\n")
 
     result = await edit_file(
-        FakeCtx(), path="multi.txt", search="foo", replacement="qux", replace_all=True
+        _make_ctx(tmp_path), path="multi.txt", search="foo", replacement="qux", replace_all=True
     )
 
     assert not result.get("error")
     assert result["replacements"] == 2
-    assert (workspace / "multi.txt").read_text() == "qux\nqux\nbar\n"
+    assert (tmp_path / "multi.txt").read_text() == "qux\nqux\nbar\n"
 
 
 @pytest.mark.asyncio
-async def test_edit_file_not_found_path(workspace):
+async def test_edit_file_not_found_path(tmp_path):
     """Returns error dict when the target file does not exist."""
-    result = await edit_file(FakeCtx(), path="ghost.txt", search="x", replacement="y")
+    result = await edit_file(_make_ctx(tmp_path), path="ghost.txt", search="x", replacement="y")
 
     assert result.get("error") is True

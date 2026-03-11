@@ -1,7 +1,7 @@
 """Functional tests for context overflow detection in run_turn().
 
 Tests verify that on_status fires the correct warning/overflow message based on
-the input_tokens / ollama_num_ctx ratio, and that Gemini turns are skipped.
+the input_tokens / llm_num_ctx ratio, and that Gemini turns are skipped.
 """
 
 import pytest
@@ -38,7 +38,7 @@ def _make_result_with_usage(
 def _make_deps(
     *,
     llm_provider: str = "ollama",
-    ollama_num_ctx: int = 65536,
+    llm_num_ctx: int = 65536,
     ctx_warn_threshold: float = 0.85,
     ctx_overflow_threshold: float = 1.0,
 ) -> CoDeps:
@@ -46,7 +46,7 @@ def _make_deps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
             llm_provider=llm_provider,
-            ollama_num_ctx=ollama_num_ctx,
+            llm_num_ctx=llm_num_ctx,
             ctx_warn_threshold=ctx_warn_threshold,
             ctx_overflow_threshold=ctx_overflow_threshold,
         ),
@@ -65,7 +65,7 @@ async def test_warn_fires_at_90_percent():
     result = _make_result_with_usage("ok", input_tokens=58982)
     frontend = RecordingFrontend()
     agent = StaticEventAgent([AgentRunResultEvent(result=result)])
-    deps = _make_deps(ollama_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
+    deps = _make_deps(llm_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
 
     turn = await run_turn(
         agent=agent,
@@ -94,7 +94,7 @@ async def test_overflow_fires_at_100_percent():
     result = _make_result_with_usage("ok", input_tokens=65536)
     frontend = RecordingFrontend()
     agent = StaticEventAgent([AgentRunResultEvent(result=result)])
-    deps = _make_deps(ollama_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
+    deps = _make_deps(llm_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
 
     turn = await run_turn(
         agent=agent,
@@ -122,7 +122,7 @@ async def test_silent_below_threshold():
     result = _make_result_with_usage("ok", input_tokens=32768)
     frontend = RecordingFrontend()
     agent = StaticEventAgent([AgentRunResultEvent(result=result)])
-    deps = _make_deps(ollama_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
+    deps = _make_deps(llm_num_ctx=65536, ctx_warn_threshold=0.85, ctx_overflow_threshold=1.0)
 
     turn = await run_turn(
         agent=agent,
@@ -154,7 +154,7 @@ async def test_gemini_provider_skipped():
     # Thresholds set extremely low (0.01) to guarantee they'd trigger on ollama
     deps = _make_deps(
         llm_provider="gemini",
-        ollama_num_ctx=65536,
+        llm_num_ctx=65536,
         ctx_warn_threshold=0.01,
         ctx_overflow_threshold=0.01,
     )

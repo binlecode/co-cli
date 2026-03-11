@@ -28,31 +28,19 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
-
-import yaml  # noqa: E402
 from pydantic_ai.messages import ModelResponse, ToolCallPart  # noqa: E402
 
 from co_cli._history import OpeningContextState, SafetyState  # noqa: E402
 from co_cli._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
-from evals._common import (  # noqa: E402
-    SilentFrontend,
-    extract_tool_calls,
-    make_eval_deps,
-)
+from evals._common import make_eval_deps  # noqa: E402
+from evals._fixtures import seed_memory  # noqa: E402
+from evals._frontend import SilentFrontend  # noqa: E402
+from evals._tools import extract_tool_calls  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -124,40 +112,6 @@ CASES: list[SignalCase] = [
 
 
 # ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _seed_memory(
-    memory_dir: Path,
-    memory_id: int,
-    content: str,
-    *,
-    days_ago: int = 0,
-    tags: list[str] | None = None,
-) -> Path:
-    """Write a memory markdown file with valid frontmatter."""
-    created = (
-        datetime.now(timezone.utc) - timedelta(days=days_ago)
-    ).isoformat()
-    slug = content[:40].lower().replace(" ", "-").replace(",", "")
-    filename = f"{memory_id:03d}-{slug}.md"
-
-    fm = {
-        "id": memory_id,
-        "created": created,
-        "tags": tags or [],
-        "source": "user-told",
-        "auto_category": None,
-    }
-
-    md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
-    path = memory_dir / filename
-    path.write_text(md, encoding="utf-8")
-    return path
-
-
-# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -174,7 +128,7 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
             # Pre-seed memories if specified
             if case.pre_seeded:
                 for i, mem in enumerate(case.pre_seeded, 1):
-                    _seed_memory(
+                    seed_memory(
                         memory_dir, i, mem["content"],
                         days_ago=mem.get("days_ago", 0),
                         tags=mem.get("tags"),

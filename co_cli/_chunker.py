@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from co_cli.config import DEFAULT_KNOWLEDGE_CHUNK_OVERLAP, DEFAULT_KNOWLEDGE_CHUNK_SIZE
+
 
 @dataclass
 class Chunk:
@@ -12,8 +14,8 @@ class Chunk:
 
 def chunk_text(
     text: str,
-    chunk_size: int = 512,
-    overlap: int = 64,
+    chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+    overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
 ) -> list[Chunk]:
     """Split text into overlapping chunks using token estimation (len/4).
 

@@ -10,7 +10,7 @@ from typing import Optional
 from rich.table import Table
 
 from co_cli._doctor import run_doctor
-from co_cli.config import settings, DATA_DIR, project_config_path, CONFIG_DIR
+from co_cli.config import settings, DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR
 from co_cli._model_check import _check_llm_provider, _check_model_availability
 
 
@@ -127,8 +127,7 @@ def get_status(tool_count: int = 0) -> StatusInfo:
         mcp_status.append((server_name, status_str))
 
     # -- db size --
-    db_path = DATA_DIR / "co-cli.db"
-    db_size = f"{os.path.getsize(db_path) / 1024:.1f} KB" if db_path.exists() else "0 KB"
+    db_size = f"{os.path.getsize(LOGS_DB) / 1024:.1f} KB" if LOGS_DB.exists() else "0 KB"
 
     return StatusInfo(
         version=version,

@@ -26,6 +26,7 @@ from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
 from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD
 from co_cli.deps import CoDeps
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -279,7 +280,7 @@ def _touch_memory(entry: MemoryEntry) -> None:
 
 
 def _dedup_pulled(
-    entries: list[MemoryEntry], threshold: int = 85
+    entries: list[MemoryEntry], threshold: int = DEFAULT_MEMORY_DEDUP_THRESHOLD
 ) -> list[MemoryEntry]:
     """Deduplicate pulled results by pairwise similarity.
 
@@ -341,7 +342,7 @@ def _dedup_pulled(
 
 
 def _check_duplicate(
-    new_content: str, recent_memories: list[MemoryEntry], threshold: int = 85
+    new_content: str, recent_memories: list[MemoryEntry], threshold: int = DEFAULT_MEMORY_DEDUP_THRESHOLD
 ) -> tuple[bool, MemoryEntry | None, float]:
     """Check if new content is duplicate of existing memory using token-based similarity.
 

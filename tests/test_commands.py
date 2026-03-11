@@ -23,12 +23,20 @@ _CONFIG = CoConfig.from_settings(settings)
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 
 
-def _make_ctx(message_history: list | None = None) -> CommandContext:
+def _make_ctx(
+    message_history: list | None = None,
+    *,
+    memory_dir: "Path | None" = None,
+) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
+    from pathlib import Path
     agent, _, tool_names, _ = get_agent()
+    config = replace(_CONFIG, session_id="test-commands")
+    if memory_dir is not None:
+        config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG, session_id="test-commands"),
+        config=config,
     )
     return CommandContext(
         message_history=message_history or [],
@@ -424,28 +432,22 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
 
     Requires a running LLM provider.
     """
-    import os
     from pydantic_ai.messages import ModelRequest, UserPromptPart, ModelResponse, TextPart
 
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        msgs = [
-            ModelRequest(parts=[UserPromptPart(content="What is Python?")]),
-            ModelResponse(parts=[TextPart(content="Python is a programming language.")]),
-            ModelRequest(parts=[UserPromptPart(content="Tell me about its history.")]),
-            ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
-        ]
-        ctx = _make_ctx(message_history=msgs)
-        async with asyncio.timeout(60):
-            handled, new_history = await dispatch("/new", ctx)
-    finally:
-        os.chdir(original_cwd)
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    msgs = [
+        ModelRequest(parts=[UserPromptPart(content="What is Python?")]),
+        ModelResponse(parts=[TextPart(content="Python is a programming language.")]),
+        ModelRequest(parts=[UserPromptPart(content="Tell me about its history.")]),
+        ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
+    ]
+    ctx = _make_ctx(message_history=msgs, memory_dir=memory_dir)
+    async with asyncio.timeout(60):
+        handled, new_history = await dispatch("/new", ctx)
 
     assert handled is True
     assert new_history == [], "history must be cleared"
 
-    memory_dir = tmp_path / ".co-cli" / "memory"
     session_files = list(memory_dir.glob("session-*.md"))
     assert len(session_files) == 1, "exactly one session file must be written"
 
@@ -469,7 +471,6 @@ async def test_cmd_new_empty_history_noop():
 @pytest.mark.asyncio
 async def test_forget_command_evicts_fts_row(tmp_path):
     """/forget removes the file and evicts the FTS row in the same session."""
-    import os
     from co_cli._knowledge_index import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
@@ -497,12 +498,7 @@ async def test_forget_command_evicts_fts_row(tmp_path):
         tool_names=tool_names,
     )
 
-    original_cwd = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        handled, _ = await dispatch("/forget 1", ctx)
-    finally:
-        os.chdir(original_cwd)
+    handled, _ = await dispatch("/forget 1", ctx)
 
     assert handled is True
     assert not memory_file.exists(), "File must be deleted by /forget"

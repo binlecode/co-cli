@@ -39,7 +39,7 @@ async def list_directory(
         max_entries: Maximum number of entries to return (default: 200).
     """
     try:
-        resolved = _resolve_workspace_path(path, Path.cwd())
+        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root or Path.cwd())
     except ValueError as e:
         return terminal_error(str(e))
 
@@ -86,7 +86,7 @@ async def read_file(
         end_line: Last line to include (1-indexed, inclusive). Optional.
     """
     try:
-        resolved = _resolve_workspace_path(path, Path.cwd())
+        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root or Path.cwd())
     except ValueError as e:
         return terminal_error(str(e))
 
@@ -137,7 +137,7 @@ async def find_in_files(
     except re.error:
         return terminal_error(f"Invalid regex: {pattern}")
 
-    workspace_root = Path.cwd()
+    workspace_root = ctx.deps.config.workspace_root or Path.cwd()
     matches: list[dict[str, Any]] = []
     lines_output: list[str] = []
 
@@ -184,7 +184,7 @@ async def write_file(
         content: Text content to write.
     """
     try:
-        resolved = _resolve_workspace_path(path, Path.cwd())
+        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root or Path.cwd())
     except ValueError as e:
         return terminal_error(str(e))
 
@@ -218,7 +218,7 @@ async def edit_file(
         replace_all: If True, replace all occurrences; otherwise requires exactly one.
     """
     try:
-        resolved = _resolve_workspace_path(path, Path.cwd())
+        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root or Path.cwd())
     except ValueError as e:
         return terminal_error(str(e))
 

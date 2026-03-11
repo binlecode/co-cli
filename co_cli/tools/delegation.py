@@ -29,18 +29,18 @@ async def delegate_coder(
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured("coding"):
-        return {
-            "display": "Coder delegation is not configured. Set role_models.coding in settings.",
-            "error": True,
-        }
+        raise ModelRetry("Coding sub-agent is unavailable — handle this task directly.")
     rm = registry.get("coding", ResolvedModel(model=ctx.model, settings=None))
     agent = make_coder_agent(rm)
-    result = await agent.run(
-        task,
-        deps=make_subagent_deps(ctx.deps),
-        usage_limits=UsageLimits(request_limit=max_requests),
-        model_settings=rm.settings,
-    )
+    try:
+        result = await agent.run(
+            task,
+            deps=make_subagent_deps(ctx.deps),
+            usage_limits=UsageLimits(request_limit=max_requests),
+            model_settings=rm.settings,
+        )
+    except Exception as exc:
+        raise ModelRetry(f"Coding sub-agent failed: {exc} — handle this task directly.") from exc
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()
     else:
@@ -88,20 +88,20 @@ async def delegate_research(
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured("research"):
-        return {
-            "display": "Research delegation is not configured. Set role_models.research in settings to enable research delegation.",
-            "error": True,
-        }
+        raise ModelRetry("Research sub-agent is unavailable — handle this task directly.")
     rm = registry.get("research", ResolvedModel(model=ctx.model, settings=None))
     sub_deps = make_subagent_deps(ctx.deps)
     agent = make_research_agent(rm)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
-    result = await agent.run(
-        scoped_query,
-        deps=sub_deps,
-        usage_limits=UsageLimits(request_limit=max_requests),
-        model_settings=rm.settings,
-    )
+    try:
+        result = await agent.run(
+            scoped_query,
+            deps=sub_deps,
+            usage_limits=UsageLimits(request_limit=max_requests),
+            model_settings=rm.settings,
+        )
+    except Exception as exc:
+        raise ModelRetry(f"Research sub-agent failed: {exc} — handle this task directly.") from exc
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()
     else:
@@ -167,22 +167,22 @@ async def delegate_analysis(
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured("analysis"):
-        return {
-            "display": "Analysis delegation is not configured. Set role_models.analysis in settings to enable analysis delegation.",
-            "error": True,
-        }
+        raise ModelRetry("Analysis sub-agent is unavailable — handle this task directly.")
     rm = registry.get("analysis", ResolvedModel(model=ctx.model, settings=None))
     scoped_question = question
     if inputs:
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question
 
     agent = make_analysis_agent(rm)
-    result = await agent.run(
-        scoped_question,
-        deps=make_subagent_deps(ctx.deps),
-        usage_limits=UsageLimits(request_limit=max_requests),
-        model_settings=rm.settings,
-    )
+    try:
+        result = await agent.run(
+            scoped_question,
+            deps=make_subagent_deps(ctx.deps),
+            usage_limits=UsageLimits(request_limit=max_requests),
+            model_settings=rm.settings,
+        )
+    except Exception as exc:
+        raise ModelRetry(f"Analysis sub-agent failed: {exc} — handle this task directly.") from exc
     if ctx.deps.runtime.turn_usage is None:
         ctx.deps.runtime.turn_usage = result.usage()
     else:

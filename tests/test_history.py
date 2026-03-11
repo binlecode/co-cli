@@ -36,7 +36,6 @@ _CONFIG_FOR_REGISTRY = type("Config", (), {
     "role_models": {k: list(v) for k, v in _settings.role_models.items()},
     "llm_provider": _settings.llm_provider,
     "ollama_host": _settings.ollama_host,
-    "ollama_num_ctx": _settings.ollama_num_ctx,
 })()
 _REGISTRY = ModelRegistry.from_config(_CONFIG_FOR_REGISTRY)
 

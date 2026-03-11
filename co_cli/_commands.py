@@ -354,8 +354,10 @@ def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> Model
 
         # Build ModelSettings from inference profile
         inf = get_model_inference("ollama", normalized_model)
-        num_ctx = inf.get("num_ctx", settings.ollama_num_ctx)
-        extra: dict = {"num_ctx": num_ctx}
+        extra: dict = {}
+        num_ctx = inf.get("num_ctx")
+        if num_ctx is not None:
+            extra["num_ctx"] = num_ctx
         extra.update(inf.get("extra_body", {}))
 
         return ModelSettings(
@@ -1072,6 +1074,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
         ctx.deps.session.active_skill_env = dict(skill.skill_env)
         # Propagate per-skill tool grants — cleared by chat_loop() after run_turn()
         ctx.deps.session.skill_tool_grants = set(skill.allowed_tools)
+        ctx.deps.session.active_skill_name = skill.name
         body = skill.body
         if args:
             args_list = args.split()

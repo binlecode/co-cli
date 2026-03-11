@@ -40,22 +40,27 @@ def _discover_valid_personalities() -> list[str]:
 VALID_PERSONALITIES: list[str] = _discover_valid_personalities()
 
 
-def validate_personality_files(role: str) -> list[str]:
+def validate_personality_files(role: str, _personalities_dir: Path | None = None) -> list[str]:
     """Return non-blocking warnings for missing soul/mindset files.
 
     Validation is defensive and never raises — callers can surface warnings at
     startup while continuing with degraded behavior.
+
+    Args:
+        role: Personality role name (e.g., "finch").
+        _personalities_dir: Override the personalities directory. Defaults to the package directory.
     """
+    personalities_dir = _personalities_dir or _PERSONALITIES_DIR
     warnings: list[str] = []
 
-    seed_file = _PERSONALITIES_DIR / "souls" / role / "seed.md"
+    seed_file = personalities_dir / "souls" / role / "seed.md"
     if not seed_file.exists():
         warnings.append(
             f"Personality '{role}' missing soul seed: souls/{role}/seed.md"
         )
 
     for task_type in REQUIRED_MINDSET_TASK_TYPES:
-        mindset_file = _PERSONALITIES_DIR / "mindsets" / role / f"{task_type}.md"
+        mindset_file = personalities_dir / "mindsets" / role / f"{task_type}.md"
         if not mindset_file.exists():
             warnings.append(
                 "Personality "

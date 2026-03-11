@@ -42,6 +42,8 @@ DEFAULT_SHELL_SAFE_COMMANDS: list[str] = [
 CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_NAME
 DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
+SEARCH_DB = DATA_DIR / "co-cli-search.db"
+LOGS_DB = DATA_DIR / "co-cli-logs.db"
 
 
 def _ensure_dirs() -> None:
@@ -151,7 +153,9 @@ DEFAULT_MAX_HISTORY_MESSAGES = 40
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "fts5"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "ollama"
 DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
-DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 256
+DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
+DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
+DEFAULT_KNOWLEDGE_RERANK_API_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT = 0.7
 DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT = 0.3
 DEFAULT_KNOWLEDGE_RERANKER_PROVIDER = "local"
@@ -207,13 +211,15 @@ class Settings(BaseModel):
 
     # Knowledge search backend
     knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND)
-    knowledge_embedding_provider: Literal["ollama", "gemini", "none"] = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER)
+    knowledge_embedding_provider: Literal["ollama", "gemini", "tei", "none"] = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER)
     knowledge_embedding_model: str = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_MODEL)
     knowledge_embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
     knowledge_hybrid_vector_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT, ge=0.0, le=1.0)
     knowledge_hybrid_text_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT, ge=0.0, le=1.0)
-    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local"] = Field(default=DEFAULT_KNOWLEDGE_RERANKER_PROVIDER)
+    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local", "tei"] = Field(default=DEFAULT_KNOWLEDGE_RERANKER_PROVIDER)
     knowledge_reranker_model: str = Field(default=DEFAULT_KNOWLEDGE_RERANKER_MODEL)
+    knowledge_embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
+    knowledge_rerank_api_url: str = Field(default=DEFAULT_KNOWLEDGE_RERANK_API_URL)
 
     # Memory lifecycle (notes with gravity)
     memory_max_count: int = Field(default=DEFAULT_MEMORY_MAX_COUNT, ge=10)
@@ -362,7 +368,7 @@ class Settings(BaseModel):
     # See docs/DESIGN-llm-models.md for Modelfile setup.
     # Client-side num_ctx sent with every request. Currently ignored by Ollama's
     # OpenAI API (ollama/ollama#5356) — kept for documentation and future-proofing.
-    ollama_num_ctx: int = Field(default=DEFAULT_OLLAMA_NUM_CTX)
+    llm_num_ctx: int = Field(default=DEFAULT_OLLAMA_NUM_CTX)
     ctx_warn_threshold: float = Field(default=DEFAULT_CTX_WARN_THRESHOLD)
     ctx_overflow_threshold: float = Field(default=DEFAULT_CTX_OVERFLOW_THRESHOLD)
 
@@ -398,6 +404,8 @@ class Settings(BaseModel):
             "knowledge_embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
             "knowledge_reranker_provider": "CO_KNOWLEDGE_RERANKER_PROVIDER",
             "knowledge_reranker_model": "CO_KNOWLEDGE_RERANKER_MODEL",
+            "knowledge_embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
+            "knowledge_rerank_api_url": "CO_KNOWLEDGE_RERANK_API_URL",
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
             "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
             "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",
@@ -411,7 +419,7 @@ class Settings(BaseModel):
             "gemini_api_key": "GEMINI_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "ollama_host": "OLLAMA_HOST",
-            "ollama_num_ctx": "OLLAMA_NUM_CTX",
+            "llm_num_ctx": "LLM_NUM_CTX",
             "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
             "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
             "background_max_concurrent": "CO_BACKGROUND_MAX_CONCURRENT",
@@ -441,7 +449,7 @@ class Settings(BaseModel):
         provider = str(data.get("llm_provider", "ollama")).lower()
         if provider == "gemini":
             role_defaults: dict = {"reasoning": [DEFAULT_GEMINI_REASONING_MODEL]}
-        else:
+        elif provider == "ollama":
             role_defaults = {
                 "reasoning": list(DEFAULT_OLLAMA_REASONING_MODELS),
                 "summarization": [DEFAULT_OLLAMA_SUMMARIZATION_MODEL],
@@ -449,6 +457,8 @@ class Settings(BaseModel):
                 "coding": [DEFAULT_OLLAMA_CODING_MODEL],
                 "research": [{"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}}],
             }
+        else:
+            raise ValueError(f"Unsupported llm_provider: {provider!r}")
         # Merge: defaults supply missing roles; explicit config and env vars override.
         existing_roles = data.get("role_models", {})
         data["role_models"] = {**role_defaults, **existing_roles, **role_models_env}
@@ -475,25 +485,39 @@ class Settings(BaseModel):
         with open(SETTINGS_FILE, "w") as f:
             f.write(self.model_dump_json(indent=2, exclude_none=True))
 
-def find_project_config() -> Path | None:
-    """Return .co-cli/settings.json in cwd if it exists, else None."""
-    candidate = Path.cwd() / ".co-cli" / "settings.json"
+def find_project_config(_project_dir: Path | None = None) -> Path | None:
+    """Return .co-cli/settings.json in the project dir if it exists, else None.
+
+    Args:
+        _project_dir: Override the project directory. Defaults to Path.cwd().
+    """
+    candidate = (_project_dir or Path.cwd()) / ".co-cli" / "settings.json"
     return candidate if candidate.is_file() else None
 
 
-def load_config() -> Settings:
+def load_config(
+    _user_config_path: Path | None = None,
+    _project_dir: Path | None = None,
+) -> Settings:
+    """Load layered configuration: user config → project config → env vars.
+
+    Args:
+        _user_config_path: Override the user settings file path. Defaults to SETTINGS_FILE.
+        _project_dir: Override the project directory for project config lookup. Defaults to cwd.
+    """
     data: dict[str, Any] = {}
 
     # Layer 1: User config (~/.config/co-cli/settings.json)
-    if SETTINGS_FILE.exists():
-        with open(SETTINGS_FILE, "r") as f:
+    user_config = _user_config_path if _user_config_path is not None else SETTINGS_FILE
+    if user_config.exists():
+        with open(user_config, "r") as f:
             try:
                 data = json.load(f)
             except Exception as e:
                 print(f"Error loading settings.json: {e}. Using defaults.")
 
     # Layer 2: Project config (<cwd>/.co-cli/settings.json) — deep merge
-    project_config = find_project_config()
+    project_config = find_project_config(_project_dir)
     if project_config is not None:
         with open(project_config, "r") as f:
             try:

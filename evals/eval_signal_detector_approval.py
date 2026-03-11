@@ -26,66 +26,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
-
 from pydantic_ai.messages import ModelRequest, UserPromptPart  # noqa: E402
 
 from co_cli._signal_analyzer import analyze_for_signals  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 from co_cli.tools.memory import _save_memory_impl  # noqa: E402
 from evals._common import make_eval_deps  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# CapturingFrontend
-# ---------------------------------------------------------------------------
-
-
-class CapturingFrontend:
-    """Frontend that records prompt_approval calls and statuses for assertions."""
-
-    def __init__(self, *, approval_response: str = "y"):
-        self.statuses: list[str] = []
-        self.approval_calls: list[str] = []
-        self._approval_response = approval_response
-
-    def on_text_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_text_commit(self, final: str) -> None:
-        pass
-
-    def on_thinking_delta(self, accumulated: str) -> None:
-        pass
-
-    def on_thinking_commit(self, final: str) -> None:
-        pass
-
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        pass
-
-    def on_tool_result(self, title: str, content: Any) -> None:
-        pass
-
-    def on_final_output(self, text: str) -> None:
-        pass
-
-    def cleanup(self) -> None:
-        pass
-
-    def on_status(self, message: str) -> None:
-        self.statuses.append(message)
-
-    def prompt_approval(self, description: str) -> str:
-        self.approval_calls.append(description)
-        return self._approval_response
+from evals._frontend import CapturingFrontend  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

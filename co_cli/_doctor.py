@@ -1,19 +1,27 @@
-"""System-wide integration health checks — single source of truth for all non-LLM checks.
+"""System-wide integration health checks — backward-compat shim over _probes.py.
 
-Provides CheckItem/DoctorResult data model, pure check_* functions, and a single
-entry point run_doctor(deps) that always reads from the settings singleton for
-integration config, and uses deps (when available) for runtime state checks.
+Provides CheckItem/DoctorResult data model and run_doctor() entry point.
+Probe logic lives in _probes.py. This module maps ProbeResult → CheckItem for callers
+that depend on the DoctorResult interface.
 
 Callers:
-  run_doctor(deps)   — bootstrap Step 4, capabilities tool (runtime context available)
+  run_doctor(deps)   — bootstrap Step 4, _status.py with deps
   run_doctor()       — _status.py (no runtime context; skips knowledge + skills checks)
 """
 
-import os
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+from co_cli._probes import (
+    ProbeResult,
+    probe_brave,
+    probe_google,
+    probe_knowledge,
+    probe_mcp_server,
+    probe_obsidian,
+    probe_skills,
+)
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -60,97 +68,14 @@ class DoctorResult:
         return lines
 
 
-def check_google(
-    credentials_path: str | None,
-    token_path: Path,
-    adc_path: Path,
-) -> CheckItem:
-    if credentials_path and os.path.exists(os.path.expanduser(credentials_path)):
-        return CheckItem(
-            name="google",
-            status="ok",
-            detail="configured (credentials file)",
-            extra=credentials_path,
-        )
-    if token_path.exists():
-        return CheckItem(
-            name="google",
-            status="ok",
-            detail="configured (token.json)",
-            extra=str(token_path),
-        )
-    if adc_path.exists():
-        return CheckItem(
-            name="google",
-            status="ok",
-            detail="configured (ADC)",
-            extra=str(adc_path),
-        )
-    return CheckItem(name="google", status="warn", detail="not configured")
-
-
-def check_obsidian(vault_path: Path | None) -> CheckItem:
-    if vault_path is None:
-        return CheckItem(name="obsidian", status="skipped", detail="not configured")
-    if os.path.exists(vault_path):
-        return CheckItem(
-            name="obsidian",
-            status="ok",
-            detail="vault found",
-            extra=str(vault_path),
-        )
+def _to_check_item(name: str, result: ProbeResult) -> CheckItem:
+    """Map a ProbeResult to a CheckItem for backward-compat callers."""
     return CheckItem(
-        name="obsidian",
-        status="warn",
-        detail="path not found",
-        extra=str(vault_path),
+        name=name,
+        status=result.status,  # type: ignore[arg-type]
+        detail=result.detail,
+        extra=str(result.extra.get("value", "")),
     )
-
-
-def check_brave(api_key: str | None) -> CheckItem:
-    if api_key:
-        return CheckItem(name="brave", status="ok", detail="API key configured")
-    return CheckItem(name="brave", status="skipped", detail="not configured")
-
-
-def check_mcp_server(name: str, command: str | None, url: str | None) -> CheckItem:
-    if url:
-        return CheckItem(
-            name=f"mcp:{name}",
-            status="ok",
-            detail="remote url",
-            extra=url,
-        )
-    if command and shutil.which(command):
-        return CheckItem(
-            name=f"mcp:{name}",
-            status="ok",
-            detail=f"{command} found",
-            extra=command,
-        )
-    cmd_label = command or "(no command)"
-    return CheckItem(
-        name=f"mcp:{name}",
-        status="error",
-        detail=f"{cmd_label} not found",
-        extra=cmd_label,
-    )
-
-
-def check_knowledge(backend: str, index_active: bool) -> CheckItem:
-    if index_active:
-        return CheckItem(name="knowledge", status="ok", detail=f"{backend} active")
-    return CheckItem(
-        name="knowledge",
-        status="warn",
-        detail="grep fallback (FTS5 unavailable)",
-    )
-
-
-def check_skills(count: int) -> CheckItem:
-    if count > 0:
-        return CheckItem(name="skills", status="ok", detail=f"{count} skill(s) loaded")
-    return CheckItem(name="skills", status="skipped", detail="no skills found")
 
 
 def run_doctor(deps: "CoDeps | None" = None) -> DoctorResult:
@@ -168,21 +93,23 @@ def run_doctor(deps: "CoDeps | None" = None) -> DoctorResult:
 
     checks: list[CheckItem] = []
 
-    checks.append(check_google(settings.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH))
+    checks.append(_to_check_item("google", probe_google(
+        settings.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH
+    )))
 
     obsidian_path = Path(settings.obsidian_vault_path) if settings.obsidian_vault_path else None
-    checks.append(check_obsidian(obsidian_path))
+    checks.append(_to_check_item("obsidian", probe_obsidian(obsidian_path)))
 
-    checks.append(check_brave(settings.brave_search_api_key))
+    checks.append(_to_check_item("brave", probe_brave(settings.brave_search_api_key)))
 
     for name, cfg in (settings.mcp_servers or {}).items():
-        checks.append(check_mcp_server(name, cfg.command, cfg.url))
+        checks.append(_to_check_item(f"mcp:{name}", probe_mcp_server(cfg.command, cfg.url)))
 
     if deps is not None:
-        checks.append(check_knowledge(
+        checks.append(_to_check_item("knowledge", probe_knowledge(
             deps.config.knowledge_search_backend,
             deps.services.knowledge_index is not None,
-        ))
-        checks.append(check_skills(len(deps.session.skill_registry)))
+        )))
+        checks.append(_to_check_item("skills", probe_skills(len(deps.session.skill_registry))))
 
     return DoctorResult(checks=checks)

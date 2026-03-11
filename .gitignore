@@ -13,8 +13,8 @@ wheels/
 .env
 settings.json
 .co_history
-.co_logs.db
-.co-cli/co-cli.db
+co-cli-logs.db
+co-cli-search.db
 
 # Test and tooling caches
 .pytest_cache/

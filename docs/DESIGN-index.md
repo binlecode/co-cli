@@ -162,7 +162,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | Knowledge retrieval backend (`grep`, `fts5`, `hybrid`) |
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid retrieval |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name |
-| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `256` | Embedding vector dimensionality |
+| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimensionality (1024 = bge-m3; legacy Ollama embeddinggemma used 256) |
 | `knowledge_hybrid_vector_weight` | `—` | `0.7` | Hybrid retrieval vector-score weight |
 | `knowledge_hybrid_text_weight` | `—` | `0.3` | Hybrid retrieval BM25-score weight |
 | `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider (`none`, `local`, `ollama`, `gemini`) |

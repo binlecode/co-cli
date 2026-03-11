@@ -82,7 +82,7 @@ def get_agent(
     _raw_entry = model_name or _cfg.role_models["reasoning"][0]
     reasoning_entry = _raw_entry if isinstance(_raw_entry, _ModelEntry) else _ModelEntry(model=_raw_entry)
     model, model_settings = build_model(
-        reasoning_entry, provider_name, _cfg.ollama_host, _cfg.ollama_num_ctx
+        reasoning_entry, provider_name, _cfg.ollama_host
     )
 
     from co_cli.prompts.model_quirks import normalize_model_name
@@ -234,10 +234,13 @@ def get_agent(
     # Capability introspection — no approval (read-only, no side effects)
     _register(check_capabilities, False)
 
-    # Sub-agent delegation — no approval (read-only tools only, gated by model_roles setting)
-    _register(delegate_coder, False)
-    _register(delegate_research, False)
-    _register(delegate_analysis, False)
+    # Sub-agent delegation — registered only when the role model is configured
+    if _cfg.role_models.get("coding"):
+        _register(delegate_coder, False)
+    if _cfg.role_models.get("research"):
+        _register(delegate_research, False)
+    if _cfg.role_models.get("analysis"):
+        _register(delegate_analysis, False)
 
     # Native file tools
     _register(list_directory, False)

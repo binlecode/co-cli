@@ -45,11 +45,12 @@ class FakeCtx:
 
 @pytest.mark.asyncio
 async def test_delegate_coder_no_model() -> None:
-    """Returns error dict when role_models.coding is not set."""
+    """Raises ModelRetry when role_models.coding is not set."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
     ctx = FakeCtx(role_models={})
-    result = await delegate_coder(ctx, "analyze foo")
-    assert result.get("error") is True
-    assert "not configured" in result["display"]
+    with pytest.raises(_ModelRetry, match="unavailable"):
+        await delegate_coder(ctx, "analyze foo")
 
 
 def test_coder_result_model() -> None:
@@ -138,11 +139,12 @@ def test_make_research_agent_registers_web_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_delegate_research_no_model() -> None:
-    """Returns error dict when role_models.research is not set."""
+    """Raises ModelRetry when role_models.research is not set."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
     ctx = FakeCtx(role_models={})
-    result = await delegate_research(ctx, "latest Python news")
-    assert result.get("error") is True
-    assert "not configured" in result["display"]
+    with pytest.raises(_ModelRetry, match="unavailable"):
+        await delegate_research(ctx, "latest Python news")
 
 
 @pytest.mark.asyncio
@@ -175,11 +177,12 @@ def test_make_analysis_agent_returns_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_delegate_analysis_no_model() -> None:
-    """Returns error dict when role_models.analysis is not set."""
+    """Raises ModelRetry when role_models.analysis is not set."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
     ctx = FakeCtx(role_models={})
-    result = await delegate_analysis(ctx, "compare these documents")
-    assert result.get("error") is True
-    assert "not configured" in result["display"]
+    with pytest.raises(_ModelRetry, match="unavailable"):
+        await delegate_analysis(ctx, "compare these documents")
 
 
 def test_confidence_out_of_range_fails_validation() -> None:

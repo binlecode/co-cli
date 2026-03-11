@@ -1,10 +1,17 @@
-"""Model dependency check — pre-agent gate for LLM provider and model availability."""
+"""Model dependency check — pre-agent gate for LLM provider and model availability.
+
+Private helpers delegate to _probes.py for factual probing. This module retains
+the PreflightResult type and run_model_check() for backward compatibility with
+existing callers (_status.py). Startup policy (fail-fast gating, error emission)
+lives here; probe logic lives in _probes.py.
+"""
 
 from dataclasses import dataclass, field
 
 from co_cli.config import ModelEntry
 from co_cli.deps import CoDeps
 from co_cli.display import TerminalFrontend
+from co_cli._probes import probe_provider, probe_role_models
 
 
 @dataclass
@@ -24,41 +31,13 @@ def _check_llm_provider(
 ) -> PreflightResult:
     """Check provider credentials and basic server reachability.
 
-    Priority:
-    1. Gemini provider without API key → error (cannot proceed).
-    2. Ollama provider unreachable → warning (soft fail; model list check will also skip).
-    3. Non-Gemini provider without Gemini key → warning (Gemini-dependent features unavailable).
-    4. All checks pass → ok.
+    Delegates to probe_provider(); maps ProbeResult → PreflightResult for callers
+    that depend on the PreflightResult interface (status uses "warning" not "warn").
     """
-    if llm_provider == "gemini":
-        if gemini_api_key:
-            return PreflightResult(ok=True, status="ok", message="Gemini API key configured")
-        return PreflightResult(
-            ok=False,
-            status="error",
-            message="GEMINI_API_KEY not set — required for Gemini provider",
-        )
-
-    if llm_provider == "ollama":
-        try:
-            import httpx
-            resp = httpx.get(f"{ollama_host}/api/tags", timeout=5)
-            resp.raise_for_status()
-        except Exception as err:
-            return PreflightResult(
-                ok=True,
-                status="warning",
-                message=f"Ollama model check skipped — {err}",
-            )
-
-    if not gemini_api_key:
-        return PreflightResult(
-            ok=True,
-            status="warning",
-            message="Gemini API key not set — Gemini-dependent features unavailable",
-        )
-
-    return PreflightResult(ok=True, status="ok", message="Provider configured")
+    result = probe_provider(llm_provider, gemini_api_key, ollama_host)
+    # ProbeResult uses "warn"; PreflightResult callers expect "warning"
+    pf_status = "warning" if result.status == "warn" else result.status
+    return PreflightResult(ok=result.ok, status=pf_status, message=result.detail)
 
 
 def _check_model_availability(
@@ -68,70 +47,19 @@ def _check_model_availability(
 ) -> PreflightResult:
     """Check Ollama model availability and return updated role_models if chains advanced.
 
-    Ollama-only; returns ok immediately for non-Ollama providers.
+    Delegates to probe_role_models(); maps ProbeResult → PreflightResult.
     Pure function — does not mutate role_models. Returns updated copy in result.role_models
     when chains are advanced; caller applies mutation.
     """
-    if llm_provider != "ollama":
-        return PreflightResult(
-            ok=True,
-            status="ok",
-            message="Model availability check skipped (non-Ollama provider)",
-        )
-
-    try:
-        import httpx
-        resp = httpx.get(f"{ollama_host}/api/tags", timeout=5)
-        resp.raise_for_status()
-        installed = {m["name"] for m in resp.json().get("models", [])}
-    except Exception as err:
-        return PreflightResult(
-            ok=True,
-            status="warning",
-            message=f"Ollama model check skipped — {err}",
-        )
-
-    updated_roles: dict[str, list[ModelEntry]] = {k: list(v) for k, v in role_models.items()}
-    chain_changed = False
-    status_messages: list[str] = []
-
-    reasoning_chain = updated_roles.get("reasoning", [])
-    if reasoning_chain:
-        available_reasoning = [e for e in reasoning_chain if e.model in installed]
-        if not available_reasoning:
-            return PreflightResult(
-                ok=False,
-                status="error",
-                message="No reasoning model available — check role_models.reasoning",
-            )
-        if available_reasoning != reasoning_chain:
-            updated_roles["reasoning"] = available_reasoning
-            chain_changed = True
-            status_messages.append(f"Reasoning model → {available_reasoning[0].model} (chain advanced)")
-
-    for role in ("summarization", "coding", "research", "analysis"):
-        chain = updated_roles.get(role, [])
-        if not chain:
-            continue
-        available = [e for e in chain if e.model in installed]
-        if not available:
-            updated_roles[role] = []
-            chain_changed = True
-            status_messages.append(f"{role} role disabled — no models available")
-        elif available != chain:
-            updated_roles[role] = available
-            chain_changed = True
-            status_messages.append(f"{role} chain advanced to: {available[0].model}")
-
-    if chain_changed:
-        return PreflightResult(
-            ok=True,
-            status="warning",
-            message="; ".join(status_messages) if status_messages else "Model chains advanced",
-            role_models=updated_roles,
-        )
-
-    return PreflightResult(ok=True, status="ok", message="All models available")
+    result = probe_role_models(llm_provider, ollama_host, role_models)
+    pf_status = "warning" if result.status == "warn" else result.status
+    updated = result.extra.get("role_models")
+    return PreflightResult(
+        ok=result.ok,
+        status=pf_status,
+        message=result.detail,
+        role_models=updated,
+    )
 
 
 def run_model_check(deps: CoDeps, frontend: TerminalFrontend) -> None:

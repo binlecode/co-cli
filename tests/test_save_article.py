@@ -25,22 +25,35 @@ from co_cli._frontmatter import parse_frontmatter
 _AGENT, _, _, _ = get_agent()
 
 
-def _make_ctx(*, knowledge_index: Any = None, knowledge_search_backend: str = "grep") -> RunContext:
+def _make_ctx(
+    *,
+    library_dir: Path | None = None,
+    memory_dir: Path | None = None,
+    knowledge_index: Any = None,
+    knowledge_search_backend: str = "grep",
+) -> RunContext:
     """Return a real RunContext with real CoDeps for article tool tests."""
+    from dataclasses import replace
+    config = CoConfig(knowledge_search_backend=knowledge_search_backend)
+    if library_dir is not None:
+        config = replace(config, library_dir=library_dir)
+    if memory_dir is not None:
+        config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), knowledge_index=knowledge_index),
-        config=CoConfig(knowledge_search_backend=knowledge_search_backend),
+        config=config,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def _ctx() -> RunContext:
-    return _make_ctx()
-
-
-def _ctx_with_idx(idx: Any) -> RunContext:
+def _ctx_with_idx(idx: Any, *, library_dir: Path | None = None, memory_dir: Path | None = None) -> RunContext:
     """Return a real RunContext with FTS5 backend and the given KnowledgeIndex."""
-    return _make_ctx(knowledge_index=idx, knowledge_search_backend="fts5")
+    return _make_ctx(
+        library_dir=library_dir,
+        memory_dir=memory_dir,
+        knowledge_index=idx,
+        knowledge_search_backend="fts5",
+    )
 
 
 def _run(coro):
@@ -52,12 +65,13 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 
 
-def test_save_article_writes_correct_frontmatter(tmp_path, monkeypatch):
+def test_save_article_writes_correct_frontmatter(tmp_path):
     """save_article writes kind:article, origin_url, provenance:web-fetch, decay_protected:true."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
 
     result = _run(save_article(
-        _ctx(),
+        ctx,
         content="## Python Asyncio Guide\n\nAsyncio is a library...",
         title="Python Asyncio Guide",
         origin_url="https://docs.python.org/3/library/asyncio.html",
@@ -84,12 +98,13 @@ def test_save_article_writes_correct_frontmatter(tmp_path, monkeypatch):
     assert "Asyncio is a library" in body
 
 
-def test_save_article_dedup_by_origin_url(tmp_path, monkeypatch):
+def test_save_article_dedup_by_origin_url(tmp_path):
     """Saving the same origin_url twice consolidates rather than creating duplicate."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
 
     result1 = _run(save_article(
-        _ctx(),
+        ctx,
         content="First version of content",
         title="My Article",
         origin_url="https://example.com/article",
@@ -98,7 +113,7 @@ def test_save_article_dedup_by_origin_url(tmp_path, monkeypatch):
     assert result1["action"] == "saved"
 
     result2 = _run(save_article(
-        _ctx(),
+        ctx,
         content="Updated version of content",
         title="My Article v2",
         origin_url="https://example.com/article",
@@ -125,23 +140,24 @@ def test_save_article_dedup_by_origin_url(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_recall_article_returns_summary_only(tmp_path, monkeypatch):
+def test_recall_article_returns_summary_only(tmp_path):
     """recall_article returns first paragraph, not full body."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
 
     long_content = (
         "First paragraph about asyncio basics.\n\n"
         "Second paragraph with much more detail that should not appear in summary. " * 20
     )
     _run(save_article(
-        _ctx(),
+        ctx,
         content=long_content,
         title="Asyncio Deep Dive",
         origin_url="https://example.com/asyncio",
         tags=["asyncio"],
     ))
 
-    result = _run(recall_article(_ctx(), "asyncio"))
+    result = _run(recall_article(ctx, "asyncio"))
     assert result["count"] >= 1
     # Snippet is first paragraph only, not the full 20-repetition content
     snippet = result["results"][0]["snippet"]
@@ -149,11 +165,13 @@ def test_recall_article_returns_summary_only(tmp_path, monkeypatch):
     assert "Second paragraph" not in snippet
 
 
-def test_recall_article_no_match(tmp_path, monkeypatch):
+def test_recall_article_no_match(tmp_path):
     """recall_article returns count=0 when no match found."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    ctx = _make_ctx(library_dir=library_dir)
 
-    result = _run(recall_article(_ctx(), "xyzunmatchable999"))
+    result = _run(recall_article(ctx, "xyzunmatchable999"))
     assert result["count"] == 0
     assert result["results"] == []
 
@@ -163,24 +181,24 @@ def test_recall_article_no_match(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_read_article_detail_returns_full_body(tmp_path, monkeypatch):
+def test_read_article_detail_returns_full_body(tmp_path):
     """read_article_detail returns full markdown body."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
 
     long_body = "# Full Content\n\n" + ("Detailed paragraph. " * 100)
     _run(save_article(
-        _ctx(),
+        ctx,
         content=long_body,
         title="Full Article",
         origin_url="https://example.com/full",
         tags=["full"],
     ))
 
-    library_dir = tmp_path / ".co-cli" / "library"
     files = list(library_dir.glob("*.md"))
     slug = files[0].stem
 
-    result = _run(read_article_detail(_ctx(), slug))
+    result = _run(read_article_detail(ctx, slug))
     assert result["content"] is not None
     assert len(result["content"]) > 200
     assert "Detailed paragraph." in result["content"]
@@ -188,29 +206,31 @@ def test_read_article_detail_returns_full_body(tmp_path, monkeypatch):
     assert result["title"] == "Full Article"
 
 
-def test_read_article_detail_prefix_match(tmp_path, monkeypatch):
+def test_read_article_detail_prefix_match(tmp_path):
     """read_article_detail finds article via prefix glob when exact slug not given."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
     _run(save_article(
-        _ctx(),
+        ctx,
         content="Full content here.",
         title="Prefix Match Article",
         origin_url="https://example.com/prefix-match",
         tags=[],
     ))
-    library_dir = tmp_path / ".co-cli" / "library"
     full_slug = list(library_dir.glob("*.md"))[0].stem
     partial = full_slug[:3]
-    result = _run(read_article_detail(_ctx(), partial))
+    result = _run(read_article_detail(ctx, partial))
     assert result["content"] is not None
     assert result["title"] == "Prefix Match Article"
 
 
-def test_read_article_detail_not_found(tmp_path, monkeypatch):
+def test_read_article_detail_not_found(tmp_path):
     """read_article_detail returns None content for unknown slug."""
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    ctx = _make_ctx(library_dir=library_dir)
 
-    result = _run(read_article_detail(_ctx(), "999-nonexistent-slug"))
+    result = _run(read_article_detail(ctx, "999-nonexistent-slug"))
     assert result["content"] is None
     assert result["article_id"] is None
 
@@ -220,13 +240,13 @@ def test_read_article_detail_not_found(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_recall_article_fts_metadata_parity(tmp_path, monkeypatch):
+def test_recall_article_fts_metadata_parity(tmp_path):
     """recall_article via FTS returns article_id and origin_url (not None)."""
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
         ctx,
@@ -252,7 +272,7 @@ def test_recall_article_fts_metadata_parity(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_fts_article_consolidated_tags_indexed(tmp_path, monkeypatch):
+def test_fts_article_consolidated_tags_indexed(tmp_path):
     """Consolidated article reindex carries merged tags (Bug #1 regression guard).
 
     Saving the same origin_url twice merges tags on disk AND in the FTS index.
@@ -260,9 +280,9 @@ def test_fts_article_consolidated_tags_indexed(tmp_path, monkeypatch):
     """
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
         ctx,
@@ -288,7 +308,7 @@ def test_fts_article_consolidated_tags_indexed(tmp_path, monkeypatch):
     idx.close()
 
 
-def test_recall_article_fts_return_contract(tmp_path, monkeypatch):
+def test_recall_article_fts_return_contract(tmp_path):
     """recall_article FTS path returns correct field types.
 
     Validates schema parity: article_id (int), origin_url (str),
@@ -296,9 +316,9 @@ def test_recall_article_fts_return_contract(tmp_path, monkeypatch):
     """
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
         ctx,
@@ -321,7 +341,7 @@ def test_recall_article_fts_return_contract(tmp_path, monkeypatch):
     idx.close()
 
 
-def test_search_knowledge_fts_kind_filter(tmp_path, monkeypatch):
+def test_search_knowledge_fts_kind_filter(tmp_path):
     """search_knowledge FTS path respects kind filter.
 
     Saves one article and one memory both matching the query keyword.
@@ -329,9 +349,10 @@ def test_search_knowledge_fts_kind_filter(tmp_path, monkeypatch):
     """
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir, memory_dir=memory_dir)
 
     _run(save_article(
         ctx,
@@ -358,27 +379,28 @@ def test_search_knowledge_fts_kind_filter(tmp_path, monkeypatch):
     idx.close()
 
 
-def test_search_knowledge_fallback_grep_kind_filter(tmp_path, monkeypatch):
+def test_search_knowledge_fallback_grep_kind_filter(tmp_path):
     """search_knowledge grep fallback (no FTS index) respects kind filter.
 
     Saves one article. kind='article' must find it; kind='memory' must return 0.
     """
-    monkeypatch.chdir(tmp_path)
+    library_dir = tmp_path / ".co-cli" / "library"
+    ctx = _make_ctx(library_dir=library_dir)
 
     _run(save_article(
-        _ctx(),
+        ctx,
         content="Guide to zygomorphic-grepkind asyncio patterns",
         title="Zygomorphic Grepkind Guide",
         origin_url="https://example.com/zygomorphic-grepkind",
         tags=["reference"],
     ))
 
-    article_result = _run(search_knowledge(_ctx(), "zygomorphic-grepkind", kind="article"))
+    article_result = _run(search_knowledge(ctx, "zygomorphic-grepkind", kind="article"))
     assert article_result["count"] >= 1
     first = article_result["results"][0]
     assert isinstance(first["title"], str) and first["title"]
 
-    memory_result = _run(search_knowledge(_ctx(), "zygomorphic-grepkind", kind="memory"))
+    memory_result = _run(search_knowledge(ctx, "zygomorphic-grepkind", kind="memory"))
     assert memory_result["count"] == 0
 
 
@@ -387,13 +409,13 @@ def test_search_knowledge_fallback_grep_kind_filter(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch):
+def test_search_knowledge_result_dicts_contain_confidence(tmp_path):
     """search_knowledge FTS path populates confidence in each result dict."""
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Use save_article — search_knowledge default scope covers local articles, not memories
     _run(save_article(
@@ -414,13 +436,13 @@ def test_search_knowledge_result_dicts_contain_confidence(tmp_path, monkeypatch)
     idx.close()
 
 
-def test_search_knowledge_display_contains_conf_label(tmp_path, monkeypatch):
+def test_search_knowledge_display_contains_conf_label(tmp_path):
     """search_knowledge display string shows 'conf:' for FTS results."""
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Use save_article — search_knowledge default scope covers local articles, not memories
     _run(save_article(
@@ -468,18 +490,17 @@ def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
+def test_search_knowledge_flags_contradictions(tmp_path):
     """search_knowledge marks both memories conflict:True when same category has opposing polarity."""
     from co_cli._knowledge_index import KnowledgeIndex
     import yaml as _yaml
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
-
-    # Write two memories in the same category with opposing content
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx, memory_dir=memory_dir)
+
+    # Write two memories in the same category with opposing content
 
     fm_a = {
         "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
@@ -516,17 +537,15 @@ def test_search_knowledge_flags_contradictions(tmp_path, monkeypatch):
     idx.close()
 
 
-def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
+def test_search_knowledge_no_conflict_when_no_opposition(tmp_path):
     """search_knowledge returns conflict:False when results are compatible."""
     from co_cli._knowledge_index import KnowledgeIndex
     import yaml as _yaml
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
-
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
+    idx = KnowledgeIndex(tmp_path / "search.db")
+    ctx = _ctx_with_idx(idx, memory_dir=memory_dir)
 
     fm_a = {
         "id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
@@ -560,10 +579,8 @@ def test_search_knowledge_no_conflict_when_no_opposition(tmp_path, monkeypatch):
     idx.close()
 
 
-def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypatch):
+def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path):
     """Grep fallback returns empty for non-memory sources; normal for source='memory'."""
-    monkeypatch.chdir(tmp_path)
-
     # Write a memory file so grep has something to find
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -572,12 +589,14 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypat
         encoding="utf-8",
     )
 
+    ctx = _make_ctx(memory_dir=memory_dir)
+
     # source='obsidian' with no FTS index → must return empty, not memory results
-    obsidian_result = _run(search_knowledge(_ctx(), "xylozygote", source="obsidian"))
+    obsidian_result = _run(search_knowledge(ctx, "xylozygote", source="obsidian"))
     assert obsidian_result["count"] == 0
 
     # source='memory' with no FTS index → grep works, must find the file
-    memory_result = _run(search_knowledge(_ctx(), "xylozygote", source="memory"))
+    memory_result = _run(search_knowledge(ctx, "xylozygote", source="memory"))
     assert memory_result["count"] >= 1
 
 
@@ -586,13 +605,14 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_search_knowledge_default_excludes_memories(tmp_path, monkeypatch):
+def test_search_knowledge_default_excludes_memories(tmp_path):
     """search_knowledge with no source filter returns articles but not memories."""
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
+    memory_dir = tmp_path / ".co-cli" / "memory"
     idx = KnowledgeIndex(tmp_path / "search.db")
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir, memory_dir=memory_dir)
 
     # Save an article (indexed at source="library") and a memory (source="memory")
     _run(save_article(
@@ -621,13 +641,13 @@ def test_search_knowledge_default_excludes_memories(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_save_article_long_article_second_half_retrievable(tmp_path, monkeypatch):
+def test_save_article_long_article_second_half_retrievable(tmp_path):
     """Scenario 20: save a long article; phrase only in second half must be retrievable via chunks FTS."""
     from co_cli._knowledge_index import KnowledgeIndex
 
+    library_dir = tmp_path / ".co-cli" / "library"
     idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=100, chunk_overlap=10)
-    ctx = _ctx_with_idx(idx)
-    monkeypatch.chdir(tmp_path)
+    ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Construct article >2 x chunk_size tokens: ~100 tokens = 400 chars
     # First half has no target phrase; second half has it

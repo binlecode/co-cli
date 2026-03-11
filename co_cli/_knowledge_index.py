@@ -18,6 +18,7 @@ Hybrid mode adds sqlite-vec vector similarity (docs_vec / chunks_vec) merged via
 Falls back to FTS5-only if embedding provider is unavailable.
 """
 
+import dataclasses
 import hashlib
 import json
 import logging
@@ -27,6 +28,21 @@ from pathlib import Path
 from typing import Any, Literal
 
 from co_cli._frontmatter import parse_frontmatter
+from co_cli.config import (
+    DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
+    DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+    DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
+    DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
+    DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
+    DEFAULT_KNOWLEDGE_EMBED_API_URL,
+    DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT,
+    DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT,
+    DEFAULT_KNOWLEDGE_RERANK_API_URL,
+    DEFAULT_KNOWLEDGE_RERANKER_MODEL,
+    DEFAULT_KNOWLEDGE_RERANKER_PROVIDER,
+    DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
+    DEFAULT_OLLAMA_HOST,
+)
 
 try:
     import pysqlite3 as sqlite3
@@ -149,6 +165,7 @@ _CHUNKS_FTS_SQL = """
 SELECT c.source, c.doc_path AS path,
        snippet(chunks_fts, 0, '>', '<', '...', 40) AS snippet,
        bm25(chunks_fts) AS rank,
+       c.chunk_index, c.start_line, c.end_line,
        d.kind, d.title, d.tags, d.category, d.created, d.updated, d.provenance, d.certainty
   FROM chunks_fts
   JOIN chunks c ON c.rowid = chunks_fts.rowid
@@ -200,6 +217,9 @@ class SearchResult:
     provenance: str | None = None
     certainty: str | None = None
     confidence: float | None = None
+    chunk_index: int | None = None
+    start_line: int | None = None
+    end_line: int | None = None
 
 
 class KnowledgeIndex:
@@ -210,7 +230,7 @@ class KnowledgeIndex:
       - 'hybrid': FTS5 + sqlite-vec cosine vector search, weighted merge.
 
     Usage:
-        idx = KnowledgeIndex(DATA_DIR / "search.db")
+        idx = KnowledgeIndex(SEARCH_DB)
         idx.sync_dir("memory", knowledge_dir)
         results = idx.search("pytest testing")
         idx.close()
@@ -220,18 +240,20 @@ class KnowledgeIndex:
         self,
         db_path: Path,
         *,
-        backend: str = "fts5",
-        embedding_provider: str = "ollama",
-        embedding_model: str = "embeddinggemma",
-        embedding_dims: int = 256,
-        ollama_host: str = "http://localhost:11434",
+        backend: str = DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
+        embedding_provider: str = DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
+        embedding_model: str = DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
+        embedding_dims: int = DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
+        ollama_host: str = DEFAULT_OLLAMA_HOST,
         gemini_api_key: str | None = None,
-        hybrid_vector_weight: float = 0.7,
-        hybrid_text_weight: float = 0.3,
-        reranker_provider: str = "none",
-        reranker_model: str = "",
-        chunk_size: int = 600,
-        chunk_overlap: int = 80,
+        embed_api_url: str = DEFAULT_KNOWLEDGE_EMBED_API_URL,
+        rerank_api_url: str = DEFAULT_KNOWLEDGE_RERANK_API_URL,
+        hybrid_vector_weight: float = DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT,
+        hybrid_text_weight: float = DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT,
+        reranker_provider: str = DEFAULT_KNOWLEDGE_RERANKER_PROVIDER,
+        reranker_model: str = DEFAULT_KNOWLEDGE_RERANKER_MODEL,
+        chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE,
+        chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
     ) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = db_path
@@ -241,6 +263,8 @@ class KnowledgeIndex:
         self._embedding_dims = embedding_dims
         self._ollama_host = ollama_host
         self._gemini_api_key = gemini_api_key
+        self._embed_api_url = embed_api_url
+        self._rerank_api_url = rerank_api_url
         self._hybrid_vector_weight = hybrid_vector_weight
         self._hybrid_text_weight = hybrid_text_weight
         self._reranker_provider = reranker_provider
@@ -537,8 +561,8 @@ class KnowledgeIndex:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """Hybrid BM25 + vector search with weighted merge. Falls back to FTS5."""
-        fts_results = self._fts_search(
+        """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
+        fts_mem, fts_chunks = self._fts_chunks_raw(
             query, source=source, kind=kind, tags=tags,
             tag_match_mode=tag_match_mode, created_after=created_after,
             created_before=created_before, limit=limit * 4,
@@ -546,25 +570,25 @@ class KnowledgeIndex:
         try:
             emb = self._embed_cached(query)
             if emb is not None:
-                vec_results = self._vec_search(
+                vec_mem, vec_chunks = self._vec_search(
                     emb, source=source, kind=kind, tags=tags,
                     tag_match_mode=tag_match_mode, created_after=created_after,
                     created_before=created_before, limit=limit * 4,
                 )
                 merged = self._hybrid_merge(
-                    fts_results, vec_results,
+                    fts_mem, fts_chunks, vec_mem, vec_chunks,
                     self._hybrid_vector_weight, self._hybrid_text_weight,
                 )
-                # Deduplicate by path keeping highest score
-                seen: dict[str, SearchResult] = {}
-                for r in merged:
-                    if r.path not in seen or r.score > seen[r.path].score:
-                        seen[r.path] = r
-                merged = sorted(seen.values(), key=lambda r: r.score, reverse=True)
                 return self._rerank_results(query, merged, limit)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
-        return fts_results[:limit]
+
+        # Fallback: collapse chunk-level FTS results to doc-level
+        fallback_seen: dict[str, SearchResult] = {}
+        for r in fts_mem + fts_chunks:
+            if r.path not in fallback_seen or r.score > fallback_seen[r.path].score:
+                fallback_seen[r.path] = r
+        return sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)[:limit]
 
     def _fts_search(
         self,
@@ -590,6 +614,10 @@ class KnowledgeIndex:
 
         tags = list(dict.fromkeys(tags)) if tags else tags
         fetch_limit = limit * 20 if tags else limit
+        # Chunks leg always uses a larger pool: one document produces N chunk rows,
+        # so limiting at chunk granularity causes a single long article to crowd out
+        # other matching documents before Python-side doc-level dedup can run.
+        chunks_fetch_limit = limit * 20
 
         all_rows: list[tuple[Any, str]] = []
 
@@ -603,7 +631,7 @@ class KnowledgeIndex:
             nonmem = _nonmemory_sources(source)
             all_rows.extend(self._run_chunks_fts(
                 fts_query, sources=nonmem, kind=kind, created_after=created_after,
-                created_before=created_before, limit=fetch_limit,
+                created_before=created_before, limit=chunks_fetch_limit,
             ))
 
         if tags:
@@ -620,9 +648,12 @@ class KnowledgeIndex:
                 ]
 
         results: list[SearchResult] = []
-        for row, _leg in all_rows:
+        for row, leg in all_rows:
             rank = row["rank"]
             score = 1.0 / (1.0 + abs(rank))
+            chunk_index = row["chunk_index"] if leg == "chunks" else None
+            start_line = row["start_line"] if leg == "chunks" else None
+            end_line = row["end_line"] if leg == "chunks" else None
             results.append(SearchResult(
                 source=row["source"],
                 kind=row["kind"],
@@ -636,6 +667,9 @@ class KnowledgeIndex:
                 updated=row["updated"],
                 provenance=row["provenance"],
                 certainty=row["certainty"],
+                chunk_index=chunk_index,
+                start_line=start_line,
+                end_line=end_line,
             ))
 
         # Deduplicate by path, keep highest score per document
@@ -714,6 +748,91 @@ class KnowledgeIndex:
             return []
         return [(row, "chunks") for row in rows]
 
+    def _fts_chunks_raw(
+        self,
+        query: str,
+        *,
+        source: str | list[str] | None,
+        kind: str | None,
+        tags: list[str] | None,
+        tag_match_mode: Literal["any", "all"],
+        created_after: str | None,
+        created_before: str | None,
+        limit: int,
+    ) -> tuple[list[SearchResult], list[SearchResult]]:
+        """Return (memory_doc_results, nonmemory_chunk_results) for hybrid RRF.
+
+        Memory leg: doc-level (docs_fts), deduplicated — memory is never chunked.
+        Non-memory leg: chunk-level (chunks_fts), NOT deduplicated to doc level.
+        """
+        fts_query = self._build_fts_query(query)
+        if fts_query is None:
+            return [], []
+
+        tags = list(dict.fromkeys(tags)) if tags else tags
+        fetch_limit = limit * 20 if tags else limit
+        chunks_fetch_limit = limit * 20
+
+        memory_rows: list[tuple[Any, str]] = []
+        chunk_rows: list[tuple[Any, str]] = []
+
+        if _uses_memory_leg(source):
+            memory_rows.extend(self._run_memory_fts(
+                fts_query, kind=kind, created_after=created_after,
+                created_before=created_before, limit=fetch_limit,
+            ))
+
+        if _uses_chunks_leg(source):
+            nonmem = _nonmemory_sources(source)
+            chunk_rows.extend(self._run_chunks_fts(
+                fts_query, sources=nonmem, kind=kind, created_after=created_after,
+                created_before=created_before, limit=chunks_fetch_limit,
+            ))
+
+        if tags:
+            tag_set = set(tags)
+            predicate = (
+                (lambda rl: tag_set <= {t for t in (rl[0]["tags"] or "").split() if t})
+                if tag_match_mode == "all"
+                else (lambda rl: tag_set & {t for t in (rl[0]["tags"] or "").split() if t})
+            )
+            memory_rows = [rl for rl in memory_rows if predicate(rl)]
+            chunk_rows = [rl for rl in chunk_rows if predicate(rl)]
+
+        def _build(row: Any, leg: str) -> SearchResult:
+            rank = row["rank"]
+            score = 1.0 / (1.0 + abs(rank))
+            return SearchResult(
+                source=row["source"],
+                kind=row["kind"],
+                path=row["path"],
+                title=row["title"],
+                snippet=row["snippet"],
+                score=score,
+                tags=row["tags"],
+                category=row["category"],
+                created=row["created"],
+                updated=row["updated"],
+                provenance=row["provenance"],
+                certainty=row["certainty"],
+                chunk_index=row["chunk_index"] if leg == "chunks" else None,
+                start_line=row["start_line"] if leg == "chunks" else None,
+                end_line=row["end_line"] if leg == "chunks" else None,
+            )
+
+        # Memory: deduplicate to doc level
+        mem_seen: dict[str, SearchResult] = {}
+        for row, leg in memory_rows:
+            r = _build(row, leg)
+            if r.path not in mem_seen or r.score > mem_seen[r.path].score:
+                mem_seen[r.path] = r
+        mem_results = sorted(mem_seen.values(), key=lambda r: r.score, reverse=True)
+
+        # Non-memory: return chunk-level, not collapsed
+        chunk_results = [_build(row, leg) for row, leg in chunk_rows]
+
+        return mem_results, chunk_results
+
     def _vec_search(
         self,
         embedding: list[float],
@@ -725,36 +844,35 @@ class KnowledgeIndex:
         created_after: str | None,
         created_before: str | None,
         limit: int,
-    ) -> list[SearchResult]:
+    ) -> tuple[list[SearchResult], list[SearchResult]]:
         """Vector search with source routing.
 
-        Memory sources → docs_vec leg.
-        Non-memory sources → chunks_vec leg.
-        source=None or mixed → both legs, union by path.
+        Returns (memory_doc_results, nonmemory_chunk_results).
+        Memory leg is doc-level (docs_vec); non-memory leg is chunk-level (chunks_vec).
         """
         blob = struct.pack(f"{len(embedding)}f", *embedding)
-        results: list[SearchResult] = []
 
+        mem_results: list[SearchResult] = []
         if _uses_memory_leg(source):
-            results.extend(self._vec_docs_search(
+            raw = self._vec_docs_search(
                 blob, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
                 created_after=created_after, created_before=created_before, limit=limit * 4,
-            ))
+            )
+            seen: dict[str, SearchResult] = {}
+            for r in raw:
+                if r.path not in seen or r.score > seen[r.path].score:
+                    seen[r.path] = r
+            mem_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
 
+        chunk_results: list[SearchResult] = []
         if _uses_chunks_leg(source):
             nonmem = _nonmemory_sources(source)
-            results.extend(self._vec_chunks_search(
+            chunk_results = self._vec_chunks_search(
                 blob, sources=nonmem, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
                 created_after=created_after, created_before=created_before, limit=limit * 4,
-            ))
+            )
 
-        # Deduplicate by path, keep highest score
-        seen: dict[str, SearchResult] = {}
-        for r in results:
-            if r.path not in seen or r.score > seen[r.path].score:
-                seen[r.path] = r
-        sorted_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
-        return sorted_results[:limit]
+        return mem_results, chunk_results
 
     def _vec_docs_search(
         self,
@@ -843,7 +961,10 @@ class KnowledgeIndex:
         rowid_to_distance = {row["rowid"]: row["distance"] for row in vec_rows}
         rowids = list(rowid_to_distance.keys())
         placeholders = ",".join("?" * len(rowids))
-        chunk_sql = f"SELECT rowid, source, doc_path FROM chunks WHERE rowid IN ({placeholders})"
+        chunk_sql = (
+            f"SELECT rowid, source, doc_path, chunk_index, start_line, end_line"
+            f" FROM chunks WHERE rowid IN ({placeholders})"
+        )
         chunk_params: list[Any] = list(rowids)
         if sources is not None and len(sources) == 1:
             chunk_sql += " AND source = ?"
@@ -857,22 +978,14 @@ class KnowledgeIndex:
         if not chunk_rows:
             return []
 
-        # Group by doc_path, keep best (lowest distance) chunk per doc
-        best_by_path: dict[str, tuple[str, float]] = {}
-        for row in chunk_rows:
-            dist = rowid_to_distance.get(row["rowid"], 1.0)
-            path = row["doc_path"]
-            if path not in best_by_path or dist < best_by_path[path][1]:
-                best_by_path[path] = (row["source"], dist)
-
-        # Fetch metadata from docs
-        paths = list(best_by_path.keys())
-        doc_ph = ",".join("?" * len(paths))
+        # Batch-fetch doc metadata for unique doc_paths
+        doc_paths = list({row["doc_path"] for row in chunk_rows})
+        doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
             f"SELECT source, kind, path, title, tags, category, created, updated, "
             f"provenance, certainty FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
         )
-        doc_params: list[Any] = paths
+        doc_params: list[Any] = doc_paths
         if kind is not None:
             doc_sql += " AND kind = ?"
             doc_params.append(kind)
@@ -890,73 +1003,107 @@ class KnowledgeIndex:
                 doc_rows = [r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
             else:
                 doc_rows = [r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
+        doc_meta = {row["path"]: row for row in doc_rows}
 
-        return [
-            SearchResult(
-                source=row["source"],
-                kind=row["kind"],
-                path=row["path"],
-                title=row["title"],
+        results: list[SearchResult] = []
+        for c in chunk_rows:
+            meta = doc_meta.get(c["doc_path"])
+            if meta is None:
+                continue
+            dist = rowid_to_distance.get(c["rowid"], 1.0)
+            results.append(SearchResult(
+                source=meta["source"],
+                kind=meta["kind"],
+                path=c["doc_path"],
+                title=meta["title"],
                 snippet=None,
-                score=max(0.0, 1.0 - best_by_path[row["path"]][1]),
-                tags=row["tags"],
-                category=row["category"],
-                created=row["created"],
-                updated=row["updated"],
-                provenance=row["provenance"],
-                certainty=row["certainty"],
-            )
-            for row in doc_rows
-        ]
+                score=max(0.0, 1.0 - dist),
+                tags=meta["tags"],
+                category=meta["category"],
+                created=meta["created"],
+                updated=meta["updated"],
+                provenance=meta["provenance"],
+                certainty=meta["certainty"],
+                chunk_index=c["chunk_index"],
+                start_line=c["start_line"],
+                end_line=c["end_line"],
+            ))
+        return results
 
     def _hybrid_merge(
         self,
-        fts: list[SearchResult],
-        vec: list[SearchResult],
+        fts_mem: list[SearchResult],
+        fts_chunks: list[SearchResult],
+        vec_mem: list[SearchResult],
+        vec_chunks: list[SearchResult],
         vector_weight: float,
         text_weight: float,
     ) -> list[SearchResult]:
-        """Reciprocal Rank Fusion (RRF) merge of FTS and vector results.
+        """RRF on chunk-level lists; collapse to doc-level after fusion.
 
-        vector_weight and text_weight are ignored — RRF is rank-based, not score-based.
-        Both parameters are kept in the signature for backward compatibility with callers.
-
-        k=60 is the standard constant from Cormack 2009, robust across corpora.
-        A doc at rank i contributes 1/(k + i + 1) to its RRF score (1-based rank).
+        Memory results (chunk_index=None) keyed by path.
+        Non-memory results (chunk_index=int) keyed by (path, chunk_index).
+        After RRF, doc score = sum of its chunks' RRF scores; winning chunk
+        (highest per-key score) carries its snippet/chunk_index/start_line/end_line.
+        k=60: Cormack 2009 standard.
+        vector_weight and text_weight are kept for API compatibility but unused (RRF is rank-only).
         """
         k = 60
-        rrf_scores: dict[str, float] = {}
-        fts_by_path: dict[str, SearchResult] = {}
-        vec_by_path: dict[str, SearchResult] = {}
 
-        for i, r in enumerate(fts):
-            rrf_scores[r.path] = rrf_scores.get(r.path, 0.0) + 1.0 / (k + i + 1)
-            fts_by_path[r.path] = r
+        # --- Memory leg: RRF keyed on path ---
+        mem_rrf: dict[str, float] = {}
+        mem_fts_by_path: dict[str, SearchResult] = {}
+        mem_vec_by_path: dict[str, SearchResult] = {}
 
-        for j, r in enumerate(vec):
-            rrf_scores[r.path] = rrf_scores.get(r.path, 0.0) + 1.0 / (k + j + 1)
-            vec_by_path[r.path] = r
+        for i, r in enumerate(fts_mem):
+            mem_rrf[r.path] = mem_rrf.get(r.path, 0.0) + 1.0 / (k + i + 1)
+            mem_fts_by_path[r.path] = r
+        for j, r in enumerate(vec_mem):
+            mem_rrf[r.path] = mem_rrf.get(r.path, 0.0) + 1.0 / (k + j + 1)
+            mem_vec_by_path[r.path] = r
 
-        merged = []
-        for path, score in rrf_scores.items():
-            # Prefer FTS result for snippet; vec-only entries get snippet=None
-            r = fts_by_path.get(path) or vec_by_path[path]
-            snippet = fts_by_path[path].snippet if path in fts_by_path else None
-            merged.append(SearchResult(
-                source=r.source,
-                kind=r.kind,
-                path=path,
-                title=r.title,
-                snippet=snippet,
-                score=score,
-                tags=r.tags,
-                category=r.category,
-                created=r.created,
-                updated=r.updated,
-                provenance=r.provenance,
-                certainty=r.certainty,
-            ))
+        mem_merged: list[SearchResult] = []
+        for path, score in mem_rrf.items():
+            base = mem_fts_by_path.get(path) or mem_vec_by_path[path]
+            snippet = mem_fts_by_path[path].snippet if path in mem_fts_by_path else None
+            mem_merged.append(dataclasses.replace(base, score=score, snippet=snippet))
 
+        # --- Non-memory leg: RRF keyed on (path, chunk_index) ---
+        ChunkKey = tuple  # (path, chunk_index)
+        chunk_rrf: dict[ChunkKey, float] = {}
+        chunk_fts_by_key: dict[ChunkKey, SearchResult] = {}
+        chunk_vec_by_key: dict[ChunkKey, SearchResult] = {}
+
+        for i, r in enumerate(fts_chunks):
+            key = (r.path, r.chunk_index)
+            chunk_rrf[key] = chunk_rrf.get(key, 0.0) + 1.0 / (k + i + 1)
+            chunk_fts_by_key[key] = r
+        for j, r in enumerate(vec_chunks):
+            key = (r.path, r.chunk_index)
+            chunk_rrf[key] = chunk_rrf.get(key, 0.0) + 1.0 / (k + j + 1)
+            if key not in chunk_fts_by_key:
+                chunk_vec_by_key[key] = r
+
+        # Accumulate doc scores; track winning chunk per doc
+        doc_rrf: dict[str, float] = {}
+        doc_winner_key: dict[str, ChunkKey] = {}
+        doc_winner_score: dict[str, float] = {}
+
+        for key, score in chunk_rrf.items():
+            path = key[0]
+            doc_rrf[path] = doc_rrf.get(path, 0.0) + score
+            if path not in doc_winner_score or score > doc_winner_score[path]:
+                doc_winner_key[path] = key
+                doc_winner_score[path] = score
+
+        chunk_merged: list[SearchResult] = []
+        for path, total_score in doc_rrf.items():
+            winner_key = doc_winner_key[path]
+            base = chunk_fts_by_key.get(winner_key) or chunk_vec_by_key[winner_key]
+            snippet = chunk_fts_by_key[winner_key].snippet if winner_key in chunk_fts_by_key else None
+            chunk_merged.append(dataclasses.replace(base, score=total_score, snippet=snippet))
+
+        merged = mem_merged + chunk_merged
         merged.sort(key=lambda r: r.score, reverse=True)
         return merged
 
@@ -1009,6 +1156,17 @@ class KnowledgeIndex:
                 )
                 return result.embeddings[0].values
 
+            if self._embedding_provider == "tei":
+                import httpx
+                resp = httpx.post(
+                    f"{self._embed_api_url}/embed",
+                    json={"inputs": text},
+                    timeout=30.0,
+                )
+                resp.raise_for_status()
+                # TEI returns: [[1024 floats]]
+                return resp.json()[0]
+
             # provider == "none" or unknown
             return None
 
@@ -1028,23 +1186,12 @@ class KnowledgeIndex:
         try:
             if self._reranker_provider == "local":
                 return self._local_cross_encoder_rerank(query, candidates, limit)
+            if self._reranker_provider == "tei":
+                return self._tei_rerank(query, candidates, limit)
             texts = self._fetch_reranker_texts(candidates)
             scores = self._generate_rerank_scores(query, texts)
             reranked = [
-                SearchResult(
-                    source=r.source,
-                    kind=r.kind,
-                    path=r.path,
-                    title=r.title,
-                    snippet=r.snippet,
-                    score=scores[i],
-                    tags=r.tags,
-                    category=r.category,
-                    created=r.created,
-                    updated=r.updated,
-                    provenance=r.provenance,
-                    certainty=r.certainty,
-                )
+                dataclasses.replace(r, score=scores[i])
                 for i, r in enumerate(candidates)
             ]
             reranked.sort(key=lambda r: r.score, reverse=True)
@@ -1054,23 +1201,45 @@ class KnowledgeIndex:
             return candidates[:limit]
 
     def _fetch_reranker_texts(self, candidates: list[SearchResult]) -> list[str]:
-        """Fetch title+content snippets for reranking from the DB."""
-        paths = [r.path for r in candidates]
-        placeholders = ",".join("?" * len(paths))
-        rows = self._conn.execute(
-            f"SELECT path, title, content FROM docs WHERE path IN ({placeholders}) AND chunk_id = 0",
-            paths,
-        ).fetchall()
-        by_path = {row["path"]: row for row in rows}
-        texts = []
-        for r in candidates:
-            row = by_path.get(r.path)
-            if row:
+        """Fetch relevant text for reranking.
+
+        chunk_index is not None → fetch chunks.content (exact matching chunk text).
+        chunk_index is None → fetch docs.content[:200] preamble (memory results).
+        """
+        doc_level = [r for r in candidates if r.chunk_index is None]
+        chunk_level = [r for r in candidates if r.chunk_index is not None]
+
+        # Batch-fetch doc preambles (memory / doc-level results)
+        doc_texts: dict[str, str] = {}
+        if doc_level:
+            paths = [r.path for r in doc_level]
+            ph = ",".join("?" * len(paths))
+            rows = self._conn.execute(
+                f"SELECT path, title, content FROM docs WHERE path IN ({ph}) AND chunk_id = 0",
+                paths,
+            ).fetchall()
+            for row in rows:
                 title = row["title"] or ""
                 content = (row["content"] or "")[:200]
-                texts.append(f"{title}\n{content}".strip())
+                doc_texts[row["path"]] = f"{title}\n{content}".strip()
+
+        # Per-row chunk content fetch (candidate sets are <= limit*4, typically 20-40 rows)
+        chunk_texts: dict[tuple, str] = {}
+        for r in chunk_level:
+            row = self._conn.execute(
+                "SELECT content FROM chunks WHERE source=? AND doc_path=? AND chunk_index=?",
+                (r.source, r.path, r.chunk_index),
+            ).fetchone()
+            if row and row["content"]:
+                chunk_texts[(r.source, r.path, r.chunk_index)] = row["content"]
+
+        texts: list[str] = []
+        for r in candidates:
+            if r.chunk_index is None:
+                texts.append(doc_texts.get(r.path) or r.title or "")
             else:
-                texts.append(r.title or "")
+                content = chunk_texts.get((r.source, r.path, r.chunk_index), "")
+                texts.append(f"{r.title or ''}\n{content}".strip() if content else r.title or "")
         return texts
 
     def _generate_rerank_scores(self, query: str, texts: list[str]) -> list[float]:
@@ -1176,22 +1345,33 @@ class KnowledgeIndex:
         scores = list(self._reranker_instance.rerank(query, texts))
         ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
         return [
-            SearchResult(
-                source=r.source,
-                kind=r.kind,
-                path=r.path,
-                title=r.title,
-                snippet=r.snippet,
-                score=s,
-                tags=r.tags,
-                category=r.category,
-                created=r.created,
-                updated=r.updated,
-                provenance=r.provenance,
-                certainty=r.certainty,
-            )
+            dataclasses.replace(r, score=s)
             for s, r in ranked[:limit]
         ]
+
+    def _tei_rerank(
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        limit: int,
+    ) -> list[SearchResult]:
+        """Rerank candidates using cross-encoder API at self._rerank_api_url/rerank."""
+        texts = self._fetch_reranker_texts(candidates)
+        import httpx
+        resp = httpx.post(
+            f"{self._rerank_api_url}/rerank",
+            json={"query": query, "texts": texts},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        # TEI returns: [{"index": i, "score": f}, ...] sorted by score desc
+        scored = {item["index"]: item["score"] for item in resp.json()}
+        reranked = [
+            dataclasses.replace(candidates[i], score=scored.get(i, 0.0))
+            for i in range(len(candidates))
+        ]
+        reranked.sort(key=lambda r: r.score, reverse=True)
+        return reranked[:limit]
 
     def _build_fts_query(self, query: str) -> str | None:
         """Tokenize query, filter stopwords, quote terms, AND-join.

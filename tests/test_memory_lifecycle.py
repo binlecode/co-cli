@@ -5,8 +5,6 @@ and timeout-driven on_failure behavior (timeout=0 via CoDeps, no mocks).
 """
 
 import asyncio
-import os
-import tempfile
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,18 +71,19 @@ def _seed_memory(
 
 
 def _make_deps(
+    memory_dir: Path | None = None,
     max_count: int = 200,
     timeout: int = 20,
 ) -> CoDeps:
-    return CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=replace(
-            _CONFIG,
-            session_id="test-lifecycle",
-            memory_max_count=max_count,
-            memory_consolidation_timeout_seconds=timeout,
-        ),
+    cfg = replace(
+        _CONFIG,
+        session_id="test-lifecycle",
+        memory_max_count=max_count,
+        memory_consolidation_timeout_seconds=timeout,
     )
+    if memory_dir is not None:
+        cfg = replace(cfg, memory_dir=memory_dir)
+    return CoDeps(services=CoServices(shell=ShellBackend()), config=cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +91,14 @@ def _make_deps(
 # ---------------------------------------------------------------------------
 
 
-def test_update_action_sets_updated_timestamp(tmp_path: Path, monkeypatch):
+def test_update_action_sets_updated_timestamp(tmp_path: Path):
     """apply_plan_atomically UPDATE refreshes the entry's updated timestamp."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     entry = _seed_memory(memory_dir, 1, "User prefers dark mode", tags=["preference"])
-    monkeypatch.chdir(tmp_path)
 
     plan = ConsolidationPlan(actions=[MemoryAction(action="UPDATE", target_alias="M1")])
     alias_map = {"M1": entry}
-    deps = _make_deps()
+    deps = _make_deps(memory_dir=memory_dir)
 
     apply_plan_atomically(plan, alias_map, deps)
 
@@ -114,20 +112,19 @@ def test_update_action_sets_updated_timestamp(tmp_path: Path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path, monkeypatch):
+def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path):
     """DELETE removes non-protected entry; silently skips protected entry."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     non_protected = _seed_memory(memory_dir, 1, "Obsolete preference", tags=["preference"])
     protected = _seed_memory(memory_dir, 2, "Core architecture decision",
                              tags=["decision"], decay_protected=True)
-    monkeypatch.chdir(tmp_path)
 
     plan = ConsolidationPlan(actions=[
         MemoryAction(action="DELETE", target_alias="M1"),
         MemoryAction(action="DELETE", target_alias="M2"),
     ])
     alias_map = {"M1": non_protected, "M2": protected}
-    deps = _make_deps()
+    deps = _make_deps(memory_dir=memory_dir)
 
     apply_plan_atomically(plan, alias_map, deps)
 
@@ -140,14 +137,13 @@ def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path, mon
 # ---------------------------------------------------------------------------
 
 
-def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path, monkeypatch):
+def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path):
     """Candidate matching existing memory via rapidfuzz updates timestamp, creates no new file."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
-    monkeypatch.chdir(tmp_path)
 
     before_count = len(list(memory_dir.glob("*.md")))
-    deps = _make_deps()
+    deps = _make_deps(memory_dir=memory_dir)
 
     # Near-duplicate content (high similarity)
     asyncio.run(
@@ -167,17 +163,16 @@ def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_overflow_cut_oldest_unprotected(tmp_path: Path, monkeypatch):
+def test_overflow_cut_oldest_unprotected(tmp_path: Path):
     """After persist_memory, total > max_count triggers cut of oldest unprotected."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    monkeypatch.chdir(tmp_path)
 
     max_count = 5
     for i in range(1, max_count + 1):
         _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10,
                      decay_protected=(i == 1))
 
-    deps = _make_deps(max_count=max_count)
+    deps = _make_deps(memory_dir=memory_dir, max_count=max_count)
     asyncio.run(
         persist_memory(deps, "Brand new important memory", ["test"], None)
     )
@@ -201,10 +196,9 @@ def test_overflow_cut_oldest_unprotected(tmp_path: Path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_retention_cap_excludes_articles(tmp_path: Path, monkeypatch):
+def test_retention_cap_excludes_articles(tmp_path: Path):
     """Retention cap counts only memories; articles must never be deleted."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    monkeypatch.chdir(tmp_path)
 
     # Seed 3 memories (oldest to newest) and 1 article
     for i in range(1, 4):
@@ -222,7 +216,7 @@ def test_retention_cap_excludes_articles(tmp_path: Path, monkeypatch):
     )
 
     # max_count=3: saving one more memory should evict oldest memory, not the article
-    deps = _make_deps(max_count=3)
+    deps = _make_deps(memory_dir=memory_dir, max_count=3)
     asyncio.run(persist_memory(deps, "Brand new memory triggers retention", ["test"], None))
 
     remaining = list(memory_dir.glob("*.md"))
@@ -235,13 +229,12 @@ def test_retention_cap_excludes_articles(tmp_path: Path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
+def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path):
     """With timeout=0, consolidation times out but on_failure='add' writes a file."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
-    monkeypatch.chdir(tmp_path)
 
-    deps = _make_deps(timeout=0)
+    deps = _make_deps(memory_dir=memory_dir, timeout=0)
 
     before_count = len(list(memory_dir.glob("*.md")))
 
@@ -264,13 +257,12 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path, monkeypatch):
+def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
     """With timeout=0, consolidation times out and on_failure='skip' writes nothing."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
-    monkeypatch.chdir(tmp_path)
 
-    deps = _make_deps(timeout=0)
+    deps = _make_deps(memory_dir=memory_dir, timeout=0)
 
     before_count = len(list(memory_dir.glob("*.md")))
 

@@ -520,20 +520,20 @@ async def run_turn(
             # Context overflow detection: Ollama truncates silently when input_tokens > num_ctx.
             # Gemini enforces its own hard limit via HTTP 400 — skip check for Gemini.
             # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-            if turn_usage is not None and deps.config.llm_provider == "ollama" and deps.config.ollama_num_ctx > 0:
-                ratio = turn_usage.input_tokens / deps.config.ollama_num_ctx
+            if turn_usage is not None and deps.config.llm_provider == "ollama" and deps.config.llm_num_ctx > 0:
+                ratio = turn_usage.input_tokens / deps.config.llm_num_ctx
                 with _TRACER.start_as_current_span("ctx_overflow_check") as span:
                     span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)
-                    span.set_attribute("ctx.num_ctx", deps.config.ollama_num_ctx)
+                    span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
                     span.set_attribute("ctx.ratio", ratio)
                     if ratio >= deps.config.ctx_overflow_threshold:
                         frontend.on_status(
-                            f"Context limit reached ({turn_usage.input_tokens:,} / {deps.config.ollama_num_ctx:,} tokens)"
+                            f"Context limit reached ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
                             " — Ollama likely truncated the prompt. Use /compact or /new."
                         )
                     elif ratio >= deps.config.ctx_warn_threshold:
                         frontend.on_status(
-                            f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.config.ollama_num_ctx:,} tokens)."
+                            f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
                             " Consider /compact to free space."
                         )
 

@@ -16,17 +16,7 @@ Usage:
 """
 
 import asyncio
-import os
 import sys
-
-_ENV_DEFAULTS = {
-    "LLM_PROVIDER": "ollama",
-    "OLLAMA_MODEL": "qwen3:30b-a3b-thinking-2507-q8_0-agentic",
-    "OLLAMA_NUM_CTX": "262144",
-}
-for _k, _v in _ENV_DEFAULTS.items():
-    if _k not in os.environ:
-        os.environ[_k] = _v
 
 from pydantic_ai.messages import (  # noqa: E402
     ModelRequest,

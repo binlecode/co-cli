@@ -7,11 +7,11 @@ from pydantic_ai.models.function import FunctionModel, AgentInfo
 from pydantic_ai.messages import ModelResponse, TextPart, ModelMessage
 
 from co_cli.agent import get_agent
-from co_cli.config import WebPolicy
+from co_cli.config import WebPolicy, settings
 
 
-# Canonical tool inventory. Update this set when adding/removing/renaming tools.
-EXPECTED_TOOLS = {
+# Canonical non-delegation tool inventory. Update when adding/removing/renaming tools.
+EXPECTED_TOOLS_CORE = {
     # Side-effectful (requires_approval=True)
     "run_shell_command",
     "create_email_draft",
@@ -41,10 +41,6 @@ EXPECTED_TOOLS = {
     "read_file",
     "list_directory",
     "find_in_files",
-    # Sub-agent delegation
-    "delegate_coder",
-    "delegate_research",
-    "delegate_analysis",
     # Session task tracking
     "todo_write",
     "todo_read",
@@ -55,6 +51,19 @@ EXPECTED_TOOLS = {
     "list_background_tasks",
     # Capability introspection
     "check_capabilities",
+}
+
+# Delegation tools are registered iff their role model is configured
+_ROLE_TO_TOOL = {
+    "coding": "delegate_coder",
+    "research": "delegate_research",
+    "analysis": "delegate_analysis",
+}
+
+EXPECTED_TOOLS = EXPECTED_TOOLS_CORE | {
+    tool
+    for role, tool in _ROLE_TO_TOOL.items()
+    if settings.role_models.get(role)
 }
 
 EXPECTED_APPROVAL_TOOLS = {
