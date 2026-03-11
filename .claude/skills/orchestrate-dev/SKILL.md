@@ -9,7 +9,7 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 **Invocation:** `/orchestrate-dev <slug>`
 
-Reads `docs/TODO-<slug>.md`. Executes each task. Prunes or deletes the TODO based on shipped work. Produces `docs/DELIVERY-<slug>.md`.
+Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Produces `docs/DELIVERY-<slug>.md`. Deletes TODO alongside DELIVERY at Gate 3.
 
 **Consumes:** docs/TODO-<slug>.md. **Produces:** docs/DELIVERY-<slug>.md (temporary)
 
@@ -115,6 +115,7 @@ After implementing, read every changed file and check:
 - Tool returning raw `list[dict]` instead of `dict[str, Any]` with `display` field
 - `CoDeps` holding a config object instead of flat scalar fields
 - Trailing inline comments instead of comments on the line above
+- IO-bound tests missing `asyncio.timeout(N)` with `N <= 60s` (mandatory per CLAUDE.md testing rules)
 
 **Security:**
 - Command injection (user input passed to shell without sanitization)
@@ -129,7 +130,6 @@ After implementing, read every changed file and check:
 - If you added to an existing test file, scan it for assertions that hardcode counts, sets, or
   enums your changes affect (e.g. `assert set(COMMANDS.keys()) == {...}`). Update stale
   assertions before verifying `done_when`.
-- If `docs/REVIEW-<scope>.md` exists for this feature area, check it for P0 Code Dev findings before marking this task done — do not introduce or deepen a blocking inaccuracy it already flagged.
 
 Fix any issues found before proceeding to the next step.
 
@@ -139,7 +139,7 @@ Execute the `done_when` criterion literally:
 
 | done_when type | Action |
 |----------------|--------|
-| `test X passes` or `uv run pytest <path>` | Run `uv run pytest <path> -v` and check exit code |
+| `test X passes` or `uv run pytest <path>` | Run `uv run pytest <path> -v 2>&1 \| tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-task.log` and check exit code |
 | `grep <pattern> <file>` | Run the grep and confirm expected output is present |
 | `file <path> exists` | Check the file exists at the path |
 | `file <path> contains field Z` | Read the file and verify the field is present |
@@ -177,13 +177,13 @@ Run after all tasks have been attempted (or after the first blocked task if stop
 A task can pass its own `done_when` while silently breaking an unrelated module that imports the
 changed code. Touched-files-only testing misses this.
 ```
-uv run pytest -v
+uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
 ```
 
 **Partial delivery (any task blocked or skipped):** Run only test files touched by completed
 (✓ pass) tasks — a full suite against incomplete code produces misleading failures.
 ```
-uv run pytest <test_file_1> <test_file_2> ... -v
+uv run pytest <test_file_1> <test_file_2> ... -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-touched.log
 ```
 Collect touched test files from completed tasks only. If none were touched, skip and record
 "no tests run — no test files touched by completed tasks."
@@ -236,13 +236,18 @@ Record result: clean / gaps found (list missing features by name).
 
 ### Step 5 — TODO lifecycle
 
-For every task that reached ✓ pass, remove it from `docs/TODO-<slug>.md`. Design details that belong in a DESIGN doc should be merged there (already handled by Step 3 sync).
+For every task that reached ✓ pass, mark it done in `docs/TODO-<slug>.md` — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
 
-- **All tasks shipped, no deferred items remain:** delete `docs/TODO-<slug>.md` entirely. An empty TODO is not kept.
-- **All tasks shipped, deferred items remain:** remove shipped tasks; leave only unimplemented work and any explicit "Deferred" sections.
-- **Partial delivery (some tasks blocked):** leave the blocked and unstarted tasks in place; remove only the tasks that reached ✓ pass.
-- Apply this cleanup before writing the delivery report. The report must describe the post-cleanup TODO state, not the pre-cleanup state.
-- If a shipped task still appears in `docs/TODO-<slug>.md`, the delivery is incomplete. Fix the TODO file before proceeding.
+Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
+```
+### ✓ DONE — TASK-1: <title>
+```
+
+- **All tasks shipped (done or deferred):** mark all shipped tasks `✓ DONE`. Keep the file — it tracks the full delivery through Gate 3. Delete it only after PO acceptance at Gate 3, in the same session that deletes `DELIVERY-<slug>.md`.
+- **Deferred items remain:** mark shipped tasks done; leave deferred tasks unmarked. Same Gate 3 deletion rule applies.
+- **Partial delivery (some tasks blocked):** mark ✓ DONE for passed tasks; leave blocked and unstarted tasks unmarked.
+- Apply this update before writing the delivery report. The report must describe the current TODO state.
+- If a passed task is not marked `✓ DONE` in `docs/TODO-<slug>.md`, the delivery tracking is incomplete. Fix before proceeding.
 
 ---
 
@@ -283,12 +288,12 @@ Date: <ISO 8601 date>
 - Result: clean / gaps found (<list missing features>)
 
 ## Artifact Lifecycle
-- TODO status: deleted / retained with only unshipped work
+- TODO status: tasks marked ✓ DONE (not removed) / retained through Gate 3 — delete alongside DELIVERY after PO acceptance
 - DELIVERY status: keep for Gate 2 and Gate 3 only
 
 ## Gate 3 Cleanup
-- After PO acceptance, delete `docs/DELIVERY-<slug>.md` in the same session.
-- If PO acceptance is not part of this run, stop after writing this report and surface that delete action as the next step.
+- After PO acceptance, delete both `docs/TODO-<slug>.md` and `docs/DELIVERY-<slug>.md` in the same session.
+- If PO acceptance is not part of this run, stop after writing this report and surface both deletes as the next step.
 
 ## Overall: DELIVERED / BLOCKED
 <one sentence summary>

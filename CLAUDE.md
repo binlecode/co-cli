@@ -11,15 +11,20 @@ uv run co status                 # System health check
 uv run co logs                   # Datasette trace viewer (table)
 uv run co traces                 # Nested HTML trace viewer
 
-uv run pytest                    # Run all functional tests (fail-fast via pytest -x)
-uv run pytest -v                 # Verbose output (still fail-fast)
-uv run pytest tests/test_tools.py            # Single test file
-uv run pytest tests/test_tools.py::test_name # Single test function
-uv run pytest --cov=co_cli                   # With coverage (still fail-fast)
+uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log       # Run all tests; ALWAYS pipe to timestamped log
+uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log   # Verbose; same log rule
+uv run pytest tests/test_tools.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_tools.log
+uv run pytest tests/test_tools.py::test_name 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_name.log
+uv run pytest --cov=co_cli 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-cov.log
+
+# MANDATORY: ALL pytest runs must be piped to a timestamped log file under .pytest-logs/.
+# Format: .pytest-logs/YYYYMMDD-HHMMSS-<descriptor>.log
+# Never truncate pytest output (no | head, | tail, | grep on the pipe before the log file).
+# mkdir -p .pytest-logs before first run if the directory does not exist.
 
 # Evals: uv run python evals/eval_<name>.py  (ls evals/ for full list)
 # Tool-calling quality gate (functional pytest)
-uv run pytest tests/test_tool_calling_functional.py
+uv run pytest tests/test_tool_calling_functional.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-tool_calling.log
 ```
 
 ## System Overview
@@ -125,40 +130,39 @@ Start at `docs/DESIGN-index.md` for navigation, config reference, and module ind
 
 Workflow artifact placement:
 
-- `REVIEW-*.md`, `TODO-*.md`, `PLAN-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
+- `AUDIT-*.md`, `REPORT-*.md`, `TODO-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
 - `docs/reference/` is for research only (`RESEARCH-*`, `ROADMAP-*`).
 
 Workflow artifact lifecycle:
 
-- `REVIEW-<scope>.md` is permanent. It is a health-check record, not temporary scaffolding.
-- `PLAN-<slug>-audit.md` is permanent. It preserves plan-cycle decisions after the audit log is stripped from the TODO file.
-- `TODO-<slug>.md` is active-work scaffolding. `orchestrate-dev` must remove shipped tasks after each delivery pass and delete the file entirely when no unshipped or deferred work remains.
+- `WORKLOG-<scope>.md` — **removed concept**. Existing files are historical records only; do not create new ones. Planning rationale lives in `TODO-<slug>.md` alongside the task record and is deleted with the TODO at Gate 3.
+- `AUDIT-<scope>.md` is permanent. It is the `/delivery-audit` inverse coverage record (tools/settings/commands vs DESIGN docs). Only `/delivery-audit` produces AUDIT- files.
+- `REPORT-<scope>.md` is permanent. It is an eval or pipeline run report. Only eval runs produce REPORT- files.
+- `TODO-<slug>.md` tracks active work through full delivery. `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The full task record is preserved for debugging, troubleshooting, and revert. The file is deleted only at Gate 3 (PO acceptance), in the same session that deletes the DELIVERY file.
 - `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same work session that records acceptance.
 
 TODO lifecycle:
 
-- When a section ships, remove it from `docs/TODO-<slug>.md` and merge its design into the relevant DESIGN doc.
-- TODO docs contain only unimplemented work.
+- When a task ships, mark it `✓ DONE` in `docs/TODO-<slug>.md` — do not delete it. The record is preserved for debugging, troubleshooting, and revert until Gate 3.
+- Design details merged into a DESIGN doc (via sync-doc) are noted in the task entry, not stripped from the TODO.
+- The full TODO (done + pending tasks) is deleted at Gate 3 alongside the DELIVERY file.
 
 ### Skills and Workflow
 
 The workflow skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
 ```text
-PO brief / TL pre-check
-    ↓
-     /orchestrate-review <scope>  → docs/REVIEW-<scope>.md  (Code Dev + Auditor)
-    ↓
-👤  TL reads verdict: HEALTHY / NEEDS_ATTENTION / ACTION_REQUIRED
-    ↓
 [optional] TL:  /research <scope>  → docs/reference/RESEARCH-<scope>.md
 [optional] 👤  TL reads research: gaps to address in design?
     ↓
-TL:  /orchestrate-plan  → docs/TODO-<slug>.md  (TL + Reviewer + Auditor)
+TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
+  - create TODO if none exists
+  - refine TODO if one exists
+  - validate current state inline (no separate review step)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit)
+Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit → docs/AUDIT-<slug>.md)
     ↓
 👤  Gate 2: TL reviews delivery report    (all done_when passed?)
     ↓
@@ -169,13 +173,13 @@ ship
 🗑  Delete DELIVERY-<slug>.md  (temporary scaffolding — delete immediately after Gate 3)
 ```
 
-- `/orchestrate-review <scope>`: code↔doc accuracy + workflow artifact health -> TL verdict. Run after every delivery or before planning.
-- `/orchestrate-plan <slug>`: TL drafts plan -> Core Dev critiques -> TL decides -> produces `docs/TODO-<slug>.md`.
-- `/orchestrate-dev <slug>`: implements approved plan, prunes or deletes `docs/TODO-<slug>.md`, and produces `docs/DELIVERY-<slug>.md` with explicit Gate 3 cleanup instruction.
+- `/orchestrate-plan <slug>`: create or refine `docs/TODO-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
+- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), produce `docs/DELIVERY-<slug>.md`, auto-invoke sync-doc and delivery-audit.
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
-- `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs. Auto-invoked by `orchestrate-dev`.
-- `research <scope>`: free-form task comparing co-cli against peer systems, producing `docs/reference/RESEARCH-<scope>.md`. See reference repos in `docs/reference/` for key files per repo.
+- `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs -> `docs/AUDIT-<scope>.md`. Auto-invoked by `orchestrate-dev`.
+- `/research <scope>`: free-form discovery, producing `docs/reference/RESEARCH-<scope>.md`. Outside the delivery workflow. See reference repos in `docs/reference/` for key files per repo.
+- `/orchestrate-review`: **removed** — no longer part of the standard workflow.
 
 ## Reference Repos
 
-Peer CLI tools in `~/workspace_genai/` are used for design research. Key repos: `codex` (shell safety, sandbox), `claude-code` (permission engine), `openclaw` (hybrid memory search), `letta` (three-tier memory), `sidekick-cli` (approval UX), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, and `opencode`. File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`.
+Peer CLI tools in `~/workspace_genai/` are used for design research. Key repos: `codex` (shell safety, sandbox), `claude-code` (permission engine), `openclaw` (hybrid memory search), `letta` (three-tier memory), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, and `opencode`. File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`.

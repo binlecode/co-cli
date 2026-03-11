@@ -11,8 +11,6 @@ Direct execution skill — no planning ceremony. Read doc → read source → di
 - Use **sync-doc** when the fix is doc-only: wrong schema description, stale function name, phantom feature in a DESIGN doc. No code changes, no Gate 1 approval needed — it's a 5-minute correction, not a delivery.
 - Use **orchestrate-dev** when fixing the inaccuracy requires code changes, schema migrations, or new tests. Doc-only fixes don't warrant the full plan → dev → gates ceremony.
 
-**If invoked after `/orchestrate-review`:** pass the docs flagged as `blocking` by Code Dev as explicit args — fixes P0 items first rather than rediscovering them during a full-scope pass. Example: `/sync-doc DESIGN-knowledge DESIGN-core`.
-
 ## Invocation
 
 ```
@@ -109,7 +107,7 @@ If any doc had a stale file path in its Files section (source file doesn't exist
 
 ## Scope boundaries
 
-- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or `docs/REVIEW-*.md` / `docs/RESEARCH-*.md` files. These are permanent review and research records that are never edited by sync-doc.
+- **Only DESIGN docs** — never modify TODO docs, ROADMAP docs, CLAUDE.md, or `docs/reference/RESEARCH-*.md` / `docs/reference/ROADMAP-*.md` files. These are permanent research and reference records that are never edited by sync-doc.
 - **Factual fixes only** — never restructure sections, rename headings, or change the doc's scope
 - **No new sections** unless a shipped feature has zero coverage anywhere in the doc
 - **No code changes** — if you find a code gap (e.g., a setting in the doc that's missing from `config.py`'s env_map), document it as `*(no env var — code gap)*` in the Config table, don't fix the code. **Exception (step 2b2):** source-file docstring and comment fixes are required — when step 2b2 identifies stale API refs, decorator renames, or behaviour description mismatches in a source file's docstrings or inline comments, fix them directly in the source file using the Edit tool. Only docstring/comment text is in scope; functional logic changes remain forbidden.

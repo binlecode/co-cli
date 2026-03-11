@@ -11,9 +11,9 @@ Inventory every shipped feature from source. For each, verify it has honest DESI
 
 **Invocation:** `/delivery-audit <scope>`
 
-`<scope>` is a feature area, module name, or `all`. Output written to `docs/REVIEW-delivery-<scope>.md`.
+`<scope>` is a feature area, module name, or `all`. Output written to `docs/AUDIT-<scope>.md`.
 
-**Consumes:** source files, DESIGN docs. **Produces:** `docs/REVIEW-delivery-<scope>.md`
+**Consumes:** source files, DESIGN docs. **Produces:** `docs/AUDIT-<scope>.md`
 
 ---
 
@@ -27,9 +27,9 @@ Inventory every shipped feature from source. For each, verify it has honest DESI
 - `scope = all`: glob `docs/DESIGN-*.md`.
 - Otherwise: same prefix/substring match against `docs/DESIGN-*.md` filenames. If no match: use all DESIGN docs (feature may be documented outside its own module doc).
 
-**Create the output file** at `docs/REVIEW-delivery-<scope>.md`:
+**Create the output file** at `docs/AUDIT-<scope>.md`:
 ```
-# REVIEW: delivery/<scope> — Delivery Audit
+# Delivery Audit: <scope>
 _Date: <today>_
 
 ## What Was Scanned
@@ -126,4 +126,4 @@ Print terminal summary: scope, verdict, blocking count, minor count, output path
 - **Adversarial default:** Start assuming documentation has gaps. Every CLEAN classification must be positively justified — not inferred from absence of obvious problems.
 - **Partial is blocking for agent tools:** A tool that is only named in passing gives a developer no actionable information. It is underdocumented, not partially documented.
 - **Scope mismatch stops immediately:** If Phase 1 finds no matching source modules, stop — no output file.
-- **Output is permanent:** `docs/REVIEW-delivery-<scope>.md` is not temporary scaffolding.
+- **Output is permanent:** `docs/AUDIT-<scope>.md` is not temporary scaffolding.

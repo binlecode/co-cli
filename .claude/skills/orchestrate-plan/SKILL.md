@@ -5,11 +5,11 @@ description: Orchestrate the planning phase. TL drafts the plan, then spawns Cor
 
 # Plan Orchestration Workflow
 
-**TL is the orchestrator.** Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
+**TL is the orchestrator and the planning gate.** Plan will create or refine `docs/TODO-<slug>.md` — creating it for new work, refining an existing one before dev. TL validates current state before drafting — review is not a separate prerequisite. Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
 
 **Derive the slug** from the feature name: lowercase, hyphenated (e.g. `sqlite-fts`, `auth-refresh`, `knowledge-docs-restructure`).
 
-**Consumes:** docs/REVIEW-<scope>.md, docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md
+**Consumes:** docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md (created or refined)
 
 ---
 
@@ -67,12 +67,16 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 
 **Before writing, do:**
 1. Search the codebase for relevant modules, patterns, and tests related to the feature.
-2. Read related DESIGN and TODO docs in `docs/`. If `docs/REVIEW-<scope>.md` exists for this feature area, read it — carry forward any unresolved findings into the plan's Context section. A REVIEW verdict of `ACTION_REQUIRED` is a blocking pre-condition — stop and surface it rather than drafting over it:
+2. Read related DESIGN and TODO docs in `docs/`. **Current-state validation:** Before drafting, do two checks:
+   - **Doc/source accuracy:** Scan relevant source files and DESIGN docs for accuracy against the planned scope. Flag phantom features, schema mismatches, and stale module names.
+   - **Workflow artifact hygiene:** Check for orphaned DELIVERY docs (delivered but not deleted), stale TODO files with no remaining unshipped work, or WORKLOG files (removed concept — existing ones are historical records, not active artifacts). Note any hygiene issues in the Context section.
+   If the current state is too inconsistent to plan safely, stop and surface it:
    ```
-   ✗ REVIEW-<scope>.md verdict is ACTION_REQUIRED.
-   Resolve P0 items before planning. Run /sync-doc or fix TODO as indicated.
+   ✗ Current state is too inconsistent to plan safely.
+   Describe the specific inaccuracies found. Run /sync-doc to fix docs first.
    ```
-3. If `docs/TODO-<slug>.md` already exists, read it first. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
+   This check happens inline — no separate pre-planning step is required.
+3. If `docs/TODO-<slug>.md` already exists, read it. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
 4. For each open question you intend to list, first try to answer it by reading existing source files. An open question answerable by inspection weakens the plan and will be flagged by Core Dev.
 5. **For `doc-restructure` and `doc+code` tasks**: Run a **Code Accuracy Verification** pass — read each source file referenced by the target docs and check every factual claim against the code. List inaccuracies explicitly in the Context section before proposing structure changes.
 
@@ -214,21 +218,11 @@ Human decision required before proceeding.
 
 When stopping normally:
 
-1. **Save the Audit Log** — before stripping, write everything from the `---` separator through
-   the end of the file to `docs/PLAN-<slug>-audit.md` with this header prepended:
-   ```
-   # Plan Audit Log: <feature name>
-   _Slug: <slug> | Date: <today>_
-   ```
-   This file is permanent — not temporary scaffolding. It preserves the decision history
-   (why items were adopted, modified, or rejected across cycles) for future planning passes.
-   It lives in `docs/` alongside other workflow artifacts, not in `docs/reference/`.
-
-2. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
+1. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
    `# Audit Log` to the end of `docs/TODO-<slug>.md`. The TODO file must be clean after
    this step: only tasks and plan content remain.
 
-3. **Append the final section** to `docs/TODO-<slug>.md`:
+2. **Append the final section** to `docs/TODO-<slug>.md`:
 ```
 ## Final — Team Lead
 
