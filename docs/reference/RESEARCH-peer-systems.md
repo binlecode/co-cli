@@ -1,5 +1,5 @@
 # RESEARCH: peer repos and 2026 frontier assistant patterns
-_Date: 2026-03-08_
+_Date: 2026-03-11_
 
 This doc replaces the earlier file-level note sheet with a design review grounded in:
 
@@ -38,14 +38,14 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 |---|---|---|---|
 | `Codex` | Strongest shell-safety and sandboxing discipline; explicit execution boundaries; coding-first product shape | co already has approval-first execution and shell policy, but is less formal on execution hardening and more personal-operator oriented | Borrow command-policy rigor and execution safety patterns. Do not drift into a sandbox-first product identity. |
 | `Claude Code` | Memory hierarchy via `CLAUDE.md`; first-class subagents; mature permission surfaces | co is already aligned on scoped delegation, markdown-defined behavior, and approvals, but has a flatter memory model | Borrow scoped memory visibility and specialist-context patterns. Do not recenter the product around coding. |
-| `Gemini CLI` | Flexible permission patterns; strong connection to broader Gemini surfaces and long context | co has a stronger local-memory and approval story, but weaker cross-surface continuity | Borrow permission ergonomics and continuity ideas selectively. Do not copy broad product-surface ambition. |
+| `Gemini CLI` | Event-driven subagent task execution (`a2a-server`, `agent/executor`), deep browser agent integration (`browserAgentInvocation`), policy engine enhancements, and web fetching (`webfetch-stage-1`) | co has a stronger local-memory and approval story, but weaker cross-surface continuity and event-driven delegation | Borrow permission ergonomics, event-driven task models, and browser execution ideas selectively. Do not copy broad product-surface ambition. |
 | `Aider` | Very simple approval model; git-centric reversibility; trust through explicitness | co has richer workflows and tools, but also more complexity and more trust UX burden | Borrow simplicity and reversibility discipline. Do not assume co should collapse into a purely git-centric workflow. |
-| `OpenClaw` | Strongest local "personal operator" adjacency; practical hybrid retrieval and workflow orchestration; broader life/admin scope | co is closer on knowledge-work orientation and local operator feel, but narrower in surface area and stronger on approval-first boundaries | Borrow retrieval and operator-workflow patterns selectively. Do not absorb the full surface-area sprawl. |
+| `OpenClaw` | Agentic Control Protocol (ACP) support, subagent scoping/spawn limits, embedded runner compaction/failover, talk mode, and `cluster` concepts | co is closer on knowledge-work orientation and local operator feel, but narrower in scope and lacks explicit inter-agent protocols like ACP | Borrow ACP standard integration and subagent boundary (spawn limits) ideas. Do not absorb the full surface-area sprawl. |
 | `Letta` | Memory is product-central; typed in-context vs archival memory; async memory maintenance | co has a strong local memory substrate, but it is still flatter and less visibly typed | Borrow typed memory tiers and async maintenance ideas. Do not adopt a framework dependency wholesale. |
-| `Mem0` | Explicit add/update/delete/none memory semantics; graph memory; multimodal memory | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and user-model structure | Borrow explicit memory mutation semantics and stronger contradiction handling. Do not default to graph-heavy infrastructure. |
-| `Sidekick CLI` / `OpenCode` | Durable workflow, approvals, orchestration, and practical session control without heavyweight framework assumptions | co is directionally aligned and already has tasks, approvals, and skills, but can improve workflow polish and state continuity | Borrow lightweight workflow patterns and background-consolidation ideas. Do not add orchestration machinery for its own sake. |
-| `nanobot` | Ultra-lightweight OpenClaw alternative (~4k lines); broad chat-app integration (Telegram, Discord, Feishu); native heartbeat/cron tasks | co has background tasks and CLI focus, but narrower external channel integration | Borrow lightweight heartbeat/cron execution patterns and chat-app integration ideas. Do not abandon CLI-first origins for a purely chat-bot focus. |
-| `TinyClaw` | Multi-agent teams via queue-based message passing; purely file-based workspaces; bash-driven heartbeat | co has sub-agent delegation but lacks multi-agent fan-out/fan-in conversations and continuous background heartbeats | Borrow queue-based teammate handoff and simple file-driven heartbeats. Do not adopt the black-box CLI wrapper architecture. |
+| `Mem0` | Maturation into SQLite vector stores, official OpenClaw integration, explicit mutation semantics, graph/multimodal memory | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and SQLite/vector maturity | Borrow explicit memory mutation semantics, robust SQLite vector handling, and cross-assistant integrations. Do not default to graph-heavy infrastructure. |
+| `Sidekick CLI` / `OpenCode` | Refined TUI with new dialogs, workspace routing middleware, DB migrations (moving 'org' to 'state') | co is directionally aligned but can improve workflow polish, TUI dialogues, and clean state routing | Borrow lightweight workflow routing, state management discipline, and TUI polish. Do not add orchestration machinery for its own sake. |
+| `nanobot` | Broad chat-app integration (added WeCom), native heartbeat/cron tasks, new memory consolidation token logic, config migration tests | co has background tasks and CLI focus, but narrower external channel integration and consolidation logic | Borrow memory consolidation logic and broad channel connectivity ideas. Do not abandon CLI-first origins for a purely chat-bot focus. |
+| `TinyClaw` | Huge monorepo refactor (`packages/core`, `cli`, `server`, etc.), explicit structured queues (`queues.ts`, `router.ts`), and SSE events (`docs/SSE-EVENTS.md`) | co lacks multi-agent fan-out/fan-in conversations, robust event routers, and continuous background heartbeats | Borrow structured queue routing, SSE events for observability, and monorepo modularity. Do not adopt the old black-box CLI wrapper architecture. |
 
 ---
 
@@ -114,12 +114,13 @@ Strong evidence:
 
 - Anthropic subagents
 - OpenAI unified agent workflows with multiple tool modes
-- TinyClaw queue-based teammate message passing and isolated file workspaces
+- OpenClaw subagent scoping and explicit spawn depth limits
+- TinyClaw's shift to explicit structured queues (`queues.ts`, `router.ts`) and SSE events for agent-to-agent observability
 
 Design implication for co:
 
 - current delegation work is aligned
-- the gap is not existence of subagents, but making them useful for long-running bounded workflows, potentially using queue-based fan-out like TinyClaw
+- the gap is not existence of subagents, but making them useful for long-running bounded workflows, potentially using explicit structured queues and SSE-based observability like TinyClaw, while enforcing strict spawn limits like OpenClaw
 
 ## 4.5 Multimodal and cross-surface continuity is rising fast
 
@@ -134,6 +135,17 @@ Design implication for co:
 
 - terminal-first remains viable
 - terminal-only is probably not the long-term ceiling if the goal is a true personal operator
+
+## 4.6 Agent-to-agent communication is standardizing (ACP)
+
+Strong evidence:
+
+- OpenClaw's adoption of the Agentic Control Protocol (ACP), `acpx` plugins, and ACP translators/servers
+
+Design implication for co:
+
+- bespoke agent communication protocols will become a liability
+- co should investigate standardizing its agent-to-agent and tool-to-agent interfaces using emerging standards like ACP instead of custom local IPC
 
 ---
 
