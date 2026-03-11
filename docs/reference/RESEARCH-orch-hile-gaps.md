@@ -4,7 +4,9 @@ Task type: doc
 
 ## Context
 
-Source: SOTA comparison analysis (2026-03-07). Four architectural gaps identified in the
+Date: 2026-03-11
+
+Source: SOTA comparison analysis (updated 2026-03-11). Five architectural gaps identified in the
 orchestration skill cycle that require non-trivial infrastructure, new agent patterns, or
 fundamental changes to the execution model. Documented here for future planning — not ready
 for implementation without a dedicated design and review cycle per gap.
@@ -83,7 +85,7 @@ human re-runs `/orchestrate-dev`. This is a full cycle for what may be a one-lin
 
 ### SOTA Pattern
 
-Top systems (OpenHands, Devin 2) add a diagnosis-and-retry loop before human escalation:
+Top systems (OpenHands, Devin 2, Gemini CLI via event-driven `a2a-server` tasks) add a diagnosis-and-retry loop before human escalation:
 
 ```
 task fails done_when
@@ -219,15 +221,42 @@ in the delivery report for TL review at Gate 2.
 
 ---
 
+## Gap 5 — No execution observability or standard agent protocols
+
+### Problem
+
+Orchestration currently uses a bespoke text-based delegation protocol (`delegation.py`). The user can't easily see the internal event stream of what a subagent is doing. Furthermore, there is no cycle detection or depth limit (like OpenClaw's subagent spawn depth limits), risking infinite loops if subagents continually spawn other subagents.
+
+### SOTA Pattern
+
+Leading systems solve this through structured observability and standardized protocols:
+- **OpenClaw:** Added Agentic Control Protocol (ACP) support, and explicit subagent spawn depth limits to prevent runaway delegation loops.
+- **Gemini CLI:** Shifted towards event-driven subagent task execution (`a2a-server`) and deep browser agent capabilities.
+
+### Design Notes for Future Planning
+
+- Adopt standard ACP or SSE streams for subagent logging to provide real-time observability into subagent thought processes and tool use.
+- Add a hard `spawn_depth` parameter to `delegation.py` to enforce a maximum delegation depth.
+- Event streams should be surfaced to the user in a collapsible or filtered UI so they can monitor progress without being overwhelmed.
+
+### Estimated Scope
+
+- Update `delegation.py` with `spawn_depth` limits and tracking.
+- Implement SSE or ACP event emitting for subagent actions.
+- ~1 design cycle + 1 dev cycle.
+
+---
+
 ## Recommended Planning Order
 
 Dependencies and sequencing:
 
 ```
-Gap 3 (impact analysis)   — independent, no prerequisites, highest planning ROI
+Gap 5 (observability)      — independent, highly recommended for safety (spawn limits)
+Gap 3 (impact analysis)    — independent, no prerequisites, highest planning ROI
 Gap 1 (worktree isolation) — independent, prerequisite for Gap 2
-Gap 4 (eval harness)      — independent, easier after Gap 3 ships
-Gap 2 (dynamic re-plan)   — requires Gap 1 to ship first
+Gap 4 (eval harness)       — independent, easier after Gap 3 ships
+Gap 2 (dynamic re-plan)    — requires Gap 1 to ship first
 ```
 
 Each gap is a separate `/orchestrate-plan` → `/orchestrate-dev` cycle. Do not bundle.

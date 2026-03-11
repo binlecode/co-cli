@@ -1,5 +1,7 @@
 # RESEARCH: Cron Scheduler — Peer Review & Adoption Design
 
+**Date:** 2026-03-11
+
 **Scope:** OpenClaw's cron system reviewed as primary reference; adoption analysis and design
 proposal for co-cli.
 
@@ -88,7 +90,7 @@ are cleared to recover from hard crashes.
 For `sessionTarget="isolated"` + `payload.kind="agentTurn"`:
 
 1. Resolve full agent config (model, fallbacks, auth profiles, workspace, sandbox skills)
-2. Run agent via `runCliAgent(message, ...)` with timeout AbortController
+2. Run agent via `runCliAgent(message, ...)` with timeout AbortController. Recent updates show the maturation of this embedded runner with explicit memory compaction and more robust failover handling during execution loops.
 3. Extract text output from agent response
 4. Dispatch delivery (announce / webhook) if configured
 5. Return `CronRunOutcome` with status, summary, session IDs, usage telemetry
@@ -165,29 +167,35 @@ Multi-account: delivery can target a specific `accountId` for multi-bot setups.
 
 ---
 
-## 2. TinyClaw Heartbeat System Review
+## 2. Minimal heartbeat-loop pattern
 
 ### 2.1 Architecture Overview
 
-Unlike OpenClaw's complex cron engine, TinyClaw takes a hyper-minimalist approach to recurring tasks using a "heartbeat" mechanism:
+Unlike OpenClaw's complex cron engine, a hyper-minimalist recurring-task pattern uses a simple "heartbeat" loop:
 
-- **Loop Engine**: A simple bash script (`lib/heartbeat-cron.sh`) runs inside a `tmux` pane. It loops indefinitely, sleeping for `heartbeat_interval` seconds (default 3600).
-- **Queue Injection**: On each tick, the bash script iterates over all configured agents and injects a new message directly into the SQLite queue (`tinyclaw.db`) with `channel="heartbeat"` and the contents of a `heartbeat.md` file.
+- **Loop Engine**: A simple background shell loop runs continuously and sleeps for a fixed `heartbeat_interval`.
+- **Queue Injection**: On each tick, the loop injects a heartbeat message into the runtime queue using the contents of a `heartbeat.md` file.
 - **Execution Payload**: There is no schedule parser or RPC. The payload is literally the text from `<agent_workspace>/heartbeat.md` (e.g., "Check for pending tasks. Check for errors. Take action if needed.").
 - **Smart Pruning**: To prevent the queue from backing up if an agent is busy, the script checks the `messages` table and skips enqueuing a new heartbeat if one is already pending or processing for that agent.
 
-### 2.2 What TinyClaw Gets Right
+### 2.2 Evolution in Peer Systems
+
+Recent updates in peer systems show divergence in how this minimalist pattern is applied:
+- **nanobot**: Its heartbeat loop (`nanobot/agent/loop.py`) was updated to include token-aware memory consolidation logic during background ticks (`test_loop_consolidation_tokens.py`). This demonstrates that the minimalist heartbeat loop can effectively manage complex background tasks like token-budgeted memory compaction.
+
+### 2.3 What the minimalist pattern gets right
 
 - **Extreme Transparency**: The schedule is just a `sleep` loop. The payload is just a markdown file. Users can easily understand and modify `heartbeat.md` to change what the agent checks periodically.
 - **Queue Backpressure**: Skipping heartbeat injection when the agent is already processing one prevents queue flooding.
 - **No Complex Math**: No drift formulas, no timezone parsing, no caching expressions.
 
-### 2.3 Why Co Should Stick to the OpenClaw Model
+### 2.4 Why co should stick to the structured model
 
-While TinyClaw's approach is brilliantly simple for a 24/7 background chatbot, it is too blunt for a precise CLI tool:
-- Co needs to support one-shot reminders ("remind me in 30m"). TinyClaw's heartbeat cannot do deferred one-shot execution.
-- Co needs to support specific intervals per job ("run script X daily", "run script Y hourly"). TinyClaw fires the same `heartbeat.md` payload at a single global interval.
-- Therefore, the proposed SQLite-backed `ScheduledJob` table inspired by OpenClaw remains the correct target architecture for `co-cli`.
+While the heartbeat approach is simple and capable of complex embedded tasks (like `nanobot`'s memory consolidation), it is fundamentally misaligned with the needs of a precise CLI tool:
+- Co needs to support one-shot reminders ("remind me in 30m"). A fixed heartbeat loop cannot do deferred one-shot execution.
+- Co needs to support specific intervals per job ("run script X daily", "run script Y hourly"). A single global heartbeat fires the same `heartbeat.md` payload at one interval.
+- Even in agent frameworks, the simple flat-file loop often hits a ceiling for observability and complexity.
+- Therefore, the proposed SQLite-backed `ScheduledJob` table inspired by OpenClaw remains the correct target architecture for `co-cli`. The structured model provides the observability and precise scheduling that a simple flat-file loop lacks.
 
 ---
 
