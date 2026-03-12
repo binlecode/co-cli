@@ -40,7 +40,7 @@ User ──▶ Typer CLI (main.py) ──▶ Agent (pydantic-ai) ──▶ Tools
          + rich console
 ```
 
-See `docs/DESIGN-core.md` for system overview (architecture diagrams), agent loop internals, CoDeps, orchestration, and approval mechanics. See `docs/DESIGN-index.md` for doc navigation and config/module reference.
+See `docs/DESIGN-system.md` for system overview (architecture diagrams), `CoDeps`, capability surface, and security boundaries. See `docs/DESIGN-core-loop.md` for agent loop internals, orchestration, and approval mechanics. See `docs/DESIGN-index.md` for doc navigation and config/module reference.
 
 ### Knowledge System
 
@@ -53,18 +53,18 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Python 3.12+** with type hints everywhere.
 - **Imports**: always explicit; never `from X import *`.
 - **Comments**: no trailing comments; put comments on the line above, not at end of code lines.
-- **`__init__.py`**: prefer empty (docstring-only); no re-exports unless the module is a public API facade.
+- **`__init__.py`**: prefer empty (docstring-only); no re-exports.
 - **`_prefix.py` helpers**: internal/shared helpers in a package use a leading underscore. They are private to the package, not registered as tools, and not part of the public API.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
-- **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design for MVP first. Use protocols/abstractions so post-MVP enhancements require zero caller changes.
+- **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.
 
 ### Agents, Tools, and Config
 
 - **Tool pattern**: new tools must use `agent.tool()` with `RunContext[CoDeps]`. Do not use `tool_plain()` for new tools.
 - **Tool deps**: access runtime resources via `ctx.deps`. Do not import `settings` directly in tool files. Do not put approval prompts inside tools.
-- **Tool approval**: side-effectful tools use `requires_approval=True`. Approval UX lives in the chat loop, not inside tools.
+- **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations (file reads, searches, network fetches) do not. Approval UX lives in the chat loop, not inside tools.
 - **Tool return type**: tools returning user-facing data must return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) plus metadata fields such as `count` or `next_page_token`. Never return raw `list[dict]`.
-- **No global state in tools**: settings are injected through `CoDeps`, not imported directly in tool files.
+- **No global state in tools**: tools must not hold or mutate module-level state. All runtime resources are accessed through `ctx.deps`.
 - **CoDeps is grouped, not flat**: `CoDeps` holds four sub-groups:
   - `services`: runtime objects such as `ShellBackend`, `KnowledgeIndex`, `TaskRunner`
   - `config`: read-only scalars from `Settings`
@@ -81,33 +81,26 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 ### Testing
 
-- **Testing rules are mandatory**: these are enforced repository policy, not guidance. Any test or test change that violates them must be fixed or removed before regression runs or merge.
-- **Only pytest files in `tests/`**: all files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts such as demos, evaluations, and utilities go in `scripts/`.
+- **Testing rules are mandatory**: these are enforced repository policy, not guidance. Any test or test change that violates them must be fixed or removed before regression testing or merge.
+- **Only pytest files in `tests/`**: all files in `tests/` must be pytest test files (`test_*.py` or `*_test.py`). Non-test scripts such as demos, one-off utilities, and helper scripts go in `scripts/`. Evaluations go in `evals/`.
 - **Framework**: `pytest` + `pytest-asyncio`.
-- **End-to-end validation belongs in `evals/`**: chain and capability validation goes to `evals/`, not `tests/`. e2e tests are expensive; configure `LLM_PROVIDER` and model settings before running evals.
+- **End-to-end validation belongs in `evals/`**: chain and capability validation goes to `evals/`, not `tests/`.
 - **Evals run against the real configured system**: evals must never override or fake config settings. Do not add `_ENV_DEFAULTS` blocks, `os.environ` overrides, or any fallback that shadows the user's real settings. If a prerequisite (API key, personality, provider) is not configured, check at runtime and skip gracefully — do not silently inject defaults.
 - **Eval infrastructure stays in `evals/`**: shared eval helpers (frontends, fixtures, span analysis, check engine) belong in `evals/_*.py` sub-modules, not in `co_cli/`. The eval package is the correct boundary for eval-centric code.
-- **Functional tests only**: no mocks or stubs. Tests exercise real code paths with real services such as real SQLite, real filesystem, and real FTS5 index. No unit tests: never test string constants, internal helpers in isolation, or assert on implementation details. Every test must exercise a real code path that a user or the agent would trigger.
-- **No fake deps**: `RunContext` is instantiable via `pydantic_ai._run_context.RunContext(deps=deps, model=agent.model, usage=RunUsage())`. Tests use real `CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(...))` with real `RunContext`. No custom fake dataclass scaffolding. Any deviation requires explicit approval.
-- **No mocks, stubs, or monkeypatching**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or any other form of patching. If a behavior cannot be tested without injecting fake dependencies, the production API is wrong and must be fixed. The only exception is environment variables via `monkeypatch.setenv` when testing config parsing.
-- **IO-bound tests must have explicit timeouts**: wrap each individual `await` call to external services such as LLMs, network, and subprocess spawning with `asyncio.timeout(N)` so tests fail fast instead of hanging. Never wrap multiple sequential awaits or retry loops in one shared timeout block. Timeouts must be `<= 60s`. Use adaptive values within that cap: set `N = expected_worst_case + safety_margin`, not a flat ceiling. Guidelines:
-  - subprocess lifecycle tests: `<= 15s`
-  - single HTTP requests: `<= 30s`
-  - HTTP with retries/backoff: `<= 30s` and verify against tool retry config
-  - LLM summarization: `<= 60s`
-  - full agent runs: `<= 60s`
-  - local SQLite/filesystem tests: no timeout needed
-- Let `TimeoutError` propagate; pytest reports it as a hard failure automatically. No try/catch wrapper is needed.
-- **Timeout = fail fast, then diagnose**: when a test times out, treat it as a hard failure. Fail-fast is mandatory and repository-enforced: pytest must stop on the first failure (`-x`). Stop immediately and check the trace log (`uv run co logs` or query `.co-cli/co-cli.db`) to find the root cause before touching any timeout value. Common causes: broken dependency, unsynced knowledge index, Ollama model queue contention from a prior cancelled request, wrong model context size. Never increase `asyncio.timeout` as a first response — fix the underlying issue. Never re-run hoping it clears.
+- **Functional tests only — no unit tests**: NO unit tests, never. All pytest tests must be functional tests that exercise real code paths with real services (real SQLite, real filesystem, real FTS5 index). Tests exist to find bugs in critical functionality, not to achieve coverage percentages. Every test must target a real failure mode a user or the agent would hit. Never test string constants, internal helpers in isolation, or assert on implementation details.
+- **No fake deps**: use the real `RunContext` and real `CoDeps` — no fakes, no stubs, no custom scaffolding, no exceptions. Tests use real `CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(...))` with real `RunContext`.
+- **No mocks, stubs, or monkeypatching**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or any other form of patching. If a behavior cannot be tested without injecting fake dependencies, the production API is wrong and must be fixed. No exceptions.
+- **IO-bound tests must have explicit timeouts**: wrap each individual `await` call to external services (LLMs, network, subprocess) with `asyncio.timeout(N)` so tests fail fast instead of hanging. Never wrap multiple sequential awaits or a retry loop in one shared timeout block. Local SQLite/filesystem calls do not need timeouts. Let `TimeoutError` propagate — no try/catch wrapper.
+- **Timeout = full stop**: when a test times out, stop all testing immediately. Do not re-run, do not increase the timeout value. Check the trace log (`uv run co logs`) to find the root cause and fix it before running any test again.
 - **Clean up tests before regression**: before running the full test suite after any code change, first remove or update tests that are now stale, redundant, or policy-violating for the changed code. Stale tests pollute failure signals and make real regressions harder to spot. Only run the full regression after the test file is clean.
 - **Policy-violating tests block regression**: do not continue to broader test runs while a timeout, mock/stub usage, fake dep pattern, skip, or other rules violation is still present. Fix the first violation, then resume from there.
 - **Remove stale tests**: a test that exercises a removed or renamed API, asserts on a deleted constant, or depends on infrastructure that no longer exists must be deleted, not skipped or commented out. If you change a public API such as a function signature, return shape, or class name, scan `tests/` for callers and update or remove them in the same commit.
 - **Critical functionality focus**: each test must validate behavior that matters, such as a tool returning correct results, a pipeline producing expected output, or a safety invariant holding. Do not write tests for trivial paths such as empty input -> empty output, negative edge cases with no real-world trigger, or assertions that merely restate what the code does. Ask: “if this test were deleted, would a real regression go undetected?” If no, do not write it.
 - **No skips**: tests must pass or fail, never skip. Exception: API-dependent tests requiring paid external credentials (Brave Search) may use `pytest.mark.skipif` when the key is absent, because without a valid key those tests hang on network timeouts rather than failing with a useful error.
-- **Google tests resolve credentials automatically** through explicit `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`.
+- **Google credentials**: do not configure or inject credentials in tests. They resolve automatically through `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`.
 - **Test timing is always on**: `pyproject.toml` enforces `-x --durations=0` so every run is fail-fast and reports per-test wall time. When adding a test, check that its timing is proportionate to what it exercises; unexpectedly slow tests usually indicate over-broad scope or missing `asyncio.timeout`.
 - **No `conftest.py`**: eat your own dogfood. Tests run against the real `config.py` settings singleton, not overridden fixtures. If a test fails because of a wrong default in `config.py`, fix `config.py`. Never add `conftest.py` to inject test-only config. Tests are the first consumer of production config; if the default is broken for tests, it is broken for users too.
-- **Test data isolation and cleanup**: functional tests must not leave data in shared stores (knowledge index, memory dir, library dir, SQLite DBs). Use `tmp_path` (pytest-managed temp dir, auto-deleted after the test) for all filesystem writes. For shared stores that cannot use `tmp_path`, delete test-introduced records in a `try/finally` block as best effort. Test-introduced records that land in any shared store must use a `test-` prefix in their identifier (e.g. `session_id="test-..."`, slug `test-...`, memory tag `test`). This makes stray records identifiable and safe to bulk-delete.
+- **Test data isolation and cleanup**: functional tests must not leave data in shared stores (knowledge index, memory dir, library dir, SQLite DBs). Use `tmp_path` (pytest-managed temp dir, auto-deleted after the test) for all filesystem writes. For shared stores that cannot use `tmp_path`, delete test-introduced records in a `try/finally` block. Cleanup is mandatory — if it fails, the test must explicitly fail and report the failure. Test-introduced records that land in any shared store must use a `test-` prefix in their identifier (e.g. `session_id="test-..."`, slug `test-...`, memory tag `test`). This makes stray records identifiable and safe to bulk-delete.
 
 ## Docs
 
@@ -124,22 +117,20 @@ Every component DESIGN doc follows this four-section template:
 
 Never paste source code into DESIGN docs. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
 
-Start at `docs/DESIGN-index.md` for navigation, config reference, and module index. `docs/DESIGN-core.md` covers the agent loop, CoDeps, orchestration, and approval. All 20+ component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
+Start at `docs/DESIGN-index.md` for navigation, config reference, and module index. `docs/DESIGN-system.md` covers top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/DESIGN-core-loop.md` covers the agent loop, orchestration, and approval flow. All 20+ component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
 
-`docs/reference/` is for research and background material such as `RESEARCH-*` and `ROADMAP-*`, and is not linked from DESIGN docs.
+`docs/reference/` is for research and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from DESIGN docs.
 
 Workflow artifact placement:
 
 - `AUDIT-*.md`, `REPORT-*.md`, `TODO-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
-- `docs/reference/` is for research only (`RESEARCH-*`, `ROADMAP-*`).
 
 Workflow artifact lifecycle:
 
-- `WORKLOG-<scope>.md` — **removed concept**. Existing files are historical records only; do not create new ones. Planning rationale lives in `TODO-<slug>.md` alongside the task record and is deleted with the TODO at Gate 3.
 - `AUDIT-<scope>.md` is permanent. It is the `/delivery-audit` inverse coverage record (tools/settings/commands vs DESIGN docs). Only `/delivery-audit` produces AUDIT- files.
 - `REPORT-<scope>.md` is permanent. It is an eval or pipeline run report. Only eval runs produce REPORT- files.
-- `TODO-<slug>.md` tracks active work through full delivery. `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The full task record is preserved for debugging, troubleshooting, and revert. The file is deleted only at Gate 3 (PO acceptance), in the same session that deletes the DELIVERY file.
-- `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same work session that records acceptance.
+- `TODO-<slug>.md` tracks active work through full delivery. `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The full task record is preserved for debugging, troubleshooting, and revert. The file is deleted only at Gate 3 (PO acceptance), in the same Claude Code workflow session that deletes the DELIVERY file.
+- `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same Claude Code workflow session that records acceptance.
 
 TODO lifecycle:
 
@@ -178,7 +169,6 @@ ship
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
 - `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs -> `docs/AUDIT-<scope>.md`. Auto-invoked by `orchestrate-dev`.
 - `/research <scope>`: free-form discovery, producing `docs/reference/RESEARCH-<scope>.md`. Outside the delivery workflow. See reference repos in `docs/reference/` for key files per repo.
-- `/orchestrate-review`: **removed** — no longer part of the standard workflow.
 
 ## Reference Repos
 

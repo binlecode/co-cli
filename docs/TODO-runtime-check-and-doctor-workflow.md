@@ -8,7 +8,7 @@
 
 ## Context
 
-Related artifact: permanent review history and rationale should live in a `docs/WORKLOG-runtime-check-and-doctor-workflow.md` record. This TODO is the implementation source of truth.
+This TODO is the implementation source of truth.
 
 **Current state verified against source:**
 
@@ -105,7 +105,7 @@ skills/doctor.md
 
 ## Implementation Plan
 
-### TASK-1: Create `_probes.py` with shared factual probes
+### ✓ DONE — TASK-1: Create `_probes.py` with shared factual probes
 
 **files:**
 - `co_cli/_probes.py` (create)
@@ -127,7 +127,7 @@ skills/doctor.md
 
 ---
 
-### TASK-2: Persist tool surface and skill surface in `CoSessionState`
+### ✓ DONE — TASK-2: Persist tool surface and skill surface in `CoSessionState`
 
 **files:**
 - `co_cli/deps.py` (modify — add `tool_names`, `tool_approvals`, `active_skill_name` to `CoSessionState`)
@@ -147,7 +147,7 @@ skills/doctor.md
 
 ---
 
-### TASK-3: Create `_runtime_check.py` with `check_runtime(deps) -> RuntimeCheck`
+### ✓ DONE — TASK-3: Create `_runtime_check.py` with `check_runtime(deps) -> RuntimeCheck`
 
 **files:**
 - `co_cli/_runtime_check.py` (create)
@@ -204,7 +204,7 @@ Implement `check_runtime(deps: CoDeps) -> RuntimeCheck`:
 
 ---
 
-### TASK-4: Create `_startup_check.py` with `check_startup(deps, frontend) -> None`
+### ✓ DONE — TASK-4: Create `_startup_check.py` with `check_startup(deps, frontend) -> None`
 
 **Rationale:** `_model_check.py` currently mixes startup policy (fail-fast gating, error emission) with factual probing. This conflation makes it impossible to reuse the same provider/model facts at runtime without triggering startup side-effects. Separating them gives `check_runtime` a clean probe layer to call without startup policy interference.
 
@@ -231,7 +231,7 @@ Implement `check_runtime(deps: CoDeps) -> RuntimeCheck`:
 
 ---
 
-### TASK-5: Update `check_capabilities` to use `check_runtime`
+### ✓ DONE — TASK-5: Update `check_capabilities` to use `check_runtime`
 
 **files:**
 - `co_cli/tools/capabilities.py` (modify)
@@ -249,7 +249,7 @@ Implement `check_runtime(deps: CoDeps) -> RuntimeCheck`:
 
 ---
 
-### TASK-6: Rewrite `/doctor` skill as structured troubleshooting workflow
+### ✓ DONE — TASK-6: Rewrite `/doctor` skill as structured troubleshooting workflow
 
 **files:**
 - `co_cli/skills/doctor.md` (modify)
@@ -275,7 +275,7 @@ Keep skill body under 400 tokens. Doctor recommends — does not repair. Do not 
 
 ---
 
-### TASK-7: Migrate `_bootstrap.py` Step 4 to `check_runtime`
+### ✓ DONE — TASK-7: Migrate `_bootstrap.py` Step 4 to `check_runtime`
 
 **files:**
 - `co_cli/_bootstrap.py` (modify — Step 4 integration health)
@@ -292,7 +292,7 @@ Keep skill body under 400 tokens. Doctor recommends — does not repair. Do not 
 
 ---
 
-### TASK-8: Tests
+### ✓ DONE — TASK-8: Tests
 
 **files:**
 - `tests/test_runtime_check.py` (create)
@@ -339,12 +339,12 @@ Update `test_capabilities.py` if it exists: assert that `check_capabilities` ret
 
 ---
 
-### TASK-9: Update DESIGN docs
+### ✓ DONE — TASK-9: Update DESIGN docs
 
 **files:**
 - `docs/DESIGN-doctor.md` (modify — reflect `_probes.py` + `check_runtime` + doctor as workflow)
 - `docs/DESIGN-system-bootstrap.md` (modify — update startup sequence: `check_startup` separate from probing; Step 4 uses `check_runtime`)
-- `docs/DESIGN-core.md` (modify — add `tool_names`, `tool_approvals` to `CoSessionState` table)
+- `docs/DESIGN-system.md` (modify — add `tool_names`, `tool_approvals` to `CoSessionState` table)
 - `docs/DESIGN-tools-execution.md` (modify — add `_probes.py` and `_runtime_check.py` entries)
 - `docs/DESIGN-index.md` (modify — add `_probes.py`, `_runtime_check.py`, `_startup_check.py` to module index)
 
@@ -390,5 +390,4 @@ Plan approved.
 
 > Gate 1 complete.
 > Implementation source of truth: this TODO.
-> Review history and rationale should be preserved in `docs/WORKLOG-runtime-check-and-doctor-workflow.md`.
 > Next step: `/orchestrate-dev runtime-check-and-doctor-workflow`

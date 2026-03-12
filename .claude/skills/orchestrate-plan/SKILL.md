@@ -69,7 +69,7 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
 1. Search the codebase for relevant modules, patterns, and tests related to the feature.
 2. Read related DESIGN and TODO docs in `docs/`. **Current-state validation:** Before drafting, do two checks:
    - **Doc/source accuracy:** Scan relevant source files and DESIGN docs for accuracy against the planned scope. Flag phantom features, schema mismatches, and stale module names.
-   - **Workflow artifact hygiene:** Check for orphaned DELIVERY docs (delivered but not deleted), stale TODO files with no remaining unshipped work, or WORKLOG files (removed concept — existing ones are historical records, not active artifacts). Note any hygiene issues in the Context section.
+   - **Workflow artifact hygiene:** Check for orphaned DELIVERY docs (delivered but not deleted) and stale TODO files with no remaining unshipped work. Note any hygiene issues in the Context section.
    If the current state is too inconsistent to plan safely, stop and surface it:
    ```
    ✗ Current state is too inconsistent to plan safely.
