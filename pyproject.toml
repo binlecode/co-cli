@@ -35,7 +35,6 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
-    "respx>=0.21.0",
 ]
 reranker = [
     "fastembed>=0.4.0",
@@ -43,3 +42,4 @@ reranker = [
 
 [tool.pytest.ini_options]
 addopts = "-x --durations=0"
+asyncio_default_fixture_loop_scope = "function"
