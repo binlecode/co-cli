@@ -100,7 +100,7 @@ Confirmed in `_fts_search()` (line 569+) and `_run_chunks_fts()` (line 679+).
 | articles.py: `index_chunks` after `index` | **Full** | Implicitly covered; Files table references `articles.py`. |
 | google_drive.py: `index_chunks` after `index` | **Full** | Section 2.2 notes `remove_chunks` callers via sync_dir; Files table references `google_drive.py`. |
 
-### `docs/DESIGN-flow-knowledge-lifecycle.md`
+### `docs/DESIGN-knowledge.md`
 
 | Feature | Coverage Level | Notes |
 |---------|---------------|-------|
@@ -143,7 +143,7 @@ Confirmed in `_fts_search()` (line 569+) and `_run_chunks_fts()` (line 679+).
 
 5. **Blocking gap check**: `index_chunks()` and `remove_chunks()` are internal `KnowledgeIndex` methods, not agent-registered tools. They are not in DESIGN-tools.md (correct — they are engine internals). No blocking gap from tool coverage rules.
 
-6. **One blocking gap found**: `DESIGN-system-bootstrap.md` — confirmed via grep: the bootstrap design doc has zero mentions of chunk indexing in startup sync. The startup sync sequence documented there for library files does not mention the `index_chunks()` call that was added. However, `DESIGN-flow-knowledge-lifecycle.md` Part 2 Step 1b is the authoritative source for the sync sequence and covers this correctly. The bootstrap doc is a higher-level summary that explicitly defers to the flow doc. Severity: **not blocking** on that basis.
+6. **One blocking gap found**: `DESIGN-system-bootstrap.md` — confirmed via grep: the bootstrap design doc has zero mentions of chunk indexing in startup sync. The startup sync sequence documented there for library files does not mention the `index_chunks()` call that was added. However, `DESIGN-knowledge.md` now owns the sync sequence and covers this correctly. The bootstrap doc is a higher-level summary that explicitly defers to the knowledge doc. Severity: **not blocking** on that basis.
 
    Re-examining strictly: the only place a gap remains is `DESIGN-index.md` lines 166–167 containing stale descriptions for `knowledge_hybrid_vector_weight` and `knowledge_hybrid_text_weight`. These descriptions predate the RRF change and now misrepresent the purpose of those settings. Since `DESIGN-index.md` is the project-wide config reference, a stale entry there is a real gap even if the authoritative knowledge doc is correct.
 
@@ -164,15 +164,15 @@ Confirmed in `_fts_search()` (line 569+) and `_run_chunks_fts()` (line 679+).
 
 All core chunking-rrf deliverables have honest, complete DESIGN doc coverage:
 
-- `_chunker.py` / `chunk_text()` — fully documented in `DESIGN-knowledge.md` Section 2.2 and `DESIGN-flow-knowledge-lifecycle.md` Owning Code table
+- `_chunker.py` / `chunk_text()` — fully documented in `DESIGN-knowledge.md`
 - `chunks` / `chunks_fts` / `chunks_vec` schema — fully documented in `DESIGN-knowledge.md` Section 2.2
 - `index_chunks()` / `remove_chunks()` — fully documented with semantics, atomicity, and guard conditions
 - FTS source routing (memory → `docs_fts`, non-memory → `chunks_fts`) — fully documented in both knowledge docs
 - RRF merge (k=60) — fully documented with formula, Cormack citation, and note that weight parameters are ignored
 - `knowledge_chunk_size` / `knowledge_chunk_overlap` — fully documented in `DESIGN-knowledge.md` Section 3.1, `DESIGN-index.md`, and `DESIGN-core.md` CoConfig table
-- Articles tool `index_chunks` call path — documented in `DESIGN-flow-knowledge-lifecycle.md` Part 3
-- Google Drive tool `index_chunks` call path — documented in `DESIGN-flow-knowledge-lifecycle.md` Part 7
-- Library startup sync `index_chunks` — documented in `DESIGN-flow-knowledge-lifecycle.md` Part 2
+- Articles tool `index_chunks` call path — documented in `DESIGN-knowledge.md`
+- Google Drive tool `index_chunks` call path — documented in `DESIGN-knowledge.md`
+- Library startup sync `index_chunks` — documented in `DESIGN-knowledge.md`
 
 ### Fix Required
 
@@ -185,4 +185,4 @@ The corrected phrasing is already used verbatim in `DESIGN-knowledge.md` Section
 
 ---
 
-**Summary:** scope=chunking-rrf | verdict=GAPS_FOUND | blocking=1 | minor=1 | output=docs/REVIEW-delivery-chunking-rrf.md
+**Summary:** scope=chunking-rrf | verdict=GAPS_FOUND | blocking=1 | minor=1 | output=docs/AUDIT-chunking-rrf.md

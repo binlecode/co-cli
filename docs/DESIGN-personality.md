@@ -404,7 +404,9 @@ This DESIGN doc keeps only the contract-level view:
 
 Implementation details (run loop, error handling, check semantics, outputs, tracing) are intentionally source-of-truth in:
 - `evals/eval_personality_behavior.py`
-- `evals/_common.py`
+- `evals/_deps.py`
+- `evals/_checks.py`
+- `evals/_trace.py`
 - `evals/personality_behavior.jsonl`
 
 Run:
@@ -446,7 +448,9 @@ Eval CLI flags are documented by the runner itself:
 | `co_cli/config.py` | Field validator enforces role name in `VALID_PERSONALITIES`; `_validate_personality()` emits startup warnings for missing seed/mindset files |
 | `evals/eval_personality_behavior.py` | Consolidated personality eval runner (single + multi-turn), majority vote, gates, JSON/MD/trace outputs |
 | `evals/personality_behavior.jsonl` | Golden personality behavior cases (`id`, `personality`, `turns`, `checks_per_turn`) |
-| `evals/_common.py` | Shared eval infrastructure: deps factory, settings passthrough, check engine, telemetry/trace parsing |
+| `evals/_deps.py` | Shared eval dependency factory and eval settings passthrough: `detect_model_tag()`, `make_eval_deps()`, `make_eval_settings()` |
+| `evals/_checks.py` | Shared eval check engine: JSONL case loading, synchronous checks, `JudgeResult`, `score_response()`, `score_turn()` |
+| `evals/_trace.py` | Shared eval telemetry and trace parsing helpers used by trace reports and RCA output |
 | `evals/personality_behavior-data.json` | Detailed eval output (auto-generated) |
 | `evals/personality_behavior-result.md` | Human-readable eval report (auto-generated) |
 | `evals/personality_behavior-trace-*.md` | Per-turn trace reports with model/tool/check internals (auto-generated) |

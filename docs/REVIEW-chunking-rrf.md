@@ -2,7 +2,7 @@
 _Date: 2026-03-10_
 
 ## What Was Reviewed
-- **DESIGN docs:** `docs/DESIGN-knowledge.md`, `docs/DESIGN-flow-knowledge-lifecycle.md`, `docs/DESIGN-index.md`
+- **DESIGN docs:** `docs/DESIGN-knowledge.md`, `docs/DESIGN-index.md`
 - **Source modules:** `co_cli/_knowledge_index.py`, `co_cli/_chunker.py`, `co_cli/tools/articles.py`, `co_cli/tools/google_drive.py`, `co_cli/_bootstrap.py`, `co_cli/main.py`, `co_cli/config.py`, `co_cli/deps.py`
 - **TODO docs:** none matched scope (feature fully shipped)
 - **DELIVERY docs:** `docs/DELIVERY-chunking-rrf.md`
@@ -42,9 +42,9 @@ No TODO docs matched scope — feature fully shipped.
 | DESIGN-knowledge.md | §2.2 — schema (docs table) | pass | `docs` table columns, UNIQUE constraint `(source, path, chunk_id)`, `chunks` table, `chunks_fts` virtual table, FTS triggers, `embedding_cache` — all match `_SCHEMA_SQL` exactly. |
 | DESIGN-knowledge.md | §2.2 — RRF scoring | pass | `1/(k + rank + 1)` description matches `_hybrid_merge` implementation (line 1044, 1047, 1064, 1068). |
 | DESIGN-knowledge.md | §2.2 — source routing | pass | Memory → `docs_fts`, non-memory → `chunks_fts`, mixed → both legs. Matches `_fts_search` and `_uses_memory_leg`/`_uses_chunks_leg` helpers. |
-| DESIGN-flow-knowledge-lifecycle.md | Part 3 — article save flow | pass | Describes `index_chunks("library", path, chunk_text(...))` after FTS reindex on both new save and consolidation. Matches `save_article` code. |
-| DESIGN-flow-knowledge-lifecycle.md | Part 7 — Drive indexing | pass | `index_chunks("drive", file_id, chunk_text(...))` after `knowledge_index.index(...)`. Matches `read_drive_file` tool. |
-| DESIGN-flow-knowledge-lifecycle.md | Owning Code table | pass | All file paths in the table exist on disk and match actual module roles. |
+| DESIGN-knowledge.md | Article save flow | pass | Describes `index_chunks("library", path, chunk_text(...))` after FTS reindex on both new save and consolidation. Matches `save_article` code. |
+| DESIGN-knowledge.md | Drive indexing | pass | `index_chunks("drive", file_id, chunk_text(...))` after `knowledge_index.index(...)`. Matches `read_drive_file` tool. |
+| DESIGN-knowledge.md | Files and implementation mapping | pass | File paths and module roles match the live code. |
 | tests/test_knowledge_index.py | Crowding regression test | pass | `test_chunks_fts_multi_document_crowding` exists (line 686) and exercises the `chunks_fetch_limit = limit * 20` fix. Not mentioned in DESIGN docs (see minor finding above), but the test itself is present. |
 
 ### Finding Details

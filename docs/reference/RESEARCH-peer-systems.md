@@ -43,9 +43,8 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 | `OpenClaw` | Agentic Control Protocol (ACP) support, subagent scoping/spawn limits, embedded runner compaction/failover, talk mode, and `cluster` concepts | co is closer on knowledge-work orientation and local operator feel, but narrower in scope and lacks explicit inter-agent protocols like ACP | Borrow ACP standard integration and subagent boundary (spawn limits) ideas. Do not absorb the full surface-area sprawl. |
 | `Letta` | Memory is product-central; typed in-context vs archival memory; async memory maintenance | co has a strong local memory substrate, but it is still flatter and less visibly typed | Borrow typed memory tiers and async maintenance ideas. Do not adopt a framework dependency wholesale. |
 | `Mem0` | Maturation into SQLite vector stores, official OpenClaw integration, explicit mutation semantics, graph/multimodal memory | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and SQLite/vector maturity | Borrow explicit memory mutation semantics, robust SQLite vector handling, and cross-assistant integrations. Do not default to graph-heavy infrastructure. |
-| `Sidekick CLI` / `OpenCode` | Refined TUI with new dialogs, workspace routing middleware, DB migrations (moving 'org' to 'state') | co is directionally aligned but can improve workflow polish, TUI dialogues, and clean state routing | Borrow lightweight workflow routing, state management discipline, and TUI polish. Do not add orchestration machinery for its own sake. |
+| `OpenCode` | Refined TUI with new dialogs, workspace routing middleware, and state-model cleanup | co is directionally aligned but can improve workflow polish, TUI dialogues, and clean state routing | Borrow lightweight workflow routing, state management discipline, and TUI polish. Do not add orchestration machinery for its own sake. |
 | `nanobot` | Broad chat-app integration (added WeCom), native heartbeat/cron tasks, new memory consolidation token logic, config migration tests | co has background tasks and CLI focus, but narrower external channel integration and consolidation logic | Borrow memory consolidation logic and broad channel connectivity ideas. Do not abandon CLI-first origins for a purely chat-bot focus. |
-| `TinyClaw` | Huge monorepo refactor (`packages/core`, `cli`, `server`, etc.), explicit structured queues (`queues.ts`, `router.ts`), and SSE events (`docs/SSE-EVENTS.md`) | co lacks multi-agent fan-out/fan-in conversations, robust event routers, and continuous background heartbeats | Borrow structured queue routing, SSE events for observability, and monorepo modularity. Do not adopt the old black-box CLI wrapper architecture. |
 
 ---
 
@@ -115,12 +114,11 @@ Strong evidence:
 - Anthropic subagents
 - OpenAI unified agent workflows with multiple tool modes
 - OpenClaw subagent scoping and explicit spawn depth limits
-- TinyClaw's shift to explicit structured queues (`queues.ts`, `router.ts`) and SSE events for agent-to-agent observability
 
 Design implication for co:
 
 - current delegation work is aligned
-- the gap is not existence of subagents, but making them useful for long-running bounded workflows, potentially using explicit structured queues and SSE-based observability like TinyClaw, while enforcing strict spawn limits like OpenClaw
+- the gap is not existence of subagents, but making them useful for long-running bounded workflows with explicit queueing/observability, while enforcing strict spawn limits like OpenClaw
 
 ## 4.5 Multimodal and cross-surface continuity is rising fast
 
@@ -269,7 +267,6 @@ Examples:
 - from Letta: adopt typed memory visibility, not a framework dependency
 - from Mem0: adopt explicit memory update semantics, not graph-heavy architecture by default
 - from nanobot: adopt transparent heartbeat tasks and channel event bus, not a pure chatbot architecture
-- from TinyClaw: adopt teammate message passing logic and file-driven heartbeat triggers, not the CLI wrapper architecture
 - from OpenAI/Google frontier products: adopt direction-of-travel signals, not cloud-scale breadth
 ---
 

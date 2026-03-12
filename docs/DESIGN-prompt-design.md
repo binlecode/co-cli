@@ -4,7 +4,7 @@
 
 This doc is the canonical spec for co-cli's **prompt composition** — how the system prompt is assembled at agent creation, how per-turn instruction layers are built before each model request, and the design principles that govern what goes into the prompt vs what is kept tool-loaded.
 
-Runtime execution (loop topology, approval, context governance) has moved to dedicated docs. See [DESIGN-core-loop.md](DESIGN-core-loop.md), [DESIGN-flow-approval.md](DESIGN-flow-approval.md), and [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md).
+Runtime execution (loop topology, approval, context engineering) has moved to dedicated docs. See [DESIGN-core-loop.md](DESIGN-core-loop.md), [DESIGN-tools-execution.md](DESIGN-tools-execution.md), and [DESIGN-context-engineering.md](DESIGN-context-engineering.md).
 
 `DESIGN-core.md` remains the system skeleton and nav map.
 
@@ -41,7 +41,7 @@ graph TD
 These are runtime execution concerns — they now live in dedicated flow docs:
 
 > - **Turn execution:** [DESIGN-core-loop.md](DESIGN-core-loop.md) — `run_turn` state machine, streaming, approval re-entry loop, doom loop / grace turn / shell reflection, error handling, interrupt recovery, turn outcome contract
-> - **Approval:** [DESIGN-flow-approval.md](DESIGN-flow-approval.md) — three-tier decision chain, shell inline policy, `"a"` persistence semantics, MCP approval inheritance
+> - **Approval:** [DESIGN-tools-execution.md](DESIGN-tools-execution.md) — three-tier decision chain, shell inline policy, `"a"` persistence semantics, MCP approval inheritance
 
 ### Prompt Architecture
 
@@ -76,11 +76,11 @@ When the model emits no text delta before its first tool call, `_stream_events()
 
 > **Streaming detail:** [DESIGN-core-loop.md](DESIGN-core-loop.md) §4.4 — how `_stream_events` dispatches events and when the preamble fires.
 
-### Context Governance
+### Context Engineering
 
-History processors registered on the agent prevent context overflow. Context governance (processor chain, tool output trimming, sliding-window summarization, precomputed compaction, message history lifecycle) is now specified in its own flow doc.
+History processors registered on the agent prevent context overflow. Context engineering (processor chain, tool output trimming, sliding-window summarization, precomputed compaction, message history lifecycle) is now specified in its own dedicated design doc.
 
-> **Full flow spec:** [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) — processor chain (inject_opening_context → truncate_tool_returns → detect_safety_issues → truncate_history_window), summarization model rationale, background pre-computation, slash command effects on history, DeferredToolRequests history interaction.
+> **Full design spec:** [DESIGN-context-engineering.md](DESIGN-context-engineering.md) — processor chain (inject_opening_context → truncate_tool_returns → detect_safety_issues → truncate_history_window), summarization model rationale, background pre-computation, slash command effects on history, DeferredToolRequests history interaction.
 
 
 ### Future Extensions (Deferred)

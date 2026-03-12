@@ -56,7 +56,7 @@ Articles (`kind: "article"`) use the following frontmatter fields:
 
 No `certainty` field — articles are external reference content, not user-state assertions.
 
-> **Full lifecycle spec:** [DESIGN-flow-knowledge-lifecycle.md](DESIGN-flow-knowledge-lifecycle.md) — backend resolution at wakeup (hybrid→fts5→grep degradation), startup sync sequence, article save/dedup write path, index write triggers by source, retrieval surfaces (`search_knowledge`, `read_article_detail`), Obsidian/Drive sources, failure and fallback behavior.
+This doc is the canonical knowledge design and lifecycle spec: backend resolution at wakeup (hybrid→fts5→grep degradation), startup sync sequence, article save/dedup write path, index write triggers by source, retrieval surfaces (`search_knowledge`, `read_article_detail`), Obsidian/Drive sources, failure and fallback behavior.
 
 ### 2.2 KnowledgeIndex internals
 
@@ -113,6 +113,47 @@ TEI embedding provider:
 
 1. `read_article_detail` prefix fallback returns the first glob match without deterministic disambiguation when multiple articles share a slug prefix.
 2. `save_article` dedup uses strict raw URL equality; equivalent normalized URLs can still produce duplicates.
+
+### 2.4 Operational lifecycle
+
+Backend resolution:
+- `create_deps()` resolves the configured backend before bootstrap sync using adaptive degradation: `hybrid -> fts5 -> grep`.
+- The configured backend lives in settings; the resolved backend is written to `deps.config.knowledge_search_backend`.
+- When backend resolution falls all the way to grep, `deps.services.knowledge_index` is set to `None`.
+
+Startup sync:
+- `run_bootstrap()` Step 1 syncs both `memory_dir` and `library_dir`.
+- Memory sync uses `sync_dir(source="memory", kind_filter="memory")` and never chunk-indexes.
+- Library sync uses `sync_dir(source="library", kind_filter="article")` and writes paragraph chunks for changed files.
+- Any sync failure closes the index and disables it for the session, forcing grep fallback for supported surfaces.
+
+Write triggers by source:
+- `memory`: bootstrap sync plus memory write/edit/delete flows
+- `library`: bootstrap sync plus `save_article`
+- `obsidian`: on-demand `sync_dir` during note or knowledge search
+- `drive`: opportunistic index write after `read_drive_file`
+
+Article save flow:
+- `save_article` dedups on exact `origin_url`.
+- Consolidation rewrites the existing file, merges tags, updates timestamps, reindexes the doc row, and refreshes chunks.
+- New saves allocate the next numeric ID, write the article markdown, index the doc row, then write chunks.
+
+Retrieval flow:
+- `search_knowledge` resolves scope first: by default it searches `library`, `obsidian`, and `drive`, while memory is opt-in via `source="memory"`.
+- When Obsidian is in scope, the vault is pre-synced before search.
+- Indexed retrieval routes memory to `docs_fts` / `docs_vec` and non-memory sources to `chunks_fts` / `chunks_vec`.
+- `search_knowledge` applies confidence scoring and contradiction detection after retrieval; the memory-side certainty/provenance weighting is documented in [DESIGN-memory.md](DESIGN-memory.md).
+- Grep fallback supports memory and library only; Obsidian and Drive require the index.
+
+Source-specific behavior:
+- Obsidian is synced on demand, not at startup.
+- Drive search returns metadata only; `read_drive_file` is the path that writes Drive content into the knowledge index.
+
+Degradation:
+- Wakeup degradation: `hybrid -> fts5 -> grep`
+- Session degradation: bootstrap sync failure disables the index for the rest of the session
+- Source degradation: grep fallback covers memory/library but not Obsidian/Drive
+- Hybrid degradation: embedding or reranker failures fall back to lexical candidate ordering rather than failing the tool
 
 ## 3. Config
 

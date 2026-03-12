@@ -63,24 +63,69 @@ Supported lifecycle fields:
 
 Certainty is not set for articles (external content is not a user-state assertion).
 
-### 2.2 Lifecycle mechanics
+### 2.2 Write, Edit, and Recall Lifecycle
 
-> **Full spec:** [DESIGN-flow-memory-lifecycle.md](DESIGN-flow-memory-lifecycle.md) — write path (persist_memory step-by-step), precision edits (update_memory, append_memory), recall path (recall_memory FTS/grep, temporal decay, gravity, one-hop expansion), runtime injection (inject_opening_context + add_personality_memories), post-turn signal detection, retention enforcement, quality classification (certainty, confidence scoring, contradiction detection).
+All memory writes route through `persist_memory(...)` in `_memory_lifecycle.py`.
 
-### 2.3 `/new` session checkpoint
+Write path:
+- Title provided (`/new` checkpoint style) skips dedup and LLM consolidation, writes directly, then reindexes.
+- Untitled writes first run a dedup fast-path over recent memories using `rapidfuzz.token_sort_ratio`.
+- When a model is provided, the memory consolidator runs a two-phase `extract_facts -> resolve` plan. `ADD` writes a new file, `UPDATE` touches existing state, `DELETE` removes non-protected entries, and a plan with no `ADD` writes nothing.
+- `on_failure="add"` falls through to a normal write when consolidation times out; `on_failure="skip"` drops the write.
+- New files write frontmatter fields such as `id`, `created`, `kind`, `provenance`, `certainty`, `tags`, `auto_category`, `title`, and `related`.
+- After each successful write, retention cuts oldest non-protected memories until count is back under `memory_max_count`, then the file is indexed into `knowledge_index` when available.
+
+Edit paths:
+- `update_memory` requires exactly one match of the old content, rewrites the body, sets `updated`, and reindexes.
+- `append_memory` appends content, sets `updated`, and reindexes.
+- Both are registered without approval because they modify an existing memory rather than creating a new one.
+
+Recall path:
+- Internal `recall_memory(...)` is not an agent tool; it is called by `inject_opening_context`.
+- With an index available, recall runs BM25 over `docs_fts`, applies tag/temporal filters, and rescales by temporal decay (`memory_recall_half_life_days`), while `decay_protected` entries are exempt from decay.
+- Without an index, recall falls back to substring grep over `.co-cli/memory/`, sorted by recency.
+- Post-retrieval maintenance includes near-duplicate collapse (`_dedup_pulled`), one-hop `related` expansion, and gravity touch updates on directly matched memories.
+
+### 2.3 Runtime Injection and Post-Turn Signals
+
+Memory enters the model context through two independent paths:
+- `inject_opening_context` runs as the first history processor, calls `recall_memory`, and appends a sibling `SystemPromptPart` with relevant memories.
+- `add_personality_memories` is a per-request instruction layer that loads up to five `personality-context` memories by recency and injects them as `## Learned Context`.
+
+After each successful turn, `chat_loop` calls `analyze_for_signals(...)`:
+- high-confidence signals auto-save through `persist_memory(..., on_failure="skip")`
+- low-confidence signals prompt the user before saving
+- no signal means no write
+
+This is also where confidence scoring and contradiction detection feed back into the memory surface used by search/recall tools.
+
+### 2.4 Quality signals
+
+Write-time certainty classification:
+- `_classify_certainty(...)` assigns `high`, `medium`, or `low` from keyword patterns and stores the result in frontmatter plus the indexed `docs.certainty` field.
+
+Search-time confidence scoring:
+- `search_memories` / `search_knowledge(source="memory")` combine retrieval score, temporal decay, provenance weight, and certainty multiplier.
+- Current formula: `0.5 * score + 0.3 * decay + 0.2 * (prov_weight * certainty_mult)`.
+
+Contradiction detection:
+- `search_knowledge` applies contradiction detection on grouped `auto_category` results and flags conflicts in the returned display.
+- `search_memories` does not run the contradiction pass.
+
+### 2.5 `/new` session checkpoint
 
 - Summarizes recent session messages via `_index_session_summary()`.
 - Calls `persist_memory` with `title="session-<UTC timestamp>"`, `tags=["session"]`, `provenance="session"`.
 - Dedup and LLM consolidation are skipped (title-based write path).
 - Clears chat history after checkpoint.
 
-### 2.4 `/forget` deletion
+### 2.6 `/forget` deletion
 
 - Scans `deps.config.memory_dir` for `{memory_id:03d}-*.md`.
 - Deletes the matched file.
 - Evicts the index row via `knowledge_index.remove("memory", absolute_path)` when index exists.
 
-### 2.5 Known limitations
+### 2.7 Known limitations
 
 1. `/forget` help text references `/list_memories`, which is not a slash command.
 2. `recall_memory` FTS path reorders by temporal decay weight only, which can suppress lexical relevance ordering from BM25.

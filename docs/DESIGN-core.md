@@ -181,7 +181,7 @@ get_agent(...) → (agent, model_settings, tool_names, tool_approval):
 | `detect_safety_issues` | Runtime guards: doom-loop detection, shell-error-streak detection |
 | `truncate_history_window` | Applies sliding-window compaction for long sessions |
 
-See [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) for the full processor chain and prompt assembly order.
+See [DESIGN-context-engineering.md](DESIGN-context-engineering.md) for the full processor chain and prompt assembly order.
 
 See [DESIGN-llm-models.md](DESIGN-llm-models.md) for model configuration details.
 
@@ -287,7 +287,7 @@ The approval tier determines whether a tool executes immediately or requires use
 | MCP tools (approval=auto) | Yes | External tools default to requiring approval |
 | MCP tools (approval=never) | No | Explicitly trusted by user config |
 
-See [DESIGN-flow-approval.md](DESIGN-flow-approval.md) for the three-tier approval decision chain.
+See [DESIGN-tools-execution.md](DESIGN-tools-execution.md) for the three-tier approval decision chain.
 
 ### 3.6 Graceful Degradation
 
@@ -350,9 +350,7 @@ Skills are `.md` files invocable via `/skill-name` that expand into LLM turns. T
 
 **Security boundary:** Skills support requires-gating (binaries, env vars, OS, settings), security scanning for suspicious shell patterns, and env-var blocking for dangerous names. However, skills can run shell preprocess commands and auto-approve listed tools — they are best understood as trusted local workflow extensions, not a sandboxed plugin system.
 
-> **Full lifecycle spec:** [DESIGN-flow-skills-lifecycle.md](DESIGN-flow-skills-lifecycle.md) — startup load, requires gates, dispatch path, env injection, allowed-tools grant, reload/watch, install/upgrade, security scan.
->
-> **Implementation detail:** [DESIGN-skills.md](DESIGN-skills.md) — `SkillCommand` dataclass, loader internals, security scanner patterns, `/skills` command implementation.
+> **Skills design:** [DESIGN-skills.md](DESIGN-skills.md) — startup load, requires gates, dispatch path, env injection, allowed-tools grant, reload/watch, install/upgrade, security scan, and `SkillCommand` internals.
 
 ---
 
@@ -366,9 +364,7 @@ Memory files are YAML-frontmatter markdown in `.co-cli/memory/` — per-project 
 
 **Write path:** Post-turn signal detector (`_signal_analyzer.py`) classifies conversation signals. High-confidence signals auto-save via `save_memory`; low-confidence signals surface for user approval. The write pipeline runs dedup → consolidation → write → retention.
 
-> **Memory algorithms:** [DESIGN-memory.md](DESIGN-memory.md) — frontmatter contract, signal detection, dedup, consolidation, certainty scoring, retention.
->
-> **Write/recall/decay paths:** [DESIGN-flow-memory-lifecycle.md](DESIGN-flow-memory-lifecycle.md) — end-to-end lifecycle.
+> **Memory design:** [DESIGN-memory.md](DESIGN-memory.md) — frontmatter contract, signal detection, dedup, consolidation, write/edit/recall lifecycle, certainty scoring, retention, and runtime injection.
 
 ---
 
@@ -382,9 +378,7 @@ Memory files are YAML-frontmatter markdown in `.co-cli/memory/` — per-project 
 
 **Reranking:** Optional cross-encoder reranking via `local`, `ollama`, or `gemini` provider to improve result quality over raw BM25.
 
-> **Index internals:** [DESIGN-knowledge.md](DESIGN-knowledge.md) — FTS5/hybrid retrieval, frontmatter schema, Obsidian/Drive indexing, source namespace.
->
-> **Retrieval lifecycle:** [DESIGN-flow-knowledge-lifecycle.md](DESIGN-flow-knowledge-lifecycle.md) — article save, startup sync, retrieval flow, fallback, source namespace.
+> **Knowledge design:** [DESIGN-knowledge.md](DESIGN-knowledge.md) — FTS5/hybrid retrieval, frontmatter schema, startup sync, article save flow, Obsidian/Drive indexing, fallback, and source namespace.
 
 ---
 

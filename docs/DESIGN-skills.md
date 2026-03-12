@@ -23,11 +23,26 @@ User input /skill-name args:
     (after run_turn: os.environ restored, active_skill_env.clear(), active_skill_allowed_tools.clear())
 ```
 
-## 2. Data Model
+## 2. Core Logic
 
-> **Full lifecycle spec:** [DESIGN-flow-skills-lifecycle.md](DESIGN-flow-skills-lifecycle.md) — two-pass startup load, `requires` gates, dispatch pipeline, arg substitution, shell preprocessing, env injection/rollback, allowed-tools grant, file watcher, security scanner, install/upgrade/reload flows.
+### 2.1 Startup load and gating
 
-### SkillCommand model (frozen dataclass)
+`_load_skills()` runs a two-pass load:
+- pass 1 scans package-default skills in `co_cli/skills/*.md`
+- pass 2 scans project-local skills in `.co-cli/skills/*.md`
+- exact-name collisions are resolved in favor of project-local files
+
+Each file load:
+- skips reserved built-in slash-command names
+- parses frontmatter and body
+- applies `requires` gates (`bins`, `anyBins`, `env`, `os`, `settings`)
+- runs `_scan_skill_content(...)`
+- filters blocked env vars from `skill_env`
+- coerces invalid `allowed_tools` metadata to `[]`
+
+After load, `SKILL_COMMANDS` is replaced atomically and `deps.session.skill_registry` is rebuilt from non-hidden skills.
+
+### 2.2 SkillCommand model (frozen dataclass)
 
 ```
 name: str
@@ -41,7 +56,39 @@ skill_env: dict[str, str] = field(default_factory=dict)   # env vars to inject (
 allowed_tools: list[str] = field(default_factory=list)    # tools auto-approved for this skill's LLM turn
 ```
 
-### Security scanner patterns
+### 2.3 Dispatch, env injection, and grants
+
+Dispatch path:
+- `dispatch()` stages `active_skill_env` and `skill_tool_grants`
+- performs `$ARGUMENTS` / `$0` / `$N` substitution
+- preprocesses shell blocks (`!`-backtick form, capped count and timeout)
+- sets `ctx.skill_body` and returns without calling `run_turn()` directly
+
+`chat_loop()` then:
+- snapshots the previous values of injected env vars
+- mutates `os.environ` immediately before the LLM turn
+- restores env vars in `try/finally`
+- clears both `active_skill_env` and `skill_tool_grants` in the same `finally`
+
+Allowed-tools grants are exact-match tool-name auto-approvals checked at the first tier of the approval chain for that skill turn only.
+
+### 2.4 File watcher, install, and upgrade flows
+
+Live reload:
+- `chat_loop()` polls `.co-cli/skills/` mtimes before each prompt
+- on change it reruns `_load_skills()`, rebuilds `skill_registry`, and refreshes the completer
+
+Install flow:
+- `/skills install` fetches local or remote content
+- remote installs persist `source-url` into frontmatter
+- `_scan_skill_content(...)` is blocking at install time: warnings require explicit user confirmation
+- successful install writes to `skills_dir`, reloads skills, and refreshes the completer
+
+Upgrade flow:
+- `/skills upgrade <name>` re-fetches from the stored `source-url`
+- local-only installs without `source-url` are not upgradeable
+
+### 2.5 Security scanner patterns
 
 `_scan_skill_content(content)` checks four patterns:
 - `credential_exfil` — env vars piped/sent to external URLs

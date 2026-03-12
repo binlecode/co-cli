@@ -16,21 +16,14 @@ DESIGN-core.md   ← system architecture diagrams, agent loop internals
 What is your question?
     │
     ├── tracing a bug or runtime workflow?
-    │       └─▶  Layer 2 — Workflow docs
-    │               flow-core-turn
-    │               flow-approval
-    │               system-bootstrap  (canonical startup: model check + bootstrap)
-    │               flow-context-governance
+    │       └─▶  Layer 2 — Runtime docs
+    │               core-loop
+    │               system-bootstrap
+    │               context-engineering
+    │               tools-execution
     │
-    ├── changing a subsystem (memory, tools, knowledge, skills)?
-    │       └─▶  Layer 3 — Lifecycle docs
-    │               flow-tools-lifecycle
-    │               flow-memory-lifecycle
-    │               flow-knowledge-lifecycle
-    │               flow-skills-lifecycle
-    │
-    └── need schema, algorithm, or config detail?
-            └─▶  Layer 4 — Component docs
+    └── need schema, lifecycle, or config detail?
+            └─▶  Layer 3 — Component docs
                     DESIGN-core
                     DESIGN-prompt-design
                     DESIGN-tools
@@ -51,47 +44,47 @@ What is your question?
 Start here for navigation: reading guide, config reference, and module index.
 System overview and architecture diagrams live in [DESIGN-core.md](DESIGN-core.md).
 
-### Layer 2 — Workflow docs
+### Layer 2 — Runtime docs
 
-Read a flow doc when you have a **runtime question about a specific workflow** — debugging a bug, tracing execution, or understanding how two modules interact during a user turn.
+Read a runtime doc when you have a **runtime question about a specific workflow** — debugging a bug, tracing execution, or understanding how two modules interact during a user turn.
 
-Each workflow doc is self-contained: entry conditions → ordered steps → branching → state mutations → failure paths → owning source files.
+These docs cover ordered execution, state transitions, and failure paths for live runtime behavior.
 
 | If you're asking... | Read |
 |---------------------|------|
 | What happens from the moment a user types to the LLM responding? | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
-| Why did a tool not get approved / what's the approval decision chain? | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) |
+| Why did a tool not get approved / what's the approval decision chain? | [DESIGN-tools-execution.md](DESIGN-tools-execution.md) |
 | What runs at startup before the first user message? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
-| How is the system prompt assembled and how does history compaction work? | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) |
+| How is the system prompt assembled and how does history compaction work? | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) |
 
 | Workflow | Doc | What it covers |
 |----------|-----|----------------|
 | One user turn (end-to-end) | [DESIGN-core-loop.md](DESIGN-core-loop.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
 | Startup (canonical) | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
-| Tool approval | [DESIGN-flow-approval.md](DESIGN-flow-approval.md) | three-tier decision chain, shell policy path, skill grants, session auto-approve, `"a"` persistence |
-| Context governance | [DESIGN-flow-context-governance.md](DESIGN-flow-context-governance.md) | prompt assembly, per-turn layers, memory injection, tool output trimming, history summarization, precomputed compaction |
+| Tool approval and shell policy | [DESIGN-tools-execution.md](DESIGN-tools-execution.md) | deferred approval chain, shell inline policy, skill grants, session auto-approve, `"a"` persistence |
+| Context engineering | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) | prompt assembly, per-turn layers, memory injection, tool output trimming, history summarization, precomputed compaction |
 
-### Layer 3 — Lifecycle docs
+### Layer 3 — Component docs
 
-Read a lifecycle doc when you have a **subsystem question** — adding a new memory tool, changing how skills load, modifying retrieval behavior.
+Read a component doc when you have a **subsystem question** — adding a new memory tool, changing how skills load, or modifying retrieval behavior. These docs now own both lifecycle and implementation details.
 
 | If you're asking... | Read |
 |---------------------|------|
-| How does a tool go from registration to the model calling it? | [DESIGN-flow-tools-lifecycle.md](DESIGN-flow-tools-lifecycle.md) |
-| How does a memory get written, recalled, and eventually pruned? | [DESIGN-flow-memory-lifecycle.md](DESIGN-flow-memory-lifecycle.md) |
-| How does knowledge get indexed and retrieved? | [DESIGN-flow-knowledge-lifecycle.md](DESIGN-flow-knowledge-lifecycle.md) |
-| How does a skill go from `.md` file to running in the agent? | [DESIGN-flow-skills-lifecycle.md](DESIGN-flow-skills-lifecycle.md) |
+| How does a tool go from registration to the model calling it? | [DESIGN-tools.md](DESIGN-tools.md) |
+| How does a memory get written, recalled, and eventually pruned? | [DESIGN-memory.md](DESIGN-memory.md) |
+| How does knowledge get indexed and retrieved? | [DESIGN-knowledge.md](DESIGN-knowledge.md) |
+| How does a skill go from `.md` file to running in the agent? | [DESIGN-skills.md](DESIGN-skills.md) |
 
 | Subsystem | Doc | What it covers |
 |-----------|-----|----------------|
-| Tools (all families) | [DESIGN-flow-tools-lifecycle.md](DESIGN-flow-tools-lifecycle.md) | registration, exposure to model, approval classification, execution paths, return shape, error classification |
-| Memory | [DESIGN-flow-memory-lifecycle.md](DESIGN-flow-memory-lifecycle.md) | write path, edit, recall, runtime injection, signal detection, retention/decay |
-| Knowledge | [DESIGN-flow-knowledge-lifecycle.md](DESIGN-flow-knowledge-lifecycle.md) | article save, source sync, retrieval, fallback, source namespace |
-| Skills | [DESIGN-flow-skills-lifecycle.md](DESIGN-flow-skills-lifecycle.md) | startup load, precedence, dispatch, env injection, allowed-tools grant, install/upgrade |
+| Tools (all families) | [DESIGN-tools.md](DESIGN-tools.md) | registration, model exposure, approval classes, execution paths, return shape, and error classification |
+| Memory | [DESIGN-memory.md](DESIGN-memory.md) | write path, edit, recall, runtime injection, signal detection, and retention/decay |
+| Knowledge | [DESIGN-knowledge.md](DESIGN-knowledge.md) | article save, source sync, retrieval, fallback, chunking, and source namespace |
+| Skills | [DESIGN-skills.md](DESIGN-skills.md) | startup load, precedence, dispatch, env injection, allowed-tools grant, install/upgrade, and security scan |
 
-### Layer 4 — Component docs
+### Layer 4 — Deep Component Docs
 
-Read a component doc when you need **implementation detail for a specific module** — schema, algorithm specifics, config options for a single subsystem. These docs are usually pointed to by flow/lifecycle docs.
+Read a component doc when you need **implementation detail for a specific module** — schema, algorithm specifics, or config options for a single subsystem.
 
 | If you're asking... | Read |
 |---------------------|------|
@@ -116,7 +109,7 @@ Read a component doc when you need **implementation detail for a specific module
 | Personality System | [DESIGN-personality.md](DESIGN-personality.md) | File-driven roles, 5 traits, structural per-turn injection, reasoning depth override |
 | MCP Client | [DESIGN-mcp-client.md](DESIGN-mcp-client.md) | External tool servers via Model Context Protocol (stdio and HTTP transports, auto-prefixing, approval inheritance) |
 | Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
-| Doctor | [DESIGN-doctor.md](DESIGN-doctor.md) | System-wide integration health checks: check_* functions, DoctorResult, bootstrap sweep, capabilities tool delegation |
+| Doctor | [DESIGN-doctor.md](DESIGN-doctor.md) | System-wide integration health checks: shared doctor engine, probe contracts, bootstrap/runtime/status callsites |
 | Eval LLM-as-Judge | [DESIGN-eval-llm-judge.md](DESIGN-eval-llm-judge.md) | LLM-as-judge for personality evals: check types, judge file structure, prompt design, model settings |
 | Config Reference | DESIGN-index.md §Config Reference (this doc) | Consolidated setting/env/default reference |
 | Module Index | DESIGN-index.md §Modules (this doc) | All source files by layer with purpose |

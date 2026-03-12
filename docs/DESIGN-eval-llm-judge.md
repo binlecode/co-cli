@@ -190,7 +190,7 @@ span data is unavailable.
 
 | File | Purpose |
 |------|---------|
-| `evals/_common.py` | `JudgeResult`, `_JUDGES_DIR`, `_load_character_judge`, `_JUDGE_PROMPT`, `_make_judge_settings`, `_llm_judge`, `score_turn` |
+| `evals/_checks.py` | `JudgeResult`, `_JUDGES_DIR`, `_load_character_judge`, `_JUDGE_PROMPT`, `_make_judge_settings`, `_llm_judge`, `score_turn` |
 | `evals/judges/finch.md` | Finch behavioral judgment rubric — pass indicators, fail indicators, ambiguity rule |
 | `evals/judges/jeff.md` | Jeff behavioral judgment rubric — pass indicators, fail indicators, ambiguity rule |
 | `evals/judges/tars.md` | Tars behavioral judgment rubric — pass indicators, fail indicators, ambiguity rule |

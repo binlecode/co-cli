@@ -8,7 +8,7 @@
 
 ## Context
 
-Related artifact: `docs/PLAN-runtime-check-and-doctor-workflow-audit.md` — review history and rationale only. This TODO is the implementation source of truth.
+Related artifact: permanent review history and rationale should live in a `docs/WORKLOG-runtime-check-and-doctor-workflow.md` record. This TODO is the implementation source of truth.
 
 **Current state verified against source:**
 
@@ -390,5 +390,5 @@ Plan approved.
 
 > Gate 1 complete.
 > Implementation source of truth: this TODO.
-> Review history and rationale: `docs/PLAN-runtime-check-and-doctor-workflow-audit.md`
+> Review history and rationale should be preserved in `docs/WORKLOG-runtime-check-and-doctor-workflow.md`.
 > Next step: `/orchestrate-dev runtime-check-and-doctor-workflow`

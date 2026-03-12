@@ -2,6 +2,8 @@
 
 Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the four-step bootstrap initialization sweep.
 
+Bootstrap owns sequencing. Shared resource and integration check design does not live here; Step 4 delegates to Doctor. See `DESIGN-doctor.md` for the centralized design of the shared check engine used by bootstrap, runtime capability checks, and `co status`.
+
 ```mermaid
 flowchart TD
     A[create_deps] --> B[run_model_check]
@@ -334,15 +336,18 @@ except Exception as e:
     frontend.on_status("integration health check failed ...")
 ```
 
-`run_doctor(deps)` checks:
-- Google credential sources
-- Obsidian vault path
-- Brave API key
-- each MCP server command or URL
-- knowledge backend state
-- loaded skill count
+Bootstrap is a caller of Doctor, not the owner of resource-check semantics. Step 4 exists to sequence the call and render the result during startup. The Doctor subsystem owns:
+- which checks are included
+- which are static-only vs runtime-aware
+- result/status semantics
+- shared behavior across bootstrap, runtime, and status surfaces
 
-The sweep is always non-blocking. It performs local checks only and should not do network I/O.
+Bootstrap-specific guarantees:
+- the sweep is non-blocking for normal degraded states
+- unexpected Doctor exceptions are swallowed and rendered as a warning line
+- startup continues after Step 4 whether the sweep reports warnings/errors or raises unexpectedly
+
+For the current shared check set and probe semantics, see [DESIGN-doctor.md](DESIGN-doctor.md).
 
 ## 6. Pre-Bootstrap Subflows
 
@@ -436,7 +441,7 @@ All status messages from model check, bootstrap, and skills loading appear above
 |------|------|
 | `co_cli/_model_check.py` | Provider/model preflight gate and `PreflightResult` |
 | `co_cli/_bootstrap.py` | `run_bootstrap()` four-step initialization |
-| `co_cli/_doctor.py` | `run_doctor(deps)` integration checks used in Step 4 |
+| `co_cli/_doctor.py` | Shared Doctor entry point invoked by Step 4 |
 | `co_cli/_session.py` | Session helpers: new/load/save/touch/is_fresh/increment_compaction |
 | `co_cli/main.py` | `create_deps()`, `chat_loop()`, startup assembly |
 | `co_cli/_commands.py` | Skill loading helpers |
@@ -447,7 +452,7 @@ All status messages from model check, bootstrap, and skills loading appear above
 
 - [DESIGN-system.md](DESIGN-system.md) - system architecture and capability surface
 - [DESIGN-core-loop.md](DESIGN-core-loop.md) - main loop and turn state machine
-- [DESIGN-doctor.md](DESIGN-doctor.md) - doctor subsystem details
+- [DESIGN-doctor.md](DESIGN-doctor.md) - centralized Doctor design for shared resource and integration checks
 - [DESIGN-knowledge.md](DESIGN-knowledge.md) - retrieval backend and sync internals
 - [DESIGN-skills.md](DESIGN-skills.md) - skill loader and security model
 - [DESIGN-mcp-client.md](DESIGN-mcp-client.md) - MCP lifecycle and fallback

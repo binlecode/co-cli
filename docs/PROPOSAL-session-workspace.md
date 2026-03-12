@@ -4,9 +4,9 @@ _Status: Proposed (Pending PO & TL Review)_
 
 ## Executive Summary
 
-Following the review of peer systems (specifically the hyper-minimalist `TinyClaw` architecture), we identified a critical gap in `co-cli`'s execution model: **File-System Sandboxing and Transparency**. 
+Following the review of peer systems and local-first agent runtimes, we identified a critical gap in `co-cli`'s execution model: **File-System Sandboxing and Transparency**.
 
-While `co` enforces strict *tool* boundaries (e.g., read-only sub-agents), it executes all agents within the same global working directory. This proposal introduces the **Session Workspace Pattern**, adapting TinyClaw's isolated directory approach to fit `co`'s engineering rigor.
+While `co` enforces strict *tool* boundaries (e.g., read-only sub-agents), it executes all agents within the same global working directory. This proposal introduces the **Session Workspace Pattern**, adapting isolated per-task workspace ideas to fit `co`'s engineering rigor.
 
 This proposal advocates for three distinct architectural additions under the `.co-cli/` directory:
 1. **Sub-agent Sandboxing** (`.co-cli/workspaces/`): Ephemeral scratchpads for delegated tasks.
@@ -108,7 +108,7 @@ When the timer ticks, the `TaskScheduler` reads the markdown file. The file can 
 
 ### 3.5 Integrating with the Upcoming Input Queue
 
-The `REVIEW-input-queue.md` proposes an explicit UI text queue. The File Exchange directory acts as the **bulk data twin** to that text queue. 
+The `docs/reference/RESEARCH-input-queue.md` proposes an explicit UI text queue. The File Exchange directory acts as the **bulk data twin** to that text queue. 
 
 **Wait, Should the Text Queue also be a sequence file?**
 We considered whether the text FIFO queue itself should be backed by a sequence file (e.g., `.co-cli/exchange/queue.jsonl`) rather than an in-memory queue inside `main.py`. 
@@ -118,14 +118,33 @@ We considered whether the text FIFO queue itself should be backed by a sequence 
 2. **Ephemeral Nature:** User chat inputs ("stop", "actually fix the other function") are highly contextual to the exact second they are typed. If the process crashes and restarts 10 minutes later, replaying a stale "fix the other function" command from a JSONL file without context is dangerous.
 3. **The File Exchange is for Bulk Data:** Text commands are control signals; files are data. We should keep control signals in memory where they can be explicitly canceled, and keep data on disk where it can be asynchronously dropped.
 
-**Changes to `main.py` (chat loop):**
-Between `run_turn()` invocations, the loop must execute a deterministic join:
-1. Turn completes.
-2. `chat_loop` scans `.co-cli/exchange/` for newly modified/added files (tracking `mtime`).
-3. If new files exist, it synthesizes an automatic prompt: `[System: New files detected in workspace exchange: X, Y. Please review if relevant to current task.]`
-4. Only after processing the bulk-exchange notification does the chat loop pop the next explicit text string from the UI `QueueManager`.
+**Changes to `main.py` (chat loop integration):**
+`co-cli`'s chat loop uses `prompt_toolkit` to wait for user text input, and then passes that single input into `run_turn()`. We integrate both queues perfectly before the UI blocks for typing.
 
-This guarantees that if a user drops a massive log file into the exchange folder while the model is typing, and then types "read the log" into the UI queue, the file exists in the context *before* the text command executes.
+```python
+        while True:
+            # 1. Existing skill watcher...
+            _new_snap = _skills_snapshot(deps.config.skills_dir)
+            
+            # 2. THE DATA QUEUE: File Exchange Scan
+            new_files = _scan_exchange_directory(deps.config.exchange_dir, last_scan_time)
+            if new_files:
+                # Bypass the user prompt! Synthesize an automatic turn.
+                user_input = f"[System: New files detected in workspace exchange: {', '.join(new_files)}. Please review them if relevant to the current task.]"
+                last_scan_time = time.time()
+                
+            # 3. THE TEXT QUEUE: In-memory FIFO
+            elif text_queue.has_items():
+                user_input = text_queue.pop_next()
+                
+            # 4. DEFAULT: Block the UI for human typing
+            else:
+                try:
+                    user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
+                except ...
+```
+
+This elegant priority system guarantees that if a user drops a massive log file into the exchange folder while the model is typing, and then queues up the text "read the log", the file notification is pushed to the agent's context *before* the text command is executed, completely decoupling the UI's blocking nature from asynchronous data transfers.
 
 ---
 

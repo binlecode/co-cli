@@ -1,14 +1,13 @@
-# REVIEW-input-queue
+# RESEARCH: Input Queue — Peer System Comparison
 
 ## Executive Summary
 
-This review compares user-input queue behavior in `codex`, `gemini-cli`, `openclaw`, and `tinyclaw` and proposes an adoption plan for `co-cli`.
+This review compares user-input queue behavior in `codex`, `gemini-cli`, and `openclaw` and proposes an adoption plan for `co-cli`.
 
 Headline:
 - `codex`: explicit TUI-owned FIFO queue for user turns, with one-item drain when idle.
 - `gemini-cli`: explicit UI queue; queued messages are combined and submitted when stream is idle and MCP is ready.
 - `openclaw`: no TUI turn queue; `chat.send` is immediate, while backend session logic can enqueue follow-up runs when a run is active.
-- `tinyclaw`: backend SQLite-based event queue; parallel processing across agents but sequential (batched) drain per-agent, with team-conversation fan-out chaining capabilities.
 - `co-cli` today: no input queue in chat loop; one prompt -> one `run_turn()` call.
 
 Recommended co adoption:
@@ -26,7 +25,6 @@ Reference repos were pulled before review and inspected at:
 - `gemini-cli`: `e63d273e4e24`
 - `codex`: `ce139bb1afad`
 - `openclaw`: `9c6847074d77`
-- `tinyclaw`: `c1b5a228f44d` (approximate)
 
 Method:
 - Read concrete submit/dispatch/queue/drain code paths.
@@ -179,56 +177,18 @@ Tradeoffs:
 - Queue semantics are less visible at TUI level.
 - Behavior depends on backend queue mode and active-run state, which is harder to reason about from frontend alone.
 
-## 4) TinyClaw
-
-### Discovery
-
-Queue is an explicit SQLite backend database (`tinyclaw.db`):
-- All incoming messages (from Discord, Telegram, or internal heartbeat/team routing) are pushed directly into a database via `enqueueMessage()`.
-
-Evidence:
-- [queue-processor.ts:250](/Users/binle/workspace_genai/tinyclaw/src/queue-processor.ts)
-- [db.ts:100](/Users/binle/workspace_genai/tinyclaw/src/lib/db.ts)
-
-Processing execution:
-- Uses a `queue-processor` loop running periodically or event-driven.
-- Agents run in *parallel*, but for a given agent, messages are *sequentially* processed.
-- `claimAllPendingMessages(agentId)` batches all pending user turns for that specific agent.
-
-Evidence:
-- [queue-processor.ts:50](/Users/binle/workspace_genai/tinyclaw/src/queue-processor.ts)
-
-Team conversations fan-out (Queue-based message passing):
-- Agent responses are scanned for `@teammate` mentions.
-- These mentions bypass the frontend entirely, resulting in new messages directly enqueued for the mentioned teammates using the internal `enqueueInternalMessage`.
-- Conversations use a trace ID (`conversationId`) to orchestrate completion when all fan-out branches finish.
-
-Evidence:
-- [queue-processor.ts:180](/Users/binle/workspace_genai/tinyclaw/src/queue-processor.ts)
-
-### Analysis
-
-Strengths:
-- Deeply resilient: Since the queue is SQLite-backed, it survives crashes and gracefully recovers stale jobs.
-- Native multi-agent routing: Chaining and fan-out are naturally expressed by pushing new tasks onto the queue.
-
-Tradeoffs:
-- Asynchronous by default. Not tied to a TUI streaming context, making it less suitable for an interactive synchronous CLI experience.
-
----
-
 ## Cross-System Comparison
 
-| Dimension | Codex | Gemini CLI | OpenClaw | TinyClaw |
-|---|---|---|---|---|
-| Primary queue owner | TUI/chat widget | UI hook (`useMessageQueue`) | Backend reply pipeline | SQLite DB (`tinyclaw.db`) |
-| Frontend submit while busy | Queue in UI | Queue in UI | Send immediately | Send immediately |
-| Queued unit | `UserMessage` turn | text string | `FollowupRun` session task | `DbMessage` |
-| Drain trigger | turn complete / idle check | stream idle + MCP ready | run finalization + drain scheduler | event / periodic cron processor |
-| Drain granularity | one queued turn | merged batch | one follow-up run | batched per agent (sequential chain) |
-| Ordering | FIFO (`VecDeque`) | append order, merged on send | queue order + policy | FIFO, prioritized by agent availability |
-| Policy richness | moderate | low | high (mode/drop/debounce/cap) | moderate (team fan-out, dead-lettering) |
-| Replay/resume handling | explicit suppression/restore | N/A | backend stateful | SQLite persistent, automatic recovery |
+| Dimension | Codex | Gemini CLI | OpenClaw |
+|---|---|---|---|
+| Primary queue owner | TUI/chat widget | UI hook (`useMessageQueue`) | Backend reply pipeline |
+| Frontend submit while busy | Queue in UI | Queue in UI | Send immediately |
+| Queued unit | `UserMessage` turn | text string | `FollowupRun` session task |
+| Drain trigger | turn complete / idle check | stream idle + MCP ready | run finalization + drain scheduler |
+| Drain granularity | one queued turn | merged batch | one follow-up run |
+| Ordering | FIFO (`VecDeque`) | append order, merged on send | queue order + policy |
+| Policy richness | moderate | low | high (mode/drop/debounce/cap) |
+| Replay/resume handling | explicit suppression/restore | N/A | backend stateful |
 
 ---
 

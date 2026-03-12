@@ -2,6 +2,40 @@
 
 Local host execution tools: todo session state, shell subprocess, workspace files, background processes, and capability introspection. Part of the [Tools index](DESIGN-tools.md).
 
+## Approval Lifecycle
+
+Execution tools participate in the shared approval system through two cooperating layers:
+- inline shell policy inside `run_shell_command`
+- deferred approval resolution in `_collect_deferred_tool_approvals()`
+
+Deferred approval path:
+- tools registered with `requires_approval=True` return `DeferredToolRequests`
+- `run_turn()` resumes the same turn in a loop until no deferred calls remain
+- approval hops share the same usage budget; approval re-entry does not reset turn limits
+- a single user turn can require multiple approval hops if resumed execution emits more deferred calls
+
+Three-tier deferred decision chain:
+- Tier 1: `deps.session.skill_tool_grants`
+- Tier 2: `deps.session.session_tool_approvals`
+- Tier 3: user prompt `[y/n/a]`
+
+`"a"` persistence semantics:
+- shell commands persist a derived fnmatch pattern to `.co-cli/exec-approvals.json`
+- other tools add the tool name to `deps.session.session_tool_approvals` for the current session only
+- for shell commands, the prompt shows the derived remembered pattern before the user answers
+
+MCP tools use the same deferred pipeline when their server config uses approval wrapping. There is no separate MCP-specific approval loop.
+
+Shell-policy boundary:
+- shell DENY / ALLOW / persistent-approval decisions happen inside `run_shell_command` before any deferral
+- only shell calls that reach `ApprovalRequired` enter the shared deferred approval loop
+- skill grants and session auto-approve do not bypass shell DENY rules
+
+Failure and recovery:
+- user denial returns `ToolDenied`, which the model can react to by choosing an alternative path
+- budget exhaustion across approval hops fails the turn; approval re-entry is not a budget bypass
+- persistent shell approvals are managed through `/approvals list` and `/approvals clear [id]`
+
 ## Todo Tools
 
 ### 1. What & How

@@ -65,6 +65,17 @@ Anti-patterns to avoid:
 
 Additional: CAPS reserved for safety-critical constraints only (write/delete tools). Each param description: type context + example value. Paginated tools embed next-action hints in the `display` field.
 
+**Lifecycle summary:**
+- `get_agent()` registers all native tools explicitly via `agent.tool(fn, requires_approval=...)`.
+- The registration result is reflected in `tool_names` and `tool_approval`, which are returned by `get_agent()` for display and audit.
+- Four execution classes exist:
+  - always-deferred tools (`requires_approval=True`)
+  - conditional all-approval mode (`--all-approval`)
+  - shell with inline DENY / ALLOW / REQUIRE_APPROVAL policy
+  - MCP tools inheriting per-server approval config
+- Successful tool execution returns either a `dict` with `display`, or plain text for a few intentional exceptions.
+- Error handling is split between `ModelRetry(...)` for retry-worthy failures and `terminal_error(...)` for terminal failures where the model should route elsewhere.
+
 **Cross-tool routing map:**
 
 ```

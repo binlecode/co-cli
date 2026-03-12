@@ -31,11 +31,11 @@ Date: 2026-03-10
 - Overall: clean after fixes
 
 ## Doc Sync
-- Result: fixed — `DESIGN-knowledge.md` (schema, chunking description, FTS routing, RRF, config table, `_chunker.py` entry); `DESIGN-flow-knowledge-lifecycle.md` (flowchart, pseudocode, config section); `DESIGN-index.md` (module index, config table); `DESIGN-core.md` (knowledge system path references); `co_cli/tools/articles.py` and `co_cli/_knowledge_index.py` source docstrings (stale phase framing removed)
+- Result: fixed — `DESIGN-knowledge.md` (schema, chunking description, FTS routing, RRF, lifecycle flow, config table, `_chunker.py` entry); `DESIGN-index.md` (module index, config table); `DESIGN-core.md` (knowledge system path references); `co_cli/tools/articles.py` and `co_cli/_knowledge_index.py` source docstrings (stale phase framing removed)
 
 ## Coverage Audit
 - Result: GAPS_FOUND — 1 blocking (stale `knowledge_hybrid_vector_weight`/`text_weight` descriptions in `DESIGN-index.md` config table); 1 minor
-- Disposition: sync-doc had already fixed the `DESIGN-index.md` entries by the time the delivery-audit ran; `grep` confirmed the stale text was absent. Finding was auto-resolved. See `docs/REVIEW-delivery-chunking-rrf.md` for full audit report.
+- Disposition: sync-doc had already fixed the `DESIGN-index.md` entries by the time the delivery-audit ran; `grep` confirmed the stale text was absent. Finding was auto-resolved. See `docs/AUDIT-chunking-rrf.md` for full audit report.
 
 ## Artifact Lifecycle
 - TODO status: deleted — all tasks shipped, no deferred work remains
