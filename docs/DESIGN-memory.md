@@ -2,7 +2,7 @@
 
 ## 1. What & How
 
-Agent memory is per-project agent state — facts the agent has learned through conversation (preferences, corrections, decisions, contextual signals). Memory files live in `.co-cli/memory/` (project-local), are lifecycle-managed (dedup → optional LLM consolidation → retention cap), and are proactively injected into context before each turn via history processors.
+Agent memory is per-project agent state — facts the agent has learned through conversation (preferences, corrections, decisions, contextual signals). Memory files live in `.co-cli/memory/` (project-local) and are lifecycle-managed (dedup → optional LLM consolidation → retention cap). Runtime injection into the model context is documented in [DESIGN-context-engineering.md](DESIGN-context-engineering.md).
 
 ```mermaid
 graph TD
@@ -86,11 +86,13 @@ Recall path:
 - Without an index, recall falls back to substring grep over `.co-cli/memory/`, sorted by recency.
 - Post-retrieval maintenance includes near-duplicate collapse (`_dedup_pulled`), one-hop `related` expansion, and gravity touch updates on directly matched memories.
 
-### 2.3 Runtime Injection and Post-Turn Signals
+### 2.3 Runtime touchpoints and post-turn signals
 
-Memory enters the model context through two independent paths:
-- `inject_opening_context` runs as the first history processor, calls `recall_memory`, and appends a sibling `SystemPromptPart` with relevant memories.
-- `add_personality_memories` is a per-request instruction layer that loads up to five `personality-context` memories by recency and injects them as `## Learned Context`.
+Memory touches runtime in two ways:
+- `recall_memory(...)` is called by the context-engineering layer for proactive opening-context injection.
+- `personality-context` memories are loaded by the context-engineering layer as learned context.
+
+This doc does not own the prompt/context injection pipeline. See [DESIGN-context-engineering.md](DESIGN-context-engineering.md) for when those paths run.
 
 After each successful turn, `chat_loop` calls `analyze_for_signals(...)`:
 - high-confidence signals auto-save through `persist_memory(..., on_failure="skip")`
@@ -150,9 +152,9 @@ Contradiction detection:
 | `co_cli/_memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution (two-phase mini-agent) |
 | `co_cli/_memory_retention.py` | Cut-only retention enforcement: delete oldest non-protected until under cap |
 | `co_cli/tools/memory.py` | `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` + shared helpers (`_load_memories`, `_check_duplicate`, etc.) |
-| `co_cli/tools/personality.py` | Loads `personality-context` memories for per-turn instruction injection |
+| `co_cli/tools/personality.py` | Loads `personality-context` memories used by the personalization/context layers |
 | `co_cli/_frontmatter.py` | Frontmatter parsing and validation for memory files |
-| `co_cli/_history.py` | `inject_opening_context` history processor — proactive recall injection |
+| `co_cli/_history.py` | Calls into memory recall from the context-engineering layer |
 | `co_cli/_signal_analyzer.py` | LLM mini-agent for post-turn signal detection |
 | `co_cli/prompts/agents/signal_analyzer.md` | Signal classification policy prompt |
 | `co_cli/prompts/agents/memory_consolidator.md` | Two-phase consolidation prompt: fact extraction + contradiction resolution |

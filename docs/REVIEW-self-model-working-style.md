@@ -24,7 +24,7 @@ The practical thesis is:
 
 # 1. What Was Reviewed
 
-- **Current co design/docs:** `docs/DESIGN-personality.md`, `docs/DESIGN-core.md`, `docs/DESIGN-prompt-design.md`, `docs/reference/RESEARCH-peer-systems.md`, `docs/reference/ROADMAP-co-evolution.md`
+- **Current co design/docs:** `docs/DESIGN-personalization.md`, `docs/DESIGN-context-engineering.md`, `docs/DESIGN-system.md`, `docs/reference/RESEARCH-peer-systems.md`, `docs/reference/ROADMAP-co-evolution.md`
 - **Current co implementation:** `co_cli/agent.py`, `co_cli/_commands.py`, `co_cli/_history.py`, `co_cli/tools/personality.py`
 - **Frontier/peer patterns already captured in repo research:** OpenAI memory/agent direction, Anthropic Claude Code memory + subagents, Letta typed memory blocks, Mem0 structured memory operations, Codex/Claude Code prompt-and-policy discipline
 

@@ -243,7 +243,7 @@ graph TD
 |---------------|-------------|------------|
 | `CoServices` | Service handles | `shell`, `knowledge_index`, `task_runner`, `model_registry` |
 | `CoConfig` | Read-only config | `session_id`, paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
-| `CoSessionState` | Mutable session state | `google_creds`, `session_tool_approvals`, `active_skill_env`, `skill_tool_grants`, `drive_page_tokens`, `session_todos`, `skill_registry` |
+| `CoSessionState` | Mutable session state | `google_creds`, `session_tool_approvals`, `active_skill_env`, `skill_tool_grants`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction`, `turn_usage`, `opening_ctx_state`, `safety_state` |
 
 Sub-agent isolation:
@@ -341,7 +341,7 @@ These subsystems are structurally part of the system capability surface but own 
 
 Memory:
 - Files are YAML-frontmatter markdown in `.co-cli/memory/`
-- runtime injection happens through `inject_opening_context`
+- runtime injection happens through `inject_opening_context`; personalization asset design lives in [DESIGN-personalization.md](DESIGN-personalization.md)
 - write path runs signal detection, dedup, consolidation, persistence, and retention
 
 Knowledge:
@@ -439,7 +439,8 @@ System-relevant settings called out here:
 | `co_cli/main.py` | `create_deps()`, `chat_loop()`, startup assembly, REPL |
 | `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
 | `co_cli/_history.py` | History processors and compaction |
-| `co_cli/_model_check.py` | Model/provider preflight checks used during bootstrap |
+| `co_cli/_startup_check.py` | `check_startup()` — provider/model preflight gate used during bootstrap |
+| `co_cli/_model_check.py` | Backward-compat shim: `PreflightResult`, private check helpers — used only by `_status.py` |
 | `co_cli/_commands.py` | Slash commands and skill dispatch surface |
 | `co_cli/config.py` | Settings model and precedence rules |
 | `co_cli/tools/` | Native tool families |

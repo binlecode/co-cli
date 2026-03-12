@@ -1,6 +1,6 @@
 # Tools
 
-Native agent tools: shell execution, workspace files, background tasks, todo session state, Obsidian, Google (Drive/Gmail/Calendar), web search and fetch, memory persistence, capability introspection, and sub-agent delegation. See [DESIGN-mcp-client.md](DESIGN-mcp-client.md) for external MCP tool servers, and [DESIGN-prompt-design.md](DESIGN-prompt-design.md) for loop/prompt architecture that consumes these tools.
+Native agent tools: shell execution, workspace files, background tasks, todo session state, Obsidian, Google (Drive/Gmail/Calendar), web search and fetch, memory persistence, capability introspection, and sub-agent delegation. See [DESIGN-mcp-client.md](DESIGN-mcp-client.md) for external MCP tool servers, and [DESIGN-context-engineering.md](DESIGN-context-engineering.md) for the prompt/context layer that consumes these tools.
 
 ## Common Conventions
 

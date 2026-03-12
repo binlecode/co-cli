@@ -2,11 +2,11 @@
 
 ## 1. What & How
 
-This doc is the canonical spec for co-cli's context engineering layer: static prompt assembly at agent creation, per-request instruction layering, history processor transforms, context-budget controls, and message-history lifecycle over a session.
+This doc is the canonical spec for co-cli's context engineering layer: static prompt assembly at agent creation, per-request instruction layering, memory/context injection, history processor transforms, context-budget controls, and message-history lifecycle over a session.
 
 Scope boundary:
 - In scope: prompt composition, per-turn context injection, memory/context recall injection, tool-output trimming, safety interventions in history, summarization/compaction, and history repair.
-- Out of scope: overall system architecture in [DESIGN-system.md](DESIGN-system.md), end-to-end turn orchestration and approval mechanics in [DESIGN-core-loop.md](DESIGN-core-loop.md), and personality content design in [DESIGN-personality.md](DESIGN-personality.md).
+- Out of scope: overall system architecture in [DESIGN-system.md](DESIGN-system.md), end-to-end turn orchestration and approval mechanics in [DESIGN-core-loop.md](DESIGN-core-loop.md), and personalization asset design in [DESIGN-personalization.md](DESIGN-personalization.md).
 
 ## 2. Component in System Architecture
 
@@ -109,6 +109,8 @@ Static contents:
 - Ordered behavioral rules from `prompts/rules/*.md`.
 - Optional examples and model-specific counter-steering.
 
+Personalization-specific meaning for seed, critique, examples, mindsets, and character memories is documented in [DESIGN-personalization.md](DESIGN-personalization.md). This doc owns only the runtime assembly order.
+
 Failure and fallback behavior:
 - Missing optional examples or quirks are ignored.
 - Rule filenames must validate as contiguous `NN_*` ordering; invalid rule structure is treated as prompt-assembly failure at agent build time.
@@ -133,6 +135,8 @@ Behavior:
 - `add_personality_memories`: loads up to five `personality-context` memories by recency.
 - `inject_personality_critique`: injects the role critique lens when configured.
 - `add_available_skills`: injects `/name - description` entries from `skill_registry`, capped at 2 KB.
+
+The source and meaning of personalization assets are documented in [DESIGN-personalization.md](DESIGN-personalization.md). The storage and lifecycle of memory entries are documented in [DESIGN-memory.md](DESIGN-memory.md).
 
 Failure and fallback behavior:
 - Any layer with missing or empty source material contributes nothing.
@@ -160,6 +164,10 @@ append "Relevant memories:\n..."
 
 Fallback:
 - If no memories match, history is unchanged.
+
+Ownership note:
+- Memory lifecycle, indexing, dedup, and retention belong to [DESIGN-memory.md](DESIGN-memory.md).
+- The fact that recalled memories are injected here before the model request belongs to this doc.
 
 #### `truncate_tool_returns`
 
@@ -300,6 +308,6 @@ Known limitations:
 | `co_cli/deps.py` | Runtime state consumed by instructions and history processors |
 | `docs/DESIGN-system.md` | System-level architecture and integration map |
 | `docs/DESIGN-core-loop.md` | End-to-end turn execution, approval loop, and streaming behavior |
-| `docs/DESIGN-personality.md` | Personality content sources and injection semantics |
+| `docs/DESIGN-personalization.md` | Personalization asset schema and invariants |
 | `docs/DESIGN-llm-models.md` | Provider/model selection and summarization model configuration |
 | `tests/test_history.py` | Functional coverage for processors, summarization, and `/compact` |

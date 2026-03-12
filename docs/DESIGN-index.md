@@ -1,6 +1,6 @@
 # Co CLI — Documentation Index
 
-> For system overview, architecture diagrams, and core design: [DESIGN-core.md](DESIGN-core.md).
+> For system overview and architecture diagrams: [DESIGN-system.md](DESIGN-system.md).
 
 ## 1. Reading Guide
 
@@ -10,7 +10,7 @@ The docs are organized in four layers. Use the question types below to find the 
 DESIGN-index.md  ← start here (navigation, config reference, module index)
     │
     ▼
-DESIGN-core.md   ← system architecture diagrams, agent loop internals
+DESIGN-system.md ← system architecture diagrams, top-level system contracts
     │
     ▼
 What is your question?
@@ -24,7 +24,7 @@ What is your question?
     │
     └── need schema, lifecycle, or config detail?
             └─▶  Layer 3 — Component docs
-                    DESIGN-core
+                    DESIGN-system
                     DESIGN-prompt-design
                     DESIGN-tools
                     DESIGN-memory
@@ -42,7 +42,7 @@ What is your question?
 ### Layer 1 — Documentation Index (this doc)
 
 Start here for navigation: reading guide, config reference, and module index.
-System overview and architecture diagrams live in [DESIGN-core.md](DESIGN-core.md).
+System overview and architecture diagrams live in [DESIGN-system.md](DESIGN-system.md).
 
 ### Layer 2 — Runtime docs
 
@@ -88,9 +88,9 @@ Read a component doc when you need **implementation detail for a specific module
 
 | If you're asking... | Read |
 |---------------------|------|
-| How does the agent factory, CoDeps, or approval flow work at the code level? | [DESIGN-core.md](DESIGN-core.md) |
+| How does the agent factory, CoDeps, or approval flow work at the code level? | [DESIGN-system.md](DESIGN-system.md) and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | What models/providers are supported and how is the reasoning chain configured? | [DESIGN-llm-models.md](DESIGN-llm-models.md) |
-| How does the prompt get structured / what are the safety policy rules? | [DESIGN-prompt-design.md](DESIGN-prompt-design.md) |
+| How does the prompt get structured / what gets injected at runtime? | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) |
 | What are all the tools and their approval/return shape? | [DESIGN-tools.md](DESIGN-tools.md) |
 | How does memory dedup, consolidation, and certainty scoring work? | [DESIGN-memory.md](DESIGN-memory.md) |
 | How does the FTS5/hybrid knowledge index work internally? | [DESIGN-knowledge.md](DESIGN-knowledge.md) |
@@ -99,14 +99,14 @@ Read a component doc when you need **implementation detail for a specific module
 
 | Component | Doc | Summary |
 |-----------|-----|---------|
-| Core orchestration (agent factory, CoDeps, capability surface, session management, security) | [DESIGN-core.md](DESIGN-core.md) | Agent factory, CoDeps, capability surface (tools/skills/MCP/sub-agents/approval boundary), memory & knowledge systems, session management, security model |
-| Agents + Prompt Architecture | [DESIGN-prompt-design.md](DESIGN-prompt-design.md) | Prompt composition: static assembly, per-turn layers, tool preamble, context governance coupling |
+| System architecture (agent factory, CoDeps, capability surface, session management, security) | [DESIGN-system.md](DESIGN-system.md) | Agent factory, CoDeps, capability surface (tools/skills/MCP/sub-agents/approval boundary), memory & knowledge systems, session management, security model |
+| Context engineering | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) | Prompt composition, memory/context injection, history processors, compaction, history integrity |
 | Tools index | [DESIGN-tools.md](DESIGN-tools.md) — [execution](DESIGN-tools-execution.md), [integrations](DESIGN-tools-integrations.md), [delegation](DESIGN-tools-delegation.md) | Shell, files, background, todo, capabilities, Obsidian, Google, web, memory, sub-agent delegation |
 | Knowledge internals | [DESIGN-knowledge.md](DESIGN-knowledge.md) | `KnowledgeIndex` FTS5/hybrid retrieval, article frontmatter schema, Obsidian/Drive indexing |
 | Memory internals | [DESIGN-memory.md](DESIGN-memory.md) | Frontmatter contract, signal detection, dedup, consolidation, retention, certainty classification |
 | Skills internals | [DESIGN-skills.md](DESIGN-skills.md) | `SkillCommand` schema, security scanner patterns |
 | LLM Models | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Gemini/Ollama model selection, inference parameters, Ollama local setup, sub-agent model roles |
-| Personality System | [DESIGN-personality.md](DESIGN-personality.md) | File-driven roles, 5 traits, structural per-turn injection, reasoning depth override |
+| Personalization | [DESIGN-personalization.md](DESIGN-personalization.md) | Role asset schema, file-driven customization, character grounding, learned-context semantics |
 | MCP Client | [DESIGN-mcp-client.md](DESIGN-mcp-client.md) | External tool servers via Model Context Protocol (stdio and HTTP transports, auto-prefixing, approval inheritance) |
 | Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
 | Doctor | [DESIGN-doctor.md](DESIGN-doctor.md) | System-wide integration health checks: shared doctor engine, probe contracts, bootstrap/runtime/status callsites |
@@ -156,10 +156,12 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid retrieval |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name |
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimensionality (1024 = bge-m3; legacy Ollama embeddinggemma used 256) |
-| `knowledge_hybrid_vector_weight` | `—` | `0.7` | Hybrid retrieval vector-score weight |
-| `knowledge_hybrid_text_weight` | `—` | `0.3` | Hybrid retrieval BM25-score weight |
-| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"local"` | Reranker provider (`none`, `local`, `ollama`, `gemini`) |
+| `knowledge_hybrid_vector_weight` | `—` | `0.7` | Retained for backward compatibility; ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
+| `knowledge_hybrid_text_weight` | `—` | `0.3` | Retained for backward compatibility; ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
+| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"tei"` | Reranker provider (`none`, `local`, `ollama`, `gemini`, `tei`) |
 | `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
+| `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | Base URL for TEI embed service (`POST /embed`) |
+| `knowledge_rerank_api_url` | `CO_KNOWLEDGE_RERANK_API_URL` | `"http://127.0.0.1:8282"` | Base URL for TEI rerank service (`POST /rerank`) |
 | `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | Max stored memories |
 | `memory_dedup_window_days` | `CO_CLI_MEMORY_DEDUP_WINDOW_DAYS` | `7` | Duplicate-detection lookback window |
 | `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | Fuzzy similarity threshold for dedup |
@@ -210,7 +212,10 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 1. Agents + Orchestration | `_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
 | 1. Agents + Orchestration | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| 2. Runtime Deps + Session State | `_model_check.py` | `run_model_check()`, `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — pre-agent resource gate |
+| 2. Runtime Deps + Session State | `_startup_check.py` | `check_startup(deps, frontend)` — provider/model preflight gate; hard errors abort startup, warnings are advisory |
+| 2. Runtime Deps + Session State | `_probes.py` | Shared factual probe layer: `probe_provider`, `probe_role_models`, `probe_google`, `probe_obsidian`, `probe_brave`, `probe_mcp_server`, `probe_knowledge`, `probe_skills` — all return `ProbeResult` |
+| 2. Runtime Deps + Session State | `_runtime_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines) |
+| 2. Runtime Deps + Session State | `_model_check.py` | Backward-compat shim: `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — called only by `_status.py` |
 | 2. Runtime Deps + Session State | `_bootstrap.py` | `run_bootstrap()` — four startup steps: knowledge sync, session restore/create, skills count report, integration health sweep |
 | 2. Runtime Deps + Session State | `_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | 2. Runtime Deps + Session State | `_history.py` | History processors and `summarize_messages()` |
