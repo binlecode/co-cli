@@ -123,13 +123,12 @@ Start at `docs/DESIGN-index.md` for navigation, config reference, and module ind
 
 Workflow artifact placement:
 
-- `AUDIT-*.md`, `REPORT-*.md`, `TODO-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
+- `REPORT-*.md`, `TODO-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
 
 Workflow artifact lifecycle:
 
-- `AUDIT-<scope>.md` is permanent. It is the `/delivery-audit` inverse coverage record (tools/settings/commands vs DESIGN docs). Only `/delivery-audit` produces AUDIT- files.
 - `REPORT-<scope>.md` is permanent. It is an eval or pipeline run report. Only eval runs produce REPORT- files.
-- `TODO-<slug>.md` tracks active work through full delivery. `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The full task record is preserved for debugging, troubleshooting, and revert. The file is deleted only at Gate 3 (PO acceptance), in the same Claude Code workflow session that deletes the DELIVERY file.
+- `TODO-<slug>.md` is the single source of work tracking for a delivery. It holds the plan, the audit log from `/orchestrate-plan`, and the `/delivery-audit` coverage results (appended at the end). `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The file is deleted only at Gate 3 (PO acceptance), in the same Claude Code workflow session that deletes the DELIVERY file.
 - `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same Claude Code workflow session that records acceptance.
 
 TODO lifecycle:
@@ -153,7 +152,7 @@ TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit → docs/AUDIT-<slug>.md)
+Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit → appended to TODO)
     ↓
 👤  Gate 2: TL reviews delivery report    (all done_when passed?)
     ↓
@@ -167,7 +166,7 @@ ship
 - `/orchestrate-plan <slug>`: create or refine `docs/TODO-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
 - `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), produce `docs/DELIVERY-<slug>.md`, auto-invoke sync-doc and delivery-audit.
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
-- `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs -> `docs/AUDIT-<scope>.md`. Auto-invoked by `orchestrate-dev`.
+- `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs. Results appended to `docs/TODO-<scope>.md`. Auto-invoked by `orchestrate-dev`.
 - `/research <scope>`: free-form discovery, producing `docs/reference/RESEARCH-<scope>.md`. Outside the delivery workflow. See reference repos in `docs/reference/` for key files per repo.
 
 ## Reference Repos

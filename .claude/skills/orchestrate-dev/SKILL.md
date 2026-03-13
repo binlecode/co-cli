@@ -230,7 +230,7 @@ Record result: clean / fixed (what was fixed).
 
 ### Step 4 — Coverage audit
 
-Run `/delivery-audit <slug>`. Checks whether delivered features — new agent tools, config settings, CLI commands — have DESIGN doc coverage. `sync-doc` fixes stale claims in existing doc sections; coverage-audit catches features that have no doc section at all.
+Run `/delivery-audit <slug>`. Checks whether delivered features — new agent tools, config settings, CLI commands — have DESIGN doc coverage. `sync-doc` fixes stale claims in existing doc sections; coverage-audit catches features that have no doc section at all. Results are appended directly to `docs/TODO-<slug>.md`.
 
 Record result: clean / gaps found (list missing features by name).
 
