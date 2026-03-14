@@ -9,8 +9,6 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.agents._factory import build_model
 from co_cli.config import ModelEntry as _ModelEntry, settings, WebPolicy, MCPServerConfig
-
-logger = logging.getLogger(__name__)
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.context._history import (
     inject_opening_context,
@@ -37,6 +35,8 @@ from co_cli.tools.task_control import (
     cancel_background_task,
     list_background_tasks,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_agent(
