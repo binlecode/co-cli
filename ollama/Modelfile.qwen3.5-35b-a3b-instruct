@@ -17,6 +17,20 @@
 # - num_predict (16384): Since expansive thought blocks are omitted, 16k is 
 #   plenty for direct generation while maintaining safety limits.
 # - num_ctx (131072): Full 128K context window for document analysis.
+#
+# API OVERRIDES (Application Config):
+# To guarantee optimal performance and prevent the client application from 
+# overriding these with suboptimal defaults, configure your API client with:
+# "options": {
+#   "temperature": 0.7,
+#   "top_p": 0.8,
+#   "top_k": 20,
+#   "min_p": 0.0,
+#   "presence_penalty": 1.5,
+#   "repeat_penalty": 1.0,
+#   "num_ctx": 131072,
+#   "num_predict": 16384
+# }
 # ==============================================================================
 
 FROM qwen3.5:35b-a3b

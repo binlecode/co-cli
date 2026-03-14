@@ -16,6 +16,20 @@
 # - num_predict (32768): Ensures adequate output length for very long thought 
 #   processes before arriving at an answer.
 # - num_ctx (131072): 128K context window allows for massive document analysis.
+#
+# API OVERRIDES (Application Config):
+# To guarantee optimal performance and prevent the client application from 
+# overriding these with suboptimal defaults, configure your API client with:
+# "options": {
+#   "temperature": 1.0,
+#   "top_p": 0.95,
+#   "top_k": 20,
+#   "min_p": 0.0,
+#   "presence_penalty": 1.5,
+#   "repeat_penalty": 1.0,
+#   "num_ctx": 131072,
+#   "num_predict": 32768
+# }
 # ==============================================================================
 
 FROM qwen3.5:35b-a3b
