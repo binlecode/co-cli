@@ -1,14 +1,18 @@
+import logging
 import os
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.agents._factory import build_model
 from co_cli.config import ModelEntry as _ModelEntry, settings, WebPolicy, MCPServerConfig
+
+logger = logging.getLogger(__name__)
 from co_cli.deps import CoDeps, CoConfig
-from co_cli._history import (
+from co_cli.context._history import (
     inject_opening_context,
     truncate_tool_returns,
     detect_safety_issues,
@@ -16,7 +20,7 @@ from co_cli._history import (
 )
 from co_cli.prompts import assemble_prompt
 from co_cli.tools.shell import run_shell_command
-from co_cli.tools.obsidian import search_notes, list_notes, read_note
+from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
@@ -41,7 +45,6 @@ def get_agent(
     web_policy: WebPolicy | None = None,
     mcp_servers: dict[str, MCPServerConfig] | None = None,
     personality: str | None = None,
-    model_name: str | None = None,
     config: CoConfig | None = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], ModelSettings | None, list[str], dict[str, bool]]:
     """Factory function to create the Pydantic AI Agent.
@@ -77,22 +80,19 @@ def get_agent(
             raise ValueError("gemini_api_key is required in settings when llm_provider is 'gemini'.")
         os.environ["GEMINI_API_KEY"] = api_key
 
-    # model_name override (eval/test path) builds a bare entry with no api_params;
-    # the configured reasoning entry carries full api_params in the live chat flow.
-    _raw_entry = model_name or _cfg.role_models["reasoning"][0]
-    reasoning_entry = _raw_entry if isinstance(_raw_entry, _ModelEntry) else _ModelEntry(model=_raw_entry)
+    reasoning_entry = _cfg.role_models["reasoning"][0]
     model, model_settings = build_model(
         reasoning_entry, provider_name, _cfg.ollama_host
     )
 
-    from co_cli.prompts.model_quirks import normalize_model_name
+    from co_cli.prompts.model_quirks._loader import normalize_model_name
     normalized_model = normalize_model_name(reasoning_entry.model)
 
     # Soul block — seed + character base memories first; examples trail the rules
     soul_seed: str | None = None
     soul_examples: str | None = None
     if personality:
-        from co_cli.prompts.personalities._composer import (
+        from co_cli.prompts.personalities._loader import (
             load_soul_seed,
             load_soul_examples,
             load_soul_mindsets,
@@ -151,7 +151,7 @@ def get_agent(
         model,
         deps_type=CoDeps,
         system_prompt=system_prompt,
-        retries=settings.tool_retries,
+        retries=_cfg.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[
             inject_opening_context,
@@ -269,14 +269,18 @@ def get_agent(
     _register(read_article_detail, all_approval)
     _register(search_knowledge, all_approval)
     _register(list_notes, all_approval)
+    _register(search_notes, all_approval)
     _register(read_note, all_approval)
+    _register(recall_article, all_approval)
     _register(search_drive_files, all_approval)
     _register(read_drive_file, all_approval)
     _register(list_emails, all_approval)
     _register(search_emails, all_approval)
     _register(list_calendar_events, all_approval)
     _register(search_calendar_events, all_approval)
-    policy = web_policy or settings.web_policy
+    # is not None guard (not `or`) — WebPolicy() is always truthy, so `or` would never
+    # fall through to _cfg. settings.web_policy was the bug: bypassed _cfg entirely.
+    policy = web_policy if web_policy is not None else _cfg.web_policy
     search_approval = all_approval or (policy.search == "ask")
     fetch_approval = all_approval or (policy.fetch == "ask")
     _register(web_search, search_approval)
@@ -285,3 +289,86 @@ def get_agent(
     tool_names = [name for name, _ in tool_registry]
     tool_approval = {name: flag for name, flag in tool_registry}
     return agent, model_settings, tool_names, tool_approval
+
+
+async def discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list[str]:
+    """Discover MCP tool names from connected servers (after async with agent).
+
+    Falls back to ``{prefix}_*`` placeholders if list_tools() is unavailable.
+    """
+    from pydantic_ai.mcp import MCPServer
+
+    mcp_tool_names: list[str] = []
+    native_set = set(native_tool_names)
+
+    for toolset in agent.toolsets:
+        # Unwrap approval wrappers to reach the MCPServer base instance
+        inner = getattr(toolset, "wrapped", toolset)
+        if not isinstance(inner, MCPServer):
+            continue
+        try:
+            tools = await inner.list_tools()
+            prefix = inner.tool_prefix or ""
+            for t in tools:
+                name = f"{prefix}_{t.name}" if prefix else t.name
+                if name not in native_set:
+                    mcp_tool_names.append(name)
+        except Exception as e:
+            logger.warning(
+                f"MCP tool list failed for {inner.tool_prefix!r}: {e}"
+            )
+            # Server not yet connected or list failed — use placeholder
+            prefix = inner.tool_prefix or "mcp"
+            mcp_tool_names.append(f"{prefix}_*")
+
+    return native_tool_names + sorted(mcp_tool_names)
+
+
+def swap_model_inplace(
+    agent: Any,
+    model_name: str,
+    config: CoConfig,
+) -> ModelSettings | None:
+    """Swap the agent's model in-place without rebuilding MCP connections.
+
+    Delegates model construction to build_model() — no provider-specific logic here.
+    Rebuilds the system prompt for the new model's quirks (applies to all providers).
+    Returns new ModelSettings for the caller to apply.
+    """
+    from co_cli.agents._factory import build_model
+    from co_cli.config import ModelEntry
+    from co_cli.prompts import assemble_prompt
+    from co_cli.prompts.model_quirks._loader import normalize_model_name
+
+    old_model = agent.model
+    new_model, new_settings = build_model(
+        ModelEntry(model=model_name), config.llm_provider, config.ollama_host
+    )
+    agent.model = new_model
+    try:
+        # Rebuild system prompt for new model's quirks
+        normalized_model = normalize_model_name(model_name)
+        soul_seed = None
+        soul_examples = None
+        if config.personality and config.memory_dir:
+            from co_cli.prompts.personalities._loader import (
+                load_soul_seed, load_soul_examples, load_character_memories,
+            )
+            soul_seed = load_soul_seed(config.personality)
+            base_memories = load_character_memories(config.personality, config.memory_dir)
+            if base_memories:
+                soul_seed = soul_seed + "\n\n" + base_memories
+            examples = load_soul_examples(config.personality)
+            if examples:
+                soul_examples = examples
+        new_system_prompt, _ = assemble_prompt(
+            config.llm_provider,
+            model_name=normalized_model,
+            soul_seed=soul_seed,
+            soul_examples=soul_examples,
+        )
+        agent.system_prompt = new_system_prompt
+        return new_settings
+    except Exception:
+        agent.model = old_model
+        raise

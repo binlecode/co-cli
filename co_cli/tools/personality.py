@@ -1,7 +1,7 @@
 """Personality helpers — per-turn memory injection.
 
 All task-type mindset files are loaded statically into the soul block at agent
-creation via ``load_soul_mindsets()`` in ``_composer.py``. This module handles
+creation via ``load_soul_mindsets()`` in ``personalities/_loader.py``. This module handles
 only the per-turn personality-context memory injection.
 """
 
