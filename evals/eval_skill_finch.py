@@ -21,9 +21,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from co_cli._commands import _load_skills
+from co_cli.commands._commands import _load_skills
 from co_cli.agent import get_agent
-from co_cli.config import get_settings
 
 from evals._common import (
     detect_model_tag,
@@ -150,28 +149,6 @@ def _write_fix_report(
     )
     lines.append("")
 
-    lines.append("### FIX-02 — `make_eval_deps()` missing 3 CoDeps fields (openclaw refactor gap)")
-    lines.append("")
-    lines.append("**Severity:** low (eval workaround in place; runtime defaults are correct values)")
-    lines.append("")
-    lines.append("**Location:** `evals/_common.py:make_eval_deps()`")
-    lines.append("")
-    lines.append("**Root cause:**")
-    lines.append(
-        "`knowledge_reranker_provider`, `mcp_count`, and `skill_registry` were added to "
-        "`CoDeps` in the openclaw-skills-adoption-review but were not backfilled into "
-        "`make_eval_deps()`. Any future eval omitting explicit overrides silently uses "
-        "CoDeps defaults (which happen to be correct values), but the intent is invisible."
-    )
-    lines.append("")
-    lines.append("**Proposed fix:** Add to `defaults` dict in `make_eval_deps()`:")
-    lines.append("```python")
-    lines.append('"knowledge_reranker_provider": s.knowledge_reranker_provider,')
-    lines.append('"mcp_count": len(s.mcp_servers),')
-    lines.append('"skill_registry": [],')
-    lines.append("```")
-    lines.append("")
-
     # --- Dynamic issues from eval failures ---
     dynamic_failures = [r for r in results if r["failures"]]
     if dynamic_failures:
@@ -216,15 +193,9 @@ async def run_eval() -> int:
     print(f"Agent(finch) created with {len(tool_names)} tools")
     print()
 
-    # Build deps with explicit overrides for the 3 new CoDeps fields that
-    # make_eval_deps() predates (openclaw refactor gap — see FIX-02).
-    s = get_settings()
     deps = make_eval_deps(
         session_id="eval-skill-finch",
         personality="finch",
-        knowledge_reranker_provider=s.knowledge_reranker_provider,
-        mcp_count=len(s.mcp_servers),
-        skill_registry=[],
     )
 
     results: list[dict] = []

@@ -127,7 +127,10 @@ Workflow artifact placement:
 
 Workflow artifact lifecycle:
 
-- `REPORT-<scope>.md` is permanent. It is an eval or pipeline run report. Only eval runs produce REPORT- files.
+- `REPORT-<scope>.md` is permanent. It is an eval, pipeline run, or benchmarking report. Only eval/benchmark/script runs produce REPORT- files.
+- **Reporting Structure Guidelines:** 
+  - **Qualitative Behavior Evals** (`evals/*-result.md`): Must include "Per-Case Results" tables, "Drift/Error Tracing" (failed turns with prompt/response context), and Pass/Fail Gates.
+  - **Quantitative Benchmarks** (`evals/benchmark-*-result.md` or `scripts/*-result.md`): Must include a "Results Summary" table showing Deltas between models (e.g., Throughput, TTFT, Total Time), "Detailed Findings" narratives explaining hardware/context anomalies, and explicitly list "API Parameters Forced" in the header.
 - `TODO-<slug>.md` is the single source of work tracking for a delivery. It holds the plan, the audit log from `/orchestrate-plan`, and the `/delivery-audit` coverage results (appended at the end). `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The file is deleted only at Gate 3 (PO acceptance), in the same Claude Code workflow session that deletes the DELIVERY file.
 - `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same Claude Code workflow session that records acceptance.
 

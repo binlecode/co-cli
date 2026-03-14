@@ -19,8 +19,8 @@ import asyncio
 import sys
 import time
 
-from co_cli._history import SafetyState  # noqa: E402
-from co_cli._orchestrate import run_turn  # noqa: E402
+from co_cli.context._history import SafetyState  # noqa: E402
+from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
 from evals._common import make_eval_deps  # noqa: E402

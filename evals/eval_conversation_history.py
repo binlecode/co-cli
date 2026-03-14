@@ -40,7 +40,7 @@ from pydantic_ai.usage import UsageLimits
 from co_cli.agent import CoDeps, get_agent
 from co_cli.config import settings
 
-from evals._common import make_eval_deps, make_eval_settings
+from evals._common import build_message_history, make_eval_deps, make_eval_settings, patch_dangling_tool_calls
 
 
 # ---------------------------------------------------------------------------
@@ -271,78 +271,14 @@ def _describe_messages(messages: list) -> list[str]:
     return desc
 
 
-def _build_synthetic_history(entries: list) -> list:
-    """Convert synthetic_history tuples into pydantic-ai message objects.
-
-    Entry formats:
-      ("user", "text")
-      ("assistant", "text")
-      ("tool_call", tool_name, args_json, call_id)
-      ("tool_return", tool_name, content, call_id)
-    """
-    messages = []
-    for entry in entries:
-        kind = entry[0]
-        if kind == "user":
-            messages.append(ModelRequest(parts=[UserPromptPart(content=entry[1])]))
-        elif kind == "assistant":
-            messages.append(ModelResponse(parts=[TextPart(content=entry[1])]))
-        elif kind == "tool_call":
-            _, tool_name, args, call_id = entry
-            messages.append(ModelResponse(parts=[
-                ToolCallPart(tool_name=tool_name, args=args, tool_call_id=call_id),
-            ]))
-        elif kind == "tool_return":
-            _, tool_name, content, call_id = entry
-            messages.append(ModelRequest(parts=[
-                ToolReturnPart(tool_name=tool_name, content=content, tool_call_id=call_id),
-            ]))
-    return messages
-
-
-def _make_eval_settings(model_settings):
-    """Build deterministic eval settings (temp=0) from model settings."""
-    return make_eval_settings(model_settings)
-
-
 # ---------------------------------------------------------------------------
 # Case runners
 # ---------------------------------------------------------------------------
 
 
-def _patch_dangling_tool_calls(messages: list) -> list:
-    """Patch history if last response has unanswered tool calls.
-
-    Some models may trigger tool calls during setup turns.
-    pydantic-ai rejects the next agent.run() if history ends with dangling
-    ToolCallPart without matching ToolReturnPart.  Same pattern as
-    co_cli/_orchestrate.py:_patch_dangling_tool_calls.
-    """
-    if not messages:
-        return messages
-
-    last_msg = messages[-1]
-    if not (hasattr(last_msg, "kind") and last_msg.kind == "response"):
-        return messages
-
-    tool_calls = [p for p in last_msg.parts if isinstance(p, ToolCallPart)]
-    if not tool_calls:
-        return messages
-
-    return_parts = [
-        ToolReturnPart(
-            tool_name=tc.tool_name,
-            tool_call_id=tc.tool_call_id,
-            content="[eval: tool not available during setup turn]",
-        )
-        for tc in tool_calls
-    ]
-    return messages + [ModelRequest(parts=return_parts)]
-
-
 async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label: str) -> dict:
     """Run a multi-turn test case. Supports all three tiers."""
-    eval_settings = _make_eval_settings(model_settings)
+    eval_settings = make_eval_settings(model_settings)
     limits = UsageLimits(request_limit=3)
 
     # Build history: either from live LLM turns or synthetic messages
@@ -350,7 +286,7 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
 
     if case.get("synthetic_history"):
         # Tier 3: start with synthetic history
-        history = _build_synthetic_history(case["synthetic_history"])
+        history = build_message_history(case["synthetic_history"])
     else:
         # Tier 1 & 2: run setup turns live through the LLM
         setup_turns = case["turns"][:-1]
@@ -364,7 +300,7 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
             )
             # Patch dangling tool calls before next turn — overeager models
             # may trigger tool calls during conversational setup prompts
-            history = _patch_dangling_tool_calls(result.all_messages())
+            history = patch_dangling_tool_calls(result.all_messages())
 
     setup_history_len = len(history)
 
@@ -422,7 +358,7 @@ def _switch_model(agent, model_name: str):
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
     from co_cli.prompts import assemble_prompt
-    from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
+    from co_cli.prompts.model_quirks._loader import normalize_model_name, get_model_inference
 
     ollama_host = settings.ollama_host
     provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")

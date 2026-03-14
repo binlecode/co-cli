@@ -229,7 +229,7 @@ def bootstrap_telemetry(db_path: str) -> Any:
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from pydantic_ai import Agent
     from pydantic_ai.agent import InstrumentationSettings
-    from co_cli._telemetry import SQLiteSpanExporter
+    from co_cli.observability._telemetry import SQLiteSpanExporter
 
     exporter = SQLiteSpanExporter(db_path=db_path)
     resource = Resource.create({"service.name": "co-cli", "service.version": "eval"})

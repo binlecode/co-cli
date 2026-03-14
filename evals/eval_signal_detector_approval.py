@@ -28,9 +28,9 @@ from typing import Any
 
 from pydantic_ai.messages import ModelRequest, UserPromptPart  # noqa: E402
 
-from co_cli._signal_analyzer import analyze_for_signals  # noqa: E402
+from co_cli.memory._signal_detector import analyze_for_signals  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
-from co_cli.tools.memory import _save_memory_impl  # noqa: E402
+from co_cli.memory._lifecycle import persist_memory as _save_memory_impl  # noqa: E402
 from evals._common import make_eval_deps  # noqa: E402
 from evals._frontend import CapturingFrontend  # noqa: E402
 

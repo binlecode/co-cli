@@ -1,0 +1,30 @@
+# ==============================================================================
+# Qwen 3.5 35B A3B - Thinking Mode (General Tasks)
+# Reference: https://unsloth.ai/docs/models/qwen3.5
+# ==============================================================================
+#
+# USAGE GUIDE:
+# This configuration is officially optimized by Unsloth for "General Tasks"
+# using Qwen3.5's hybrid reasoning (thinking) capabilities. It is best used for 
+# broad reasoning, creative problem-solving, and open-ended analysis.
+#
+# PARAMETER RATIONALE:
+# - temperature (1.0): High temperature encourages creative, diverse thought 
+#   processes and expansive reasoning.
+# - presence_penalty (1.5): Set high to reduce repetitive loops during extended 
+#   reasoning chains (Note: too high can slightly decrease precise performance).
+# - num_predict (32768): Ensures adequate output length for very long thought 
+#   processes before arriving at an answer.
+# - num_ctx (131072): 128K context window allows for massive document analysis.
+# ==============================================================================
+
+FROM qwen3.5:35b-a3b
+TEMPLATE {{ .Prompt }}
+PARAMETER temperature 1.0
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER min_p 0.0
+PARAMETER presence_penalty 1.5
+PARAMETER repeat_penalty 1.0
+PARAMETER num_ctx 131072
+PARAMETER num_predict 32768

@@ -29,9 +29,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from co_cli._history import SafetyState  # noqa: E402
-from co_cli._knowledge_index import KnowledgeIndex  # noqa: E402
-from co_cli._orchestrate import run_turn  # noqa: E402
+from co_cli.context._history import SafetyState  # noqa: E402
+from co_cli.knowledge._index import KnowledgeIndex  # noqa: E402
+from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
 from evals._common import make_eval_deps  # noqa: E402
@@ -55,6 +55,9 @@ TURN2_PROMPT = (
     f"Search my knowledge base for {TOPIC_KEYWORD} and summarise "
     "what you find there."
 )
+
+TURN1_EXPECTED_CHAIN = ["web_search", "web_fetch", "save_article"]
+TURN2_EXPECTED_TOOLS = {"search_knowledge", "recall_article"}
 
 
 # ---------------------------------------------------------------------------

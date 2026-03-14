@@ -1,0 +1,30 @@
+# ==============================================================================
+# Qwen 3.5 35B A3B - Coding Mode (Precise Coding Tasks)
+# Reference: https://unsloth.ai/docs/models/qwen3.5
+# ==============================================================================
+#
+# USAGE GUIDE:
+# This configuration is officially optimized by Unsloth for "Precise Coding 
+# Tasks (e.g. WebDev)". It restricts the model's creativity in favor of strict, 
+# exact logic and syntactical accuracy, making it perfect for agentic coding.
+#
+# PARAMETER RATIONALE:
+# - temperature (0.6): Lowered significantly to reduce hallucinations and 
+#   enforce strict logical adherence to instructions.
+# - presence_penalty (0.0): Disabled entirely. While penalizing presence helps 
+#   general writing, it actively harms code generation by forcing the model to 
+#   avoid reusing necessary variable names, keywords, or syntax structures.
+# - num_predict (32768): Provides plenty of output room for large code blocks.
+# - num_ctx (131072): 128K context window for ingesting entire codebases.
+# ==============================================================================
+
+FROM qwen3.5:35b-a3b
+TEMPLATE {{ .Prompt }}
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 20
+PARAMETER min_p 0.0
+PARAMETER presence_penalty 0.0
+PARAMETER repeat_penalty 1.0
+PARAMETER num_ctx 131072
+PARAMETER num_predict 32768

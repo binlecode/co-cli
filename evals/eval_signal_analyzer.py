@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from co_cli._signal_analyzer import SignalResult, analyze_for_signals  # noqa: E402
+from co_cli.memory._signal_detector import SignalResult, analyze_for_signals  # noqa: E402
 from co_cli.agent import get_agent  # noqa: E402
 
 from evals._fixtures import single_user_turn  # noqa: E402
