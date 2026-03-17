@@ -5,7 +5,7 @@ import os
 import pytest
 from pathlib import Path
 
-from co_cli._commands import (
+from co_cli.commands._commands import (
     _load_skills,
     _check_requires,
     _diagnose_requires_failures,
@@ -24,12 +24,12 @@ from co_cli._commands import (
 )
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 
 
 def _make_ctx(skill_commands: dict | None = None) -> CommandContext:
     """Build a minimal CommandContext with real agent."""
-    agent, _, tool_names, _ = get_agent()
+    agent, tool_names, _ = get_agent()
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig(session_id="test-skills"))
     return CommandContext(
         message_history=[],
@@ -78,7 +78,7 @@ def test_load_skills_reserved_name_rejected(tmp_path):
 
 def test_skill_command_is_separate_type():
     """SkillCommand is not a subclass of SlashCommand."""
-    from co_cli._commands import SlashCommand
+    from co_cli.commands._commands import SlashCommand
     assert not issubclass(SkillCommand, SlashCommand)
 
 

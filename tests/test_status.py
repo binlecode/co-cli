@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli._status import check_security, SecurityFinding
+from co_cli.bootstrap._render_status import check_security, SecurityFinding
 
 
 def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
@@ -87,7 +87,7 @@ def test_check_security_exec_approval_no_wildcard(tmp_path):
 
 def test_render_security_findings_outputs_findings():
     """render_security_findings with findings does not raise."""
-    from co_cli._status import render_security_findings
+    from co_cli.bootstrap._render_status import render_security_findings
     findings = [
         SecurityFinding(
             severity="warn",

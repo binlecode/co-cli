@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from co_cli._approval import _is_safe_command
+from co_cli.tools._approval import _is_safe_command
 
 
 class ShellDecision(Enum):

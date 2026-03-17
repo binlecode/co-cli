@@ -1,6 +1,6 @@
 """Functional tests for co_cli._chunker.chunk_text."""
 
-from co_cli._chunker import Chunk, chunk_text
+from co_cli.knowledge._chunker import Chunk, chunk_text
 
 
 def test_short_text_returns_single_chunk() -> None:

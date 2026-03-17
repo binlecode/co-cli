@@ -4,7 +4,7 @@ A farmer has a wolf, a goat, and a cabbage. He needs to cross a river in a boat 
 
 # Response
 
-1. Take the goat across the river and leave it on the far side.  
+1. Take the goat across the river and leave it on the other side.  
 2. Return alone to the original side.  
 3. Take the wolf across the river.  
 4. Bring the goat back to the original side.  
@@ -12,4 +12,4 @@ A farmer has a wolf, a goat, and a cabbage. He needs to cross a river in a boat 
 6. Return alone to the original side.  
 7. Take the goat across the river.  
 
-All three—wolf, goat, and cabbage—are now safely on the far side.
+All three—wolf, goat, and cabbage—are now safely on the other side.

@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
 
-from co_cli._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
+from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from pydantic_ai._agent_graph import GraphAgentState
 from pydantic_ai.messages import (
     FunctionToolCallEvent,

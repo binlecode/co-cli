@@ -25,7 +25,7 @@ from opentelemetry import trace as otel_trace
 from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
-from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD
 from co_cli.deps import CoDeps
 
@@ -492,7 +492,7 @@ async def save_memory(
         related: Slugs of related memories for knowledge linking
                  (e.g. ["003-user-prefers-pytest"]).
     """
-    from co_cli._memory_lifecycle import persist_memory
+    from co_cli.memory._lifecycle import persist_memory
 
     with _TRACER.start_as_current_span("co.memory.save") as span:
         span.set_attribute("memory.tags", ",".join(tags or []))

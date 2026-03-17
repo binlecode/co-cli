@@ -18,6 +18,8 @@ co-cli-search.db
 
 # Test and tooling caches
 .pytest_cache/
+.pytest-last-run.xml
+.pytest-logs/
 .mypy_cache/
 .ruff_cache/
 .tox/

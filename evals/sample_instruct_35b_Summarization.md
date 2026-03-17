@@ -4,30 +4,20 @@ Explain the core differences between optimistic concurrency control and pessimis
 
 # Response
 
-### Core Differences
+**Pessimistic Concurrency Control** assumes conflicts are likely. It locks the data immediately upon access, preventing other transactions from reading or modifying it until the current transaction is finished.
 
-The fundamental difference lies in **when** the system checks for conflicts and **how** it handles them.
-
-*   **Pessimistic Concurrency Control (PCC):** Assumes conflicts are likely. It **locks** the data immediately when a transaction starts. Other transactions must wait until the lock is released.
-    *   *Pros:* High safety, no lost updates.
-    *   *Cons:* Lower performance, potential for deadlocks (everyone waiting for each other).
-*   **Optimistic Concurrency Control (OCC):** Assumes conflicts are rare. It **allows** all transactions to proceed without locking. It checks for conflicts only at the end (commit time). If a conflict is found, the transaction is rolled back and retried.
-    *   *Pros:* High performance, better concurrency.
-    *   *Cons:* Potential for retries and wasted work if conflicts are frequent.
+**Optimistic Concurrency Control** assumes conflicts are rare. It allows multiple transactions to proceed without locking. It only checks for conflicts at the moment of saving (commit), usually by comparing version numbers or timestamps.
 
 ### Real-World Analogy: The Shared Whiteboard
 
-Imagine a team working on a **single shared whiteboard** in a meeting room.
+*   **Pessimistic Control:** You walk up to the whiteboard and **lock the marker** so no one else can use it. You write your notes, then unlock the marker. This guarantees no one overwrites you, but others must wait for you to finish.
+*   **Optimistic Control:** Everyone grabs a marker and writes freely. When you finish, you check if the board looks the same as when you started. If someone else wrote on it while you were working, your changes are rejected, and you must try again.
 
-*   **Pessimistic Approach (The "Do Not Disturb" Sign):**
-    Before anyone starts writing, they must put a "In Use" sign on the board. No one else can touch the board until they finish writing and remove the sign.
-    *   *Result:* Safe, but if two people want to write at once, one must wait in line.
+### Summary of Differences
 
-*   **Optimistic Approach (The "Check Before Leaving" Rule):**
-    Anyone can write on the board freely without asking. However, before they leave, they check if the board looks the same as when they started. If someone else wrote over their section in the meantime, they erase their work and start over.
-    *   *Result:* Fast and efficient, but if everyone writes at once, everyone will end up erasing and restarting their work.
-
-### When to Use Which?
-
-*   **Use Pessimistic** when data conflicts are frequent (e.g., booking the last seat on a flight).
-*   **Use Optimistic** when conflicts are rare (e.g., updating a user profile or reading data).
+| Feature | Pessimistic | Optimistic |
+| :--- | :--- | :--- |
+| **Strategy** | Lock data to prevent conflict | Check for conflict at commit |
+| **Performance** | Slower (due to waiting/locks) | Faster (less waiting) |
+| **Risk** | Low risk of data loss | Risk of failed transactions (retries) |
+| **Best For** | High-conflict data (e.g., bank balances) | Low-conflict data (e.g., blog comments) |

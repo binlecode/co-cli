@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from pydantic_ai import ModelRetry
+
 
 def terminal_error(message: str) -> dict[str, Any]:
     """Return an error dict for terminal (non-retryable) tool failures.
@@ -30,3 +32,23 @@ def http_status_code(e: Exception) -> int | None:
         return int(raw_status)
     except (TypeError, ValueError):
         return None
+
+
+def handle_google_api_error(label: str, e: Exception) -> dict[str, Any]:
+    """Route Google API errors to terminal_error or ModelRetry.
+
+    401 → terminal (auth failure, user must fix credentials)
+    403/404/429/5xx → ModelRetry (transient or permission issue worth retrying)
+    """
+    status = http_status_code(e)
+    if status == 401:
+        return terminal_error(f"{label}: authentication error (401). Check credentials.")
+    if status == 403:
+        raise ModelRetry(f"{label}: access forbidden (403). Check API enablement and permissions.")
+    if status == 404:
+        raise ModelRetry(f"{label}: resource not found (404). Verify the ID and retry.")
+    if status == 429:
+        raise ModelRetry(f"{label}: rate limited (429). Wait a moment and retry.")
+    if status and status >= 500:
+        raise ModelRetry(f"{label}: server error ({status}). Retry shortly.")
+    raise ModelRetry(f"{label}: API error ({e}). Check credentials, API enablement, and quota.")

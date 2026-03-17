@@ -6,7 +6,7 @@ Approval-gated subprocess with env-sanitized execution.
 import asyncio
 import os
 
-from co_cli._shell_env import kill_process_tree, restricted_env
+from co_cli.tools._shell_env import kill_process_tree, restricted_env
 
 
 class ShellBackend:

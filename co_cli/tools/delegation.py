@@ -5,7 +5,8 @@ from typing import Any
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agents._factory import ResolvedModel
+from co_cli._model_factory import ResolvedModel
+from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
 from co_cli.deps import CoDeps, make_subagent_deps
 
 
@@ -25,12 +26,12 @@ async def delegate_coder(
         task: Natural language description of the analysis task.
         max_requests: Maximum LLM requests the sub-agent may make (default 10).
     """
-    from co_cli.agents.coder import make_coder_agent
+    from co_cli.tools._delegation_agents import make_coder_agent
 
     registry = ctx.deps.services.model_registry
-    if not registry or not registry.is_configured("coding"):
+    if not registry or not registry.is_configured(ROLE_CODING):
         raise ModelRetry("Coding sub-agent is unavailable — handle this task directly.")
-    rm = registry.get("coding", ResolvedModel(model=ctx.model, settings=None))
+    rm = registry.get(ROLE_CODING, ResolvedModel(model=ctx.model, settings=None))
     agent = make_coder_agent(rm)
     try:
         result = await agent.run(
@@ -84,12 +85,19 @@ async def delegate_research(
     if max_requests < 1:
         raise ModelRetry("max_requests must be at least 1")
 
-    from co_cli.agents.research import make_research_agent
+    policy = ctx.deps.config.web_policy
+    if policy.search != "allow" or policy.fetch != "allow":
+        raise ModelRetry(
+            "Research sub-agent requires unrestricted web access; "
+            "web_policy is not 'allow'. Handle this task directly."
+        )
+
+    from co_cli.tools._delegation_agents import make_research_agent
 
     registry = ctx.deps.services.model_registry
-    if not registry or not registry.is_configured("research"):
+    if not registry or not registry.is_configured(ROLE_RESEARCH):
         raise ModelRetry("Research sub-agent is unavailable — handle this task directly.")
-    rm = registry.get("research", ResolvedModel(model=ctx.model, settings=None))
+    rm = registry.get(ROLE_RESEARCH, ResolvedModel(model=ctx.model, settings=None))
     sub_deps = make_subagent_deps(ctx.deps)
     agent = make_research_agent(rm)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
@@ -163,12 +171,16 @@ async def delegate_analysis(
     if max_requests < 1:
         raise ModelRetry("max_requests must be at least 1")
 
-    from co_cli.agents.analysis import make_analysis_agent
+    # No web_policy gate here: analysis sub-agent uses search_knowledge and
+    # search_drive_files only — no web tools. If Drive ever gets a policy
+    # setting, the gate belongs here, mirroring delegate_research above.
+
+    from co_cli.tools._delegation_agents import make_analysis_agent
 
     registry = ctx.deps.services.model_registry
-    if not registry or not registry.is_configured("analysis"):
+    if not registry or not registry.is_configured(ROLE_ANALYSIS):
         raise ModelRetry("Analysis sub-agent is unavailable — handle this task directly.")
-    rm = registry.get("analysis", ResolvedModel(model=ctx.model, settings=None))
+    rm = registry.get(ROLE_ANALYSIS, ResolvedModel(model=ctx.model, settings=None))
     scoped_question = question
     if inputs:
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question

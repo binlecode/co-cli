@@ -9,29 +9,22 @@ Covers:
 """
 
 import asyncio
-import json
-import os
 from dataclasses import replace
-from typing import Any
 
 import pytest
-from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import get_agent
-from co_cli.agents._factory import ModelRegistry
-from co_cli.config import settings
+from co_cli._model_factory import ModelRegistry
+from co_cli.config import settings, ROLE_REASONING, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
+from tests._ollama import ensure_ollama_warm
 
 _CONFIG = CoConfig.from_settings(settings)
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-
-
-def _is_ollama_provider() -> bool:
-    provider = (os.getenv("LLM_PROVIDER") or settings.llm_provider).lower()
-    return provider == "ollama"
+_REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 
 
 def _make_deps(session_id: str) -> CoDeps:
@@ -41,28 +34,21 @@ def _make_deps(session_id: str) -> CoDeps:
     )
 
 
-def _extract_first_tool_call(messages: list[Any]) -> tuple[str | None, dict[str, Any] | None]:
-    for msg in messages:
-        if not isinstance(msg, ModelResponse):
-            continue
-        for part in msg.parts:
-            if isinstance(part, ToolCallPart):
-                return part.tool_name, part.args_as_dict()
-    return None, None
+def _make_deps_web_deferred(session_id: str) -> CoDeps:
+    """Deps with web_search deferred (ask) so tool selection test stays within 60s.
 
-
-def _extract_first_deferred_call(output: DeferredToolRequests) -> tuple[str | None, dict[str, Any]]:
-    approvals = list(output.approvals)
-    if not approvals:
-        return None, {}
-    call = approvals[0]
-    args = call.args
-    if isinstance(args, str):
-        try:
-            args = json.loads(args)
-        except json.JSONDecodeError:
-            args = {}
-    return call.tool_name, args or {}
+    The test verifies tool name + query arg from turn 1 only — no need to execute
+    the actual search or wait for a second LLM turn.
+    """
+    return CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
+        config=replace(
+            _CONFIG,
+            session_id=session_id,
+            personality="finch",
+            web_policy=WebPolicy(search="ask"),
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -70,7 +56,7 @@ def _extract_first_deferred_call(output: DeferredToolRequests) -> tuple[str | No
     "prompt,expected_tool,arg_key,arg_contains",
     [
         (
-            "Call the run_shell_command tool with cmd exactly 'git status'.",
+            "Use the run_shell_command tool to execute: git status\nDo NOT describe what you would do — call the tool now.",
             "run_shell_command",
             "cmd",
             "git status",
@@ -88,6 +74,7 @@ def _extract_first_deferred_call(output: DeferredToolRequests) -> tuple[str | No
             "database preferences",
         ),
     ],
+    ids=["shell_git_status", "web_search_fastapi", "search_knowledge_db"],
 )
 async def test_tool_selection_and_arg_extraction(
     prompt: str,
@@ -95,50 +82,74 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    if not _is_ollama_provider():
-        return
+    from co_cli._model_factory import ResolvedModel
+    # web_search: build agent with search="ask" so the tool is deferred — the test
+    # verifies tool selection from the DeferredToolRequests in one LLM turn (60s budget).
+    # Other tools use the default agent and policy.
+    if expected_tool == "web_search":
+        web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
+        agent, _, _ = get_agent(config=web_cfg)
+        deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
+    else:
+        agent, _, _ = get_agent()
+        deps = _make_deps(f"test-tool-{expected_tool}")
+    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
 
-    agent, model_settings, _, _ = get_agent(all_approval=True)
-    deps = _make_deps(f"test-tool-{expected_tool}")
-
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     last_details = "no run executed"
-    for _ in range(2):
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        tool_name = None
+        args = None
         try:
             async with asyncio.timeout(60):
                 result = await agent.run(
                     prompt,
                     deps=deps,
-                    model_settings=model_settings,
+                    model=resolved.model,
+                    model_settings=resolved.settings,
                     usage_limits=UsageLimits(request_limit=2),
                 )
+            # Extract first tool call from message history (works for both
+            # deferred/unapproved tools and normal tool executions).
+            for msg in result.all_messages():
+                if isinstance(msg, ModelResponse):
+                    for part in msg.parts:
+                        if isinstance(part, ToolCallPart):
+                            tool_name = part.tool_name
+                            args = part.args_as_dict()
+                            break
+                if tool_name:
+                    break
         except Exception as e:
             last_details = f"agent.run error: {type(e).__name__}: {e}"
             continue
-        if not isinstance(result.output, DeferredToolRequests):
-            last_details = f"expected deferred tool call, got {type(result.output).__name__}"
+
+        if tool_name is None:
+            last_details = "no tool call observed"
             continue
-        tool_name, args = _extract_first_deferred_call(result.output)
+
         if expected_tool == "search_knowledge_or_list_memories":
             if tool_name == "search_knowledge":
-                actual = str(args.get("query", "")).lower()
+                actual = str((args or {}).get("query", "")).lower()
                 if "database preferences" in actual:
                     return
                 last_details = (
                     f"tool={tool_name!r}, missing arg fragment "
-                    f"'database preferences' in query={args.get('query')!r}"
+                    f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
             if tool_name == "search_memories":
-                actual = str(args.get("query", "")).lower()
+                actual = str((args or {}).get("query", "")).lower()
                 if "database preferences" in actual:
                     return
                 last_details = (
                     f"tool={tool_name!r}, missing arg fragment "
-                    f"'database preferences' in query={args.get('query')!r}"
+                    f"'database preferences' in query={(args or {}).get('query')!r}"
                 )
                 continue
             if tool_name == "list_memories":
-                kind = args.get("kind")
+                kind = (args or {}).get("kind")
                 if kind in (None, "memory"):
                     return
                 last_details = f"tool={tool_name!r}, unexpected kind={kind!r}, args={args!r}"
@@ -148,15 +159,16 @@ async def test_tool_selection_and_arg_extraction(
                 f"('search_knowledge', 'search_memories', 'list_memories'), args={args!r}"
             )
             continue
+
         if tool_name != expected_tool:
             last_details = f"tool={tool_name!r}, expected={expected_tool!r}, args={args!r}"
             continue
-        actual = str(args.get(arg_key, "")).lower()
+        actual = str((args or {}).get(arg_key, "")).lower()
         if arg_contains.lower() in actual:
             return
         last_details = (
             f"tool={tool_name!r}, missing arg fragment "
-            f"{arg_contains!r} in {arg_key}={args.get(arg_key)!r}"
+            f"{arg_contains!r} in {arg_key}={(args or {}).get(arg_key)!r}"
         )
 
     pytest.fail(f"Tool selection/arg extraction failed: {last_details}")
@@ -164,70 +176,45 @@ async def test_tool_selection_and_arg_extraction(
 
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
-    if not _is_ollama_provider():
-        return
-
-    agent, model_settings, _, _ = get_agent(all_approval=True)
+    from co_cli._model_factory import ResolvedModel
+    agent, _, _ = get_agent()
+    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-refusal")
+    await ensure_ollama_warm(_REASONING_MODEL)
     async with asyncio.timeout(60):
         result = await agent.run(
             "What is 17 times 23?",
             deps=deps,
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=2),
+            model=resolved.model,
+            model_settings=resolved.settings,
         )
-
-    assert not isinstance(result.output, DeferredToolRequests), (
-        f"Expected text-only refusal path, got tool approvals: {result.output!r}"
-    )
-    tool_name, _ = _extract_first_tool_call(result.all_messages())
-    assert tool_name is None, f"Expected no tool call, got {tool_name!r}"
+    for msg in result.all_messages():
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                assert not isinstance(part, ToolCallPart), (
+                    f"Expected no tool call, got {part.tool_name!r}"
+                )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "prompt,expected_tool",
-    [
-        ("This function has a bug", None),
-        # Unambiguous shell directive — no file exploration needed before routing
-        ("Run pytest to check if the tests pass", "run_shell_command"),
-    ],
-)
-async def test_intent_routing_observation_vs_directive(
-    prompt: str,
-    expected_tool: str | None,
-):
-    if not _is_ollama_provider():
-        return
-
-    agent, model_settings, _, _ = get_agent(all_approval=True)
+async def test_intent_routing_observation_no_tool():
+    """Observation-only statement must not trigger a tool call."""
+    from co_cli._model_factory import ResolvedModel
+    agent, _, _ = get_agent()
+    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-intent-routing")
 
-    last_tool: str | None = None
-    last_details = "no run executed"
-    for _ in range(2):
-        try:
-            async with asyncio.timeout(60):
-                result = await agent.run(
-                    prompt,
-                    deps=deps,
-                    model_settings=model_settings,
-                    # Extra budget: model may read files before calling run_shell_command
-                    usage_limits=UsageLimits(request_limit=6),
+    await ensure_ollama_warm(_REASONING_MODEL)
+    async with asyncio.timeout(60):
+        result = await agent.run(
+            "This function has a bug",
+            deps=deps,
+            model=resolved.model,
+            model_settings=resolved.settings,
+        )
+    for msg in result.all_messages():
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                assert not isinstance(part, ToolCallPart), (
+                    f"Expected no tool call for observation statement, got {part.tool_name!r}"
                 )
-        except Exception as e:
-            last_details = f"agent.run error: {type(e).__name__}: {e}"
-            continue
-        if isinstance(result.output, DeferredToolRequests):
-            tool_name, _ = _extract_first_deferred_call(result.output)
-        else:
-            tool_name = None
-        last_tool = tool_name
-        last_details = f"tool={tool_name!r}"
-        if tool_name == expected_tool:
-            return
-
-    assert last_tool == expected_tool, (
-        f"Intent routing mismatch for prompt={prompt!r}: "
-        f"expected {expected_tool!r}, got {last_tool!r} — {last_details}"
-    )

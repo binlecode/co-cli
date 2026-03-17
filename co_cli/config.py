@@ -3,17 +3,22 @@ import json
 from pathlib import Path
 from copy import deepcopy
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 APP_NAME = "co-cli"
-DEFAULT_OLLAMA_REASONING_MODELS = [
-    "qwen3.5:35b-a3b-agentic",
-    "qwen3:30b-a3b-thinking-2507-agentic",
-]
-DEFAULT_OLLAMA_SUMMARIZATION_MODEL = "qwen3:30b-a3b-instruct-2507"
-DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3:30b-a3b-instruct-2507"
-DEFAULT_OLLAMA_CODING_MODEL = "qwen3-coder-next:code"
-DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-agentic"
+DEFAULT_OLLAMA_REASONING_MODEL = "qwen3.5:35b-a3b-think"
+# Summarization uses the think model with thinking disabled (same weights,
+# no KV cache / VRAM cost difference vs instruct, avoids a model-swap eviction).
+# ollama-native routes through /api/chat; think=False disables the reasoning
+# chain at call-time without swapping model weights (no VRAM eviction).
+DEFAULT_OLLAMA_SUMMARIZATION_MODEL = {
+    "model": "qwen3.5:35b-a3b-think",
+    "provider": "ollama-native",
+    "api_params": {"temperature": 0.7, "top_p": 0.8, "max_tokens": 16384, "think": False},
+}
+DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3.5:35b-a3b-instruct"
+DEFAULT_OLLAMA_CODING_MODEL = "qwen3.5:35b-a3b-code"
+DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-instruct"
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
@@ -41,6 +46,8 @@ DEFAULT_SHELL_SAFE_COMMANDS: list[str] = [
 # (platformdirs would resolve to ~/Library/Application Support/ on macOS)
 CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_NAME
 DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
+GOOGLE_TOKEN_PATH = CONFIG_DIR / "google_token.json"
+ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 SEARCH_DB = DATA_DIR / "co-cli-search.db"
 LOGS_DB = DATA_DIR / "co-cli-logs.db"
@@ -70,7 +77,7 @@ def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict
 
 def _validate_personality(personality: str) -> list[str]:
     """Return startup warnings for missing personality files."""
-    from co_cli.prompts.personalities._composer import validate_personality_files
+    from co_cli.prompts.personalities._validator import validate_personality_files
 
     return validate_personality_files(personality)
 
@@ -133,11 +140,23 @@ class ModelEntry(BaseModel):
 
     model: str
     api_params: dict[str, Any] = Field(default_factory=dict)
+    # Per-entry provider override; if None, inherits the session-level provider.
+    # Use "ollama-native" to route this entry through Ollama's /api/chat endpoint
+    # instead of the OpenAI-compatible /v1/chat/completions wrapper.
+    provider: str | None = Field(default=None)
 
 
-VALID_ROLE_NAMES: frozenset[str] = frozenset(
-    {"reasoning", "summarization", "coding", "research", "analysis"}
-)
+# Canonical role name constants. Used as keys in role_models and ModelRegistry lookups.
+# Add a new constant here when adding a new role — do not use string literals elsewhere.
+ROLE_REASONING = "reasoning"
+ROLE_SUMMARIZATION = "summarization"
+ROLE_CODING = "coding"
+ROLE_RESEARCH = "research"
+ROLE_ANALYSIS = "analysis"
+
+VALID_ROLE_NAMES: frozenset[str] = frozenset({
+    ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS,
+})
 
 # Named defaults for Settings fields — used by Settings field definitions and
 # CoConfig in deps.py so both share the same ground-truth values.
@@ -150,15 +169,15 @@ DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
 DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
 DEFAULT_MAX_HISTORY_MESSAGES = 40
-DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "fts5"
-DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "ollama"
+DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
+DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
 DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
 DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
 DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_RERANK_API_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT = 0.7
 DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT = 0.3
-DEFAULT_KNOWLEDGE_RERANKER_PROVIDER = "local"
+DEFAULT_KNOWLEDGE_RERANKER_PROVIDER = "tei"
 DEFAULT_KNOWLEDGE_RERANKER_MODEL = ""
 DEFAULT_MEMORY_MAX_COUNT = 200
 DEFAULT_MEMORY_DEDUP_WINDOW_DAYS = 7
@@ -179,8 +198,8 @@ DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS = 8.0
 DEFAULT_WEB_HTTP_JITTER_RATIO = 0.2
 DEFAULT_SESSION_TTL_MINUTES = 60
-DEFAULT_LLM_PROVIDER = "ollama"
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+DEFAULT_LLM_PROVIDER = "ollama-openai"
+DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_OLLAMA_NUM_CTX = 262144
 DEFAULT_CTX_WARN_THRESHOLD = 0.85
 DEFAULT_CTX_OVERFLOW_THRESHOLD = 1.0
@@ -288,36 +307,29 @@ class Settings(BaseModel):
 
     @field_validator("role_models", mode="before")
     @classmethod
-    def _parse_role_models(cls, v: dict[str, Any] | None) -> dict[str, list[dict]]:
+    def _parse_role_models(cls, v: dict[str, Any] | None) -> dict[str, dict]:
         if not v:
             return {}
-        parsed: dict[str, list[dict]] = {}
-        for role, models in v.items():
-            entries: list[dict] = []
-            if isinstance(models, str):
-                # Comma-separated string of model names
-                for m in models.split(","):
-                    m = m.strip()
-                    if m:
-                        entries.append({"model": m})
+        parsed: dict[str, dict] = {}
+        for role, model in v.items():
+            if isinstance(model, list):
+                # Backwards-compat: take first element if a list is supplied
+                model = model[0] if model else None
+                if model is None:
+                    continue
+            if isinstance(model, str):
+                parsed[str(role)] = {"model": model.strip()}
+            elif isinstance(model, dict):
+                parsed[str(role)] = model
             else:
-                for m in models:
-                    if isinstance(m, str):
-                        m = m.strip()
-                        if m:
-                            entries.append({"model": m})
-                    elif isinstance(m, dict):
-                        entries.append(m)
-                    else:
-                        # Already a ModelEntry instance (re-validation path)
-                        entries.append(m.model_dump() if hasattr(m, "model_dump") else {"model": str(m)})
-            parsed[str(role)] = entries
+                # Already a ModelEntry instance (re-validation path)
+                parsed[str(role)] = model.model_dump() if hasattr(model, "model_dump") else {"model": str(model)}
         return parsed
 
     @field_validator("personality")
     @classmethod
     def _validate_personality_name(cls, v: str) -> str:
-        from co_cli.prompts.personalities._composer import VALID_PERSONALITIES
+        from co_cli.prompts.personalities._validator import VALID_PERSONALITIES
 
         if v not in VALID_PERSONALITIES:
             raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
@@ -333,10 +345,9 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_reasoning_role(self) -> "Settings":
-        chain = self.role_models.get("reasoning", [])
-        if not chain:
+        if not self.role_models.get(ROLE_REASONING):
             raise ValueError(
-                "role_models.reasoning must contain at least one model"
+                "role_models.reasoning must be configured"
             )
         return self
 
@@ -353,14 +364,13 @@ class Settings(BaseModel):
     # Session persistence TTL
     session_ttl_minutes: int = Field(default=DEFAULT_SESSION_TTL_MINUTES, ge=1)
 
-    # Role model chains (ordered by preference within provider).
-    # Mandatory role: reasoning (main agent).
-    role_models: dict[str, list[ModelEntry]] = Field(default_factory=dict)
+    # Role model: one model per role. Mandatory role: reasoning (main agent).
+    role_models: dict[str, ModelEntry] = Field(default_factory=dict)
 
     # LLM Settings (Gemini / Ollama)
-    gemini_api_key: Optional[str] = Field(default=None)
+    llm_api_key: Optional[str] = Field(default=None)
     llm_provider: str = Field(default=DEFAULT_LLM_PROVIDER)
-    ollama_host: str = Field(default=DEFAULT_OLLAMA_HOST)
+    llm_host: str = Field(default=DEFAULT_LLM_HOST)
     # IMPORTANT: Use -agentic Modelfile variants for models that need custom num_ctx.
     # Ollama's OpenAI-compatible API ignores num_ctx from request params — it MUST
     # be baked into the Modelfile via PARAMETER num_ctx. Base tags default to 4096
@@ -374,8 +384,11 @@ class Settings(BaseModel):
 
     @model_validator(mode='before')
     @classmethod
-    def fill_from_env(cls, data: dict) -> dict:
+    def fill_from_env(cls, data: dict, info: ValidationInfo) -> dict:
         """Env vars override all file-based values (highest precedence layer)."""
+        env_source: dict = (info.context or {}).get("env") if info.context else None
+        if env_source is None:
+            env_source = os.environ
         env_map = {
             "obsidian_vault_path": "OBSIDIAN_VAULT_PATH",
             "brave_search_api_key": "BRAVE_SEARCH_API_KEY",
@@ -416,9 +429,9 @@ class Settings(BaseModel):
             "knowledge_chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
             "knowledge_chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
             "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",
-            "gemini_api_key": "GEMINI_API_KEY",
+            "llm_api_key": "LLM_API_KEY",
             "llm_provider": "LLM_PROVIDER",
-            "ollama_host": "OLLAMA_HOST",
+            "llm_host": "LLM_HOST",
             "llm_num_ctx": "LLM_NUM_CTX",
             "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
             "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
@@ -429,33 +442,28 @@ class Settings(BaseModel):
         }
         
         for field, env_var in env_map.items():
-            val = os.getenv(env_var)
+            val = env_source.get(env_var)
             if val:
                 data[field] = val
 
         # Per-role model overrides — merge per-key, not whole-dict replacement.
         # Plain strings from env vars are coerced to ModelEntry by _parse_role_models.
-        role_models_env: dict[str, list[str]] = {}
-        for role, env_var in [
-            ("reasoning", "CO_MODEL_ROLE_REASONING"),
-            ("summarization", "CO_MODEL_ROLE_SUMMARIZATION"),
-            ("coding", "CO_MODEL_ROLE_CODING"),
-            ("research", "CO_MODEL_ROLE_RESEARCH"),
-            ("analysis", "CO_MODEL_ROLE_ANALYSIS"),
-        ]:
-            val = os.getenv(env_var)
+        role_models_env: dict[str, str] = {}
+        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
+            env_var = f"CO_MODEL_ROLE_{role.upper()}"
+            val = env_source.get(env_var)
             if val:
-                role_models_env[role] = [m.strip() for m in val.split(",") if m.strip()]
-        provider = str(data.get("llm_provider", "ollama")).lower()
+                role_models_env[role] = val.strip()
+        provider = str(data.get("llm_provider", "ollama-openai")).lower()
         if provider == "gemini":
-            role_defaults: dict = {"reasoning": [DEFAULT_GEMINI_REASONING_MODEL]}
-        elif provider == "ollama":
+            role_defaults: dict = {ROLE_REASONING: DEFAULT_GEMINI_REASONING_MODEL}
+        elif provider in ("ollama-openai", "ollama-native"):
             role_defaults = {
-                "reasoning": list(DEFAULT_OLLAMA_REASONING_MODELS),
-                "summarization": [DEFAULT_OLLAMA_SUMMARIZATION_MODEL],
-                "analysis": [DEFAULT_OLLAMA_ANALYSIS_MODEL],
-                "coding": [DEFAULT_OLLAMA_CODING_MODEL],
-                "research": [{"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}}],
+                ROLE_REASONING: DEFAULT_OLLAMA_REASONING_MODEL,
+                ROLE_SUMMARIZATION: DEFAULT_OLLAMA_SUMMARIZATION_MODEL,
+                ROLE_ANALYSIS: DEFAULT_OLLAMA_ANALYSIS_MODEL,
+                ROLE_CODING: DEFAULT_OLLAMA_CODING_MODEL,
+                ROLE_RESEARCH: {"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}},
             }
         else:
             raise ValueError(f"Unsupported llm_provider: {provider!r}")
@@ -463,12 +471,12 @@ class Settings(BaseModel):
         existing_roles = data.get("role_models", {})
         data["role_models"] = {**role_defaults, **existing_roles, **role_models_env}
 
-        mcp_env = os.getenv("CO_CLI_MCP_SERVERS")
+        mcp_env = env_source.get("CO_CLI_MCP_SERVERS")
         if mcp_env:
             data["mcp_servers"] = json.loads(mcp_env)
 
-        web_policy_search = os.getenv("CO_CLI_WEB_POLICY_SEARCH")
-        web_policy_fetch = os.getenv("CO_CLI_WEB_POLICY_FETCH")
+        web_policy_search = env_source.get("CO_CLI_WEB_POLICY_SEARCH")
+        web_policy_fetch = env_source.get("CO_CLI_WEB_POLICY_FETCH")
         if web_policy_search or web_policy_fetch:
             policy_data = data.get("web_policy", {})
             if not isinstance(policy_data, dict):
@@ -498,12 +506,15 @@ def find_project_config(_project_dir: Path | None = None) -> Path | None:
 def load_config(
     _user_config_path: Path | None = None,
     _project_dir: Path | None = None,
+    _env: dict[str, str] | None = None,
 ) -> Settings:
     """Load layered configuration: user config → project config → env vars.
 
     Args:
         _user_config_path: Override the user settings file path. Defaults to SETTINGS_FILE.
         _project_dir: Override the project directory for project config lookup. Defaults to cwd.
+        _env: Override environment variables. Defaults to os.environ. Use in tests to inject
+              env vars without mutating os.environ.
     """
     data: dict[str, Any] = {}
 
@@ -526,7 +537,8 @@ def load_config(
                 print(f"Error loading project config {project_config}: {e}. Skipping.")
 
     # Layer 3: Env vars (handled by fill_from_env model_validator)
-    resolved = Settings.model_validate(data)
+    context = {"env": _env} if _env is not None else None
+    resolved = Settings.model_validate(data, context=context)
 
     # Non-blocking personality file diagnostics surfaced at startup.
     for warning in _validate_personality(resolved.personality):

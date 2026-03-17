@@ -17,8 +17,10 @@ from typing import Any
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
+from co_cli.config import ROLE_SUMMARIZATION, ROLE_REASONING
 from co_cli.display import console
-from co_cli._frontmatter import parse_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.deps import CoSessionState
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,18 @@ class SkillCommand:
 # Module-level skill registry — populated by chat_loop() via _load_skills().
 # dispatch() accesses this directly; no parameter passing needed.
 SKILL_COMMANDS: dict[str, SkillCommand] = {}
+
+
+def set_skill_commands(new_skills: dict[str, SkillCommand], session: CoSessionState) -> None:
+    """Replace SKILL_COMMANDS in-place and update session.skill_registry."""
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS.update(new_skills)
+    session.skill_registry = [
+        {"name": s.name, "description": s.description}
+        for s in SKILL_COMMANDS.values()
+        if s.description and not s.disable_model_invocation
+    ]
+
 
 # Env vars that skill-env may never override — security boundary.
 _SKILL_ENV_BLOCKED: frozenset[str] = frozenset({
@@ -214,9 +228,9 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
                 console.print(line)
         return None
 
-    from co_cli._status import get_status, render_status_table, check_security, render_security_findings
+    from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 
-    info = get_status(tool_count=len(ctx.tool_names))
+    info = get_status(ctx.deps.config, tool_count=len(ctx.tool_names))
     console.print(render_status_table(info))
     findings = check_security()
     render_security_findings(findings)
@@ -246,18 +260,25 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
     """Summarize conversation via LLM to reduce context."""
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli._history import _run_summarization_with_policy
-    from co_cli.agents._factory import ResolvedModel
+    from co_cli.context._history import _run_summarization_with_policy
+    from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    fallback = ResolvedModel(model=ctx.agent.model, settings=None)
-    rm = ctx.deps.services.model_registry.get("summarization", fallback)
+    _none = ResolvedModel(model=None, settings=None)
+    _reasoning = (
+        ctx.deps.services.model_registry.get(ROLE_REASONING, _none)
+        if ctx.deps.services.model_registry else _none
+    )
+    resolved = (
+        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _reasoning)
+        if ctx.deps.services.model_registry else _reasoning
+    )
     summary = await _run_summarization_with_policy(
-        ctx.message_history, rm,
+        ctx.message_history, resolved,
         max_retries=ctx.deps.config.model_http_retries,
     )
 
@@ -279,96 +300,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
         f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
     )
     return new_history
-
-
-def _swap_model_inplace(agent: Any, model_name: str, provider_name: str, settings: Any) -> ModelSettings:
-    """Swap the agent's model in-place without rebuilding MCP connections.
-
-    Ollama path: OpenAIProvider + OpenAIChatModel (same as _switch_ollama_model).
-    Gemini path: update the google-gla:model_name string on agent.model directly.
-
-    Returns new ModelSettings for the caller to apply.
-    """
-    if provider_name == "ollama":
-        return _switch_ollama_model(agent, model_name, settings.ollama_host)
-    elif provider_name == "gemini":
-        import os as _os
-        from pydantic_ai.settings import ModelSettings as _MS
-        from co_cli.prompts.model_quirks import get_model_inference, normalize_model_name as _normalize
-        # Ensure API key is in environment
-        if settings.gemini_api_key:
-            _os.environ["GEMINI_API_KEY"] = settings.gemini_api_key
-        agent.model = f"google-gla:{model_name}"
-        inf = get_model_inference("gemini", _normalize(model_name))
-        return _MS(
-            temperature=inf.get("temperature", 1.0),
-            top_p=inf.get("top_p", 0.95),
-            max_tokens=inf.get("max_tokens", 65536),
-        )
-    else:
-        raise ValueError(f"_swap_model_inplace: unknown provider '{provider_name}'")
-
-
-def _switch_ollama_model(agent: Any, model_name: str, ollama_host: str) -> ModelSettings:
-    """Build a new OpenAIChatModel, system prompt, and ModelSettings for agent.
-
-    Returns the new ModelSettings so the chat loop can use them.
-    """
-    from pydantic_ai.models.openai import OpenAIChatModel
-    from pydantic_ai.providers.openai import OpenAIProvider
-    from co_cli.prompts import assemble_prompt
-    from co_cli.prompts.model_quirks import normalize_model_name, get_model_inference
-    from co_cli.config import settings
-
-    # Swap model — save old for rollback
-    old_model = agent.model
-    provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
-    new_model = OpenAIChatModel(model_name=model_name, provider=provider)
-    agent.model = new_model
-    try:
-        # Rebuild system prompt with new model quirks
-        normalized_model = normalize_model_name(model_name)
-        soul_seed = None
-        soul_examples = None
-        if settings.personality:
-            from pathlib import Path as _Path
-            from co_cli.prompts.personalities._composer import (
-                load_soul_seed, load_soul_examples, load_character_memories,
-            )
-            soul_seed = load_soul_seed(settings.personality)
-            base_memories = load_character_memories(
-                settings.personality, _Path.cwd() / ".co-cli" / "memory"
-            )
-            if base_memories:
-                soul_seed = soul_seed + "\n\n" + base_memories
-            examples = load_soul_examples(settings.personality)
-            if examples:
-                soul_examples = examples
-        new_system_prompt, _manifest = assemble_prompt(
-            "ollama",
-            model_name=normalized_model,
-            soul_seed=soul_seed,
-            soul_examples=soul_examples,
-        )
-        agent.system_prompt = new_system_prompt
-
-        # Build ModelSettings from inference profile
-        inf = get_model_inference("ollama", normalized_model)
-        extra: dict = {}
-        num_ctx = inf.get("num_ctx")
-        if num_ctx is not None:
-            extra["num_ctx"] = num_ctx
-        extra.update(inf.get("extra_body", {}))
-
-        return ModelSettings(
-            temperature=inf.get("temperature", 0.7),
-            top_p=inf.get("top_p", 1.0),
-            max_tokens=inf.get("max_tokens", 16384),
-            extra_body=extra,
-        )
-    except Exception:
-        agent.model = old_model
-        raise
 
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
@@ -410,19 +341,26 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
-    from co_cli._history import _index_session_summary
-    from co_cli._memory_lifecycle import persist_memory as _save_memory_impl
-    from co_cli.agents._factory import ResolvedModel
+    from co_cli.context._history import _index_session_summary
+    from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
+    from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
         return None
 
-    fallback = ResolvedModel(model=ctx.agent.model, settings=None)
-    rm = ctx.deps.services.model_registry.get("summarization", fallback)
+    _none = ResolvedModel(model=None, settings=None)
+    _reasoning = (
+        ctx.deps.services.model_registry.get(ROLE_REASONING, _none)
+        if ctx.deps.services.model_registry else _none
+    )
+    resolved = (
+        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _reasoning)
+        if ctx.deps.services.model_registry else _reasoning
+    )
     summary = await _index_session_summary(
         ctx.message_history,
-        rm,
+        resolved,
         personality_active=bool(ctx.deps.config.personality),
         max_retries=ctx.deps.config.model_http_retries,
     )
@@ -447,7 +385,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
 
 async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
     """Create a workspace snapshot."""
-    from co_cli._workspace_checkpoint import create_checkpoint
+    from co_cli.bootstrap._checkpoint import create_checkpoint
 
     label = args.strip()
     try:
@@ -460,7 +398,7 @@ async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_rewind(ctx: CommandContext, args: str) -> None:
     """Restore a workspace snapshot."""
-    from co_cli._workspace_checkpoint import list_checkpoints, restore_checkpoint
+    from co_cli.bootstrap._checkpoint import list_checkpoints, restore_checkpoint
 
     target = args.strip()
     if not target or target == "last":
@@ -513,7 +451,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     elif subcmd == "check":
         from co_cli.config import settings as _settings
 
-        default_dir = Path(__file__).parent / "skills"
+        default_dir = Path(__file__).parent.parent / "skills"
         project_dir = ctx.deps.config.skills_dir
 
         all_paths: list[Path] = []
@@ -556,7 +494,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
         new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
         # Scan only files that successfully loaded — avoids warnings for requires-gated skills
-        default_dir = Path(__file__).parent / "skills"
+        default_dir = Path(__file__).parent.parent / "skills"
         project_dir = ctx.deps.config.skills_dir
         all_paths = (sorted(default_dir.glob("*.md")) if default_dir.exists() else []) + \
                     (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
@@ -567,13 +505,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                         console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
                 except Exception:
                     pass
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(new_skills)
-        ctx.deps.session.skill_registry = [
-            {"name": s.name, "description": s.description}
-            for s in SKILL_COMMANDS.values()
-            if s.description and not s.disable_model_invocation
-        ]
+        set_skill_commands(new_skills, ctx.deps.session)
         _refresh_completer(ctx)
         console.print(f"[success]✓ Reloaded {len(SKILL_COMMANDS)} skill(s)[/success]")
 
@@ -651,15 +583,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
 
     # Reload in-session: package-default + updated project dir
     new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(new_skills)
-
-    # Update skill_registry so agent prompt reflects the new skill
-    ctx.deps.session.skill_registry = [
-        {"name": s.name, "description": s.description}
-        for s in SKILL_COMMANDS.values()
-        if s.description and not s.disable_model_invocation
-    ]
+    set_skill_commands(new_skills, ctx.deps.session)
     _refresh_completer(ctx)
 
     console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
@@ -689,7 +613,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
     """Manage persistent exec approval patterns."""
-    from co_cli._exec_approvals import load_approvals, save_approvals
+    from co_cli.tools._exec_approvals import load_approvals, save_approvals
 
     path = ctx.deps.config.exec_approvals_path
     sub = args.strip().split(maxsplit=1)
@@ -808,7 +732,7 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         console.print(f"[bold red]Task not found:[/bold red] {task_id}")
         return None
 
-    from co_cli._background import TaskStatus
+    from co_cli.tools._background import TaskStatus
     if meta.get("status") != TaskStatus.running.value:
         console.print(f"[dim]Task {task_id} is not running (status={meta.get('status')}).[/dim]")
         return None
@@ -967,7 +891,8 @@ def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillComma
     reserved = set(COMMANDS.keys())
 
     # Package-default skills (shipped inside the package — available from any directory)
-    default_dir = Path(__file__).parent / "skills"
+    # Path goes up two levels: commands/ → co_cli/ → skills/
+    default_dir = Path(__file__).parent.parent / "skills"
     if default_dir.exists():
         for path in sorted(default_dir.glob("*.md")):
             _load_skill_file(path, result, reserved, settings)

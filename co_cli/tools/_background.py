@@ -353,7 +353,7 @@ class TaskRunner:
 
     async def _kill(self, task_id: str, proc: asyncio.subprocess.Process) -> None:
         """Send SIGTERM → wait 200ms → SIGKILL via process group."""
-        from co_cli._shell_env import kill_process_tree
+        from co_cli.tools._shell_env import kill_process_tree
         await kill_process_tree(proc)
         self._live.pop(task_id, None)
         completed_at = datetime.now(timezone.utc).isoformat()
@@ -365,7 +365,7 @@ class TaskRunner:
         """Kill all running tasks and wait up to 5s. Called on co-cli exit."""
         if not self._live:
             return
-        from co_cli._shell_env import kill_process_tree
+        from co_cli.tools._shell_env import kill_process_tree
 
         async def _cancel_one(task_id: str, proc: asyncio.subprocess.Process):
             await kill_process_tree(proc)

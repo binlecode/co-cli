@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 
-from co_cli._knowledge_index import KnowledgeIndex
+from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.deps import CoDeps, CoServices, CoConfig
 
 
@@ -193,7 +193,7 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
     (personal / "diary.md").write_text(f"# Diary\n{keyword} in personal note.")
 
     # Broad index — both folders indexed under source='obsidian'
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
@@ -223,7 +223,7 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
     (vault / "Work" / "standup.md").write_text(f"# Standup\n{keyword} in work note.")
     (vault / "Workbench" / "bench.md").write_text(f"# Bench\n{keyword} in workbench note.")
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
@@ -251,7 +251,7 @@ def test_fts_tag_filter_works_with_index(tmp_path):
         "---\ntags: [archived]\n---\n# Archived\nProject beta xylofts-tag-test was cancelled."
     )
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(

@@ -4,23 +4,23 @@ Draft a professional but firm email to a vendor explaining that their recent sof
 
 # Response
 
-Subject: URGENT: Critical Production Outage Following Recent Update
+Subject: URGENT: Critical Production Failure Following Latest Software Update
 
-Dear [Vendor Contact Name],
+Dear [Vendor Contact Name/Support Team],
 
-I am writing to formally report a critical issue resulting from your recent software update deployed on [Date/Time]. This update has caused a significant failure in our production environment, disrupting operations.
+We are writing to formally report a critical incident resulting from your recent software update (Version [X]). This update has caused a severe failure in our production environment, disrupting our operations.
 
-Given the severity of this incident, we require the following immediate actions:
+Given the severity of this impact, we require the following actions immediately:
 
-1.  **Rollback Plan:** Please provide an immediate plan and timeline to revert to the previous stable version to restore full service functionality.
-2.  **Root Cause Analysis (RCA):** We require a detailed RCA outlining the cause of the failure, the impact assessment, and the corrective measures to prevent recurrence.
+1. **Immediate Rollback Plan:** Provide a confirmed timeline and execution plan to revert to the previous stable version without further delay.
+2. **Root Cause Analysis (RCA):** Submit a detailed RCA explaining the cause of the failure, why it was not detected during your testing phase, and the steps you will take to prevent recurrence.
 
-Please confirm receipt of this email and provide the rollback timeline within the next [Number] hours. The RCA is due by [Date/Time].
+Please acknowledge receipt of this email and provide the rollback status by [Time/Date]. We expect the RCA to be delivered by [Date].
 
-We value our partnership but expect a higher standard of stability. We await your prompt response.
+We take these service levels seriously and expect your full cooperation in resolving this matter urgently.
 
-Sincerely,
+Regards,
 
 [Your Name]
 [Your Title]
-[Your Company]
+[Your Company Name]

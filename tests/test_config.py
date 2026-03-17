@@ -7,7 +7,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from co_cli.config import find_project_config, load_config, Settings
+from co_cli.config import find_project_config, load_config, Settings, ROLE_REASONING
 
 
 def test_project_config_overrides_user(tmp_path):
@@ -25,17 +25,16 @@ def test_project_config_overrides_user(tmp_path):
     assert settings.tool_retries == 5
 
 
-def test_env_overrides_project_config(tmp_path, monkeypatch):
+def test_env_overrides_project_config(tmp_path):
     """Environment variables override project config."""
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({"theme": "dark"}))
 
-    monkeypatch.setenv("CO_CLI_THEME", "light")
-
     settings = load_config(
         _user_config_path=tmp_path / "nonexistent.json",
         _project_dir=project_dir,
+        _env={"CO_CLI_THEME": "light"},
     )
     assert settings.theme == "light"
 
@@ -136,8 +135,8 @@ def test_project_config_partially_overrides_role_models(tmp_path):
     user_settings.parent.mkdir(parents=True)
     user_settings.write_text(json.dumps({
         "role_models": {
-            "reasoning": ["base-reasoning"],
-            "coding": ["base-coding"],
+            ROLE_REASONING: "base-reasoning",
+            "coding": "base-coding",
         }
     }))
 
@@ -145,23 +144,21 @@ def test_project_config_partially_overrides_role_models(tmp_path):
     (project_dir / ".co-cli").mkdir(parents=True)
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
         "role_models": {
-            "coding": ["project-coding"],
+            "coding": "project-coding",
         }
     }))
 
     settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
-    assert [entry.model for entry in settings.role_models["reasoning"]] == ["base-reasoning"]
-    assert [entry.model for entry in settings.role_models["coding"]] == ["project-coding"]
+    assert settings.role_models[ROLE_REASONING].model == "base-reasoning"
+    assert settings.role_models["coding"].model == "project-coding"
 
 
-def test_env_overrides_web_policy(tmp_path, monkeypatch):
+def test_env_overrides_web_policy(tmp_path):
     """CO_CLI_WEB_POLICY_SEARCH/FETCH override file values."""
-    monkeypatch.setenv("CO_CLI_WEB_POLICY_SEARCH", "ask")
-    monkeypatch.setenv("CO_CLI_WEB_POLICY_FETCH", "deny")
-
     settings = load_config(
         _user_config_path=tmp_path / "nonexistent.json",
         _project_dir=tmp_path / "empty",
+        _env={"CO_CLI_WEB_POLICY_SEARCH": "ask", "CO_CLI_WEB_POLICY_FETCH": "deny"},
     )
     assert settings.web_policy.search == "ask"
     assert settings.web_policy.fetch == "deny"
@@ -183,23 +180,60 @@ def test_personality_validation():
         Settings(personality="invalid")
 
 
-def test_gemini_api_key_overrides_env():
-    """Regression: settings gemini_api_key must overwrite a pre-existing GEMINI_API_KEY env var."""
+def test_default_provider_is_ollama_openai(tmp_path):
+    """When no llm_provider is set, the default must be 'ollama-openai' (P1 rename)."""
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _project_dir=tmp_path / "empty",
+    )
+    assert settings.llm_provider == "ollama-openai"
+
+
+def test_ollama_native_provider_accepted(tmp_path):
+    """'ollama-native' is a valid provider — rejected before P1."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    (project_dir / ".co-cli" / "settings.json").write_text(
+        json.dumps({"llm_provider": "ollama-native"})
+    )
+    settings = load_config(
+        _user_config_path=tmp_path / "nonexistent.json",
+        _project_dir=project_dir,
+    )
+    assert settings.llm_provider == "ollama-native"
+
+
+def test_old_ollama_provider_string_rejected(tmp_path):
+    """The bare 'ollama' discriminator is rejected after P1 rename."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    (project_dir / ".co-cli" / "settings.json").write_text(
+        json.dumps({"llm_provider": "ollama"})
+    )
+    with pytest.raises(Exception, match="Unsupported llm_provider"):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
+        )
+
+
+def test_llm_api_key_overrides_env():
+    """Regression: settings llm_api_key must overwrite a pre-existing GEMINI_API_KEY env var."""
     import os
     from co_cli.agent import get_agent
     from co_cli.config import settings
 
     original_env = os.environ.get("GEMINI_API_KEY")
-    original_key = settings.gemini_api_key
+    original_key = settings.llm_api_key
     original_provider = settings.llm_provider
     try:
         os.environ["GEMINI_API_KEY"] = "stale-key-from-env"
-        settings.gemini_api_key = "settings-key-wins"
+        settings.llm_api_key = "settings-key-wins"
         settings.llm_provider = "gemini"
         get_agent()
         assert os.environ["GEMINI_API_KEY"] == "settings-key-wins"
     finally:
-        settings.gemini_api_key = original_key
+        settings.llm_api_key = original_key
         settings.llm_provider = original_provider
         if original_env is None:
             os.environ.pop("GEMINI_API_KEY", None)

@@ -89,7 +89,7 @@ The previous roadmap listed several items as future phases that are now present 
 | Background execution | shipped in `co_cli/_background.py` and `co_cli/tools/task_control.py` |
 | Skills system | shipped in `co_cli/_commands.py` and `docs/DESIGN-skills.md` |
 | Session persistence | shipped in `co_cli/_session.py` and bootstrap flow |
-| Sub-agent delegation | shipped in `co_cli/tools/delegation.py` and `co_cli/agents/` |
+| Sub-agent delegation | shipped in `co_cli/tools/delegation.py` and `co_cli/tools/_delegation_agents.py` |
 | Capability/health inspection | shipped in `co_cli/_doctor.py` and `co_cli/tools/capabilities.py` |
 | Knowledge/article system | shipped in `co_cli/tools/articles.py` and `_knowledge_index.py` |
 

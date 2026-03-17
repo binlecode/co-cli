@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from co_cli._session import (
+from co_cli.context._session import (
     increment_compaction,
     is_fresh,
     load_session,

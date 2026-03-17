@@ -11,10 +11,10 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.memory import list_memories, save_memory
-from co_cli._frontmatter import parse_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ from co_cli._frontmatter import parse_frontmatter
 # ---------------------------------------------------------------------------
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 def _make_ctx(
@@ -242,10 +242,10 @@ def test_read_article_detail_not_found(tmp_path):
 
 def test_recall_article_fts_metadata_parity(tmp_path):
     """recall_article via FTS returns article_id and origin_url (not None)."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
@@ -278,10 +278,10 @@ def test_fts_article_consolidated_tags_indexed(tmp_path):
     Saving the same origin_url twice merges tags on disk AND in the FTS index.
     Both the retained tag and the new tag must be discoverable via tag search.
     """
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
@@ -314,10 +314,10 @@ def test_recall_article_fts_return_contract(tmp_path):
     Validates schema parity: article_id (int), origin_url (str),
     tags (list[str]), snippet (str), slug (str).
     """
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     _run(save_article(
@@ -347,11 +347,11 @@ def test_search_knowledge_fts_kind_filter(tmp_path):
     Saves one article and one memory both matching the query keyword.
     kind='article' returns only articles; kind='memory' returns only memories.
     """
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
     memory_dir = tmp_path / ".co-cli" / "memory"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir, memory_dir=memory_dir)
 
     _run(save_article(
@@ -411,10 +411,10 @@ def test_search_knowledge_fallback_grep_kind_filter(tmp_path):
 
 def test_search_knowledge_result_dicts_contain_confidence(tmp_path):
     """search_knowledge FTS path populates confidence in each result dict."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Use save_article — search_knowledge default scope covers local articles, not memories
@@ -438,10 +438,10 @@ def test_search_knowledge_result_dicts_contain_confidence(tmp_path):
 
 def test_search_knowledge_display_contains_conf_label(tmp_path):
     """search_knowledge display string shows 'conf:' for FTS results."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Use save_article — search_knowledge default scope covers local articles, not memories
@@ -461,7 +461,7 @@ def test_search_knowledge_display_contains_conf_label(tmp_path):
 
 def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
     """_compute_confidence: user-told+high scores higher than detected+medium at same base score."""
-    from co_cli._knowledge_index import SearchResult
+    from co_cli.knowledge._index_store import SearchResult
     from co_cli.tools.articles import _compute_confidence
 
     created = datetime.now(timezone.utc).isoformat()
@@ -492,12 +492,12 @@ def test_compute_confidence_user_told_high_outscores_detected_medium(tmp_path):
 
 def test_search_knowledge_flags_contradictions(tmp_path):
     """search_knowledge marks both memories conflict:True when same category has opposing polarity."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
     import yaml as _yaml
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, memory_dir=memory_dir)
 
     # Write two memories in the same category with opposing content
@@ -539,12 +539,12 @@ def test_search_knowledge_flags_contradictions(tmp_path):
 
 def test_search_knowledge_no_conflict_when_no_opposition(tmp_path):
     """search_knowledge returns conflict:False when results are compatible."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
     import yaml as _yaml
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, memory_dir=memory_dir)
 
     fm_a = {
@@ -607,11 +607,11 @@ def test_search_knowledge_grep_fallback_honors_source_filter(tmp_path):
 
 def test_search_knowledge_default_excludes_memories(tmp_path):
     """search_knowledge with no source filter returns articles but not memories."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
     memory_dir = tmp_path / ".co-cli" / "memory"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir, memory_dir=memory_dir)
 
     # Save an article (indexed at source="library") and a memory (source="memory")
@@ -643,10 +643,10 @@ def test_search_knowledge_default_excludes_memories(tmp_path):
 
 def test_save_article_long_article_second_half_retrievable(tmp_path):
     """Scenario 20: save a long article; phrase only in second half must be retrievable via chunks FTS."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     library_dir = tmp_path / ".co-cli" / "library"
-    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=100, chunk_overlap=10)
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_chunk_size=100, knowledge_chunk_overlap=10))
     ctx = _ctx_with_idx(idx, library_dir=library_dir)
 
     # Construct article >2 x chunk_size tokens: ~100 tokens = 400 chars
@@ -668,3 +668,120 @@ def test_save_article_long_article_second_half_retrievable(tmp_path):
         "Phrase only in second half of article must be retrievable via chunks FTS"
     )
     idx.close()
+
+
+def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp_path):
+    """Real whole-flow hybrid retrieval must populate vec rows using configured embedder settings."""
+    from dataclasses import replace
+
+    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.bootstrap._check import check_tei
+    from co_cli.config import settings
+
+    if not check_tei(settings.knowledge_embed_api_url).ok:
+        pytest.fail("TEI embed service not reachable — start the service before running hybrid tests")
+
+    library_dir = tmp_path / ".co-cli" / "library"
+    config = replace(
+        CoConfig(),
+        library_dir=library_dir,
+        knowledge_search_backend="hybrid",
+    )
+    deps = CoDeps(
+        services=CoServices(
+            shell=ShellBackend(),
+            knowledge_index=KnowledgeIndex(config=replace(config, knowledge_db_path=tmp_path / "search.db")),
+        ),
+        config=config,
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    idx = ctx.deps.services.knowledge_index
+
+    _run(save_article(
+        ctx,
+        content="wholeflow-real-embedder-token alpha content for configured provider",
+        title="Alpha Real Embedder Doc",
+        origin_url="https://example.com/real-embedder-alpha",
+        tags=["reference"],
+    ))
+    _run(save_article(
+        ctx,
+        content="wholeflow-real-embedder-token beta content for configured provider",
+        title="Beta Real Embedder Doc",
+        origin_url="https://example.com/real-embedder-beta",
+        tags=["reference"],
+    ))
+
+    docs_vec_count = idx._conn.execute("SELECT COUNT(*) FROM docs_vec").fetchone()[0]
+    chunks_vec_count = idx._conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+
+    assert docs_vec_count >= 2, "Configured embedder must populate docs_vec for hybrid retrieval"
+    assert chunks_vec_count >= 2, "Configured embedder must populate chunks_vec for hybrid retrieval"
+
+    result = _run(search_knowledge(ctx, "wholeflow-real-embedder-token"))
+    assert result["count"] >= 2
+    idx.close()
+
+
+def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_path):
+    """Real whole-flow hybrid retrieval must apply the configured reranker, not fallback passthrough."""
+    from dataclasses import replace
+
+    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.bootstrap._check import check_tei
+    from co_cli.config import settings
+
+    if not check_tei(settings.knowledge_rerank_api_url).ok:
+        pytest.fail("TEI rerank service not reachable — start the service before running hybrid tests")
+
+    library_dir = tmp_path / ".co-cli" / "library"
+    config = replace(
+        CoConfig(),
+        library_dir=library_dir,
+        knowledge_search_backend="hybrid",
+    )
+    deps = CoDeps(
+        services=CoServices(
+            shell=ShellBackend(),
+            knowledge_index=KnowledgeIndex(config=replace(config, knowledge_db_path=tmp_path / "search.db", knowledge_reranker_provider="none")),
+        ),
+        config=config,
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    idx_none = ctx.deps.services.knowledge_index
+
+    _run(save_article(
+        ctx,
+        content="wholeflow-real-reranker-token alpha content for configured reranker",
+        title="Alpha Real Reranker Doc",
+        origin_url="https://example.com/real-reranker-alpha",
+        tags=["reference"],
+    ))
+    _run(save_article(
+        ctx,
+        content="wholeflow-real-reranker-token beta content for configured reranker",
+        title="Beta Real Reranker Doc",
+        origin_url="https://example.com/real-reranker-beta",
+        tags=["reference"],
+    ))
+
+    baseline = _run(search_knowledge(ctx, "wholeflow-real-reranker-token"))
+    assert baseline["count"] >= 2
+    idx_none.close()
+
+    # Fresh index on the same db with the real reranker — no private state mutation
+    idx_real = KnowledgeIndex(config=replace(config, knowledge_db_path=tmp_path / "search.db"))
+    deps_real = CoDeps(
+        services=CoServices(shell=ShellBackend(), knowledge_index=idx_real),
+        config=config,
+    )
+    ctx_real = RunContext(deps=deps_real, model=_AGENT.model, usage=RunUsage())
+    reranked = _run(search_knowledge(ctx_real, "wholeflow-real-reranker-token"))
+
+    baseline_scores = [r["score"] for r in baseline["results"]]
+    reranked_scores = [r["score"] for r in reranked["results"]]
+
+    assert reranked_scores != baseline_scores, (
+        "Configured reranker must change final retrieval scores; identical scores indicate fallback passthrough"
+    )
+    idx_real.close()

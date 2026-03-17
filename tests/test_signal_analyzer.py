@@ -1,4 +1,4 @@
-"""Functional tests for _signal_analyzer.
+"""Functional tests for memory/_signal_detector.py.
 
 Covers _build_window (turn extraction) and analyze_for_signals E2E via the
 configured LLM model. Signal detection is fully LLM-driven — no heuristic
@@ -10,19 +10,18 @@ import asyncio
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart, TextPart
 
-from co_cli._signal_analyzer import _build_window, analyze_for_signals
-from co_cli.agent import get_agent
-from co_cli.agents._factory import ModelRegistry
-from co_cli.config import settings
+from co_cli.memory._signal_detector import _build_window, analyze_for_signals, SignalResult
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.config import settings, ROLE_REASONING
 from co_cli.deps import CoConfig, CoServices
-from co_cli._shell_backend import ShellBackend
-
-# Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+from co_cli.tools._shell_backend import ShellBackend
+from tests._ollama import ensure_ollama_warm
 
 _CONFIG = CoConfig.from_settings(settings)
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _SERVICES = CoServices(shell=ShellBackend(), model_registry=_REGISTRY)
+_REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
+_RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +72,7 @@ def test_window_excludes_tool_return_content():
 
     _build_window only extracts UserPromptPart and TextPart. A ModelRequest
     that contains a ToolReturnPart (not UserPromptPart) must not add any line,
-    otherwise the mini-agent receives raw tool output as if it were a user turn.
+    otherwise the signal analyzer receives raw tool output as if it were a user turn.
     """
     messages = [
         _user("search for cats"),
@@ -134,10 +133,11 @@ def test_window_with_only_tool_messages_returns_empty():
 async def test_analyze_correction():
     """Clear correction classifies as correction with high confidence and inject=True."""
     messages = [_user("don't use trailing comments in the code")]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await analyze_for_signals(
             messages,
-            _AGENT.model,
+            _RESOLVED_MODEL,
             services=_SERVICES,
         )
     assert result.found is True
@@ -150,10 +150,11 @@ async def test_analyze_correction():
 async def test_analyze_preference_detected():
     """Stated preference message is detected as a signal."""
     messages = [_user("I prefer shorter responses")]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await analyze_for_signals(
             messages,
-            _AGENT.model,
+            _RESOLVED_MODEL,
             services=_SERVICES,
         )
     assert result.found is True
@@ -164,10 +165,11 @@ async def test_analyze_preference_detected():
 async def test_analyze_no_signal():
     """Neutral question produces no signal."""
     messages = [_user("what time is it in Tokyo?")]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await analyze_for_signals(
             messages,
-            _AGENT.model,
+            _RESOLVED_MODEL,
             services=_SERVICES,
         )
     assert result.found is False
@@ -177,13 +179,35 @@ async def test_analyze_no_signal():
 async def test_inject_false_for_ephemeral():
     """Session-scoped decision produces inject=False."""
     messages = [_user("let's use React for this project, just this one")]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await analyze_for_signals(
             messages,
-            _AGENT.model,
+            _RESOLVED_MODEL,
             services=_SERVICES,
         )
     assert result.inject is False
+
+
+@pytest.mark.asyncio
+async def test_analyze_model_registry_none_returns_signal_result():
+    """model_registry=None uses fallback model — no AttributeError, returns SignalResult.
+
+    Regression test for memory/_signal_detector.py: previously, model_registry.get() was called
+    outside the try/except block, causing AttributeError when registry is None. After the
+    fix the None guard inside try/except must return SignalResult(found=False) cleanly.
+    """
+    null_services = CoServices(shell=ShellBackend(), model_registry=None)
+    messages = [_user("what time is it in Tokyo?")]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
+    async with asyncio.timeout(60):
+        result = await analyze_for_signals(
+            messages,
+            _RESOLVED_MODEL,
+            services=null_services,
+        )
+    assert isinstance(result, SignalResult)
+    assert result.found is False
 
 
 @pytest.mark.asyncio
@@ -202,10 +226,11 @@ async def test_neutrality_guardrail_blocks_assistant_style():
         _assistant("Timsort. Python uses it. Ships with stdlib. Trust it."),
         _user("ok thanks"),
     ]
+    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await analyze_for_signals(
             messages,
-            _AGENT.model,
+            _RESOLVED_MODEL,
             services=_SERVICES,
         )
     assert result.found is False, (

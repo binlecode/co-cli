@@ -2,17 +2,21 @@
 
 ## 1. What & How
 
-Co CLI supports two providers (`ollama`, `gemini`) and one model-selection contract:
-`role_models` role chains. Main agent always uses `role_models["reasoning"][0]`. On terminal
-model error, the chat loop advances the chain (drops failed head, retries with next). Sub-agent
-tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
+Co CLI supports three providers (`ollama-openai`, `ollama-native`, `gemini`) and one model-selection contract:
+`role_models` — one `ModelEntry` per role. The main agent is created with `model=None` (per-call model passing);
+`run_turn_with_fallback()` resolves `role_models["reasoning"]` from `ModelRegistry` before each turn.
+Sub-agent tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
 
 ```
 ModelRegistry.from_config(config) → session-scoped registry
   for each role in config.role_models:
-    build_model(role_models[role][0], provider, ollama_host)
-      ├── provider == "ollama"
-      │   └── OpenAIProvider(base_url="{ollama_host}/v1", api_key="ollama") + OpenAIChatModel
+    build_model(role_models[role], provider, llm_host)
+      ├── provider == "ollama-openai"
+      │   └── OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama") + OpenAIChatModel
+      │       (num_ctx baked from model inference metadata when available)
+      ├── provider == "ollama-native"
+      │   └── OllamaNativeModel using Ollama's native /api/chat endpoint
+      │       (exposes top-level `think` field for call-time reasoning control)
       └── provider == "gemini"
           └── model = "google-gla:{model_name}"
     → ResolvedModel(model, settings) stored in registry
@@ -25,32 +29,31 @@ There is no separate primary/fallback settings tier.
 
 ## 2. Core Logic
 
-### Role Chains
+### Role Models
 
-`role_models` is `dict[str, list[ModelEntry]]`:
+`role_models` is `dict[str, ModelEntry]` — one model per role:
 
-- Mandatory role: `reasoning` (`len >= 1` required by settings validation — raises `ValueError` at startup if absent or empty).
-- Optional roles: `summarization`, `coding`, `research`, `analysis` (empty/missing disables that role).
-- Order is preference order within the active provider.
-- Each entry is a `ModelEntry(model, api_params)` — plain model name strings are coerced to `ModelEntry` by `_parse_role_models`.
+- Mandatory role: `reasoning` (a single `ModelEntry` required — raises `ValueError` at startup if absent).
+- Optional roles: `summarization`, `coding`, `research`, `analysis` (absent/missing disables that role).
+- Each entry is a `ModelEntry(model, api_params, provider?)` — plain model name strings are coerced to `ModelEntry` by `_parse_role_models`. When supplied as a list in JSON, only the first element is used (backwards-compat).
 
 Example:
 
 ```json
 {
   "role_models": {
-    "reasoning": ["qwen3.5:35b-a3b-agentic", "qwen3:30b-a3b-thinking-2507-agentic"],
-    "coding": ["qwen3-coder-next:code"],
-    "research": ["qwen3.5:35b-a3b-agentic"],
-    "summarization": ["qwen3:30b-a3b-instruct-2507"],
-    "analysis": ["qwen3:30b-a3b-instruct-2507"]
+    "reasoning": "qwen3.5:35b-a3b-agentic",
+    "coding": "qwen3-coder-next:code",
+    "research": "qwen3.5:35b-a3b-instruct",
+    "summarization": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-native", "api_params": {"think": false}},
+    "analysis": "qwen3.5:35b-a3b-instruct"
   }
 }
 ```
 
 When `role_models` is not configured, provider defaults are injected for all roles:
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama`: all five roles populated — reasoning → `qwen3.5:35b-a3b-agentic`, then `qwen3:30b-a3b-thinking-2507-agentic`; summarization and analysis → `qwen3:30b-a3b-instruct-2507`; coding → `qwen3-coder-next:code`; research → `qwen3.5:35b-a3b-agentic`
+- `ollama-openai` / `ollama-native`: all five roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization → `qwen3.5:35b-a3b-think` (via `ollama-native`, `think=False`); analysis → `qwen3.5:35b-a3b-instruct`; coding → `qwen3.5:35b-a3b-code`; research → `qwen3.5:35b-a3b-instruct` with `think=False`
 
 ### ModelRegistry and ResolvedModel
 
@@ -58,9 +61,10 @@ When `role_models` is not configured, provider defaults are injected for all rol
 
 `ResolvedModel` is a dataclass pairing a pre-built model object (`Any`) with its `ModelSettings | None`. Agent factories and summarization functions receive a `ResolvedModel` directly.
 
-Sub-agent model construction is provider-aware via `build_model()` in `co_cli/agents/_factory.py`:
+Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_model_factory.py`:
 
-- `ollama` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{ollama_host}/v1", api_key="ollama"))`
+- `ollama-openai` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama"))`
+- `ollama-native` → `OllamaNativeModel(model_name, llm_host)` using Ollama's `/api/chat` endpoint
 - `gemini` → `"google-gla:{model_name}"`
 - Any other provider → `ValueError` raised.
 
@@ -68,19 +72,17 @@ Roles are resolved at registry build time by iterating `role_models`. Empty or a
 
 ### Model Dependency Checks
 
-`_check_model_availability()` and `_check_llm_provider()` run via `run_model_check()` before the agent is created (after `create_deps()`, before `get_agent()`):
+`check_llm()` and `check_model_availability()` run inside `create_deps()` (before `get_agent()`). Error status raises `ValueError` immediately — session never starts.
 
-- `_check_llm_provider`: early-return guard structure (priority order):
+- `check_llm`: provider credential and reachability check:
   1. `gemini` + key absent → `status="error"` (cannot proceed)
   2. `gemini` + key present → `status="ok"`
-  3. `ollama` + server unreachable (`/api/tags`, 5s timeout) → `status="warning"` (soft fail)
-  4. non-Gemini provider + Gemini key absent → `status="warning"` (Gemini-dependent features unavailable)
-  5. all checks pass → `status="ok"`
-- `_check_model_availability`: Ollama-only. Queries `{ollama_host}/api/tags` (5s timeout). On any network error, returns `status="warning"` — soft fail.
-- `reasoning` chain: if configured and no model in it is installed, returns `status="error"` → `run_model_check` raises `RuntimeError` (fail-fast, agent never created).
-- If some reasoning models missing, filters chain to installed models (preserving order) → `status="warning"`, updated chains returned in `PreflightResult.role_models`; `run_model_check` applies mutation to `deps.config.role_models`.
-- Optional roles (`summarization`, `coding`, `research`, `analysis`): filtered to installed models (preserving order). Role disabled (set to `[]`) if none found. No error raised.
-- Non-Ollama provider (e.g. Gemini): returns `status="ok"` immediately — no model list probe.
+  3. `ollama-openai` or `ollama-native` + server unreachable (`/api/tags`, 5s timeout) → `status="warn"` (soft fail, session continues)
+  4. server reachable → `status="ok"`
+- `check_model_availability`: Ollama providers only (`ollama-openai`, `ollama-native`). Queries `{llm_host}/api/tags` (5s timeout). On any network error, returns `status="warn"` — soft fail.
+  - `reasoning` role: if configured model is not installed → `status="error"` → `create_deps()` raises `ValueError` (fail-fast, agent never created).
+  - Optional roles (`summarization`, `coding`, `research`, `analysis`): if configured model not installed → `status="warn"`, session continues.
+  - Non-Ollama provider (e.g. Gemini): returns `status="ok"` immediately — no model list probe.
 
 ## 3. Config
 
@@ -88,12 +90,12 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Provider selection: `ollama` or `gemini` |
-| `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server base URL |
-| `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai`, `ollama-native`, or `gemini` |
+| `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL (Ollama or compatible) |
+| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
-| `gemini_api_key` | `GEMINI_API_KEY` | `None` | Gemini API key (required when `llm_provider=gemini`) |
+| `llm_api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm_provider=gemini`) |
 | `role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model chain (comma-separated) |
 | `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model chain for `/compact` and history compaction |
 | `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model chain |
@@ -121,7 +123,7 @@ role_models:
 
 3. **`/no_think` SYSTEM directive** — baked into a Modelfile (e.g. the `-nothink` backup). Works for `qwen3` thinking models; `qwen3.5` ignores prompt-level directives and requires `api_params` instead.
 
-`build_model()` in `_factory.py` bakes non-empty `api_params` into the `ModelSettings.extra_body`
+`build_model()` in `_model_factory.py` bakes non-empty `api_params` into the `ModelSettings.extra_body`
 returned alongside the model — applied to every request through the `ResolvedModel` at call sites.
 `ModelRegistry.from_config(config)` is the single entry point for constructing all role models
 at session startup. Individual consumers call `registry.get(role, fallback)` to retrieve a
@@ -130,7 +132,7 @@ at session startup. Individual consumers call `registry.get(role, fallback)` to 
 Important backend distinction:
 
 - For Ollama-backed thinking models, the native request control is `think: false`. This is the
-  correct setting for `role_models[*].api_params` in co-cli when `llm_provider=ollama`.
+  correct setting for `role_models[*].api_params` in co-cli when `llm_provider=ollama-openai` or `llm_provider=ollama-native`.
 - For generic OpenAI-compatible Qwen3.5 servers outside Ollama, upstream Qwen documents a
   different control path: `chat_template_kwargs.enable_thinking=false` in the extra request body.
 - So `api_params: {think: false}` in this repo is an Ollama-specific contract, not a universal
@@ -145,7 +147,7 @@ issue ollama/ollama#5356). Base model tags default to 4096 tokens and silently t
 conversation history.
 
 For models requiring a larger context window, `num_ctx` must be set via `PARAMETER num_ctx` in the
-Modelfile. All custom Modelfiles in `ollama/` bake this parameter. The `ollama_num_ctx` setting is
+Modelfile. All custom Modelfiles in `ollama/` bake this parameter via `PARAMETER num_ctx`. The `llm_num_ctx` setting is
 forwarded as a client-side hint for future-proofing but is not enforced by Ollama today.
 
 ### Modelfile Parameters Reference
@@ -154,11 +156,9 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 
 | Modelfile | Role | num_ctx | num_predict | temp | top_p | top_k | presence_p | repeat_p |
 |-----------|------|--------:|------------:|-----:|------:|------:|-----------:|---------:|
-| `qwen3.5-35b-a3b-agentic` | reasoning, research | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
-| `qwen3-30b-a3b-thinking-2507-agentic` | reasoning (fallback) | 128K | 32K | 0.6 | 0.95 | 20 | — | 1.0 |
-| `qwen3-30b-a3b-thinking-2507-nothink` | backup only | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
-| `qwen3-30b-a3b-instruct-2507` | summarization, analysis | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
-| `qwen3-coder-next-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
+| `qwen3.5-35b-a3b-think` | reasoning | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
+| `qwen3.5-35b-a3b-instruct` | summarization, analysis, research | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
+| `qwen3.5-35b-a3b-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
 
 **num_ctx rationale:**
 - Agentic/thinking models: 128K — sweet spot for long multi-turn tool workflows without the KV cache cost of 256K. Native context is 256K; reduce to 32K if OOM.
@@ -170,8 +170,8 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 - Coder model (32K): 50/50 split with num_ctx — 32K output budget, 32K input headroom for prompt + tool context.
 
 **Sampling params rationale:**
-- `qwen3.5` thinking mode uses `temperature 1.0` (official Qwen3.5 guidance) — distinct from `qwen3` thinking mode which uses `0.6`.
-- `presence_penalty 1.5` on the 35b model: official Qwen3.5 recommendation to suppress repetitions in long thinking traces.
+- `qwen3.5` thinking mode uses `temperature 1.0` (official Qwen3.5 guidance).
+- `presence_penalty 1.5` on the think model: official Qwen3.5 recommendation to suppress repetitions in long thinking traces.
 - `repeat_penalty 1.05` on the coder: slightly above 1.0 to discourage repetitive boilerplate in generated code.
 
 ## 5. Files
@@ -179,16 +179,15 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | File | Purpose |
 |------|---------|
 | `co_cli/config.py` | `role_models` setting, `ModelEntry` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
-| `co_cli/deps.py` | `role_models`, `ollama_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
-| `co_cli/_model_check.py` | `_check_llm_provider`, `_check_model_availability`, `run_model_check`, `PreflightResult` — pre-agent model dependency check gate |
-| `co_cli/_commands.py` | `_swap_model_inplace`, `_switch_ollama_model` — in-place model swap used by error-recovery chain advancement in `main.py`; uses `registry.get("summarization", fallback)` for `/compact` and `/new` |
-| `co_cli/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
-| `co_cli/agents/_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, ollama_host, ollama_num_ctx)` — builds provider-aware model and `ModelSettings` |
-| `ollama/Modelfile.qwen3.5-35b-a3b-agentic` | Primary reasoning/research model — thinking enabled, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-agentic` | Reasoning fallback — thinking enabled, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-thinking-2507-nothink` | Backup nothink variant — `/no_think` SYSTEM directive, 128K ctx |
-| `ollama/Modelfile.qwen3-30b-a3b-instruct-2507` | Summarization/analysis — native instruct (thinking off at model level), 128K ctx |
-| `ollama/Modelfile.qwen3-coder-next-code` | Coding sub-agent — deterministic params, 64K ctx / 32K output |
+| `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
+| `co_cli/bootstrap/_check.py` | `check_llm`, `check_model_availability` (and other integration probes) — shared factual probe layer |
+| `co_cli/agent.py` | `get_agent()` factory — model selection, tool registration, system prompt assembly |
+| `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
+| `co_cli/context/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
+| `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host)` — builds provider-aware model and `ModelSettings`; `prepare_provider(provider, llm_api_key)` — provider-level side effects (Gemini API key env injection) called at `get_agent()` startup |
+| `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
+| `ollama/Modelfile.qwen3.5-35b-a3b-instruct` | Summarization/analysis/research — native instruct (thinking off at model level) |
+| `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |
 | `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and `/no_think` directives; not invoked at startup |
 
 ## 6. Testing Boundary
@@ -200,7 +199,7 @@ Model validation and config-role validation are intentionally split:
   Ollama tags exist and that their baked parameters and baked `/no_think` directives match the
   corresponding Modelfiles.
 - pytest covers application behavior. Tests validate config parsing, default role injection,
-  `Settings -> CoConfig` transfer, role resolution, reasoning-chain advance, summarization fallback,
+  `Settings -> CoConfig` transfer, role resolution, summarization fallback,
   and delegation role selection.
 - pytest is not the primary mechanism for checking whether a local Ollama tag is installed or whether
   a Modelfile was built with the expected parameters.

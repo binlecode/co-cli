@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic_ai import RunContext
 
-from co_cli._doctor import run_doctor
+from co_cli.bootstrap._check import check_runtime
 from co_cli.deps import CoDeps
 
 
@@ -23,33 +23,27 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     - obsidian: True if Obsidian vault path is configured
     - brave: True if Brave Search API key is set
     - mcp_count: number of MCP servers configured
-    - checks: list of {"name", "status", "detail"} for each doctor check
+    - reasoning_models: list of reasoning ModelEntry objects
+    - reasoning_ready: True if reasoning chain is configured
+    - checks: list of {"name", "status", "detail"} for each probe
+    - skill_grants: sorted list of active skill tool grants
+    - tool_count: number of tools in the current session surface
+    - active_skill: name of the currently active skill, or None
+    - mcp_mode: "mcp" or "native-only"
+    - knowledge_mode: active knowledge search backend
     """
-    result = run_doctor(ctx.deps)
+    result = check_runtime(ctx.deps)
 
-    # Integration status derived from doctor checks
-    google_item = result.by_name("google")
-    google = google_item is not None and google_item.status == "ok"
-
-    obsidian_item = result.by_name("obsidian")
-    obsidian = obsidian_item is not None and obsidian_item.status == "ok"
-
-    brave_item = result.by_name("brave")
-    brave = brave_item is not None and brave_item.status == "ok"
-
-    # Knowledge backend from config (unchanged)
-    knowledge_backend = ctx.deps.config.knowledge_search_backend
+    caps = result.capabilities
+    st = result.status
 
     # Reranker from config
     reranker = ctx.deps.config.knowledge_reranker_provider
 
-    # MCP count from config
-    mcp_count = ctx.deps.config.mcp_count
+    # Reasoning model sourced from capabilities
+    reasoning_model = caps["reasoning_model"]
 
-    # Reasoning model chain from config
-    reasoning_chain = ctx.deps.config.role_models.get("reasoning", [])
-
-    # Build display: doctor summary lines + reranker, reasoning, session lines
+    # Build display: probe summary lines + reranker, reasoning, session lines
     lines: list[str] = result.summary_lines()
 
     if reranker == "none":
@@ -57,35 +51,37 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     else:
         lines.append(f"Search reranker: {reranker}")
 
-    if reasoning_chain:
-        lines.append(f"Reasoning models: {', '.join(e.model for e in reasoning_chain)}")
+    if reasoning_model:
+        lines.append(f"Reasoning model: {reasoning_model}")
     else:
-        lines.append("Reasoning models: not configured (doctor fail-fast)")
+        lines.append("Reasoning model: not configured (doctor fail-fast)")
 
     if ctx.deps.config.session_id:
         lines.append(f"Session: {ctx.deps.config.session_id[:8]}...")
 
-    skill_grants = sorted(ctx.deps.session.skill_tool_grants)
+    skill_grants = st["skill_grants"]
     if skill_grants:
         lines.append(f"Active skill grants: {', '.join(skill_grants)}")
 
-    display = "\n".join(lines)
+    if st["tool_count"]:
+        lines.append(f"Tools: {st['tool_count']} ({st['mcp_mode']})")
 
-    checks = [
-        {"name": c.name, "status": c.status, "detail": c.detail}
-        for c in result.checks
-    ]
+    display = "\n".join(lines)
 
     return {
         "display": display,
-        "knowledge_backend": knowledge_backend,
+        "knowledge_backend": caps["knowledge_backend"],
         "reranker": reranker,
-        "google": google,
-        "obsidian": obsidian,
-        "brave": brave,
-        "mcp_count": mcp_count,
-        "reasoning_models": reasoning_chain,
-        "reasoning_ready": bool(reasoning_chain),
-        "checks": checks,
+        "google": caps["google"],
+        "obsidian": caps["obsidian"],
+        "brave": caps["brave"],
+        "mcp_count": caps["mcp_count"],
+        "reasoning_model": reasoning_model,
+        "reasoning_ready": caps["reasoning_ready"],
+        "checks": caps["checks"],
         "skill_grants": skill_grants,
+        "tool_count": st["tool_count"],
+        "active_skill": st["active_skill"],
+        "mcp_mode": st["mcp_mode"],
+        "knowledge_mode": st["knowledge_mode"],
     }

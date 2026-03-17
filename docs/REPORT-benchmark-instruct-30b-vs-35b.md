@@ -3,7 +3,7 @@
 **Models tested**:
 1. `qwen3:30b-a3b-instruct-2507` (Baseline - Qwen3 30B Instruct)
 2. `qwen3.5:35b-a3b-instruct` (New - Qwen3.5 35B Instruct)
-**Date**: 2026-03-14 17:34:03
+**Date**: 2026-03-14 17:43:49
 
 ## Objective
 
@@ -15,26 +15,18 @@ Evaluate the generation performance (Throughput, TTFT, Token Efficiency) and mem
 
 | Model | VRAM Usage (GB) | Task | Throughput (tok/s) | Total Time (s) | TTFT (s) | Tokens |
 |-------|-----------------|------|--------------------|----------------|----------|--------|
-| 30B | 24.06 GB | Email_Draft | 70.55 | 6.17 | 0.21 | 413 |
-| 30B | 24.06 GB | Logic_Puzzle | 62.95 | 2.09 | 0.42 | 103 |
-| 30B | 24.06 GB | Summarization | 59.01 | 14.61 | 0.21 | 834 |
-| 35B | 26.89 GB | Email_Draft | 31.05 | 39.27 | 32.07 | 1190 |
-| 35B | 26.89 GB | Logic_Puzzle | 44.94 | 24.44 | 22.83 | 1072 |
-| 35B | 26.89 GB | Summarization | 44.84 | 55.21 | 45.03 | 2437 |
+| 30B | 24.06 GB | Email_Draft | 93.91 | 4.95 | 0.17 | 444 |
+| 30B | 24.06 GB | Logic_Puzzle | 94.08 | 1.30 | 0.19 | 103 |
+| 30B | 24.06 GB | Summarization | 91.36 | 8.71 | 0.17 | 770 |
+| 35B | 26.89 GB | Email_Draft | 44.75 | 27.03 | 22.27 | 1180 |
+| 35B | 26.89 GB | Logic_Puzzle | 44.95 | 16.28 | 14.70 | 709 |
+| 35B | 26.89 GB | Summarization | 45.08 | 36.23 | 28.97 | 1602 |
 
 ## 2. Qualitative Findings
 
-1. **Instruction Following & Brevity**: 
-    *   **Logic Puzzle**: Both models correctly solved the classic Wolf/Goat/Cabbage river crossing puzzle. However, the new `35B` model adhered perfectly to the negative constraint ("Provide just the step-by-step solution without extra fluff"), providing exactly 7 lines of steps. The older `30B` model added an unnecessary conversational summary sentence at the end.
-    *   **Summarization**: The `35B` model produced a much more concise, punchy, and professional explanation of Optimistic vs Pessimistic Concurrency (32 lines) compared to the `30B` model's highly formatted, slightly overly-enthusiastic, and verbose response (79 lines). This demonstrates the `35B` model is significantly better tuned for direct, programmatic agentic interactions where brevity and exact constraint adherence are valued over conversational flair.
+(To be analyzed based on evals)
 
-2. **Throughput vs Context Size Issue**: 
-    *   The 30B model achieved higher theoretical throughput (~60-70 tok/s) because it was forced to stop generating much earlier (emitting only 100-800 tokens). 
-    *   The 35B model sustained a very healthy ~30-45 tok/s, emitting significantly higher quality and perfectly constrained tokens.
-    *   **Memory Footprint**: The `30B` model consumed **24.06 GB**, while the `35B` model consumed **26.89 GB**. The ~2.8 GB delta is negligible on a 128GB unified memory system.
 
 ## Final Recommendations
 
-- **Upgrade the default Instruct/Non-Thinker agent routing to `qwen3.5:35b-a3b-instruct`**.
-- The `35B` model strictly follows formatting constraints (like "no extra fluff") significantly better than its predecessor, which is critical for an autonomous agent pipeline that parses LLM outputs programmatically.
-- The memory overhead (26.89 GB) perfectly mirrors the `code` model, allowing them to hot-swap into the exact same VRAM footprint efficiently.
+(To be analyzed based on evals)

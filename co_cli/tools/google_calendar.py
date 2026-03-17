@@ -8,7 +8,7 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._errors import terminal_error, http_status_code
+from co_cli.tools._errors import terminal_error, handle_google_api_error
 
 
 _CALENDAR_NOT_CONFIGURED = (
@@ -16,24 +16,6 @@ _CALENDAR_NOT_CONFIGURED = (
     "Set google_credentials_path in settings or run: "
     "gcloud auth application-default login"
 )
-
-
-def _handle_calendar_error(e: Exception) -> dict[str, Any]:
-    """Route Calendar API errors with Calendar-specific guidance."""
-    status = http_status_code(e)
-    if status == 401:
-        return terminal_error("Calendar: authentication error (401). Check credentials.")
-    if status == 403:
-        raise ModelRetry(
-            "Calendar: access forbidden (403). Check API enablement and calendar sharing permissions."
-        )
-    if status == 404:
-        raise ModelRetry("Calendar: event or calendar not found (404). Verify IDs and retry.")
-    if status == 429:
-        raise ModelRetry("Calendar: rate limited (429). Wait a moment and retry.")
-    if status and status >= 500:
-        raise ModelRetry(f"Calendar: server error ({status}). Retry shortly.")
-    raise ModelRetry(f"Calendar: API error ({e}). Check credentials, API enablement, and quota.")
 
 
 def _get_calendar_service(ctx: RunContext[CoDeps]):
@@ -172,7 +154,7 @@ def list_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_calendar_error(e)
+        return handle_google_api_error("Calendar", e)
 
 
 def search_calendar_events(
@@ -235,4 +217,4 @@ def search_calendar_events(
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_calendar_error(e)
+        return handle_google_api_error("Calendar", e)

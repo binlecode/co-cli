@@ -1,54 +1,38 @@
 """Functional tests for the delegate_coder, delegate_research, and delegate_analysis tool wiring."""
 
 import pytest
-from dataclasses import dataclass, field
 
 from pydantic import ValidationError
+from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agents._factory import ResolvedModel
-from co_cli.agents.analysis import AnalysisResult, make_analysis_agent
-from co_cli.agents.coder import CoderResult, make_coder_agent
-from co_cli.agents.research import ResearchResult, make_research_agent
+from co_cli.agent import get_agent
+from co_cli._model_factory import ResolvedModel
+from co_cli.tools._delegation_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent
 from co_cli.config import ModelEntry
+from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research
 
-
-@dataclass
-class FakeConfig:
-    role_models: dict = field(default_factory=dict)
-    llm_provider: str = "ollama"
-    ollama_host: str = "http://localhost:11434"
+# Cache agent at module level — get_agent() is expensive; model reference is stable.
+_AGENT, _, _ = get_agent()
 
 
-@dataclass
-class FakeRuntime:
-    turn_usage: RunUsage | None = None
-
-
-@dataclass
-class FakeServices:
-    model_registry: object | None = None
-
-
-@dataclass
-class FakeDeps:
-    config: FakeConfig = field(default_factory=FakeConfig)
-    runtime: FakeRuntime = field(default_factory=FakeRuntime)
-    services: FakeServices = field(default_factory=FakeServices)
-
-
-class FakeCtx:
-    def __init__(self, role_models: dict | None = None) -> None:
-        self.deps = FakeDeps(config=FakeConfig(role_models=role_models or {}))
+def _make_ctx() -> RunContext:
+    """Return a real RunContext with no model_registry — triggers unavailable guard."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=None),
+        config=CoConfig(),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 @pytest.mark.asyncio
 async def test_delegate_coder_no_model() -> None:
-    """Raises ModelRetry when role_models.coding is not set."""
+    """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
-    ctx = FakeCtx(role_models={})
+    ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await delegate_coder(ctx, "analyze foo")
 
@@ -74,7 +58,7 @@ def test_make_coder_agent_registers_file_tools() -> None:
 def test_make_subagent_deps_resets_session_state() -> None:
     """make_subagent_deps() resets session/runtime groups; shares services/config."""
     from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     dirty = CoDeps(
         services=CoServices(shell=ShellBackend()),
@@ -139,20 +123,20 @@ def test_make_research_agent_registers_web_tools() -> None:
 
 @pytest.mark.asyncio
 async def test_delegate_research_no_model() -> None:
-    """Raises ModelRetry when role_models.research is not set."""
+    """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
-    ctx = FakeCtx(role_models={})
+    ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await delegate_research(ctx, "latest Python news")
 
 
 @pytest.mark.asyncio
 async def test_delegate_research_max_requests_guard() -> None:
-    """max_requests < 1 raises ModelRetry."""
+    """max_requests < 1 raises ModelRetry (checked before registry lookup)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
-    ctx = FakeCtx(role_models={"coding": [ModelEntry(model="some-model")]})
+    ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="max_requests must be at least 1"):
         await delegate_research(ctx, "any query", max_requests=0)
 
@@ -177,10 +161,10 @@ def test_make_analysis_agent_returns_agent() -> None:
 
 @pytest.mark.asyncio
 async def test_delegate_analysis_no_model() -> None:
-    """Raises ModelRetry when role_models.analysis is not set."""
+    """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
-    ctx = FakeCtx(role_models={})
+    ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await delegate_analysis(ctx, "compare these documents")
 

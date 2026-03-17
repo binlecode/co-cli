@@ -25,6 +25,7 @@ dependencies = [
     "rapidfuzz>=3.14.3",
     "pysqlite3>=0.6.0",
     "sqlite-vec>=0.1.6",
+    "ollama>=0.6.1",
 ]
 
 [project.scripts]
@@ -43,3 +44,4 @@ reranker = [
 [tool.pytest.ini_options]
 addopts = "-x --durations=0"
 asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

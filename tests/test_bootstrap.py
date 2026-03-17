@@ -1,18 +1,20 @@
-"""Functional tests for startup bootstrap flow (real components only)."""
+"""Functional tests for bootstrap-sequence behaviors (real components, direct API calls)."""
 
-import asyncio
+import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from co_cli._bootstrap import run_bootstrap
-from co_cli._session import new_session, save_session
-from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli.display import TerminalFrontend
-from co_cli._knowledge_index import KnowledgeIndex
-from co_cli._shell_backend import ShellBackend
+import pytest
+
+from co_cli.bootstrap._bootstrap import restore_session
+from co_cli.context._session import is_fresh, load_session, new_session, save_session
+from co_cli.knowledge._index_store import KnowledgeIndex
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState
+from co_cli.context._history import OpeningContextState, SafetyState
+from co_cli.tools._shell_backend import ShellBackend
 
 
-def _write_knowledge_file(path: Path, *, mem_id: int, body: str) -> None:
+def _write_memory_file(path: Path, *, mem_id: int, body: str) -> None:
     path.write_text(
         (
             "---\n"
@@ -28,165 +30,128 @@ def _write_knowledge_file(path: Path, *, mem_id: int, body: str) -> None:
     )
 
 
-async def _run(
-    deps: CoDeps,
-    frontend: TerminalFrontend,
-    *,
-    memory_dir: Path,
-    library_dir: Path,
-    session_path: Path,
-    ttl_minutes: int = 60,
-    n_skills: int = 2,
-) -> dict:
-    return await run_bootstrap(
-        deps,
-        frontend,
-        memory_dir=memory_dir,
-        library_dir=library_dir,
-        session_path=session_path,
-        session_ttl_minutes=ttl_minutes,
-        n_skills=n_skills,
-    )
-
-
-def test_bootstrap_syncs_knowledge_and_restores_fresh_session(tmp_path: Path) -> None:
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-    library_dir = tmp_path / ".co-cli" / "library"
-    memory_file = memory_dir / "001-wakeup-memory.md"
-    _write_knowledge_file(memory_file, mem_id=1, body="Wakeup sync writes this entry to the index.")
-    session_path = tmp_path / ".co-cli" / "session.json"
-    session_path.parent.mkdir(parents=True, exist_ok=True)
-    session_data = new_session()
-    save_session(session_path, session_data)
-
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
-        config=CoConfig(knowledge_search_backend="fts5"),
-    )
-    frontend = TerminalFrontend()
-
-    out = asyncio.run(
-        _run(
-            deps,
-            frontend,
-            memory_dir=memory_dir,
-            library_dir=library_dir,
-            session_path=session_path,
-        )
-    )
-
-    assert out["session_id"] == session_data["session_id"]
-    assert deps.config.session_id == session_data["session_id"]
-    results = idx.search("wakeup sync", source="memory", limit=5)
-    assert results, "Expected synced knowledge to be searchable in the real index"
-    assert any(r.path == str(memory_file) for r in results)
-    idx.close()
-
-
-def test_bootstrap_two_pass_sync_partitions_by_kind(tmp_path: Path) -> None:
-    """Bootstrap syncs kind:memory under source='memory' and kind:article under source='library'."""
-    import yaml as _yaml
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-    library_dir = tmp_path / ".co-cli" / "library"
-    library_dir.mkdir(parents=True)
-
-    mem_file = memory_dir / "001-wakeup-memory.md"
-    _write_knowledge_file(mem_file, mem_id=1, body="Memory content for partition test.")
-
-    art_file = library_dir / "002-test-article.md"
-    art_fm = {
-        "id": 2, "kind": "article", "created": "2026-01-01T00:00:00+00:00",
-        "tags": [], "decay_protected": True, "origin_url": "https://example.com/test",
+def _write_article_file(path: Path, *, art_id: int, body: str) -> None:
+    fm = {
+        "id": art_id,
+        "kind": "article",
+        "created": "2026-01-01T00:00:00+00:00",
+        "tags": [],
+        "decay_protected": True,
+        "origin_url": "https://example.com/test",
     }
-    art_file.write_text(
-        f"---\n{_yaml.dump(art_fm, default_flow_style=False)}---\n\nArticle for partition test.\n",
+    path.write_text(
+        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{body}\n",
         encoding="utf-8",
     )
 
-    session_path = tmp_path / ".co-cli" / "session.json"
-    session_path.parent.mkdir(parents=True, exist_ok=True)
-    from co_cli._session import new_session, save_session
+
+def test_knowledge_sync_writes_to_index_and_fresh_session_is_restored(tmp_path: Path) -> None:
+    """sync_dir() indexes files into the index; a just-saved session is fresh and restorable."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    mem_file = memory_dir / "001-wakeup-memory.md"
+    _write_memory_file(mem_file, mem_id=1, body="Wakeup sync writes this entry to the index.")
+
+    session_path = tmp_path / "session.json"
     session_data = new_session()
     save_session(session_path, session_data)
 
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
-    deps = CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(knowledge_search_backend="fts5"))
-    frontend = TerminalFrontend()
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5", knowledge_reranker_provider="none"))
+    try:
+        count = idx.sync_dir("memory", memory_dir, kind_filter="memory")
+        assert count >= 1, "sync_dir must index at least one file"
 
-    asyncio.run(_run(deps, frontend, memory_dir=memory_dir, library_dir=library_dir, session_path=session_path))
+        results = idx.search("wakeup sync", source="memory", limit=5)
+        assert results, "Synced knowledge must be searchable in the real index"
+        assert any(r.path == str(mem_file) for r in results)
 
-    mem_results = idx.search("partition test", source="memory", limit=5)
-    assert any(r.path == str(mem_file) for r in mem_results), \
-        "Memory file must be searchable under source='memory'"
-
-    art_results = idx.search("partition test", source="library", limit=5)
-    assert any(r.path == str(art_file) for r in art_results), \
-        "Article file must be searchable under source='library'"
-    idx.close()
+        loaded = load_session(session_path)
+        assert loaded is not None
+        assert is_fresh(loaded, ttl_minutes=60), "A just-saved session must be fresh"
+        assert loaded["session_id"] == session_data["session_id"]
+    finally:
+        idx.close()
 
 
-def test_bootstrap_disables_index_when_sync_fails(tmp_path: Path) -> None:
-    memory_dir = tmp_path / ".co-cli" / "memory"
+def test_two_pass_sync_partitions_by_kind(tmp_path: Path) -> None:
+    """sync_dir() with kind_filter routes memory files to source='memory' and articles to source='library'."""
+    memory_dir = tmp_path / "memory"
     memory_dir.mkdir(parents=True)
-    library_dir = tmp_path / ".co-cli" / "library"
-    session_path = tmp_path / ".co-cli" / "session.json"
-    session_path.parent.mkdir(parents=True, exist_ok=True)
+    library_dir = tmp_path / "library"
+    library_dir.mkdir(parents=True)
 
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="fts5", reranker_provider="none")
+    mem_file = memory_dir / "001-mem.md"
+    _write_memory_file(mem_file, mem_id=1, body="Memory content for partition test.")
+
+    art_file = library_dir / "002-article.md"
+    _write_article_file(art_file, art_id=2, body="Article content for partition test.")
+
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5", knowledge_reranker_provider="none"))
+    try:
+        idx.sync_dir("memory", memory_dir, kind_filter="memory")
+        idx.sync_dir("library", library_dir, kind_filter="article")
+
+        mem_results = idx.search("partition test", source="memory", limit=5)
+        assert any(r.path == str(mem_file) for r in mem_results), \
+            "Memory file must be searchable under source='memory'"
+
+        art_results = idx.search("partition test", source="library", limit=5)
+        assert any(r.path == str(art_file) for r in art_results), \
+            "Article file must be searchable under source='library'"
+    finally:
+        idx.close()
+
+
+def test_index_disabled_when_sync_fails(tmp_path: Path) -> None:
+    """When sync_dir() fails due to a closed index, setting knowledge_index to None disables it."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    _write_memory_file(memory_dir / "001-mem.md", mem_id=1, body="Should fail to sync.")
+
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5", knowledge_reranker_provider="none"))
     idx.close()
+
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), knowledge_index=idx),
         config=CoConfig(knowledge_search_backend="fts5"),
     )
-    frontend = TerminalFrontend()
 
-    asyncio.run(
-        _run(
-            deps,
-            frontend,
-            memory_dir=memory_dir,
-            library_dir=library_dir,
-            session_path=session_path,
-        )
-    )
+    sync_failed = False
+    try:
+        deps.services.knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
+    except Exception:
+        sync_failed = True
+        deps.services.knowledge_index = None
 
-    assert deps.services.knowledge_index is None
+    assert sync_failed, "sync_dir on a closed index must raise an exception"
+    assert deps.services.knowledge_index is None, \
+        "knowledge_index must be set to None after sync failure"
 
 
-def test_bootstrap_stale_session_creates_new_session(tmp_path: Path) -> None:
-    """Expired session at wake-up should create a fresh session id."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-    library_dir = tmp_path / ".co-cli" / "library"
-    session_path = tmp_path / ".co-cli" / "session.json"
-    session_path.parent.mkdir(parents=True, exist_ok=True)
+def _make_deps(session_path: Path) -> CoDeps:
+    config = CoConfig(session_path=session_path, session_ttl_minutes=60)
+    services = CoServices(shell=ShellBackend())
+    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+    return CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
+
+
+def test_stale_session_creates_new_session_id(tmp_path: Path) -> None:
+    """restore_session() with a stale on-disk session must create a new session_id in deps.config."""
+    session_path = tmp_path / "session.json"
     stale = new_session()
+    stale_id = stale["session_id"]
     stale["last_used_at"] = (datetime.now(timezone.utc) - timedelta(minutes=180)).isoformat()
     save_session(session_path, stale)
 
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=None),
-        config=CoConfig(knowledge_search_backend="grep"),
-    )
+    deps = _make_deps(session_path)
+    from co_cli.display import TerminalFrontend
     frontend = TerminalFrontend()
+    restore_session(deps, frontend)
 
-    out = asyncio.run(
-        _run(
-            deps,
-            frontend,
-            memory_dir=memory_dir,
-            library_dir=library_dir,
-            session_path=session_path,
-            ttl_minutes=60,
-        )
-    )
-
-    assert out["session_id"] != stale["session_id"]
-    assert deps.config.session_id == out["session_id"]
-
-
-
+    assert deps.config.session_id != stale_id, \
+        "restore_session() must assign a new session_id when the on-disk session is stale"
+    assert deps.config.session_id != "", "restore_session() must set a non-empty session_id"
+    # New session file must have been written with the fresh ID
+    on_disk = load_session(session_path)
+    assert on_disk["session_id"] == deps.config.session_id, \
+        "restore_session() must persist the new session_id to disk"

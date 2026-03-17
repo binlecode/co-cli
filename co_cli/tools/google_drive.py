@@ -7,7 +7,7 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._errors import terminal_error, http_status_code
+from co_cli.tools._errors import terminal_error, handle_google_api_error
 
 
 _DRIVE_NOT_CONFIGURED = (
@@ -15,24 +15,6 @@ _DRIVE_NOT_CONFIGURED = (
     "Set google_credentials_path in settings or run: "
     "gcloud auth application-default login"
 )
-
-
-def _handle_drive_error(e: Exception) -> dict[str, Any]:
-    """Route Drive API errors with Drive-specific guidance."""
-    status = http_status_code(e)
-    if status == 401:
-        return terminal_error("Drive: authentication error (401). Check credentials.")
-    if status == 403:
-        raise ModelRetry(
-            "Drive: access forbidden (403). Check API enablement, OAuth scopes, and file permissions."
-        )
-    if status == 404:
-        raise ModelRetry("Drive: file not found (404). Verify the file ID and try again.")
-    if status == 429:
-        raise ModelRetry("Drive: rate limited (429). Wait a moment and retry.")
-    if status and status >= 500:
-        raise ModelRetry(f"Drive: server error ({status}). Retry shortly.")
-    raise ModelRetry(f"Drive: API error ({e}). Check credentials, API enablement, and quota.")
 
 
 def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
@@ -120,7 +102,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_drive_error(e)
+        return handle_google_api_error("Drive", e)
 
 
 def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, Any]:
@@ -166,7 +148,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
                     content=text,
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
-                from co_cli._chunker import chunk_text
+                from co_cli.knowledge._chunker import chunk_text
                 drive_chunks = chunk_text(
                     text,
                     chunk_size=ctx.deps.config.knowledge_chunk_size,
@@ -180,4 +162,4 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_drive_error(e)
+        return handle_google_api_error("Drive", e)

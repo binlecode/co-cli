@@ -9,7 +9,7 @@ from pydantic_ai import ModelRetry
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 
 
 @dataclass

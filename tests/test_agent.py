@@ -17,11 +17,10 @@ EXPECTED_TOOLS_CORE = {
     "create_email_draft",
     "save_memory",
     "save_article",
-    "write_file",
-    "edit_file",
-    # Precision memory edits (approval governed by all_approval flag)
     "update_memory",
     "append_memory",
+    "write_file",
+    "edit_file",
     # Read-only
     "search_memories",
     "list_memories",
@@ -29,6 +28,8 @@ EXPECTED_TOOLS_CORE = {
     "search_knowledge",
     "list_notes",
     "read_note",
+    "search_notes",
+    "recall_article",
     "search_drive_files",
     "read_drive_file",
     "list_emails",
@@ -70,6 +71,8 @@ EXPECTED_APPROVAL_TOOLS = {
     "create_email_draft",
     "save_memory",
     "save_article",
+    "update_memory",
+    "append_memory",
     "write_file",
     "edit_file",
     "start_background_task",
@@ -78,14 +81,14 @@ EXPECTED_APPROVAL_TOOLS = {
 
 def test_get_agent_registers_all_tools():
     """get_agent() registers exactly the expected tools with no duplicates."""
-    _agent, _model_settings, tool_names, _ = get_agent()
+    _agent, tool_names, _ = get_agent()
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
     assert set(tool_names) == EXPECTED_TOOLS
 
 
 def test_approval_tools_flagged():
     """Side-effectful tools require approval; read-only tools do not."""
-    _agent, _model_settings, _tool_names, tool_approval = get_agent()
+    _agent, _tool_names, tool_approval = get_agent()
     for name, requires_approval in tool_approval.items():
         if name in EXPECTED_APPROVAL_TOOLS:
             assert requires_approval, (
@@ -99,7 +102,7 @@ def test_approval_tools_flagged():
 
 def test_history_processors_attached():
     """Agent has all four history processors for context governance (§16)."""
-    agent, _model_settings, _tool_names, _ = get_agent()
+    agent, _tool_names, _ = get_agent()
     processor_names = [p.__name__ for p in agent.history_processors]
     assert "inject_opening_context" in processor_names
     assert "truncate_tool_returns" in processor_names
@@ -109,26 +112,20 @@ def test_history_processors_attached():
 
 def test_web_search_ask_requires_approval():
     """web_search requires approval when web_policy.search is 'ask'."""
-    _agent, _model_settings, _tool_names, tool_approval = get_agent(
-        web_policy=WebPolicy(search="ask", fetch="allow"),
-    )
+    from co_cli.deps import CoConfig
+    import dataclasses
+    config = dataclasses.replace(CoConfig.from_settings(settings), web_policy=WebPolicy(search="ask", fetch="allow"))
+    _agent, _tool_names, tool_approval = get_agent(config=config)
     assert tool_approval["web_search"] is True
     assert tool_approval["web_fetch"] is False
 
 
-def test_all_approval_gates_precision_write_tools():
-    """all_approval=True forces deferred-only behavior for side-effectful tools."""
-    _, _, _, tool_approval = get_agent(all_approval=True)
-    assert tool_approval["run_shell_command"] is True
-    assert tool_approval["update_memory"] is True
-    assert tool_approval["append_memory"] is True
-
-
 def test_web_fetch_ask_requires_approval():
     """web_fetch requires approval when web_policy.fetch is 'ask'."""
-    _agent, _model_settings, _tool_names, tool_approval = get_agent(
-        web_policy=WebPolicy(search="allow", fetch="ask"),
-    )
+    from co_cli.deps import CoConfig
+    import dataclasses
+    config = dataclasses.replace(CoConfig.from_settings(settings), web_policy=WebPolicy(search="allow", fetch="ask"))
+    _agent, _tool_names, tool_approval = get_agent(config=config)
     assert tool_approval["web_search"] is False
     assert tool_approval["web_fetch"] is True
 
@@ -141,7 +138,7 @@ def test_instructions_reevaluated_on_turn2():
     channel is not stale.
     """
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     captured: list[str | None] = []
 
@@ -149,7 +146,7 @@ def test_instructions_reevaluated_on_turn2():
         captured.append(info.instructions)
         return ModelResponse(parts=[TextPart(content="ok")])
 
-    agent, _, _, _ = get_agent()
+    agent, _, _ = get_agent()
     agent._model = FunctionModel(capture_model)
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 

@@ -15,9 +15,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._orchestrate import run_turn
+from co_cli.context._orchestrate import run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from tests.test_orchestrate import RecordingFrontend, StaticEventAgent
 
 
@@ -37,7 +37,7 @@ def _make_result_with_usage(
 
 def _make_deps(
     *,
-    llm_provider: str = "ollama",
+    llm_provider: str = "ollama-openai",
     llm_num_ctx: int = 65536,
     ctx_warn_threshold: float = 0.85,
     ctx_overflow_threshold: float = 1.0,

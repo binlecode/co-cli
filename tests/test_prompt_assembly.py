@@ -8,14 +8,16 @@ Task-specific guidance: all 6 mindset files loaded statically into the soul bloc
 import time
 from pathlib import Path
 
-from co_cli._frontmatter import parse_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.prompts import assemble_prompt, _RULES_DIR
-from co_cli.prompts.personalities._composer import (
+from co_cli.prompts.personalities._validator import (
     REQUIRED_MINDSET_TASK_TYPES,
     VALID_PERSONALITIES,
+    validate_personality_files,
+)
+from co_cli.prompts.personalities._loader import (
     load_character_memories,
     load_soul_seed,
-    validate_personality_files,
 )
 
 
@@ -59,13 +61,6 @@ def test_prompt_has_no_memory():
 
 
 # --- Counter-steering ---
-
-
-def test_counter_steering_for_quirk_model():
-    """Model with known quirks gets counter-steering appended."""
-    prompt, manifest = assemble_prompt("ollama", model_name="qwen3-coder-next")
-    assert "## Model-Specific Guidance" in prompt
-    assert "counter_steering" in manifest.parts_loaded
 
 
 def test_counter_steering_absent_default():
@@ -156,7 +151,7 @@ def test_role_base_memories_exist_in_flat_memory_dir():
 
 def test_total_prompt_under_budget():
     """Static prompt with soul seed (including mindsets) stays under budget."""
-    from co_cli.prompts.personalities._composer import load_soul_mindsets
+    from co_cli.prompts.personalities._loader import load_soul_mindsets
     for name in VALID_PERSONALITIES:
         seed = load_soul_seed(name)
         memory_dir = Path.cwd() / ".co-cli" / "memory"

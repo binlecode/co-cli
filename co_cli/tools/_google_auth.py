@@ -3,15 +3,11 @@
 import os
 import shutil
 import subprocess
-from pathlib import Path
 from typing import Any
 
 import google.auth
 from google.oauth2.credentials import Credentials
-from co_cli.config import CONFIG_DIR
-
-GOOGLE_TOKEN_PATH = CONFIG_DIR / "google_token.json"
-ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+from co_cli.config import GOOGLE_TOKEN_PATH, ADC_PATH
 
 ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli._background import TaskRunner, TaskStorage, TaskStatus, _make_task_id
+from co_cli.tools._background import TaskRunner, TaskStorage, TaskStatus, _make_task_id
 
 
 # ---------------------------------------------------------------------------
@@ -299,9 +299,9 @@ def test_orphan_recovery(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_background_command(tmp_tasks_dir: Path):
     """Slash /background spawns a task and prints task_id."""
-    from co_cli._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     async with asyncio.timeout(10):
         runner = TaskRunner(
@@ -325,9 +325,9 @@ async def test_slash_background_command(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_tasks_command(tmp_tasks_dir: Path):
     """Slash /tasks lists tasks; filtering by status works."""
-    from co_cli._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     s = TaskStorage(tmp_tasks_dir)
     runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)
@@ -345,9 +345,9 @@ async def test_slash_tasks_command(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_cancel_command(tmp_tasks_dir: Path):
     """Slash /cancel cancels a running task."""
-    from co_cli._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     async with asyncio.timeout(10):
         runner = TaskRunner(
@@ -376,9 +376,9 @@ async def test_slash_cancel_command(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_status_with_task_id(tmp_tasks_dir: Path):
     """Slash /status <task_id> displays task metadata without error."""
-    from co_cli._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     s = TaskStorage(tmp_tasks_dir)
     runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)

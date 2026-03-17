@@ -1,63 +1,33 @@
-"""Functional tests for the pre-agent model dependency check gate."""
+"""Functional tests for provider and model availability checks."""
 
 import json
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-import pytest
-
-from co_cli._model_check import (
-    PreflightResult,
-    _check_llm_provider,
-    _check_model_availability,
-    run_model_check,
-)
-from co_cli.config import ModelEntry
-from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli.display import TerminalFrontend
-from co_cli._shell_backend import ShellBackend
+from co_cli.bootstrap._check import check_llm, check_model_availability
+from co_cli.config import ModelEntry, ROLE_REASONING
+from co_cli.deps import CoConfig
 
 
-# --- _check_llm_provider tests ---
+# --- check_llm tests ---
 
 
-def test_check_llm_provider_gemini_key_missing_returns_error() -> None:
-    result = _check_llm_provider(
-        llm_provider="gemini",
-        gemini_api_key=None,
-        ollama_host="http://localhost:11434",
-    )
+def test_check_llm_gemini_key_missing_returns_error() -> None:
+    result = check_llm(CoConfig(llm_provider="gemini", llm_api_key=None))
     assert result.status == "error"
     assert not result.ok
-    assert "GEMINI_API_KEY" in result.message
+    assert "LLM_API_KEY" in result.detail
 
 
-def test_check_llm_provider_non_gemini_key_missing_returns_warning() -> None:
-    # Non-Gemini provider with a reachable server (we need to avoid triggering the
-    # Ollama reachability check). Use a non-"ollama" provider string.
-    result = _check_llm_provider(
-        llm_provider="custom",
-        gemini_api_key=None,
-        ollama_host="http://localhost:11434",
-    )
-    assert result.status == "warning"
-    assert result.ok
-    assert "Gemini" in result.message
-
-
-def test_check_llm_provider_ollama_unreachable_returns_warning() -> None:
+def test_check_llm_ollama_unreachable_returns_warn() -> None:
     # Port 1 is reserved/unreachable — connection refused immediately.
-    result = _check_llm_provider(
-        llm_provider="ollama",
-        gemini_api_key=None,
-        ollama_host="http://localhost:1",
-    )
-    assert result.status == "warning"
+    result = check_llm(CoConfig(llm_provider="ollama-openai", llm_host="http://localhost:1"))
+    assert result.status == "warn"
     assert result.ok
 
 
-# --- _check_model_availability tests ---
+# --- check_model_availability tests ---
 
 
 def _make_ollama_server(models: list[str]) -> tuple[HTTPServer, int]:
@@ -84,27 +54,16 @@ def _make_ollama_server(models: list[str]) -> tuple[HTTPServer, int]:
     return server, port
 
 
-def test_check_model_availability_chain_advanced_returns_warning_with_updated_roles() -> None:
-    server, port = _make_ollama_server(["fallback-model"])
+def test_check_model_availability_all_available_returns_ok() -> None:
+    server, port = _make_ollama_server(["my-reasoning-model"])
     try:
-        role_models = {
-            "reasoning": [
-                ModelEntry(model="missing-head"),
-                ModelEntry(model="fallback-model"),
-            ]
-        }
-        result = _check_model_availability(
-            llm_provider="ollama",
-            ollama_host=f"http://127.0.0.1:{port}",
-            role_models=role_models,
-        )
-        assert result.status == "warning"
+        result = check_model_availability(CoConfig(
+            llm_provider="ollama-openai",
+            llm_host=f"http://127.0.0.1:{port}",
+            role_models={ROLE_REASONING: ModelEntry(model="my-reasoning-model")},
+        ))
+        assert result.status == "ok"
         assert result.ok
-        assert result.role_models is not None
-        assert result.role_models["reasoning"] == [ModelEntry(model="fallback-model")]
-        # Original role_models must be untouched (pure function)
-        assert len(role_models["reasoning"]) == 2
-        assert role_models["reasoning"][0].model == "missing-head"
     finally:
         server.shutdown()
 
@@ -112,66 +71,40 @@ def test_check_model_availability_chain_advanced_returns_warning_with_updated_ro
 def test_check_model_availability_no_reasoning_model_returns_error() -> None:
     server, port = _make_ollama_server(["other-model"])
     try:
-        result = _check_model_availability(
-            llm_provider="ollama",
-            ollama_host=f"http://127.0.0.1:{port}",
-            role_models={"reasoning": [ModelEntry(model="missing-model")]},
-        )
+        result = check_model_availability(CoConfig(
+            llm_provider="ollama-openai",
+            llm_host=f"http://127.0.0.1:{port}",
+            role_models={ROLE_REASONING: ModelEntry(model="missing-model")},
+        ))
         assert result.status == "error"
         assert not result.ok
-        assert "reasoning" in result.message.lower()
+        assert "reasoning" in result.detail.lower() or "missing-model" in result.detail
+    finally:
+        server.shutdown()
+
+
+def test_check_model_availability_optional_role_missing_returns_warn() -> None:
+    server, port = _make_ollama_server(["my-reasoning-model"])
+    try:
+        result = check_model_availability(CoConfig(
+            llm_provider="ollama-openai",
+            llm_host=f"http://127.0.0.1:{port}",
+            role_models={
+                ROLE_REASONING: ModelEntry(model="my-reasoning-model"),
+                "coding": ModelEntry(model="missing-coder"),
+            },
+        ))
+        assert result.status == "warn"
+        assert result.ok
+        assert "coding" in result.detail
     finally:
         server.shutdown()
 
 
 def test_check_model_availability_non_ollama_returns_ok() -> None:
-    result = _check_model_availability(
+    result = check_model_availability(CoConfig(
         llm_provider="gemini",
-        ollama_host="http://localhost:11434",
-        role_models={"reasoning": [ModelEntry(model="gemini-3-flash-preview")]},
-    )
+        role_models={ROLE_REASONING: ModelEntry(model="gemini-3-flash-preview")},
+    ))
     assert result.status == "ok"
     assert result.ok
-
-
-# --- run_model_check tests ---
-
-
-def test_run_model_check_error_result_raises_runtime_error() -> None:
-    # Gemini provider with no API key → _check_llm_provider returns error → RuntimeError
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(
-            llm_provider="gemini",
-            gemini_api_key=None,
-            role_models={"reasoning": [ModelEntry(model="gemini-3-flash-preview")]},
-        ),
-    )
-    frontend = TerminalFrontend()
-    with pytest.raises(RuntimeError):
-        run_model_check(deps, frontend)
-
-
-def test_run_model_check_applies_role_models_mutation_from_check() -> None:
-    server, port = _make_ollama_server(["fallback-model"])
-    try:
-        deps = CoDeps(
-            services=CoServices(shell=ShellBackend()),
-            config=CoConfig(
-                llm_provider="ollama",
-                gemini_api_key=None,
-                ollama_host=f"http://127.0.0.1:{port}",
-                role_models={
-                    "reasoning": [
-                        ModelEntry(model="missing-head"),
-                        ModelEntry(model="fallback-model"),
-                    ]
-                },
-            ),
-        )
-        frontend = TerminalFrontend()
-        run_model_check(deps, frontend)
-        # Mutation applied: deps.config.role_models updated to advanced chain
-        assert deps.config.role_models["reasoning"] == [ModelEntry(model="fallback-model")]
-    finally:
-        server.shutdown()

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic_ai import DeferredToolResults, ToolDenied
 
-from co_cli._exec_approvals import add_approval, derive_pattern, find_approved, load_approvals, update_last_used
+from co_cli.tools._exec_approvals import add_approval, derive_pattern, find_approved, load_approvals, update_last_used
 from co_cli.deps import CoDeps
 
 

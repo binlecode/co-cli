@@ -6,10 +6,10 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 def test_skill_grants_field() -> None:
@@ -33,3 +33,16 @@ def test_no_skill_grants_field_when_empty() -> None:
     result = asyncio.run(check_capabilities(ctx))
     assert result["skill_grants"] == []
     assert "Active skill grants" not in result["display"]
+
+
+def test_new_runtime_fields_present() -> None:
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+    result = asyncio.run(check_capabilities(ctx))
+    assert "tool_count" in result
+    assert "mcp_mode" in result
+    assert result["mcp_mode"] in ("mcp", "native-only")
+    assert isinstance(result["tool_count"], int)

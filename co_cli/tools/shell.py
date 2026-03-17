@@ -2,9 +2,9 @@ from typing import Any
 
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 
-from co_cli._tool_approvals import is_shell_command_persistently_approved
+from co_cli.tools._tool_approvals import is_shell_command_persistently_approved
 from co_cli.deps import CoDeps
-from co_cli._shell_policy import ShellDecision, evaluate_shell_command
+from co_cli.tools._shell_policy import ShellDecision, evaluate_shell_command
 from co_cli.tools._errors import terminal_error
 
 

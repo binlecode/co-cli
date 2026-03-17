@@ -10,7 +10,7 @@ from co_cli.tools.google_gmail import list_emails, search_emails, create_email_d
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 
 
 @dataclass

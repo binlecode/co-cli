@@ -1,7 +1,7 @@
 """Themed terminal display — console, semantic styles, display helpers."""
 
 import signal
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.live import Live
@@ -133,6 +133,57 @@ def prompt_selection(
                 return None
     except (EOFError, KeyboardInterrupt):
         return None
+
+
+# -- FrontendProtocol — abstraction for display + user interaction ----------
+
+
+@runtime_checkable
+class FrontendProtocol(Protocol):
+    """Display and interaction contract for the orchestration layer.
+
+    Implementations: TerminalFrontend (Rich/prompt-toolkit), RecordingFrontend (tests).
+    """
+
+    def on_text_delta(self, accumulated: str) -> None:
+        """Incremental Markdown render (called at throttled FPS)."""
+        ...
+
+    def on_text_commit(self, final: str) -> None:
+        """Final text render + tear down any live display."""
+        ...
+
+    def on_thinking_delta(self, accumulated: str) -> None:
+        """Thinking panel update (verbose mode only)."""
+        ...
+
+    def on_thinking_commit(self, final: str) -> None:
+        """Final thinking panel render."""
+        ...
+
+    def on_tool_call(self, name: str, args_display: str) -> None:
+        """Dim annotation when tool is invoked."""
+        ...
+
+    def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
+        """Panel for tool output."""
+        ...
+
+    def on_status(self, message: str) -> None:
+        """Status messages (e.g. 'Co is thinking...')."""
+        ...
+
+    def on_final_output(self, text: str) -> None:
+        """Fallback Markdown render when streaming didn't emit text."""
+        ...
+
+    def prompt_approval(self, description: str) -> str:
+        """Prompt user for approval. Returns 'y', 'n', or 'a'."""
+        ...
+
+    def cleanup(self) -> None:
+        """Exception/cancellation cleanup — restore terminal state."""
+        ...
 
 
 # -- TerminalFrontend (FrontendProtocol implementation) --------------------

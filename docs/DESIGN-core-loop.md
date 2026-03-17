@@ -58,7 +58,7 @@ graph LR
 
 Upstream dependencies:
 - startup has completed successfully
-- `agent`, `model_settings`, and `CoDeps` are ready
+- `agent` and `CoDeps` (with `services.model_registry`) are ready
 - session data and message history exist
 
 Downstream consumers:
@@ -113,7 +113,7 @@ flowchart TD
     ERR --> POST
     INT --> POST
 
-    POST{error and reasoning fallback?} -- yes --> CHAIN["_swap_model_inplace\nretry from pre_turn_history"]
+    POST{error?} -- yes --> CHAIN["run_turn_with_fallback\nwraps run_turn (no chain advance)"]
     POST -- no --> SIG
     CHAIN --> SIG
 
@@ -135,7 +135,7 @@ Failure and fallback inline:
 - provider/network failures are classified into reflection, backoff retry, or abort
 - budget exhaustion triggers one grace turn rather than a hard stop
 - interrupts patch dangling tool calls and recover to the prompt
-- same-provider reasoning fallback can swap to the next configured reasoning model
+- provider/network failures exit to `run_turn_with_fallback` (no chain-swap currently)
 
 ### Approval Flow
 
@@ -186,7 +186,7 @@ Failure and fallback inline:
 ### 4.1 Entry Conditions
 
 Before the first loop iteration:
-- startup has completed: `create_deps()` + `run_model_check()` + `get_agent()` + `run_bootstrap()`
+- startup has completed: `TaskRunner` + `create_deps()` + `get_agent(config=deps.config)` + inline wakeup steps (knowledge sync, session restore, skills report, integration health)
 - `message_history` is the active conversation history
 - `session_data` is loaded and held by `chat_loop()`
 - `deps.runtime.safety_state` will be reset at the start of every `run_turn()`
@@ -465,16 +465,7 @@ These guards are implemented through history processors and turn-scoped runtime 
 
 All retries are capped by `model_http_retries`.
 
-Reasoning-chain fallback:
-
-```text
-if run_turn() returns outcome="error" and another reasoning model exists:
-    pop failed reasoning model from head
-    _swap_model_inplace(agent, new_head_model, provider, settings)
-    retry run_turn once from pre_turn_history
-```
-
-The failed model is removed for the rest of the session. This is same-provider fallback, not multi-provider routing.
+Reasoning fallback: `run_turn_with_fallback()` in `co_cli/context/_orchestrate.py` wraps `run_turn()` — passes through to a single turn with no chain advancement.
 
 ### 4.13 Interrupt Recovery
 
@@ -504,8 +495,8 @@ After `run_turn()` returns:
 ```text
 message_history = turn_result.messages
 
-if outcome == "error" and reasoning chain has fallback:
-    perform reasoning-chain advance
+if outcome == "error":
+    run_turn_with_fallback handles the turn (currently no chain advance)
 
 finally:
     restore os.environ
@@ -558,7 +549,7 @@ Recovery behavior:
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell error threshold before intervention |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per older tool return |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for sliding-window compaction |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for ollama; primary model for gemini) | Summarization model chain for compaction |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for `ollama-openai`/`ollama-native`; primary model for `gemini`) | Summarization model chain for compaction |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL |
 
 ## 6. Files
@@ -566,15 +557,14 @@ Recovery behavior:
 | File | Purpose |
 |------|---------|
 | `co_cli/main.py` | `chat_loop()`, REPL dispatch, background compaction trigger |
-| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()`, interrupt patching |
+| `co_cli/context/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()`, interrupt patching |
 | `co_cli/tools/shell.py` | `run_shell_command()` inline DENY/ALLOW/persistent approval gate |
-| `co_cli/_shell_policy.py` | Shell DENY / ALLOW / REQUIRE_APPROVAL classification |
-| `co_cli/_approval.py` | Safe-prefix shell classification |
-| `co_cli/_exec_approvals.py` | Persistent shell approval pattern derivation and storage |
-| `co_cli/_tool_approvals.py` | Extracted approval helpers: session auto-approval, shell remembered-approval routing, approval formatting |
-| `co_cli/_history.py` | Compaction helpers and safety processors consulted during turns |
-| `co_cli/_commands.py` | Slash command handlers and skill dispatch |
-| `co_cli/_session.py` | Session persistence touched on every completed turn |
+| `co_cli/tools/_shell_policy.py` | Shell DENY / ALLOW / REQUIRE_APPROVAL classification |
+| `co_cli/tools/_approval.py` | Safe-prefix shell classification |
+| `co_cli/tools/_exec_approvals.py` | Persistent shell approval pattern derivation and storage |
+| `co_cli/tools/_tool_approvals.py` | Extracted approval helpers: session auto-approval, shell remembered-approval routing, approval formatting |
+| `co_cli/context/_history.py` | Compaction helpers and safety processors consulted during turns |
+| `co_cli/commands/_commands.py` | Slash command handlers and skill dispatch |
+| `co_cli/context/_session.py` | Session persistence touched on every completed turn |
 | `co_cli/display.py` | `TerminalFrontend` implementation |
 | `docs/DESIGN-system-bootstrap.md` | Startup work that must complete before the loop begins |
-| `docs/DESIGN-context-engineering.md` | Prompt composition, history processors, and compaction behavior |

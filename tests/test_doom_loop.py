@@ -16,10 +16,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._history import SafetyState, detect_safety_issues
+from co_cli.context._history import SafetyState, detect_safety_issues
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 
 
 def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
@@ -32,7 +32,7 @@ def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
         ),
         runtime=CoRuntimeState(safety_state=SafetyState()),
     )
-    agent, _, _, _ = get_agent()
+    agent, _, _ = get_agent()
     return RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
 

@@ -1,7 +1,7 @@
 """Memory consolidator — fact extraction and contradiction resolution.
 
 Provides LLM-driven consolidation planning for write-time memory lifecycle.
-Uses two-phase mini-agent approach: extract facts, then resolve against existing.
+Two-phase structured LLM extraction: extract facts, then resolve against existing.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_PATH = Path(__file__).parent / "prompts" / "agents" / "memory_consolidator.md"
+_PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_consolidator.md"
 
 
 class MemoryAction(BaseModel):
@@ -72,7 +72,7 @@ async def extract_facts(
 ) -> list[str]:
     """Extract normalized facts from a candidate memory string.
 
-    Calls an LLM mini-agent (Phase 1 prompt) to decompose the candidate into
+    Calls a structured LLM extraction (Phase 1 prompt) to decompose the candidate into
     discrete facts. Falls back to single-fact passthrough on timeout or error.
 
     Args:
@@ -121,7 +121,7 @@ async def resolve(
 ) -> ConsolidationPlan:
     """Resolve facts against existing memories to produce an action plan.
 
-    Calls an LLM mini-agent (Phase 2 prompt) to determine ADD/UPDATE/DELETE/NONE
+    Calls a structured LLM extraction (Phase 2 prompt) to determine ADD/UPDATE/DELETE/NONE
     for each candidate fact. Falls back to ADD plan on timeout or validation error.
 
     Args:

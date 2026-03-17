@@ -83,7 +83,7 @@ def assemble_prompt(
     4. Model-specific counter-steering (if quirks exist)
 
     Args:
-        provider: LLM provider name ("gemini", "ollama").
+        provider: LLM provider name ("gemini", "ollama-openai", "ollama-native").
         model_name: Normalized model identifier for quirk lookup.
         soul_seed: Seed + character base memories pre-combined by ``get_agent()``.
             Placed first so the model's opening context is the soul identity.
@@ -120,7 +120,7 @@ def assemble_prompt(
 
     # 4. Counter-steering (model-specific quirks)
     if model_name:
-        from co_cli.prompts.model_quirks import get_counter_steering
+        from co_cli.prompts.model_quirks._loader import get_counter_steering
 
         counter_steering = get_counter_steering(provider, model_name)
         if counter_steering:

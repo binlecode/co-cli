@@ -1,8 +1,4 @@
-"""Functional tests for memory lifecycle retention.
-
-save_memory() triggers cut-only retention when memory count hits capacity.
-Deterministic — no LLM calls.
-"""
+"""Functional tests for memory decay mechanics. Requires a running LLM provider."""
 
 import asyncio
 from datetime import datetime, timedelta, timezone
@@ -16,11 +12,11 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import get_agent
 from co_cli.config import Settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 def _seed_memory(
@@ -72,7 +68,7 @@ def test_decay_cut_triggers(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(save_memory(ctx, "Brand new important memory", tags=["test"]))
+    asyncio.run(asyncio.wait_for(save_memory(ctx, "Brand new important memory", tags=["test"]), timeout=60))
 
     after = list(memory_dir.glob("*.md"))
     assert len(after) <= max_count, f"Total {len(after)} > max {max_count}"
@@ -103,7 +99,7 @@ def test_decay_protected_survives(tmp_path: Path):
         )
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(save_memory(ctx, "New memory triggering decay", tags=["test"]))
+    asyncio.run(asyncio.wait_for(save_memory(ctx, "New memory triggering decay", tags=["test"]), timeout=60))
 
     after = list(memory_dir.glob("*.md"))
     remaining_ids: set[int] = set()
@@ -129,7 +125,7 @@ def test_decay_below_limit_no_trigger(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Memory number {i}", days_ago=10 - i)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(save_memory(ctx, "New memory within budget", tags=["test"]))
+    asyncio.run(asyncio.wait_for(save_memory(ctx, "New memory within budget", tags=["test"]), timeout=60))
 
     after = list(memory_dir.glob("*.md"))
     assert len(after) == seed_count + 1, (
@@ -139,24 +135,28 @@ def test_decay_below_limit_no_trigger(tmp_path: Path):
     assert not has_consolidated, "Decay triggered below capacity limit"
 
 
-def test_save_memory_writes_certainty_to_frontmatter(tmp_path: Path):
-    """save_memory writes certainty field to frontmatter on new save."""
+def test_save_memory_writes_low_certainty(tmp_path: Path):
+    """save_memory writes certainty=low to frontmatter for hedging content."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
 
     ctx = _make_ctx(memory_dir, max_count=50)
 
-    # Hedging content → low
-    asyncio.run(save_memory(ctx, "I think I prefer dark mode", tags=["preference"]))
+    asyncio.run(asyncio.wait_for(save_memory(ctx, "I think I prefer dark mode", tags=["preference"]), timeout=60))
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1
     fm = yaml.safe_load(files[0].read_text().split("---")[1])
     assert fm.get("certainty") == "low"
 
-    # Remove and test certain content
-    files[0].unlink()
 
-    asyncio.run(save_memory(ctx, "I always use dark mode", tags=["preference"]))
+def test_save_memory_writes_high_certainty(tmp_path: Path):
+    """save_memory writes certainty=high to frontmatter for definitive content."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
+
+    ctx = _make_ctx(memory_dir, max_count=50)
+
+    asyncio.run(asyncio.wait_for(save_memory(ctx, "I always use dark mode", tags=["preference"]), timeout=60))
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1
     fm = yaml.safe_load(files[0].read_text().split("---")[1])

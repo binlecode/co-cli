@@ -37,8 +37,10 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agents._factory import ResolvedModel
+from co_cli._model_factory import ResolvedModel
+from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
+from co_cli.tools._http_retry import parse_retry_after
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +227,7 @@ async def summarize_messages(
 
 async def _index_session_summary(
     messages: list[ModelMessage],
-    resolved_model: ResolvedModel,
+    resolved_model: "ResolvedModel",
     *,
     max_retries: int = 2,
     personality_active: bool = False,
@@ -247,26 +249,16 @@ async def _index_session_summary(
 
 async def _run_summarization_with_policy(
     messages: list[ModelMessage],
-    resolved_model: ResolvedModel,
+    resolved_model: "ResolvedModel",
     *,
     max_retries: int = 2,
     personality_active: bool = False,
 ) -> str | None:
-    """Run summarization with provider error classification and retry policy.
+    """Run summarization with retry on transient provider errors.
 
-    Wraps ``summarize_messages()`` with the same error policy used by
-    ``run_turn()`` in the main orchestration loop:
-
-    - 400 (REFLECT) → treated as retryable (no tools to reformulate).
-    - 429/5xx/network (BACKOFF_RETRY) → exponential backoff retry.
-    - 401/403/404 (ABORT) → immediate failure.
-
-    Returns summary text on success, ``None`` on terminal/exhausted failure.
-    Logs classified error details internally so callers can branch on
-    ``None`` without string parsing.
+    - 400/429/5xx/network → exponential backoff retry.
+    - 401/403/404 or retries exhausted → return None.
     """
-    from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
-
     retries_left = max_retries
     backoff_base = 1.0
 
@@ -276,26 +268,37 @@ async def _run_summarization_with_policy(
                 messages, resolved_model,
                 personality_active=personality_active,
             )
-        except (ModelHTTPError, ModelAPIError) as e:
-            action, msg, delay = classify_provider_error(e)
-
-            # REFLECT has no meaning for a tool-less summarizer — treat as
-            # retryable with the same backoff path as 429/5xx.
-            if action in (ProviderErrorAction.REFLECT, ProviderErrorAction.BACKOFF_RETRY):
-                if retries_left > 0:
-                    retries_left -= 1
-                    attempt = max_retries - retries_left
-                    wait = min(delay * (backoff_base ** attempt), 30.0)
-                    log.warning(
-                        "Summarization %s (attempt %d/%d), retrying in %.1fs: %s",
-                        action.value, attempt, max_retries, wait, msg,
-                    )
-                    await asyncio.sleep(wait)
-                    backoff_base *= 1.5
-                    continue
-
-            # ABORT or retries exhausted
-            log.warning("Summarization failed (%s): %s", action.value, msg)
+        except ModelHTTPError as e:
+            if e.status_code in (401, 403, 404):
+                log.warning("Summarization aborted (HTTP %d): %s", e.status_code, e.body)
+                return None
+            if retries_left > 0:
+                retries_left -= 1
+                attempt = max_retries - retries_left
+                delay = parse_retry_after(None, e.body) or (3.0 if e.status_code == 429 else 2.0)
+                wait = min(delay * (backoff_base ** attempt), 30.0)
+                log.warning(
+                    "Summarization HTTP %d (attempt %d/%d), retrying in %.1fs",
+                    e.status_code, attempt, max_retries, wait,
+                )
+                await asyncio.sleep(wait)
+                backoff_base *= 1.5
+                continue
+            log.warning("Summarization failed (HTTP %d, retries exhausted): %s", e.status_code, e.body)
+            return None
+        except ModelAPIError as e:
+            if retries_left > 0:
+                retries_left -= 1
+                attempt = max_retries - retries_left
+                wait = min(2.0 * (backoff_base ** attempt), 30.0)
+                log.warning(
+                    "Summarization network error (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt, max_retries, wait, e,
+                )
+                await asyncio.sleep(wait)
+                backoff_base *= 1.5
+                continue
+            log.warning("Summarization failed (network error): %s", e)
             return None
 
 
@@ -395,9 +398,12 @@ async def truncate_history_window(
     else:
         # Fall through to inline summarization
         fallback = ResolvedModel(model=ctx.model, settings=None)
-        rm = ctx.deps.services.model_registry.get("summarization", fallback)
+        resolved = (
+            ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, fallback)
+            if ctx.deps.services.model_registry else fallback
+        )
         summary_text = await _run_summarization_with_policy(
-            dropped, rm,
+            dropped, resolved,
             max_retries=ctx.deps.config.model_http_retries,
             personality_active=False,
         )
@@ -479,9 +485,12 @@ async def precompute_compaction(
     dropped = messages[head_end:tail_start]
 
     fallback = ResolvedModel(model=model, settings=None)
-    rm = deps.services.model_registry.get("summarization", fallback)
+    resolved = (
+        deps.services.model_registry.get(ROLE_SUMMARIZATION, fallback)
+        if deps.services.model_registry else fallback
+    )
     summary_text = await _run_summarization_with_policy(
-        dropped, rm,
+        dropped, resolved,
         max_retries=deps.config.model_http_retries,
         personality_active=False,
     )

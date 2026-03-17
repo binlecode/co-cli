@@ -24,9 +24,9 @@ from typing import Any, Literal
 import yaml
 from pydantic_ai import RunContext
 
-from co_cli._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.deps import CoDeps
-from co_cli._knowledge_index import SearchResult
+from co_cli.knowledge._index_store import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def _read_content_for_contradiction(r: SearchResult) -> str:
         return ""
     try:
         from pathlib import Path as _Path
-        from co_cli._frontmatter import parse_frontmatter as _parse_frontmatter
+        from co_cli.knowledge._frontmatter import parse_frontmatter as _parse_frontmatter
         raw = _Path(r.path).read_text(encoding="utf-8")
         _, body = _parse_frontmatter(raw)
         return body.strip().lower()
@@ -372,7 +372,7 @@ async def save_article(
                     created=fm2.get("created"),
                     updated=fm2.get("updated"),
                 )
-                from co_cli._chunker import chunk_text
+                from co_cli.knowledge._chunker import chunk_text
                 consolidated_chunks = chunk_text(
                     body2.strip(),
                     chunk_size=ctx.deps.config.knowledge_chunk_size,
@@ -428,7 +428,7 @@ async def save_article(
                 tags=" ".join(tags or []),
                 created=frontmatter["created"],
             )
-            from co_cli._chunker import chunk_text
+            from co_cli.knowledge._chunker import chunk_text
             article_chunks = chunk_text(
                 content,
                 chunk_size=ctx.deps.config.knowledge_chunk_size,

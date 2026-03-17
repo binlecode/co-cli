@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.files import (
     list_directory,
     read_file,
@@ -18,7 +18,7 @@ from co_cli.tools.files import (
 )
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 def _make_ctx(workspace: Path) -> RunContext:

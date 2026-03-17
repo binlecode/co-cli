@@ -11,8 +11,8 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._memory_lifecycle import persist_memory as _save_memory_impl
-from co_cli._shell_backend import ShellBackend
+from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import (
     _touch_memory,
     _dedup_pulled,
@@ -30,7 +30,7 @@ from co_cli.tools.memory import (
 # ---------------------------------------------------------------------------
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 def _make_ctx(
@@ -186,11 +186,11 @@ def test_list_memories_pagination(tmp_path: Path):
 def test_fts_freshness_after_consolidation(tmp_path: Path):
     """FTS returns updated content after a near-duplicate memory is consolidated."""
     import asyncio
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
     from co_cli.tools.memory import save_memory
 
     memory_dir = tmp_path / ".co-cli" / "memory"
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
 
     # Save initial memory
@@ -397,7 +397,7 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
 
 def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path):
     """After dedup-on-read deletes an older file, its FTS entry is also evicted."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -416,7 +416,7 @@ def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path):
         tags=["preference"], created=new_time,
     )
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
 
     # Both paths should be findable before recall
@@ -447,7 +447,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
     With only a 1-day age gap, the BM25 advantage of M1 overcomes the small recency
     edge of M2, demonstrating that composite scoring is BM25-driven, not decay-only.
     """
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -476,7 +476,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
         created=new_time,
     )
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5"))
     idx.sync_dir("memory", memory_dir)
 
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
@@ -494,7 +494,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
 
 def test_forget_evicts_from_fts(tmp_path: Path):
     """KnowledgeIndex.remove() evicts a deleted memory from FTS results."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
 
@@ -502,7 +502,7 @@ def test_forget_evicts_from_fts(tmp_path: Path):
     path = _write_memory(memory_dir, 1, "xyloquartz memory for forget eviction test")
 
     # Index it
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
 
     # Verify it's searchable
@@ -527,7 +527,7 @@ def test_forget_evicts_from_fts(tmp_path: Path):
 
 def test_search_memories_finds_saved_memories(tmp_path: Path):
     """search_memories returns saved memories with source='memory'."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    from co_cli.knowledge._index_store import KnowledgeIndex
 
     memory_dir = tmp_path / ".co-cli" / "memory"
 
@@ -536,7 +536,7 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
     _write_memory(memory_dir, 2, "User uses xyloquartz-search-test for all tests",
                   tags=["context"])
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
 
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")

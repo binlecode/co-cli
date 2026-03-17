@@ -107,11 +107,8 @@ graph TB
 | Startup and bootstrap | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
 | Main chat loop and turn state machine | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | Approval decision chain | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
-| Prompt assembly and context engineering | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) |
+| Prompt assembly and history processors | [DESIGN-system.md](DESIGN-system.md) §Agent Factory (this doc) |
 | Tool families and execution detail | [DESIGN-tools.md](DESIGN-tools.md) |
-| Skills lifecycle | [DESIGN-skills.md](DESIGN-skills.md) |
-| Memory lifecycle | [DESIGN-memory.md](DESIGN-memory.md) |
-| Knowledge retrieval and indexing | [DESIGN-knowledge.md](DESIGN-knowledge.md) |
 
 Upstream dependencies:
 - `config.py` settings and provider/model configuration
@@ -184,17 +181,17 @@ Rules:
 
 ### 4.1 Agent Factory
 
-`get_agent(all_approval, web_policy, mcp_servers, personality, model_name?, config: CoConfig | None = None) -> (agent, model_settings, tool_names, tool_approval)` selects the LLM model, assembles the system prompt, registers tools with approval policies, and registers MCP toolsets.
+`get_agent(*, config: CoConfig | None = None) -> (agent, tool_names, tool_approval)` calls `prepare_provider()` for provider-level side effects, assembles the system prompt, creates the agent with `model=None` (per-call model passing), registers tools with approval policies, and registers MCP toolsets.
 
 ```text
-get_agent(...) -> (agent, model_settings, tool_names, tool_approval):
-    _cfg = config if config is not None else settings
-    resolve model from _cfg.llm_provider
+get_agent(*, config: CoConfig | None = None) -> (agent, tool_names, tool_approval):
+    _cfg = config if config is not None else CoConfig.from_settings(settings)
+    prepare_provider(provider_name, _cfg.llm_api_key)  # Gemini env-var injection, etc.
     load soul seed/examples/mindsets for active personality
-    build system_prompt via assemble_prompt(provider, model_name, soul_seed, soul_examples)
+    build system_prompt via _build_system_prompt(provider, model_name, _cfg)
 
     create Agent with:
-        model, deps_type=CoDeps, system_prompt, retries=tool_retries
+        model=None, deps_type=CoDeps, system_prompt, retries=tool_retries
         output_type = [str, DeferredToolRequests]
         history_processors = [inject_opening_context, truncate_tool_returns,
                                detect_safety_issues, truncate_history_window]
@@ -216,7 +213,7 @@ History processors are attached at agent construction and run before every model
 | `detect_safety_issues` | Runtime guards: doom-loop detection, shell-error-streak detection |
 | `truncate_history_window` | Applies sliding-window compaction for long sessions |
 
-See [DESIGN-context-engineering.md](DESIGN-context-engineering.md) for processor ordering and [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider/model configuration.
+See [DESIGN-core-loop.md](DESIGN-core-loop.md) for turn execution ordering and [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider/model configuration.
 
 ### 4.2 `CoDeps` Runtime Contract
 
@@ -261,9 +258,9 @@ The agent's effective capability is the interaction of native tools, skill overl
 |----------|-------|----------|
 | Workspace and files | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` | Read auto; writes deferred |
 | Shell | `run_shell_command` | Policy-classified: DENY / ALLOW / REQUIRE_APPROVAL |
-| Web | `web_search`, `web_fetch` | Policy-driven by `web_policy`; deferred when `all_approval=True` |
-| Memory and knowledge | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories`, `search_knowledge`, `save_article`, `read_article_detail` | Save deferred; others conditional |
-| Personal data: Obsidian | `list_notes`, `read_note` | Conditional |
+| Web | `web_search`, `web_fetch` | Policy-driven by `web_policy.search` / `web_policy.fetch` (`allow` or `ask`) |
+| Memory and knowledge | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories`, `search_knowledge`, `save_article`, `recall_article`, `read_article_detail` | Save deferred; others conditional |
+| Personal data: Obsidian | `list_notes`, `search_notes`, `read_note` | Conditional |
 | Personal data: Google | `search_drive_files`, `read_drive_file`, `list_emails`, `search_emails`, `create_email_draft`, `list_calendar_events`, `search_calendar_events` | Draft deferred; reads conditional |
 | Background tasks | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` | Start deferred; status/cancel/list auto |
 | Session utilities | `todo_write`, `todo_read`, `check_capabilities` | Conditional for todo; auto for capabilities |
@@ -274,10 +271,11 @@ The agent's effective capability is the interaction of native tools, skill overl
 | Sub-agent | Tool surface | Notes |
 |-----------|-------------|-------|
 | Coder | `list_directory`, `read_file`, `find_in_files` | Read-only workspace; no shell, no web |
-| Research | `web_search`, `web_fetch` | Web-only; no memory writes, no shell |
+| Research | `web_search`, `web_fetch` | Web-only; no memory writes, no shell. Requires `web_policy.search == "allow"` and `web_policy.fetch == "allow"` — raises `ModelRetry` otherwise |
 | Analysis | `search_knowledge`, `search_drive_files` | Knowledge and Drive read; no shell, no direct web |
 
-See [DESIGN-tools-delegation.md](DESIGN-tools-delegation.md) for sub-agent details.
+See [DESIGN-tools.md](DESIGN-tools.md) §Delegation for sub-agent details.
+
 
 #### MCP Extension Plane
 
@@ -289,13 +287,13 @@ See [DESIGN-tools-delegation.md](DESIGN-tools-delegation.md) for sub-agent detai
 
 MCP tools inherit the same orchestration and approval model as native tools. Per-server `approval` config (`"auto"` or `"never"`) controls the default trust tier.
 
-See [DESIGN-mcp-client.md](DESIGN-mcp-client.md) for transport and approval inheritance.
+See [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers for transport and approval inheritance.
 
 #### Skills As Capability Overlays
 
 Skills are user-invocable slash-command workflows that expand into LLM turns. They orchestrate existing tools and may temporarily grant auto-approval for listed tools during the turn they run. They do not add new primitive capabilities.
 
-See [DESIGN-skills.md](DESIGN-skills.md) for loader, dispatch, and security details.
+See [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Skills Load and [DESIGN-core-loop.md](DESIGN-core-loop.md) §Pre-Turn Setup for loader, dispatch, and security details.
 
 #### Approval Boundary
 
@@ -303,11 +301,10 @@ The approval tier determines whether a tool executes immediately or requires use
 
 | Category | Approval | Rationale |
 |----------|----------|-----------|
-| Side-effectful always | Always deferred | `create_email_draft`, `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task` |
+| Side-effectful always | Always deferred | `create_email_draft`, `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task`, `update_memory`, `append_memory` |
 | Shell conditional | Policy inside tool | `run_shell_command`: DENY -> terminal error, ALLOW -> execute, else approval |
-| Conditional via `all_approval` | Deferred only when `all_approval=True` | `update_memory`, `append_memory`, `todo_write`, `todo_read`, and read-heavy personal-data tools |
-| Always auto-execute | Never deferred | `check_capabilities`, `delegate_*`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel |
-| Web tools | Policy and eval driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask`; `all_approval=True` still forces defer |
+| Always auto-execute | Never deferred | `check_capabilities`, `delegate_*`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Web tools | Policy driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask` |
 | MCP tools with `approval=auto` | Deferred | External tools default to requiring approval |
 | MCP tools with `approval=never` | Auto | Explicitly trusted by user config |
 
@@ -341,7 +338,7 @@ These subsystems are structurally part of the system capability surface but own 
 
 Memory:
 - Files are YAML-frontmatter markdown in `.co-cli/memory/`
-- runtime injection happens through `inject_opening_context`; personalization asset design lives in [DESIGN-personalization.md](DESIGN-personalization.md)
+- runtime injection happens through `inject_opening_context`
 - write path runs signal detection, dedup, consolidation, persistence, and retention
 
 Knowledge:
@@ -350,7 +347,7 @@ Knowledge:
 - primary retrieval entrypoint is `search_knowledge`
 - backend degradation chain is `hybrid -> fts5 -> grep`
 
-See [DESIGN-memory.md](DESIGN-memory.md) and [DESIGN-knowledge.md](DESIGN-knowledge.md).
+See [DESIGN-tools.md](DESIGN-tools.md) §Memory and §Knowledge for per-tool detail.
 
 ### 4.6 Session, Frontend, And CLI Structural Contracts
 
@@ -378,11 +375,11 @@ Frontend contract:
 | `cleanup()` | Exception teardown |
 
 CLI command surface:
-- `co chat`
-- `co status`
-- `co tail`
-- `co logs`
-- `co traces`
+- `co chat [--theme dark|light] [--verbose]` — start interactive REPL; `--verbose` streams LLM thinking tokens
+- `co config` — show system configuration and integration health (pre-agent check)
+- `co tail [--trace ID] [--tools-only] [--models-only] [--poll N] [--no-follow] [--last N] [--verbose]` — real-time OTel span stream
+- `co logs` — launch Datasette dashboard for ad-hoc trace SQL queries
+- `co traces` — generate and open static HTML nested span tree viewer
 
 REPL slash-command surface:
 - `/help`, `/clear`, `/new`, `/status`, `/tools`, `/history`, `/compact`
@@ -406,7 +403,7 @@ Security model:
 2. Confirmation: human approval for high-impact side effects
 3. Environment sanitization: allowlist-only env vars, safe pagers, process-group cleanup on timeout
 4. Input validation: path traversal protection and integration-specific scoping
-5. Security posture checks: file permissions and wildcard approval warnings in `_status.py`
+5. Security posture checks: file permissions and wildcard approval warnings in `bootstrap/_render_status.py`
 
 Concurrency model:
 - model turns are single-threaded
@@ -421,13 +418,13 @@ System-relevant settings called out here:
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Main provider selection |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (ollama) or reasoning-only (gemini) | Role model chains |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Main provider selection (`ollama-openai`, `ollama-native`, or `gemini`) |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`/`ollama-native`) or reasoning-only (`gemini`) | Role model chains |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Provider/network retry budget per turn |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` approval policy |
 | `web_policy.fetch` | `CO_CLI_WEB_POLICY_FETCH` | `"allow"` | `web_fetch` approval policy |
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | Configured retrieval backend before fallback resolution |
+| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"hybrid"` | Configured retrieval backend before fallback resolution |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session restore TTL |
 
 ## 6. Files
@@ -436,17 +433,13 @@ System-relevant settings called out here:
 |------|---------|
 | `co_cli/agent.py` | `get_agent()`, prompt assembly wiring, native tool and MCP registration |
 | `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
-| `co_cli/main.py` | `create_deps()`, `chat_loop()`, startup assembly, REPL |
-| `co_cli/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
-| `co_cli/_history.py` | History processors and compaction |
-| `co_cli/_startup_check.py` | `check_startup()` — provider/model preflight gate used during bootstrap |
-| `co_cli/_model_check.py` | Backward-compat shim: `PreflightResult`, private check helpers — used only by `_status.py` |
-| `co_cli/_commands.py` | Slash commands and skill dispatch surface |
+| `co_cli/main.py` | `chat_loop()`, startup assembly, REPL |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `check_integration_health()` |
+| `co_cli/context/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
+| `co_cli/context/_history.py` | History processors and compaction |
+| `co_cli/commands/_commands.py` | Slash commands and skill dispatch surface |
 | `co_cli/config.py` | Settings model and precedence rules |
 | `co_cli/tools/` | Native tool families |
 | `docs/DESIGN-system-bootstrap.md` | Canonical startup and bootstrap flow |
 | `docs/DESIGN-core-loop.md` | Main loop and per-turn runtime state machine |
 | `docs/DESIGN-tools.md` | Tool subsystem details |
-| `docs/DESIGN-skills.md` | Skill subsystem details |
-| `docs/DESIGN-memory.md` | Memory subsystem details |
-| `docs/DESIGN-knowledge.md` | Knowledge subsystem details |

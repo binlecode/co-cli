@@ -12,20 +12,18 @@ from typing import Any
 
 import yaml
 
-from co_cli.agent import get_agent
-from co_cli.config import settings
+from co_cli.config import settings, ROLE_REASONING
+from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._memory_consolidator import ConsolidationPlan, MemoryAction, build_alias_map
-from co_cli._memory_lifecycle import apply_plan_atomically, persist_memory
-from co_cli._shell_backend import ShellBackend
-from co_cli._signal_analyzer import SignalResult
-from co_cli.main import _handle_signal
+from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction, build_alias_map
+from co_cli.memory._lifecycle import apply_plan_atomically, persist_memory
+from co_cli.tools._shell_backend import ShellBackend
+from co_cli.memory._signal_detector import SignalResult, handle_signal as _handle_signal
 from co_cli.tools.memory import MemoryEntry, _load_memories
 
-# Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
-
 _CONFIG = CoConfig.from_settings(settings)
+_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +240,7 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path):
         persist_memory(
             deps, "Unique xylophone-fallback-test memory",
             ["preference"], None,
-            on_failure="add", model=_AGENT.model,
+            on_failure="add", model=_RESOLVED_MODEL,
         )
     )
 
@@ -270,7 +268,7 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
         persist_memory(
             deps, "Signal candidate xylophone-skip-test memory",
             None, None,
-            on_failure="skip", model=_AGENT.model,
+            on_failure="skip", model=_RESOLVED_MODEL,
         )
     )
 

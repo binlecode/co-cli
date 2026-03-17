@@ -9,9 +9,9 @@ import pytest
 
 from pydantic_ai import ApprovalRequired, ModelRetry
 
-from co_cli._exec_approvals import add_approval
+from co_cli.tools._exec_approvals import add_approval
 from co_cli.tools.shell import run_shell_command
-from co_cli._shell_backend import ShellBackend
+from co_cli.tools._shell_backend import ShellBackend
 from co_cli.deps import CoDeps, CoServices, CoConfig
 
 

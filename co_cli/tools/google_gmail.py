@@ -9,7 +9,7 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._errors import terminal_error, http_status_code
+from co_cli.tools._errors import terminal_error, handle_google_api_error
 
 
 _GMAIL_NOT_CONFIGURED = (
@@ -17,24 +17,6 @@ _GMAIL_NOT_CONFIGURED = (
     "Set google_credentials_path in settings or run: "
     "gcloud auth application-default login"
 )
-
-
-def _handle_gmail_error(e: Exception) -> dict[str, Any]:
-    """Route Gmail API errors with Gmail-specific guidance."""
-    status = http_status_code(e)
-    if status == 401:
-        return terminal_error("Gmail: authentication error (401). Check credentials.")
-    if status == 403:
-        raise ModelRetry(
-            "Gmail: access forbidden (403). Check API enablement and Gmail OAuth scopes."
-        )
-    if status == 404:
-        raise ModelRetry("Gmail: message or draft not found (404). Verify IDs and retry.")
-    if status == 429:
-        raise ModelRetry("Gmail: rate limited (429). Wait a moment and retry.")
-    if status and status >= 500:
-        raise ModelRetry(f"Gmail: server error ({status}). Retry shortly.")
-    raise ModelRetry(f"Gmail: API error ({e}). Check credentials, API enablement, and quota.")
 
 
 def _format_messages(service, message_ids: list[dict]) -> str:
@@ -110,7 +92,7 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_gmail_error(e)
+        return handle_google_api_error("Gmail", e)
 
 
 def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
@@ -153,7 +135,7 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_gmail_error(e)
+        return handle_google_api_error("Gmail", e)
 
 
 def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str | dict[str, Any]:
@@ -185,4 +167,4 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
     except ModelRetry:
         raise
     except Exception as e:
-        return _handle_gmail_error(e)
+        return handle_google_api_error("Gmail", e)

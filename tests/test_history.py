@@ -19,25 +19,24 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._history import (
+from co_cli.context._history import (
     _SUMMARIZER_SYSTEM_PROMPT,
     summarize_messages,
     truncate_tool_returns,
     truncate_history_window,
 )
 from co_cli.agent import get_agent
-from co_cli.agents._factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings as _settings
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.config import settings as _settings, ROLE_REASONING
+from co_cli.deps import CoConfig
+from tests._ollama import ensure_ollama_warm
 
-# Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
-
-_CONFIG_FOR_REGISTRY = type("Config", (), {
-    "role_models": {k: list(v) for k, v in _settings.role_models.items()},
-    "llm_provider": _settings.llm_provider,
-    "ollama_host": _settings.ollama_host,
-})()
-_REGISTRY = ModelRegistry.from_config(_CONFIG_FOR_REGISTRY)
+_CONFIG = CoConfig.from_settings(_settings)
+_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
+_SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
+_RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
+_AGENT, _, _ = get_agent()
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +62,7 @@ def _real_run_context(model, *, max_history_messages=40, tool_output_trim_chars=
     """Build a real RunContext for history processor tests."""
     from pydantic_ai._run_context import RunContext
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
+    from co_cli.tools._shell_backend import ShellBackend
 
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
@@ -236,8 +235,11 @@ async def test_summarize_messages():
         _user("How do I install it on Ubuntu?"),
         _assistant("Run: sudo apt-get install docker-ce docker-ce-cli containerd.io"),
     ]
+    fallback = ResolvedModel(model=None, settings=None)
+    resolved = _REGISTRY.get("summarization", fallback)
+    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
-        summary = await summarize_messages(msgs, ResolvedModel(model=_AGENT.model, settings=None))
+        summary = await summarize_messages(msgs, resolved)
     assert isinstance(summary, str)
     assert len(summary) > 10
     assert "docker" in summary.lower() or "container" in summary.lower()
@@ -268,7 +270,8 @@ async def test_truncate_history_window_triggers_compaction():
     ]
     assert len(msgs) == 10
 
-    ctx = _real_run_context(_AGENT.model, max_history_messages=6)
+    ctx = _real_run_context(_RESOLVED_MODEL, max_history_messages=6)
+    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await truncate_history_window(ctx, msgs)
 
@@ -299,10 +302,10 @@ async def test_compact_produces_two_message_history():
     Requires a running LLM provider.
     """
     from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli._shell_backend import ShellBackend
-    from co_cli._commands import dispatch, CommandContext
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.commands._commands import dispatch, CommandContext
 
-    _, _, tool_names, _ = get_agent()
+    _, tool_names, _ = get_agent()
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=CoConfig(session_id="test-compact"),
@@ -323,6 +326,7 @@ async def test_compact_produces_two_message_history():
         tool_names=tool_names,
     )
 
+    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         handled, new_history = await dispatch("/compact", ctx)
     assert handled is True
@@ -403,8 +407,11 @@ async def test_summarize_messages_personality_active():
         _user("I love how you explain things with analogies, keep doing that!"),
         _assistant("Thanks! I'll keep using analogies — they help make abstract concepts concrete."),
     ]
+    fallback = ResolvedModel(model=None, settings=None)
+    resolved = _REGISTRY.get("summarization", fallback)
+    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
-        summary = await summarize_messages(msgs, ResolvedModel(model=_AGENT.model, settings=None), personality_active=True)
+        summary = await summarize_messages(msgs, resolved, personality_active=True)
     assert isinstance(summary, str)
     assert len(summary) > 10
 
@@ -417,7 +424,7 @@ async def test_summarize_messages_personality_active():
 @pytest.mark.asyncio
 async def test_compaction_excludes_personality_addendum() -> None:
     """With personality_active=False, _PERSONALITY_COMPACTION_ADDENDUM is not in the prompt."""
-    from co_cli._history import _PERSONALITY_COMPACTION_ADDENDUM, summarize_messages
+    from co_cli.context._history import _PERSONALITY_COMPACTION_ADDENDUM, summarize_messages
 
     captured: list[str] = []
 

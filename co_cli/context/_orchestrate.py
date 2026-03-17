@@ -1,14 +1,15 @@
 """Orchestration state machine — extracted from main.py for testability.
 
-Contains FrontendProtocol, TurnResult, run_turn(), and supporting private
-functions. The chat loop in main.py delegates all LLM interaction here.
+Contains TurnResult, run_turn(), and supporting private functions.
+FrontendProtocol lives in co_cli/display.py. The chat loop in main.py
+delegates all LLM interaction here.
 """
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal
 
 from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, FinishReason
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
@@ -28,8 +29,9 @@ TurnOutcome = Literal["continue", "stop", "error", "compact"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-from co_cli._provider_errors import ProviderErrorAction, classify_provider_error
-from co_cli._tool_approvals import (
+from co_cli.display import FrontendProtocol
+from co_cli.tools._http_retry import parse_retry_after
+from co_cli.tools._tool_approvals import (
     decode_tool_args,
     format_tool_call_description,
     is_session_auto_approved,
@@ -48,59 +50,6 @@ def _check_skill_grant(tool_name: str, deps: CoDeps) -> bool:
         )
         return True
     return False
-
-
-# ---------------------------------------------------------------------------
-# FrontendProtocol — abstraction for display + user interaction
-# ---------------------------------------------------------------------------
-
-
-@runtime_checkable
-class FrontendProtocol(Protocol):
-    """Display and interaction contract for the orchestration layer.
-
-    Implementations: TerminalFrontend (Rich/prompt-toolkit), RecordingFrontend (tests).
-    """
-
-    def on_text_delta(self, accumulated: str) -> None:
-        """Incremental Markdown render (called at throttled FPS)."""
-        ...
-
-    def on_text_commit(self, final: str) -> None:
-        """Final text render + tear down any live display."""
-        ...
-
-    def on_thinking_delta(self, accumulated: str) -> None:
-        """Thinking panel update (verbose mode only)."""
-        ...
-
-    def on_thinking_commit(self, final: str) -> None:
-        """Final thinking panel render."""
-        ...
-
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        """Dim annotation when tool is invoked."""
-        ...
-
-    def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
-        """Panel for tool output."""
-        ...
-
-    def on_status(self, message: str) -> None:
-        """Status messages (e.g. 'Co is thinking...')."""
-        ...
-
-    def on_final_output(self, text: str) -> None:
-        """Fallback Markdown render when streaming didn't emit text."""
-        ...
-
-    def prompt_approval(self, description: str) -> str:
-        """Prompt user for approval. Returns 'y', 'n', or 'a'."""
-        ...
-
-    def cleanup(self) -> None:
-        """Exception/cancellation cleanup — restore terminal state."""
-        ...
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +265,7 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
                          message_history: list, model_settings: dict,
                          usage_limits: UsageLimits, usage=None,
                          deferred_tool_results=None, verbose: bool,
-                         frontend: FrontendProtocol):
+                         frontend: FrontendProtocol, model: Any = None):
     """Stream agent events, dispatching to frontend callbacks.
 
     Returns (result, streamed_text).
@@ -332,6 +281,7 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
             usage_limits=usage_limits,
             usage=usage,
             deferred_tool_results=deferred_tool_results,
+            model=model,
         ):
             if isinstance(event, PartStartEvent):
                 if _handle_part_start_event(
@@ -457,6 +407,7 @@ async def run_turn(
     deps: CoDeps,
     message_history: list,
     model_settings: dict,
+    model: Any = None,
     max_request_limit: int = 50,
     http_retries: int = 2,
     verbose: bool = False,
@@ -473,7 +424,7 @@ async def run_turn(
       "compact"  — reserved for compaction triggers
     """
     # Reset turn-scoped safety state (doom loop + shell reflection tracking)
-    from co_cli._history import SafetyState
+    from co_cli.context._history import SafetyState
     deps.runtime.safety_state = SafetyState()
 
     result = None
@@ -490,7 +441,7 @@ async def run_turn(
                 agent, user_input=current_input, deps=deps,
                 message_history=message_history, model_settings=model_settings,
                 usage_limits=turn_limits, usage=turn_usage,
-                verbose=verbose, frontend=frontend,
+                verbose=verbose, frontend=frontend, model=model,
             )
             turn_usage = result.usage()
 
@@ -502,7 +453,7 @@ async def run_turn(
                     message_history=result.all_messages(),
                     model_settings=model_settings, usage_limits=turn_limits,
                     usage=turn_usage, deferred_tool_results=approvals,
-                    verbose=verbose, frontend=frontend,
+                    verbose=verbose, frontend=frontend, model=model,
                 )
                 turn_usage = result.usage()
 
@@ -517,10 +468,10 @@ async def run_turn(
                     "Use /continue to extend."
                 )
 
-            # Context overflow detection: Ollama truncates silently when input_tokens > num_ctx.
-            # Gemini enforces its own hard limit via HTTP 400 — skip check for Gemini.
+            # Context overflow detection: both Ollama providers truncate silently when
+            # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
             # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-            if turn_usage is not None and deps.config.llm_provider == "ollama" and deps.config.llm_num_ctx > 0:
+            if turn_usage is not None and deps.config.llm_provider in ("ollama-openai", "ollama-native") and deps.config.llm_num_ctx > 0:
                 ratio = turn_usage.input_tokens / deps.config.llm_num_ctx
                 with _TRACER.start_as_current_span("ctx_overflow_check") as span:
                     span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)
@@ -567,7 +518,7 @@ async def run_turn(
                     message_history=msgs + [grace_msg],
                     model_settings=model_settings,
                     usage_limits=UsageLimits(request_limit=1),
-                    verbose=verbose, frontend=frontend,
+                    verbose=verbose, frontend=frontend, model=model,
                 )
                 message_history = grace_result.all_messages()
                 if not grace_streamed and isinstance(grace_result.output, str):
@@ -595,16 +546,16 @@ async def run_turn(
                 )
 
         except ModelHTTPError as e:
-            action, msg, delay = classify_provider_error(e)
+            code = e.status_code
 
-            if action == ProviderErrorAction.REFLECT and http_retries_left > 0:
+            if code == 400 and http_retries_left > 0:
                 http_retries_left -= 1
                 attempt = http_retries - http_retries_left
                 frontend.on_status(
-                    f"Tool call rejected (HTTP {e.status_code}), "
+                    f"Tool call rejected (HTTP {code}), "
                     f"reflecting to model... ({attempt}/{http_retries})"
                 )
-                await asyncio.sleep(delay)
+                await asyncio.sleep(0.5)
                 reflection = ModelRequest(parts=[UserPromptPart(
                     content=(
                         "Your previous tool call was rejected by the "
@@ -616,19 +567,20 @@ async def run_turn(
                 current_input = None
                 continue
 
-            if action == ProviderErrorAction.BACKOFF_RETRY and http_retries_left > 0:
+            if (code == 429 or code >= 500) and http_retries_left > 0:
                 http_retries_left -= 1
                 attempt = http_retries - http_retries_left
+                delay = parse_retry_after(None, e.body) or (3.0 if code == 429 else 2.0)
                 wait = min(delay * (backoff_base ** attempt), 30.0)
                 frontend.on_status(
-                    f"{msg}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                    f"Provider error (HTTP {code}), retrying in {wait:.0f}s... ({attempt}/{http_retries})"
                 )
                 await asyncio.sleep(wait)
                 backoff_base *= 1.5
                 continue
 
-            # ABORT or retries exhausted
-            frontend.on_status(f"Provider error: {msg}")
+            # 401/403/404, unknown 4xx, or retries exhausted
+            frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
             msgs = result.all_messages() if result else message_history
             return TurnResult(
                 messages=msgs,
@@ -640,14 +592,13 @@ async def run_turn(
             )
 
         except ModelAPIError as e:
-            # Network/timeout — use backoff path
+            # Network/timeout — backoff retry
             if http_retries_left > 0:
                 http_retries_left -= 1
                 attempt = http_retries - http_retries_left
-                _, msg, delay = classify_provider_error(e)
-                wait = min(delay * (backoff_base ** attempt), 30.0)
+                wait = min(2.0 * (backoff_base ** attempt), 30.0)
                 frontend.on_status(
-                    f"{msg}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                    f"Network error: {e}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
                 )
                 await asyncio.sleep(wait)
                 backoff_base *= 1.5
@@ -685,3 +636,35 @@ async def run_turn(
                 streamed_text=streamed_text,
                 outcome="continue",
             )
+
+
+async def run_turn_with_fallback(
+    *,
+    agent: Any,
+    user_input: str,
+    deps: "CoDeps",
+    message_history: list,
+    verbose: bool,
+    frontend: "FrontendProtocol",
+) -> "TurnResult":
+    """Run a turn, resolving the model from the registry for per-call model passing."""
+    from co_cli.config import ROLE_REASONING
+    from co_cli._model_factory import ResolvedModel
+    _none = ResolvedModel(model=None, settings=None)
+    resolved = (
+        deps.services.model_registry.get(ROLE_REASONING, _none)
+        if deps.services.model_registry else _none
+    )
+    frontend.on_status("Co is thinking...")
+    return await run_turn(
+        agent=agent,
+        user_input=user_input,
+        deps=deps,
+        message_history=message_history,
+        model=resolved.model,
+        model_settings=resolved.settings,
+        max_request_limit=deps.config.max_request_limit,
+        http_retries=deps.config.model_http_retries,
+        verbose=verbose,
+        frontend=frontend,
+    )

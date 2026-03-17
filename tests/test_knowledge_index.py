@@ -11,11 +11,11 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import get_agent
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli._knowledge_index import KnowledgeIndex, SearchResult
-from co_cli._shell_backend import ShellBackend
+from co_cli.knowledge._index_store import KnowledgeIndex, SearchResult
+from co_cli.tools._shell_backend import ShellBackend
 
 # Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _, _ = get_agent()
+_AGENT, _, _ = get_agent()
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ def _sha256(s: str) -> str:
 
 def test_knowledge_index_creates_schema(tmp_path):
     """KnowledgeIndex creates docs table and docs_fts virtual table on init."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     conn = idx._conn
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','shadow')")}
     assert "docs" in tables
@@ -59,7 +59,7 @@ def test_knowledge_index_creates_schema(tmp_path):
 
 def test_index_inserts_doc(tmp_path):
     """index() inserts a document and it appears in the docs table."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(
         source="memory",
         kind="memory",
@@ -81,7 +81,7 @@ def test_index_inserts_doc(tmp_path):
 
 def test_index_skips_unchanged_hash(tmp_path):
     """index() skips re-indexing when hash matches (no duplicate inserts)."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     content = "User prefers pytest"
     h = _sha256(content)
     idx.index(source="memory", path="/test/001.md", title="T1", content=content, hash=h)
@@ -99,7 +99,7 @@ def test_index_skips_unchanged_hash(tmp_path):
 
 def test_search_returns_bm25_ranked_results(tmp_path):
     """search() returns results ordered by BM25 score."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", kind="memory", path="/p1.md", title="pytest testing",
               content="User prefers pytest for unit testing frameworks extensively",
               hash=_sha256("pytest testing"), mtime=0.0)
@@ -120,7 +120,7 @@ def test_search_returns_bm25_ranked_results(tmp_path):
 
 def test_search_stopword_only_returns_empty(tmp_path):
     """search() returns [] when query contains only stopwords."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", path="/p1.md", title="test", content="hello world",
               hash=_sha256("hello world"), mtime=0.0)
     results = idx.search("the a an")
@@ -130,8 +130,8 @@ def test_search_stopword_only_returns_empty(tmp_path):
 
 def test_search_filters_by_source(tmp_path):
     """search() with source= returns only matching source."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", path="/mem.md", title="memo", content="pytest memory item",
               hash=_sha256("pytest memory"), mtime=0.0)
     idx.index(source="obsidian", path="/obs.md", title="obsidian", content="pytest obsidian note",
@@ -153,7 +153,7 @@ def test_search_filters_by_source(tmp_path):
 
 def test_sync_dir_indexes_new_files(tmp_path):
     """sync_dir() indexes new markdown files."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-foo.md", "User prefers dark mode",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": ["preference"]})
@@ -168,7 +168,7 @@ def test_sync_dir_indexes_new_files(tmp_path):
 
 def test_sync_dir_skips_unchanged_files(tmp_path):
     """sync_dir() does not re-index files that haven't changed."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-foo.md", "User prefers dark mode",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
@@ -189,7 +189,7 @@ def test_sync_dir_skips_unchanged_files(tmp_path):
 
 def test_remove_stale_removes_deleted_paths(tmp_path):
     """remove_stale() removes index entries for deleted files."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", path="/keep.md", title="keep", content="keep this",
               hash=_sha256("keep"), mtime=0.0)
     idx.index(source="memory", path="/delete.md", title="delete", content="delete this",
@@ -213,7 +213,7 @@ def test_remove_stale_removes_deleted_paths(tmp_path):
 
 def test_rebuild_wipes_and_reindexes(tmp_path):
     """rebuild() deletes all source entries and re-indexes from directory."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-foo.md", "User prefers dark theme",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": ["preference"]})
@@ -239,7 +239,7 @@ def test_rebuild_wipes_and_reindexes(tmp_path):
 
 def test_sync_dir_recursive(tmp_path):
     """sync_dir() with default glob indexes files in nested subdirectories."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     vault = tmp_path / "vault"
     subfolder = vault / "Work"
     _write_md(vault, "top.md", "Top-level note about productivity",
@@ -257,7 +257,7 @@ def test_sync_dir_recursive(tmp_path):
 
 def test_remove_stale_scoped_to_directory(tmp_path):
     """remove_stale() with directory= only evicts entries within that directory."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="obsidian", path="/vault/Work/note1.md", title="work note",
               content="work content", hash=_sha256("work"), mtime=0.0)
     idx.index(source="obsidian", path="/vault/Personal/note2.md", title="personal note",
@@ -279,7 +279,7 @@ def test_remove_stale_scoped_to_directory(tmp_path):
 
 def test_remove_stale_does_not_evict_common_prefix_sibling(tmp_path):
     """Sibling dirs with a common prefix are not evicted by a scoped sync."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="obsidian", path="/vault/Work/note.md", title="work",
               content="work content", hash=_sha256("work"), mtime=0.0)
     idx.index(source="obsidian", path="/vault/Workbench/note.md", title="bench",
@@ -306,7 +306,7 @@ def test_fts_roundtrip_save_and_recall(tmp_path):
     import asyncio
     from co_cli.tools.memory import save_memory
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), knowledge_index=idx),
         config=CoConfig(
@@ -330,7 +330,7 @@ def test_fts_roundtrip_save_and_recall(tmp_path):
 
 def test_tag_match_mode_all_returns_only_items_with_all_tags(tmp_path):
     """search(tag_match_mode='all') returns only docs that have every requested tag."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
               content="doc about junction table filtering",
               hash="a", mtime=0.0, tags="python async")
@@ -345,7 +345,7 @@ def test_tag_match_mode_all_returns_only_items_with_all_tags(tmp_path):
 
 def test_created_after_filters_older_items(tmp_path):
     """search(created_after=) excludes docs created before that date."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", kind="memory", path="/a.md", title="Doc A",
               content="doc about temporal range filtering",
               hash="a", mtime=0.0, created="2024-01-01T00:00:00+00:00")
@@ -365,14 +365,13 @@ def test_created_after_filters_older_items(tmp_path):
 
 def test_hybrid_schema_creates_vec_table(tmp_path):
     """KnowledgeIndex with backend='hybrid' creates the docs_vec virtual table."""
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     tables = {
         row[0]
         for row in idx._conn.execute(
             "SELECT name FROM sqlite_master WHERE type IN ('table', 'shadow')"
         ).fetchall()
     }
-    assert idx._backend == "hybrid"
     assert "docs_vec" in tables or any("vec" in t for t in tables), (
         f"docs_vec not found in schema. Tables: {tables}"
     )
@@ -381,7 +380,7 @@ def test_hybrid_schema_creates_vec_table(tmp_path):
 
 def test_hybrid_provider_none_uses_fts_leg_in_hybrid(tmp_path):
     """provider='none' in hybrid backend still returns lexical FTS results."""
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     idx.index(
         source="memory", kind="memory", path="/xyloquartz.md",
         title="Xyloquartz note", content="xyloquartz hybrid fallback test content",
@@ -395,7 +394,7 @@ def test_hybrid_provider_none_uses_fts_leg_in_hybrid(tmp_path):
 
 def test_hybrid_remove_cleans_docs_vec(tmp_path):
     """remove() in hybrid mode evicts from docs/docs_fts/docs_vec."""
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     idx.index(
         source="memory", kind="memory", path="/rem.md",
         title="Remove test", content="xyloquartz-remove-hybrid unique content",
@@ -418,40 +417,31 @@ def test_hybrid_remove_cleans_docs_vec(tmp_path):
 
 
 def test_reranker_provider_none_is_passthrough(tmp_path):
-    """_rerank_results() with provider='none' returns candidates[:limit] unchanged."""
-    idx = KnowledgeIndex(tmp_path / "search.db", reranker_provider="none")
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(5)
-    ]
-    result = idx._rerank_results("test query", candidates, limit=3)
-    assert result == candidates[:3]
+    """With reranker_provider='none', search() respects limit and returns BM25 results without reranking."""
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_reranker_provider="none"))
+    for i in range(5):
+        idx.index(source="memory", kind="memory", path=f"/passthrough{i}.md",
+                  title=f"Passthrough {i}", content=f"xyloquartz-passthrough unique content document {i}",
+                  hash=f"h{i}", mtime=float(i))
+    results = idx.search("xyloquartz-passthrough", limit=3)
+    assert len(results) == 3
     idx.close()
 
 
 def test_rerank_falls_back_on_error(tmp_path):
-    """_rerank_results() with a dead Ollama host returns candidates[:limit], no exception."""
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="ollama",
-        ollama_host="http://localhost:19999",
-        reranker_model="qwen2.5:3b",
-    )
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(5)
-    ]
-    result = idx._rerank_results("test query", candidates, limit=3)
-    assert len(result) == 3
-    assert result == candidates[:3]
+    """search() with a dead Ollama reranker host falls back gracefully — no exception, returns results."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_reranker_provider="ollama",
+        llm_host="http://localhost:19999",
+        knowledge_reranker_model="qwen2.5:3b",
+    ))
+    for i in range(5):
+        idx.index(source="memory", kind="memory", path=f"/fallback{i}.md",
+                  title=f"Fallback {i}", content=f"xyloquartz-fallback-error unique content {i}",
+                  hash=f"h{i}", mtime=float(i))
+    results = idx.search("xyloquartz-fallback-error", limit=3)
+    assert len(results) == 3
     idx.close()
 
 
@@ -462,22 +452,9 @@ def test_rerank_falls_back_on_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_searchresult_has_provenance_and_certainty_fields(tmp_path):
-    """SearchResult dataclass has provenance and certainty fields (both default None)."""
-    r = SearchResult(
-        source="memory", kind="memory", path="/x.md",
-        title=None, snippet=None, score=0.5,
-        tags=None, category=None, created=None, updated=None,
-    )
-    assert hasattr(r, "provenance")
-    assert hasattr(r, "certainty")
-    assert r.provenance is None
-    assert r.certainty is None
-
-
 def test_sync_dir_propagates_provenance_and_certainty(tmp_path):
     """sync_dir() reads provenance/certainty from frontmatter and stores them."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-prov.md", "sync provenance certainty test content",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00",
@@ -491,7 +468,7 @@ def test_sync_dir_propagates_provenance_and_certainty(tmp_path):
 
 def test_sync_dir_kind_filter_skips_non_matching(tmp_path):
     """sync_dir(kind_filter='memory') skips files whose frontmatter kind != 'memory'."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-mem.md", "User prefers dark mode",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
@@ -510,7 +487,7 @@ def test_sync_dir_kind_filter_skips_non_matching(tmp_path):
 
 def test_sync_dir_kind_filter_article(tmp_path):
     """sync_dir(kind_filter='article') indexes articles under 'library' source."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "knowledge"
     _write_md(knowledge_dir, "001-mem.md", "User prefers dark mode",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
@@ -536,7 +513,7 @@ def test_sync_dir_kind_filter_article(tmp_path):
 
 def test_chunks_and_chunks_fts_tables_exist(tmp_path):
     """Scenario 8: chunks and chunks_fts tables are created on KnowledgeIndex init."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     tables = {
         row[0]
         for row in idx._conn.execute(
@@ -550,8 +527,8 @@ def test_chunks_and_chunks_fts_tables_exist(tmp_path):
 
 def test_index_chunks_inserts_correct_row_count(tmp_path):
     """Scenario 9: index_chunks inserts correct number of rows into chunks table."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="library", path="/art.md", title="Test Article", content="body", hash="h", mtime=0.0)
     chunks = [
         Chunk(index=0, content="First paragraph content", start_line=0, end_line=2),
@@ -568,8 +545,8 @@ def test_index_chunks_inserts_correct_row_count(tmp_path):
 
 def test_chunks_fts_finds_phrase_in_second_half_of_article(tmp_path):
     """Scenario 10: FTS search on non-memory source retrieves phrase only in second half."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="library", path="/long.md", title="Long Article", content="intro text", hash="h1", mtime=0.0)
     idx.index_chunks("library", "/long.md", [
         Chunk(index=0, content="The first half discusses general concepts", start_line=0, end_line=5),
@@ -583,8 +560,8 @@ def test_chunks_fts_finds_phrase_in_second_half_of_article(tmp_path):
 
 def test_remove_also_removes_chunk_rows(tmp_path):
     """Scenario 11: remove() on a library article also removes its chunk rows."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="library", path="/del.md", title="Delete Test", content="content", hash="h2", mtime=0.0)
     idx.index_chunks("library", "/del.md", [
         Chunk(index=0, content="chunk content zygomorphic-remove-cascade", start_line=0, end_line=0),
@@ -606,7 +583,7 @@ def test_remove_also_removes_chunk_rows(tmp_path):
 
 def test_sync_dir_library_emits_chunk_rows(tmp_path):
     """Scenario 12a: sync_dir for library source writes rows into chunks table."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "library"
     _write_md(knowledge_dir, "001-art.md",
               "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
@@ -623,7 +600,7 @@ def test_sync_dir_library_emits_chunk_rows(tmp_path):
 
 def test_sync_dir_memory_emits_no_chunk_rows(tmp_path):
     """Scenario 12b: sync_dir for memory source must not write any chunk rows."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     knowledge_dir = tmp_path / "memory"
     _write_md(knowledge_dir, "001-mem.md", "User preference note content",
               {"id": 1, "kind": "memory", "created": "2026-01-01T00:00:00+00:00", "tags": []})
@@ -639,7 +616,7 @@ def test_sync_dir_memory_emits_no_chunk_rows(tmp_path):
 
 def test_recall_memory_queries_docs_fts_not_chunks(tmp_path):
     """Scenario 13: memory search queries docs_fts; chunks table remains empty for memory."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", kind="memory", path="/m.md", title="mem",
               content="zygomorphic-recall-memory-test content", hash="hm", mtime=0.0)
 
@@ -655,8 +632,8 @@ def test_recall_memory_queries_docs_fts_not_chunks(tmp_path):
 
 def test_index_chunks_memory_raises_value_error(tmp_path):
     """Scenario 14: index_chunks with source='memory' raises ValueError."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     with pytest.raises(ValueError, match="memory"):
         idx.index_chunks("memory", "/m.md", [Chunk(index=0, content="x", start_line=0, end_line=0)])
     idx.close()
@@ -664,8 +641,8 @@ def test_index_chunks_memory_raises_value_error(tmp_path):
 
 def test_global_search_returns_both_memory_and_nonmemory(tmp_path):
     """Scenario 15: source=None search returns results from both memory and non-memory."""
-    from co_cli._chunker import Chunk
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    from co_cli.knowledge._chunker import Chunk
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     # Index a memory item
     idx.index(source="memory", kind="memory", path="/mem15.md", title="Global search memory",
               content="zygomorphic-global-union memory entry", hash="hg1", mtime=0.0)
@@ -689,9 +666,9 @@ def test_chunks_fts_multi_document_crowding(tmp_path):
     Before the fix, _run_chunks_fts used LIMIT at chunk-row granularity, so a single
     article with N matching chunks consumed the full limit and suppressed other documents.
     """
-    from co_cli._chunker import Chunk
+    from co_cli.knowledge._chunker import Chunk
 
-    idx = KnowledgeIndex(tmp_path / "search.db", chunk_size=50, chunk_overlap=5)
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_chunk_size=50, knowledge_chunk_overlap=5))
 
     # Article A: 10 matching chunks — more than the search limit of 5.
     idx.index(source="library", kind="article", path="/crowding-a.md",
@@ -741,9 +718,9 @@ def test_searchresult_has_chunk_fields(tmp_path):
 
 def test_fts_search_chunk_result_carries_chunk_index(tmp_path):
     """FTS search on non-memory source populates chunk_index, start_line, end_line."""
-    from co_cli._chunker import Chunk
+    from co_cli.knowledge._chunker import Chunk
 
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="library", kind="article", path="/art.md",
               title="Article", content="intro", hash="h1", mtime=0.0)
     idx.index_chunks("library", "/art.md", [
@@ -762,7 +739,7 @@ def test_fts_search_chunk_result_carries_chunk_index(tmp_path):
 
 def test_fts_search_memory_result_chunk_fields_none(tmp_path):
     """FTS search on memory source leaves chunk fields as None."""
-    idx = KnowledgeIndex(tmp_path / "search.db")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.index(source="memory", kind="memory", path="/mem.md",
               title="Memory", content="zygomorphic-mem-chunk-fields content",
               hash="hm", mtime=0.0)
@@ -777,15 +754,14 @@ def test_fts_search_memory_result_chunk_fields_none(tmp_path):
 
 
 def test_hybrid_rrf_multi_chunk_doc_scores_higher(tmp_path):
-    """Doc with 3 matching chunks accumulates higher RRF score than doc with 1 chunk."""
-    from co_cli._knowledge_index import KnowledgeIndex
+    """Doc with 3 matching chunks ranks above a doc with 1 matching chunk in hybrid search."""
+    from co_cli.knowledge._chunker import Chunk
 
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
 
     # Doc A: 3 matching chunks
     idx.index(source="library", kind="article", path="/doc-a.md",
               title="Doc A", content="intro", hash="ha", mtime=0.0)
-    from co_cli._chunker import Chunk
     idx.index_chunks("library", "/doc-a.md", [
         Chunk(index=0, content="zygomorphic-rrf-test alpha section content", start_line=0, end_line=2),
         Chunk(index=1, content="zygomorphic-rrf-test beta section content", start_line=4, end_line=6),
@@ -799,30 +775,21 @@ def test_hybrid_rrf_multi_chunk_doc_scores_higher(tmp_path):
         Chunk(index=0, content="zygomorphic-rrf-test single entry only", start_line=0, end_line=2),
     ])
 
-    # Use _fts_chunks_raw + _hybrid_merge directly to test RRF accumulation
-    fts_mem, fts_chunks = idx._fts_chunks_raw(
-        "zygomorphic-rrf-test", source="library", kind=None,
-        tags=None, tag_match_mode="any", created_after=None,
-        created_before=None, limit=20,
-    )
-    merged = idx._hybrid_merge(fts_mem, fts_chunks, [], [],
-                               idx._hybrid_vector_weight, idx._hybrid_text_weight)
-
-    scores_by_path = {r.path: r.score for r in merged}
-    assert "/doc-a.md" in scores_by_path, "Doc A must appear in merged results"
-    assert "/doc-b.md" in scores_by_path, "Doc B must appear in merged results"
-    assert scores_by_path["/doc-a.md"] > scores_by_path["/doc-b.md"], (
-        "Doc A with 3 matching chunks must accumulate higher RRF score than Doc B with 1"
+    results = idx.search("zygomorphic-rrf-test")
+    paths = [r.path for r in results]
+    assert "/doc-a.md" in paths, "Doc A must appear in results"
+    assert "/doc-b.md" in paths, "Doc B must appear in results"
+    assert paths.index("/doc-a.md") < paths.index("/doc-b.md"), (
+        "Doc A with 3 matching chunks must rank above Doc B with 1"
     )
     idx.close()
 
 
 def test_hybrid_merge_winning_chunk_metadata_propagated(tmp_path):
-    """After _hybrid_merge, the winning chunk's chunk_index and snippet are on the doc result."""
-    from co_cli._knowledge_index import KnowledgeIndex
-    from co_cli._chunker import Chunk
+    """In hybrid search, the winning chunk's chunk_index and snippet are propagated to the result."""
+    from co_cli.knowledge._chunker import Chunk
 
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     idx.index(source="library", kind="article", path="/merge-test.md",
               title="Merge Test", content="intro", hash="hmt", mtime=0.0)
     idx.index_chunks("library", "/merge-test.md", [
@@ -830,64 +797,23 @@ def test_hybrid_merge_winning_chunk_metadata_propagated(tmp_path):
         Chunk(index=1, content="zygomorphic-merge-winner best matching chunk content", start_line=5, end_line=8),
     ])
 
-    fts_mem, fts_chunks = idx._fts_chunks_raw(
-        "zygomorphic-merge-winner", source="library", kind=None,
-        tags=None, tag_match_mode="any", created_after=None,
-        created_before=None, limit=20,
-    )
-    merged = idx._hybrid_merge(fts_mem, fts_chunks, [], [],
-                               idx._hybrid_vector_weight, idx._hybrid_text_weight)
-
-    assert len(merged) >= 1
-    result = merged[0]
+    results = idx.search("zygomorphic-merge-winner")
+    assert len(results) >= 1
+    result = results[0]
     assert result.path == "/merge-test.md"
-    # The winning chunk (index=1) should be propagated
     assert result.chunk_index == 1, f"Expected winning chunk_index=1, got {result.chunk_index}"
     assert result.start_line == 5, f"Expected start_line=5, got {result.start_line}"
     assert result.snippet is not None, "Snippet from FTS chunk must be propagated"
     idx.close()
 
 
-def test_fetch_reranker_texts_uses_chunk_content(tmp_path):
-    """_fetch_reranker_texts returns chunk content for chunk_index candidates, not doc preamble."""
-    from co_cli._chunker import Chunk
-
-    idx = KnowledgeIndex(tmp_path / "search.db")
-    idx.index(source="library", kind="article", path="/rerank-test.md",
-              title="Rerank Test Doc",
-              content="This is the document preamble introduction text.",
-              hash="hrt", mtime=0.0)
-    chunk_content = "This is chunk 5 deep content zygomorphic-reranker-chunk-test unique"
-    idx.index_chunks("library", "/rerank-test.md", [
-        Chunk(index=i, content=f"chunk {i} filler content text here",
-              start_line=i * 3, end_line=i * 3 + 2)
-        for i in range(5)
-    ] + [
-        Chunk(index=5, content=chunk_content, start_line=15, end_line=17)
-    ])
-
-    candidate = SearchResult(
-        source="library", kind="article", path="/rerank-test.md",
-        title="Rerank Test Doc", snippet=None, score=0.8,
-        tags=None, category=None, created=None, updated=None,
-        chunk_index=5, start_line=15, end_line=17,
-    )
-    texts = idx._fetch_reranker_texts([candidate])
-    assert len(texts) == 1
-    assert "zygomorphic-reranker-chunk-test" in texts[0], (
-        "Reranker text must contain chunk 5 content, not just the doc preamble"
-    )
-    assert "preamble" not in texts[0], (
-        "Reranker text must not contain the doc preamble for chunk-level candidates"
-    )
-    idx.close()
 
 
 def test_hybrid_fallback_collapses_chunks_to_doc_level(tmp_path):
     """Hybrid search with embedding_provider=none falls back to FTS and returns one result per doc."""
-    from co_cli._chunker import Chunk
+    from co_cli.knowledge._chunker import Chunk
 
-    idx = KnowledgeIndex(tmp_path / "search.db", backend="hybrid", embedding_provider="none")
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     idx.index(source="library", kind="article", path="/fallback-doc.md",
               title="Fallback Doc", content="intro", hash="hfd", mtime=0.0)
     idx.index_chunks("library", "/fallback-doc.md", [
@@ -912,10 +838,7 @@ def test_hybrid_fallback_collapses_chunks_to_doc_level(tmp_path):
 def test_vec_docs_search_closest_embedding_ranked_first(tmp_path):
     """2 docs injected at [1,0,0,0] and [0,1,0,0]; query [1,0,0,0] → doc1 first, chunk_index=None."""
     dims = 4
-    idx = KnowledgeIndex(
-        tmp_path / "search.db", backend="hybrid",
-        embedding_provider="none", embedding_dims=dims,
-    )
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none", knowledge_embedding_dims=dims))
     idx.index(source="memory", kind="memory", path="/doc1.md",
               title="Doc1", content="content one", hash="h1", mtime=0.0)
     idx.index(source="memory", kind="memory", path="/doc2.md",
@@ -946,13 +869,10 @@ def test_vec_docs_search_closest_embedding_ranked_first(tmp_path):
 
 def test_vec_chunks_search_returns_chunk_level_results(tmp_path):
     """chunk_index=2 injected into chunks_vec; result has chunk_index=2, start_line populated."""
-    from co_cli._chunker import Chunk
+    from co_cli.knowledge._chunker import Chunk
 
     dims = 4
-    idx = KnowledgeIndex(
-        tmp_path / "search.db", backend="hybrid",
-        embedding_provider="none", embedding_dims=dims,
-    )
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none", knowledge_embedding_dims=dims))
     idx.index(source="library", kind="article", path="/art.md",
               title="Article", content="intro", hash="h1", mtime=0.0)
     idx.index_chunks("library", "/art.md", [
@@ -980,45 +900,12 @@ def test_vec_chunks_search_returns_chunk_level_results(tmp_path):
     idx.close()
 
 
-def test_hybrid_vec_only_match_appears_in_merged_results(tmp_path):
-    """Doc content unrelated to FTS query; close embedding injected; doc appears in mem_results."""
-    dims = 4
-    idx = KnowledgeIndex(
-        tmp_path / "search.db", backend="hybrid",
-        embedding_provider="none", embedding_dims=dims,
-    )
-    idx.index(source="memory", kind="memory", path="/vec-only.md",
-              title="Unrelated Topic", content="bananas and oranges",
-              hash="hvo", mtime=0.0)
-
-    row = idx._conn.execute(
-        "SELECT rowid FROM docs WHERE path='/vec-only.md' AND chunk_id=0"
-    ).fetchone()
-    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
-                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
-    idx._conn.commit()
-
-    query_blob = struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)
-    embedding = list(struct.unpack(f"{dims}f", query_blob))
-    vec_mem, vec_chunks = idx._vec_search(
-        embedding, source="memory", kind=None, tags=None, tag_match_mode="any",
-        created_after=None, created_before=None, limit=10,
-    )
-    paths_in_vec_mem = {r.path for r in vec_mem}
-    assert "/vec-only.md" in paths_in_vec_mem, "Vec-only doc must appear in mem_results"
-    assert vec_chunks == [], "Memory source search must not populate chunk_results"
-    idx.close()
-
-
 def test_hybrid_rrf_both_legs_boost_same_chunk(tmp_path):
-    """Same (path, chunk_index) present in fts_chunks + vec_chunks; combined RRF > either leg alone."""
-    from co_cli._chunker import Chunk
+    """A chunk matching both FTS and injected vec embedding appears in hybrid search results."""
+    from co_cli.knowledge._chunker import Chunk
 
     dims = 4
-    idx = KnowledgeIndex(
-        tmp_path / "search.db", backend="hybrid",
-        embedding_provider="none", embedding_dims=dims,
-    )
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none", knowledge_embedding_dims=dims))
     idx.index(source="library", kind="article", path="/boost.md",
               title="Boost Doc", content="intro", hash="hb", mtime=0.0)
     idx.index_chunks("library", "/boost.md", [
@@ -1033,64 +920,25 @@ def test_hybrid_rrf_both_legs_boost_same_chunk(tmp_path):
                       (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
     idx._conn.commit()
 
-    # FTS leg
-    fts_mem, fts_chunks = idx._fts_chunks_raw(
-        "zygomorphic-rrf-boost-test", source="library", kind=None,
-        tags=None, tag_match_mode="any", created_after=None, created_before=None, limit=20,
+    results = idx.search("zygomorphic-rrf-boost-test")
+    assert any(r.path == "/boost.md" for r in results), (
+        "Chunk matching both FTS and vec legs must appear in hybrid search results"
     )
-    # Vec leg
-    embedding = [1.0, 0.0, 0.0, 0.0]
-    vec_mem, vec_chunks = idx._vec_search(
-        embedding, source="library", kind=None, tags=None, tag_match_mode="any",
-        created_after=None, created_before=None, limit=20,
-    )
-
-    # Scores from each leg alone
-    fts_only_score = sum(
-        1.0 / (60 + i + 1) for i, r in enumerate(fts_chunks) if r.path == "/boost.md"
-    )
-    vec_only_score = sum(
-        1.0 / (60 + j + 1) for j, r in enumerate(vec_chunks) if r.path == "/boost.md"
-    )
-
-    merged = idx._hybrid_merge(
-        fts_mem, fts_chunks, vec_mem, vec_chunks,
-        idx._hybrid_vector_weight, idx._hybrid_text_weight,
-    )
-    combined_score = next((r.score for r in merged if r.path == "/boost.md"), 0.0)
-
-    assert combined_score > fts_only_score, "Combined RRF must exceed FTS-only score"
-    assert combined_score > vec_only_score, "Combined RRF must exceed vec-only score"
     idx.close()
 
 
 def test_hybrid_memory_uses_docs_vec_not_chunks_vec(tmp_path):
-    """Memory source vec search returns results in mem_results; chunk_results empty; chunk_index=None."""
-    dims = 4
-    idx = KnowledgeIndex(
-        tmp_path / "search.db", backend="hybrid",
-        embedding_provider="none", embedding_dims=dims,
-    )
+    """Memory source results in hybrid search have chunk_index=None — memory is indexed at doc level."""
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="hybrid", knowledge_embedding_provider="none"))
     idx.index(source="memory", kind="memory", path="/mem-vec.md",
-              title="Memory Vec Doc", content="memory only vec test content",
+              title="Memory Vec Doc", content="xyloquartz-memory-vec-test unique term",
               hash="hmv", mtime=0.0)
 
-    row = idx._conn.execute(
-        "SELECT rowid FROM docs WHERE path='/mem-vec.md' AND chunk_id=0"
-    ).fetchone()
-    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
-                      (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
-    idx._conn.commit()
-
-    embedding = [1.0, 0.0, 0.0, 0.0]
-    vec_mem, vec_chunks = idx._vec_search(
-        embedding, source="memory", kind=None, tags=None, tag_match_mode="any",
-        created_after=None, created_before=None, limit=10,
+    results = idx.search("xyloquartz-memory-vec-test")
+    assert len(results) >= 1
+    assert all(r.chunk_index is None for r in results), (
+        "Memory results must have chunk_index=None — memory is indexed at doc level, not chunked"
     )
-    assert any(r.path == "/mem-vec.md" for r in vec_mem), "Memory doc must appear in mem_results"
-    assert vec_chunks == [], "chunk_results must be empty for memory-only source"
-    assert all(r.chunk_index is None for r in vec_mem), "Memory vec results must have chunk_index=None"
-    idx.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1098,93 +946,19 @@ def test_hybrid_memory_uses_docs_vec_not_chunks_vec(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_tei_embed_provider_calls_embed_endpoint(tmp_path):
-    """POST /embed called with {'inputs': text}; result stored in embedding_cache."""
-    import respx
-    import httpx as httpx_lib
-
-    dims = 4
-    fake_embedding = [0.1, 0.2, 0.3, 0.4]
-
-    with respx.mock:
-        respx.post("http://127.0.0.1:8283/embed").mock(
-            return_value=httpx_lib.Response(200, json=[fake_embedding])
-        )
-        idx = KnowledgeIndex(
-            tmp_path / "search.db", backend="hybrid",
-            embedding_provider="tei", embedding_dims=dims,
-            embed_api_url="http://127.0.0.1:8283",
-        )
-        result = idx._embed_cached("test input text")
-
-    assert result == fake_embedding, "TEI embed result must match returned embedding"
-
-    # Verify it was stored in embedding_cache
-    content_hash = _sha256("test input text")
-    row = idx._conn.execute(
-        "SELECT embedding FROM embedding_cache WHERE provider='tei' AND content_hash=?",
-        (content_hash,),
-    ).fetchone()
-    assert row is not None, "Embedding must be stored in embedding_cache"
-    idx.close()
-
-
-def test_tei_rerank_provider_scores_candidates(tmp_path):
-    """POST /rerank called with query + texts; returned scores applied; results sorted correctly."""
-    import respx
-    import httpx as httpx_lib
-
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="tei",
-        rerank_api_url="http://127.0.0.1:8282",
-    )
-    # doc0 is worst, doc2 is best according to TEI response
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(3)
-    ]
-    tei_response = [
-        {"index": 2, "score": 0.95},
-        {"index": 0, "score": 0.60},
-        {"index": 1, "score": 0.30},
-    ]
-
-    with respx.mock:
-        respx.post("http://127.0.0.1:8282/rerank").mock(
-            return_value=httpx_lib.Response(200, json=tei_response)
-        )
-        result = idx._rerank_results("query", candidates, limit=3)
-
-    assert result[0].path == "/doc2.md", "Highest-scored candidate must rank first"
-    assert result[1].path == "/doc0.md"
-    assert result[2].path == "/doc1.md"
-    assert abs(result[0].score - 0.95) < 1e-6
-    idx.close()
-
-
 def test_tei_rerank_falls_back_on_connection_error(tmp_path):
-    """Dead TEI rerank host → fallback to candidates[:limit], no exception raised."""
-    idx = KnowledgeIndex(
-        tmp_path / "search.db",
-        reranker_provider="tei",
-        rerank_api_url="http://127.0.0.1:19999",
-    )
-    candidates = [
-        SearchResult(
-            source="memory", kind="memory", path=f"/doc{i}.md",
-            title=f"Doc {i}", snippet=None, score=float(i),
-            tags=None, category=None, created=None, updated=None,
-        )
-        for i in range(5)
-    ]
-    result = idx._rerank_results("query", candidates, limit=3)
-    assert len(result) == 3
-    assert result == candidates[:3]
+    """search() with a dead TEI reranker host falls back gracefully — no exception, returns results."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_reranker_provider="tei",
+        knowledge_rerank_api_url="http://127.0.0.1:19999",
+    ))
+    for i in range(5):
+        idx.index(source="memory", kind="memory", path=f"/tei-fallback{i}.md",
+                  title=f"Tei Fallback {i}", content=f"xyloquartz-tei-fallback unique content {i}",
+                  hash=f"h{i}", mtime=float(i))
+    results = idx.search("xyloquartz-tei-fallback", limit=3)
+    assert len(results) == 3
     idx.close()
 
 

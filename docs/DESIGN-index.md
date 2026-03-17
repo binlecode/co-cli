@@ -19,20 +19,14 @@ What is your question?
     │       └─▶  Layer 2 — Runtime docs
     │               core-loop
     │               system-bootstrap
-    │               context-engineering
-    │               tools-execution
+    │               tools
     │
     └── need schema, lifecycle, or config detail?
             └─▶  Layer 3 — Component docs
                     DESIGN-system
-                    DESIGN-prompt-design
                     DESIGN-tools
-                    DESIGN-memory
-                    DESIGN-knowledge
-                    DESIGN-skills
                     DESIGN-llm-models
-                    DESIGN-personality
-                    DESIGN-mcp-client
+                    DESIGN-logging-and-tracking
                     DESIGN-eval-llm-judge
                             │
                             ▼
@@ -53,16 +47,15 @@ These docs cover ordered execution, state transitions, and failure paths for liv
 | If you're asking... | Read |
 |---------------------|------|
 | What happens from the moment a user types to the LLM responding? | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
-| Why did a tool not get approved / what's the approval decision chain? | [DESIGN-tools-execution.md](DESIGN-tools-execution.md) |
+| Why did a tool not get approved / what's the approval decision chain? | [DESIGN-tools.md](DESIGN-tools.md) §Approval and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | What runs at startup before the first user message? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
-| How is the system prompt assembled and how does history compaction work? | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) |
+| How is the system prompt assembled and how does history compaction work? | [DESIGN-system.md](DESIGN-system.md) §Agent Factory and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 
 | Workflow | Doc | What it covers |
 |----------|-----|----------------|
 | One user turn (end-to-end) | [DESIGN-core-loop.md](DESIGN-core-loop.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
 | Startup (canonical) | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
-| Tool approval and shell policy | [DESIGN-tools-execution.md](DESIGN-tools-execution.md) | deferred approval chain, shell inline policy, skill grants, session auto-approve, `"a"` persistence |
-| Context engineering | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) | prompt assembly, per-turn layers, memory injection, tool output trimming, history summarization, precomputed compaction |
+| Tool approval and shell policy | [DESIGN-tools.md](DESIGN-tools.md) §Approval Classes and [DESIGN-core-loop.md](DESIGN-core-loop.md) | deferred approval chain, shell inline policy, skill grants, session auto-approve, `"a"` persistence |
 
 ### Layer 3 — Component docs
 
@@ -71,16 +64,13 @@ Read a component doc when you have a **subsystem question** — adding a new mem
 | If you're asking... | Read |
 |---------------------|------|
 | How does a tool go from registration to the model calling it? | [DESIGN-tools.md](DESIGN-tools.md) |
-| How does a memory get written, recalled, and eventually pruned? | [DESIGN-memory.md](DESIGN-memory.md) |
-| How does knowledge get indexed and retrieved? | [DESIGN-knowledge.md](DESIGN-knowledge.md) |
-| How does a skill go from `.md` file to running in the agent? | [DESIGN-skills.md](DESIGN-skills.md) |
+| How does a memory get written, recalled, and eventually pruned? | [DESIGN-system.md](DESIGN-system.md) §Memory and [DESIGN-tools.md](DESIGN-tools.md) §Memory |
+| How does knowledge get indexed and retrieved? | [DESIGN-system.md](DESIGN-system.md) §Knowledge and [DESIGN-tools.md](DESIGN-tools.md) §Knowledge |
+| How does a skill go from `.md` file to running in the agent? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Skills Load and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 
 | Subsystem | Doc | What it covers |
 |-----------|-----|----------------|
 | Tools (all families) | [DESIGN-tools.md](DESIGN-tools.md) | registration, model exposure, approval classes, execution paths, return shape, and error classification |
-| Memory | [DESIGN-memory.md](DESIGN-memory.md) | write path, edit, recall, runtime injection, signal detection, and retention/decay |
-| Knowledge | [DESIGN-knowledge.md](DESIGN-knowledge.md) | article save, source sync, retrieval, fallback, chunking, and source namespace |
-| Skills | [DESIGN-skills.md](DESIGN-skills.md) | startup load, precedence, dispatch, env injection, allowed-tools grant, install/upgrade, and security scan |
 
 ### Layer 4 — Deep Component Docs
 
@@ -90,26 +80,19 @@ Read a component doc when you need **implementation detail for a specific module
 |---------------------|------|
 | How does the agent factory, CoDeps, or approval flow work at the code level? | [DESIGN-system.md](DESIGN-system.md) and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 | What models/providers are supported and how is the reasoning chain configured? | [DESIGN-llm-models.md](DESIGN-llm-models.md) |
-| How does the prompt get structured / what gets injected at runtime? | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) |
+| How does the prompt get structured / what gets injected at runtime? | [DESIGN-system.md](DESIGN-system.md) §Agent Factory |
 | What are all the tools and their approval/return shape? | [DESIGN-tools.md](DESIGN-tools.md) |
-| How does memory dedup, consolidation, and certainty scoring work? | [DESIGN-memory.md](DESIGN-memory.md) |
-| How does the FTS5/hybrid knowledge index work internally? | [DESIGN-knowledge.md](DESIGN-knowledge.md) |
-| How does the MCP client connect and inherit approval? | [DESIGN-mcp-client.md](DESIGN-mcp-client.md) |
-| What integrations are configured and healthy at startup? | [DESIGN-doctor.md](DESIGN-doctor.md) |
+| How does the MCP client connect and inherit approval? | [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers |
+| What integrations are configured and healthy at startup? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Integration Health Sweep |
 
 | Component | Doc | Summary |
 |-----------|-----|---------|
 | System architecture (agent factory, CoDeps, capability surface, session management, security) | [DESIGN-system.md](DESIGN-system.md) | Agent factory, CoDeps, capability surface (tools/skills/MCP/sub-agents/approval boundary), memory & knowledge systems, session management, security model |
-| Context engineering | [DESIGN-context-engineering.md](DESIGN-context-engineering.md) | Prompt composition, memory/context injection, history processors, compaction, history integrity |
-| Tools index | [DESIGN-tools.md](DESIGN-tools.md) — [execution](DESIGN-tools-execution.md), [integrations](DESIGN-tools-integrations.md), [delegation](DESIGN-tools-delegation.md) | Shell, files, background, todo, capabilities, Obsidian, Google, web, memory, sub-agent delegation |
-| Knowledge internals | [DESIGN-knowledge.md](DESIGN-knowledge.md) | `KnowledgeIndex` FTS5/hybrid retrieval, article frontmatter schema, Obsidian/Drive indexing |
-| Memory internals | [DESIGN-memory.md](DESIGN-memory.md) | Frontmatter contract, signal detection, dedup, consolidation, retention, certainty classification |
-| Skills internals | [DESIGN-skills.md](DESIGN-skills.md) | `SkillCommand` schema, security scanner patterns |
+| Tools | [DESIGN-tools.md](DESIGN-tools.md) | Registration, approval classes, error classes, per-family tool detail (files, shell, memory, articles, Obsidian, Google, web, background, todo, capabilities, delegation, MCP servers) |
 | LLM Models | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Gemini/Ollama model selection, inference parameters, Ollama local setup, sub-agent model roles |
-| Personalization | [DESIGN-personalization.md](DESIGN-personalization.md) | Role asset schema, file-driven customization, character grounding, learned-context semantics |
-| MCP Client | [DESIGN-mcp-client.md](DESIGN-mcp-client.md) | External tool servers via Model Context Protocol (stdio and HTTP transports, auto-prefixing, approval inheritance) |
+| MCP Tool Servers | [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers | External tool servers via Model Context Protocol (stdio and HTTP transports, auto-prefixing, approval inheritance) |
 | Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
-| Doctor | [DESIGN-doctor.md](DESIGN-doctor.md) | System-wide integration health checks: shared doctor engine, probe contracts, bootstrap/runtime/status callsites |
+| Integration Health | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Step 4 | Integration health sweep: `check_runtime(deps)`, `RuntimeCheck` contract, bootstrap/runtime/status callsites |
 | Eval LLM-as-Judge | [DESIGN-eval-llm-judge.md](DESIGN-eval-llm-judge.md) | LLM-as-judge for personality evals: check types, judge file structure, prompt design, model settings |
 | Config Reference | DESIGN-index.md §Config Reference (this doc) | Consolidated setting/env/default reference |
 | Module Index | DESIGN-index.md §Modules (this doc) | All source files by layer with purpose |
@@ -126,15 +109,16 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Obsidian vault root for notes tools |
 | `brave_search_api_key` | `BRAVE_SEARCH_API_KEY` | `null` | Brave Search credential for `web_search` |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Explicit OAuth credential path for Google tools |
+| `library_path` | `CO_LIBRARY_PATH` | `null` | User-global article library directory override (`~/.local/share/co-cli/library/` by default) |
 | `personality` | `CO_CLI_PERSONALITY` | `"finch"` | Personality role name (per-turn injection) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `50` | Caps LLM round-trips per user turn |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (ollama) or reasoning-only (gemini) | Ordered model chains per role (`reasoning` required; other roles optional) |
-| `llm_provider` | `LLM_PROVIDER` | `"ollama"` | Provider selection (`gemini` or `ollama`) |
-| `gemini_api_key` | `GEMINI_API_KEY` | `null` | Gemini credential (required when provider is `gemini`) |
-| `ollama_host` | `OLLAMA_HOST` | `"http://localhost:11434"` | Ollama server base URL |
-| `ollama_num_ctx` | `OLLAMA_NUM_CTX` | `262144` | Configured Ollama context window hint |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`/`ollama-native`) or reasoning-only (`gemini`) | Ordered model chains per role (`reasoning` required; other roles optional) |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection (`ollama-openai`, `ollama-native`, or `gemini`) |
+| `llm_api_key` | `LLM_API_KEY` | `null` | LLM API key (required when `llm_provider=gemini`) |
+| `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL (Ollama or compatible) |
+| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Configured context window hint (passed to Ollama; ignored by Ollama API — set in Modelfile) |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn ratio for context saturation |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow ratio for context saturation |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Consecutive identical tool-call threshold for doom-loop warning |
@@ -152,8 +136,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `web_http_backoff_base_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS` | `1.0` | Base backoff interval (seconds) for `web_fetch` retries |
 | `web_http_backoff_max_seconds` | `CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS` | `8.0` | Max backoff cap (seconds) for `web_fetch` retries |
 | `web_http_jitter_ratio` | `CO_CLI_WEB_HTTP_JITTER_RATIO` | `0.2` | Jitter fraction applied to backoff interval (0–1) |
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"fts5"` | Knowledge retrieval backend (`grep`, `fts5`, `hybrid`) |
-| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"ollama"` | Embedding provider for hybrid retrieval |
+| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"hybrid"` | Knowledge retrieval backend (`grep`, `fts5`, `hybrid`) |
+| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"tei"` | Embedding provider for hybrid retrieval |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Embedding model name |
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimensionality (1024 = bge-m3; legacy Ollama embeddinggemma used 256) |
 | `knowledge_hybrid_vector_weight` | `—` | `0.7` | Retained for backward compatibility; ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
@@ -187,8 +171,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 └── settings.json          # User configuration
 
 ~/.local/share/co-cli/
-├── co-cli.db              # OpenTelemetry traces (SQLite)
-├── search.db              # FTS5 / hybrid knowledge search index (rebuildable)
+├── co-cli-logs.db         # OpenTelemetry traces (SQLite)
+├── co-cli-search.db       # FTS5 / hybrid knowledge search index (rebuildable)
 └── history.txt            # REPL command history
 
 <project-root>/
@@ -206,20 +190,16 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 
 | Layer | Module | Purpose |
 |-------|--------|---------|
-| 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup, `create_deps()` |
+| 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup |
+| 1. Agents + Orchestration | `bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `check_integration_health()` — startup assembly and inline wakeup steps |
 | 1. Agents + Orchestration | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
-| 1. Agents + Orchestration | `_orchestrate.py` | `FrontendProtocol`, `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
-| 1. Agents + Orchestration | `_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
-| 1. Agents + Orchestration | `_provider_errors.py` | `ProviderErrorAction`, `classify_provider_error()` — chat-loop error classification |
+| 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
+| 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| 2. Runtime Deps + Session State | `_startup_check.py` | `check_startup(deps, frontend)` — provider/model preflight gate; hard errors abort startup, warnings are advisory |
-| 2. Runtime Deps + Session State | `_probes.py` | Shared factual probe layer: `probe_provider`, `probe_role_models`, `probe_google`, `probe_obsidian`, `probe_brave`, `probe_mcp_server`, `probe_knowledge`, `probe_skills` — all return `ProbeResult` |
-| 2. Runtime Deps + Session State | `_runtime_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines) |
-| 2. Runtime Deps + Session State | `_model_check.py` | Backward-compat shim: `PreflightResult`, `_check_llm_provider()`, `_check_model_availability()` — called only by `_status.py` |
-| 2. Runtime Deps + Session State | `_bootstrap.py` | `run_bootstrap()` — four startup steps: knowledge sync, session restore/create, skills count report, integration health sweep |
-| 2. Runtime Deps + Session State | `_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
-| 2. Runtime Deps + Session State | `_history.py` | History processors and `summarize_messages()` |
-| 2. Runtime Deps + Session State | `_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
+| 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines); `check_llm`, `check_model_availability`, `check_settings` |
+| 2. Runtime Deps + Session State | `context/_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
+| 2. Runtime Deps + Session State | `context/_history.py` | History processors and `summarize_messages()` |
+| 2. Runtime Deps + Session State | `tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | 3. Tool Layer | `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
 | 3. Tool Layer | `tools/files.py` | Native file tools: `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
 | 3. Tool Layer | `tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis` — read-only sub-agent delegation tools |
@@ -233,36 +213,32 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `tools/task_control.py` | Background task tools: `start_background_task` (approval), `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | 3. Tool Layer | `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | 3. Tool Layer | `tools/_errors.py` | Shared error helpers: `terminal_error()`, `http_status_code()` |
-| 3. Tool Layer | `_shell_backend.py` | `ShellBackend` — approval-gated subprocess execution |
-| 3. Tool Layer | `_shell_policy.py` | Shell policy engine: `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
-| 3. Tool Layer | `_approval.py` | Shell safe-command classification (`_is_safe_command`) |
-| 3. Tool Layer | `_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
-| 3. Tool Layer | `_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
-| 3. Tool Layer | `_workspace_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
-| 3. Tool Layer | `agents/__init__.py` | Sub-agent package init |
-| 3. Tool Layer | `agents/_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, ollama_host, ollama_num_ctx)` — provider-aware model factory |
-| 3. Tool Layer | `agents/coder.py` | Read-only coder sub-agent: `CoderResult`, `make_coder_agent(resolved_model: ResolvedModel)` |
-| 3. Tool Layer | `agents/research.py` | Read-only research sub-agent: `ResearchResult`, `make_research_agent(resolved_model: ResolvedModel)` |
-| 3. Tool Layer | `agents/analysis.py` | Read-only analysis sub-agent: `AnalysisResult`, `make_analysis_agent(resolved_model: ResolvedModel)` |
-| 4. Knowledge + Memory | `_knowledge_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
-| 4. Knowledge + Memory | `_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
+| 3. Tool Layer | `tools/_shell_backend.py` | `ShellBackend` — approval-gated subprocess execution |
+| 3. Tool Layer | `tools/_shell_policy.py` | Shell policy engine: `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
+| 3. Tool Layer | `tools/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
+| 3. Tool Layer | `tools/_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
+| 3. Tool Layer | `tools/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
+| 3. Tool Layer | `bootstrap/_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
+| 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host)` — provider-aware model factory; `prepare_provider(provider, llm_api_key)` — provider-level side effects (Gemini env injection) called at `get_agent()` startup |
+| 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()` — delegation agent helpers |
+| 4. Knowledge + Memory | `knowledge/_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
+| 4. Knowledge + Memory | `knowledge/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |
-| 4. Knowledge + Memory | `_memory_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |
-| 4. Knowledge + Memory | `_memory_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
-| 4. Knowledge + Memory | `_memory_retention.py` | Cut-only retention enforcement |
+| 4. Knowledge + Memory | `memory/_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |
+| 4. Knowledge + Memory | `memory/_consolidator.py` | LLM-driven fact extraction and contradiction resolution |
+| 4. Knowledge + Memory | `memory/_retention.py` | Cut-only retention enforcement |
 | 4. Knowledge + Memory | `tools/memory.py` | Memory recall/edit tools: `save_memory`, `recall_memory`, `search_memories`, `list_memories`, `update_memory`, `append_memory` |
 | 4. Knowledge + Memory | `tools/personality.py` | Per-turn personality-context memory injector helper |
-| 4. Knowledge + Memory | `_frontmatter.py` | YAML frontmatter parser for skills/knowledge markdown files |
-| 4. Knowledge + Memory | `_signal_analyzer.py` | Post-turn signal detector for auto-memory capture |
-| 5. Skills | `_commands.py` | Slash command registry, handlers, `dispatch()`, `_load_skills()`, `SkillCommand` |
+| 4. Knowledge + Memory | `knowledge/_frontmatter.py` | YAML frontmatter parser for skills/knowledge markdown files |
+| 4. Knowledge + Memory | `memory/_signal_detector.py` | Post-turn signal detector for auto-memory capture |
+| 5. Skills | `commands/_commands.py` | Slash command registry, handlers, `dispatch()`, `_load_skills()`, `SkillCommand` |
 | 5. Skills | `skills/` | Package-default skill `.md` files — always available; currently ships `doctor.md` |
 | 6. Config + Infra Reference | `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
-| 6. Config + Infra Reference | `display.py` | Themed Rich Console, semantic styles, display helpers, `TerminalFrontend` |
-| 6. Config + Infra Reference | `_status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` + `SecurityFinding` dataclass + `check_security()` + `render_security_findings()` |
-| 6. Config + Infra Reference | `_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
-| 6. Config + Infra Reference | `_tail.py` | Real-time span viewer (`co tail`) |
-| 6. Config + Infra Reference | `_trace_viewer.py` | Static HTML trace viewer (`co traces`) |
-| 6. Config + Infra Reference | `_banner.py` | ASCII art welcome banner |
+| 6. Config + Infra Reference | `display.py` | Themed Rich Console, semantic styles, display helpers, `FrontendProtocol` (display + interaction contract), `TerminalFrontend` |
+| 6. Config + Infra Reference | `bootstrap/_render_status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` + `SecurityFinding` dataclass + `check_security()` + `render_security_findings()` + `display_welcome_banner()` |
+| 6. Config + Infra Reference | `observability/_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
+| 6. Config + Infra Reference | `observability/_tail.py` | Real-time span viewer (`co tail`) |
+| 6. Config + Infra Reference | `observability/_viewer.py` | Static HTML trace viewer (`co traces`) |
 | 6. Config + Infra Reference | `tests/test_tool_calling_functional.py` | Functional tool-calling gate — selection, args, refusal, intent routing, recovery |
 
 ---
