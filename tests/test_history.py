@@ -5,6 +5,7 @@ LLM tests require a running provider (GEMINI_API_KEY or OLLAMA_HOST).
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -25,18 +26,18 @@ from co_cli.context._history import (
     truncate_tool_returns,
     truncate_history_window,
 )
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings as _settings, ROLE_REASONING
 from co_cli.deps import CoConfig
 from tests._ollama import ensure_ollama_warm
 
-_CONFIG = CoConfig.from_settings(_settings)
+_CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 _SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
 _RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
-_AGENT, _, _ = get_agent()
+_AGENT, _, _ = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd()))
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +68,6 @@ def _real_run_context(model, *, max_history_messages=40, tool_output_trim_chars=
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=CoConfig(
-            session_id="test-history",
             max_history_messages=max_history_messages,
             tool_output_trim_chars=tool_output_trim_chars,
         ),
@@ -305,10 +305,10 @@ async def test_compact_produces_two_message_history():
     from co_cli.tools._shell_backend import ShellBackend
     from co_cli.commands._commands import dispatch, CommandContext
 
-    _, tool_names, _ = get_agent()
+    _, tool_names, _ = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd()))
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=CoConfig(session_id="test-compact"),
+        config=CoConfig(),
     )
 
     history: list[ModelMessage] = [

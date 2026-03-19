@@ -262,10 +262,10 @@ def _tool_preamble_message(tool_name: str) -> str:
 
 
 async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
-                         message_history: list, model_settings: dict,
+                         message_history: list, model_settings: dict | None = None,
                          usage_limits: UsageLimits, usage=None,
                          deferred_tool_results=None, verbose: bool,
-                         frontend: FrontendProtocol, model: Any = None):
+                         frontend: FrontendProtocol):
     """Stream agent events, dispatching to frontend callbacks.
 
     Returns (result, streamed_text).
@@ -281,7 +281,6 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
             usage_limits=usage_limits,
             usage=usage,
             deferred_tool_results=deferred_tool_results,
-            model=model,
         ):
             if isinstance(event, PartStartEvent):
                 if _handle_part_start_event(
@@ -406,8 +405,7 @@ async def run_turn(
     user_input: str,
     deps: CoDeps,
     message_history: list,
-    model_settings: dict,
-    model: Any = None,
+    model_settings: dict | None = None,
     max_request_limit: int = 50,
     http_retries: int = 2,
     verbose: bool = False,
@@ -441,7 +439,7 @@ async def run_turn(
                 agent, user_input=current_input, deps=deps,
                 message_history=message_history, model_settings=model_settings,
                 usage_limits=turn_limits, usage=turn_usage,
-                verbose=verbose, frontend=frontend, model=model,
+                verbose=verbose, frontend=frontend,
             )
             turn_usage = result.usage()
 
@@ -453,7 +451,7 @@ async def run_turn(
                     message_history=result.all_messages(),
                     model_settings=model_settings, usage_limits=turn_limits,
                     usage=turn_usage, deferred_tool_results=approvals,
-                    verbose=verbose, frontend=frontend, model=model,
+                    verbose=verbose, frontend=frontend,
                 )
                 turn_usage = result.usage()
 
@@ -647,22 +645,13 @@ async def run_turn_with_fallback(
     verbose: bool,
     frontend: "FrontendProtocol",
 ) -> "TurnResult":
-    """Run a turn, resolving the model from the registry for per-call model passing."""
-    from co_cli.config import ROLE_REASONING
-    from co_cli._model_factory import ResolvedModel
-    _none = ResolvedModel(model=None, settings=None)
-    resolved = (
-        deps.services.model_registry.get(ROLE_REASONING, _none)
-        if deps.services.model_registry else _none
-    )
+    """Run a turn using the agent's baked-in model and settings."""
     frontend.on_status("Co is thinking...")
     return await run_turn(
         agent=agent,
         user_input=user_input,
         deps=deps,
         message_history=message_history,
-        model=resolved.model,
-        model_settings=resolved.settings,
         max_request_limit=deps.config.max_request_limit,
         http_retries=deps.config.model_http_retries,
         verbose=verbose,

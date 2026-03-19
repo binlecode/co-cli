@@ -45,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`scripts/trace_report_personality.py`**: Trace report script for personality behavior analysis.
 
 ### Fixed
-- **Test suite fully green (193/193)**: Fixed 4 stale test assertions — `test_rules_token_budget` (threshold 5000→6000 chars to match expanded rules), `test_compose_personality_contains_mandate` (removed stale `"Match expression depth to context"` phrase), `test_get_agent_registers_all_tools` (added `todo_write`/`todo_read` to canonical tool inventory), `test_commands_registry_complete` (added `depth` to expected commands set).
+- **Test suite fully green (193/193)**: Fixed 4 stale test assertions — `test_rules_token_budget` (threshold 5000→6000 chars to match expanded rules), `test_compose_personality_contains_mandate` (removed stale `"Match expression depth to context"` phrase), `test_build_agent_registers_all_tools` (added `todo_write`/`todo_read` to canonical tool inventory), `test_commands_registry_complete` (added `depth` to expected commands set).
 - **`web_search` display**: Added `"Web search results for '{query}':\n\n"` prefix to the `display` field so tool output is self-describing in conversation context.
 
 ### Changed
@@ -150,7 +150,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Eval improvement**: `er-drive-01` error recovery case now passes 3/3 (was 0/3) after `terminal_error()` fix — model no longer loops on unconfigured Drive API.
 
 ### Changed
-- **Web policy model simplified**: Replaced `web_permission_mode` with per-tool `web_policy` (`search` and `fetch`, each `allow|ask|deny`). Approval wiring in `get_agent()` is now per tool, and deny enforcement moved to `ctx.deps.web_policy.search/fetch` checks in web tools. Added env overrides `CO_CLI_WEB_POLICY_SEARCH` and `CO_CLI_WEB_POLICY_FETCH`. Updated reference config and web design doc.
+- **Web policy model simplified**: Replaced `web_permission_mode` with per-tool `web_policy` (`search` and `fetch`, each `allow|ask|deny`). Approval wiring in `build_agent()` is now per tool, and deny enforcement moved to `ctx.deps.web_policy.search/fetch` checks in web tools. Added env overrides `CO_CLI_WEB_POLICY_SEARCH` and `CO_CLI_WEB_POLICY_FETCH`. Updated reference config and web design doc.
 - **Thinking display**: Replaced bordered `Panel` with plain dim italic `Text` in `on_thinking_delta()` and `on_thinking_commit()` — lighter weight, codex-style.
 - **`co_cli/main.py`**: LLM turn block collapsed from ~60 lines to a single `run_turn()` call. Removed `_stream_agent_run`, `_handle_approvals`, `_patch_dangling_tool_calls`, `_CHOICES_HINT`, `_RENDER_INTERVAL`.
 - **`co_cli/tools/google_drive.py`, `google_gmail.py`, `google_calendar.py`**: Replaced ad-hoc `except Exception` blocks with `classify_google_error()` + `handle_tool_error()`.
@@ -193,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Web tools**: `web_search` (Brave Search API) and `web_fetch` (HTML→markdown via `html2text`). New `co_cli/tools/web.py` module. Read-only, no approval. Brave API key configurable via `BRAVE_SEARCH_API_KEY` env var or `brave_search_api_key` setting. Known limitation: no private IP/SSRF protection in MVP.
 - **Eval framework for tool-calling quality**: Statistical eval suite measuring tool-calling accuracy across all enabled tools. 26 golden JSONL cases across 4 dimensions (`tool_selection`, `arg_extraction`, `refusal`, `error_recovery`). Dual-agent architecture — deferred agent (all tools return `DeferredToolRequests`) for selection/args/refusal, normal agent for error recovery. Majority-vote scoring, absolute/relative gates, model comparison reports with per-dimension delta table.
-- **`all_approval` parameter on `get_agent()`**: When `True`, all tools (including read-only) register with `requires_approval=True` — returns `DeferredToolRequests` without executing. Used by eval to avoid ModelRetry loops from missing credentials.
+- **`all_approval` parameter on `build_agent()`**: When `True`, all tools (including read-only) register with `requires_approval=True` — returns `DeferredToolRequests` without executing. Used by eval to avoid ModelRetry loops from missing credentials.
 - **Eval baselines**: `evals/baseline-gemini.json` and `evals/baseline-ollama.json` — both models at 100% (26/26) on current golden set.
 - **`docs/TODO-eval-tool-calling.md`**: Eval framework design doc — 12 sections covering JSONL format, scoring, CLI interface, golden cases, and key patterns.
 - **Web tool tests** (`tests/test_web.py`): Validation (empty query, invalid URL scheme), missing API key, functional search/fetch integration.
@@ -201,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **LLM E2E web tests** (`tests/test_llm_e2e.py`): Web search tool selection and arg extraction tests.
 
 ### Changed
-- **`co_cli/agent.py`**: `get_agent()` accepts `all_approval: bool = False`. Read-only tools registered with `requires_approval=all_approval`.
+- **`co_cli/agent.py`**: `build_agent()` accepts `all_approval: bool = False`. Read-only tools registered with `requires_approval=all_approval`.
 - **`CLAUDE.md`**: Added `docs/TODO-eval-tool-calling.md` to TODO inventory. Added `DESIGN-13-tool-web-search.md` to design docs index. Removed `TODO-tool-web-search.md` from TODO list (feature complete). Amended testing policy to document skip exception for API-dependent tests (Brave, Slack).
 
 ### Removed
@@ -302,7 +302,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`shell_safe_commands` setting**: New `config.py` field with 30 conservative defaults, `CO_CLI_SHELL_SAFE_COMMANDS` env var (comma-separated), and `CoDeps` field for injection into the approval flow.
 - **`render_status_table()`**: Extracted status table rendering from `main.py` and `_commands.py` into `status.py`. Uses semantic style names (`accent`, `info`, `success`) instead of hardcoded colors.
 - **`set_theme()`**: Runtime theme switching in `display.py` (called from `--theme` flag). Expanded theme palettes with `error`, `success`, `warning`, `hint` semantic styles.
-- **`get_agent()` returns `tool_names`**: 3-tuple return `(agent, model_settings, tool_names)` — eliminates private `_function_toolset` access throughout codebase.
+- **`build_agent()` returns `tool_names`**: 3-tuple return `(agent, model_settings, tool_names)` — eliminates private `_function_toolset` access throughout codebase.
 - **Approval flow tests**: 10 new tests in `tests/test_commands.py` — `_is_safe_command` unit tests covering prefix matching, multi-word prefixes, chaining/redirection/backgrounding rejection, exact match, partial-name rejection, empty safe list.
 - **Shell hardening tests**: 20+ new functional tests in `tests/test_shell.py` — timeout, pipe, non-root, network isolation, capability drop, redirect, variable expansion, subshell, heredoc, stderr merge, Python script lifecycle, special chars, large output, empty output, workspace mapping.
 - **`/release` skill**: `.claude/skills/release/release.md` — versioned release workflow invokable as `/release <version|feature|bugfix>`.
@@ -310,7 +310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`_commands.py`**: `CommandContext.tool_count` → `tool_names: list[str]`. `/status` and `/tools` use `render_status_table()` and sorted `tool_names` respectively.
 - **`_approval.py`**: Hardened rejection list — added `&` (backgrounding), `>` / `<` (redirection), `\n` (embedded newlines) alongside original chaining operators.
-- **`main.py`**: Adapted to 3-tuple `get_agent()`, uses `set_theme()` for `--theme` flag, uses `render_status_table()` for `co status`.
+- **`main.py`**: Adapted to 3-tuple `build_agent()`, uses `set_theme()` for `--theme` flag, uses `render_status_table()` for `co status`.
 - **`docs/DESIGN-00-co-cli.md`**: Updated sandbox diagram, `CoDeps` class diagram, config table, dependency flow.
 - **`docs/DESIGN-tool-google.md`**: Rewritten auth architecture — lazy credential resolution via `get_cached_google_creds()`.
 - **`CLAUDE.md`**: Added design principles section, reference repos table, updated doc references.
@@ -371,7 +371,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shell error propagation**: `Sandbox.run_command()` raises `RuntimeError` on non-zero exit code (was silently returning error string). `run_shell_command` tool wraps errors in `ModelRetry` so the LLM can self-correct.
 - **Config `max_request_limit`**: New setting (default 25) with `CO_CLI_MAX_REQUEST_LIMIT` env var, used as `UsageLimits(request_limit=...)` in the chat loop.
 - **Google auth lazy caching**: `get_cached_google_creds()` resolves credentials once on first call (module-level cache). Replaced eager `build_google_service()` — Google API clients are now built per-call in each tool, avoiding stale service objects.
-- **Agent unknown-provider error**: `get_agent()` raises `ValueError` for unrecognized `llm_provider` values instead of silently falling through to Ollama.
+- **Agent unknown-provider error**: `build_agent()` raises `ValueError` for unrecognized `llm_provider` values instead of silently falling through to Ollama.
 - **New tests**: `test_search_notes_folder_filter`, `test_search_notes_tag_filter`, `test_search_notes_snippet_word_boundaries`, `test_shell_nonzero_exit_raises_model_retry`.
 - **New E2E script**: `scripts/e2e_ctrl_c.py` — PTY-based test that sends SIGINT during approval prompt and during `agent.run()`, asserts process survives and returns to `Co ❯` prompt.
 - **New TODO docs**: `TODO-conversation-memory.md`, `TODO-cross-tool-rag.md`.

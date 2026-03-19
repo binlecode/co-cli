@@ -22,7 +22,7 @@ def _make_ctx(brave_search_api_key: str | None = None) -> Context:
     return Context(deps=CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            session_id="test",
+            
             brave_search_api_key=brave_search_api_key,
         ),
     ))
@@ -39,7 +39,7 @@ def _make_policy_ctx(
     return Context(deps=CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            session_id="test",
+            
             brave_search_api_key=brave_search_api_key,
             web_fetch_allowed_domains=allowed_domains or [],
             web_fetch_blocked_domains=blocked_domains or [],

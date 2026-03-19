@@ -1,7 +1,6 @@
 """Provider-aware model factory — builds and caches LLM model objects by role."""
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,7 +16,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import Model, ModelRequestParameters
+from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings, merge_model_settings
 from pydantic_ai.usage import RequestUsage
@@ -31,19 +32,6 @@ _HTTP_CONNECT_TIMEOUT = 10.0
 _HTTP_READ_TIMEOUT = 300.0
 _HTTP_WRITE_TIMEOUT = 30.0
 _HTTP_POOL_TIMEOUT = 10.0
-
-
-def prepare_provider(provider: str, llm_api_key: str | None) -> None:
-    """Configure provider-level prerequisites before building models.
-
-    Side effects are intentional and visible at call sites in agent.py.
-    Currently handles Gemini API key injection into the environment
-    (pydantic-ai reads GEMINI_API_KEY at model instantiation time).
-    """
-    if provider == "gemini":
-        if not llm_api_key:
-            raise ValueError("llm_api_key is required in settings when llm_provider is 'gemini'.")
-        os.environ["GEMINI_API_KEY"] = llm_api_key
 
 
 @dataclass
@@ -73,11 +61,10 @@ class ModelRegistry:
         risk but keeps _model_factory.py dep-free of deps.py).
         """
         registry = cls()
-        prepare_provider(config.llm_provider, config.llm_api_key)
         for role, entry in config.role_models.items():
             if not entry:
                 continue
-            model, settings = build_model(entry, config.llm_provider, config.llm_host)
+            model, settings = build_model(entry, config.llm_provider, config.llm_host, api_key=config.llm_api_key)
             registry._models[role] = ResolvedModel(model=model, settings=settings)
         return registry
 
@@ -216,7 +203,8 @@ def build_model(
     model_entry: ModelEntry,
     provider: str,
     llm_host: str,
-) -> tuple[OpenAIChatModel | OllamaNativeModel | str, ModelSettings | None]:
+    api_key: str | None = None,
+) -> tuple[OpenAIChatModel | OllamaNativeModel | GoogleModel, ModelSettings | None]:
     """Construct a pydantic-ai model object and merged ModelSettings for the given provider.
 
     Per-entry `model_entry.provider` overrides the session-level `provider`.
@@ -225,7 +213,7 @@ def build_model(
 
     ollama         → OpenAIChatModel wrapping the Ollama OpenAI-compatible API
     ollama-native  → OllamaNativeModel using Ollama's native /api/chat endpoint
-    gemini         → bare "google-gla:<model_name>" string (resolved by pydantic-ai)
+    gemini         → GoogleModel with GoogleProvider (api_key injected via constructor)
 
     Raises ValueError for unsupported providers.
     """
@@ -313,6 +301,7 @@ def build_model(
             top_p=inf.get("top_p", 0.95),
             max_tokens=inf.get("max_tokens", 65536),
         )
-        return f"google-gla:{model_name}", model_settings
+        google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
+        return google_model, model_settings
 
     raise ValueError(f"Unsupported provider: {effective_provider!r}")

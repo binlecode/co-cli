@@ -1,3 +1,4 @@
+import pathlib
 #!/usr/bin/env python3
 """Eval: tool-chains — verify the agent completes multi-step tool sequences.
 
@@ -27,9 +28,11 @@ from typing import Any
 
 from co_cli.context._history import SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
-from evals._common import make_eval_deps  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._frontend import SilentFrontend  # noqa: E402
 from evals._tools import extract_tool_calls, is_ordered_subsequence  # noqa: E402
 
@@ -163,7 +166,8 @@ async def main() -> int:
     print("  Eval: Multi-Step Tool Chains")
     print("=" * 60)
 
-    agent, model_settings, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="eval-tool-chains")
     deps.runtime.safety_state = SafetyState()
 
@@ -187,7 +191,7 @@ async def main() -> int:
     for i, case in enumerate(runnable, 1):
         print(f"[{i}/{len(runnable)}] {case.id} ...", end=" ", flush=True)
         try:
-            r = await run_chain_case(case, agent, deps, model_settings)
+            r = await run_chain_case(case, agent, deps, make_eval_settings())
             results.append(r)
             status = "PASS" if r["passed"] else "FAIL"
             print(f"{status} ({r['elapsed']:.1f}s)")

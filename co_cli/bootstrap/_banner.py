@@ -3,14 +3,17 @@
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from co_cli.bootstrap._check import RuntimeCheck
 from co_cli.config import ROLE_REASONING
 from co_cli.deps import CoConfig
 from co_cli.display import console
 
+if TYPE_CHECKING:
+    from co_cli.deps import CoDeps
 
-_PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+_PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
 _ASCII_ART = {
     "dark": [
@@ -25,7 +28,7 @@ _ASCII_ART = {
 }
 
 
-def display_welcome_banner(runtime_check: RuntimeCheck, config: CoConfig) -> None:
+def display_welcome_banner(deps: "CoDeps", config: CoConfig) -> None:
     """Render welcome banner with ASCII art, model, and environment info."""
     from rich.panel import Panel
 
@@ -39,7 +42,11 @@ def display_welcome_banner(runtime_check: RuntimeCheck, config: CoConfig) -> Non
     else:
         llm_provider = config.llm_provider
 
-    tool_count = runtime_check.status.get("tool_count", 0)
+    from co_cli.commands._commands import BUILTIN_COMMANDS
+    tool_count = len(deps.session.tool_names)
+    skill_count = len(deps.session.skill_registry)
+    mcp_count = len(deps.config.mcp_servers or {})
+    cmd_count = len(BUILTIN_COMMANDS) + deps.session.slash_command_count
 
     try:
         git_branch = subprocess.check_output(
@@ -50,21 +57,14 @@ def display_welcome_banner(runtime_check: RuntimeCheck, config: CoConfig) -> Non
     except Exception:
         git_branch = ""
 
-    if runtime_check.findings:
-        verdict = f"[error]✗ {len(runtime_check.findings)} issue(s) — run /status[/error]"
-    elif runtime_check.fallbacks:
-        verdict = f"[dim]· degraded ({len(runtime_check.fallbacks)} fallback(s))[/dim]"
-    else:
-        verdict = "[success]✓ All systems operational[/success]"
-
     lines = [
         f"\n[accent]{art}[/accent]\n",
         f"    v{version} — CLI Assistant",
         f"    Model: [accent]{llm_provider}[/accent]",
-        f"    Tools: {tool_count}  Shell: subprocess (approval-gated)",
+        f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",
-        f"    {verdict}",
+        f"    [success]✓ Ready[/success]",
         f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

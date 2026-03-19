@@ -1,7 +1,7 @@
 """System-wide integration health checks.
 
 Provides CheckResult (IO check return type), CheckItem/DoctorResult data model,
-IO check functions (check_llm, check_model_availability, check_mcp_server, check_tei),
+IO check functions (check_llm, check_mcp_server, check_tei),
 and the check_settings() entry point.
 
 Callers:
@@ -91,7 +91,14 @@ class DoctorResult:
 
 
 def check_llm(config: "CoConfig") -> CheckResult:
-    """Check LLM provider credentials and basic server reachability."""
+    """Check LLM provider credentials and model availability in one pass.
+
+    Gemini: validates API key presence (no HTTP call).
+    Ollama: one GET /api/tags call — checks reachability and all configured model names.
+      - Unreachable → warn (soft fail; session continues)
+      - Reasoning model missing → error (hard fail; session cannot start)
+      - Optional role model missing → warn (soft fail; those tools degrade silently)
+    """
     if config.llm_provider == "gemini":
         if config.llm_api_key:
             return CheckResult(ok=True, status="ok", detail="Gemini API key configured")
@@ -105,36 +112,9 @@ def check_llm(config: "CoConfig") -> CheckResult:
         import httpx
         resp = httpx.get(f"{config.llm_host}/api/tags", timeout=5)
         resp.raise_for_status()
-    except Exception as err:
-        return CheckResult(
-            ok=True,
-            status="warn",
-            detail=f"Ollama model check skipped — {err}",
-        )
-
-    return CheckResult(ok=True, status="ok", detail="Provider configured")
-
-
-def check_model_availability(config: "CoConfig") -> CheckResult:
-    """Check Ollama model availability for configured roles."""
-    if config.llm_provider not in ("ollama-openai", "ollama-native"):
-        return CheckResult(
-            ok=True,
-            status="ok",
-            detail="Model availability check skipped (non-Ollama provider)",
-        )
-
-    try:
-        import httpx
-        resp = httpx.get(f"{config.llm_host}/api/tags", timeout=5)
-        resp.raise_for_status()
         installed = {m["name"] for m in resp.json().get("models", [])}
     except Exception as err:
-        return CheckResult(
-            ok=True,
-            status="warn",
-            detail=f"Ollama model check skipped — {err}",
-        )
+        return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}")
 
     reasoning_entry = config.role_models.get(ROLE_REASONING)
     if reasoning_entry and reasoning_entry.model not in installed:
@@ -157,7 +137,7 @@ def check_model_availability(config: "CoConfig") -> CheckResult:
             detail=f"Optional roles have unavailable models: {'; '.join(missing_optional)}",
         )
 
-    return CheckResult(ok=True, status="ok", detail="All models available")
+    return CheckResult(ok=True, status="ok", detail="Provider and models configured")
 
 
 def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
@@ -287,19 +267,16 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
     config and integration state with session state from deps. No startup policy —
     failures are recorded as findings, not raised as exceptions.
 
-    skip_provider_checks: when True, substitute static ok results for check_llm and
-        check_model_availability (avoids duplicate HTTP calls when bootstrap already
-        validated the provider at startup).
+    skip_provider_checks: when True, substitute a static ok result for check_llm
+        (avoids a duplicate HTTP call when bootstrap already validated the provider at startup).
     """
     from co_cli.config import ADC_PATH, GOOGLE_TOKEN_PATH
 
     # IO checks
     if skip_provider_checks:
         provider_result = CheckResult(ok=True, status="ok", detail="validated at startup")
-        role_models_result = CheckResult(ok=True, status="ok", detail="validated at startup")
     else:
         provider_result = check_llm(deps.config)
-        role_models_result = check_model_availability(deps.config)
 
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
     obsidian_result = _check_obsidian(deps.config.obsidian_vault_path)
@@ -315,8 +292,7 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
 
     # Assemble named check list for checks display and findings scan
     named_checks: list[tuple[str, CheckResult]] = [
-        ("llm", provider_result),
-        ("model_availability", role_models_result),
+        ("provider", provider_result),
         ("google", google_result),
         ("obsidian", obsidian_result),
         ("brave", brave_result),
@@ -337,10 +313,6 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
             "status": provider_result.status,
             "detail": provider_result.detail,
         },
-        "role_models": {
-            ROLE_REASONING: role_models_result.status,
-            "optional_roles": role_models_result.detail,
-        },
         "reasoning_model": reasoning_entry.model if reasoning_entry else None,
         "reasoning_ready": reasoning_entry is not None,
         "google": google_result.status == "ok",
@@ -353,14 +325,14 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
 
     # Build status dict from session state
     status: dict[str, Any] = {
-        "session_id": deps.config.session_id,
+        "session_id": deps.session.session_id,
         "active_skill": deps.session.active_skill_name,
         "skill_grants": sorted(deps.session.skill_tool_grants),
         "tool_names": list(deps.session.tool_names),
         "tool_approvals": dict(deps.session.tool_approvals),
         "tool_count": len(deps.session.tool_names),
         "skill_count": len(deps.session.skill_registry),
-        "mcp_mode": "mcp" if deps.config.mcp_count > 0 else "native-only",
+        "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge_search_backend,
     }
 
@@ -376,7 +348,7 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
 
     # Fallbacks: active degraded-mode operations
     fallbacks: list[str] = []
-    if deps.config.mcp_count == 0:
+    if len(deps.config.mcp_servers) == 0:
         fallbacks.append("mcp: native-only (no MCP servers configured)")
 
     return RuntimeCheck(

@@ -20,19 +20,19 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli.context._orchestrate import run_turn_with_fallback
 from co_cli.context._history import precompute_compaction
 from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
-from co_cli.agent import get_agent, discover_mcp_tools
+from co_cli.agent import build_agent, discover_mcp_tools
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB
 from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.commands._commands import (
-    dispatch as dispatch_command, CommandContext, COMMANDS,
-    _load_skills, _skills_snapshot, _build_completer_words, set_skill_commands,
+    dispatch as dispatch_command, CommandContext, BUILTIN_COMMANDS,
+    _load_skills, _build_completer_words, set_skill_commands,
 )
 from co_cli.tools._exec_approvals import prune_stale as _prune_stale_approvals
 from co_cli.context._session import touch_session, increment_compaction, save_session
-from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session, check_integration_health
+from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session
 
 exporter = SQLiteSpanExporter()
 
@@ -71,28 +71,27 @@ def _default(ctx: typer.Context):
 async def _chat_loop(verbose: bool = False):
     frontend = TerminalFrontend()
 
-    completer = WordCompleter([f"/{name}" for name in COMMANDS], sentence=True)
+    completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)
     session = PromptSession(
         history=FileHistory(str(DATA_DIR / "history.txt")),
         completer=completer,
         complete_while_typing=False,
     )
-    _skills_watch_snapshot: dict[str, float] = {}
-
     _prune_stale_approvals(Path.cwd() / ".co-cli" / "exec-approvals.json", max_age_days=90)
     deps = create_deps()
-
-    agent, tool_names, tool_approvals = get_agent(config=deps.config)
-    deps.session.tool_names = tool_names
-    deps.session.tool_approvals = tool_approvals
 
     from co_cli._model_factory import ResolvedModel
     from co_cli.config import ROLE_REASONING
     _none_resolved = ResolvedModel(model=None, settings=None)
-    primary_model = (
-        deps.services.model_registry.get(ROLE_REASONING, _none_resolved).model
-        if deps.services.model_registry else None
+    resolved = (
+        deps.services.model_registry.get(ROLE_REASONING, _none_resolved)
+        if deps.services.model_registry else _none_resolved
     )
+    primary_model = resolved.model  # used for signal detection and background compaction
+
+    agent, tool_names, tool_approvals = build_agent(config=deps.config, resolved=resolved)
+    deps.session.tool_names = tool_names
+    deps.session.tool_approvals = tool_approvals
 
     stack = AsyncExitStack()
     message_history = []
@@ -102,36 +101,24 @@ async def _chat_loop(verbose: bool = False):
         try:
             await stack.enter_async_context(agent)
         except Exception as e:
-            console.print(f"[error]MCP server failed to connect: {e}[/error]")
-            console.print("[dim]Fix MCP server config in settings.json or remove mcp_servers.[/dim]")
-            raise SystemExit(1)
+            console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
         if deps.config.mcp_servers:
-            tool_names = await discover_mcp_tools(agent, tool_names)
+            mcp_tool_names = await discover_mcp_tools(agent, exclude=set(tool_names))
+            tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 
         skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
         set_skill_commands(skill_commands, deps.session)
-        _skills_watch_snapshot = _skills_snapshot(deps.config.skills_dir)
         completer.words = _build_completer_words()
 
         sync_knowledge(deps, frontend)
         session_data = restore_session(deps, frontend)
         frontend.on_status(f"  {len(deps.session.skill_registry)} skill(s) loaded")
-        runtime_check = check_integration_health(deps, frontend)
 
-        display_welcome_banner(runtime_check, deps.config)
+        display_welcome_banner(deps, deps.config)
 
         while True:
-            # File watcher: detect skill edits before each prompt
-            _new_snap = _skills_snapshot(deps.config.skills_dir)
-            if _new_snap != _skills_watch_snapshot:
-                _skills_watch_snapshot = _new_snap
-                _reloaded = _load_skills(deps.config.skills_dir, settings=settings)
-                set_skill_commands(_reloaded, deps.session)
-                completer.words = _build_completer_words()
-                console.print("[dim]Skills reloaded (files changed).[/dim]")
-
             _saved_env: dict[str, str | None] = {}
             try:
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
@@ -272,8 +259,9 @@ def chat(
 @app.command()
 def config():
     """Show system configuration and integration health (pre-agent check)."""
+    from pathlib import Path
     from co_cli.deps import CoConfig
-    sys_status = get_status(CoConfig.from_settings(settings))
+    sys_status = get_status(CoConfig.from_settings(settings, cwd=Path.cwd()))
     console.print(render_status_table(sys_status))
     findings = check_security()
     render_security_findings(findings)

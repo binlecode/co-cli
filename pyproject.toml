@@ -16,7 +16,7 @@ dependencies = [
     "google-genai>=1.61.0",
     "opentelemetry-sdk>=1.39.1",
     "prompt-toolkit>=3.0.52",
-    "pydantic-ai==1.59.0",
+    "pydantic-ai==1.70.0",
     "rich>=14.3.2",
     "typer>=0.21.1",
     "datasette-pretty-json>=0.3",

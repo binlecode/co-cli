@@ -299,7 +299,7 @@ def test_orphan_recovery(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_background_command(tmp_tasks_dir: Path):
     """Slash /background spawns a task and prints task_id."""
-    from co_cli.commands._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
@@ -313,7 +313,7 @@ async def test_slash_background_command(tmp_tasks_dir: Path):
         ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
         # Run /background echo test
-        await COMMANDS["background"].handler(ctx, "echo slash_test")
+        await BUILTIN_COMMANDS["background"].handler(ctx, "echo slash_test")
 
         # At least one task should now exist
         tasks = runner.list_tasks()
@@ -325,7 +325,7 @@ async def test_slash_background_command(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_tasks_command(tmp_tasks_dir: Path):
     """Slash /tasks lists tasks; filtering by status works."""
-    from co_cli.commands._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
@@ -338,14 +338,14 @@ async def test_slash_tasks_command(tmp_tasks_dir: Path):
     ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
     # Should not raise
-    await COMMANDS["tasks"].handler(ctx, "")
-    await COMMANDS["tasks"].handler(ctx, "completed")
+    await BUILTIN_COMMANDS["tasks"].handler(ctx, "")
+    await BUILTIN_COMMANDS["tasks"].handler(ctx, "completed")
 
 
 @pytest.mark.asyncio
 async def test_slash_cancel_command(tmp_tasks_dir: Path):
     """Slash /cancel cancels a running task."""
-    from co_cli.commands._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
@@ -366,7 +366,7 @@ async def test_slash_cancel_command(tmp_tasks_dir: Path):
         deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
         ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
-        await COMMANDS["cancel"].handler(ctx, task_id)
+        await BUILTIN_COMMANDS["cancel"].handler(ctx, task_id)
 
         meta = runner.get_task(task_id)
         assert meta["status"] == TaskStatus.cancelled.value
@@ -376,7 +376,7 @@ async def test_slash_cancel_command(tmp_tasks_dir: Path):
 @pytest.mark.asyncio
 async def test_slash_status_with_task_id(tmp_tasks_dir: Path):
     """Slash /status <task_id> displays task metadata without error."""
-    from co_cli.commands._commands import CommandContext, COMMANDS
+    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
@@ -389,4 +389,4 @@ async def test_slash_status_with_task_id(tmp_tasks_dir: Path):
     ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
     # Should not raise
-    await COMMANDS["status"].handler(ctx, "task_status_test")
+    await BUILTIN_COMMANDS["status"].handler(ctx, "task_status_test")

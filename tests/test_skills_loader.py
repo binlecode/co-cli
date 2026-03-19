@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from dataclasses import replace
 import pytest
 from pathlib import Path
 
@@ -12,25 +13,25 @@ from co_cli.commands._commands import (
     _preprocess_shell_blocks,
     _scan_skill_content,
     _build_completer_words,
-    _skills_snapshot,
     _inject_source_url,
     _cmd_skills,
     _install_skill,
     SkillCommand,
-    COMMANDS,
+    BUILTIN_COMMANDS,
     dispatch,
     CommandContext,
     SKILL_COMMANDS,
 )
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 
 
 def _make_ctx(skill_commands: dict | None = None) -> CommandContext:
     """Build a minimal CommandContext with real agent."""
-    agent, tool_names, _ = get_agent()
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig(session_id="test-skills"))
+    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     return CommandContext(
         message_history=[],
         deps=deps,
@@ -242,9 +243,9 @@ def test_gating_missing_bin_skips_skill(tmp_path):
     assert "needs-bin" not in result
 
 
-def test_gating_missing_env_skips_skill(tmp_path, monkeypatch):
+def test_gating_missing_env_skips_skill(tmp_path):
     """Skill requiring an unset env var is skipped."""
-    monkeypatch.delenv("SOME_NONEXISTENT_VAR_XYZ", raising=False)
+    os.environ.pop("SOME_NONEXISTENT_VAR_XYZ", None)
     skills_dir = tmp_path / ".co-cli" / "skills"
     content = "---\nrequires:\n  env:\n    - SOME_NONEXISTENT_VAR_XYZ\n---\nbody"
     _write_skill(skills_dir, "needs-env", content)
@@ -255,14 +256,11 @@ def test_gating_missing_env_skips_skill(tmp_path, monkeypatch):
 def test_gating_settings_field_missing_skips_skill(tmp_path):
     """Skill requiring a settings field that is None/empty is skipped."""
     skills_dir = tmp_path / ".co-cli" / "skills"
-    content = "---\nrequires:\n  settings:\n    - brave_search_api_key\n---\nbody"
-    _write_skill(skills_dir, "needs-brave", content)
-
-    class FakeSettings:
-        brave_search_api_key = None
-
-    result = _load_skills(skills_dir, settings=FakeSettings())
-    assert "needs-brave" not in result
+    # Use a field name that does not exist on Settings — getattr returns None, skill is skipped.
+    content = "---\nrequires:\n  settings:\n    - nonexistent_setting_xyz\n---\nbody"
+    _write_skill(skills_dir, "needs-setting", content)
+    result = _load_skills(skills_dir, settings=settings)
+    assert "needs-setting" not in result
 
 
 # -- Package-default skills override -----------------------------------------------
@@ -319,11 +317,11 @@ async def test_skill_env_dispatch():
         ctx.deps.session.active_skill_env.clear()
 
 
-def test_skill_env_rollback(monkeypatch):
+def test_skill_env_rollback():
     """Env vars injected from active_skill_env are restored after simulated CancelledError."""
-    monkeypatch.delenv("TEST_ENV_VAR_XYZ", raising=False)
+    os.environ.pop("TEST_ENV_VAR_XYZ", None)
 
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig(session_id="test-rollback"))
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     deps.session.active_skill_env = {"TEST_ENV_VAR_XYZ": "injected"}
 
     # Replicate the injection + try/finally pattern from chat_loop()
@@ -474,7 +472,7 @@ async def test_skills_reload_picks_up_new_skill(tmp_path):
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "reload-test-skill", "body")
     ctx = _make_ctx()
-    ctx.deps.config.skills_dir = skills_dir
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
     _original = dict(SKILL_COMMANDS)
     try:
         handled, _ = await dispatch("/skills reload", ctx)
@@ -504,7 +502,7 @@ async def test_completer_update_reload(tmp_path):
     completer = WordCompleter(words=["/help"])
     ctx = _make_ctx()
     ctx.completer = completer
-    ctx.deps.config.skills_dir = skills_dir
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
     _original = dict(SKILL_COMMANDS)
     try:
@@ -539,7 +537,7 @@ async def test_completer_update_install(tmp_path):
     completer = WordCompleter(words=["/help"])
     ctx = _make_ctx()
     ctx.completer = completer
-    ctx.deps.config.skills_dir = skills_dir
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
     _original = dict(SKILL_COMMANDS)
     try:
@@ -548,30 +546,6 @@ async def test_completer_update_install(tmp_path):
     finally:
         SKILL_COMMANDS.clear()
         SKILL_COMMANDS.update(_original)
-
-
-# -- P2: File watcher / auto-reload (TASK-2) -------------------------------
-
-
-def test_skills_snapshot_mtime(tmp_path):
-    """_skills_snapshot returns a non-empty dict and detects file changes.
-
-    Uses write_text() (not os.utime) to produce a new mtime.
-    Assumes sub-second mtime resolution (macOS APFS).
-    On Linux ext4 (1-second resolution), add time.sleep(0.01) or os.utime
-    with an explicit future timestamp if this test becomes flaky.
-    """
-    skill_file = tmp_path / "myskill.md"
-    skill_file.write_text("body", encoding="utf-8")
-
-    snap1 = _skills_snapshot(tmp_path)
-    assert snap1
-    assert all(isinstance(v, float) and v > 0 for v in snap1.values())
-
-    # Rewrite to produce a new mtime
-    skill_file.write_text("updated body", encoding="utf-8")
-    snap2 = _skills_snapshot(tmp_path)
-    assert snap2 != snap1
 
 
 # -- P2: Skill upgrade flow (TASK-3) ---------------------------------------
@@ -600,7 +574,7 @@ async def test_skill_upgrade_no_url(tmp_path):
     try:
         ctx = _make_ctx()
         # ctx.deps.skills_dir must point to the test fixture dir
-        ctx.deps.config.skills_dir = skills_dir
+        ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
         await _cmd_skills(ctx, "upgrade noupgrade")
 
@@ -660,7 +634,7 @@ async def test_skill_upgrade_happy_path(tmp_path):
         # on the test fixture dir, not .co-cli/skills
         skills_dir = tmp_path / ".co-cli" / "skills"
         ctx = _make_ctx()
-        ctx.deps.config.skills_dir = skills_dir
+        ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
         _original = dict(SKILL_COMMANDS)
         try:

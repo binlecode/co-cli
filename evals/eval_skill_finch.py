@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from co_cli.commands._commands import _load_skills
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 
 from evals._common import (
     detect_model_tag,
@@ -189,7 +189,7 @@ async def run_eval() -> int:
     print()
 
     # Create a Finch-personality agent (soul seed baked into static system prompt)
-    agent, model_settings, tool_names, _ = get_agent(personality="finch")
+    agent, model_settings, tool_names, _ = build_agent(personality="finch")
     print(f"Agent(finch) created with {len(tool_names)} tools")
     print()
 

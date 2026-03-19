@@ -65,7 +65,7 @@ The bootstrap in `main.py:chat_loop()` runs in this order:
 4.  TaskRunner(storage=task_storage)
 5.  create_deps(task_runner)         ← _wiring.py; knowledge fallback hybrid→fts5→grep
 6.  check_startup(deps, frontend)    ← _startup_check.py; HARD GATE — raises RuntimeError
-7.  get_agent(...)                   ← agent created; tool surface bound to deps.session
+7.  build_agent(...)                   ← agent created; tool surface bound to deps.session
 8.  agent context entry (await)      ← MCP servers connect; SystemExit(1) on failure
 9.  discover_mcp_tools()
 10. _load_skills()

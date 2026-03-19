@@ -133,7 +133,7 @@ Cross-component touchpoints:
 ```mermaid
 flowchart LR
     A[Settings + bootstrap outputs] --> B[create_deps]
-    B --> C[get_agent]
+    B --> C[build_agent]
     C --> D[Register native tools]
     C --> E[Attach history processors]
     C --> F[Attach MCP toolsets]
@@ -148,8 +148,8 @@ flowchart LR
 
 Ordered composition:
 1. Bootstrap resolves settings, provider viability, knowledge backend, skill registry, and session identity.
-2. `create_deps()` materializes grouped runtime state in `CoDeps`.
-3. `get_agent()` selects the reasoning model, assembles the prompt, registers native tools, and registers MCP toolsets.
+2. `create_deps()` materializes grouped runtime state in `CoDeps`, including pre-assembling the system prompt into `config.system_prompt`.
+3. `build_agent()` creates the agent from `config.system_prompt`, registers native tools with approval policies, and registers MCP toolsets.
 4. The resulting agent plus `CoDeps` define the model-visible capability surface.
 5. [DESIGN-core-loop.md](DESIGN-core-loop.md) executes turns against that surface.
 
@@ -181,20 +181,23 @@ Rules:
 
 ### 4.1 Agent Factory
 
-`get_agent(*, config: CoConfig | None = None) -> (agent, tool_names, tool_approval)` calls `prepare_provider()` for provider-level side effects, assembles the system prompt, creates the agent with `model=None` (per-call model passing), registers tools with approval policies, and registers MCP toolsets.
+`build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool_names, tool_approval)` creates the agent from the pre-assembled `config.system_prompt` (set by `create_deps()` before this call), attaches per-turn `@agent.instructions` layers, registers native tools with approval policies, and registers MCP toolsets. Provider credential validation and system prompt assembly happen upstream in `create_deps()`, not here.
 
 ```text
-get_agent(*, config: CoConfig | None = None) -> (agent, tool_names, tool_approval):
-    _cfg = config if config is not None else CoConfig.from_settings(settings)
-    prepare_provider(provider_name, _cfg.llm_api_key)  # Gemini env-var injection, etc.
-    load soul seed/examples/mindsets for active personality
-    build system_prompt via _build_system_prompt(provider, model_name, _cfg)
-
+build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool_names, tool_approval):
+    # system_prompt already assembled by create_deps() — read directly
     create Agent with:
-        model=None, deps_type=CoDeps, system_prompt, retries=tool_retries
+        model=None, deps_type=CoDeps, system_prompt=config.system_prompt, retries=tool_retries
         output_type = [str, DeferredToolRequests]
         history_processors = [inject_opening_context, truncate_tool_returns,
                                detect_safety_issues, truncate_history_window]
+
+    # per-turn dynamic layers (fresh each request, never accumulated)
+    @agent.instructions: inject current date
+    @agent.instructions: inject shell guidance when available
+    @agent.instructions: inject project instructions from .co-cli/instructions.md
+    @agent.instructions: inject personality-context memories
+    @agent.instructions: inject available skills list
 
     for each tool fn: register via _register(fn, requires_approval)
         append (fn.__name__, requires_approval) to tool_registry
@@ -231,16 +234,16 @@ graph TD
     CoServices --> S3[task_runner: TaskRunner]
     CoServices --> S4[model_registry: ModelRegistry]
 
-    CoConfig --> C1["session_id, paths, API keys,\nlimits, web_policy, role_models"]
-    CoSessionState --> SE1["google_creds, session approvals,\nskill grants, todos, page tokens, skill registry"]
+    CoConfig --> C1["paths, API keys,\nlimits, web_policy, role_models"]
+    CoSessionState --> SE1["session_id, google_creds, session approvals,\nskill grants, todos, page tokens, skill registry"]
     CoRuntimeState --> R1["precomputed_compaction,\nturn_usage, opening_ctx_state, safety_state"]
 ```
 
 | Sub-dataclass | Field group | Key fields |
 |---------------|-------------|------------|
 | `CoServices` | Service handles | `shell`, `knowledge_index`, `task_runner`, `model_registry` |
-| `CoConfig` | Read-only config | `session_id`, paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
-| `CoSessionState` | Mutable session state | `google_creds`, `session_tool_approvals`, `active_skill_env`, `skill_tool_grants`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
+| `CoConfig` | Read-only config | paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
+| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_tool_approvals`, `active_skill_env`, `skill_tool_grants`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction`, `turn_usage`, `opening_ctx_state`, `safety_state` |
 
 Sub-agent isolation:
@@ -281,7 +284,7 @@ See [DESIGN-tools.md](DESIGN-tools.md) §Delegation for sub-agent details.
 
 | MCP capability | Co-cli concept | Status |
 |----------------|----------------|--------|
-| `tools` | Agent-callable tools registered via `toolsets=` in `get_agent()` | Implemented |
+| `tools` | Agent-callable tools registered via `toolsets=` in `build_agent()` | Implemented |
 | `prompts` | User-invocable skills | Deferred pending pydantic-ai native prompt support |
 | `resources` | Read-only context injection | Out of scope |
 
@@ -424,17 +427,21 @@ System-relevant settings called out here:
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Provider/network retry budget per turn |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` approval policy |
 | `web_policy.fetch` | `CO_CLI_WEB_POLICY_FETCH` | `"allow"` | `web_fetch` approval policy |
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"hybrid"` | Configured retrieval backend before fallback resolution |
+| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"hybrid"` | Configured retrieval backend before fallback resolution (`hybrid → fts5 → grep`) |
+| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"tei"` | Embedding provider for hybrid vec leg: `tei`, `ollama`, `gemini`, or `none` |
+| `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name passed to the embedding provider |
+| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Vector dimensions — must match the model. If changed, delete `~/.local/share/co-cli/search.db` to rebuild the vec schema |
+| `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | TEI or compatible embedding API endpoint |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session restore TTL |
 
 ## 6. Files
 
 | File | Purpose |
 |------|---------|
-| `co_cli/agent.py` | `get_agent()`, prompt assembly wiring, native tool and MCP registration |
+| `co_cli/agent.py` | `build_agent()`, prompt assembly wiring, native tool and MCP registration |
 | `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
 | `co_cli/main.py` | `chat_loop()`, startup assembly, REPL |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `check_integration_health()` |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` |
 | `co_cli/context/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
 | `co_cli/context/_history.py` | History processors and compaction |
 | `co_cli/commands/_commands.py` | Slash commands and skill dispatch surface |

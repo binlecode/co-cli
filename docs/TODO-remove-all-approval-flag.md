@@ -1,10 +1,10 @@
-# TODO: Remove `all_approval` Flag from `get_agent()`
+# TODO: Remove `all_approval` Flag from `build_agent()`
 
 **Task type: refactor** — eval infrastructure cleanup; no behavior change in production.
 
 ## Context
 
-`get_agent()` in `co_cli/agent.py` has an `all_approval: bool = False` parameter that,
+`build_agent()` in `co_cli/agent.py` has an `all_approval: bool = False` parameter that,
 when `True`, registers every tool with `requires_approval=True`. This forces all tool
 calls to return `DeferredToolRequests` without executing, so tests can inspect tool
 selection and args without side effects.
@@ -27,16 +27,16 @@ default settings.
 
 ## Problem & Outcome
 
-**Problem:** `all_approval` in `get_agent()` is test-only infrastructure in production
+**Problem:** `all_approval` in `build_agent()` is test-only infrastructure in production
 code. It also fails silently for sub-agents.
 
-**Outcome:** `all_approval` parameter removed from `get_agent()`. The four test
+**Outcome:** `all_approval` parameter removed from `build_agent()`. The four test
 call sites are rewritten to use `agent.iter()` + `FunctionToolCallEvent`.
-`get_agent()` is a pure production factory.
+`build_agent()` is a pure production factory.
 
 ## Scope
 
-**In:** Remove `all_approval` from `get_agent()` and all call sites. Rewrite the four
+**In:** Remove `all_approval` from `build_agent()` and all call sites. Rewrite the four
 affected tests to use the event stream.
 
 **Out:** Logic changes to any tool. Changes to `web_policy` wiring (covered by
@@ -55,7 +55,7 @@ affected tests to use the event stream.
 
 ### TASK-1 — Rewrite `test_tool_selection_and_arg_extraction`
 
-Replace `get_agent(all_approval=True)` + `DeferredToolRequests` inspection with
+Replace `build_agent(all_approval=True)` + `DeferredToolRequests` inspection with
 `agent.iter()`. Use `FunctionToolCallEvent` to capture the first tool call and break:
 
 ```python
@@ -110,7 +110,7 @@ removed, the test is stale. Delete it.
 
 ---
 
-### TASK-4 — Remove `all_approval` from `get_agent()`
+### TASK-4 — Remove `all_approval` from `build_agent()`
 
 Remove the parameter, the `all_approval` usages in `_register()` calls, and the
 inline comment at line 253. The `_register()` calls revert to their natural approval

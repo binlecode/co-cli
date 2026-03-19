@@ -25,10 +25,10 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     """Build a CoDeps suitable for evals, pulling defaults from settings.
 
     Pass keyword overrides to customise any CoConfig field, e.g.
-    ``make_eval_deps(session_id="my-eval", brave_search_api_key=None)``.
+    ``make_eval_deps(brave_search_api_key=None)``.
     Service fields (shell, knowledge_index, task_runner) and session fields
-    (skill_registry) can also be passed as overrides and are extracted before
-    building CoConfig.
+    (skill_registry, session_id) can also be passed as overrides and are
+    extracted before building CoConfig. session_id is routed to CoSessionState.
     """
     s = get_settings()
 
@@ -37,9 +37,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     knowledge_index = overrides.pop("knowledge_index", None)
     task_runner = overrides.pop("task_runner", None)
     skill_registry = overrides.pop("skill_registry", [])
+    session_id_override = overrides.pop("session_id", "eval")
 
     config_defaults: dict[str, Any] = {
-        "session_id": "eval",
         "obsidian_vault_path": None,
         "google_credentials_path": None,
         "shell_safe_commands": [],
@@ -57,10 +57,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
         "knowledge_reranker_provider": s.knowledge_reranker_provider,
-        "mcp_count": len(s.mcp_servers),
-        "role_models": {k: list(v) for k, v in s.role_models.items()},
+        "role_models": dict(s.role_models),
         "llm_provider": s.llm_provider,
-        "ollama_host": s.ollama_host,
+        "llm_host": s.llm_host,
         "llm_num_ctx": s.llm_num_ctx,
     }
     config_defaults.update(overrides)
@@ -72,7 +71,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
             task_runner=task_runner,
         ),
         config=CoConfig(**config_defaults),
-        session=CoSessionState(skill_registry=skill_registry),
+        session=CoSessionState(session_id=session_id_override, skill_registry=skill_registry),
     )
 
 
@@ -85,7 +84,7 @@ def make_eval_settings(
 
     All values are passed through as-is from the quirks database so evals run
     against the same parameters as live sessions. Both providers now supply
-    model_settings via get_agent():
+    model_settings via build_agent():
       - Ollama: temperature from quirks (e.g. 0.6 for qwen3). Never override
         to 0 — thinking models produce degenerate loops at temperature=0.
       - Gemini: temperature from quirks (typically 1.0 for thinking models).
@@ -95,7 +94,7 @@ def make_eval_settings(
     (e.g. unit tests / unknown providers).
 
     Args:
-        model_settings: Settings from get_agent(), or None for fallback.
+        model_settings: Settings from build_agent(), or None for fallback.
         max_tokens: Optional override for max_tokens. Omit to use the quirks default.
     """
     if model_settings is None:

@@ -56,8 +56,8 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     else:
         lines.append("Reasoning model: not configured (doctor fail-fast)")
 
-    if ctx.deps.config.session_id:
-        lines.append(f"Session: {ctx.deps.config.session_id[:8]}...")
+    if ctx.deps.session.session_id:
+        lines.append(f"Session: {ctx.deps.session.session_id[:8]}...")
 
     skill_grants = st["skill_grants"]
     if skill_grants:

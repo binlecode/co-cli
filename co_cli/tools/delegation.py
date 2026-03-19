@@ -37,6 +37,7 @@ async def delegate_coder(
         result = await agent.run(
             task,
             deps=make_subagent_deps(ctx.deps),
+            usage=ctx.usage,
             usage_limits=UsageLimits(request_limit=max_requests),
             model_settings=rm.settings,
         )
@@ -105,6 +106,7 @@ async def delegate_research(
         result = await agent.run(
             scoped_query,
             deps=sub_deps,
+            usage=ctx.usage,
             usage_limits=UsageLimits(request_limit=max_requests),
             model_settings=rm.settings,
         )
@@ -123,6 +125,7 @@ async def delegate_research(
         retry_result = await agent.run(
             retry_query,
             deps=sub_deps,
+            usage=ctx.usage,
             usage_limits=UsageLimits(request_limit=remaining),
             model_settings=rm.settings,
         )
@@ -190,6 +193,7 @@ async def delegate_analysis(
         result = await agent.run(
             scoped_question,
             deps=make_subagent_deps(ctx.deps),
+            usage=ctx.usage,
             usage_limits=UsageLimits(request_limit=max_requests),
             model_settings=rm.settings,
         )

@@ -9,7 +9,7 @@ from typing import Optional
 
 from rich.table import Table
 
-from co_cli.bootstrap._check import check_settings, check_llm, check_model_availability
+from co_cli.bootstrap._check import check_settings, check_llm
 from co_cli.config import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, ROLE_REASONING
 from co_cli.deps import CoConfig
 from co_cli.display import console
@@ -73,15 +73,12 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
         active_model = reasoning_entry.model
         llm_provider = f"Ollama ({active_model})"
         provider_check = check_llm(config)
-        model_check = check_model_availability(config)
-        if model_check.status == "error":
+        if provider_check.status == "error":
             llm_status = "misconfigured"
-        elif provider_check.status == "warn" and "Ollama" in provider_check.detail:
+        elif provider_check.status == "warn":
             llm_status = "offline"
-        elif provider_check.status == "ok":
-            llm_status = "online"
         else:
-            llm_status = "offline"
+            llm_status = "online"
 
     # -- integrations via check_settings --
     doctor = check_settings(config)

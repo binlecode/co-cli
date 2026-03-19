@@ -109,10 +109,10 @@ uv run co chat
 > "Check my calendar for today and draft an email to the team."
 > "Run `ls -la` to see what files are in this directory."
 
-#### `co status` — System Health Check
-Verify LLM provider, shell, and config health.
+#### `co config` — System Health Check
+Verify LLM provider, shell, and config health (pre-agent, no session required).
 ```bash
-uv run co status
+uv run co config
 ```
 
 #### `co tail` — Real-Time Span Viewer
@@ -144,7 +144,7 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 |---------|--------|
 | `/help` | List all slash commands |
 | `/clear` | Clear conversation history |
-| `/status` | Show system health (same as `co status`) |
+| `/status` | Show live system health inside chat (uses active session deps) |
 | `/tools` | List registered agent tools |
 | `/history` | Show conversation turn count and total messages |
 | `/compact` | Summarize conversation via LLM to reduce context (2-message compacted history) |
@@ -159,21 +159,42 @@ Inside `co chat`, type `/` followed by a command name. Tab completion is availab
 Co remembers preferences, decisions, and project context across sessions. All knowledge is dynamic — loaded on-demand via tools, never baked into the system prompt.
 
 **Memory** — conversation-derived knowledge:
-- Storage: `.co-cli/knowledge/memories/*.md` (markdown with YAML frontmatter)
-- Tools: `save_memory`, `recall_memory`, `list_memories`
+- Storage: `.co-cli/memory/*.md` (markdown with YAML frontmatter)
+- Tools: `save_memory`, `recall_memory`, `search_knowledge`
+
+**Articles** — saved references and web content:
+- Storage: `.co-cli/library/*.md`
+- Tool: `save_article`, `search_knowledge`
 
 **Usage during chat:**
 ```
 You: "Remember that I prefer async/await over callbacks"
-Co: ✓ Saved memory 1: prefers-async-await.md
+Co: ✓ Saved memory: prefers-async-await.md
 
 You: "What do you remember about my coding style?"
 Co: Found 1 memory matching 'coding style':
-    Memory 1 (created 2026-02-09)
-    User prefers async/await over callbacks
+    User prefers async/await over callbacks (2026-02-09)
 ```
 
-All memory files are plain markdown — edit with any text editor, changes take effect on next recall.
+All knowledge files are plain markdown — edit with any text editor, changes take effect on next sync.
+
+### Knowledge Search Backend
+
+Three backends in degradation order: `hybrid → fts5 → grep`.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `knowledge_search_backend` | `"hybrid"` | `hybrid` (vec + FTS5), `fts5` (BM25 only), or `grep` (no index) |
+| `knowledge_embedding_provider` | `"tei"` | Embedding provider: `tei`, `ollama`, `gemini`, or `none` |
+| `knowledge_embedding_model` | `"embeddinggemma"` | Model name passed to the provider |
+| `knowledge_embedding_dims` | `1024` | Output vector dimensions — **must match the model** |
+| `knowledge_embed_api_url` | `"http://127.0.0.1:8283"` | TEI or compatible embedding API endpoint |
+
+> **Dimension mismatch fix**: if you change `knowledge_embedding_model` or `knowledge_embedding_dims`, the vec table schema becomes stale. Delete `~/.local/share/co-cli/search.db` — it rebuilds automatically on next `co chat`.
+>
+> ```bash
+> rm ~/.local/share/co-cli/search.db
+> ```
 
 ---
 

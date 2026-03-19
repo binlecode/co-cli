@@ -102,6 +102,15 @@ Do not introduce any of the following in this delivery:
 - MCP-centric runtime rewrites
 - generic multi-agent orchestration infrastructure
 
+## Proposal-Derived Adoptions Kept
+
+The prior `co-agent-context` proposal contained several larger refactors that do not fit the current delivery. The concrete adoptions from that analysis that do fit `co`, and are therefore retained in this TODO, are:
+
+- retrieval should be side-effect free by default
+- session summaries should be explicit resumability artifacts rather than ordinary durable memory
+- standing context should be explicit in the current memory substrate via bounded metadata, not implicit recall behavior
+- context boundaries should be documented against the current `CoDeps` model instead of speculative multi-agent architecture
+
 ## Delivery Plan
 
 ## TASK-1 — Remove write-on-read behavior from default recall
@@ -230,7 +239,7 @@ Use `always_on` as the name. It already matches the current proposal vocabulary 
 - `co_cli/context/_history.py`
 - `docs/DESIGN-system.md`
 - `docs/DESIGN-core-loop.md`
-- `docs/PROPOSAL-co-agent-context.md`
+- `docs/reference/RESEARCH-co-agent-context.md`
 
 ### Test changes
 
@@ -304,7 +313,7 @@ Add functional coverage for:
 
 The code already has stronger contracts than the current wording in several places. This task is documentation sync, but it must be tied to exact live behavior.
 
-### Required doc updates
+### Processing change
 
 Update canonical docs so they state these exact contracts:
 
@@ -315,6 +324,14 @@ Update canonical docs so they state these exact contracts:
 - MCP is additive
 - approvals are orchestrator-owned
 - skill grants are turn-scoped convenience only and cannot bypass protected approvals
+
+Implement:
+
+1. read each canonical DESIGN/research doc against the live code paths changed or validated in TASK-1 through TASK-4
+2. replace any wording that still describes read-path memory mutation, blurred session-summary semantics, or future-only background-task capability
+3. make the `make_subagent_deps()` isolation contract explicit in canonical docs
+4. align approval-language wording with the actual orchestrator-owned flow after TASK-4 lands
+5. keep MCP wording additive and operational rather than architectural
 
 ### Files
 
@@ -331,11 +348,11 @@ Update canonical docs so they state these exact contracts:
 
 ---
 
-## TASK-6 — Add proposal guardrails that match the current product stage
+## TASK-6 — Add forward-looking guardrails that match the current product stage
 
 ### Why
 
-The repo already has proposals that mention future directions. Those proposals need a local guardrail so future edits do not reintroduce overbuilt designs disconnected from the current code.
+The repo already has research and design material that mentions future directions. Those docs need a local guardrail so future edits do not reintroduce overbuilt designs disconnected from the current code.
 
 ### Processing change
 
@@ -350,7 +367,6 @@ This is a docs-only task, but it must be written against the live contracts esta
 
 ### Files
 
-- `docs/PROPOSAL-co-agent-context.md`
 - `docs/reference/RESEARCH-co-agent-context.md`
 - `docs/reference/RESEARCH-co-tools-skills-analysis.md`
 
@@ -358,6 +374,165 @@ This is a docs-only task, but it must be written against the live contracts esta
 
 - future proposal edits have an explicit local warning against over-engineering
 - the guardrail language references the current code model rather than abstract architecture preference
+
+---
+
+## TASK-7 — Improve MCP operational legibility without adding runtime abstraction
+
+### Why
+
+The current alignment work correctly treats MCP as additive, but users still need a clearer operational picture of what MCP contributes in a live session:
+
+- which MCP tools are connected
+- which are approval-gated
+- which are degraded or unavailable
+- how MCP tool names appear in status and traces
+
+This fits `co` because it strengthens inspectability and trust without making MCP the center of the runtime.
+
+### Processing change
+
+Improve user-visible MCP reporting rather than introducing an abstraction layer.
+
+Implement:
+
+1. audit how MCP-provided tools are surfaced in agent bootstrap, capability/status output, and traces
+2. make connected MCP tool identity stable and user-legible in the relevant status surfaces
+3. surface approval posture for MCP tools using the same vocabulary already used for native tools
+4. surface degraded/unavailable MCP state explicitly rather than collapsing it into missing tools
+5. sync DESIGN docs so MCP is described as additive capability with explicit operational visibility
+
+Do not add a new MCP plugin/runtime layer in this delivery.
+
+### Files
+
+- `co_cli/agent.py`
+- bootstrap/status rendering paths
+- `docs/DESIGN-system.md`
+- `docs/DESIGN-tools.md`
+
+### Done when
+
+- a user can tell which MCP tools are active, approval-gated, or degraded from normal product surfaces
+- MCP tool naming is stable across status-oriented output
+- docs describe MCP visibility as an operational contract, not a hidden implementation detail
+
+---
+
+## TASK-8 — Improve delegated-work observability without widening subagent power
+
+### Why
+
+`co` already has specialist delegation and already isolates child-agent deps correctly. What is missing is operational clarity:
+
+- what the child was asked to do
+- what budget or scope it ran under
+- what context boundary applied
+- where the returned result came from
+
+This is a good fit for `co` because it improves inspectability around an existing feature rather than adding more delegation capability.
+
+### Processing change
+
+Add observability to the current delegation path before adding any new subagent behaviors.
+
+Implement:
+
+1. audit current delegation result/status surfaces in `delegation.py` and `_delegation_agents.py`
+2. make delegated task scope and specialist role explicit in returned metadata/display
+3. surface child-agent result provenance and any relevant request-budget information where the current implementation already tracks it
+4. sync docs to describe exactly what delegated specialists inherit and what they do not inherit
+5. keep the current isolation model; do not add broader child-agent permissions in this delivery
+
+### Files
+
+- `co_cli/tools/delegation.py`
+- `co_cli/tools/_delegation_agents.py`
+- `docs/DESIGN-system.md`
+- `docs/DESIGN-tools.md`
+
+### Done when
+
+- delegated work is easier to inspect from status/result surfaces
+- users can see the scope and provenance of delegated outputs
+- docs describe the current delegation boundary without implying stronger subagent capabilities
+
+---
+
+## TASK-9 — Improve background-task visibility before any agentic async expansion
+
+### Why
+
+The code already has real bounded background execution. The next problem is not missing async machinery; it is weak visibility into:
+
+- task lineage
+- approval history
+- persisted artifacts and outcomes
+- the difference between current shell-task execution and any future agentic follow-up
+
+This fits `co` because it strengthens a live feature users can already hit today.
+
+### Processing change
+
+Strengthen the current background-task harness rather than introducing autonomous workflows.
+
+Implement:
+
+1. audit what `task_control.py` and `_background.py` currently persist and display
+2. improve task status output so lineage and outcome artifacts are easier to inspect
+3. surface approval-relevant context where it already exists, without inventing a new approval system for tasks
+4. sync docs so background tasks are described as bounded async subprocess work, not as hypothetical future capability
+5. explicitly document the boundary between current background tasks and any future agentic async work
+
+### Files
+
+- `co_cli/tools/task_control.py`
+- `co_cli/tools/_background.py`
+- `docs/DESIGN-system.md`
+- `docs/DESIGN-tools.md`
+
+### Done when
+
+- background-task status and outcomes are easier to inspect from the user surface
+- docs clearly distinguish current bounded async execution from future agentic follow-up
+- no new autonomous background-agent layer is introduced
+
+---
+
+## TASK-10 — Add explicit context-boundary docs for specialists and future background turns
+
+### Why
+
+The current code already has a concrete boundary model through `CoDeps` and `make_subagent_deps()`, but the contract is not yet stated in one place for readers and future implementers:
+
+- what a delegated specialist inherits
+- what it does not inherit
+- what a future background agent turn would be allowed to see if such a feature is ever added
+
+This is low-cost, high-value guardrail work that reduces future semantic drift.
+
+### Processing change
+
+Write the context-boundary contract against the current code model.
+
+Implement:
+
+1. document the current inheritance boundary for delegated specialists using the exact `services/config shared, session/runtime reset` contract
+2. document the current opening-context and memory boundaries so specialist context is not described as implicit or unlimited
+3. add an explicit note for future background turns stating that no broader inheritance model exists today
+4. make proposal/research docs refer back to this concrete boundary rather than speculative multi-agent architecture
+
+### Files
+
+- `docs/DESIGN-system.md`
+- `docs/DESIGN-core-loop.md`
+- relevant research docs touched by TASK-5 and TASK-6
+
+### Done when
+
+- one canonical doc explains the active context boundary for delegated specialists
+- future docs have a concrete local reference point for background-turn scope
+- proposal language no longer implies hidden inheritance semantics that the code does not implement
 
 ## Validation
 
@@ -369,6 +544,7 @@ Run targeted functional tests for the changed paths:
 - `tests/test_commands.py`
 - `tests/test_delegate_coder.py`
 - any new tests added for skill-grant approval behavior
+- any targeted tests added for delegation or background-task visibility changes
 
 Use repo-required pytest logging under `.pytest-logs/`.
 
@@ -386,6 +562,8 @@ Read updated docs side-by-side with:
 - `co_cli/commands/_commands.py`
 - `co_cli/tools/_tool_approvals.py`
 - `co_cli/tools/shell.py`
+- `co_cli/tools/delegation.py`
+- `co_cli/tools/_delegation_agents.py`
 
 ## Shipping Order
 
@@ -397,10 +575,15 @@ Implement in this order:
 4. TASK-3 standing-context metadata and injection
 5. TASK-5 DESIGN + research sync
 6. TASK-6 proposal guardrails
+7. TASK-7 MCP operational legibility
+8. TASK-8 delegated-work observability
+9. TASK-9 background-task visibility
+10. TASK-10 context-boundary docs
 
 Reason for order:
 
 - TASK-4 closes the highest-risk trust gap
 - TASK-1 and TASK-2 remove the clearest semantic mismatches
 - TASK-3 builds on the now-cleaner memory model
-- docs should be updated after the code contracts are settled
+- TASK-5 and TASK-6 lock in the cleaned-up contracts before follow-on visibility work
+- TASK-7 through TASK-10 are fit-for-`co` follow-ons that improve inspectability without expanding architecture

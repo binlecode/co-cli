@@ -1,96 +1,329 @@
 # RESEARCH: co-agent-context-gap
-_Date: 2026-03-16_
+_Date: 2026-03-17_
 
 ## Executive Summary
 
-This document analyzes the architectural gaps between `co`'s current context management implementation and **Pydantic-AI's idiomatic state management patterns**. 
+This document re-evaluates `co`'s context-management gaps against the current codebase, not against an aspirational Pydantic-AI rewrite.
 
-While the previous research (`RESEARCH-co-agent-context.md`) correctly identified that `co` possesses a strong, layered context model (prompt identity, durable memory, transcript history, session summaries), it revealed a fundamental philosophical mismatch: **`co` manages context as a pipeline of implicit string mutations, whereas Pydantic-AI expects context to be explicitly managed via strongly-typed dependency injection (`RunContext[Deps]`) and bounded state transitions.**
+The current implementation already has several strong foundations:
 
-Furthermore, cross-referencing with `RESEARCH-agentic-design-pattern-gaps.md` reveals that adopting Pydantic-AI's idioms will natively solve several lingering agentic pattern gaps—specifically **Recovery as a shared pattern** and **Bounded reflection for memory-save quality**.
+- a real grouped dependency container in `CoDeps` with `services`, `config`, `session`, and `runtime`
+- explicit subagent isolation through `make_subagent_deps()`
+- real bounded background-task execution through `TaskRunner`
+- runtime-owned approval orchestration in `_collect_deferred_tool_approvals()`
 
-To fully leverage the underlying `pydantic-ai` framework without over-engineering the system, `co` must shift its context assembly from opaque middleware processors to explicit, typed contracts.
+The main remaining gaps are narrower and more concrete than earlier drafts suggested:
 
----
+1. memory recall still mutates files on read
+2. session summaries still share the same primary type and recall path as durable memories
+3. standing context is still accidental topic recall rather than explicit metadata
+4. skill grants still function as a second approval channel for deferred tools
+5. several docs still understate current background-task and boundary contracts
 
-## Gap 1: Implicit Context Injection vs. Explicit Dependency Injection
+The earlier recommendation to replace current flows with `@agent.system_prompt`, typed specialist payloads, or explicit compaction agents is not supported as near-term implementation guidance by the latest code review. Those ideas remain possible future directions, but they are not the confirmed next steps for `co` today.
 
-### The Issue
-Currently, `co` builds its context implicitly. In `co_cli/context/_history.py`, a function like `inject_opening_context()` proactively fetches memory and injects it into the prompt. Simultaneously, `co_cli/agent.py` aggregates project instructions, the current date, and personality guidance into a monolithic system prompt string before the agent run begins.
+## Current Code Model
 
-### Detailed Analysis
-Pydantic-AI's design philosophy rejects "magic" global state or hidden pre-processors. The idiomatic approach is to pass a strongly-typed `Deps` object into the agent at runtime (`agent.run(deps=...)`). System prompts and dynamic context should be constructed using `@agent.system_prompt` decorated functions that strictly read from the injected `RunContext[Deps]`. 
+### 1. Dependency and Context Structure
 
-Because `co` builds context outside of Pydantic-AI's dependency injection loop, it breaks traceability. If a tool or a subagent needs to know *why* a certain memory is in the prompt, or needs to access the raw configuration, it cannot easily do so because the context has already been flattened into a string.
+`co_cli/deps.py` already gives the system a clear dependency model:
 
-### The Pragmatic Fix
-1. **Leverage `co_cli/deps.py`:** `co` already has a solid dependency container separating `services`, `config`, `session`, and `runtime`. Make this the official `Deps` type for the main `co` agent.
-2. **Refactor Prompt Construction:** Remove the opaque `inject_opening_context()` pipeline. Instead, use Pydantic-AI's dynamic prompt decorators:
-   ```python
-   @agent.system_prompt
-   async def build_standing_context(ctx: RunContext[CoDeps]) -> str:
-       # Explicitly fetch and format memories/config using injected dependencies
-       memories = await ctx.deps.services.memory.get_standing_context()
-       return format_context(ctx.deps.config, memories)
-   ```
+- `CoServices`: long-lived runtime handles such as shell, knowledge index, task runner, model registry
+- `CoConfig`: scalar configuration copied from settings
+- `CoSessionState`: mutable tool-visible session state such as approvals, skill grants, todos, page tokens, and skill registry
+- `CoRuntimeState`: orchestration-owned transient state such as usage, safety, and opening-context state
 
----
+This is already a strong, explicit contract. The main issue is not missing dependency structure; it is that some context semantics layered on top of it are still implicit or semantically blurry.
 
-## Gap 2: Read-Path Mutations vs. Functional Tool Purity
+### 2. Prompt and Context Assembly
 
-### The Issue
-`co_cli/tools/memory.py` contains read-path "gravity" behavior—specifically, recalling or searching for a memory silently rewrites its timestamp or ranking state to surface it more easily in the future.
+`co_cli/agent.py` currently assembles context through a mix of:
 
-### Detailed Analysis
-Pydantic-AI champions functional programming paradigms where tools are pure functions mapped to a `RunContext`. A tool executed by the LLM (or a background retrieval process) should only do what its schema and docstring declare. Silent background mutations on a "read" operation destroy the predictability of the tool execution loop and create invisible side effects that Pydantic-AI's observability tools (like Logfire) cannot trace logically.
+- one prebuilt `system_prompt` string from `assemble_prompt()`
+- multiple `@agent.instructions` functions for date, shell guidance, project instructions, personality memories, critique, and skill listing
+- history processors for opening-context injection, tool-output trimming, safety checks, and history compaction
 
-### The Pragmatic Fix & Solving Pattern Gaps
-1. **Remove Read-Path Mutations:** Strip any `update_timestamp` or ranking mutations out of the `search` and `recall` read paths in `memory.py`.
-2. **Make State Changes Explicit (Solves "Bounded reflection for memory-save quality"):** `RESEARCH-agentic-design-pattern-gaps.md` notes the need for a critic/review pass for memory-save candidates. By removing silent read-path mutations, we force memory updates into the open. `co` can provide a strict `UpdateMemoryPriority` tool with a Pydantic `OutputSchema` that requires the LLM to provide a `reasoning` string before updating a memory's gravity. This natively introduces the missing quality-control pattern.
+This means `co` is not purely "pre-assembled prompt string" and not purely "dynamic runtime prompt decorators" either. It is a hybrid.
 
----
+That matters because earlier research overstated the gap. The code already uses runtime-gated instruction layers effectively. The real problem is narrower:
 
-## Gap 3: Subagent Context Boundaries (Heuristics vs. Typed Contracts)
+- `inject_opening_context()` still injects recalled memory as hidden middleware
+- some context categories remain implicit rather than explicitly typed in the memory substrate
 
-### The Issue
-When `co` spawns a delegated read-only subagent, it isolates the subagent by giving it fresh session/runtime state via `make_subagent_deps()`. However, the exact context the subagent inherits relies on heuristics, leading to the open question: *"What standing memory should a delegated specialist see?"*
+### 3. Memory Behavior
 
-### Detailed Analysis
-In Pydantic-AI, an agent's input is defined by its generic signature: `Agent[SubAgentDeps, OutputSchema]`. If a specialist needs certain project instructions, memory, or history, it must be explicitly declared in the `SubAgentDeps` Pydantic model passed from the parent agent. 
+`co_cli/tools/memory.py` still combines several different behaviors in one substrate:
 
-### The Pragmatic Fix
-1. **Define Explicit Pydantic Models for Handoffs:** 
-   ```python
-   class SpecialistDeps(BaseModel):
-       standing_instructions: str
-       relevant_memories: list[MemoryRecord]
-       task_objective: str
-   ```
-2. **Enforce the Boundary:** The parent agent must construct this `SpecialistDeps` object explicitly and inject it. This forces developers to answer the visibility policy question in the type signature itself.
+- durable memory storage in markdown with frontmatter
+- FTS-backed or grep-backed recall
+- one-hop `related` traversal
+- duplicate consolidation
+- read-path gravity via `_touch_memory()`
 
----
+The most important confirmed mismatch is that `recall_memory()` is still not read-only. After recall and optional related traversal, it calls `_touch_memory()` on direct matches, which rewrites frontmatter and updates timestamps.
 
-## Gap 4: Hidden Middleware Processors vs. Explicit Graph/FSM
+This remains the clearest context-model bug because:
 
-### The Issue
-`co` manages transcript history, doom-loop checks, and sliding-window compaction via a hidden chain of processors in `_history.py`. 
+- the tool behaves like a read path but performs hidden writes
+- tests still encode this behavior as intentional
+- docs and future reasoning become harder because "what changed" is no longer explicit
 
-### Detailed Analysis
-Pydantic-AI explicitly pushes complex workflows (like summarization loops, tool trimming, or doom-loop recovery) out of hidden middleware and into `pydantic-graph`, or handles them via native framework features. Idiomatically, context compaction is an explicit agentic task, not a silent background string manipulation.
+### 4. Session Summaries
 
-### The Pragmatic Fix & Solving Pattern Gaps
-*Note: We must adhere to the rule "do not expand the architecture prematurely." A full rewrite into `pydantic-graph` is not recommended yet.*
+`_index_session_summary()` in `co_cli/context/_history.py` produces a summary for `/new`, but persistence still routes through the normal memory write path. That means session-summary artifacts are still written as ordinary `kind: memory` entries, with only tags and provenance distinguishing them.
 
-1. **Refocus Compaction as an Explicit Task:** When a token threshold is breached, the runtime should explicitly invoke a `CompactionAgent` that returns a strongly-typed `SessionSummary` Pydantic model. 
-2. **Formalize the Doom-Loop Guard (Solves "Recovery as a shared pattern"):** `RESEARCH-agentic-design-pattern-gaps.md` highlights the need for generalized reformulate-and-retry patterns. By moving away from hidden middleware trims, `co` can use Pydantic-AI's built-in `ModelRetry` exceptions and `UsageLimits`. If a doom-loop is detected, raising a `ModelRetry("You are looping, reformulate your approach")` natively plugs into Pydantic-AI's reflection cycle, providing the exact shared recovery pattern requested without building custom middleware.
+This creates a semantic blur between:
 
----
+- durable learned memory
+- resumability/checkpoint artifacts
 
-## Conclusion & Implementation Priority
+The storage substrate itself does not need to change. The gap is missing artifact typing and missing default recall separation.
 
-To resolve the mismatch between `co`'s legacy string-manipulation context and Pydantic-AI's idiomatic typed context—while simultaneously addressing lingering agentic pattern gaps—the following adoption path is recommended:
+### 5. Opening Context
 
-1. **Immediate (P0):** Eradicate read-path mutations in `memory.py`. Read operations must be strictly side-effect free.
-2. **High (P1):** Refactor `agent.py` and `_history.py`. Move from `inject_opening_context()` to Pydantic-AI's `@agent.system_prompt` decorators, pulling strictly from `RunContext[CoDeps]`. Use native `ModelRetry` for shared recovery loops.
-3. **Medium (P2):** Type-safe Subagents. Replace `make_subagent_deps()` heuristics with explicit `SpecialistDeps` Pydantic models for subagent spawning.
-4. **Low/Ongoing (P3):** Gradually migrate hidden middleware (compaction) into explicit Pydantic-AI agent invocations, treating session summaries as explicit structured artifacts.
+`inject_opening_context()` still works by:
+
+1. counting user turns
+2. reading the latest user message
+3. calling `recall_memory(ctx, user_msg, max_results=3)`
+4. injecting the returned display as a system message
+
+This means standing context is not a first-class concept today. Anything "always present" is only present if topic recall happens to surface it.
+
+The gap is therefore not "co lacks context injection." It already has that. The gap is that standing context has no explicit representation in the current memory model.
+
+### 6. Subagent Boundaries
+
+`make_subagent_deps()` already shares `services` and `config` while resetting `session` and `runtime`. Delegation tools use this to spawn isolated read-only specialists with narrow tool surfaces:
+
+- coder: file reads only
+- research: web search/fetch only
+- analysis: knowledge and Drive search only
+
+This is a better current-state contract than earlier research gave it credit for. The live gap is not absence of isolation; it is weak user-facing visibility into:
+
+- what boundary applied
+- what budget the child ran under
+- where its result came from
+
+That makes this an observability/documentation gap, not a required rewrite to typed specialist payload models.
+
+### 7. Background Work
+
+Background execution is not hypothetical. The code already supports:
+
+- task start
+- status checks
+- cancellation
+- listing
+- file-backed output and metadata
+- retention cleanup and orphan recovery
+
+The main background-task gap is therefore operational legibility:
+
+- lineage
+- approval context
+- output artifact visibility
+- clearer differentiation between current subprocess tasks and future agentic async ideas
+
+### 8. Approval Semantics
+
+`_collect_deferred_tool_approvals()` still resolves approvals in this order:
+
+1. skill grant
+2. session auto-approval
+3. user prompt
+
+Because `run_shell_command()` treats `ctx.tool_call_approved` as sufficient after a deferred approval path, a skill grant can still bypass the normal shell approval prompt for commands that are not DENY-classified.
+
+This is the highest-trust contract mismatch in the current context/harness model.
+
+## Confirmed Gaps
+
+### Gap 1: Read Paths Still Mutate Memory State
+
+#### Current behavior
+
+`recall_memory()` still rewrites matching memory files through `_touch_memory()`.
+
+#### Why it matters
+
+- it makes read behavior non-obvious
+- it couples retrieval ranking and durable mutation
+- it creates hidden state changes that are harder to reason about and document
+
+#### Confirmed adoption
+
+Adopt strict read-only default recall. Keep consolidation and explicit writes as mutation paths; remove silent timestamp refresh from recall.
+
+This is already the top-priority confirmed adoption.
+
+### Gap 2: Session Summary Artifacts Are Still Semantically Blurry
+
+#### Current behavior
+
+Session summaries produced for `/new` still land in the same primary memory type as durable learned state.
+
+#### Why it matters
+
+- resumability artifacts and durable memory serve different product purposes
+- default recall should not surface checkpoint summaries as if they were durable learned facts
+- docs cannot cleanly explain the model while the artifact typing is implicit
+
+#### Confirmed adoption
+
+Keep the current markdown substrate, but add explicit artifact typing and default recall exclusion for session-summary artifacts.
+
+### Gap 3: Standing Context Is Still Accidental
+
+#### Current behavior
+
+Opening context is driven entirely by topic recall from the latest user message.
+
+#### Why it matters
+
+- important stable preferences or working agreements have no explicit standing status
+- recall quality depends on lexical overlap rather than intent
+- the product cannot cleanly explain what "always carried forward" means
+
+#### Confirmed adoption
+
+Add bounded `always_on` metadata inside the existing memory substrate and inject it through a dedicated path before normal topic recall.
+
+This keeps the current architecture while making standing context explicit.
+
+### Gap 4: Skill Grants Still Bypass Protected Approval Flow
+
+#### Current behavior
+
+Skill grants are checked before the prompt path for deferred tools.
+
+#### Why it matters
+
+- skill grants behave like a parallel approval channel
+- this is especially problematic for shell execution
+- the trust model becomes harder to explain to users
+
+#### Confirmed adoption
+
+Restrict skill-grant auto-approval so it cannot approve approval-gated tools such as shell execution.
+
+### Gap 5: Docs Lag the Real Runtime Contracts
+
+#### Current behavior
+
+The code already has:
+
+- grouped deps
+- subagent isolation
+- bounded background tasks
+- additive MCP toolsets
+
+But some docs still describe these areas too loosely or with stale assumptions.
+
+#### Why it matters
+
+- readers infer larger architectural gaps than the code actually has
+- future design work drifts toward unnecessary rewrites
+- product semantics remain harder to teach internally
+
+#### Confirmed adoption
+
+Sync DESIGN and research docs to the actual runtime contracts after the core semantic fixes land.
+
+## Gaps That Are Real but Not Adopted as Current Work
+
+The following ideas came up in prior research and are not dismissed forever, but they are not confirmed next steps for `co` based on the latest code review.
+
+### 1. Full `@agent.system_prompt` Migration
+
+Earlier research framed this as the natural replacement for opening-context middleware. The current codebase does not justify that as an immediate move.
+
+Why it is not currently adopted:
+
+- the agent already uses runtime-gated `@agent.instructions` successfully
+- the concrete bug is not "lack of runtime prompt assembly"; it is missing explicit standing-context metadata
+- replacing history-processor behavior with prompt decorators would be a larger refactor than the currently confirmed gap requires
+
+Status: future option, not current recommendation.
+
+### 2. Typed Specialist Payload Models Replacing `make_subagent_deps()`
+
+Earlier research treated typed handoff models as the clean answer to subagent boundaries. The current code review shows that the live isolation contract is already sound.
+
+Why it is not currently adopted:
+
+- `make_subagent_deps()` already enforces the core security boundary
+- the immediate problem is weak visibility and documentation, not missing isolation
+- introducing multiple specialist dep models would expand architecture without a concrete failure requiring it
+
+Status: future option, not current recommendation.
+
+### 3. Explicit Compaction Agents and `UsageLimits`-Driven FSM Refactors
+
+Earlier research proposed explicit compaction-agent invocation and stronger use of framework-native recovery primitives.
+
+Why it is not currently adopted:
+
+- compaction already exists and background precomputation already exists
+- the immediate gaps are semantic clarity and inspectability, not absence of compaction machinery
+- a larger workflow rewrite would exceed the current problem scope
+
+Status: future option, not current recommendation.
+
+### 4. Explicit Memory-Priority Mutation Tools
+
+An explicit "promote to always_on" or memory-priority tool may become useful later, especially if standing context grows more sophisticated.
+
+Why it is not currently adopted:
+
+- there is no `always_on` field in the code yet
+- the first step is making standing context explicit in the substrate
+- adding a policy-heavy mutation tool before the substrate exists would be premature
+
+Status: possible later follow-up after standing-context metadata ships.
+
+## Recommended Adoption Path
+
+The recommended path is the current canonical TODO, summarized here from highest-value confirmed fixes to follow-on legibility work.
+
+### P0: Semantic and Trust Corrections
+
+1. remove write-on-read behavior from `recall_memory()`
+2. type session-summary artifacts explicitly and exclude them from default recall
+3. add bounded `always_on` standing-context metadata
+4. prevent skill grants from bypassing approval-gated tools
+
+### P1: Contract Sync
+
+5. update canonical DESIGN and research docs to match the shipped runtime contracts
+6. add forward-looking guardrails that block overbuilt rewrites disconnected from current product needs
+
+### P2: Operational Legibility
+
+7. improve MCP operational visibility
+8. improve delegated-work observability
+9. improve background-task visibility
+10. add explicit context-boundary docs for delegated specialists and future background turns
+
+## Relationship to the Canonical TODO
+
+The authoritative implementation plan is:
+
+- `docs/TODO-context-harness-research-alignment.md`
+
+This research document is diagnostic support for that TODO. It should not be treated as an independent roadmap.
+
+## Bottom Line
+
+The latest code review does not support a sweeping context-architecture rewrite as the next step for `co`.
+
+It supports a narrower, more defensible conclusion:
+
+- keep the current grouped dependency model
+- keep the current subagent isolation model
+- keep the current background-task substrate
+- fix the semantic mismatches that make the model harder to reason about
+- improve visibility and docs before introducing larger architectural moves
+
+That path is more consistent with `co`'s current product identity: local-first, approval-first, inspectable, and pragmatic.

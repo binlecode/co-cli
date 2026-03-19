@@ -73,6 +73,23 @@ class CompactionResult:
 # ---------------------------------------------------------------------------
 
 
+def _align_tail_start(messages: list[ModelMessage], tail_start: int) -> int:
+    """Walk tail_start forward to a clean user-turn boundary.
+
+    Ensures the tail never starts at a ModelRequest containing ToolReturnPart
+    whose matching ToolCallPart was dropped into the middle section.
+    Returns len(messages) if no clean boundary exists (caller should skip drop).
+    """
+    while tail_start < len(messages):
+        msg = messages[tail_start]
+        if isinstance(msg, ModelRequest) and not any(
+            isinstance(p, ToolReturnPart) for p in msg.parts
+        ):
+            break
+        tail_start += 1
+    return tail_start
+
+
 def _find_first_run_end(messages: list[ModelMessage]) -> int:
     """Return the index (inclusive) of the first ModelResponse containing a TextPart.
 
@@ -372,6 +389,9 @@ async def truncate_history_window(
     # Tail: keep roughly half of max_msgs (minimum 4 for usable context)
     tail_count = max(4, max_msgs // 2)
     tail_start = max(head_end, len(messages) - tail_count)
+    tail_start = _align_tail_start(messages, tail_start)
+    if tail_start >= len(messages):
+        return messages  # no clean boundary — keep everything
 
     # Nothing to drop?
     if tail_start <= head_end:
@@ -478,6 +498,9 @@ async def precompute_compaction(
     head_end = first_run_end + 1
     tail_count = max(4, max_msgs // 2)
     tail_start = max(head_end, len(messages) - tail_count)
+    tail_start = _align_tail_start(messages, tail_start)
+    if tail_start >= len(messages):
+        return None  # no clean boundary — skip pre-computation
 
     if tail_start <= head_end:
         return None

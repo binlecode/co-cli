@@ -1,3 +1,4 @@
+import pathlib
 #!/usr/bin/env python3
 """Eval: signal-analyzer — verify analyze_for_signals classification accuracy.
 
@@ -29,7 +30,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from co_cli.memory._signal_detector import SignalResult, analyze_for_signals  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
 from evals._fixtures import single_user_turn  # noqa: E402
 
@@ -166,7 +169,8 @@ async def main() -> int:
     print("=" * 60)
     print()
 
-    agent, _, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     model = agent.model
 
     t0 = time.monotonic()

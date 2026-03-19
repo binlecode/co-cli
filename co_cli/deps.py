@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,6 +65,7 @@ DEFAULT_TASKS_DIR = Path(".co-cli/tasks")
 if TYPE_CHECKING:
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
+    from co_cli.context._history import OpeningContextState, SafetyState
 
 
 @dataclass
@@ -81,7 +83,7 @@ class CoServices:
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class CoConfig:
     """Injected configuration — set at session bootstrap; may be updated during startup (e.g. backend resolution, model check).
 
@@ -89,7 +91,6 @@ class CoConfig:
     Tools access ctx.deps.config.field_name. No tool should import Settings.
     """
 
-    session_id: str = ""
     workspace_root: Path = field(default_factory=Path.cwd)
     obsidian_vault_path: Path | None = None
     google_credentials_path: str | None = None
@@ -134,7 +135,7 @@ class CoConfig:
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
-    personality_critique: str = ""
+    system_prompt: str = ""
     max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
@@ -150,7 +151,6 @@ class CoConfig:
     knowledge_hybrid_text_weight: float = DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT
     knowledge_reranker_model: str = DEFAULT_KNOWLEDGE_RERANKER_MODEL
     theme: str = "light"
-    mcp_count: int = 0
     mcp_servers: dict[str, "MCPServerConfig"] = field(default_factory=dict)
     role_models: dict[str, ModelEntry] = field(default_factory=dict)
     llm_host: str = DEFAULT_LLM_HOST
@@ -163,18 +163,34 @@ class CoConfig:
     tool_retries: int = DEFAULT_TOOL_RETRIES
 
     @classmethod
-    def from_settings(cls, s: "Settings") -> "CoConfig":
-        """Construct a CoConfig from a Settings instance, copying all pure-copy fields.
+    def from_settings(cls, s: "Settings", *, cwd: Path) -> "CoConfig":
+        """Construct a fully resolved CoConfig from a Settings instance and current working directory.
 
-        Computed/session fields (session_id, exec_approvals_path, skills_dir, memory_dir,
-        session_path, tasks_dir, personality_critique, knowledge_search_backend, mcp_count)
-        are left at dataclass defaults — callers override them via dataclasses.replace().
+        All cwd-relative paths and settings fields are resolved in a single call.
         """
+        # Resolve MCP server env tokens before construction (frozen=True prevents post-init mutation)
+        resolved_servers: dict[str, "MCPServerConfig"] = {}
+        for name, srv_cfg in (s.mcp_servers or {}).items():
+            if name == "github":
+                env = dict(srv_cfg.env) if srv_cfg.env else {}
+                if "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
+                    token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
+                    if token:
+                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
+                        # TODO(token-env): generalize when MCPServerConfig gains a token_env field
+                srv_cfg = srv_cfg.model_copy(update={"env": env})
+            resolved_servers[name] = srv_cfg
         return cls(
+            workspace_root=cwd,
             obsidian_vault_path=Path(s.obsidian_vault_path) if s.obsidian_vault_path else None,
             google_credentials_path=s.google_credentials_path,
             shell_safe_commands=list(s.shell_safe_commands),
             shell_max_timeout=s.shell_max_timeout,
+            exec_approvals_path=cwd / ".co-cli" / "exec-approvals.json",
+            memory_dir=cwd / ".co-cli" / "memory",
+            skills_dir=cwd / ".co-cli" / "skills",
+            session_path=cwd / ".co-cli" / "session.json",
+            tasks_dir=cwd / ".co-cli" / "tasks",
             llm_api_key=s.llm_api_key,
             brave_search_api_key=s.brave_search_api_key,
             web_fetch_allowed_domains=list(s.web_fetch_allowed_domains),
@@ -194,6 +210,7 @@ class CoConfig:
             knowledge_chunk_size=s.knowledge_chunk_size,
             knowledge_chunk_overlap=s.knowledge_chunk_overlap,
             personality=s.personality,
+            knowledge_search_backend=s.knowledge_search_backend,
             max_history_messages=s.max_history_messages,
             tool_output_trim_chars=s.tool_output_trim_chars,
             doom_loop_threshold=s.doom_loop_threshold,
@@ -213,7 +230,7 @@ class CoConfig:
             library_dir=Path(s.library_path) if s.library_path else DATA_DIR / "library",
             theme=s.theme,
             role_models=dict(s.role_models),
-            mcp_servers=dict(s.mcp_servers) if s.mcp_servers else {},
+            mcp_servers=resolved_servers,
             llm_host=s.llm_host,
             llm_provider=s.llm_provider,
             llm_num_ctx=s.llm_num_ctx,
@@ -245,10 +262,12 @@ class CoSessionState:
     skill_tool_grants: set[str] = field(default_factory=set)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
+    session_id: str = ""
     skill_registry: list[dict] = field(default_factory=list)
     tool_names: list[str] = field(default_factory=list)
     tool_approvals: dict[str, bool] = field(default_factory=dict)
     active_skill_name: str | None = None
+    slash_command_count: int = 0
 
 
 @dataclass
@@ -262,8 +281,10 @@ class CoRuntimeState:
 
     precomputed_compaction: Any = field(default=None, repr=False)
     turn_usage: RunUsage | None = None
-    opening_ctx_state: Any = field(default=None, repr=False)
-    safety_state: Any = field(default=None, repr=False)
+    # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
+    # TODO: resolve by extracting a _types.py module to break the circular import properly.
+    opening_ctx_state: "OpeningContextState | None" = field(default=None, repr=False)
+    safety_state: "SafetyState | None" = field(default=None, repr=False)
 
 
 

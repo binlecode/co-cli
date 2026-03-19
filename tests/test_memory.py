@@ -9,7 +9,8 @@ import yaml
 from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
 from co_cli.tools._shell_backend import ShellBackend
@@ -29,8 +30,8 @@ from co_cli.tools.memory import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-# Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _ = get_agent()
+# Cache agent at module level — build_agent() is expensive; model reference is stable.
+_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx(

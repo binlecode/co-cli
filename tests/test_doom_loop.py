@@ -5,7 +5,9 @@ calls and injects a SystemPromptPart warning at the configured threshold.
 Deterministic — no LLM calls.
 """
 
+from dataclasses import replace
 from pydantic_ai._run_context import RunContext
+from pathlib import Path
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -17,7 +19,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 
 from co_cli.context._history import SafetyState, detect_safety_issues
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
 from co_cli.tools._shell_backend import ShellBackend
 
@@ -26,13 +29,12 @@ def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            session_id="test-doom-loop",
             doom_loop_threshold=threshold,
             max_reflections=3,
         ),
         runtime=CoRuntimeState(safety_state=SafetyState()),
     )
-    agent, _, _ = get_agent()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     return RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
 
@@ -184,7 +186,7 @@ def test_shell_reflection_does_not_trigger_on_broken_streak():
     triggers the reflection injection.
     """
     ctx = _make_ctx(threshold=3)
-    ctx.deps.config.max_reflections = 3
+    ctx.deps.config = replace(ctx.deps.config, max_reflections=3)
     ctx.deps.runtime.safety_state = SafetyState()
     messages = [
         ModelRequest(parts=[UserPromptPart(content="run the tests")]),
@@ -221,7 +223,7 @@ def test_shell_reflection_false_positive_on_informational_error_word():
     reflection cap incorrectly.
     """
     ctx = _make_ctx(threshold=3)
-    ctx.deps.config.max_reflections = 3
+    ctx.deps.config = replace(ctx.deps.config, max_reflections=3)
     ctx.deps.runtime.safety_state = SafetyState()
     messages = [
         ModelRequest(parts=[UserPromptPart(content="run the tests")]),

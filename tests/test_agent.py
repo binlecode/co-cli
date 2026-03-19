@@ -1,13 +1,16 @@
 """Functional tests for agent factory — tool registration and approval wiring."""
 
 import asyncio
+import dataclasses
 from datetime import date
+from pathlib import Path
 
 from pydantic_ai.models.function import FunctionModel, AgentInfo
 from pydantic_ai.messages import ModelResponse, TextPart, ModelMessage
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 from co_cli.config import WebPolicy, settings
+from co_cli.deps import CoConfig
 
 
 # Canonical non-delegation tool inventory. Update when adding/removing/renaming tools.
@@ -79,16 +82,16 @@ EXPECTED_APPROVAL_TOOLS = {
 }
 
 
-def test_get_agent_registers_all_tools():
-    """get_agent() registers exactly the expected tools with no duplicates."""
-    _agent, tool_names, _ = get_agent()
+def test_build_agent_registers_all_tools():
+    """build_agent() registers exactly the expected tools with no duplicates."""
+    _agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
     assert set(tool_names) == EXPECTED_TOOLS
 
 
 def test_approval_tools_flagged():
     """Side-effectful tools require approval; read-only tools do not."""
-    _agent, _tool_names, tool_approval = get_agent()
+    _agent, _tool_names, tool_approval = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     for name, requires_approval in tool_approval.items():
         if name in EXPECTED_APPROVAL_TOOLS:
             assert requires_approval, (
@@ -102,7 +105,7 @@ def test_approval_tools_flagged():
 
 def test_history_processors_attached():
     """Agent has all four history processors for context governance (§16)."""
-    agent, _tool_names, _ = get_agent()
+    agent, _tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     processor_names = [p.__name__ for p in agent.history_processors]
     assert "inject_opening_context" in processor_names
     assert "truncate_tool_returns" in processor_names
@@ -112,20 +115,22 @@ def test_history_processors_attached():
 
 def test_web_search_ask_requires_approval():
     """web_search requires approval when web_policy.search is 'ask'."""
-    from co_cli.deps import CoConfig
-    import dataclasses
-    config = dataclasses.replace(CoConfig.from_settings(settings), web_policy=WebPolicy(search="ask", fetch="allow"))
-    _agent, _tool_names, tool_approval = get_agent(config=config)
+    config = dataclasses.replace(
+        CoConfig.from_settings(settings, cwd=Path.cwd()),
+        web_policy=WebPolicy(search="ask", fetch="allow"),
+    )
+    _agent, _tool_names, tool_approval = build_agent(config=config)
     assert tool_approval["web_search"] is True
     assert tool_approval["web_fetch"] is False
 
 
 def test_web_fetch_ask_requires_approval():
     """web_fetch requires approval when web_policy.fetch is 'ask'."""
-    from co_cli.deps import CoConfig
-    import dataclasses
-    config = dataclasses.replace(CoConfig.from_settings(settings), web_policy=WebPolicy(search="allow", fetch="ask"))
-    _agent, _tool_names, tool_approval = get_agent(config=config)
+    config = dataclasses.replace(
+        CoConfig.from_settings(settings, cwd=Path.cwd()),
+        web_policy=WebPolicy(search="allow", fetch="ask"),
+    )
+    _agent, _tool_names, tool_approval = build_agent(config=config)
     assert tool_approval["web_search"] is False
     assert tool_approval["web_fetch"] is True
 
@@ -137,7 +142,7 @@ def test_instructions_reevaluated_on_turn2():
     current-date instructions from @agent.instructions, confirming the
     channel is not stale.
     """
-    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.deps import CoDeps, CoServices
     from co_cli.tools._shell_backend import ShellBackend
 
     captured: list[str | None] = []
@@ -146,7 +151,7 @@ def test_instructions_reevaluated_on_turn2():
         captured.append(info.instructions)
         return ModelResponse(parts=[TextPart(content="ok")])
 
-    agent, _, _ = get_agent()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     agent._model = FunctionModel(capture_model)
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 

@@ -30,7 +30,7 @@ tools/
 
 ### Registration
 
-All native tools are registered via `_register(fn, requires_approval)` in `agent.py:get_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
+All native tools are registered via `_register(fn, requires_approval)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
 
 Conditional registration: `delegate_*` tools are registered only when the matching role model chain is configured. If `reasoning` only is set, all three delegation tools may be unavailable.
 
@@ -292,4 +292,4 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `co_cli/tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()` — delegation agent helpers |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` — provider-aware model factory |
-| `co_cli/agent.py` | `get_agent()` — `_register()` helper and full tool registration sequence |
+| `co_cli/agent.py` | `build_agent()` — `_register()` helper and full tool registration sequence |

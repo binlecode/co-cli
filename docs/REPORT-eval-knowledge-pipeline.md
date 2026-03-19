@@ -23,7 +23,7 @@ Turn 2: (history from T1) → search_knowledge → grounded answer
 | Step | Outcome |
 |------|---------|
 | Import `co_cli._knowledge_index` | OK (after `uv sync` + pyc clear) |
-| `get_agent()` | OK — model `qwen3:30b-a3b-thinking-2507-agentic` |
+| `build_agent()` | OK — model `qwen3:30b-a3b-thinking-2507-agentic` |
 | `KnowledgeIndex(.co-cli/search.db)` | OK — fts5 backend |
 | `make_eval_deps()` | OK — library `.co-cli/library`, brave key present |
 | Ollama model state | Loaded at 262 144 ctx / 31 545 MB VRAM |

@@ -1,14 +1,13 @@
 import logging
-import os
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 
-from co_cli._model_factory import prepare_provider
-from co_cli.config import settings, ROLE_REASONING, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
+from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
 from co_cli.deps import CoDeps, CoConfig
+from co_cli._model_factory import ResolvedModel
 from co_cli.context._history import (
     inject_opening_context,
     truncate_tool_returns,
@@ -45,22 +44,23 @@ def _build_system_prompt(
 ) -> str:
     """Build the agent system prompt for the given model and personality.
 
-    Loads soul seed, character base memories, mindsets, and examples from
-    config.personality and config.memory_dir, then calls assemble_prompt().
-    Returns the assembled system prompt string.
+    Loads soul seed, character base memories, mindsets, examples, and critique
+    from config.personality and config.memory_dir, then calls assemble_prompt().
+    Returns the assembled system prompt string including the critique block.
     """
     soul_seed: str | None = None
     soul_examples: str | None = None
+    soul_critique = ""
     if config.personality:
         from co_cli.prompts.personalities._loader import (
             load_soul_seed,
             load_soul_examples,
             load_soul_mindsets,
             load_character_memories,
+            load_soul_critique,
         )
         soul_seed = load_soul_seed(config.personality)
-        memory_dir = config.memory_dir
-        base_memories = load_character_memories(config.personality, memory_dir)
+        base_memories = load_character_memories(config.personality, config.memory_dir)
         if base_memories:
             soul_seed = soul_seed + "\n\n" + base_memories
         soul_mindsets = load_soul_mindsets(config.personality)
@@ -69,50 +69,43 @@ def _build_system_prompt(
         examples = load_soul_examples(config.personality)
         if examples:
             soul_examples = examples
+        soul_critique = load_soul_critique(config.personality)
     system_prompt, _manifest = assemble_prompt(
         provider,
         model_name=model_name,
         soul_seed=soul_seed,
         soul_examples=soul_examples,
     )
+    if soul_critique:
+        system_prompt = system_prompt + f"\n\n## Review lens\n\n{soul_critique}"
     return system_prompt
 
 
-def get_agent(
+def build_agent(
     *,
-    config: CoConfig | None = None,
+    config: CoConfig,
+    resolved: "ResolvedModel | None" = None,
 ) -> tuple[Agent[CoDeps, str | DeferredToolRequests], list[str], dict[str, bool]]:
-    """Factory function to create the Pydantic AI Agent.
-
-    Supports 'ollama' (default) and 'gemini' via config.
+    """Build the main session Agent with model and settings baked in at construction.
 
     Args:
-        config: Injected CoConfig from deps. When provided (main chat flow),
-            all settings are read from deps.config — the authoritative post-bootstrap
-            source. When absent (tests/evals without deps), falls back to the
-            global settings singleton.
+        config: Session config — system prompt, tool policy, MCP servers.
+        resolved: Pre-built reasoning model + inference settings. When omitted,
+            resolved from ModelRegistry.from_config(config). Callers that already
+            hold a resolved model (main.py) pass it explicitly to avoid building
+            the registry twice and to reuse the same instance as primary_model.
     """
-    # _cfg resolves the config source: deps.config in the live chat flow (authoritative),
-    # CoConfig.from_settings(settings) in tests/evals that call get_agent() without deps.
-    _cfg: CoConfig = config if config is not None else CoConfig.from_settings(settings)
-
-    provider_name = _cfg.llm_provider.lower()
-
-    prepare_provider(provider_name, _cfg.llm_api_key)
-
-    reasoning_entry = _cfg.role_models[ROLE_REASONING]
-
-    from co_cli.prompts.model_quirks._loader import normalize_model_name
-    normalized_model = normalize_model_name(reasoning_entry.model)
-
-    system_prompt = _build_system_prompt(provider_name, normalized_model, _cfg)
-
+    if resolved is None:
+        from co_cli._model_factory import ModelRegistry
+        resolved = ModelRegistry.from_config(config).get(
+            ROLE_REASONING, ResolvedModel(model=None, settings=None)
+        )
     # Build MCP toolsets from config
     mcp_toolsets = []
-    if _cfg.mcp_servers:
+    if config.mcp_servers:
         from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
 
-        for name, cfg in _cfg.mcp_servers.items():
+        for name, cfg in config.mcp_servers.items():
             if cfg.url:
                 # HTTP transport — SSE when URL ends with /sse, else StreamableHTTP
                 if cfg.url.rstrip("/").endswith("/sse"):
@@ -121,11 +114,6 @@ def get_agent(
                     server = MCPServerStreamableHTTP(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
             else:
                 env = dict(cfg.env) if cfg.env else {}
-                # Lazy GitHub token: resolve at session start, not at config import
-                if name == "github" and "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
-                    token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
-                    if token:
-                        env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
                 server = MCPServerStdio(
                     cfg.command,
                     args=cfg.args,
@@ -138,10 +126,11 @@ def get_agent(
             mcp_toolsets.append(server)
 
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
-        model=None,
+        resolved.model,
         deps_type=CoDeps,
-        system_prompt=system_prompt,
-        retries=_cfg.tool_retries,
+        instructions=config.system_prompt,
+        model_settings=resolved.settings,
+        retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[
             inject_opening_context,
@@ -184,13 +173,6 @@ def get_agent(
         return _load_personality_memories()
 
     @agent.instructions
-    def inject_personality_critique(ctx: RunContext[CoDeps]) -> str:
-        """Inject always-on soul critique from souls/{role}/critique.md."""
-        if not ctx.deps.config.personality_critique:
-            return ""
-        return f"\n## Review lens\n\n{ctx.deps.config.personality_critique}"
-
-    @agent.instructions
     def add_available_skills(ctx: RunContext[CoDeps]) -> str:
         """Inject the list of available skills so the model can route /skill commands."""
         if not ctx.deps.session.skill_registry:
@@ -209,11 +191,11 @@ def get_agent(
             text = truncated + f"\n(+{remaining} more — type / to see all)"
         return text
 
-    tool_registry: list[tuple[str, bool]] = []  # (name, requires_approval)
+    tool_approvals: dict[str, bool] = {}
 
     def _register(fn, requires_approval: bool) -> None:
         agent.tool(fn, requires_approval=requires_approval)
-        tool_registry.append((fn.__name__, requires_approval))
+        tool_approvals[fn.__name__] = requires_approval
 
     # Background task management
     _register(start_background_task, True)
@@ -225,11 +207,11 @@ def get_agent(
     _register(check_capabilities, False)
 
     # Sub-agent delegation — registered only when the role model is configured
-    if _cfg.role_models.get(ROLE_CODING):
+    if config.role_models.get(ROLE_CODING):
         _register(delegate_coder, False)
-    if _cfg.role_models.get(ROLE_RESEARCH):
+    if config.role_models.get(ROLE_RESEARCH):
         _register(delegate_research, False)
-    if _cfg.role_models.get(ROLE_ANALYSIS):
+    if config.role_models.get(ROLE_ANALYSIS):
         _register(delegate_analysis, False)
 
     # Native file tools
@@ -268,26 +250,24 @@ def get_agent(
     _register(search_emails, False)
     _register(list_calendar_events, False)
     _register(search_calendar_events, False)
-    policy = _cfg.web_policy
+    policy = config.web_policy
     search_approval = policy.search == "ask"
     fetch_approval = policy.fetch == "ask"
     _register(web_search, search_approval)
     _register(web_fetch, fetch_approval)
 
-    tool_names = [name for name, _ in tool_registry]
-    tool_approval = {name: flag for name, flag in tool_registry}
-    return agent, tool_names, tool_approval
+    return agent, list(tool_approvals.keys()), tool_approvals
 
 
-async def discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list[str]:
+async def discover_mcp_tools(agent: Agent, exclude: set[str]) -> list[str]:
     """Discover MCP tool names from connected servers (after async with agent).
 
-    Falls back to ``{prefix}_*`` placeholders if list_tools() is unavailable.
+    Returns only MCP tool names, excluding any names already in ``exclude``.
+    Skips servers where list_tools() is unavailable — contributes nothing for those.
     """
     from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
-    native_set = set(native_tool_names)
 
     for toolset in agent.toolsets:
         # Unwrap approval wrappers to reach the MCPServer base instance
@@ -299,15 +279,13 @@ async def discover_mcp_tools(agent: Agent, native_tool_names: list[str]) -> list
             prefix = inner.tool_prefix or ""
             for t in tools:
                 name = f"{prefix}_{t.name}" if prefix else t.name
-                if name not in native_set:
+                if name not in exclude:
                     mcp_tool_names.append(name)
         except Exception as e:
             logger.warning(
-                f"MCP tool list failed for {inner.tool_prefix!r}: {e}"
+                "MCP tool list failed for %r: %s", inner.tool_prefix, e
             )
-            # Server not yet connected or list failed — use placeholder
-            prefix = inner.tool_prefix or "mcp"
-            mcp_tool_names.append(f"{prefix}_*")
+            # contribute nothing — real tool names unknown
 
-    return native_tool_names + sorted(mcp_tool_names)
+    return sorted(mcp_tool_names)
 

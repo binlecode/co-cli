@@ -1,17 +1,15 @@
-import dataclasses
 import logging
 from pathlib import Path
 
 from opentelemetry import trace
 
-from co_cli.bootstrap._check import check_llm, check_model_availability, check_runtime, RuntimeCheck
+from co_cli.bootstrap._check import check_llm
+from co_cli.config import settings, ROLE_REASONING
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
-from co_cli.tools._shell_backend import ShellBackend
-from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
 from co_cli.display import TerminalFrontend
-from co_cli.prompts.personalities._loader import load_soul_critique
+from co_cli.tools._shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
 _TRACER = trace.get_tracer("co-cli.bootstrap")
@@ -19,29 +17,25 @@ _TRACER = trace.get_tracer("co-cli.bootstrap")
 
 def create_deps() -> CoDeps:
     """Assemble CoDeps from settings. Raises ValueError on provider/model hard errors."""
-    _base_config = CoConfig.from_settings(settings)
-    personality_critique = load_soul_critique(_base_config.personality) if _base_config.personality else ""
+    # Step 1: build config (single call, fully resolved)
+    config = CoConfig.from_settings(settings, cwd=Path.cwd())
 
-    config = dataclasses.replace(
-        _base_config,
-        exec_approvals_path=Path.cwd() / ".co-cli" / "exec-approvals.json",
-        memory_dir=Path.cwd() / ".co-cli" / "memory",
-        skills_dir=Path.cwd() / ".co-cli" / "skills",
-        session_path=Path.cwd() / ".co-cli" / "session.json",
-        tasks_dir=Path.cwd() / ".co-cli" / "tasks",
-        personality_critique=personality_critique,
-        knowledge_search_backend=settings.knowledge_search_backend,
-        mcp_count=len(settings.mcp_servers),
-    )
-
+    # Step 2: fail-fast gate (provider credentials + model availability)
     result = check_llm(config)
     if result.status == "error":
         raise ValueError(result.detail)
 
-    result = check_model_availability(config)
-    if result.status == "error":
-        raise ValueError(result.detail)
+    import dataclasses
+    from co_cli.agent import _build_system_prompt
+    from co_cli.prompts.model_quirks._loader import normalize_model_name
+    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
+    config = dataclasses.replace(
+        config,
+        system_prompt=_build_system_prompt(config.llm_provider, normalized_model, config),
+    )
 
+    # Step 3: construct services
     knowledge_index = None
     if config.knowledge_search_backend in ("fts5", "hybrid"):
         from co_cli.knowledge._index_store import KnowledgeIndex
@@ -100,30 +94,20 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
     with _TRACER.start_as_current_span("restore_session") as span:
         session_data = load_session(deps.config.session_path)
         if is_fresh(session_data, deps.config.session_ttl_minutes):
-            deps.config.session_id = session_data["session_id"]
-            short_id = deps.config.session_id[:8]
+            deps.session.session_id = session_data["session_id"]
+            short_id = deps.session.session_id[:8]
             span.set_attribute("status", "restored")
             span.set_attribute("session_id", short_id)
             frontend.on_status(f"  Session restored — {short_id}...")
         else:
             session_data = new_session()
-            deps.config.session_id = session_data["session_id"]
-            short_id = deps.config.session_id[:8]
+            deps.session.session_id = session_data["session_id"]
+            short_id = deps.session.session_id[:8]
             span.set_attribute("status", "new")
             span.set_attribute("session_id", short_id)
             save_session(deps.config.session_path, session_data)
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data
 
-
-def check_integration_health(deps: CoDeps, frontend: TerminalFrontend) -> RuntimeCheck:
-    with _TRACER.start_as_current_span("integration_health") as span:
-        runtime_check = check_runtime(deps, skip_provider_checks=True)
-        for line in runtime_check.summary_lines():
-            frontend.on_status(line)
-        span.set_attribute("status", "ok")
-        span.set_attribute("has_errors", bool(runtime_check.findings))
-        span.set_attribute("has_warnings", bool(runtime_check.fallbacks))
-        return runtime_check
 
 

@@ -6,6 +6,7 @@ precheck to test separately.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart, TextPart
@@ -17,7 +18,7 @@ from co_cli.deps import CoConfig, CoServices
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
 
-_CONFIG = CoConfig.from_settings(settings)
+_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _SERVICES = CoServices(shell=ShellBackend(), model_registry=_REGISTRY)
 _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model

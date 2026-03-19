@@ -29,7 +29,7 @@ def _make_ctx(**config_overrides) -> Context:
     shell = config_overrides.pop("shell", ShellBackend())
     return Context(deps=CoDeps(
         services=CoServices(shell=shell),
-        config=CoConfig(session_id="test", **config_overrides),
+        config=CoConfig(**config_overrides),
     ))
 
 
@@ -51,7 +51,7 @@ async def test_shell_safe_command_runs_without_deferred_approval():
     ctx = Context(
         deps=CoDeps(
             services=CoServices(shell=ShellBackend()),
-            config=CoConfig(session_id="test", shell_safe_commands=["pwd"]),
+            config=CoConfig(shell_safe_commands=["pwd"]),
         ),
         tool_call_approved=False,
     )
@@ -106,7 +106,7 @@ async def test_shell_pipe():
 async def test_shell_requires_deferred_approval_for_unknown_command():
     """Commands outside the safe allowlist raise ApprovalRequired before execution."""
     ctx = Context(
-        deps=CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig(session_id="test")),
+        deps=CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig()),
         tool_call_approved=False,
     )
 
@@ -122,7 +122,7 @@ async def test_shell_persistent_approval_bypasses_deferred_prompt(tmp_path):
     ctx = Context(
         deps=CoDeps(
             services=CoServices(shell=ShellBackend()),
-            config=CoConfig(session_id="test", exec_approvals_path=path),
+            config=CoConfig(exec_approvals_path=path),
         ),
         tool_call_approved=False,
     )
@@ -211,7 +211,7 @@ async def test_shell_workspace_dir_param():
     backend = ShellBackend(workspace_dir="/tmp")
     ctx = Context(deps=CoDeps(
         services=CoServices(shell=backend),
-        config=CoConfig(session_id="test"),
+        config=CoConfig(),
     ))
 
     result = await run_shell_command(ctx, "pwd")

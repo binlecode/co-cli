@@ -86,6 +86,7 @@ def set_skill_commands(new_skills: dict[str, SkillCommand], session: CoSessionSt
         for s in SKILL_COMMANDS.values()
         if s.description and not s.disable_model_invocation
     ]
+    session.slash_command_count = len([s for s in SKILL_COMMANDS.values() if s.user_invocable])
 
 
 # Env vars that skill-env may never override — security boundary.
@@ -128,7 +129,7 @@ def _scan_skill_content(content: str) -> list[str]:
 
 def _build_completer_words() -> list[str]:
     """Single source of truth for the REPL tab-completer word list."""
-    return [f"/{name}" for name in COMMANDS] + [
+    return [f"/{name}" for name in BUILTIN_COMMANDS] + [
         f"/{name}" for name, s in SKILL_COMMANDS.items() if s.user_invocable
     ]
 
@@ -139,12 +140,6 @@ def _refresh_completer(ctx: CommandContext) -> None:
         return
     ctx.completer.words = _build_completer_words()
 
-
-def _skills_snapshot(skills_dir: Path) -> dict[str, float]:
-    """Return {filepath_str: mtime} for all .md files in skills_dir."""
-    if not skills_dir.exists():
-        return {}
-    return {str(p): p.stat().st_mtime for p in sorted(skills_dir.glob("*.md"))}
 
 
 def _inject_source_url(content: str, url: str) -> str:
@@ -183,7 +178,7 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table = Table(title="Slash Commands", border_style="accent", expand=False)
     table.add_column("Command", style="accent")
     table.add_column("Description")
-    for cmd in COMMANDS.values():
+    for cmd in BUILTIN_COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
     if SKILL_COMMANDS:
         for skill in SKILL_COMMANDS.values():
@@ -883,12 +878,12 @@ def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillComma
     Project-local skills (.co-cli/skills/) are loaded second and override
     package-default skills on name collision (project customization path).
 
-    Reserved names are derived from COMMANDS.keys() at call time so newly
+    Reserved names are derived from BUILTIN_COMMANDS.keys() at call time so newly
     added built-in commands are automatically protected without touching this
     function.
     """
     result: dict[str, SkillCommand] = {}
-    reserved = set(COMMANDS.keys())
+    reserved = set(BUILTIN_COMMANDS.keys())
 
     # Package-default skills (shipped inside the package — available from any directory)
     # Path goes up two levels: commands/ → co_cli/ → skills/
@@ -942,7 +937,7 @@ async def _preprocess_shell_blocks(
 
 # -- Registry --------------------------------------------------------------
 
-COMMANDS: dict[str, SlashCommand] = {
+BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "help": SlashCommand("help", "List available slash commands", _cmd_help),
     "clear": SlashCommand("clear", "Clear conversation history", _cmd_clear),
     "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
@@ -983,7 +978,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
     name = parts[0].lower() if parts else ""
     args = parts[1] if len(parts) > 1 else ""
 
-    cmd = COMMANDS.get(name)
+    cmd = BUILTIN_COMMANDS.get(name)
     if cmd is not None:
         result = await cmd.handler(ctx, args)
         return True, result

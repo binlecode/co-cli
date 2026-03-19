@@ -17,7 +17,7 @@ Usage:
 
 Configuration — all params, values, and rationale:
 
-  LLM model: read from settings at runtime via get_agent().
+  LLM model: read from settings at runtime via build_agent().
     Set LLM_PROVIDER=ollama|gemini and OLLAMA_MODEL / GEMINI_MODEL env vars.
     Default: ollama qwen3:30b-a3b-thinking-2507-q8_0-agentic.
     This is the single most critical reproducibility variable — different models
@@ -97,7 +97,7 @@ from typing import Any
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 from co_cli.config import DATA_DIR
 
 from evals._common import (
@@ -1074,13 +1074,13 @@ async def run_eval(args: argparse.Namespace) -> int:
         return 0
 
     # Create one agent per unique personality — soul seed is baked into the
-    # static system prompt at agent creation time (get_agent(personality=…)).
-    # A single get_agent() without personality= would skip the soul seed entirely,
+    # static system prompt at agent creation time (build_agent(personality=…)).
+    # A single build_agent() without personality= would skip the soul seed entirely,
     # breaking the new seed+mindset personality architecture.
     unique_personalities = sorted({c.personality for c in cases})
     personality_agents: dict[str, tuple[Any, ModelSettings | None, list[str]]] = {}
     for p in unique_personalities:
-        p_agent, p_ms, p_tn, _ = get_agent(personality=p)
+        p_agent, p_ms, p_tn, _ = build_agent(personality=p)
         personality_agents[p] = (p_agent, p_ms, p_tn)
         print(f"Agent({p}) created with {len(p_tn)} tools")
     print(f"Running {args.runs} run(s) per case, threshold={args.threshold:.0%}\n")

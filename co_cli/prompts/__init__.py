@@ -85,7 +85,7 @@ def assemble_prompt(
     Args:
         provider: LLM provider name ("gemini", "ollama-openai", "ollama-native").
         model_name: Normalized model identifier for quirk lookup.
-        soul_seed: Seed + character base memories pre-combined by ``get_agent()``.
+        soul_seed: Seed + character base memories pre-combined by ``build_agent()``.
             Placed first so the model's opening context is the soul identity.
         soul_examples: Trigger→response pattern examples from ``souls/{role}/examples.md``.
             Placed after rules so examples are the last identity-level content

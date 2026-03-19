@@ -18,7 +18,7 @@ ModelRegistry.from_config(config) → session-scoped registry
       │   └── OllamaNativeModel using Ollama's native /api/chat endpoint
       │       (exposes top-level `think` field for call-time reasoning control)
       └── provider == "gemini"
-          └── model = "google-gla:{model_name}"
+          └── GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
     → ResolvedModel(model, settings) stored in registry
 
 registry.get(role, fallback) → ResolvedModel
@@ -65,24 +65,22 @@ Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_m
 
 - `ollama-openai` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama"))`
 - `ollama-native` → `OllamaNativeModel(model_name, llm_host)` using Ollama's `/api/chat` endpoint
-- `gemini` → `"google-gla:{model_name}"`
+- `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
 - Any other provider → `ValueError` raised.
 
 Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Summarization and compaction pass the main agent's model as the `fallback` argument so absent roles degrade gracefully.
 
 ### Model Dependency Checks
 
-`check_llm()` and `check_model_availability()` run inside `create_deps()` (before `get_agent()`). Error status raises `ValueError` immediately — session never starts.
+`check_llm()` runs inside `create_deps()` (before `build_agent()`) as a single fail-fast gate. Error status raises `ValueError` immediately — session never starts.
 
-- `check_llm`: provider credential and reachability check:
-  1. `gemini` + key absent → `status="error"` (cannot proceed)
-  2. `gemini` + key present → `status="ok"`
-  3. `ollama-openai` or `ollama-native` + server unreachable (`/api/tags`, 5s timeout) → `status="warn"` (soft fail, session continues)
-  4. server reachable → `status="ok"`
-- `check_model_availability`: Ollama providers only (`ollama-openai`, `ollama-native`). Queries `{llm_host}/api/tags` (5s timeout). On any network error, returns `status="warn"` — soft fail.
-  - `reasoning` role: if configured model is not installed → `status="error"` → `create_deps()` raises `ValueError` (fail-fast, agent never created).
-  - Optional roles (`summarization`, `coding`, `research`, `analysis`): if configured model not installed → `status="warn"`, session continues.
-  - Non-Ollama provider (e.g. Gemini): returns `status="ok"` immediately — no model list probe.
+- `gemini` + key absent → `status="error"` (cannot proceed)
+- `gemini` + key present → `status="ok"` (no HTTP call)
+- Ollama: one `GET {llm_host}/api/tags` (5s timeout) checks both reachability and model availability:
+  - server unreachable → `status="warn"` (soft fail, session continues)
+  - `reasoning` model not installed → `status="error"` → `create_deps()` raises `ValueError` (fail-fast)
+  - optional role model not installed → `status="warn"`, session continues
+  - all models present → `status="ok"`
 
 ## 3. Config
 
@@ -180,11 +178,11 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 |------|---------|
 | `co_cli/config.py` | `role_models` setting, `ModelEntry` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
 | `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
-| `co_cli/bootstrap/_check.py` | `check_llm`, `check_model_availability` (and other integration probes) — shared factual probe layer |
-| `co_cli/agent.py` | `get_agent()` factory — model selection, tool registration, system prompt assembly |
+| `co_cli/bootstrap/_check.py` | `check_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
+| `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
 | `co_cli/context/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
-| `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host)` — builds provider-aware model and `ModelSettings`; `prepare_provider(provider, llm_api_key)` — provider-level side effects (Gemini API key env injection) called at `get_agent()` startup |
+| `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host, api_key)` — builds provider-aware model and `ModelSettings`; `prepare_provider(provider, llm_api_key)` — provider-level credential validation (Gemini API key guard, no env mutation) called at `build_agent()` startup |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
 | `ollama/Modelfile.qwen3.5-35b-a3b-instruct` | Summarization/analysis/research — native instruct (thinking off at model level) |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |

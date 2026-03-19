@@ -21,7 +21,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.memory._signal_detector import SignalResult, handle_signal as _handle_signal
 from co_cli.tools.memory import MemoryEntry, _load_memories
 
-_CONFIG = CoConfig.from_settings(settings)
+_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
 
@@ -75,7 +75,7 @@ def _make_deps(
 ) -> CoDeps:
     cfg = replace(
         _CONFIG,
-        session_id="test-lifecycle",
+        
         memory_max_count=max_count,
         memory_consolidation_timeout_seconds=timeout,
     )

@@ -26,8 +26,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import get_agent
-from co_cli.config import DATA_DIR
+from co_cli.agent import build_agent
+from co_cli.config import DATA_DIR, settings
+from co_cli.deps import CoConfig
 from evals._common import (
     EvalCase,
     TurnTrace,
@@ -322,13 +323,14 @@ async def main() -> None:
     print(f"  Cases: {[c.id for c in target_cases]}")
 
     # Create agent once (shared across cases)
-    agent, model_settings, tool_names, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     print(f"  Agent tools: {len(tool_names)}")
 
     # Run cases sequentially to keep span windows clean
     case_traces: list[_CaseRunTrace] = []
     for case in target_cases:
-        ct = await run_case(case, agent, model_settings, provider)
+        ct = await run_case(case, agent, make_eval_settings(), provider)
         case_traces.append(ct)
 
     # Write report

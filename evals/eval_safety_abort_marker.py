@@ -1,3 +1,4 @@
+import pathlib
 #!/usr/bin/env python3
 """Eval: abort-marker — Ctrl-C injects history marker for next turn awareness.
 
@@ -25,9 +26,11 @@ from pydantic_ai.messages import (  # noqa: E402
 
 from co_cli.context._history import SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
-from evals._common import SilentFrontend, make_eval_deps  # noqa: E402
+from evals._common import SilentFrontend, make_eval_deps, make_eval_settings  # noqa: E402
 
 
 async def main() -> int:
@@ -35,7 +38,8 @@ async def main() -> int:
     print("  E2E: Abort Marker Injection")
     print("=" * 60)
 
-    agent, model_settings, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="e2e-abort-marker")
     deps.runtime.safety_state = SafetyState()
     frontend = SilentFrontend()
@@ -49,7 +53,7 @@ async def main() -> int:
             user_input="Write a detailed essay about the history of computing from the 1940s to present day",
             deps=deps,
             message_history=[],
-            model_settings=model_settings,
+            model_settings=make_eval_settings(),
             max_request_limit=50,
             verbose=False,
             frontend=frontend,

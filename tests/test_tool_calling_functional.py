@@ -9,20 +9,25 @@ Covers:
 """
 
 import asyncio
+from pathlib import Path
 from dataclasses import replace
 
 import pytest
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent, _build_system_prompt
 from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings, ROLE_REASONING, WebPolicy
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.prompts.model_quirks._loader import normalize_model_name
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
 
-_CONFIG = CoConfig.from_settings(settings)
+_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_reasoning_entry = _CONFIG.role_models.get(ROLE_REASONING)
+_normalized_model = normalize_model_name(_reasoning_entry.model) if _reasoning_entry else ""
+_CONFIG = replace(_CONFIG, system_prompt=_build_system_prompt(_CONFIG.llm_provider, _normalized_model, _CONFIG))
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 
@@ -30,7 +35,8 @@ _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG, session_id=session_id, personality="finch"),
+        config=replace(_CONFIG, personality="finch"),
+        session=CoSessionState(session_id=session_id),
     )
 
 
@@ -44,10 +50,10 @@ def _make_deps_web_deferred(session_id: str) -> CoDeps:
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
             _CONFIG,
-            session_id=session_id,
             personality="finch",
             web_policy=WebPolicy(search="ask"),
         ),
+        session=CoSessionState(session_id=session_id),
     )
 
 
@@ -88,10 +94,10 @@ async def test_tool_selection_and_arg_extraction(
     # Other tools use the default agent and policy.
     if expected_tool == "web_search":
         web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
-        agent, _, _ = get_agent(config=web_cfg)
+        agent, _, _ = build_agent(config=web_cfg)
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
     else:
-        agent, _, _ = get_agent()
+        agent, _, _ = build_agent(config=_CONFIG)
         deps = _make_deps(f"test-tool-{expected_tool}")
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
 
@@ -177,7 +183,7 @@ async def test_tool_selection_and_arg_extraction(
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = get_agent()
+    agent, _, _ = build_agent(config=_CONFIG)
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-refusal")
     await ensure_ollama_warm(_REASONING_MODEL)
@@ -200,7 +206,7 @@ async def test_refusal_no_tool_for_simple_math():
 async def test_intent_routing_observation_no_tool():
     """Observation-only statement must not trigger a tool call."""
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = get_agent()
+    agent, _, _ = build_agent(config=_CONFIG)
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-intent-routing")
 

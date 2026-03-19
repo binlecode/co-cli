@@ -35,9 +35,11 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart  # noqa: E402
 
 from co_cli.context._history import OpeningContextState, SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
-from evals._common import make_eval_deps  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._fixtures import seed_memory  # noqa: E402
 from evals._frontend import SilentFrontend  # noqa: E402
 from evals._tools import extract_tool_calls  # noqa: E402
@@ -135,7 +137,8 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
                     )
 
             # Build agent and deps
-            agent, model_settings, _, _ = get_agent()
+            # TODO: source model_settings from make_eval_settings()
+            agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
             deps = make_eval_deps(session_id=f"eval-signal-{case.id}")
             deps.runtime.safety_state = SafetyState()
             deps.runtime.opening_ctx_state = OpeningContextState()
@@ -147,7 +150,7 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
                 user_input=case.prompt,
                 deps=deps,
                 message_history=[],
-                model_settings=model_settings,
+                model_settings=make_eval_settings(),
                 max_request_limit=10,
                 verbose=False,
                 frontend=frontend,

@@ -23,7 +23,6 @@ def _make_ctx() -> Context:
     return Context(deps=CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            session_id="test",
             google_credentials_path=settings.google_credentials_path,
         ),
     ))

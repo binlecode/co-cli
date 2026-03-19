@@ -14,8 +14,8 @@ The folder structure IS the schema. Adding a role requires only files, no Python
 
 Callers:
   agent.py              — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
-                          load_character_memories at agent construction time
-  bootstrap/_bootstrap.py — uses load_soul_critique at startup
+                          load_character_memories, load_soul_critique at agent construction time
+                          (all called from _build_system_prompt(), invoked by create_deps())
 """
 
 from pathlib import Path
@@ -32,7 +32,7 @@ def load_soul_seed(role: str) -> str:
 
     The seed is the complete static identity anchor: identity declaration,
     distilled trait essence, and hard constraints (Never list). Placed at the
-    top of the static system prompt via ``get_agent(personality=…)`` so the
+    top of the static system prompt via ``build_agent(personality=…)`` so the
     model's first context is always the soul.
 
     Behavioral guidance for specific task types is loaded statically via

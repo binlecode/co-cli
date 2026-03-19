@@ -1,3 +1,4 @@
+import pathlib
 """Eval: conversation-history — multi-turn context retention stress test.
 
 Three tiers of conversation history reasoning:
@@ -37,8 +38,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import CoDeps, get_agent
+from co_cli.agent import CoDeps, build_agent
 from co_cli.config import settings
+from co_cli.deps import CoConfig
 
 from evals._common import build_message_history, make_eval_deps, make_eval_settings, patch_dangling_tool_calls
 
@@ -423,7 +425,8 @@ async def main():
           + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items())))
     print("=" * 70)
 
-    agent, base_model_settings, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="eval-conversation-history")
 
     all_results: list[dict] = []
@@ -437,7 +440,7 @@ async def main():
         if is_ollama:
             model_settings = _switch_model(agent, model_name)
         else:
-            model_settings = base_model_settings
+            model_settings = make_eval_settings()
 
         t0 = time.monotonic()
 

@@ -1,138 +1,127 @@
 # Co CLI — System Bootstrap Design
 
-Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the four inline wakeup steps (knowledge sync, session restore, skills report, integration health).
+Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the three inline wakeup steps (knowledge sync, session restore, skills report).
 
-Bootstrap owns sequencing. Shared resource and integration check design does not live here; Step 4 delegates to `check_runtime()` in `co_cli/bootstrap/_check.py`.
+Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/_check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
 
 ```
 co_cli.main  (module load)
 │
-├─ co_cli.display.console  ← import triggers settings load:
-│      co_cli.config.settings  ← first access triggers lazy init:
-│          co_cli.config._ensure_dirs()  # mkdir ~/.config/co-cli, ~/.local/share/co-cli
-│          co_cli.config.load_config()
-│              Layer 1: json.loads(~/.config/co-cli/settings.json)
-│              Layer 2: json.loads(<cwd>/.co-cli/settings.json)
-│                       co_cli.config._deep_merge_settings(base, override)
-│              Layer 3: Settings.model_validate(merged)
-│                       → fill_from_env model_validator(mode='before')
-│                         reads CO_CLI_* env vars, overrides merged dict
-│              → Settings instance cached as co_cli.config._settings
+├─ co_cli.display.console                    # import triggers settings load
+│     co_cli.config.settings                 # first access triggers lazy init
+│         _ensure_dirs()                     # mkdir ~/.config/co-cli, ~/.local/share/co-cli
+│         load_config()
+│             Layer 1: ~/.config/co-cli/settings.json
+│             Layer 2: <cwd>/.co-cli/settings.json  → _deep_merge_settings(base, override)
+│             Layer 3: Settings.model_validate(merged)
+│                          fill_from_env model_validator(mode='before')
+│                          reads CO_CLI_* env vars, overrides merged dict
+│             → Settings instance cached as co_cli.config._settings
 │
-├─ co_cli.observability._telemetry.SQLiteSpanExporter()          # Needs DATA_DIR created by _ensure_dirs()
-├─ opentelemetry.sdk.trace.TracerProvider(resource=...)
-└─ pydantic_ai.Agent.instrument_all(InstrumentationSettings(...))
+├─ SQLiteSpanExporter()                      # DATA_DIR already created by _ensure_dirs()
+├─ TracerProvider(resource=...)
+└─ Agent.instrument_all(InstrumentationSettings(...))
 
 co_cli.main.chat() → asyncio.run(_chat_loop())
 │
-│ ── PHASE 1: Pre-Agent Setup ──────────────────────────────────────────────
-│
-├─ co_cli.display.TerminalFrontend()
-├─ prompt_toolkit.completion.WordCompleter(["/cmd", ...])        # COMMANDS-only; updated after Phase 2
-├─ prompt_toolkit.PromptSession(
+├─ TerminalFrontend()
+├─ WordCompleter(["/cmd", ...])              # COMMANDS-only; updated after skills load
+├─ PromptSession(
 │      history=FileHistory(DATA_DIR / "history.txt"),
 │      completer=completer,
+│      complete_while_typing=False,
 │  )
+├─ prune_stale(.co-cli/exec-approvals.json, max_age_days=90)
 │
-└─ co_cli.bootstrap._bootstrap.create_deps()
-       │
-       ├─ co_cli.deps.CoConfig.from_settings(settings)           # bulk copy of Settings scalars
-       │     (includes library_dir resolution: settings.library_path or DATA_DIR/"library")
-       ├─ co_cli.prompts.personalities._loader.load_soul_critique(personality)
-       │
-       ├─ dataclasses.replace(_base_config,                      # runtime-resolved fields grafted on
-       │      exec_approvals_path, memory_dir, skills_dir,
-       │      session_path, tasks_dir,
-       │      personality_critique,
-       │      knowledge_search_backend=resolved_backend,
-       │      mcp_count, mcp_servers,
-       │  )
-       │
-       ├─ co_cli.bootstrap._check.check_llm(config)
-       │     "error" → raise ValueError  ← session never starts
-       │
-       ├─ co_cli.bootstrap._check.check_model_availability(config)
-       │     "error" → raise ValueError
-       │
-       ├─ Knowledge backend init (if backend in "fts5"/"hybrid"):
-       │     co_cli.knowledge._index.KnowledgeIndex(config=config)
-       │
-       ├─ co_cli.tools._background.TaskStorage(config.tasks_dir)
-       ├─ co_cli.tools._background.TaskRunner(storage, config.background_max_concurrent, ...)
-       │
-       ├─ co_cli.tools._shell_backend.ShellBackend()
-       ├─ co_cli.deps.CoServices(shell, knowledge_index, task_runner, model_registry)
-       │
-       ├─ co_cli._model_factory.ModelRegistry.from_config(config) → services.model_registry
-       ├─ co_cli.context._history.OpeningContextState()
-       ├─ co_cli.context._history.SafetyState()
-       ├─ co_cli.deps.CoRuntimeState(opening_ctx_state, safety_state)
-       └─ co_cli.deps.CoDeps(services, config, runtime)  ← returned; session field is default-fresh
-
-co_cli.agent.get_agent(config=config)
+├─ create_deps()                             # bootstrap/_bootstrap.py
+│  │
+│  │  Step 1 — build config
+│  ├─ CoConfig.from_settings(settings, cwd=Path.cwd())
+│  │      # resolves all cwd-relative paths and settings fields in one call
+│  │
+│  │  Step 2 — fail-fast gate (provider credentials + model availability)
+│  ├─ check_llm(config)     → "error": raise ValueError  # session never starts
+│  ├─ _build_system_prompt(provider, model_name, config)  # file I/O; safe after gate
+│  │      loads soul seed, memories, mindsets, examples, critique
+│  │      └─ assemble_prompt(...)  →  config = dataclasses.replace(config, system_prompt=assembled_prompt)
+│  │
+│  │  Step 3 — construct services
+│  ├─ KnowledgeIndex(config=config)          # only if backend in ("fts5", "hybrid")
+│  ├─ TaskRunner(
+│  │      storage=TaskStorage(config.tasks_dir),
+│  │      max_concurrent, inactivity_timeout, auto_cleanup, retention_days,
+│  │  )
+│  ├─ CoServices(
+│  │      shell=ShellBackend(), knowledge_index=knowledge_index,
+│  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(config),
+│  │  )
+│  ├─ CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+│  └─ CoDeps(services, config, runtime)      # returned; session field is default-fresh
 │
-├─ co_cli._model_factory.prepare_provider(provider_name, llm_api_key)  # Gemini env-var injection
-├─ co_cli.prompts.assemble_prompt(...)                           # system prompt assembly
+├─ resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)
+│      if model_registry else ResolvedModel(model=None, settings=None)
+├─ primary_model = resolved.model            # for signal detection and background compaction
 │
-├─ pydantic_ai.Agent(
-│      model=None,                                               # per-call model via ModelRegistry
-│      system_prompt=assembled_prompt,
-│      deps_type=CoDeps,
-│      result_type=str | DeferredToolRequests,
-│  )
-├─ agent.tool(run_shell_command, requires_approval=False)        # all tools registered here
-├─ agent.tool(save_memory), agent.tool(recall_memory), ...
-├─ agent.tool(delegate_coder), ...
-├─ [if mcp_servers] MCPServerStdio/HTTP added as toolsets
+├─ build_agent(config=deps.config, resolved=resolved)  # agent.py — pure construction, no I/O
+│  │
+│  ├─ [if mcp_servers] build MCPServerStdio/HTTP toolset objects → mcp_toolsets
+│  ├─ Agent(
+│  │      resolved.model,                    # baked in — same pattern as sub-agent factories
+│  │      system_prompt=config.system_prompt,  # pre-assembled by create_deps() Step 2
+│  │      model_settings=resolved.settings,
+│  │      deps_type=CoDeps,
+│  │      retries=config.tool_retries,
+│  │      output_type=[str, DeferredToolRequests],
+│  │      history_processors=[inject_opening_context, truncate_tool_returns,
+│  │                          detect_safety_issues, truncate_history_window],
+│  │      toolsets=mcp_toolsets,             # None if no mcp_servers
+│  │  )
+│  ├─ @agent.instructions add_current_date          # today's date, fresh each turn
+│  ├─ @agent.instructions add_shell_guidance        # shell policy reminder
+│  ├─ @agent.instructions add_project_instructions  # .co-cli/instructions.md if present
+│  ├─ @agent.instructions add_personality_memories  # personality-context memories
+│  ├─ @agent.instructions add_available_skills      # skill registry list (capped 2KB)
+│  ├─ agent.tool(run_shell_command, requires_approval=False)  # ~30 tools registered
+│  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
+│  ├─ agent.tool(delegate_coder), ...        # only if role model is configured
+│  └─ returns (agent, tool_names, tool_approvals)
 │
-└─ returns (agent, tool_names, tool_approvals)
-
-main._chat_loop():
-    deps.session.tool_names     = tool_names
-    deps.session.tool_approvals = tool_approvals
-
-│ ── PHASE 2: Agent Context (async with agent via AsyncExitStack) ──────────
+├─ deps.session.tool_names     = tool_names
+├─ deps.session.tool_approvals = tool_approvals
 │
-├─ contextlib.AsyncExitStack.enter_async_context(agent)
-│     ← starts MCP server subprocesses, connects stdio/HTTP transports
-│     ← Exception → console.print error, raise SystemExit(1)
+├─ AsyncExitStack.enter_async_context(agent)  # MCP server subprocesses start here
+│      Exception → print warning, continue with native tools only
 │
 ├─ [if mcp_servers]
-│     co_cli.agent.discover_mcp_tools(agent, tool_names)
-│         → deps.session.tool_names = native + MCP tools
+│      mcp_tool_names = discover_mcp_tools(agent, exclude=set(tool_names))
+│      tool_names = tool_names + mcp_tool_names
+│      deps.session.tool_names = tool_names
 │
-├─ co_cli.commands._commands._load_skills(skills_dir, settings)
-│     pass 1: scan co_cli/skills/*.md    (package defaults)
-│     pass 2: scan .co-cli/skills/*.md  (project-local; wins on collision)
+├─ _load_skills(skills_dir, settings)
+│      pass 1: scan co_cli/skills/*.md    (package defaults)
+│      pass 2: scan .co-cli/skills/*.md  (project-local; wins on collision)
+├─ set_skill_commands(skill_commands, deps.session)
+│      SKILL_COMMANDS dict updated, deps.session.skill_registry populated
+├─ completer.words = _build_completer_words()  # COMMANDS + skills
 │
-├─ co_cli.commands._commands.set_skill_commands(skill_commands, deps.session)
-│     → SKILL_COMMANDS dict updated, deps.session.skill_registry populated
-├─ completer.words = _build_completer_words()                    # COMMANDS + skills
+├─ sync_knowledge(deps, frontend)
+│      knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
+│      knowledge_index.sync_dir("library", library_dir, kind_filter="article")
+│      on fail → knowledge_index.close(); deps.services.knowledge_index = None
 │
-│ ── INLINE WAKEUP (sequential) ────────────────────────────────────────────
+├─ restore_session(deps, frontend)
+│      load_session(session_path)
+│      is_fresh? → yes: deps.session.session_id = session_data["session_id"]
+│               → no:  new_session(); deps.session.session_id = new UUID; save_session()
+│      returns session_data  # kept in chat_loop local state for per-turn persistence
 │
-├─ Step 1  co_cli.bootstrap._bootstrap.sync_knowledge(deps, frontend)
-│     co_cli.knowledge._index.KnowledgeIndex.sync_dir("memory", memory_dir, kind_filter="memory")
-│     co_cli.knowledge._index.KnowledgeIndex.sync_dir("library", library_dir, kind_filter="article")
-│     on fail → knowledge_index.close(); deps.services.knowledge_index = None
+├─ frontend.on_status(f"{len(deps.session.skill_registry)} skill(s) loaded")
 │
-├─ Step 2  co_cli.bootstrap._bootstrap.restore_session(deps, frontend, session_path, ttl)
-│     co_cli.context._session.load_session(session_path)
-│     co_cli.context._session.is_fresh(session_data, ttl)?
-│         yes → deps.config.session_id = session_data["session_id"]
-│         no  → co_cli.context._session.new_session()
-│               deps.config.session_id = new UUID
-│               co_cli.context._session.save_session(session_path, session_data)
-│
-├─ Step 3  frontend.on_status(f"{len(deps.session.skill_registry)} skill(s) loaded")
-│
-├─ Step 4  co_cli.bootstrap._bootstrap.check_integration_health(deps, frontend)
-│     co_cli.bootstrap._check.check_runtime(deps) → RuntimeCheck
-│     runtime_check.summary_lines() → each line → frontend.on_status(line)
-│     on fail → fallback RuntimeCheck(capabilities={}, status={}, findings=[], fallbacks=[])
-│
-└─ co_cli.bootstrap._banner.display_welcome_banner(runtime_check, deps.config)
-   ▲
+└─ display_welcome_banner(deps, deps.config)
+   │    tool_count  = len(deps.session.tool_names)
+   │    skill_count = len(deps.session.skill_registry)
+   │    mcp_count   = len(deps.config.mcp_servers or {})
+   ▼
    REPL loop begins
 ```
 
@@ -170,36 +159,27 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) converts the `Settings` singleton into `CoServices`, `CoConfig`, `CoSessionState`, and `CoRuntimeState`, then assembles `CoDeps`. It calls `check_llm` and `check_model_availability` (from `bootstrap/_check.py`) directly as fail-fast gates: two sync HTTP calls to Ollama (`/api/tags`, timeout=5 each) when the configured provider is Ollama. Hard errors raise `ValueError` immediately; the session never starts.
+`create_deps()` (in `bootstrap/_bootstrap.py`) converts the `Settings` singleton into `CoServices`, `CoConfig`, `CoSessionState`, and `CoRuntimeState`, then assembles `CoDeps`. It calls `check_llm` (from `bootstrap/_check.py`) as a single fail-fast gate: one sync HTTP call to Ollama (`/api/tags`, timeout=5) checking both reachability and model availability. Hard errors raise `ValueError` immediately; the session never starts.
 
 ```text
 create_deps():
-    _base_config = CoConfig.from_settings(settings)
-    # from_settings() resolves library_dir, session_ttl_minutes, and background task settings
-    personality_critique = load_soul_critique(_base_config.personality) if _base_config.personality else ""
+    # Step 1: build config (single call, fully resolved)
+    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    # from_settings() resolves all cwd-relative paths, library_dir, and settings fields
 
-    config = dataclasses.replace(
-        _base_config,  # bulk copy; obsidian_vault_path and Settings-backed fields copied here
-        # session_id left at default "" — single write in inline restore_session step
-        exec_approvals_path=Path.cwd() / ".co-cli/exec-approvals.json",
-        memory_dir=Path.cwd() / ".co-cli/memory",
-        skills_dir=Path.cwd() / ".co-cli/skills",
-        session_path=Path.cwd() / ".co-cli/session.json",
-        tasks_dir=Path.cwd() / ".co-cli/tasks",
-        personality_critique=personality_critique,
-        knowledge_search_backend=settings.knowledge_search_backend,
-        mcp_count=len(settings.mcp_servers),
-    )
-
+    # Step 2: fail-fast gates (ordered: provider → model → prompt assembly)
     result = check_llm(config)
     if result.status == "error":
         raise ValueError(result.detail)
 
-    result = check_model_availability(config)
-    if result.status == "error":
-        raise ValueError(result.detail)
+    config = dataclasses.replace(
+        config,
+        system_prompt=_build_system_prompt(provider, normalized_model, config),
+    )
+    # _build_system_prompt: loads soul seed, memories, mindsets, examples, critique; calls assemble_prompt()
 
-    knowledge_index = KnowledgeIndex(config=config) if backend in ("fts5", "hybrid") else None
+    # Step 3: construct services (lazy imports inside function body)
+    knowledge_index = KnowledgeIndex(config=config) if backend in ("fts5", "hybrid") else None  # co_cli.knowledge._index_store
     task_runner = TaskRunner(
         storage=TaskStorage(config.tasks_dir),
         max_concurrent=config.background_max_concurrent,
@@ -220,7 +200,7 @@ create_deps():
 Key transformation:
 - `settings.knowledge_search_backend` is the configured backend
 - `deps.config.knowledge_search_backend` is the resolved backend after degradation
-- `CoConfig.from_settings()` copies pure config fields only; runtime-resolved and session-scoped fields are applied afterward via `dataclasses.replace()`
+- `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call; `system_prompt` is the one field set afterward via `dataclasses.replace()` — after the fail-fast gate passes so credential validity is established before file I/O
 
 ### `CoDeps` Group Semantics
 
@@ -235,7 +215,7 @@ The session group holds tool-visible mutable state such as approvals, todos, and
 
 ## 2. Provider And Model Checks
 
-`check_llm` and `check_model_availability` (from `bootstrap/_check.py`) run inside `create_deps()` as fail-fast gates. Error status raises `ValueError` immediately — session never starts. Any other status continues; `ModelRegistry` is built immediately after both checks pass.
+`check_llm` (from `bootstrap/_check.py`) runs inside `create_deps()` as the single fail-fast gate. Error status raises `ValueError` immediately — session never starts. Any other status continues. After the gate passes, `_build_system_prompt()` assembles the static system prompt (file I/O; safe here because credentials are known-valid). `ModelRegistry` is built in Step 3 immediately after.
 
 | Condition | Behavior |
 |-----------|----------|
@@ -249,9 +229,9 @@ The session group holds tool-visible mutable state such as approvals, todos, and
 The inline wakeup steps run once per `chat_loop()` startup after deps initialization:
 
 - `create_deps()` returned without raising (provider/model probes passed)
-- `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after Phase 2 skills load using `_build_completer_words()`
-- `get_agent()` has returned an agent instance; `deps.session.tool_names` and `tool_approvals` are set immediately after
-- `async with agent` has been entered; if MCP init fails, a clean error is printed and the session exits
+- `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after skills load (inside `async with agent`) using `_build_completer_words()`
+- `build_agent()` has returned an agent instance; `deps.session.tool_names` and `tool_approvals` are set immediately after
+- `async with agent` has been entered; if MCP init fails, a warning is printed and startup continues with native tools only
 - skills are loaded inside `async with agent` after MCP init (`_load_skills`), then `set_skill_commands()` populates `SKILL_COMMANDS` and `skill_registry`, and `completer.words` is updated immediately after
 
 The four inline steps run inside the `async with agent` block after MCP init and skills load have completed.
@@ -260,21 +240,23 @@ The four inline steps run inside the `async with agent` block after MCP init and
 
 ```text
 chat_loop():
-    # Phase 1
     frontend = TerminalFrontend()
 
     completer = WordCompleter([f"/{name}" for name in COMMANDS], sentence=True)  ← COMMANDS-only
     session = PromptSession(history=..., completer=completer, ...)
-    _skills_watch_snapshot: dict[str, float] = {}
 
     _prune_stale_approvals(exec-approvals.json, max_age_days=90)
     deps = create_deps()   ← fail-fast on provider/model error; TaskRunner/TaskStorage constructed inside
 
-    agent, tool_names, tool_approvals = get_agent(config=deps.config)
-    deps.session.tool_names = tool_names        ← set immediately after get_agent
+    resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)
+    #          if model_registry else ResolvedModel(model=None, settings=None)
+    primary_model = resolved.model              ← for signal detection and background compaction
+
+    agent, tool_names, tool_approvals = build_agent(config=deps.config, resolved=resolved)
+    deps.session.tool_names = tool_names        ← set immediately after build_agent
     deps.session.tool_approvals = tool_approvals
 
-    # Phase 2 (inside async with agent)
+    # inside async with agent
     stack = AsyncExitStack()
     message_history = []
     last_interrupt_time = 0.0
@@ -283,20 +265,20 @@ chat_loop():
         try:
             await stack.enter_async_context(agent)
         except Exception as e:
-            print clean error message
-            raise SystemExit(1)              ← finally cleanup runs; session exits with code 1
+            console.print("[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
+            # startup continues with native tools only
 
         if mcp_servers:
-            tool_names = await discover_mcp_tools(agent, tool_names)
+            mcp_tool_names = await discover_mcp_tools(agent, exclude=set(tool_names))
+            tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 
         skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
         set_skill_commands(skill_commands, deps.session)   ← SKILL_COMMANDS + skill_registry
-        _skills_watch_snapshot = _skills_snapshot(deps.config.skills_dir)
         completer.words = _build_completer_words()   ← updated to COMMANDS + skills
 
-        [inline wakeup steps 1–4]
-        display_welcome_banner(runtime_check)
+        [inline wakeup steps 1–3]
+        display_welcome_banner(deps, deps.config)
         begin REPL loop
     finally:
         cleanup
@@ -308,28 +290,24 @@ If `stack.enter_async_context(agent)` raises:
 
 ```text
 except Exception as e:
-    console.print("[error]MCP server failed to connect: {e}[/error]")
-    console.print("[dim]Fix MCP server config in settings.json or remove mcp_servers.[/dim]")
-    raise SystemExit(1)
+    console.print("[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
+    # startup continues
 ```
 
-`SystemExit` is a `BaseException` — not caught by `except Exception` in the REPL inner loop. The `finally` block (task runner shutdown, stack close, shell cleanup) always runs. Exit code 1 signals failure to the shell. MCP failure is a hard error; no silent rebuild without MCP.
+MCP failure is non-fatal. A warning is printed and startup continues with native tools only. MCP tool discovery (`discover_mcp_tools`) is skipped when the context manager failed to enter.
 
 ## 5. Inline Wakeup Steps
 
-Four sequential steps run inline in `chat_loop()` after MCP init, reporting status via `frontend.on_status()`.
+Three sequential steps run inline in `chat_loop()` after MCP init, reporting status via `frontend.on_status()`.
 
 ```text
 inline wakeup (in chat_loop()):
     Step 1: sync_knowledge
     Step 2: restore_session  →  session_data local variable
     Step 3: skills_loaded_report  (reads len(deps.session.skill_registry) directly)
-    Step 4: integration_health_sweep  →  runtime_check local variable
 ```
 
-`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. `runtime_check` is captured from Step 4 and passed to `display_welcome_banner(runtime_check)`.
-
-The `try/except` around Step 4 is retained for graceful degradation: if `check_runtime()` raises unexpectedly, a warning line is emitted and a fallback `RuntimeCheck` (empty, no findings) is used so `display_welcome_banner()` still runs.
+`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps, deps.config)` reads counts directly from `deps.session` and `deps.config` — no separate health probe.
 
 ### Step 1 - Knowledge Sync
 
@@ -358,11 +336,11 @@ Details:
 session_data = load_session(deps.config.session_path)
 
 if is_fresh(session_data, deps.config.session_ttl_minutes):
-    deps.config.session_id = session_data["session_id"]
+    deps.session.session_id = session_data["session_id"]
     frontend.on_status("Session restored ...")
 else:
     session_data = new_session()
-    deps.config.session_id = session_data["session_id"]
+    deps.session.session_id = session_data["session_id"]
     save_session(deps.config.session_path, session_data)
     frontend.on_status("Session new ...")
 
@@ -388,39 +366,13 @@ The returned `session_data` stays in `chat_loop()` local state and is reused for
 frontend.on_status("{len(deps.session.skill_registry)} skill(s) loaded")
 ```
 
-This is a visibility step only. Skill loading already happened in Phase 2 after MCP init. The count reflects wired-available skills (description present, not `disable_model_invocation`) — the same set visible to the model via `skill_registry`.
-
-### Step 4 - Integration Health Sweep
-
-```text
-try:
-    result = check_runtime(deps)
-    for line in result.summary_lines():
-        frontend.on_status(line)
-    span.set_attribute("has_errors", bool(result.findings))
-    span.set_attribute("has_warnings", bool(result.fallbacks))
-except Exception as e:
-    frontend.on_status("integration health check failed ...")
-```
-
-Bootstrap is a caller of the probe layer, not the owner of resource-check semantics. Step 4 exists to sequence the call and render the result during startup. The probe layer owns:
-- which checks are included
-- which are static-only vs runtime-aware
-- result/status semantics
-- shared behavior across bootstrap, runtime, and status surfaces
-
-Bootstrap-specific guarantees:
-- the sweep is non-blocking for normal degraded states
-- unexpected Doctor exceptions are swallowed and rendered as a warning line
-- startup continues after Step 4 whether the sweep reports warnings/errors or raises unexpectedly
-
-For the integration check logic and `RuntimeCheck` contract, see `co_cli/bootstrap/_check.py`.
+This is a visibility step only. Skill loading already happened inside `async with agent`, after MCP init. The count reflects wired-available skills (description present, not `disable_model_invocation`) — the same set visible to the model via `skill_registry`.
 
 ## 6. Pre-Wakeup Subflows
 
 ### Skills Load
 
-Skills load in Phase 2, inside `async with agent` after MCP init, not before `get_agent()`:
+Skills load inside `async with agent`, after MCP init, not before `build_agent()`:
 
 ```text
 skill_commands = _load_skills(deps.config.skills_dir, settings)
@@ -429,11 +381,10 @@ skill_commands = _load_skills(deps.config.skills_dir, settings)
     parse frontmatter, check requires, scan for security issues
 
 set_skill_commands(skill_commands, deps.session)   ← SKILL_COMMANDS.clear/update + skill_registry
-_skills_watch_snapshot = _skills_snapshot(deps.config.skills_dir)
 completer.words = _build_completer_words()   ← extends COMMANDS-only list to COMMANDS + skills
 ```
 
-`PromptSession` is built in Phase 1 with a COMMANDS-only completer. After Phase 2 skills load, `_build_completer_words()` updates `completer.words` in-place to include skill names — the same pattern used during live reload.
+`PromptSession` is built before `create_deps()` with a COMMANDS-only completer. After skills load (inside `async with agent`), `_build_completer_words()` updates `completer.words` in-place to include skill names.
 
 `disable_model_invocation: true` skills stay available to the REPL but are hidden from the model-facing `skill_registry`.
 
@@ -458,31 +409,29 @@ By the time the inline wakeup steps run, the system already knows whether FTS or
 
 ### Welcome Banner Boundary
 
-`display_welcome_banner(runtime_check)` is called immediately after the four inline wakeup steps complete, still inside the `async with agent` block:
+`display_welcome_banner(deps, deps.config)` is called immediately after the three inline wakeup steps complete, still inside the `async with agent` block:
 
 ```text
-[inline steps 1-4]
-runtime_check = result of Step 4 (or empty fallback if Step 4 raises)
-display_welcome_banner(runtime_check)
+[inline steps 1-3]
+display_welcome_banner(deps, deps.config)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, and cwd inline; `runtime_check.status["tool_count"]` provides the tool count; findings and fallbacks drive the readiness verdict line.
+The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.session.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed.
 
 ### State Mutations Summary
 
 | Field | Set by | Value |
 |-------|--------|-------|
 | `deps.services.knowledge_index` | Step 1 on error | `None` to disable FTS for the session |
-| `deps.config.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
-| `deps.config.role_models` | `create_deps()` in `main.py` | Pruned chain if Ollama models are missing |
+| `deps.session.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
 | `deps.services.task_runner` | Constructed inside `create_deps()` | `TaskRunner` instance |
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
-| `deps.session.tool_names` | Set immediately after `get_agent(config=deps.config)`; extended after MCP discovery | Native tool list, then MCP-extended |
-| `deps.session.tool_approvals` | Set immediately after `get_agent(config=deps.config)` | Tool approval map |
-| `deps.session.skill_registry` | Phase 2 in `main.py` — `set_skill_commands()` (after MCP init) | Non-hidden skill dicts |
-| `SKILL_COMMANDS` | Phase 2 in `main.py` — `set_skill_commands()` (after MCP init) | Module-level dict of all loaded skills |
-| `completer.words` | Phase 1: COMMANDS-only; Phase 2: updated by `_build_completer_words()` after `set_skill_commands()` | COMMANDS-only at startup; COMMANDS + skills after Phase 2 skills load |
+| `deps.session.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
+| `deps.session.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
+| `deps.session.skill_registry` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Non-hidden skill dicts |
+| `SKILL_COMMANDS` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Module-level dict of all loaded skills |
+| `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
 
 ### Failure Paths
 
@@ -491,9 +440,8 @@ The banner marks the boundary between startup and interactive use. All status me
 | Knowledge sync raises | Index closed, `knowledge_index = None`, grep fallback, session continues |
 | Session file missing or unreadable | New session created |
 | Session TTL expired | New session created |
-| MCP server connection fails | Clean error printed, `SystemExit(1)` raised, cleanup runs, session exits |
+| MCP server connection fails | Warning printed, startup continues with native tools only |
 | One skill file fails to load | File skipped with warning; other skills still load |
-| Integration sweep raises unexpectedly | Warning line emitted; fallback `RuntimeCheck` used; session continues |
 
 ### Recovery And Fallback
 
@@ -506,13 +454,13 @@ The banner marks the boundary between startup and interactive use. All status me
 | File | Role |
 |------|------|
 | `co_cli/main.py` | `_chat_loop()` startup assembly |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `check_integration_health()` — all startup functions live here |
-| `co_cli/bootstrap/_check.py` | `check_runtime(deps)` — integration health aggregator invoked by Step 4 |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — all startup functions live here |
+| `co_cli/bootstrap/_check.py` | `check_runtime()`, `RuntimeCheck` — integration health aggregator; invoked by `/status` tool, not by bootstrap |
 | `co_cli/context/_session.py` | Session helpers: new/load/save/touch/is_fresh/increment_compaction |
-| `co_cli/bootstrap/_render_status.py` | `display_welcome_banner(runtime_check: RuntimeCheck)` — welcome banner |
+| `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps, config: CoConfig)` — welcome banner |
 | `co_cli/commands/_commands.py` | Skill loading helpers |
 | `co_cli/deps.py` | `CoDeps` groups and sub-agent isolation |
-| `co_cli/knowledge/_index.py` | `KnowledgeIndex.sync_dir()` and `close()` |
+| `co_cli/knowledge/_index_store.py` | `KnowledgeIndex.sync_dir()` and `close()` |
 
 ## 9. See Also
 

@@ -4,6 +4,7 @@ Tests exercise real load_config() — no mocks.
 """
 
 import json
+from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
@@ -217,11 +218,12 @@ def test_old_ollama_provider_string_rejected(tmp_path):
         )
 
 
-def test_llm_api_key_overrides_env():
-    """Regression: settings llm_api_key must overwrite a pre-existing GEMINI_API_KEY env var."""
+def test_gemini_api_key_not_written_to_env():
+    """build_agent() must not mutate os.environ['GEMINI_API_KEY'] — key is injected via GoogleProvider."""
     import os
-    from co_cli.agent import get_agent
+    from co_cli.agent import build_agent
     from co_cli.config import settings
+    from co_cli.deps import CoConfig
 
     original_env = os.environ.get("GEMINI_API_KEY")
     original_key = settings.llm_api_key
@@ -230,8 +232,9 @@ def test_llm_api_key_overrides_env():
         os.environ["GEMINI_API_KEY"] = "stale-key-from-env"
         settings.llm_api_key = "settings-key-wins"
         settings.llm_provider = "gemini"
-        get_agent()
-        assert os.environ["GEMINI_API_KEY"] == "settings-key-wins"
+        build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+        # Key is passed directly to GoogleProvider — env var must be untouched
+        assert os.environ["GEMINI_API_KEY"] == "stale-key-from-env"
     finally:
         settings.llm_api_key = original_key
         settings.llm_provider = original_provider

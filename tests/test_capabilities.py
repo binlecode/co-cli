@@ -1,15 +1,17 @@
 """Functional tests for check_capabilities tool."""
 import asyncio
+from pathlib import Path
 
 from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 
-_AGENT, _, _ = get_agent()
+_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def test_skill_grants_field() -> None:

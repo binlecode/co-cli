@@ -186,7 +186,7 @@ Failure and fallback inline:
 ### 4.1 Entry Conditions
 
 Before the first loop iteration:
-- startup has completed: `TaskRunner` + `create_deps()` + `get_agent(config=deps.config)` + inline wakeup steps (knowledge sync, session restore, skills report, integration health)
+- startup has completed: `TaskRunner` + `create_deps()` + `build_agent(config=deps.config)` + inline wakeup steps (knowledge sync, session restore, skills report)
 - `message_history` is the active conversation history
 - `session_data` is loaded and held by `chat_loop()`
 - `deps.runtime.safety_state` will be reset at the start of every `run_turn()`
@@ -200,12 +200,6 @@ if bg_compaction_task is done:
     deps.runtime.precomputed_compaction = bg_compaction_task.result()
 
 pre_turn_history = message_history
-
-current_snapshot = _skills_snapshot(skills_dir)
-if current_snapshot != _skills_watch_snapshot:
-    reload skills
-    refresh skill_registry and completer
-    _skills_watch_snapshot = current_snapshot
 ```
 
 Skill dispatch path:

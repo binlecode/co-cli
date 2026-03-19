@@ -41,7 +41,9 @@ from typing import Any
 from co_cli.context._history import SafetyState  # noqa: E402
 from co_cli.knowledge._index import KnowledgeIndex  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
 from evals._common import (  # noqa: E402
     SilentFrontend,
@@ -51,6 +53,7 @@ from evals._common import (  # noqa: E402
     collect_spans_for_run,
     extract_tool_calls,
     make_eval_deps,
+    make_eval_settings,
 )
 
 # Dedicated trace DB — does not pollute the main co-cli.db
@@ -318,7 +321,8 @@ async def main() -> int:
     Path(_TRACE_DB).parent.mkdir(parents=True, exist_ok=True)
     provider = bootstrap_telemetry(_TRACE_DB)
 
-    agent, model_settings, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
 
     knowledge_index = KnowledgeIndex(db_path=Path(".co-cli/search.db"))
     deps = make_eval_deps(
@@ -346,7 +350,7 @@ async def main() -> int:
     try:
         print("[1/1] jeff-learns-finch ...", end=" ", flush=True)
         t_total = time.monotonic()
-        result = await run_eval(agent, deps, model_settings, provider)
+        result = await run_eval(agent, deps, make_eval_settings(), provider)
         elapsed_total = time.monotonic() - t_total
 
         status = "PASS" if result["passed"] else "FAIL"

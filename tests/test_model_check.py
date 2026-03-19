@@ -5,29 +5,9 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from co_cli.bootstrap._check import check_llm, check_model_availability
+from co_cli.bootstrap._check import check_llm
 from co_cli.config import ModelEntry, ROLE_REASONING
 from co_cli.deps import CoConfig
-
-
-# --- check_llm tests ---
-
-
-def test_check_llm_gemini_key_missing_returns_error() -> None:
-    result = check_llm(CoConfig(llm_provider="gemini", llm_api_key=None))
-    assert result.status == "error"
-    assert not result.ok
-    assert "LLM_API_KEY" in result.detail
-
-
-def test_check_llm_ollama_unreachable_returns_warn() -> None:
-    # Port 1 is reserved/unreachable — connection refused immediately.
-    result = check_llm(CoConfig(llm_provider="ollama-openai", llm_host="http://localhost:1"))
-    assert result.status == "warn"
-    assert result.ok
-
-
-# --- check_model_availability tests ---
 
 
 def _make_ollama_server(models: list[str]) -> tuple[HTTPServer, int]:
@@ -54,10 +34,30 @@ def _make_ollama_server(models: list[str]) -> tuple[HTTPServer, int]:
     return server, port
 
 
-def test_check_model_availability_all_available_returns_ok() -> None:
+def test_check_llm_gemini_key_missing_returns_error() -> None:
+    result = check_llm(CoConfig(llm_provider="gemini", llm_api_key=None))
+    assert result.status == "error"
+    assert not result.ok
+    assert "LLM_API_KEY" in result.detail
+
+
+def test_check_llm_gemini_key_present_returns_ok() -> None:
+    result = check_llm(CoConfig(llm_provider="gemini", llm_api_key="test-key"))
+    assert result.status == "ok"
+    assert result.ok
+
+
+def test_check_llm_ollama_unreachable_returns_warn() -> None:
+    # Port 1 is reserved/unreachable — connection refused immediately.
+    result = check_llm(CoConfig(llm_provider="ollama-openai", llm_host="http://localhost:1"))
+    assert result.status == "warn"
+    assert result.ok
+
+
+def test_check_llm_all_models_available_returns_ok() -> None:
     server, port = _make_ollama_server(["my-reasoning-model"])
     try:
-        result = check_model_availability(CoConfig(
+        result = check_llm(CoConfig(
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
             role_models={ROLE_REASONING: ModelEntry(model="my-reasoning-model")},
@@ -68,10 +68,10 @@ def test_check_model_availability_all_available_returns_ok() -> None:
         server.shutdown()
 
 
-def test_check_model_availability_no_reasoning_model_returns_error() -> None:
+def test_check_llm_reasoning_model_missing_returns_error() -> None:
     server, port = _make_ollama_server(["other-model"])
     try:
-        result = check_model_availability(CoConfig(
+        result = check_llm(CoConfig(
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
             role_models={ROLE_REASONING: ModelEntry(model="missing-model")},
@@ -83,10 +83,10 @@ def test_check_model_availability_no_reasoning_model_returns_error() -> None:
         server.shutdown()
 
 
-def test_check_model_availability_optional_role_missing_returns_warn() -> None:
+def test_check_llm_optional_role_missing_returns_warn() -> None:
     server, port = _make_ollama_server(["my-reasoning-model"])
     try:
-        result = check_model_availability(CoConfig(
+        result = check_llm(CoConfig(
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
             role_models={
@@ -99,12 +99,3 @@ def test_check_model_availability_optional_role_missing_returns_warn() -> None:
         assert "coding" in result.detail
     finally:
         server.shutdown()
-
-
-def test_check_model_availability_non_ollama_returns_ok() -> None:
-    result = check_model_availability(CoConfig(
-        llm_provider="gemini",
-        role_models={ROLE_REASONING: ModelEntry(model="gemini-3-flash-preview")},
-    ))
-    assert result.status == "ok"
-    assert result.ok

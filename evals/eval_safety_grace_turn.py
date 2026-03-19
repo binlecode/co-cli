@@ -1,3 +1,4 @@
+import pathlib
 #!/usr/bin/env python3
 """Eval: grace-turn — model summarizes progress when budget is exhausted.
 
@@ -21,9 +22,11 @@ import time
 
 from co_cli.context._history import SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
+from co_cli.config import settings  # noqa: E402
+from co_cli.deps import CoConfig  # noqa: E402
 
-from evals._common import make_eval_deps  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._frontend import CapturingFrontend  # noqa: E402
 
 
@@ -32,7 +35,8 @@ async def main() -> int:
     print("  E2E: Grace Turn on Usage Limit")
     print("=" * 60)
 
-    agent, model_settings, _, _ = get_agent()
+    # TODO: source model_settings from make_eval_settings()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="e2e-grace-turn")
     deps.runtime.safety_state = SafetyState()
     frontend = CapturingFrontend(verbose=True)
@@ -55,7 +59,7 @@ async def main() -> int:
         user_input=prompt,
         deps=deps,
         message_history=[],
-        model_settings=model_settings,
+        model_settings=make_eval_settings(),
         max_request_limit=low_limit,
         verbose=False,
         frontend=frontend,

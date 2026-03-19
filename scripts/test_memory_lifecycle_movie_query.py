@@ -52,7 +52,7 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 from pydantic_ai.usage import UsageLimits  # noqa: E402
 
-from co_cli.agent import get_agent  # noqa: E402
+from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import get_settings, WebPolicy  # noqa: E402
 from co_cli.deps import CoDeps  # noqa: E402
 from co_cli.tools._shell_backend import ShellBackend  # noqa: E402
@@ -279,7 +279,7 @@ async def main():
 
     # Web tools auto-execute (no approval prompt) for this demo
     demo_web_policy = WebPolicy(search="allow", fetch="allow")
-    agent, model_settings, _, _ = get_agent(web_policy=demo_web_policy)
+    agent, model_settings, _, _ = build_agent(web_policy=demo_web_policy)
 
     # Resolve provider + model for display
     provider = settings.llm_provider.lower()

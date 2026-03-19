@@ -1,21 +1,22 @@
 """Functional tests for the delegate_coder, delegate_research, and delegate_analysis tool wiring."""
 
 import pytest
+from pathlib import Path
 
 from pydantic import ValidationError
 from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
 from co_cli.tools._delegation_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent
-from co_cli.config import ModelEntry
+from co_cli.config import ModelEntry, settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research
 
-# Cache agent at module level — get_agent() is expensive; model reference is stable.
-_AGENT, _, _ = get_agent()
+# Cache agent at module level — build_agent() is expensive; model reference is stable.
+_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx() -> RunContext:
@@ -63,11 +64,11 @@ def test_make_subagent_deps_resets_session_state() -> None:
     dirty = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            session_id="parent-session",
             brave_search_api_key="test-key",
             memory_max_count=500,
         ),
         session=CoSessionState(
+            session_id="parent-session",
             session_tool_approvals={"run_shell_command", "write_file"},
             active_skill_env={"MY_VAR": "value"},
             skill_tool_grants={"web_search"},
@@ -97,7 +98,8 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # Config inherited from parent
     assert isolated.config.brave_search_api_key == "test-key"
     assert isolated.config.memory_max_count == 500
-    assert isolated.config.session_id == "parent-session"
+    # sub-agents get fresh CoSessionState — session_id is not inherited (correct isolation behavior)
+    assert isolated.session.session_id == ""
 
     # Services shared (same object)
     assert isolated.services is dirty.services

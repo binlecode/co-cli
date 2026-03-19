@@ -6,21 +6,22 @@ All tests use real agent/deps — no mocks, no stubs.
 import asyncio
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import get_agent
+from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.commands._commands import dispatch, CommandContext, _cmd_skills
 from tests._ollama import ensure_ollama_warm
 
-_CONFIG = CoConfig.from_settings(settings)
+_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 _SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
@@ -33,13 +34,14 @@ def _make_ctx(
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
     from pathlib import Path
-    agent, tool_names, _ = get_agent()
-    config = replace(_CONFIG, session_id="test-commands")
+    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    config = _CONFIG
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=config,
+        session=CoSessionState(session_id="test-commands"),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -57,13 +59,14 @@ def _make_agent_and_deps():
     - resolved_resume: summarization model (think=False) for post-approval turns
     """
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = get_agent()
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     _fallback = ResolvedModel(model=None, settings=None)
     resolved_trigger = _REGISTRY.get(ROLE_REASONING, _fallback)
     resolved_resume = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG, session_id="test-approval"),
+        config=_CONFIG,
+        session=CoSessionState(session_id="test-approval"),
     )
     return agent, resolved_trigger, resolved_resume, deps
 
@@ -162,7 +165,7 @@ async def test_skills_install_local(tmp_path):
 
     skills_dir = tmp_path / ".co-cli" / "skills"
     ctx = _make_ctx()
-    ctx.deps.config.skills_dir = skills_dir
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
     orig_skills = dict(SKILL_COMMANDS)
     SKILL_COMMANDS.clear()
     try:
@@ -178,7 +181,7 @@ async def test_skills_install_local(tmp_path):
 async def test_skills_install_url_error(tmp_path):
     """/skills install with unreachable URL returns None (graceful failure)."""
     ctx = _make_ctx()
-    ctx.deps.config.skills_dir = tmp_path / ".co-cli" / "skills"
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=tmp_path / ".co-cli" / "skills")
     result = await _cmd_skills(ctx, "install http://127.0.0.1:1/skill.md")
     assert result is None
 
@@ -197,7 +200,7 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
     }]), encoding="utf-8")
 
     ctx = _make_ctx()
-    ctx.deps.config.exec_approvals_path = approvals_path
+    ctx.deps.config = replace(ctx.deps.config, exec_approvals_path=approvals_path)
 
     handled, _ = await dispatch("/approvals list", ctx)
     assert handled is True
@@ -421,12 +424,13 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
-    agent, tool_names, _ = get_agent()
+    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
             services=CoServices(shell=ShellBackend(), knowledge_index=idx),
-            config=CoConfig(session_id="test-forget-fts", memory_dir=memory_dir),
+            config=CoConfig(memory_dir=memory_dir),
+            session=CoSessionState(session_id="test-forget-fts"),
         ),
         agent=agent,
         tool_names=tool_names,

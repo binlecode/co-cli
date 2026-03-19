@@ -4,7 +4,7 @@
 
 ## 1. Reading Guide
 
-The docs are organized in four layers. Use the question types below to find the right starting point.
+Start here when you need navigation, the consolidated config table, or the source module index. Use the question map below to jump to the owning doc.
 
 ```
 DESIGN-index.md  ← start here (navigation, config reference, module index)
@@ -33,16 +33,9 @@ What is your question?
                 follow 'See Also' links for depth
 ```
 
-### Layer 1 — Documentation Index (this doc)
-
-Start here for navigation: reading guide, config reference, and module index.
-System overview and architecture diagrams live in [DESIGN-system.md](DESIGN-system.md).
-
 ### Layer 2 — Runtime docs
 
-Read a runtime doc when you have a **runtime question about a specific workflow** — debugging a bug, tracing execution, or understanding how two modules interact during a user turn.
-
-These docs cover ordered execution, state transitions, and failure paths for live runtime behavior.
+Use a runtime doc for ordered execution, state transitions, and failure paths during a live run.
 
 | If you're asking... | Read |
 |---------------------|------|
@@ -51,30 +44,21 @@ These docs cover ordered execution, state transitions, and failure paths for liv
 | What runs at startup before the first user message? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
 | How is the system prompt assembled and how does history compaction work? | [DESIGN-system.md](DESIGN-system.md) §Agent Factory and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 
-| Workflow | Doc | What it covers |
-|----------|-----|----------------|
-| One user turn (end-to-end) | [DESIGN-core-loop.md](DESIGN-core-loop.md) | chat loop → `run_turn` → streaming → tool calls → approval re-entry → post-turn hooks → retry/fallback |
-| Startup (canonical) | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | canonical startup flow: model dependency check (provider + model availability), knowledge sync, session restore, skills load, MCP init fallback, integration health sweep, welcome banner |
-| Tool approval and shell policy | [DESIGN-tools.md](DESIGN-tools.md) §Approval Classes and [DESIGN-core-loop.md](DESIGN-core-loop.md) | deferred approval chain, shell inline policy, skill grants, session auto-approve, `"a"` persistence |
-
 ### Layer 3 — Component docs
 
-Read a component doc when you have a **subsystem question** — adding a new memory tool, changing how skills load, or modifying retrieval behavior. These docs now own both lifecycle and implementation details.
+Use a component doc for subsystem contracts, lifecycle, and implementation detail.
 
 | If you're asking... | Read |
 |---------------------|------|
+| What is the top-level architecture, capability surface, or `CoDeps` contract? | [DESIGN-system.md](DESIGN-system.md) |
 | How does a tool go from registration to the model calling it? | [DESIGN-tools.md](DESIGN-tools.md) |
 | How does a memory get written, recalled, and eventually pruned? | [DESIGN-system.md](DESIGN-system.md) §Memory and [DESIGN-tools.md](DESIGN-tools.md) §Memory |
 | How does knowledge get indexed and retrieved? | [DESIGN-system.md](DESIGN-system.md) §Knowledge and [DESIGN-tools.md](DESIGN-tools.md) §Knowledge |
 | How does a skill go from `.md` file to running in the agent? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Skills Load and [DESIGN-core-loop.md](DESIGN-core-loop.md) |
 
-| Subsystem | Doc | What it covers |
-|-----------|-----|----------------|
-| Tools (all families) | [DESIGN-tools.md](DESIGN-tools.md) | registration, model exposure, approval classes, execution paths, return shape, and error classification |
-
 ### Layer 4 — Deep Component Docs
 
-Read a component doc when you need **implementation detail for a specific module** — schema, algorithm specifics, or config options for a single subsystem.
+Use these when you already know the subsystem and need the owning deep-dive doc.
 
 | If you're asking... | Read |
 |---------------------|------|
@@ -83,19 +67,20 @@ Read a component doc when you need **implementation detail for a specific module
 | How does the prompt get structured / what gets injected at runtime? | [DESIGN-system.md](DESIGN-system.md) §Agent Factory |
 | What are all the tools and their approval/return shape? | [DESIGN-tools.md](DESIGN-tools.md) |
 | How does the MCP client connect and inherit approval? | [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers |
-| What integrations are configured and healthy at startup? | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Integration Health Sweep |
+| What integrations are configured and healthy at startup? | [DESIGN-tools.md](DESIGN-tools.md) §Capabilities and [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
 
-| Component | Doc | Summary |
-|-----------|-----|---------|
-| System architecture (agent factory, CoDeps, capability surface, session management, security) | [DESIGN-system.md](DESIGN-system.md) | Agent factory, CoDeps, capability surface (tools/skills/MCP/sub-agents/approval boundary), memory & knowledge systems, session management, security model |
-| Tools | [DESIGN-tools.md](DESIGN-tools.md) | Registration, approval classes, error classes, per-family tool detail (files, shell, memory, articles, Obsidian, Google, web, background, todo, capabilities, delegation, MCP servers) |
-| LLM Models | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Gemini/Ollama model selection, inference parameters, Ollama local setup, sub-agent model roles |
-| MCP Tool Servers | [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers | External tool servers via Model Context Protocol (stdio and HTTP transports, auto-prefixing, approval inheritance) |
-| Logging & Tracking | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | SQLite span exporter, WAL concurrency, trace viewers, real-time `co tail` |
-| Integration Health | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Step 4 | Integration health sweep: `check_runtime(deps)`, `RuntimeCheck` contract, bootstrap/runtime/status callsites |
-| Eval LLM-as-Judge | [DESIGN-eval-llm-judge.md](DESIGN-eval-llm-judge.md) | LLM-as-judge for personality evals: check types, judge file structure, prompt design, model settings |
-| Config Reference | DESIGN-index.md §Config Reference (this doc) | Consolidated setting/env/default reference |
-| Module Index | DESIGN-index.md §Modules (this doc) | All source files by layer with purpose |
+### Canonical Docs
+
+| Doc | Role |
+|-----|------|
+| [DESIGN-system.md](DESIGN-system.md) | Top-level architecture, `CoDeps`, capability surface, security boundaries |
+| [DESIGN-core-loop.md](DESIGN-core-loop.md) | Per-turn execution and approval re-entry |
+| [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | Startup and bootstrap sequence |
+| [DESIGN-tools.md](DESIGN-tools.md) | Native tools, MCP tools, approval classes, return/error contracts |
+| [DESIGN-llm-models.md](DESIGN-llm-models.md) | Provider/model selection and role-model chains |
+| [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | Tracing, SQLite exporter, viewers |
+| [DESIGN-eval-llm-judge.md](DESIGN-eval-llm-judge.md) | LLM-as-judge eval design |
+| `DESIGN-index.md` | Navigation, consolidated config reference, and module index |
 
 ---
 
@@ -191,12 +176,12 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | Layer | Module | Purpose |
 |-------|--------|---------|
 | 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup |
-| 1. Agents + Orchestration | `bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `check_integration_health()` — startup assembly and inline wakeup steps |
-| 1. Agents + Orchestration | `agent.py` | `get_agent()` factory — model selection, tool registration, system prompt |
+| 1. Agents + Orchestration | `bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — startup assembly and inline wakeup steps |
+| 1. Agents + Orchestration | `agent.py` | `build_agent()` factory — model selection, tool registration, system prompt |
 | 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
 | 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines); `check_llm`, `check_model_availability`, `check_settings` |
+| 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines); `check_llm`, `check_settings` |
 | 2. Runtime Deps + Session State | `context/_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | 2. Runtime Deps + Session State | `context/_history.py` | History processors and `summarize_messages()` |
 | 2. Runtime Deps + Session State | `tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
@@ -219,7 +204,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `tools/_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
 | 3. Tool Layer | `tools/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
 | 3. Tool Layer | `bootstrap/_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
-| 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host)` — provider-aware model factory; `prepare_provider(provider, llm_api_key)` — provider-level side effects (Gemini env injection) called at `get_agent()` startup |
+| 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory; `prepare_provider(provider, llm_api_key)` — provider-level credential validation (Gemini API key guard) called at `build_agent()` startup |
 | 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()` — delegation agent helpers |
 | 4. Knowledge + Memory | `knowledge/_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
 | 4. Knowledge + Memory | `knowledge/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
@@ -235,7 +220,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 5. Skills | `skills/` | Package-default skill `.md` files — always available; currently ships `doctor.md` |
 | 6. Config + Infra Reference | `config.py` | `Settings` + `MCPServerConfig` (Pydantic BaseModel) from `settings.json` + env vars |
 | 6. Config + Infra Reference | `display.py` | Themed Rich Console, semantic styles, display helpers, `FrontendProtocol` (display + interaction contract), `TerminalFrontend` |
-| 6. Config + Infra Reference | `bootstrap/_render_status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` + `SecurityFinding` dataclass + `check_security()` + `render_security_findings()` + `display_welcome_banner()` |
+| 6. Config + Infra Reference | `bootstrap/_render_status.py` | `StatusInfo` dataclass + `get_status()` + `render_status_table()` + `SecurityFinding` dataclass + `check_security()` + `render_security_findings()` |
 | 6. Config + Infra Reference | `observability/_telemetry.py` | `SQLiteSpanExporter` — OTel spans to SQLite with WAL mode |
 | 6. Config + Infra Reference | `observability/_tail.py` | Real-time span viewer (`co tail`) |
 | 6. Config + Infra Reference | `observability/_viewer.py` | Static HTML trace viewer (`co traces`) |
