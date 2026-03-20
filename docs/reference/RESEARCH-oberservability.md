@@ -1,6 +1,6 @@
 # RESEARCH: Observability for Co
 
-**Date:** 2026-03-11
+**Date:** 2026-03-20
 
 ## Verdict
 
@@ -8,15 +8,15 @@
 
 Best-practice convergence is:
 
-- traces are the canonical execution spine
-- task and subagent progress is emitted as structured events, not free-form logs
-- live views are derived from persisted state, not ephemeral console output
-- bounded execution is part of observability, because runaway loops are invisible systems
-- protocol standardization matters, but only after local execution semantics are clear
+- **Traces are the canonical execution spine**: One explicit trace per user request spanning retrieval, execution, and evaluation.
+- **Task and subagent progress is emitted as structured events**, not free-form logs.
+- **Live views are derived from persisted state**, not ephemeral console output.
+- **Bounded execution is part of observability**, because runaway loops are invisible systems.
+- **Protocol standardization matters**, but only after local execution semantics are clear.
 
 For `co`, that means:
 
-1. Keep OpenTelemetry + local SQLite as the source of truth.
+1. Keep OpenTelemetry (OTel) + local SQLite as the source of truth, adopting explicit LLM observability semantics (cost attribution, RAG tracing, and privacy bounds).
 2. Add a first-class task/subagent event model correlated to traces.
 3. Add delegation bounds (`spawn_depth`, cycle detection, run budget).
 4. Improve live and resumable UX from persisted data.
@@ -32,52 +32,38 @@ The wrong move would be to bolt on ACP or SSE first and call the problem solved.
 
 Today the system already provides:
 
-- OpenTelemetry instrumentation bootstrapped in [`co_cli/main.py`](../../co_cli/main.py)
-- local SQLite span export in [`co_cli/_telemetry.py`](../../co_cli/_telemetry.py)
+- OpenTelemetry instrumentation bootstrapped in `co_cli/main.py`
+- local SQLite span export in `co_cli/_telemetry.py`
 - live terminal trace viewing via `co tail`
 - nested trace inspection via `co traces`
 - SQL/debug inspection via `co logs`
-- background task lifecycle persistence in [`co_cli/_background.py`](../../co_cli/_background.py)
-- task-to-span correlation hooks in [`co_cli/tools/task_control.py`](../../co_cli/tools/task_control.py)
+- background task lifecycle persistence in `co_cli/_background.py`
+- task-to-span correlation hooks in `co_cli/tools/task_control.py`
 
 This matters because the adoption question is not "how do we add observability?" It is "how do we converge the current tracing, task state, and future delegation flows into one coherent operator model?"
 
 So the baseline assessment is:
 
-- `co` is not missing telemetry
-- `co` is missing a converged execution event model across chat turns, background work, and delegated work
-- `co` is also missing some control-plane limits that make long-running execution observable and debuggable in practice
+- `co` is not missing telemetry, but it relies heavily on auto-instrumentation (via `pydantic-ai`) which captures raw prompts but lacks **cost attribution** and explicit **privacy controls** (e.g., prompt hashing).
+- `co` is missing a converged execution event model across chat turns, background work, and delegated work.
+- `co` lacks explicit semantic span boundaries for pre-agent operations (like FTS5 search) and overarching interactions (a root turn span).
+- `co` is missing some control-plane limits that make long-running execution observable and debuggable in practice.
 
 ---
 
 ## 2. Reference Signals That Matter
 
-This review draws from current local repository context, especially:
-
-- [`docs/DESIGN-logging-and-tracking.md`](../DESIGN-logging-and-tracking.md)
-- [`docs/reference/RESEARCH-peer-systems.md`](RESEARCH-peer-systems.md)
-- [`docs/reference/RESEARCH-cron-scheduler.md`](RESEARCH-cron-scheduler.md)
-- [`docs/reference/ROADMAP-co-evolution.md`](ROADMAP-co-evolution.md)
-- [`docs/reference/RESEARCH-voice.md`](RESEARCH-voice.md)
+This review draws from current local repository context and external industry best practices (e.g., FreeCodeCamp OTel LLM tracking patterns). 
 
 The main convergences across peer systems and `co`'s own design direction are:
 
 ### 2.1 One durable execution record beats many ad hoc logs
 
-`co` already follows the right direction here with OTel spans written locally to SQLite. The same pattern shows up elsewhere in different forms: durable run logs, persisted task state, and resumable status views all beat ephemeral stdout.
+`co` already follows the right direction here with OTel spans written locally to SQLite. The same pattern shows up elsewhere in different forms: durable run logs, persisted task state, and resumable status views all beat ephemeral stdout. The industry standard explicitly advocates for a **code-first, explicit span design** over black-box vendor agents: one end-to-end trace per user interaction.
 
 ### 2.2 Events matter as much as spans
 
-Spans are good for timing and hierarchy. They are not sufficient for operator-facing progress semantics like:
-
-- queued
-- waiting for approval
-- resumed
-- delegated
-- child agent started
-- child agent completed
-- retrying
-- blocked on dependency
+Spans are good for timing and hierarchy. They are not sufficient for operator-facing progress semantics like: queued, waiting for approval, resumed, delegated, child agent started, blocked on dependency.
 
 The converged pattern is: keep spans for timing; add structured domain events for workflow state.
 
@@ -91,14 +77,7 @@ OpenClaw's spawn limits matter for the same reason task queues and cron crash ma
 
 ### 2.5 Protocols are stabilizing, but they are not the first milestone
 
-ACP is a real signal. It may become important for inter-agent interoperability. But for `co`, internal clarity comes first:
-
-- stable event taxonomy
-- correlation IDs
-- delegation boundary semantics
-- task lifecycle semantics
-
-Without those, ACP would just serialize an unstable local model.
+ACP is a real signal. It may become important for inter-agent interoperability. But for `co`, internal clarity comes first: stable event taxonomy, correlation IDs, delegation boundary semantics. Without those, ACP would just serialize an unstable local model.
 
 ---
 
@@ -123,68 +102,36 @@ Every meaningful execution path should map to one correlated trace tree:
 
 This implies one end-to-end trace per user interaction, ensuring pre-agent operations (like FTS5 search) are cleanly bound under the same interaction trace. `co` already has the foundations for this and should keep building on OTel.
 
-### 3.2 Structured workflow event layer
+### 3.2 LLM-Specific Observability Semantics
+
+Best practices for LLM tracking explicitly call for expanding spans beyond just latency:
+
+- **Cost Tracking**: Runaway costs are a major operational blindspot. Attach `llm.usage.*` tokens and derived `llm.cost_estimated_usd` directly to the span.
+- **Privacy-Preserving Prompt Tracing**: Avoid dumping raw prompts and responses directly into traces if privacy is a concern. Instead, use hashes like `llm.prompt_hash` and `llm.response_hash` combined with length metrics (`llm.prompt_length`).
+- **RAG-Specific Attributes**: The retrieval span should explicitly record constraints and outcomes, e.g., `rag.top_k`, `rag.similarity_threshold`, and `rag.documents_returned`.
+
+### 3.3 Structured workflow event layer
 
 Add an explicit event schema for operator semantics that do not fit neatly into span timing alone.
 
 Recommended event families:
-
-- `turn.*`
-- `tool.*`
-- `task.*`
-- `approval.*`
-- `delegation.*`
-- `memory.*` only for major lifecycle events, not every internal detail
+`turn.*`, `tool.*`, `task.*`, `approval.*`, `delegation.*`, `memory.*` (major lifecycle events only).
 
 Recommended minimum fields on every event:
-
-- `event_id`
-- `ts`
-- `trace_id`
-- `span_id`
-- `session_id`
-- `run_id`
-- `kind`
-- `status`
-- `actor`
-- `summary`
-- `data` JSON payload
-
-This should stay local-first and SQLite-backed.
-
-### 3.3 Resumable operator views
-
-Best practice is not merely "show me what is happening now." It is:
-
-- show what happened
-- show what is happening
-- show what is blocked
-- show what can be resumed
-
-For `co`, that implies:
-
-- `co tail` remains the low-level live trace view
-- add a higher-level task/delegation event view
-- add resumable status summaries for long-running and delegated work
+`event_id`, `ts`, `trace_id`, `span_id`, `session_id`, `run_id`, `kind`, `status`, `actor`, `summary`, `data` (JSON payload).
 
 ### 3.4 Correlated task persistence
 
-`TaskStorage` already persists task metadata and output. The next step is to correlate task metadata and task event history directly to trace IDs and span IDs, so the operator can pivot between:
+`TaskStorage` already persists task metadata and output. The next step is to correlate task metadata and task event history directly to trace IDs and span IDs, so the operator can pivot between the human task view, the raw output log, and the trace tree.
 
-- the human task view
-- the raw output log
-- the trace tree
-
-This is more valuable than adding more logging verbosity. Additionally, ensure that spans tracking tasks and evaluations include semantic attributes (`llm.usage.*`, `llm.cost_estimated_usd`, `rag.documents_returned`) rather than generic metadata. This explicitly models operations like RAG retrievals or subagent executions so they are quantifiable.
+Additionally, ensure that spans tracking tasks and evaluations include semantic attributes (`llm.usage.*`, `llm.cost_estimated_usd`, `rag.documents_returned`) rather than generic metadata. This explicitly models operations like RAG retrievals or subagent executions so they are quantifiable.
 
 ### 3.5 Explicit execution limits
 
 Observability and control converge here. Add:
-
 - max delegation depth
 - cycle detection on repeated delegation patterns
 - max child-agent count per root run
-- max retry count per bounded workflow
 - explicit blocked/waiting states
 
 If these are missing, the system generates noise instead of understandable execution records.
@@ -195,27 +142,15 @@ If these are missing, the system generates noise instead of understandable execu
 
 ### 4.1 Keep OTel as the canonical spine
 
-This should be a hard decision.
-
-Do not introduce a second primary observability substrate for:
-
-- background tasks
-- delegated runs
-- voice
-- future schedulers
-
-Everything should correlate back to the existing local OTel trace store.
-
-This is already consistent with the voice research direction: new capabilities should land in existing OTel tracing, not in a parallel log path.
+This should be a hard decision. Do not introduce a second primary observability substrate for background tasks, delegated runs, voice, or future schedulers. Everything should correlate back to the existing local OTel trace store.
 
 ### 4.2 Add a first-class `execution_events` table
 
 Recommended purpose:
-
 - domain-level status transitions and operator-readable progress
 - durable feed for live and historical views
 - join point between traces, tasks, approvals, and delegation
-- unification with scheduled jobs (ensure `run_id` and `task_id` align semantically with the `TaskScheduler`'s `schedule_runs` table to prevent state bifurcation)
+- unification with scheduled jobs (ensure `run_id` and `task_id` align semantically with the `TaskScheduler`'s `schedule_runs` table)
 
 Suggested schema shape:
 
@@ -235,121 +170,43 @@ CREATE TABLE execution_events (
     summary TEXT NOT NULL,
     data TEXT NOT NULL
 );
-
-CREATE INDEX idx_execution_events_ts ON execution_events(ts DESC);
-CREATE INDEX idx_execution_events_trace ON execution_events(trace_id);
-CREATE INDEX idx_execution_events_run ON execution_events(run_id);
-CREATE INDEX idx_execution_events_task ON execution_events(task_id);
 ```
 
 Use it for semantic events like:
-
-- `task.queued`
-- `task.started`
-- `task.output_ready`
-- `task.completed`
-- `approval.requested`
-- `approval.granted`
-- `approval.denied`
-- `delegation.started`
-- `delegation.depth_limit_hit`
-- `delegation.cycle_detected`
-- `delegation.completed`
-- `eval.tool_approved`
-- `rag.retrieval_success`
+- `task.queued`, `task.started`, `task.completed`
+- `approval.requested`, `approval.granted`, `approval.denied`
+- `delegation.started`, `delegation.depth_limit_hit`, `delegation.completed`
+- `eval.tool_approved`, `rag.retrieval_success`
 
 ### 4.3 Treat delegation as an observable workflow, not a text exchange
 
-The old framing focused on "subagent logging." That is too narrow.
-
-What `co` actually needs is:
-
-- delegation run IDs
-- parent/child correlation
-- explicit state transitions
-- depth accounting
-- cycle detection
-- completion/result summaries
-
-The user does not primarily need to see "thought processes". The user needs to see:
-
-- what child work was started
-- why it was started
-- what it is doing now
-- whether it is blocked
-- what it returned
-- whether a safety limit stopped it
-
-That is an operator observability problem, not a chain-of-thought streaming problem.
+The user does not primarily need to see "thought processes". The user needs to see: what child work was started, why it was started, what it is doing now, whether it is blocked, what it returned, and whether a safety limit stopped it. That is an operator observability problem, not a chain-of-thought streaming problem.
 
 ### 4.4 Improve live UX from persisted state
 
 Recommended adoption order:
-
 1. Persist richer events.
 2. Extend `co tail` or add `co tasks --follow` / `co events`.
 3. Add filtered views by `trace_id`, `task_id`, `run_id`.
 4. Add resumable summaries for active workflows.
 
-This preserves the local-first, inspectable design already present in `co`.
-
 ### 4.5 Defer ACP to Phase 2
 
 ACP should not be the first deliverable.
-
-Reason:
-
-- `co` is still defining its bounded delegation model
-- `co` does not yet have a mature internal event contract
-- adopting a wire protocol too early adds compatibility burden before the product semantics settle
-
 The right sequencing is:
-
 1. define internal event taxonomy
 2. define run/delegation IDs and lifecycle rules
 3. ship local UX on those semantics
 4. then evaluate mapping them onto ACP
 
-Inference from peer signals: ACP is likely worth investigating, but only after `co` has something stable to expose.
-
 ---
 
 ## 5. What Co Should Explicitly Not Copy
 
-### 5.1 Do not build a second observability plane for subagents only
-
-If subagents emit one style of event and everything else lives in spans/tasks/logs, the operator model fragments.
-
-### 5.2 Do not make SSE the source of truth
-
-SSE is a transport for live updates. It is not the durable record.
-
-### 5.3 Do not expose private reasoning as the primary observability goal
-
-The right focus is execution transparency:
-
-- actions
-- state transitions
-- tool usage
-- waits
-- retries
-- failures
-- results
-
-Not raw hidden reasoning.
-
-### 5.4 Do not over-adopt distributed-systems patterns before they are needed
-
-`co` is still a local CLI product. It does not need:
-
-- a full remote telemetry backend
-- a gateway event bus
-- multi-tenant observability design
-- protocol complexity for its own sake
-
-### 5.5 Do not keep delegation unbounded
-
-This is both a safety problem and an observability problem. Unbounded delegation produces traces, but not understandable ones.
+- **Do not build a second observability plane for subagents only**: The operator model fragments if subagents log differently than standard tasks.
+- **Do not make SSE the source of truth**: SSE is a transport for live updates, not the durable record.
+- **Do not expose private reasoning as the primary observability goal**: Focus on execution transparency (actions, state transitions, tool usage, failures, results), not raw hidden reasoning.
+- **Do not keep delegation unbounded**: Unbounded delegation produces traces, but not understandable ones.
 
 ---
 
@@ -357,51 +214,44 @@ This is both a safety problem and an observability problem. Unbounded delegation
 
 ### Phase 1: Converge local execution visibility
 
-Goal: make one root run inspectable end-to-end.
+**Goal:** Make one root run inspectable end-to-end with accurate LLM economics.
 
-Ship:
+**Ship:**
 
-- `co.turn` overarching span tracking the whole lifecycle of an interaction
-- explicit semantic tags in existing operations (`rag.retrieval`, `llm.cost_estimated_usd`)
-- `run_id` and parent/child run correlation (aligning IDs with `TaskScheduler`)
-- `execution_events` table
-- task event emission
-- approval event emission
-- delegation event emission
-- `spawn_depth` limit
-- cycle detection for repeated delegation chains
+- **Root Turn Spans**: Wrap `run_turn` with a `co.turn` span to track the full lifecycle of an interaction.
+- **RAG Spans**: Add `rag.retrieval` spans to tools like `search_knowledge` and `search_memories`, explicitly recording `rag.documents_returned` and backend type.
+- **Cost Attribution**: Inject `llm.cost_estimated_usd` into spans during the context overflow check or via a custom span processor to track operational cost.
+- **Privacy Controls**: Introduce prompt hashing (`llm.prompt_hash`) based on a `telemetry_privacy_mode` configuration to avoid logging PII in `co logs`.
+- **Execution Events**:
+  - Add `run_id` and parent/child run correlation (aligning IDs with `TaskScheduler`)
+  - Create the `execution_events` SQLite table
+  - Emit structured events for task queues, approvals, and delegations
+- **Control Limits**:
+  - Enforce `spawn_depth` limits and cycle detection for repeated delegation chains
 
-Success condition:
-
-- any long-running or delegated workflow can be reconstructed from persisted traces + events without reading arbitrary console logs
+**Success condition:** Any long-running or delegated workflow can be reconstructed accurately from persisted traces + events without reading arbitrary console logs.
 
 ### Phase 2: Operator-grade UX
 
-Goal: make observability useful without SQL.
+**Goal:** Make observability useful without writing SQL.
 
-Ship:
+**Ship:**
+- Filtered event views in the CLI.
+- Combined task + trace summaries.
+- Blocked/waiting/resumable status surfaces.
+- Better live progress tracking for background work and delegated work.
 
-- filtered event views
-- combined task + trace summaries
-- blocked/waiting/resumable status surfaces
-- better live progress for background work and delegated work
-
-Success condition:
-
-- the user can answer "what is co doing?" and "why did it stop?" from built-in CLI views
+**Success condition:** The user can answer "what is co doing?" and "why did it stop?" directly from built-in CLI views.
 
 ### Phase 3: External protocol compatibility
 
-Goal: standardize only after semantics stabilize.
+**Goal:** Standardize inter-agent protocol only after semantics stabilize.
 
-Ship:
+**Ship:**
+- An internal-to-ACP mapping layer (if still justified).
+- Optional streaming transport for external viewers.
 
-- an internal-to-ACP mapping layer if still justified
-- optional streaming transport for external viewers
-
-Success condition:
-
-- `co` can expose stable execution events externally without redefining its internal model
+**Success condition:** `co` can expose stable execution events externally without redefining its internal model.
 
 ---
 
@@ -415,35 +265,4 @@ The converged best practice for observability in `co` is:
 - hard execution bounds for delegation and retries
 - protocol adoption only after internal semantics stabilize
 
-So the rewrite of the earlier gap is:
-
-- the main gap is not "no observability"
-- the main gap is "no converged execution event model across traces, tasks, approvals, and delegation"
-
-That is the right target for `co` adoption because it matches the product's actual strengths:
-
-- local-first
-- inspectable
-- operator-controlled
-- bounded autonomy
-
-And it avoids the common failure mode of agent systems: adding more streaming, more logging, and more protocol surface without making the system easier to understand.
-
-## 8. Appendix: OpenTelemetry LLM Observability Deep Dive
-
-This appendix details the explicit best practices for LLM Observability using OpenTelemetry (OTel), based on the FreeCodeCamp article *"How to Build End-to-End LLM Observability in FastAPI with OpenTelemetry"*.
-
-### 8.1 Key Principles
-
-The article advocates for a **code-first, explicit span design** over black-box vendor agents:
-
-1. **One Trace Per Request**: A single end-to-end trace per user interaction, serving as the root for all subsequent logical LLM operations (addressed in `co.turn` adoption).
-2. **Semantic Span Taxonomy**: Use granular logical stages (e.g., `http.request`, `rag.retrieval`, `llm.call`, `llm.postprocess`, `llm.eval`).
-3. **Privacy-Preserving Prompt Tracing**: Avoid dumping raw prompts and responses directly into traces if privacy is a concern. Instead, use hashes like `llm.prompt_hash` and `llm.response_hash` combined with length metrics (`llm.prompt_length`).
-4. **Explicit Token & Cost Tracking**: Attach `llm.usage.*` tokens and derived `llm.cost_estimated_usd` directly to the span. Runaway costs are a major operational blindspot.
-5. **RAG-Specific Attributes**: The retrieval span should explicitly record constraints and outcomes, e.g., `rag.top_k`, `rag.similarity_threshold`, and `rag.documents_returned`.
-
-### 8.2 Specific Gaps Addressed in `co`
-
-- **Privacy vs. Debuggability**: `co-cli` currently leans on `pydantic-ai` capturing full prompt strings. A proposed addition is using Pydantic-AI's settings or an explicit span processor to optionally redact or hash (`llm.prompt_hash`) prompts based on settings like `telemetry_privacy_mode`.
-- **Cost Attribution**: `co` currently captures tokens (`input_tokens`/`output_tokens`) via GenAI semantics but lacked explicit estimated cost per turn. Tracking `llm.cost_estimated_usd` at the trace/span level makes cost tracking an observable, queryable metric instead of an external billing afterthought. 
+The main gap is **not "no observability"**. The main gap is **"no converged execution event model across traces, tasks, approvals, and delegation."** That is the right target for `co` adoption because it matches the product's actual strengths: local-first, inspectable, operator-controlled, and bounded autonomy.
