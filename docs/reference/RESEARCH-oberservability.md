@@ -428,3 +428,22 @@ That is the right target for `co` adoption because it matches the product's actu
 - bounded autonomy
 
 And it avoids the common failure mode of agent systems: adding more streaming, more logging, and more protocol surface without making the system easier to understand.
+
+## 8. Appendix: OpenTelemetry LLM Observability Deep Dive
+
+This appendix details the explicit best practices for LLM Observability using OpenTelemetry (OTel), based on the FreeCodeCamp article *"How to Build End-to-End LLM Observability in FastAPI with OpenTelemetry"*.
+
+### 8.1 Key Principles
+
+The article advocates for a **code-first, explicit span design** over black-box vendor agents:
+
+1. **One Trace Per Request**: A single end-to-end trace per user interaction, serving as the root for all subsequent logical LLM operations (addressed in `co.turn` adoption).
+2. **Semantic Span Taxonomy**: Use granular logical stages (e.g., `http.request`, `rag.retrieval`, `llm.call`, `llm.postprocess`, `llm.eval`).
+3. **Privacy-Preserving Prompt Tracing**: Avoid dumping raw prompts and responses directly into traces if privacy is a concern. Instead, use hashes like `llm.prompt_hash` and `llm.response_hash` combined with length metrics (`llm.prompt_length`).
+4. **Explicit Token & Cost Tracking**: Attach `llm.usage.*` tokens and derived `llm.cost_estimated_usd` directly to the span. Runaway costs are a major operational blindspot.
+5. **RAG-Specific Attributes**: The retrieval span should explicitly record constraints and outcomes, e.g., `rag.top_k`, `rag.similarity_threshold`, and `rag.documents_returned`.
+
+### 8.2 Specific Gaps Addressed in `co`
+
+- **Privacy vs. Debuggability**: `co-cli` currently leans on `pydantic-ai` capturing full prompt strings. A proposed addition is using Pydantic-AI's settings or an explicit span processor to optionally redact or hash (`llm.prompt_hash`) prompts based on settings like `telemetry_privacy_mode`.
+- **Cost Attribution**: `co` currently captures tokens (`input_tokens`/`output_tokens`) via GenAI semantics but lacked explicit estimated cost per turn. Tracking `llm.cost_estimated_usd` at the trace/span level makes cost tracking an observable, queryable metric instead of an external billing afterthought. 
