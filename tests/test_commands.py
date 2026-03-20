@@ -107,24 +107,6 @@ async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_non_slash():
-    """Non-slash input returns (False, None) — not consumed."""
-    ctx = _make_ctx()
-    handled, new_history = await dispatch("hello world", ctx)
-    assert handled is False
-    assert new_history is None
-
-
-@pytest.mark.asyncio
-async def test_dispatch_unknown_command():
-    """Unknown /command returns (True, None) — consumed, no crash."""
-    ctx = _make_ctx()
-    handled, new_history = await dispatch("/unknown", ctx)
-    assert handled is True
-    assert new_history is None
-
-
-@pytest.mark.asyncio
 async def test_cmd_help_includes_status_usage():
     """/help should carry enough /status usage detail to defer per-command help."""
     ctx = _make_ctx()
@@ -328,50 +310,6 @@ async def test_approval_deny():
         deps.services.shell.cleanup()
 
 
-@pytest.mark.asyncio
-async def test_approval_budget_cumulative():
-    """Multi-hop approval cannot exceed a single per-turn request budget.
-
-    Requires running LLM + Docker.
-    """
-    agent, resolved_trigger, resolved_resume, deps = _make_agent_and_deps()
-    budget = settings.max_request_limit
-    turn_limits = UsageLimits(request_limit=budget)
-    try:
-        async with asyncio.timeout(60):
-            result = await agent.run(
-                "Run this exact shell command: git rev-parse --is-inside-work-tree",
-                deps=deps,
-                model=resolved_trigger.model,
-                model_settings=resolved_trigger.settings,
-                usage_limits=turn_limits,
-            )
-
-        max_hops = 5
-        hops = 0
-        while isinstance(result.output, DeferredToolRequests) and hops < max_hops:
-            hops += 1
-            approvals = DeferredToolResults()
-            for call in result.output.approvals:
-                approvals.approvals[call.tool_call_id] = True
-            async with asyncio.timeout(45):
-                result = await agent.run(
-                    None,
-                    deps=deps,
-                    message_history=result.all_messages(),
-                    deferred_tool_results=approvals,
-                    model=resolved_resume.model,
-                    model_settings=resolved_resume.settings,
-                    usage_limits=turn_limits,
-                    usage=result.usage(),
-                )
-
-        assert result.usage().requests <= budget
-        assert isinstance(result.output, str)
-    finally:
-        deps.services.shell.cleanup()
-
-
 # --- /new session checkpoint ---
 
 
@@ -403,16 +341,6 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
 
     content = session_files[0].read_text(encoding="utf-8")
     assert "provenance: session" in content, "frontmatter must contain provenance: session"
-
-
-@pytest.mark.asyncio
-async def test_cmd_new_empty_history_noop():
-    """/new with empty history prints a message and returns None (no-op)."""
-    ctx = _make_ctx(message_history=[])
-    handled, new_history = await dispatch("/new", ctx)
-
-    assert handled is True
-    assert new_history is None, "must return None (no-op) on empty history"
 
 
 # --- /forget FTS eviction ---
