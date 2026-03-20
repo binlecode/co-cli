@@ -4,8 +4,8 @@ Run this before pytest to prevent cold-start timeouts in LLM-calling tests:
 
     uv run python scripts/warmup_ollama.py && uv run pytest ...
 
-Sends concurrent minimal generation requests with keep_alive=-1 so all models
-stay loaded simultaneously for the duration of the test suite.
+Sends concurrent minimal generation requests with keep_alive=-1 so the active
+test-suite models stay loaded for the duration of the run.
 """
 
 import asyncio
@@ -14,14 +14,11 @@ import httpx
 
 OLLAMA_HOST = "http://localhost:11434"
 
-# All models used by the test suite — load concurrently so ollama keeps them
-# in VRAM simultaneously (~84 GB total, fits in 128 GB unified memory).
-# reasoning/agent model: used by agent.run() calls
-# summarization/analysis model: used by /compact and /new
-# coding model: used by delegate_coder tests
+# Active models used by the test suite.
+# Non-reason roles reuse the resident think model via reasoning_effort="none",
+# so there is no separate instruct model to warm.
 MODELS = [
     "qwen3.5:35b-a3b-think",
-    "qwen3.5:35b-a3b-instruct",
     "qwen3.5:35b-a3b-code",
 ]
 

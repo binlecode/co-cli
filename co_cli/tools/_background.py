@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import signal
+import uuid
 import time
 from datetime import datetime, timezone, timedelta
 from enum import Enum
@@ -35,14 +36,17 @@ class TaskStatus(str, Enum):
 
 
 def _make_task_id(command: str) -> str:
-    """Generate task_YYYYMMDD_HHMMSS_<cmd_name> from command string."""
+    """Generate task_YYYYMMDD_HHMMSS_<cmd_name>_<uuid> from command string.
+
+    UUID suffix guarantees uniqueness; timestamp prefix makes IDs human-trackable.
+    """
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     first_word = command.strip().split()[0] if command.strip() else "task"
     # Use basename only (e.g. /usr/bin/python → python)
     cmd_name = os.path.basename(first_word)
     # Replace unsafe filesystem chars
     cmd_name = _UNSAFE_CHARS.sub("_", cmd_name)[:32]
-    return f"task_{ts}_{cmd_name}"
+    return f"task_{ts}_{cmd_name}_{uuid.uuid4().hex[:8]}"
 
 
 # ---------------------------------------------------------------------------

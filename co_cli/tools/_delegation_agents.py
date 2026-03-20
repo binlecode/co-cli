@@ -111,3 +111,39 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
     agent.tool(search_knowledge, requires_approval=False)
     agent.tool(search_drive_files, requires_approval=False)
     return agent
+
+
+class ThinkingResult(BaseModel):
+    """Structured output from the thinking sub-agent."""
+
+    plan: str
+    steps: list[str]
+    conclusion: str
+
+
+def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ThinkingResult]:
+    """Create a reasoning-only thinking sub-agent with no tools.
+
+    The agent receives an isolated CoDeps (via make_subagent_deps) and has
+    NO registered tools — it reasons purely via the model's native thinking
+    capability (extended thinking tokens, chain-of-thought). Use this for
+    structured problem decomposition, planning, and synthesis tasks that
+    benefit from a dedicated reasoning pass.
+
+    Caller passes model_settings=resolved_model.settings to agent.run().
+    """
+    agent: Agent[CoDeps, ThinkingResult] = Agent(
+        resolved_model.model,
+        deps_type=CoDeps,
+        output_type=ThinkingResult,
+        system_prompt=(
+            "You are a reasoning agent. "
+            "Decompose the problem, reason step-by-step, and return a structured result. "
+            "Return a ThinkingResult with: "
+            "plan (1–3 sentence high-level approach), "
+            "steps (ordered action steps), "
+            "and conclusion (synthesized answer or recommendation)."
+        ),
+    )
+    # No tools registered — pure native reasoning, no external calls.
+    return agent

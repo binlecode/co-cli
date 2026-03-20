@@ -466,10 +466,10 @@ async def run_turn(
                     "Use /continue to extend."
                 )
 
-            # Context overflow detection: both Ollama providers truncate silently when
+            # Context overflow detection: Ollama truncates silently when
             # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
             # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-            if turn_usage is not None and deps.config.llm_provider in ("ollama-openai", "ollama-native") and deps.config.llm_num_ctx > 0:
+            if turn_usage is not None and deps.config.supports_context_ratio_tracking():
                 ratio = turn_usage.input_tokens / deps.config.llm_num_ctx
                 with _TRACER.start_as_current_span("ctx_overflow_check") as span:
                     span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)

@@ -186,6 +186,7 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
     console.print(table)
+    console.print("[dim]Usage: /status shows system health; /status <task-id> shows a background task.[/dim]")
     return None
 
 
@@ -941,7 +942,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "help": SlashCommand("help", "List available slash commands", _cmd_help),
     "clear": SlashCommand("clear", "Clear conversation history", _cmd_clear),
     "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
-    "status": SlashCommand("status", "Show system health", _cmd_status),
+    "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),

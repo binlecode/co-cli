@@ -49,16 +49,22 @@ def test_make_task_id_format():
     tid = _make_task_id("uv run pytest")
     assert tid.startswith("task_")
     parts = tid.split("_")
-    # task_YYYYMMDD_HHMMSS_uv → 4 parts minimum
-    assert len(parts) >= 4
-    assert parts[-1] == "uv"
+    # task_YYYYMMDD_HHMMSS_uv_<hex> → 5 parts minimum
+    assert len(parts) >= 5
+    # cmd name is the 4th segment (index 3)
+    assert parts[3] == "uv"
+    # last segment is an 8-char UUID-derived hex suffix for uniqueness
+    assert len(parts[-1]) == 8
+    assert all(c in "0123456789abcdef" for c in parts[-1])
 
 
 def test_make_task_id_unsafe_chars():
     tid = _make_task_id("/usr/bin/grep pattern")
     # basename of /usr/bin/grep → grep; no slashes in id
     assert "/" not in tid
-    assert tid.endswith("grep")
+    # cmd name segment is "grep"; last segment is the hex suffix
+    parts = tid.split("_")
+    assert parts[3] == "grep"
 
 
 # ---------------------------------------------------------------------------

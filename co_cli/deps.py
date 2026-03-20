@@ -162,6 +162,18 @@ class CoConfig:
     max_request_limit: int = DEFAULT_MAX_REQUEST_LIMIT
     tool_retries: int = DEFAULT_TOOL_RETRIES
 
+    def uses_ollama_openai(self) -> bool:
+        """Return True when the session LLM backend is Ollama's OpenAI-compatible API."""
+        return self.llm_provider == "ollama-openai"
+
+    def uses_gemini(self) -> bool:
+        """Return True when the session LLM backend is Gemini."""
+        return self.llm_provider == "gemini"
+
+    def supports_context_ratio_tracking(self) -> bool:
+        """Return True when input/output usage can be compared against an Ollama context budget."""
+        return self.uses_ollama_openai() and self.llm_num_ctx > 0
+
     @classmethod
     def from_settings(cls, s: "Settings", *, cwd: Path) -> "CoConfig":
         """Construct a fully resolved CoConfig from a Settings instance and current working directory.
@@ -281,6 +293,7 @@ class CoRuntimeState:
 
     precomputed_compaction: Any = field(default=None, repr=False)
     turn_usage: RunUsage | None = None
+    startup_statuses: list[str] = field(default_factory=list)
     # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
     # TODO: resolve by extracting a _types.py module to break the circular import properly.
     opening_ctx_state: "OpeningContextState | None" = field(default=None, repr=False)

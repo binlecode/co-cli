@@ -99,8 +99,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level retry budget for all tools |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Max provider error retries per turn |
 | `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `50` | Caps LLM round-trips per user turn |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`/`ollama-native`) or reasoning-only (`gemini`) | Ordered model chains per role (`reasoning` required; other roles optional) |
-| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection (`ollama-openai`, `ollama-native`, or `gemini`) |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`) or reasoning-only (`gemini`) | Ordered model chains per role (`reasoning` required; other roles optional) |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection (`ollama-openai` or `gemini`) |
 | `llm_api_key` | `LLM_API_KEY` | `null` | LLM API key (required when `llm_provider=gemini`) |
 | `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL (Ollama or compatible) |
 | `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Configured context window hint (passed to Ollama; ignored by Ollama API — set in Modelfile) |
@@ -141,7 +141,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Character overlap between adjacent chunks |
 | `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life (days) for temporal decay scoring in FTS-backed recall (`fts5` and `hybrid`) |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL (minutes) |
-| `mcp_servers` | `CO_CLI_MCP_SERVERS` | 3 defaults | MCP server configurations (JSON) |
+| `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server configurations (JSON) |
 | `background_max_concurrent` | `CO_BACKGROUND_MAX_CONCURRENT` | `5` | Max concurrent background tasks |
 | `background_task_retention_days` | `CO_BACKGROUND_TASK_RETENTION_DAYS` | `7` | Days to keep completed/failed/cancelled task data |
 | `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Clean up old tasks on startup |
@@ -187,7 +187,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 2. Runtime Deps + Session State | `tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
 | 3. Tool Layer | `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
 | 3. Tool Layer | `tools/files.py` | Native file tools: `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
-| 3. Tool Layer | `tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis` — read-only sub-agent delegation tools |
+| 3. Tool Layer | `tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` — sub-agent delegation tools |
 | 3. Tool Layer | `tools/todo.py` | Session todo tools: `todo_write`, `todo_read` |
 | 3. Tool Layer | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
 | 3. Tool Layer | `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
@@ -204,8 +204,8 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `tools/_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
 | 3. Tool Layer | `tools/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
 | 3. Tool Layer | `bootstrap/_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
-| 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory; `prepare_provider(provider, llm_api_key)` — provider-level credential validation (Gemini API key guard) called at `build_agent()` startup |
-| 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()` — delegation agent helpers |
+| 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory |
+| 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
 | 4. Knowledge + Memory | `knowledge/_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
 | 4. Knowledge + Memory | `knowledge/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |

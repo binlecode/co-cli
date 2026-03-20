@@ -79,6 +79,8 @@ async def _chat_loop(verbose: bool = False):
     )
     _prune_stale_approvals(Path.cwd() / ".co-cli" / "exec-approvals.json", max_age_days=90)
     deps = create_deps()
+    for status in deps.runtime.startup_statuses:
+        frontend.on_status(status)
 
     from co_cli._model_factory import ResolvedModel
     from co_cli.config import ROLE_REASONING
@@ -254,6 +256,9 @@ def chat(
         asyncio.run(_chat_loop(verbose=verbose))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
+    except ValueError as e:
+        console.print(f"[bold red]Startup error:[/bold red] {e}")
+        raise typer.Exit(code=1)
 
 
 @app.command()

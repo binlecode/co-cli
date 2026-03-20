@@ -9,11 +9,11 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
-from co_cli.tools._delegation_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent
+from co_cli.tools._delegation_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
 from co_cli.config import ModelEntry, settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research
+from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research, delegate_think
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
@@ -179,3 +179,56 @@ def test_confidence_out_of_range_fails_validation() -> None:
         CoderResult(summary="ok", diff_preview="", files_touched=[], confidence=-0.1)
 
 
+def test_thinking_result_model() -> None:
+    """ThinkingResult is a valid Pydantic model with expected field values."""
+    r = ThinkingResult(
+        plan="Decompose the problem into three phases.",
+        steps=["Phase 1: gather context", "Phase 2: analyze", "Phase 3: synthesize"],
+        conclusion="The recommended approach is X.",
+    )
+    assert r.plan == "Decompose the problem into three phases."
+    assert len(r.steps) == 3
+    assert r.conclusion == "The recommended approach is X."
+
+
+def test_make_thinking_agent_no_tools() -> None:
+    """make_thinking_agent returns a non-None agent with no registered function tools.
+
+    Note: agent._function_toolset.tools is a pydantic-ai private attribute (dict of
+    user-registered function tools). Accessing it here is intentional — it is the
+    only way to assert the no-tools invariant without a live LLM call. If pydantic-ai
+    renames this attribute, update this test.
+    """
+    agent = make_thinking_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
+    assert agent is not None
+    assert len(agent._function_toolset.tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_delegate_think_no_model() -> None:
+    """Raises ModelRetry matching 'unavailable' when model_registry is None."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
+    ctx = _make_ctx()
+    with pytest.raises(_ModelRetry, match="unavailable"):
+        await delegate_think(ctx, "solve this problem")
+
+
+@pytest.mark.asyncio
+async def test_delegate_think_max_requests_guard() -> None:
+    """max_requests=0 raises ModelRetry matching 'max_requests' (checked before registry lookup)."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
+    ctx = _make_ctx()
+    with pytest.raises(_ModelRetry, match="max_requests"):
+        await delegate_think(ctx, "any problem", max_requests=0)
+
+
+@pytest.mark.asyncio
+async def test_delegate_coder_max_requests_guard() -> None:
+    """max_requests=0 raises ModelRetry matching 'max_requests' (parity with delegate_research/analysis)."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
+    ctx = _make_ctx()
+    with pytest.raises(_ModelRetry, match="max_requests"):
+        await delegate_coder(ctx, "analyze foo", max_requests=0)

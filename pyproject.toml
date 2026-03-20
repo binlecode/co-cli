@@ -42,6 +42,6 @@ reranker = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-x --durations=0"
+addopts = "-x --durations=0 -p pytest_co_harness"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]

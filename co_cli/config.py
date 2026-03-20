@@ -6,19 +6,33 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 APP_NAME = "co-cli"
-DEFAULT_OLLAMA_REASONING_MODEL = "qwen3.5:35b-a3b-think"
-# Summarization uses the think model with thinking disabled (same weights,
-# no KV cache / VRAM cost difference vs instruct, avoids a model-swap eviction).
-# ollama-native routes through /api/chat; think=False disables the reasoning
-# chain at call-time without swapping model weights (no VRAM eviction).
-DEFAULT_OLLAMA_SUMMARIZATION_MODEL = {
+
+DEFAULT_OLLAMA_NOREASON_MODEL: dict[str, Any] = {
     "model": "qwen3.5:35b-a3b-think",
-    "provider": "ollama-native",
-    "api_params": {"temperature": 0.7, "top_p": 0.8, "max_tokens": 16384, "think": False},
+    "provider": "ollama-openai",
+    "api_params": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "max_tokens": 16384,
+        "reasoning_effort": "none",
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 1.5,
+        "repeat_penalty": 1.0,
+        "num_ctx": 131072,
+        "num_predict": 16384,
+    },
 }
-DEFAULT_OLLAMA_ANALYSIS_MODEL = "qwen3.5:35b-a3b-instruct"
+
+
+DEFAULT_OLLAMA_REASONING_MODEL = "qwen3.5:35b-a3b-think"
+# Summarization reuses the think model over the OpenAI-compatible Ollama API.
+# Request-level reasoning_effort="none" suppresses reasoning output while keeping
+# the same weights resident, avoiding an instruct-model swap.
+DEFAULT_OLLAMA_SUMMARIZATION_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
+DEFAULT_OLLAMA_ANALYSIS_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_CODING_MODEL = "qwen3.5:35b-a3b-code"
-DEFAULT_OLLAMA_RESEARCH_MODEL = "qwen3.5:35b-a3b-instruct"
+DEFAULT_OLLAMA_RESEARCH_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
@@ -122,11 +136,6 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
         args=["-y", "@modelcontextprotocol/server-github"],
         approval="auto",
     ),
-    "thinking": MCPServerConfig(
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-sequential-thinking"],
-        approval="never",
-    ),
     "context7": MCPServerConfig(
         command="npx",
         args=["-y", "@upstash/context7-mcp@latest"],
@@ -141,9 +150,7 @@ class ModelEntry(BaseModel):
     model: str
     api_params: dict[str, Any] = Field(default_factory=dict)
     # Per-entry provider override; if None, inherits the session-level provider.
-    # Use "ollama-native" to route this entry through Ollama's /api/chat endpoint
-    # instead of the OpenAI-compatible /v1/chat/completions wrapper.
-    provider: str | None = Field(default=None)
+    provider: Literal["ollama-openai", "gemini"] | None = Field(default=None)
 
 
 # Canonical role name constants. Used as keys in role_models and ModelRegistry lookups.
@@ -457,13 +464,13 @@ class Settings(BaseModel):
         provider = str(data.get("llm_provider", "ollama-openai")).lower()
         if provider == "gemini":
             role_defaults: dict = {ROLE_REASONING: DEFAULT_GEMINI_REASONING_MODEL}
-        elif provider in ("ollama-openai", "ollama-native"):
+        elif provider == "ollama-openai":
             role_defaults = {
                 ROLE_REASONING: DEFAULT_OLLAMA_REASONING_MODEL,
                 ROLE_SUMMARIZATION: DEFAULT_OLLAMA_SUMMARIZATION_MODEL,
                 ROLE_ANALYSIS: DEFAULT_OLLAMA_ANALYSIS_MODEL,
                 ROLE_CODING: DEFAULT_OLLAMA_CODING_MODEL,
-                ROLE_RESEARCH: {"model": DEFAULT_OLLAMA_RESEARCH_MODEL, "api_params": {"think": False}},
+                ROLE_RESEARCH: DEFAULT_OLLAMA_RESEARCH_MODEL,
             }
         else:
             raise ValueError(f"Unsupported llm_provider: {provider!r}")

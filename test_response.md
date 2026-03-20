@@ -2,7 +2,7 @@ Based on a deep scan of `co_cli/main.py`, `co_cli/config.py`, and `pydantic_ai`'
 
 ### 1. Logic Alignment with `pydantic-ai` Idiom: **Yes (Perfectly Aligned)**
 The instrumentation logic correctly follows the latest `pydantic-ai` idioms for native OpenTelemetry tracing (bypassing the older `logfire` abstraction):
-- **Global Setup:** `pydantic_ai.Agent.instrument_all(InstrumentationSettings(...))` is a class-level method that sets `Agent._instrument_default`. Calling this at module load time (in Phase 1) correctly ensures that all future `Agent` instances created later (e.g., inside `get_agent()`) are automatically instrumented.
+- **Global Setup:** `pydantic_ai.Agent.instrument_all(InstrumentationSettings(...))` is a class-level method that sets `Agent._instrument_default`. Calling this at module load time (in Phase 1) correctly ensures that all future `Agent` instances created later (e.g., inside `build_agent()`) are automatically instrumented.
 - **OTel Conventions:** Passing `version=3` correctly opts into the latest GenAI OpenTelemetry Semantic Conventions (`genai.*` attributes). 
 - **Sequence:** The logic of initializing the `TracerProvider` and custom `SpanExporter` *before* the first `Agent` is instantiated is exactly what Pydantic AI expects.
 

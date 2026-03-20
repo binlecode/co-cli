@@ -281,7 +281,7 @@ Implement:
 
 Minimum acceptable rule for this delivery:
 
-- skill grants may only auto-approve tools that are otherwise non-deferred in the base tool registry
+- skill grants may not bypass any approval gate — neither `requires_approval=True` at the registry level (step 2), nor `ApprovalRequired` raised inside the tool (step 3 / `run_shell_command`). Note: `run_shell_command` is registered `requires_approval=False` but raises `ApprovalRequired` internally, which pydantic-ai promotes into the deferred path — so step 2 alone does not protect it; step 3's explicit carve-out is required.
 
 ### Files
 

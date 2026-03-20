@@ -1,0 +1,270 @@
+"""Compare Ollama OpenAI-compatible think-model outputs: default vs non-reason override.
+
+Goal:
+- validate whether `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`
+  suppresses reasoning output and returns a direct final answer
+- contrast that with the same `qwen3.5:35b-a3b-think` model on its default path
+
+Method:
+- same OpenAI-compatible transport for both calls
+- same deterministic request settings for both calls
+- same direct-answer system prompt for both calls
+- constrained prompts so default-vs-nonreason behavior is measurable
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from time import perf_counter
+
+import httpx
+from rapidfuzz.fuzz import ratio
+
+from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+from co_cli.config import settings as _settings
+from co_cli.deps import CoConfig
+
+from evals._ollama import ensure_ollama_warm
+
+
+_CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
+_THINK_MODEL = "qwen3.5:35b-a3b-think"
+_SYSTEM = (
+    "You are a direct and helpful assistant. "
+    "Respond immediately to the user without outputting internal thought processes, "
+    "scratchpads, reasoning traces, or <think> tags. "
+    "Return only the final answer in the requested format."
+)
+
+_BASE_EXTRA = {
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 1.5,
+    "repeat_penalty": 1.0,
+    "num_ctx": 131072,
+    "num_predict": 16384,
+}
+_THINK_EXTRA = dict(_BASE_EXTRA) | {"reasoning_effort": "none"}
+_COMMON_SETTINGS = ModelSettings(
+    temperature=0.0,
+    top_p=0.8,
+    max_tokens=256,
+)
+_OLLAMA_WARM_TIMEOUT_S = 180
+_MODEL_CALL_TIMEOUT_S = 60
+
+
+@dataclass(frozen=True)
+class Case:
+    id: str
+    prompt: str
+    check: str  # exact | json | similar
+    similarity_floor: int = 90
+
+
+_CASES: list[Case] = [
+    Case(
+        id="exact-token",
+        prompt="Reply with exactly: HELLO",
+        check="exact",
+    ),
+    Case(
+        id="one-sentence-summary",
+        prompt=(
+            "Summarize in one sentence only: "
+            "Docker packages software and its dependencies into portable containers."
+        ),
+        check="similar",
+        similarity_floor=92,
+    ),
+    Case(
+        id="json-extract",
+        prompt=(
+            'Return strict JSON only with keys "city" and "country" for this text: '
+            '"I flew from Austin, United States to Tokyo."'
+        ),
+        check="json",
+    ),
+    Case(
+        id="bullet-rewrite",
+        prompt=(
+            "Rewrite this into exactly two bullet points and nothing else: "
+            "'The launch moved to Friday because QA found one regression. "
+            "The team fixed it and reran the checks successfully.'"
+        ),
+        check="similar",
+        similarity_floor=85,
+    ),
+]
+
+
+def _normalize(text: str) -> str:
+    return " ".join(text.strip().split())
+
+
+async def _timed_await[T](label: str, awaitable: T) -> T:
+    started = perf_counter()
+    try:
+        return await awaitable
+    finally:
+        elapsed = perf_counter() - started
+        print(f"    {label}: {elapsed:.2f}s", flush=True)
+
+
+async def _call_model(
+    *,
+    model_name: str,
+    prompt: str,
+    extra_body: dict | None = None,
+) -> tuple[str, list[str]]:
+    provider = OpenAIProvider(
+        base_url=f"{_CONFIG.llm_host}/v1",
+        api_key="ollama",
+        http_client=httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10, read=180, write=30, pool=10)
+        ),
+    )
+    model = OpenAIChatModel(model_name, provider=provider)
+    response = await model.request(
+        [ModelRequest(parts=[UserPromptPart(content=prompt)], instructions=_SYSTEM)],
+        ModelSettings(
+            temperature=_COMMON_SETTINGS["temperature"],
+            top_p=_COMMON_SETTINGS["top_p"],
+            max_tokens=_COMMON_SETTINGS["max_tokens"],
+            extra_body=extra_body,
+        ),
+        ModelRequestParameters(),
+    )
+    try:
+        text = "".join(
+            getattr(part, "content", "")
+            for part in response.parts
+            if type(part).__name__ == "TextPart"
+        ).strip()
+        thinking_parts = [type(part).__name__ for part in response.parts if "Thinking" in type(part).__name__]
+        assert text, f"{model_name} returned empty final content"
+        return text, thinking_parts
+    finally:
+        await provider.client.close()
+
+
+def _assert_case(case: Case, baseline_text: str, noreason_text: str) -> None:
+    if case.check == "exact":
+        assert _normalize(noreason_text) == "HELLO", (
+            f"{case.id}: expected exact HELLO\n"
+            f"noreason={noreason_text!r}"
+        )
+        return
+
+    if case.check == "json":
+        noreason_obj = json.loads(noreason_text)
+        assert set(noreason_obj.keys()) == {"city", "country"}, (
+            f"{case.id}: wrong json keys\n"
+            f"noreason={noreason_obj!r}"
+        )
+        return
+
+    baseline_norm = _normalize(baseline_text)
+    noreason_norm = _normalize(noreason_text)
+    assert noreason_norm, f"{case.id}: noreason output empty"
+    if baseline_norm:
+        sim = ratio(baseline_norm, noreason_norm)
+        assert sim >= case.similarity_floor, (
+            f"{case.id}: similarity {sim} < {case.similarity_floor}\n"
+            f"baseline={baseline_text!r}\nnoreason={noreason_text!r}"
+        )
+    else:
+        assert "<think>" not in noreason_text.lower(), (
+            f"{case.id}: noreason output leaked think tags\n"
+            f"noreason={noreason_text!r}"
+        )
+    
+
+
+def _require_ollama_provider() -> bool:
+    if _CONFIG.llm_provider != "ollama-openai":
+        print("SKIP: Ollama not configured")
+        return False
+    return True
+
+
+async def _run_case(case: Case) -> None:
+    """Think model with reasoning_effort=none should emit direct-answer output."""
+    assert _THINK_MODEL
+    case_started = perf_counter()
+
+    async with asyncio.timeout(_OLLAMA_WARM_TIMEOUT_S):
+        await _timed_await(
+            f"warm {_THINK_MODEL}",
+            ensure_ollama_warm(_THINK_MODEL, _CONFIG.llm_host),
+        )
+
+    async with asyncio.timeout(_MODEL_CALL_TIMEOUT_S):
+        baseline_text, baseline_thinking_parts = await _timed_await(
+            f"call {_THINK_MODEL} default",
+            _call_model(
+                model_name=_THINK_MODEL,
+                prompt=case.prompt,
+                extra_body=_BASE_EXTRA,
+            ),
+        )
+    async with asyncio.timeout(_MODEL_CALL_TIMEOUT_S):
+        noreason_text, noreason_thinking_parts = await _timed_await(
+            f"call {_THINK_MODEL} noreason",
+            _call_model(
+                model_name=_THINK_MODEL,
+                prompt=case.prompt,
+                extra_body=_THINK_EXTRA,
+            ),
+        )
+
+    assert not noreason_thinking_parts, (
+        f"{case.id}: noreason override still emitted reasoning parts: {noreason_thinking_parts}"
+    )
+    assert baseline_thinking_parts, (
+        f"{case.id}: default think path emitted no reasoning parts; expected contrast signal"
+    )
+    assert baseline_text.strip() or baseline_thinking_parts, (
+        f"{case.id}: default think path returned neither final text nor reasoning parts"
+    )
+    assert noreason_text.strip(), f"{case.id}: noreason think path returned empty text"
+
+    _assert_case(case, baseline_text, noreason_text)
+    case_elapsed = perf_counter() - case_started
+    print(f"    case total: {case_elapsed:.2f}s", flush=True)
+
+
+async def _main() -> int:
+    print("=" * 60)
+    print("  Eval: Think default vs Think+reasoning_effort=none")
+    print("=" * 60)
+
+    if not _require_ollama_provider():
+        return 0
+
+    try:
+        for idx, case in enumerate(_CASES, start=1):
+            print(f"\n[{idx}/{len(_CASES)}] {case.id}...", flush=True)
+            await _run_case(case)
+            print("PASS", flush=True)
+    except AssertionError as exc:
+        print(f"FAIL: {exc}", flush=True)
+        return 1
+    except Exception as exc:
+        print(f"FAIL: {type(exc).__name__}: {exc}", flush=True)
+        return 1
+
+    print("\nVERDICT: PASS", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(_main()))

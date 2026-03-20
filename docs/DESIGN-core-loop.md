@@ -543,7 +543,7 @@ Recovery behavior:
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell error threshold before intervention |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars per older tool return |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for sliding-window compaction |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (instruct model for `ollama-openai`/`ollama-native`; primary model for `gemini`) | Summarization model chain for compaction |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default (`qwen3.5:35b-a3b-think` with `reasoning_effort="none"` for `ollama-openai`; primary model for `gemini`) | Summarization model chain for compaction |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session persistence TTL |
 
 ## 6. Files

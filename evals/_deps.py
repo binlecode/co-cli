@@ -36,6 +36,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     shell = overrides.pop("shell", ShellBackend())
     knowledge_index = overrides.pop("knowledge_index", None)
     task_runner = overrides.pop("task_runner", None)
+    model_registry = overrides.pop("model_registry", None)
     skill_registry = overrides.pop("skill_registry", [])
     session_id_override = overrides.pop("session_id", "eval")
 
@@ -69,6 +70,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
             shell=shell,
             knowledge_index=knowledge_index,
             task_runner=task_runner,
+            model_registry=model_registry,
         ),
         config=CoConfig(**config_defaults),
         session=CoSessionState(session_id=session_id_override, skill_registry=skill_registry),

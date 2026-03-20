@@ -23,7 +23,7 @@ tools/
   todo.py           — session-scoped task list
   capabilities.py   — integration health introspection
   delegation.py     — sub-agent delegation
-  _delegation_agents.py — CoderResult, ResearchResult, AnalysisResult + agent factories
+  _delegation_agents.py — CoderResult, ResearchResult, AnalysisResult, ThinkingResult + agent factories
 ```
 
 ## 2. Core Logic
@@ -40,7 +40,7 @@ Conditional registration: `delegate_*` tools are registered only when the matchi
 |-------|-----------|---------|
 | Always deferred | `requires_approval=True`, unconditional | `write_file`, `edit_file`, `save_memory`, `save_article`, `create_email_draft`, `start_background_task`, `update_memory`, `append_memory` |
 | Shell inline policy | `requires_approval` depends on `evaluate_shell_command()` | `run_shell_command` |
-| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `delegate_*`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web policy | Depends on `web_policy.search` / `web_policy.fetch` setting | `web_search`, `web_fetch` |
 
 ### Return Shape
@@ -102,10 +102,10 @@ Memories are YAML-frontmatter markdown files stored in `.co-cli/memory/`. All re
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
 | `save_memory` | deferred | `content`, `tags?`, `category?`, `provenance?` | Writes new memory file; triggers dedup check via `memory/_lifecycle.py` write path |
-| `update_memory` | conditional | `memory_id`, `content` | Replaces body of existing memory; `terminal_error` if ID not found |
-| `append_memory` | conditional | `memory_id`, `content` | Appends to existing memory body |
-| `list_memories` | conditional | `tags?`, `category?`, `limit=20`, `offset=0` | Paginated list of memories; sorted by recency |
-| `search_memories` | conditional | `query`, `tags?`, `limit=10`, ... | FTS5/hybrid search over memory files; fallback to grep; includes confidence scoring |
+| `update_memory` | deferred | `memory_id`, `content` | Replaces body of existing memory; `terminal_error` if ID not found |
+| `append_memory` | deferred | `memory_id`, `content` | Appends to existing memory body |
+| `list_memories` | auto | `tags?`, `category?`, `limit=20`, `offset=0` | Paginated list of memories; sorted by recency |
+| `search_memories` | auto | `query`, `tags?`, `limit=10`, ... | FTS5/hybrid search over memory files; fallback to grep; includes confidence scoring |
 
 #### Knowledge / Articles (`tools/articles.py`)
 
@@ -114,9 +114,9 @@ Articles are decay-protected markdown files in the user-global library (`library
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
 | `save_article` | deferred | `content`, `title`, `origin_url`, `tags?`, `related?` | Saves article to library; deduplicates by `origin_url` exact match (consolidates on repeat) |
-| `recall_article` | conditional | `query`, `max_results=5`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Article-scoped keyword search returning summary index only (title, URL, tags, first paragraph); sorted by recency; use `read_article_detail` to load full body |
-| `search_knowledge` | conditional | `query`, `kind?`, `source?`, `limit=10`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Unified cross-source search (library + obsidian + drive by default); excludes memories unless `source="memory"`; post-retrieval confidence scoring and contradiction detection |
-| `read_article_detail` | conditional | `slug` | Loads full article body by file stem (from `search_knowledge` or `recall_article` result); two-step pattern: search → detail |
+| `recall_article` | auto | `query`, `max_results=5`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Article-scoped keyword search returning summary index only (title, URL, tags, first paragraph); sorted by recency; use `read_article_detail` to load full body |
+| `search_knowledge` | auto | `query`, `kind?`, `source?`, `limit=10`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Unified cross-source search (library + obsidian + drive by default); excludes memories unless `source="memory"`; post-retrieval confidence scoring and contradiction detection |
+| `read_article_detail` | auto | `slug` | Loads full article body by file stem (from `search_knowledge` or `recall_article` result); two-step pattern: search → detail |
 
 **`search_knowledge` source routing:**
 
@@ -133,9 +133,9 @@ Requires `obsidian_vault_path` configured. All paths are validated against vault
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `list_notes` | conditional | `tag?`, `offset=0`, `limit=20` | Paginated vault listing; sorts alphabetically; `has_more` pagination flag |
-| `search_notes` | conditional | `query`, `limit=10`, `folder?`, `tag?` | AND-logic keyword search; syncs vault into FTS index on call; regex fallback; returns snippets |
-| `read_note` | conditional | `filename` | Reads full note markdown; path traversal blocked; `ModelRetry` with available-notes hint on miss |
+| `list_notes` | auto | `tag?`, `offset=0`, `limit=20` | Paginated vault listing; sorts alphabetically; `has_more` pagination flag |
+| `search_notes` | auto | `query`, `limit=10`, `folder?`, `tag?` | AND-logic keyword search; syncs vault into FTS index on call; regex fallback; returns snippets |
+| `read_note` | auto | `filename` | Reads full note markdown; path traversal blocked; `ModelRetry` with available-notes hint on miss |
 
 #### Google Integration
 
@@ -145,23 +145,23 @@ Requires Google credentials (OAuth token or ADC). Resolved automatically via `to
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `search_drive_files` | conditional | `query`, `max_results=10`, `page_token?` | Searches My Drive; supports cursor-based pagination via `next_page_token` |
-| `read_drive_file` | conditional | `file_id` | Reads file content (text/markdown export for Docs/Sheets) |
+| `search_drive_files` | auto | `query`, `max_results=10`, `page_token?` | Searches My Drive; supports cursor-based pagination via `next_page_token` |
+| `read_drive_file` | auto | `file_id` | Reads file content (text/markdown export for Docs/Sheets) |
 
 **Gmail (`tools/google_gmail.py`):**
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `list_emails` | conditional | `query?`, `max_results=10` | Lists recent emails; standard Gmail query syntax |
-| `search_emails` | conditional | `query`, `max_results=10` | Full Gmail search (same syntax as Gmail search bar) |
+| `list_emails` | auto | `query?`, `max_results=10` | Lists recent emails; standard Gmail query syntax |
+| `search_emails` | auto | `query`, `max_results=10` | Full Gmail search (same syntax as Gmail search bar) |
 | `create_email_draft` | deferred | `to`, `subject`, `body`, `cc?`, `bcc?` | Creates draft; does not send; deferred unconditionally |
 
 **Calendar (`tools/google_calendar.py`):**
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `list_calendar_events` | conditional | `max_results=10`, `time_min?`, `time_max?` | Lists upcoming events; ISO8601 datetime params |
-| `search_calendar_events` | conditional | `query`, `max_results=10` | Full-text event search |
+| `list_calendar_events` | auto | `max_results=10`, `time_min?`, `time_max?` | Lists upcoming events; ISO8601 datetime params |
+| `search_calendar_events` | auto | `query`, `max_results=10` | Full-text event search |
 
 #### Web (`tools/web.py`)
 
@@ -191,8 +191,8 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `todo_write` | conditional | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
-| `todo_read` | conditional | — | Returns current todo list; model should call before ending multi-step turns |
+| `todo_write` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
+| `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
 | `check_capabilities` | auto | — | Runs `check_runtime(deps)`; returns probe results, active integrations, reasoning chain, skill grants, tool count |
 
 #### Delegation (`tools/delegation.py`)
@@ -204,8 +204,9 @@ Delegation tools spawn isolated sub-agents using `make_subagent_deps(base)`. Sub
 | `delegate_coder` | auto | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; no shell, no web |
 | `delegate_research` | auto | `web_search`, `web_fetch` | Web-only research; no memory writes, no filesystem. Raises `ModelRetry` when `web_policy.search` or `web_policy.fetch` is not `"allow"` — web policy gate checked before spawning the sub-agent |
 | `delegate_analysis` | auto | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; no shell, no direct web |
+| `delegate_think` | auto | none | Structured problem decomposition via native reasoning model; no tools — pure extended thinking |
 
-Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`.
+Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`. `delegate_think` is gated on `ROLE_REASONING` (same as the primary model).
 
 ---
 
@@ -236,7 +237,6 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | Server | Tool prefix | Approval |
 |--------|-------------|---------|
 | `github` | (none) | `auto` |
-| `thinking` | (none) | `never` |
 | `context7` | (none) | `never` |
 
 ## 3. Config
@@ -261,7 +261,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `background_task_retention_days` | `CO_BACKGROUND_TASK_RETENTION_DAYS` | `7` | Days to retain completed/failed/cancelled task data |
 | `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Auto-cleanup old tasks on startup |
 | `background_task_inactivity_timeout` | `CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT` | `0` | Auto-cancel task after N seconds of no output (0 = disabled) |
-| `mcp_servers` | `CO_CLI_MCP_SERVERS` | 3 defaults | MCP server map (JSON) |
+| `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server map (JSON) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget (applies to all tools) |
 
 ## 4. Files
@@ -280,7 +280,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `todo_write`, `todo_read` — session-scoped task list |
 | `co_cli/tools/capabilities.py` | `check_capabilities` — integration health introspection |
-| `co_cli/tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis` — sub-agent delegation |
+| `co_cli/tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` — sub-agent delegation |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` — env sanitizer and process-group kill |
@@ -290,6 +290,6 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
 | `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` — shared error helpers |
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
-| `co_cli/tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()` — delegation agent helpers |
+| `co_cli/tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` — provider-aware model factory |
 | `co_cli/agent.py` | `build_agent()` — `_register()` helper and full tool registration sequence |

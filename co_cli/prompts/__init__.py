@@ -83,7 +83,7 @@ def assemble_prompt(
     4. Model-specific counter-steering (if quirks exist)
 
     Args:
-        provider: LLM provider name ("gemini", "ollama-openai", "ollama-native").
+        provider: LLM provider name ("gemini", "ollama-openai").
         model_name: Normalized model identifier for quirk lookup.
         soul_seed: Seed + character base memories pre-combined by ``build_agent()``.
             Placed first so the model's opening context is the soul identity.

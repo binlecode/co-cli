@@ -99,7 +99,7 @@ def check_llm(config: "CoConfig") -> CheckResult:
       - Reasoning model missing → error (hard fail; session cannot start)
       - Optional role model missing → warn (soft fail; those tools degrade silently)
     """
-    if config.llm_provider == "gemini":
+    if config.uses_gemini():
         if config.llm_api_key:
             return CheckResult(ok=True, status="ok", detail="Gemini API key configured")
         return CheckResult(

@@ -62,6 +62,7 @@ _ROLE_TO_TOOL = {
     "coding": "delegate_coder",
     "research": "delegate_research",
     "analysis": "delegate_analysis",
+    "reasoning": "delegate_think",
 }
 
 EXPECTED_TOOLS = EXPECTED_TOOLS_CORE | {

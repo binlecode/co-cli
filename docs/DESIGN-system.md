@@ -187,7 +187,7 @@ Rules:
 build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool_names, tool_approval):
     # system_prompt already assembled by create_deps() — read directly
     create Agent with:
-        model=None, deps_type=CoDeps, system_prompt=config.system_prompt, retries=tool_retries
+        model=resolved.model, deps_type=CoDeps, instructions=config.system_prompt, retries=tool_retries
         output_type = [str, DeferredToolRequests]
         history_processors = [inject_opening_context, truncate_tool_returns,
                                detect_safety_issues, truncate_history_window]
@@ -262,12 +262,12 @@ The agent's effective capability is the interaction of native tools, skill overl
 | Workspace and files | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` | Read auto; writes deferred |
 | Shell | `run_shell_command` | Policy-classified: DENY / ALLOW / REQUIRE_APPROVAL |
 | Web | `web_search`, `web_fetch` | Policy-driven by `web_policy.search` / `web_policy.fetch` (`allow` or `ask`) |
-| Memory and knowledge | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories`, `search_knowledge`, `save_article`, `recall_article`, `read_article_detail` | Save deferred; others conditional |
-| Personal data: Obsidian | `list_notes`, `search_notes`, `read_note` | Conditional |
-| Personal data: Google | `search_drive_files`, `read_drive_file`, `list_emails`, `search_emails`, `create_email_draft`, `list_calendar_events`, `search_calendar_events` | Draft deferred; reads conditional |
+| Memory and knowledge | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories`, `search_knowledge`, `save_article`, `recall_article`, `read_article_detail` | `save_memory`, `save_article`, `update_memory`, `append_memory` deferred; reads auto |
+| Personal data: Obsidian | `list_notes`, `search_notes`, `read_note` | Auto |
+| Personal data: Google | `search_drive_files`, `read_drive_file`, `list_emails`, `search_emails`, `create_email_draft`, `list_calendar_events`, `search_calendar_events` | Draft deferred; reads auto |
 | Background tasks | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` | Start deferred; status/cancel/list auto |
-| Session utilities | `todo_write`, `todo_read`, `check_capabilities` | Conditional for todo; auto for capabilities |
-| Delegation | `delegate_coder`, `delegate_research`, `delegate_analysis` | Auto |
+| Session utilities | `todo_write`, `todo_read`, `check_capabilities` | Auto |
+| Delegation | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` | Auto |
 
 #### Delegated Sub-Agents
 
@@ -276,6 +276,7 @@ The agent's effective capability is the interaction of native tools, skill overl
 | Coder | `list_directory`, `read_file`, `find_in_files` | Read-only workspace; no shell, no web |
 | Research | `web_search`, `web_fetch` | Web-only; no memory writes, no shell. Requires `web_policy.search == "allow"` and `web_policy.fetch == "allow"` — raises `ModelRetry` otherwise |
 | Analysis | `search_knowledge`, `search_drive_files` | Knowledge and Drive read; no shell, no direct web |
+| Think | none | Pure reasoning via native model thinking capability; no tools. Gated on `ROLE_REASONING` |
 
 See [DESIGN-tools.md](DESIGN-tools.md) §Delegation for sub-agent details.
 
@@ -306,7 +307,7 @@ The approval tier determines whether a tool executes immediately or requires use
 |----------|----------|-----------|
 | Side-effectful always | Always deferred | `create_email_draft`, `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task`, `update_memory`, `append_memory` |
 | Shell conditional | Policy inside tool | `run_shell_command`: DENY -> terminal error, ALLOW -> execute, else approval |
-| Always auto-execute | Never deferred | `check_capabilities`, `delegate_*`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Always auto-execute | Never deferred | `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web tools | Policy driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask` |
 | MCP tools with `approval=auto` | Deferred | External tools default to requiring approval |
 | MCP tools with `approval=never` | Auto | Explicitly trusted by user config |
@@ -421,8 +422,8 @@ System-relevant settings called out here:
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Main provider selection (`ollama-openai`, `ollama-native`, or `gemini`) |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`/`ollama-native`) or reasoning-only (`gemini`) | Role model chains |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Main provider selection (`ollama-openai` or `gemini`) |
+| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`) or reasoning-only (`gemini`) | Role model chains |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget |
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Provider/network retry budget per turn |
 | `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` approval policy |

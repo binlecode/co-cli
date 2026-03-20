@@ -18,7 +18,8 @@ from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.commands._commands import dispatch, CommandContext, _cmd_skills
+from co_cli.commands._commands import dispatch, CommandContext, _cmd_help, _cmd_skills
+from co_cli.display import console
 from tests._ollama import ensure_ollama_warm
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -56,7 +57,7 @@ def _make_agent_and_deps():
 
     Returns (agent, resolved_trigger, resolved_resume, deps):
     - resolved_trigger: reasoning model for turn 1 tool invocation
-    - resolved_resume: summarization model (think=False) for post-approval turns
+    - resolved_resume: summarization model for post-approval turns
     """
     from co_cli._model_factory import ResolvedModel
     agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
@@ -121,6 +122,18 @@ async def test_dispatch_unknown_command():
     handled, new_history = await dispatch("/unknown", ctx)
     assert handled is True
     assert new_history is None
+
+
+@pytest.mark.asyncio
+async def test_cmd_help_includes_status_usage():
+    """/help should carry enough /status usage detail to defer per-command help."""
+    ctx = _make_ctx()
+    with console.capture() as cap:
+        await _cmd_help(ctx, "")
+    output = cap.get()
+
+    assert "/status" in output
+    assert "/status <task-id>" in output
 
 
 # --- State-changing commands ---

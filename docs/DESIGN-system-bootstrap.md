@@ -46,17 +46,23 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      └─ assemble_prompt(...)  →  config = dataclasses.replace(config, system_prompt=assembled_prompt)
 │  │
 │  │  Step 3 — construct services
-│  ├─ KnowledgeIndex(config=config)          # only if backend in ("fts5", "hybrid")
+│  ├─ resolve_knowledge_backend(config)
+│  │      configured "hybrid" → try hybrid → fallback to fts5 → fallback to grep
+│  │      configured "fts5"   → try fts5   → fallback to grep
+│  │      configured "grep"   → use grep
+│  │      returns (resolved_config, knowledge_index, startup_statuses)
 │  ├─ TaskRunner(
-│  │      storage=TaskStorage(config.tasks_dir),
+│  │      storage=TaskStorage(resolved_config.tasks_dir),
 │  │      max_concurrent, inactivity_timeout, auto_cleanup, retention_days,
 │  │  )
 │  ├─ CoServices(
 │  │      shell=ShellBackend(), knowledge_index=knowledge_index,
-│  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(config),
+│  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(resolved_config),
 │  │  )
-│  ├─ CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
-│  └─ CoDeps(services, config, runtime)      # returned; session field is default-fresh
+│  ├─ CoRuntimeState(startup_statuses=startup_statuses, ...)
+│  └─ CoDeps(services, resolved_config, runtime)      # returned; session field is default-fresh
+│
+├─ for status in deps.runtime.startup_statuses: frontend.on_status(status)
 │
 ├─ resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)
 │      if model_registry else ResolvedModel(model=None, settings=None)
@@ -67,7 +73,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ [if mcp_servers] build MCPServerStdio/HTTP toolset objects → mcp_toolsets
 │  ├─ Agent(
 │  │      resolved.model,                    # baked in — same pattern as sub-agent factories
-│  │      system_prompt=config.system_prompt,  # pre-assembled by create_deps() Step 2
+│  │      instructions=config.system_prompt,  # pre-assembled by create_deps() Step 2
 │  │      model_settings=resolved.settings,
 │  │      deps_type=CoDeps,
 │  │      retries=config.tool_retries,
@@ -83,7 +89,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ @agent.instructions add_available_skills      # skill registry list (capped 2KB)
 │  ├─ agent.tool(run_shell_command, requires_approval=False)  # ~30 tools registered
 │  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
-│  ├─ agent.tool(delegate_coder), ...        # only if role model is configured
+│  ├─ agent.tool(delegate_coder), agent.tool(delegate_think), ...  # only if role model is configured
 │  └─ returns (agent, tool_names, tool_approvals)
 │
 ├─ deps.session.tool_names     = tool_names
@@ -143,7 +149,7 @@ Layer 3: env vars via fill_from_env model_validator
 
 `role_models` defaults:
 - `gemini`: reasoning only → `gemini-3-flash-preview`; all other roles empty
-- `ollama-openai` / `ollama-native`: all five roles populated with hardcoded defaults in `config.py`
+- `ollama-openai`: all five roles populated with hardcoded defaults in `config.py`
 
 Merge order is provider defaults for missing roles, then explicit config values, then env var overrides.
 
@@ -178,8 +184,8 @@ create_deps():
     )
     # _build_system_prompt: loads soul seed, memories, mindsets, examples, critique; calls assemble_prompt()
 
-    # Step 3: construct services (lazy imports inside function body)
-    knowledge_index = KnowledgeIndex(config=config) if backend in ("fts5", "hybrid") else None  # co_cli.knowledge._index_store
+    # Step 3: resolve knowledge backend and construct services (lazy imports inside function body)
+    config, knowledge_index, startup_statuses = resolve_knowledge_backend(config)
     task_runner = TaskRunner(
         storage=TaskStorage(config.tasks_dir),
         max_concurrent=config.background_max_concurrent,
@@ -193,7 +199,11 @@ create_deps():
         task_runner=task_runner,
         model_registry=ModelRegistry.from_config(config),
     )
-    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+    runtime = CoRuntimeState(
+        startup_statuses=startup_statuses,
+        opening_ctx_state=OpeningContextState(),
+        safety_state=SafetyState(),
+    )
     return CoDeps(services=services, config=config, runtime=runtime)
 ```
 
@@ -212,6 +222,7 @@ Key transformation:
 | `runtime` | `CoRuntimeState` | Orchestration-layer transient state | Reset for sub-agents |
 
 The session group holds tool-visible mutable state such as approvals, todos, and skill grants. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
+`runtime.startup_statuses` carries one-time bootstrap status lines such as knowledge backend degradation notices; the chat loop prints them before the welcome banner and then treats them as transient state.
 
 ## 2. Provider And Model Checks
 
@@ -242,7 +253,7 @@ The four inline steps run inside the `async with agent` block after MCP init and
 chat_loop():
     frontend = TerminalFrontend()
 
-    completer = WordCompleter([f"/{name}" for name in COMMANDS], sentence=True)  ← COMMANDS-only
+    completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)  ← BUILTIN_COMMANDS-only
     session = PromptSession(history=..., completer=completer, ...)
 
     _prune_stale_approvals(exec-approvals.json, max_age_days=90)
@@ -401,6 +412,7 @@ configured "grep" -> use grep
 
 deps.config.knowledge_search_backend = resolved backend
 deps.services.knowledge_index = KnowledgeIndex instance or None
+deps.runtime.startup_statuses = one-time degradation messages shown before the banner
 ```
 
 By the time the inline wakeup steps run, the system already knows whether FTS or grep is active.
@@ -437,6 +449,7 @@ The banner marks the boundary between startup and interactive use. All status me
 
 | Condition | Outcome |
 |-----------|---------|
+| `create_deps()` raises `ValueError` (provider error, missing reasoning model) | `chat()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 |
 | Knowledge sync raises | Index closed, `knowledge_index = None`, grep fallback, session continues |
 | Session file missing or unreadable | New session created |
 | Session TTL expired | New session created |

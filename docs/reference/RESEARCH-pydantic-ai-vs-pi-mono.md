@@ -1,5 +1,3 @@
-"""
-
 # RESEARCH: Pydantic-AI vs Pi-Mono
 _Date: 2026-03-16_
 
@@ -121,4 +119,4 @@ Both frameworks reflect a maturation past early 2024 "langchain-style" wrappers,
 
 **Signals for `co`:**
 1. **From Pydantic-AI:** `co`'s reliance on Pydantic is validated. The `RunContext` dependency injection model is superior for managing state in tools compared to global singletons. We should adopt strict `deps_type` boundaries in our sub-agents.
-2. **From pi-mono:** `co`'s Markdown-based "skills" overlay is heavily aligned with pi-mono's design. `co` could greatly benefit from pi-mono's **Steering and Follow-up Queues** (handling mid-task user interruptions cleanly) and its **JSONL Session Tree** model, which elegantly solves the "rollback" problem without destroying historical context."""
+2. **From pi-mono:** `co`'s Markdown-based "skills" overlay is heavily aligned with pi-mono's design. `co` could greatly benefit from pi-mono's **Steering and Follow-up Queues** (handling mid-task user interruptions cleanly) and its **JSONL Session Tree** model, which elegantly solves the "rollback" problem without destroying historical context.

@@ -26,7 +26,7 @@ from co_cli.tools.articles import save_article, recall_article, read_article_det
 from co_cli.tools.todo import todo_write, todo_read
 from co_cli.tools.capabilities import check_capabilities
 from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
-from co_cli.tools.delegation import delegate_coder, delegate_research, delegate_analysis
+from co_cli.tools.delegation import delegate_coder, delegate_research, delegate_analysis, delegate_think
 from co_cli.tools.task_control import (
     start_background_task,
     check_task_status,
@@ -213,6 +213,8 @@ def build_agent(
         _register(delegate_research, False)
     if config.role_models.get(ROLE_ANALYSIS):
         _register(delegate_analysis, False)
+    if config.role_models.get(ROLE_REASONING):
+        _register(delegate_think, False)
 
     # Native file tools
     _register(list_directory, False)

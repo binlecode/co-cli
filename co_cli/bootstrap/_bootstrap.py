@@ -1,5 +1,7 @@
+import dataclasses
 import logging
 from pathlib import Path
+from typing import Any
 
 from opentelemetry import trace
 
@@ -15,6 +17,51 @@ logger = logging.getLogger(__name__)
 _TRACER = trace.get_tracer("co-cli.bootstrap")
 
 
+def _summarize_backend_error(exc: Exception) -> str:
+    detail = str(exc).strip() or exc.__class__.__name__
+    return detail.splitlines()[0]
+
+
+def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, list[str]]:
+    """Resolve the configured knowledge backend with graceful degradation."""
+    backend = config.knowledge_search_backend
+    statuses: list[str] = []
+    initial_error: Exception | None = None
+
+    if backend == "grep":
+        return config, None, statuses
+
+    from co_cli.knowledge._index_store import KnowledgeIndex
+
+    try:
+        return config, KnowledgeIndex(config=config), statuses
+    except Exception as exc:
+        initial_error = exc
+        logger.warning("Knowledge backend bootstrap failed for %s: %s", backend, exc)
+
+    if backend == "hybrid":
+        fallback_config = dataclasses.replace(config, knowledge_search_backend="fts5")
+        statuses.append(
+            "  Knowledge backend degraded — hybrid unavailable "
+            f"({_summarize_backend_error(initial_error or RuntimeError('hybrid init failed'))}); using fts5"
+        )
+        try:
+            return fallback_config, KnowledgeIndex(config=fallback_config), statuses
+        except Exception as fts_exc:
+            logger.warning("Knowledge backend fallback failed for fts5: %s", fts_exc)
+            statuses.append(
+                "  Knowledge backend degraded — fts5 unavailable "
+                f"({_summarize_backend_error(fts_exc)}); using grep"
+            )
+            return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
+
+    statuses.append(
+        "  Knowledge backend degraded — fts5 unavailable "
+        f"({_summarize_backend_error(initial_error or RuntimeError('fts5 init failed'))}); using grep"
+    )
+    return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
+
+
 def create_deps() -> CoDeps:
     """Assemble CoDeps from settings. Raises ValueError on provider/model hard errors."""
     # Step 1: build config (single call, fully resolved)
@@ -25,7 +72,6 @@ def create_deps() -> CoDeps:
     if result.status == "error":
         raise ValueError(result.detail)
 
-    import dataclasses
     from co_cli.agent import _build_system_prompt
     from co_cli.prompts.model_quirks._loader import normalize_model_name
     reasoning_entry = config.role_models.get(ROLE_REASONING)
@@ -36,10 +82,7 @@ def create_deps() -> CoDeps:
     )
 
     # Step 3: construct services
-    knowledge_index = None
-    if config.knowledge_search_backend in ("fts5", "hybrid"):
-        from co_cli.knowledge._index_store import KnowledgeIndex
-        knowledge_index = KnowledgeIndex(config=config)
+    config, knowledge_index, startup_statuses = resolve_knowledge_backend(config)
 
     from co_cli.tools._background import TaskStorage, TaskRunner
     task_runner = TaskRunner(
@@ -57,7 +100,11 @@ def create_deps() -> CoDeps:
         task_runner=task_runner,
         model_registry=ModelRegistry.from_config(config),
     )
-    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+    runtime = CoRuntimeState(
+        startup_statuses=startup_statuses,
+        opening_ctx_state=OpeningContextState(),
+        safety_state=SafetyState(),
+    )
     return CoDeps(services=services, config=config, runtime=runtime)
 
 
@@ -108,6 +155,4 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
             save_session(deps.config.session_path, session_data)
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data
-
-
 

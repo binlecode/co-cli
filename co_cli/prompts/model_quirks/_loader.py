@@ -20,9 +20,8 @@ files, exposing the same public API as before.
 3. **Lazy** - Model leaves TODOs, placeholders, incomplete implementations
 4. **Hesitant** - Model asks permission for read-only operations (false negative paralysis)
 
-Both `ollama-openai/` and `ollama-native/` providers share identical Qwen quirk defaults at
-initial split. The directories are kept separate to allow provider-specific tuning to diverge
-independently.
+`ollama-openai/` and `gemini/` maintain independent quirk defaults so provider-specific
+tuning can diverge without touching prompt assembly.
 
 ## Adding New Models
 
@@ -182,7 +181,7 @@ def get_counter_steering(provider: str, model_name: str) -> str:
     """Get model-specific counter-steering prompt text.
 
     Args:
-        provider: LLM provider name (case-insensitive: "gemini", "ollama-openai", "ollama-native")
+        provider: LLM provider name (case-insensitive: "gemini", "ollama-openai")
         model_name: Model identifier (normalized, e.g., "qwen3.5")
 
     Returns:

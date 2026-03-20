@@ -285,6 +285,7 @@ class KnowledgeIndex:
                 )
                 self._conn.commit()
             except Exception as e:
+                self._conn.close()
                 raise RuntimeError(
                     "Hybrid backend requires sqlite extension loading support. "
                     "Install pysqlite3 and ensure sqlite-vec can be loaded."

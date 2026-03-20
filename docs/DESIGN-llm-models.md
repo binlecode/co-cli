@@ -2,7 +2,7 @@
 
 ## 1. What & How
 
-Co CLI supports three providers (`ollama-openai`, `ollama-native`, `gemini`) and one model-selection contract:
+Co CLI supports two providers (`ollama-openai`, `gemini`) and one model-selection contract:
 `role_models` — one `ModelEntry` per role. The main agent is created with `model=None` (per-call model passing);
 `run_turn_with_fallback()` resolves `role_models["reasoning"]` from `ModelRegistry` before each turn.
 Sub-agent tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
@@ -14,9 +14,6 @@ ModelRegistry.from_config(config) → session-scoped registry
       ├── provider == "ollama-openai"
       │   └── OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama") + OpenAIChatModel
       │       (num_ctx baked from model inference metadata when available)
-      ├── provider == "ollama-native"
-      │   └── OllamaNativeModel using Ollama's native /api/chat endpoint
-      │       (exposes top-level `think` field for call-time reasoning control)
       └── provider == "gemini"
           └── GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
     → ResolvedModel(model, settings) stored in registry
@@ -44,16 +41,16 @@ Example:
   "role_models": {
     "reasoning": "qwen3.5:35b-a3b-agentic",
     "coding": "qwen3-coder-next:code",
-    "research": "qwen3.5:35b-a3b-instruct",
-    "summarization": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-native", "api_params": {"think": false}},
-    "analysis": "qwen3.5:35b-a3b-instruct"
+    "research": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}},
+    "summarization": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}},
+    "analysis": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}}
   }
 }
 ```
 
 When `role_models` is not configured, provider defaults are injected for all roles:
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama-openai` / `ollama-native`: all five roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization → `qwen3.5:35b-a3b-think` (via `ollama-native`, `think=False`); analysis → `qwen3.5:35b-a3b-instruct`; coding → `qwen3.5:35b-a3b-code`; research → `qwen3.5:35b-a3b-instruct` with `think=False`
+- `ollama-openai`: all five roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization/analysis/research → `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`; coding → `qwen3.5:35b-a3b-code`
 
 ### ModelRegistry and ResolvedModel
 
@@ -64,7 +61,6 @@ When `role_models` is not configured, provider defaults are injected for all rol
 Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_model_factory.py`:
 
 - `ollama-openai` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama"))`
-- `ollama-native` → `OllamaNativeModel(model_name, llm_host)` using Ollama's `/api/chat` endpoint
 - `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
 - Any other provider → `ValueError` raised.
 
@@ -88,7 +84,7 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai`, `ollama-native`, or `gemini` |
+| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai` or `gemini` |
 | `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL (Ollama or compatible) |
 | `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
@@ -104,37 +100,85 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 
 ### Thinking-capable Models — `api_params` Override
 
-Some Ollama MoE models (e.g. `qwen3.5`) have native thinking capability. By default they enter
-thinking mode and exhaust `num_predict` on reasoning tokens before emitting visible output.
+Some Ollama MoE models, including `qwen3.5:35b-a3b-think`, default to reasoning mode. For
+non-reasoning work such as summarization, analysis, and research, the repo does not swap to a
+second `-instruct` model. It keeps the same `-think` weights resident and changes the request body.
 
-Three mechanisms exist to suppress thinking, in order of preference:
+Supported non-reason path for this repo:
 
-1. **Native instruct variant** — use a dedicated instruct model (e.g. `qwen3:30b-a3b-instruct-2507`) where thinking is disabled at the model level. No config needed. Preferred for fixed non-thinking roles.
-2. **`api_params: {think: false}`** — request-level override on any `ModelEntry`. Use when pointing a non-thinking role at a thinking model without a dedicated instruct variant:
+- provider: `ollama-openai`
+- model: `qwen3.5:35b-a3b-think`
+- request override: `api_params.reasoning_effort = "none"`
 
-```
+Effective default shape:
+
+```yaml
 role_models:
   summarization:
-    - model: qwen3.5:35b-a3b-agentic
-      api_params: {think: false}
+    model: qwen3.5:35b-a3b-think
+    provider: ollama-openai
+    api_params:
+      reasoning_effort: none
+      temperature: 0.7
+      top_p: 0.8
+      max_tokens: 16384
+      top_k: 20
+      min_p: 0.0
+      presence_penalty: 1.5
+      repeat_penalty: 1.0
+      num_ctx: 131072
+      num_predict: 16384
 ```
 
-3. **`/no_think` SYSTEM directive** — baked into a Modelfile (e.g. the `-nothink` backup). Works for `qwen3` thinking models; `qwen3.5` ignores prompt-level directives and requires `api_params` instead.
+Application flow:
 
-`build_model()` in `_model_factory.py` bakes non-empty `api_params` into the `ModelSettings.extra_body`
-returned alongside the model — applied to every request through the `ResolvedModel` at call sites.
-`ModelRegistry.from_config(config)` is the single entry point for constructing all role models
-at session startup. Individual consumers call `registry.get(role, fallback)` to retrieve a
-`ResolvedModel` without any per-call construction overhead.
+```text
+Settings/config.py
+  default summarization/analysis/research entry
+    -> ModelEntry(model="qwen3.5:35b-a3b-think", api_params={... reasoning_effort="none" ...})
+
+ModelRegistry.from_config(config)
+  -> build_model(model_entry, provider="ollama-openai", llm_host)
+
+build_model()
+  quirks defaults + quirks extra_body + model_entry.api_params
+    -> ModelSettings fields:
+         temperature / top_p / max_tokens
+    -> ModelSettings.extra_body:
+         reasoning_effort / top_k / min_p / presence_penalty /
+         repeat_penalty / num_ctx / num_predict
+
+ResolvedModel(model, settings)
+  -> registry.get("summarization", fallback)
+  -> pydantic-ai request
+  -> POST {llm_host}/v1/chat/completions with extra_body merged into the API call
+```
+
+Practical rule:
+
+- Use `api_params` when a role should stay on the `-think` model but behave like a direct-answer,
+  non-reasoning call.
+- Put request-body controls such as `reasoning_effort`, `top_k`, `presence_penalty`, or
+  `num_predict` in `api_params`; for Ollama OpenAI-compatible models they are forwarded through
+  `ModelSettings.extra_body`.
+- Put standard sampling controls `temperature`, `top_p`, and `max_tokens` in `api_params` when a
+  role needs different values from the model-quirk defaults; `build_model()` lifts only those keys
+  into first-class `ModelSettings` fields.
+
+Observed behavior behind this design:
+
+- default `qwen3.5:35b-a3b-think` can spend its output budget on reasoning and return empty visible
+  `content`
+- `qwen3.5:35b-a3b-think` with `reasoning_effort="none"` returns direct-answer content on the same
+  resident model
 
 Important backend distinction:
 
-- For Ollama-backed thinking models, the native request control is `think: false`. This is the
-  correct setting for `role_models[*].api_params` in co-cli when `llm_provider=ollama-openai` or `llm_provider=ollama-native`.
-- For generic OpenAI-compatible Qwen3.5 servers outside Ollama, upstream Qwen documents a
-  different control path: `chat_template_kwargs.enable_thinking=false` in the extra request body.
-- So `api_params: {think: false}` in this repo is an Ollama-specific contract, not a universal
-  Qwen/OpenAI-compatible API parameter.
+- For the active Ollama OpenAI-compatible path in this repo, `reasoning_effort="none"` is the
+  supported request-level control for suppressing reasoning on `qwen3.5:35b-a3b-think`.
+- For generic OpenAI-compatible Qwen3.5 servers outside Ollama, upstream Qwen documents a different
+  control path: `chat_template_kwargs.enable_thinking=false` in the extra request body.
+- These control surfaces are not interchangeable; this repo documents and relies on the Ollama one.
 
 Validate with: `uv run python scripts/validate_ollama_models.py`
 
@@ -155,7 +199,6 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | Modelfile | Role | num_ctx | num_predict | temp | top_p | top_k | presence_p | repeat_p |
 |-----------|------|--------:|------------:|-----:|------:|------:|-----------:|---------:|
 | `qwen3.5-35b-a3b-think` | reasoning | 128K | 32K | 1.0 | 0.95 | 20 | 1.5 | 1.0 |
-| `qwen3.5-35b-a3b-instruct` | summarization, analysis, research | 128K | 16K | 0.7 | 0.8 | 20 | — | 1.0 |
 | `qwen3.5-35b-a3b-code` | coding | 64K | 32K | 0.6 | 0.8 | 20 | — | 1.05 |
 
 **num_ctx rationale:**
@@ -164,7 +207,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 
 **num_predict rationale:**
 - Thinking models (32K): chain-of-thought `<think>` tokens consume output budget before the visible answer; 32K prevents truncation.
-- Instruct/nothink models (16K): no thinking tokens, direct response only; 16K is ample and avoids wasteful allocation.
+- Non-reason calls on the same think weights use request-level `reasoning_effort="none"` instead of a separate instruct tag.
 - Coder model (32K): 50/50 split with num_ctx — 32K output budget, 32K input headroom for prompt + tool context.
 
 **Sampling params rationale:**
@@ -182,11 +225,10 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
 | `co_cli/context/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
-| `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host, api_key)` — builds provider-aware model and `ModelSettings`; `prepare_provider(provider, llm_api_key)` — provider-level credential validation (Gemini API key guard, no env mutation) called at `build_agent()` startup |
+| `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host, api_key)` — builds provider-aware model and `ModelSettings` |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
-| `ollama/Modelfile.qwen3.5-35b-a3b-instruct` | Summarization/analysis/research — native instruct (thinking off at model level) |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |
-| `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and `/no_think` directives; not invoked at startup |
+| `scripts/validate_ollama_models.py` | Standalone dev tool: validates shipped custom Ollama model tags against their baked Modelfile params and directives; not invoked at startup |
 
 ## 6. Testing Boundary
 

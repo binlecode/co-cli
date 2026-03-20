@@ -190,18 +190,18 @@ def test_default_provider_is_ollama_openai(tmp_path):
     assert settings.llm_provider == "ollama-openai"
 
 
-def test_ollama_native_provider_accepted(tmp_path):
-    """'ollama-native' is a valid provider — rejected before P1."""
+def test_ollama_native_provider_rejected(tmp_path):
+    """'ollama-native' is no longer a supported provider."""
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     (project_dir / ".co-cli" / "settings.json").write_text(
         json.dumps({"llm_provider": "ollama-native"})
     )
-    settings = load_config(
-        _user_config_path=tmp_path / "nonexistent.json",
-        _project_dir=project_dir,
-    )
-    assert settings.llm_provider == "ollama-native"
+    with pytest.raises(Exception, match="Unsupported llm_provider"):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
+        )
 
 
 def test_old_ollama_provider_string_rejected(tmp_path):

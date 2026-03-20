@@ -1,4 +1,4 @@
-"""Functional tests for security posture checks in status.py."""
+"""Functional tests for status rendering and security posture checks."""
 
 import json
 import stat
@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.bootstrap._render_status import check_security, SecurityFinding
+from co_cli.bootstrap._render_status import (
+    _PYPROJECT,
+    SecurityFinding,
+    check_security,
+    get_status,
+)
+from co_cli.config import settings
+from co_cli.deps import CoConfig
 
 
 def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
@@ -14,6 +21,18 @@ def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
     p = tmp_path / name
     p.write_text("{}")
     return p
+
+
+def test_get_status_reads_repo_root_pyproject():
+    """get_status() must read version from repo-root pyproject.toml, not co_cli/."""
+    assert _PYPROJECT.exists()
+    assert _PYPROJECT.name == "pyproject.toml"
+    assert _PYPROJECT.parent == Path(__file__).resolve().parent.parent
+
+    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    info = get_status(config)
+
+    assert info.version
 
 
 # -- check_security --------------------------------------------------------

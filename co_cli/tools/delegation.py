@@ -6,7 +6,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import UsageLimits
 
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
+from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
 from co_cli.deps import CoDeps, make_subagent_deps
 
 
@@ -25,7 +25,13 @@ async def delegate_coder(
     Args:
         task: Natural language description of the analysis task.
         max_requests: Maximum LLM requests the sub-agent may make (default 10).
+
+    Raises:
+        ModelRetry: When max_requests < 1.
     """
+    if max_requests < 1:
+        raise ModelRetry("max_requests must be at least 1")
+
     from co_cli.tools._delegation_agents import make_coder_agent
 
     registry = ctx.deps.services.model_registry
@@ -212,4 +218,63 @@ async def delegate_analysis(
         "conclusion": data.conclusion,
         "evidence": data.evidence,
         "reasoning": data.reasoning,
+    }
+
+
+async def delegate_think(
+    ctx: RunContext[CoDeps],
+    problem: str,
+    max_requests: int = 5,
+) -> dict[str, Any]:
+    """Delegate a structured reasoning task to a thinking sub-agent.
+
+    The thinking sub-agent has NO tools — it reasons purely via the model's
+    native extended thinking capability. Use this for problem decomposition,
+    planning, and synthesis tasks that benefit from a dedicated reasoning pass.
+
+    Returns a dict with:
+    - display: formatted plan + steps + conclusion — show directly to the user
+    - plan: high-level approach (1–3 sentences)
+    - steps: ordered action steps
+    - conclusion: synthesized answer or recommendation
+
+    Args:
+        problem: The problem or question to reason about.
+        max_requests: Maximum LLM requests the sub-agent may make (default 5).
+
+    Raises:
+        ModelRetry: When max_requests < 1.
+    """
+    if max_requests < 1:
+        raise ModelRetry("max_requests must be at least 1")
+
+    from co_cli.tools._delegation_agents import make_thinking_agent
+
+    registry = ctx.deps.services.model_registry
+    if not registry or not registry.is_configured(ROLE_REASONING):
+        raise ModelRetry("Thinking sub-agent is unavailable — handle this task directly.")
+    rm = registry.get(ROLE_REASONING, ResolvedModel(model=ctx.model, settings=None))
+    agent = make_thinking_agent(rm)
+    try:
+        result = await agent.run(
+            problem,
+            deps=make_subagent_deps(ctx.deps),
+            usage=ctx.usage,
+            usage_limits=UsageLimits(request_limit=max_requests),
+            model_settings=rm.settings,
+        )
+    except Exception as exc:
+        raise ModelRetry(f"Thinking sub-agent failed: {exc} — handle this task directly.") from exc
+    if ctx.deps.runtime.turn_usage is None:
+        ctx.deps.runtime.turn_usage = result.usage()
+    else:
+        ctx.deps.runtime.turn_usage.incr(result.usage())
+    data = result.output
+    steps_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(data.steps))
+    display = f"{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}"
+    return {
+        "display": display,
+        "plan": data.plan,
+        "steps": data.steps,
+        "conclusion": data.conclusion,
     }

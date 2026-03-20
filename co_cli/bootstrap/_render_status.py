@@ -15,7 +15,7 @@ from co_cli.deps import CoConfig
 from co_cli.display import console
 
 
-_PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+_PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
 
 @dataclass
