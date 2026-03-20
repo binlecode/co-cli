@@ -615,7 +615,7 @@ def test_search_knowledge_default_excludes_memories(tmp_path):
     idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _ctx_with_idx(idx, library_dir=library_dir, memory_dir=memory_dir)
 
-    # Save an article (indexed at source="library") and a memory (source="memory")
+    # Save an article (indexed at source="library")
     _run(save_article(
         ctx,
         content="xylozygote-partition-test reference article content",
@@ -623,7 +623,18 @@ def test_search_knowledge_default_excludes_memories(tmp_path):
         origin_url="https://example.com/xylozygote-partition",
         tags=["reference"],
     ))
-    _run(save_memory(ctx, "xylozygote-partition-test memory entry", tags=["preference"]))
+    # Index a memory directly — bypasses LLM consolidation which is non-deterministic
+    # and would silently drop the entry when the model extracts 0 facts from test content.
+    # This test verifies search_knowledge source-filtering, not save_memory.
+    mem_path = str(tmp_path / ".co-cli" / "memory" / "001-test-partition-mem.md")
+    idx.index(
+        source="memory",
+        kind="memory",
+        path=mem_path,
+        title="xylozygote-partition-test memory entry",
+        content="xylozygote-partition-test memory entry",
+        tags="preference test",
+    )
 
     # Default scope: should find article, not memory
     result = _run(search_knowledge(ctx, "xylozygote-partition-test"))
