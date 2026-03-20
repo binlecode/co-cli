@@ -110,16 +110,18 @@ The relevant best practice for `co` is not "buy a SaaS observability tool" and n
 
 Every meaningful execution path should map to one correlated trace tree:
 
-- root user turn
+- root user turn (e.g. `co.turn`)
 - model calls
 - tool calls
+- retrieval bounds (e.g. `rag.retrieval`)
+- post-processing and evaluation (e.g. `co.eval.tool_approved`)
 - background task launch
 - background task completion
 - delegated/subagent runs
 - approval waits
 - retries and cancellations
 
-`co` already has the foundations for this and should keep building on OTel.
+This implies one end-to-end trace per user interaction, ensuring pre-agent operations (like FTS5 search) are cleanly bound under the same interaction trace. `co` already has the foundations for this and should keep building on OTel.
 
 ### 3.2 Structured workflow event layer
 
@@ -173,7 +175,7 @@ For `co`, that implies:
 - the raw output log
 - the trace tree
 
-This is more valuable than adding more logging verbosity.
+This is more valuable than adding more logging verbosity. Additionally, ensure that spans tracking tasks and evaluations include semantic attributes (`llm.usage.*`, `llm.cost_estimated_usd`, `rag.documents_returned`) rather than generic metadata. This explicitly models operations like RAG retrievals or subagent executions so they are quantifiable.
 
 ### 3.5 Explicit execution limits
 
@@ -253,6 +255,8 @@ Use it for semantic events like:
 - `delegation.depth_limit_hit`
 - `delegation.cycle_detected`
 - `delegation.completed`
+- `eval.tool_approved`
+- `rag.retrieval_success`
 
 ### 4.3 Treat delegation as an observable workflow, not a text exchange
 
@@ -357,6 +361,8 @@ Goal: make one root run inspectable end-to-end.
 
 Ship:
 
+- `co.turn` overarching span tracking the whole lifecycle of an interaction
+- explicit semantic tags in existing operations (`rag.retrieval`, `llm.cost_estimated_usd`)
 - `run_id` and parent/child run correlation (aligning IDs with `TaskScheduler`)
 - `execution_events` table
 - task event emission
