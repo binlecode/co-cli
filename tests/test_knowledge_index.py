@@ -10,7 +10,7 @@ from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
+from co_cli.config import settings, ModelEntry
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.knowledge._index_store import KnowledgeIndex, SearchResult
 from co_cli.tools._shell_backend import ShellBackend
@@ -417,9 +417,53 @@ def test_hybrid_remove_cleans_docs_vec(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_reranker_provider_computed_none_when_nothing_configured(tmp_path):
+    """Both URL and LLM reranker absent → _reranker_provider is 'none'."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=None,
+    ))
+    assert idx._reranker_provider == "none"
+    idx.close()
+
+
+def test_reranker_provider_tei_when_url_set(tmp_path):
+    """Cross-encoder URL set (any URL) → _reranker_provider is 'tei'."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
+        knowledge_llm_reranker=None,
+    ))
+    assert idx._reranker_provider == "tei"
+    idx.close()
+
+
+def test_reranker_provider_tei_takes_priority_over_llm(tmp_path):
+    """Cross-encoder URL takes priority when both cross-encoder and LLM reranker are configured."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
+        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
+    ))
+    assert idx._reranker_provider == "tei"
+    idx.close()
+
+
+def test_reranker_provider_ollama_openai_maps_to_ollama(tmp_path):
+    """ModelEntry.provider='ollama-openai' must map _reranker_provider to 'ollama' for build_llm_reranker."""
+    idx = KnowledgeIndex(config=CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
+    ))
+    assert idx._reranker_provider == "ollama"
+    idx.close()
+
+
 def test_reranker_provider_none_is_passthrough(tmp_path):
     """With reranker_provider='none', search() respects limit and returns BM25 results without reranking."""
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_reranker_provider="none"))
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_cross_encoder_reranker_url=None))
     for i in range(5):
         idx.index(source="memory", kind="memory", path=f"/passthrough{i}.md",
                   title=f"Passthrough {i}", content=f"xyloquartz-passthrough unique content document {i}",
@@ -433,9 +477,9 @@ def test_rerank_falls_back_on_error(tmp_path):
     """search() with a dead Ollama reranker host falls back gracefully — no exception, returns results."""
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
-        knowledge_reranker_provider="ollama",
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
         llm_host="http://localhost:19999",
-        knowledge_reranker_model="qwen2.5:3b",
     ))
     for i in range(5):
         idx.index(source="memory", kind="memory", path=f"/fallback{i}.md",
@@ -851,9 +895,9 @@ def test_vec_docs_search_closest_embedding_ranked_first(tmp_path):
     row2 = idx._conn.execute(
         "SELECT rowid FROM docs WHERE path=? AND chunk_id=0", ("/doc2.md",)
     ).fetchone()
-    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+    idx._conn.execute(f"INSERT INTO {idx._docs_vec_table}(rowid, embedding) VALUES (?, ?)",
                       (row1["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
-    idx._conn.execute("INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+    idx._conn.execute(f"INSERT INTO {idx._docs_vec_table}(rowid, embedding) VALUES (?, ?)",
                       (row2["rowid"], struct.pack(f"{dims}f", 0.0, 1.0, 0.0, 0.0)))
     idx._conn.commit()
 
@@ -885,7 +929,7 @@ def test_vec_chunks_search_returns_chunk_level_results(tmp_path):
     row = idx._conn.execute(
         "SELECT rowid FROM chunks WHERE source='library' AND doc_path='/art.md' AND chunk_index=2"
     ).fetchone()
-    idx._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+    idx._conn.execute(f"INSERT INTO {idx._chunks_vec_table}(rowid, embedding) VALUES (?, ?)",
                       (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
     idx._conn.commit()
 
@@ -917,7 +961,7 @@ def test_hybrid_rrf_both_legs_boost_same_chunk(tmp_path):
     row = idx._conn.execute(
         "SELECT rowid FROM chunks WHERE source='library' AND doc_path='/boost.md' AND chunk_index=0"
     ).fetchone()
-    idx._conn.execute("INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+    idx._conn.execute(f"INSERT INTO {idx._chunks_vec_table}(rowid, embedding) VALUES (?, ?)",
                       (row["rowid"], struct.pack(f"{dims}f", 1.0, 0.0, 0.0, 0.0)))
     idx._conn.commit()
 
@@ -951,8 +995,7 @@ def test_tei_rerank_falls_back_on_connection_error(tmp_path):
     """search() with a dead TEI reranker host falls back gracefully — no exception, returns results."""
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
-        knowledge_reranker_provider="tei",
-        knowledge_rerank_api_url="http://127.0.0.1:19999",
+        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
     ))
     for i in range(5):
         idx.index(source="memory", kind="memory", path=f"/tei-fallback{i}.md",

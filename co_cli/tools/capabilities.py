@@ -23,7 +23,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     - obsidian: True if Obsidian vault path is configured
     - brave: True if Brave Search API key is set
     - mcp_count: number of MCP servers configured
-    - reasoning_models: list of reasoning ModelEntry objects
+    - reasoning_model: name of the active reasoning model, or None
     - reasoning_ready: True if reasoning chain is configured
     - checks: list of {"name", "status", "detail"} for each probe
     - skill_grants: sorted list of active skill tool grants
@@ -38,7 +38,14 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     st = result.status
 
     # Reranker from config
-    reranker = ctx.deps.config.knowledge_reranker_provider
+    _ce_url = ctx.deps.config.knowledge_cross_encoder_reranker_url
+    _llm_r = ctx.deps.config.knowledge_llm_reranker
+    if _ce_url:
+        reranker = f"tei ({_ce_url})"
+    elif _llm_r:
+        reranker = f"{_llm_r.provider or 'llm'}:{_llm_r.model}"
+    else:
+        reranker = "none"
 
     # Reasoning model sourced from capabilities
     reasoning_model = caps["reasoning_model"]

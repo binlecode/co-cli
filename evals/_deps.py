@@ -12,8 +12,8 @@ from co_cli.tools._shell_backend import ShellBackend
 def detect_model_tag() -> str:
     """Auto-detect a model tag from the current LLM config."""
     provider = settings.llm_provider.lower()
-    models = settings.role_models.get("reasoning", [])
-    model = models[0] if models else None
+    entry = settings.role_models.get("reasoning")
+    model = entry.model if entry is not None else None
     if provider == "gemini":
         return f"gemini-{model}" if model else "gemini"
     if provider == "ollama":
@@ -44,6 +44,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "obsidian_vault_path": None,
         "google_credentials_path": None,
         "shell_safe_commands": [],
+        "llm_api_key": s.llm_api_key,
         "brave_search_api_key": s.brave_search_api_key,
         "web_policy": s.web_policy,
         "web_http_max_retries": s.web_http_max_retries,
@@ -57,7 +58,8 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "memory_dedup_threshold": s.memory_dedup_threshold,
         "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
-        "knowledge_reranker_provider": s.knowledge_reranker_provider,
+        "knowledge_cross_encoder_reranker_url": s.knowledge_cross_encoder_reranker_url,
+        "knowledge_llm_reranker": s.knowledge_llm_reranker,
         "role_models": dict(s.role_models),
         "llm_provider": s.llm_provider,
         "llm_host": s.llm_host,

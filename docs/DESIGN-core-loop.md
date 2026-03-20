@@ -150,9 +150,9 @@ flowchart TD
     P -->|No| F[Deferred approval chain]
     B -->|No, requires_approval=True| F
     B -->|MCP approval=auto| F
-    F --> G{Tier 1: skill_tool_grants?}
-    G -->|Match| H[Auto-approve]
-    G -->|No match| I{Tier 2: session_tool_approvals?}
+    F --> G{Tier 1: skill grant?<br/>eligibility-gated}
+    G -->|Eligible + granted| H[Auto-approve]
+    G -->|Denied or absent| I{Tier 2: session_tool_approvals?}
     I -->|Match| H
     I -->|No match| L[Tier 3: user prompt y/n/a]
     L -->|y| H
@@ -360,7 +360,7 @@ _collect_deferred_tool_approvals(result, deps, frontend):
     for each call in result.output.approvals:
         args = decode_tool_args(call.args)          # normalize str | dict | None → dict
 
-        if call.tool_name in deps.session.skill_tool_grants:
+        if _check_skill_grant(call.tool_name, deps):  # eligibility-gated — see _check_skill_grant()
             approvals[call.tool_call_id] = True
             continue
 

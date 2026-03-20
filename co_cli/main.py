@@ -118,7 +118,7 @@ async def _chat_loop(verbose: bool = False):
         session_data = restore_session(deps, frontend)
         frontend.on_status(f"  {len(deps.session.skill_registry)} skill(s) loaded")
 
-        display_welcome_banner(deps, deps.config)
+        display_welcome_banner(deps)
 
         while True:
             _saved_env: dict[str, str | None] = {}

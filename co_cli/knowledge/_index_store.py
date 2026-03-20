@@ -21,6 +21,7 @@ Falls back to FTS5-only if embedding provider is unavailable.
 import dataclasses
 import hashlib
 import logging
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -230,17 +231,27 @@ class KnowledgeIndex:
         self._embedding_provider = config.knowledge_embedding_provider
         self._embedding_model = config.knowledge_embedding_model
         self._embedding_dims = config.knowledge_embedding_dims
+        self._docs_vec_table = f"docs_vec_{self._embedding_dims}"
+        self._chunks_vec_table = f"chunks_vec_{self._embedding_dims}"
         self._llm_host = config.llm_host
         self._llm_api_key = config.llm_api_key
         self._embed_api_url = config.knowledge_embed_api_url
-        self._rerank_api_url = config.knowledge_rerank_api_url
+        self._cross_encoder_url = config.knowledge_cross_encoder_reranker_url
         self._hybrid_vector_weight = config.knowledge_hybrid_vector_weight
         self._hybrid_text_weight = config.knowledge_hybrid_text_weight
-        self._reranker_provider = config.knowledge_reranker_provider
-        self._reranker_model = config.knowledge_reranker_model
+        self._llm_reranker = config.knowledge_llm_reranker
         self._chunk_size = config.knowledge_chunk_size
         self._chunk_overlap = max(0, min(config.knowledge_chunk_overlap, config.knowledge_chunk_size - 1)) if config.knowledge_chunk_size > 0 else 0
-        self._reranker_instance: Any = None
+
+        # Determine effective reranker provider from new config fields:
+        # cross-encoder (TEI) takes priority; LLM listwise as fallback; none if neither configured.
+        if self._cross_encoder_url is not None:
+            self._reranker_provider = "tei"
+        elif self._llm_reranker is not None:
+            _p = self._llm_reranker.provider or config.llm_provider
+            self._reranker_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
+        else:
+            self._reranker_provider = "none"
 
         from co_cli.knowledge._embedder import build_embedder
         from co_cli.knowledge._reranker import build_llm_reranker
@@ -251,10 +262,17 @@ class KnowledgeIndex:
             self._embed_api_url,
             self._llm_api_key,
         )
+        if self._llm_reranker is not None:
+            _p = self._llm_reranker.provider or config.llm_provider
+            _llm_rerank_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
+            _llm_rerank_model = self._llm_reranker.model
+        else:
+            _llm_rerank_provider = "none"
+            _llm_rerank_model = ""
         self._rerank_llm_fn = build_llm_reranker(
-            self._reranker_provider,
+            _llm_rerank_provider,
             self._llm_host,
-            self._reranker_model,
+            _llm_rerank_model,
             self._llm_api_key,
         )
 
@@ -277,11 +295,15 @@ class KnowledgeIndex:
         if self._backend == "hybrid":
             try:
                 self._load_sqlite_vec()
+                # Table names are dim-suffixed (e.g. docs_vec_1024) so a dim
+                # change just creates a new table — old tables are left in place.
                 self._conn.execute(
-                    f"CREATE VIRTUAL TABLE IF NOT EXISTS docs_vec USING vec0(embedding float[{self._embedding_dims}])"
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._docs_vec_table}"
+                    f" USING vec0(embedding float[{self._embedding_dims}])"
                 )
                 self._conn.execute(
-                    f"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(embedding float[{self._embedding_dims}])"
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS {self._chunks_vec_table}"
+                    f" USING vec0(embedding float[{self._embedding_dims}])"
                 )
                 self._conn.commit()
             except Exception as e:
@@ -297,6 +319,17 @@ class KnowledgeIndex:
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
+
+    def _get_vec_table_dim(self, table_name: str) -> int | None:
+        """Return the embedding dimension declared in an existing vec0 table, or None."""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        m = re.search(r'float\[(\d+)\]', row[0] or "")
+        return int(m.group(1)) if m else None
 
     def _migrate_chunk_id(self) -> None:
         """Rebuild docs table to add chunk_id + new UNIQUE(source, path, chunk_id) if absent."""
@@ -395,10 +428,10 @@ class KnowledgeIndex:
                     "SELECT rowid FROM docs WHERE source=? AND path=? AND chunk_id=0", (source, path)
                 ).fetchone()
                 if row:
-                    self._conn.execute("DELETE FROM docs_vec WHERE rowid=?", (row["rowid"],))
+                    self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
                     blob = struct.pack(f"{len(emb)}f", *emb)
                     self._conn.execute(
-                        "INSERT INTO docs_vec(rowid, embedding) VALUES (?, ?)",
+                        f"INSERT INTO {self._docs_vec_table}(rowid, embedding) VALUES (?, ?)",
                         (row["rowid"], blob),
                     )
                     self._conn.commit()
@@ -433,7 +466,7 @@ class KnowledgeIndex:
             if existing_rowids:
                 placeholders = ",".join("?" * len(existing_rowids))
                 self._conn.execute(
-                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    f"DELETE FROM {self._chunks_vec_table} WHERE rowid IN ({placeholders})",
                     existing_rowids,
                 )
 
@@ -460,7 +493,7 @@ class KnowledgeIndex:
                     if row:
                         blob = struct.pack(f"{len(emb)}f", *emb)
                         self._conn.execute(
-                            "INSERT INTO chunks_vec(rowid, embedding) VALUES (?, ?)",
+                            f"INSERT INTO {self._chunks_vec_table}(rowid, embedding) VALUES (?, ?)",
                             (row["rowid"], blob),
                         )
 
@@ -479,7 +512,7 @@ class KnowledgeIndex:
             if rowids:
                 placeholders = ",".join("?" * len(rowids))
                 self._conn.execute(
-                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    f"DELETE FROM {self._chunks_vec_table} WHERE rowid IN ({placeholders})",
                     rowids,
                 )
         self._conn.execute(
@@ -869,7 +902,7 @@ class KnowledgeIndex:
     ) -> list[SearchResult]:
         """Vector search against docs_vec (memory sources only)."""
         vec_rows = self._conn.execute(
-            "SELECT rowid, distance FROM docs_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            f"SELECT rowid, distance FROM {self._docs_vec_table} WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
             (blob, limit),
         ).fetchall()
         if not vec_rows:
@@ -934,7 +967,7 @@ class KnowledgeIndex:
     ) -> list[SearchResult]:
         """Vector search against chunks_vec (non-memory sources)."""
         vec_rows = self._conn.execute(
-            "SELECT rowid, distance FROM chunks_vec WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            f"SELECT rowid, distance FROM {self._chunks_vec_table} WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
             (blob, limit),
         ).fetchall()
         if not vec_rows:
@@ -1130,8 +1163,6 @@ class KnowledgeIndex:
         if self._reranker_provider == "none" or not candidates:
             return candidates[:limit]
         try:
-            if self._reranker_provider == "local":
-                return self._local_cross_encoder_rerank(query, candidates, limit)
             if self._reranker_provider == "tei":
                 return self._tei_rerank(query, candidates, limit)
             texts = self._fetch_reranker_texts(candidates)
@@ -1219,41 +1250,17 @@ class KnowledgeIndex:
         """Dispatch to provider-specific LLM and return list of 1-based ranked indices."""
         return self._rerank_llm_fn(prompt, n)
 
-    def _local_cross_encoder_rerank(
-        self,
-        query: str,
-        candidates: list[SearchResult],
-        limit: int,
-    ) -> list[SearchResult]:
-        """ONNX cross-encoder reranking via fastembed. Falls back gracefully."""
-        try:
-            from fastembed.rerank.cross_encoder import TextCrossEncoder
-        except ImportError:
-            logger.warning("fastembed not installed; falling back to unranked results (uv sync --group reranker)")
-            return candidates[:limit]
-
-        texts = self._fetch_reranker_texts(candidates)
-        if self._reranker_instance is None:
-            self._reranker_instance = TextCrossEncoder(model_name=self._reranker_model)
-
-        scores = list(self._reranker_instance.rerank(query, texts))
-        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
-        return [
-            dataclasses.replace(r, score=s)
-            for s, r in ranked[:limit]
-        ]
-
     def _tei_rerank(
         self,
         query: str,
         candidates: list[SearchResult],
         limit: int,
     ) -> list[SearchResult]:
-        """Rerank candidates using cross-encoder API at self._rerank_api_url/rerank."""
+        """Rerank candidates using cross-encoder API at self._cross_encoder_url/rerank."""
         texts = self._fetch_reranker_texts(candidates)
         import httpx
         resp = httpx.post(
-            f"{self._rerank_api_url}/rerank",
+            f"{self._cross_encoder_url}/rerank",
             json={"query": query, "texts": texts},
             timeout=30.0,
         )
@@ -1272,11 +1279,16 @@ class KnowledgeIndex:
 
         Returns None if no non-stopword tokens survive (e.g. "the a an").
         Quoted terms prevent FTS5 syntax injection from user input.
+        Non-word characters (backticks, quotes, punctuation) are stripped from
+        each token before quoting to prevent FTS5 phrase-string syntax errors.
         """
-        tokens = [
-            t for t in query.lower().split()
-            if t and t not in STOPWORDS and len(t) > 1
-        ]
+        tokens = []
+        for raw in query.lower().split():
+            # Strip characters that break FTS5 double-quoted phrase strings.
+            # Keep word chars and hyphens; drop everything else (backticks, quotes, etc.)
+            t = re.sub(r'[^\w-]', '', raw)
+            if t and t not in STOPWORDS and len(t) > 1:
+                tokens.append(t)
         if not tokens:
             return None
         return " AND ".join(f'"{t}"' for t in tokens)
@@ -1386,7 +1398,7 @@ class KnowledgeIndex:
                 "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
             ).fetchone()
             if row:
-                self._conn.execute("DELETE FROM docs_vec WHERE rowid=?", (row["rowid"],))
+                self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
         self._conn.execute(
             "DELETE FROM docs WHERE source = ? AND path = ?",
             (source, path),
@@ -1433,7 +1445,7 @@ class KnowledgeIndex:
                     "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
                 ).fetchone()
                 if row:
-                    self._conn.execute("DELETE FROM docs_vec WHERE rowid=?", (row["rowid"],))
+                    self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
             self._conn.execute(
                 "DELETE FROM docs WHERE source = ? AND path = ?",
                 (source, path),
@@ -1468,13 +1480,32 @@ class KnowledgeIndex:
             if chunk_rowids:
                 placeholders = ",".join("?" * len(chunk_rowids))
                 self._conn.execute(
-                    f"DELETE FROM chunks_vec WHERE rowid IN ({placeholders})",
+                    f"DELETE FROM {self._chunks_vec_table} WHERE rowid IN ({placeholders})",
                     chunk_rowids,
                 )
         self._conn.execute("DELETE FROM chunks WHERE source = ?", (source,))
         self._conn.execute("DELETE FROM docs WHERE source = ?", (source,))
         self._conn.commit()
         return self.sync_dir(source, directory, glob)
+
+    def probe(self) -> None:
+        """Run a minimal health check; raise on the first error found.
+
+        Used by bootstrap to surface FTS/vector configuration problems early.
+        Unlike search(), this method does NOT suppress errors.
+        """
+        # Probe FTS: run a raw FTS match against docs_fts to verify the table is intact.
+        self._conn.execute(
+            "SELECT rowid FROM docs_fts WHERE docs_fts MATCH ? LIMIT 1",
+            ("probe",),
+        ).fetchone()
+
+        # Probe vec tables: verify the dim-suffixed tables exist and are accessible.
+        if self._backend == "hybrid":
+            for table in (self._docs_vec_table, self._chunks_vec_table):
+                self._conn.execute(
+                    f"SELECT rowid FROM {table} LIMIT 1"
+                ).fetchone()
 
     def close(self) -> None:
         """Close the database connection."""

@@ -25,8 +25,6 @@ def build_llm_reranker(
     if not effective_model:
         if provider == "gemini":
             effective_model = "gemini-2.0-flash"
-        elif provider == "local":
-            effective_model = "BAAI/bge-reranker-base"
         else:
             effective_model = "qwen2.5:3b"
 

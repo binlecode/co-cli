@@ -42,14 +42,28 @@ from co_cli.deps import CoDeps
 
 def _check_skill_grant(tool_name: str, deps: CoDeps) -> bool:
     """Return True if tool_name is granted by the active skill's allowed-tools."""
-    if tool_name in deps.session.skill_tool_grants:
-        logger.debug(
-            "Skill grant: tool=%s active_grants=%s",
-            tool_name,
-            sorted(deps.session.skill_tool_grants),
-        )
-        return True
-    return False
+    if tool_name not in deps.session.skill_tool_grants:
+        return False
+    # Eligibility gate: skill grants must not bypass protected tools.
+    # Condition 1 — registry-level: tool registered with requires_approval=True.
+    if deps.session.tool_approvals.get(tool_name, False):
+        logger.debug("Skill grant denied: tool=%s is approval-gated", tool_name)
+        return False
+    # Condition 2 — explicit carve-out: run_shell_command is registered requires_approval=False
+    # at the registry level but raises ApprovalRequired internally under REQUIRE_APPROVAL policy.
+    # The registry dict alone does not catch it. This guard is defensive — run_shell_command
+    # normally never reaches the deferred path (it is requires_approval=False). It exists to
+    # prevent a future registration change or unusual code path from silently bypassing shell
+    # approval via skill grant.
+    if tool_name == "run_shell_command":
+        logger.debug("Skill grant denied: run_shell_command requires explicit user approval")
+        return False
+    logger.debug(
+        "Skill grant: tool=%s active_grants=%s",
+        tool_name,
+        sorted(deps.session.skill_tool_grants),
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------

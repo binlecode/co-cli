@@ -5,9 +5,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from co_cli.agent import _build_system_prompt
+from co_cli.config import ModelEntry
 from co_cli.bootstrap._banner import display_welcome_banner
-from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, restore_session, sync_knowledge
-from co_cli.bootstrap._check import check_llm
+from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reranker, restore_session, sync_knowledge
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
@@ -68,13 +68,6 @@ def _write_article_file(path: Path, *, art_id: int, body: str) -> None:
     )
 
 
-def test_check_llm_rejects_gemini_without_key() -> None:
-    """check_llm returns error for gemini with no API key — the session must never start in this state."""
-    config = CoConfig(llm_provider="gemini", llm_api_key=None)
-    result = check_llm(config)
-    assert result.status == "error"
-    assert "LLM_API_KEY" in result.detail or "gemini" in result.detail.lower()
-
 
 def test_build_system_prompt_assembles_non_empty() -> None:
     """_build_system_prompt must return a non-empty string — a blank prompt leaves the agent with no instructions."""
@@ -95,7 +88,7 @@ def test_sync_knowledge_indexes_memory_and_article(tmp_path: Path) -> None:
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="fts5",
-        knowledge_reranker_provider="none",
+        knowledge_cross_encoder_reranker_url=None,
     ))
     try:
         deps = _make_deps(tmp_path, knowledge_index=idx, memory_dir=memory_dir, library_dir=library_dir)
@@ -123,7 +116,7 @@ def test_sync_knowledge_disables_index_on_failure(tmp_path: Path) -> None:
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="fts5",
-        knowledge_reranker_provider="none",
+        knowledge_cross_encoder_reranker_url=None,
     ))
     idx.close()  # closed before sync so sync_dir raises
 
@@ -134,14 +127,14 @@ def test_sync_knowledge_disables_index_on_failure(tmp_path: Path) -> None:
         "sync_knowledge must set knowledge_index=None after sync failure"
 
 
-def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_vec_setup_fails(tmp_path: Path) -> None:
-    """Hybrid bootstrap must degrade to FTS5 when sqlite-vec setup fails."""
+def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(tmp_path: Path) -> None:
+    """Hybrid bootstrap must degrade to FTS5 when the embedder is unreachable at startup."""
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="hybrid",
-        knowledge_embedding_provider="none",
-        knowledge_embedding_dims=0,
-        knowledge_reranker_provider="none",
+        knowledge_embedding_provider="tei",
+        knowledge_embed_api_url="http://127.0.0.1:1/embed",
+        knowledge_cross_encoder_reranker_url=None,
     )
 
     resolved_config, knowledge_index, statuses = resolve_knowledge_backend(config)
@@ -158,7 +151,7 @@ def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_vec_setup_fails(
             ).fetchall()
         }
         assert "docs_fts" in tables, "FTS tables must exist after hybrid bootstrap degrades to fts5"
-        assert "docs_vec" not in tables, "Hybrid vec tables must not remain active after fallback to fts5"
+        assert not any(t.startswith("docs_vec_") for t in tables), "Hybrid vec tables must not remain active after fallback to fts5"
     finally:
         knowledge_index.close()
 
@@ -196,6 +189,66 @@ def test_restore_session_stale_creates_new_id(tmp_path: Path) -> None:
         "restore_session() must persist the new session_id to disk"
 
 
+def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
+    """No reranker configured → config unchanged, no status messages."""
+    config = CoConfig(knowledge_cross_encoder_reranker_url=None, knowledge_llm_reranker=None)
+    resolved, statuses = resolve_reranker(config)
+    assert resolved.knowledge_cross_encoder_reranker_url is None
+    assert resolved.knowledge_llm_reranker is None
+    assert statuses == []
+
+
+def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
+    """TEI cross-encoder at a dead port → URL nulled, degradation status emitted."""
+    config = CoConfig(
+        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
+        knowledge_llm_reranker=None,
+    )
+    resolved, statuses = resolve_reranker(config)
+    assert resolved.knowledge_cross_encoder_reranker_url is None
+    assert any("cross-encoder" in s.lower() or "tei" in s.lower() for s in statuses)
+
+
+def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
+    """LLM reranker with gemini provider but no API key → check_reranker_llm returns error → reranker nulled."""
+    config = CoConfig(
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        llm_provider="gemini",
+        llm_api_key=None,
+    )
+    resolved, statuses = resolve_reranker(config)
+    assert resolved.knowledge_llm_reranker is None
+    assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
+
+
+def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
+    """LLM reranker with Ollama provider but unreachable host → reranker nulled (warn != ok)."""
+    config = CoConfig(
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+        llm_provider="ollama-openai",
+        llm_host="http://localhost:1",
+    )
+    resolved, statuses = resolve_reranker(config)
+    assert resolved.knowledge_llm_reranker is None
+    assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
+
+
+def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
+    """TEI dead + LLM reranker with no API key → both nulled, two separate status messages."""
+    config = CoConfig(
+        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
+        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        llm_provider="gemini",
+        llm_api_key=None,
+    )
+    resolved, statuses = resolve_reranker(config)
+    assert resolved.knowledge_cross_encoder_reranker_url is None
+    assert resolved.knowledge_llm_reranker is None
+    assert len(statuses) == 2
+
+
 def test_display_welcome_banner_reads_counts_from_deps(tmp_path: Path) -> None:
     """display_welcome_banner() must read tool/skill/MCP counts from deps.session — not from a RuntimeCheck."""
     deps = _make_deps(tmp_path, mcp_servers={})
@@ -204,7 +257,7 @@ def test_display_welcome_banner_reads_counts_from_deps(tmp_path: Path) -> None:
     deps.session.slash_command_count = 2
 
     with console.capture() as cap:
-        display_welcome_banner(deps, deps.config)
+        display_welcome_banner(deps)
     output = cap.get()
 
     assert "Tools: 3" in output, "Banner must show tool count from deps.session.tool_names"

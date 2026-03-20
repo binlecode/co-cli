@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.config import ROLE_REASONING
-from co_cli.deps import CoConfig
 from co_cli.display import console
 
 if TYPE_CHECKING:
@@ -28,10 +27,11 @@ _ASCII_ART = {
 }
 
 
-def display_welcome_banner(deps: "CoDeps", config: CoConfig) -> None:
+def display_welcome_banner(deps: "CoDeps") -> None:
     """Render welcome banner with ASCII art, model, and environment info."""
     from rich.panel import Panel
 
+    config = deps.config
     art = "\n".join(_ASCII_ART.get(config.theme, _ASCII_ART["light"]))
 
     version = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
@@ -57,10 +57,27 @@ def display_welcome_banner(deps: "CoDeps", config: CoConfig) -> None:
     except Exception:
         git_branch = ""
 
+    backend = deps.config.knowledge_search_backend
+    if backend == "hybrid":
+        knowledge_info = (
+            f"hybrid · {deps.config.knowledge_embedding_provider}/"
+            f"{deps.config.knowledge_embedding_model} {deps.config.knowledge_embedding_dims}d"
+        )
+    elif backend == "fts5":
+        knowledge_info = "fts5"
+    else:
+        knowledge_info = "grep (no index)"
+
+    degraded = deps.runtime.startup_statuses
+    knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"
+    if degraded:
+        knowledge_line += "  [yellow](degraded)[/yellow]"
+
     lines = [
         f"\n[accent]{art}[/accent]\n",
         f"    v{version} — CLI Assistant",
         f"    Model: [accent]{llm_provider}[/accent]",
+        knowledge_line,
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",

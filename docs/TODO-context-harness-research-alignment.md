@@ -18,6 +18,7 @@ This TODO is grounded in a code scan of:
 - `co_cli/commands/_commands.py`
 - `co_cli/tools/_tool_approvals.py`
 - `co_cli/tools/shell.py`
+- `co_cli/agent.py`
 - `tests/test_memory.py`
 - `tests/test_delegate_coder.py`
 
@@ -25,16 +26,19 @@ This TODO is grounded in a code scan of:
 
 These are the implementation facts this delivery must align docs and behavior around.
 
-### FACT-1 — `recall_memory()` mutates files on read
+### FACT-1 — `recall_memory()` has two write-on-read paths
 
 Current flow in `co_cli/tools/memory.py`:
 
 1. search via FTS or grep
-2. `_dedup_pulled(matches, ...)`
+2. `_dedup_pulled(matches, ...)` — **WRITE PATH**: merges tags via `_update_existing_memory()` and deletes older duplicate files via `older.path.unlink()`
 3. follow one-hop `related`
-4. call `_touch_memory()` on each direct match
+4. `_touch_memory()` on each direct match — **WRITE PATH**: rewrites frontmatter and sets `updated=<now>`
+5. format and return
 
-`_touch_memory()` rewrites frontmatter and sets `updated=<now>`. Default recall is therefore not read-only.
+Both `_dedup_pulled()` and `_touch_memory()` are labeled "Gravity" in the code comments. Both mutate the filesystem during what is described as a read operation. Default recall is therefore not read-only.
+
+The original TODO identified only `_touch_memory()`. The second write path, `_dedup_pulled()` in `recall_memory()`, is equally non-read-only and must also be addressed in TASK-1.
 
 ### FACT-2 — session summaries are stored as ordinary memories
 
@@ -44,6 +48,8 @@ Current flow:
 2. it persists the summary through `persist_memory(...)`
 3. `persist_memory()` always writes `kind: memory`
 4. the only session-specific marker is `tags=["session"]` and `provenance="session"`
+
+The `MemoryEntry` dataclass has no `artifact_type` field. `validate_memory_frontmatter()` has no `artifact_type` validation. `persist_memory()` has no `artifact_type` parameter. No `artifact_type` field exists anywhere in the stack.
 
 Result: resumability artifacts and durable user memory share the same primary type and recall path.
 
@@ -55,7 +61,7 @@ Result: resumability artifacts and durable user memory share the same primary ty
 2. calls `recall_memory(ctx, user_msg, max_results=3)`
 3. injects the returned display as a system message
 
-There is no explicit "always include this standing context" path. Any standing behavior is currently accidental.
+There is no `always_on` field in `MemoryEntry`, `_frontmatter.py`, or `persist_memory()`. No explicit "always include this standing context" path exists. Any standing behavior is currently accidental.
 
 ### FACT-4 — subagent isolation is already implemented correctly
 
@@ -63,8 +69,8 @@ There is no explicit "always include this standing context" path. Any standing b
 
 - shares `services`
 - shares `config`
-- resets `session`
-- resets `runtime`
+- resets `session` (new `CoSessionState()`)
+- resets `runtime` (new `CoRuntimeState()`)
 
 This is already covered by `tests/test_delegate_coder.py::test_make_subagent_deps_resets_session_state`.
 
@@ -88,7 +94,21 @@ Current approval chain in `_collect_deferred_tool_approvals()`:
 2. session auto-approval
 3. user prompt
 
-`run_shell_command()` treats `ctx.tool_call_approved` as sufficient to execute non-safe commands. That means a skill that grants `run_shell_command` can bypass the normal user prompt for shell commands that are not DENY-classified.
+`_check_skill_grant()` checks only `deps.session.skill_tool_grants` — no guard against the tool's approval posture.
+
+`deps.session.tool_approvals` is a `dict[str, bool]` populated at bootstrap by `build_agent()`. It maps each registered tool name to its `requires_approval` registration flag. This dict is available at the orchestration layer and is the right source for TASK-4 step 2.
+
+Key values confirmed by code scan:
+
+- `run_shell_command` → `requires_approval=False` in registry (registered at `agent.py:229`), but raises `ApprovalRequired` internally when policy is `REQUIRE_APPROVAL`
+- `save_memory`, `write_file`, `edit_file`, `start_background_task`, `create_email_draft`, `save_article`, `update_memory`, `append_memory` → `requires_approval=True`
+- `web_search`, `web_fetch` → approval depends on `web_policy` setting
+
+Because `run_shell_command` is registered `requires_approval=False`, `deps.session.tool_approvals.get("run_shell_command", False)` returns `False`. The registry-level check in TASK-4 step 2 does not protect it. The explicit carve-out in step 3 is therefore required and not redundant.
+
+**Existing defense**: `_SKILL_SCAN_PATTERNS` in `_commands.py` scans skill content for overtly malicious patterns at skill-load time. This is a content-level defense and is independent of the approval bypass gap. TASK-4 targets the approval path, not content scanning.
+
+`run_shell_command()` treats `ctx.tool_call_approved` as sufficient to execute non-safe commands. A skill that grants `run_shell_command` can bypass the normal user prompt for shell commands that are not DENY-classified.
 
 This is a real contract mismatch. Skill grants are currently functioning as a second approval channel.
 
@@ -113,25 +133,30 @@ The prior `co-agent-context` proposal contained several larger refactors that do
 
 ## Delivery Plan
 
-## TASK-1 — Remove write-on-read behavior from default recall
+## TASK-1 — Remove both write-on-read paths from default recall
 
 ### Why
 
-`recall_memory()` is described and expected as a read path, but it rewrites memory files through `_touch_memory()`.
+`recall_memory()` is described and expected as a read path, but it rewrites memory files through two separate write paths both labeled "Gravity" in comments:
+- `_touch_memory()`: refreshes `updated` timestamp on each matched file
+- `_dedup_pulled()`: merges tags into surviving entries and deletes duplicate files
+
+Both are triggered unconditionally during every recall. Removing both makes recall genuinely read-only.
 
 ### Processing change
 
 Change `co_cli/tools/memory.py` so the default recall path is:
 
 1. search
-2. optional `_dedup_pulled(...)`
-3. optional one-hop `related` expansion
-4. format results
-5. return without rewriting any matched files
+2. one-hop `related` expansion
+3. format results
+4. return without rewriting any matched files
 
 Delete the `_touch_memory()` call from `recall_memory()`.
 
-Do not replace it with another implicit write path in this delivery.
+Remove the `_dedup_pulled()` call from `recall_memory()`. `_dedup_pulled()` is a write operation (merges entries, deletes files) and does not belong in the read path. It already runs correctly during `persist_memory()` for write-time dedup — no recall-time invocation is needed. The dedup comment "# Gravity: dedup collisions among pulled results" must be deleted along with the call.
+
+Do not replace either path with another implicit write path in this delivery.
 
 ### Files
 
@@ -144,14 +169,16 @@ Do not replace it with another implicit write path in this delivery.
 
 Replace read-mutation expectations with read-only expectations:
 
-- remove or rewrite `test_recall_touches_pulled_memories`
-- remove or rewrite `test_gravity_affects_recency_order`
-- add a test that snapshots file contents or `updated` before/after `recall_memory()` and asserts no write occurs
+- remove `test_recall_touches_pulled_memories` (tests write-on-read behavior that will no longer exist)
+- remove `test_gravity_affects_recency_order` (tests gravity ordering that depends on write-on-read)
+- add a test that reads file contents and `updated` timestamps before and after `recall_memory()` and asserts no file is written or deleted
 
 ### Done when
 
 - `recall_memory()` does not call `_touch_memory()`
-- recalling a memory does not change its frontmatter timestamps
+- `recall_memory()` does not call `_dedup_pulled()`
+- recalling a memory does not change any file's frontmatter timestamps
+- recalling a memory does not delete any file
 - docs no longer describe "gravity" or touched-on-read recency as default behavior
 
 ---
@@ -162,6 +189,8 @@ Replace read-mutation expectations with read-only expectations:
 
 `/new` currently stores resumability summaries as plain `kind: memory` entries with a `session` tag. That makes recall and docs blur session summaries with durable user memory.
 
+`search_memories` hits the FTS index directly. The `artifact_type` exclusion cannot happen at the FTS query layer (the FTS schema has no `artifact_type` column). Exclusion must happen at the result-loading level, after the FTS matches are resolved to file paths and frontmatter is parsed.
+
 ### Processing change
 
 Keep the same markdown substrate and file location, but add explicit artifact typing.
@@ -170,16 +199,13 @@ Implement:
 
 1. add optional frontmatter field `artifact_type`
 2. support `artifact_type: session_summary`
-3. plumb `artifact_type` through `MemoryEntry`, `_load_memories()`, and `persist_memory()`
-4. update `/new` to persist:
-   - `kind: memory`
-   - `provenance: session`
-   - `artifact_type: session_summary`
-   - `tags: ["session"]`
-5. make `recall_memory()` and `search_memories()` exclude `artifact_type=session_summary` by default
-6. make `list_memories()` display artifact type when present
-
-This keeps storage simple while making the semantics explicit.
+3. extend `validate_memory_frontmatter()` to accept `artifact_type: str | None` as an optional field (do not add it to the required set)
+4. extend `MemoryEntry` and `_load_memories()` to carry `artifact_type: str | None`
+5. extend `persist_memory()` to accept and write `artifact_type`, default `None`
+6. update `/new` (`_cmd_new`) to call `persist_memory()` with `artifact_type="session_summary"`
+7. make `recall_memory()` exclude entries where `artifact_type == "session_summary"` — apply this filter after FTS results are resolved to `MemoryEntry` objects, not at the FTS query level
+8. make `search_memories()` exclude `artifact_type=session_summary` at the same result-loading stage
+9. make `list_memories()` display artifact type when present
 
 ### Files
 
@@ -197,12 +223,15 @@ Add functional coverage for:
 
 - `/new` writing a memory record marked `artifact_type: session_summary`
 - default `recall_memory()` excluding session-summary artifacts
+- default `search_memories()` excluding session-summary artifacts
 - `list_memories()` exposing the artifact marker
+- old memory files without `artifact_type` field load correctly (backward compat: field defaults to `None`)
 
 ### Done when
 
 - session checkpoints are explicitly marked as `artifact_type: session_summary`
 - default memory recall does not return those artifacts
+- default `search_memories` does not return those artifacts
 - docs state that session summary is a resumability artifact, not long-term memory
 
 ---
@@ -219,8 +248,8 @@ Add a first-class `always_on: bool` memory field.
 
 Implement:
 
-1. extend frontmatter validation to accept `always_on: bool`
-2. extend `MemoryEntry` and `_load_memories()` to carry `always_on`
+1. extend `validate_memory_frontmatter()` to accept `always_on: bool` as an optional field
+2. extend `MemoryEntry` and `_load_memories()` to carry `always_on: bool = False`
 3. extend `persist_memory()` to write `always_on`, default `False`
 4. extend `save_memory()` to accept `always_on: bool = False`
 5. add a helper in `co_cli/tools/memory.py` to load a small bounded set of `always_on` memories
@@ -262,7 +291,11 @@ Add functional coverage for:
 
 ### Why
 
-The current approval ordering lets `skill_tool_grants` auto-approve any deferred tool call before the normal prompt path runs. This can bypass shell approval for `run_shell_command`.
+The current approval ordering lets `skill_tool_grants` auto-approve any deferred tool call before the normal prompt path runs. `_check_skill_grant()` checks only `deps.session.skill_tool_grants` with no guard against the tool's approval posture. This can bypass:
+- any tool registered `requires_approval=True` (blocked by registry-level check)
+- `run_shell_command`, which is registered `requires_approval=False` but raises `ApprovalRequired` internally
+
+Note: `deps.session.tool_approvals` (populated by `build_agent()`) gives registry-level approval status per tool. For `run_shell_command`, this value is `False` — so the registry check alone does not protect it. The explicit carve-out (step 3) is required and not redundant.
 
 ### Processing change
 
@@ -270,11 +303,11 @@ Constrain skill grants to convenience for already-safe tooling, not approval byp
 
 Implement:
 
-1. add a helper in `co_cli/context/_orchestrate.py` that checks whether a skill grant is eligible for auto-approval
-2. deny skill-grant auto-approval when `deps.session.tool_approvals.get(tool_name, False)` is `True`
-3. explicitly deny skill-grant auto-approval for `run_shell_command`, even though its approval is raised inside the tool
+1. add an eligibility check in `_check_skill_grant()` (or alongside it in `_collect_deferred_tool_approvals()`) that evaluates whether a skill grant is eligible for auto-approval
+2. deny skill-grant auto-approval when `deps.session.tool_approvals.get(tool_name, False)` is `True` (registry-level `requires_approval=True`)
+3. explicitly deny skill-grant auto-approval for `run_shell_command` by name — it is registered `requires_approval=False` but raises `ApprovalRequired` internally; registry check alone does not catch it
 4. keep the order:
-   - eligible skill grant
+   - eligible skill grant (new eligibility gate applied)
    - remembered/session approval
    - user prompt
 5. document that skill grants do not override the main approval model
@@ -297,11 +330,12 @@ Add functional coverage for:
 
 - a skill grant not bypassing approval for `run_shell_command`
 - a skill grant not bypassing any tool with `requires_approval=True`
-- a skill grant still working for intended low-risk convenience tools
+- a skill grant still working for intended low-risk convenience tools (tools registered `requires_approval=False` that do not raise `ApprovalRequired`)
 
 ### Done when
 
 - skill grants cannot auto-approve shell execution
+- skill grants cannot auto-approve any tool registered `requires_approval=True`
 - skill grants no longer act as a second approval system
 - docs state the exact approval precedence implemented in `_collect_deferred_tool_approvals()`
 
@@ -317,7 +351,7 @@ The code already has stronger contracts than the current wording in several plac
 
 Update canonical docs so they state these exact contracts:
 
-- memory recall is read-only by default
+- memory recall is read-only by default (no gravity, no `_dedup_pulled` on read)
 - durable memory, transcript history, and session-summary artifacts are different things
 - `make_subagent_deps()` shares `services` and `config` but resets `session` and `runtime`
 - background tasks already exist and are bounded async execution, not hypothetical future capability
@@ -327,7 +361,7 @@ Update canonical docs so they state these exact contracts:
 
 Implement:
 
-1. read each canonical DESIGN/research doc against the live code paths changed or validated in TASK-1 through TASK-4
+1. read each canonical DESIGN doc against the live code paths changed or validated in TASK-1 through TASK-4
 2. replace any wording that still describes read-path memory mutation, blurred session-summary semantics, or future-only background-task capability
 3. make the `make_subagent_deps()` isolation contract explicit in canonical docs
 4. align approval-language wording with the actual orchestrator-owned flow after TASK-4 lands
@@ -564,13 +598,14 @@ Read updated docs side-by-side with:
 - `co_cli/tools/shell.py`
 - `co_cli/tools/delegation.py`
 - `co_cli/tools/_delegation_agents.py`
+- `co_cli/agent.py`
 
 ## Shipping Order
 
 Implement in this order:
 
 1. TASK-4 skill-grant approval clamp
-2. TASK-1 recall read-only fix
+2. TASK-1 recall read-only fix (both `_touch_memory` and `_dedup_pulled` removals)
 3. TASK-2 session-summary artifact typing
 4. TASK-3 standing-context metadata and injection
 5. TASK-5 DESIGN + research sync

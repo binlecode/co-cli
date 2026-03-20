@@ -8,13 +8,14 @@ Also validates the knowledge backend degradation path:
   resolve_knowledge_backend() hybrid -> fts5 when sqlite-vec dims are invalid.
 
 Case groups:
-  bootstrap-create-deps       -- create_deps() returns CoDeps without raising
-  bootstrap-startup-statuses  -- deps.runtime.startup_statuses is present and a list
-  bootstrap-sync-ok           -- sync_knowledge() keeps index active after successful sync
-  bootstrap-sync-disable      -- sync_knowledge() sets knowledge_index=None on failure
-  bootstrap-restore-session   -- restore_session() populates a non-empty session_id
-  bootstrap-banner            -- display_welcome_banner() produces non-empty rich output
-  bootstrap-degrade-hybrid    -- resolve_knowledge_backend() hybrid->fts5 on vec failure
+  bootstrap-create-deps          -- create_deps() returns CoDeps without raising
+  bootstrap-startup-statuses     -- deps.runtime.startup_statuses is present and a list
+  bootstrap-sync-ok              -- sync_knowledge() keeps index active after successful sync
+  bootstrap-sync-disable         -- sync_knowledge() sets knowledge_index=None on failure
+  bootstrap-restore-session      -- restore_session() populates a non-empty session_id
+  bootstrap-banner               -- display_welcome_banner() produces non-empty rich output
+  bootstrap-degrade-hybrid       -- resolve_knowledge_backend() hybrid->fts5 on vec failure
+  bootstrap-degrade-hybrid-sync  -- full path: hybrid->fts5 degradation then sync_knowledge()
 
 Prerequisites:
   LLM provider configured (bootstrap-create-deps/startup-statuses skip gracefully
@@ -35,7 +36,7 @@ from typing import Any
 
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, restore_session, sync_knowledge
-from co_cli.bootstrap._check import check_llm
+from co_cli.bootstrap._check import check_agent_llm
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
@@ -121,7 +122,7 @@ def case_create_deps_success() -> CaseResult:
         llm_provider=settings.llm_provider,
         llm_api_key=getattr(settings, "llm_api_key", None),
     )
-    check = check_llm(config_probe)
+    check = check_agent_llm(config_probe)
     if check.status == "error":
         return CaseResult(
             id="bootstrap-create-deps",
@@ -166,7 +167,7 @@ def case_startup_statuses_is_list() -> CaseResult:
         llm_provider=settings.llm_provider,
         llm_api_key=getattr(settings, "llm_api_key", None),
     )
-    check = check_llm(config_probe)
+    check = check_agent_llm(config_probe)
     if check.status == "error":
         return CaseResult(
             id="bootstrap-startup-statuses",
@@ -218,7 +219,7 @@ def case_sync_knowledge_keeps_index() -> CaseResult:
         idx = KnowledgeIndex(config=CoConfig(
             knowledge_db_path=tmp / "search.db",
             knowledge_search_backend="fts5",
-            knowledge_reranker_provider="none",
+            knowledge_cross_encoder_reranker_url=None,
         ))
         try:
             deps = _make_deps(tmp, knowledge_index=idx, memory_dir=memory_dir, library_dir=library_dir)
@@ -274,7 +275,7 @@ def case_sync_knowledge_disables_on_failure() -> CaseResult:
         idx = KnowledgeIndex(config=CoConfig(
             knowledge_db_path=tmp / "search.db",
             knowledge_search_backend="fts5",
-            knowledge_reranker_provider="none",
+            knowledge_cross_encoder_reranker_url=None,
         ))
         idx.close()  # close before sync so sync_dir raises
 
@@ -363,7 +364,7 @@ def case_banner_produces_output() -> CaseResult:
             deps.session.slash_command_count = 1
 
             with console.capture() as cap:
-                display_welcome_banner(deps, deps.config)
+                display_welcome_banner(deps)
             output = cap.get()
             elapsed = time.monotonic() - t0
 
@@ -405,9 +406,9 @@ def case_degrade_hybrid_to_fts5() -> CaseResult:
         config = CoConfig(
             knowledge_db_path=tmp / "search.db",
             knowledge_search_backend="hybrid",
-            knowledge_embedding_provider="none",
-            knowledge_embedding_dims=0,
-            knowledge_reranker_provider="none",
+            knowledge_embedding_provider="tei",
+            knowledge_embed_api_url="http://127.0.0.1:1/embed",
+            knowledge_cross_encoder_reranker_url=None,
         )
         try:
             resolved_config, knowledge_index, statuses = resolve_knowledge_backend(config)
@@ -433,8 +434,8 @@ def case_degrade_hybrid_to_fts5() -> CaseResult:
                     }
                     if "docs_fts" not in tables:
                         failures.append("docs_fts table missing after fallback to fts5")
-                    if "docs_vec" in tables:
-                        failures.append("docs_vec table unexpectedly present after fallback to fts5")
+                    if any(t.startswith("docs_vec_") for t in tables):
+                        failures.append("docs_vec_{dims} table unexpectedly present after fallback to fts5")
                 finally:
                     knowledge_index.close()
 
@@ -477,9 +478,9 @@ def case_degrade_hybrid_then_sync() -> CaseResult:
         config = CoConfig(
             knowledge_db_path=tmp / "search.db",
             knowledge_search_backend="hybrid",
-            knowledge_embedding_provider="none",
-            knowledge_embedding_dims=0,
-            knowledge_reranker_provider="none",
+            knowledge_embedding_provider="tei",
+            knowledge_embed_api_url="http://127.0.0.1:1/embed",
+            knowledge_cross_encoder_reranker_url=None,
             session_path=tmp / "session.json",
             memory_dir=memory_dir,
             library_dir=tmp / "library",

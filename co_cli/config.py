@@ -181,11 +181,9 @@ DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
 DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
 DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
 DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
-DEFAULT_KNOWLEDGE_RERANK_API_URL = "http://127.0.0.1:8282"
+DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT = 0.7
 DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT = 0.3
-DEFAULT_KNOWLEDGE_RERANKER_PROVIDER = "tei"
-DEFAULT_KNOWLEDGE_RERANKER_MODEL = ""
 DEFAULT_MEMORY_MAX_COUNT = 200
 DEFAULT_MEMORY_DEDUP_WINDOW_DAYS = 7
 DEFAULT_MEMORY_DEDUP_THRESHOLD = 85
@@ -242,10 +240,9 @@ class Settings(BaseModel):
     knowledge_embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
     knowledge_hybrid_vector_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT, ge=0.0, le=1.0)
     knowledge_hybrid_text_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT, ge=0.0, le=1.0)
-    knowledge_reranker_provider: Literal["none", "ollama", "gemini", "local", "tei"] = Field(default=DEFAULT_KNOWLEDGE_RERANKER_PROVIDER)
-    knowledge_reranker_model: str = Field(default=DEFAULT_KNOWLEDGE_RERANKER_MODEL)
+    knowledge_cross_encoder_reranker_url: str | None = Field(default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL)
+    knowledge_llm_reranker: ModelEntry | None = Field(default=None)
     knowledge_embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
-    knowledge_rerank_api_url: str = Field(default=DEFAULT_KNOWLEDGE_RERANK_API_URL)
 
     # Memory lifecycle (notes with gravity)
     memory_max_count: int = Field(default=DEFAULT_MEMORY_MAX_COUNT, ge=10)
@@ -422,10 +419,10 @@ class Settings(BaseModel):
             "knowledge_embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
             "knowledge_embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
             "knowledge_embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
-            "knowledge_reranker_provider": "CO_KNOWLEDGE_RERANKER_PROVIDER",
-            "knowledge_reranker_model": "CO_KNOWLEDGE_RERANKER_MODEL",
+            "knowledge_cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
             "knowledge_embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-            "knowledge_rerank_api_url": "CO_KNOWLEDGE_RERANK_API_URL",
+            "knowledge_hybrid_vector_weight": "CO_KNOWLEDGE_HYBRID_VECTOR_WEIGHT",
+            "knowledge_hybrid_text_weight": "CO_KNOWLEDGE_HYBRID_TEXT_WEIGHT",
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
             "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
             "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",

@@ -15,15 +15,14 @@ from co_cli.config import (
     DEFAULT_MAX_REFLECTIONS,
     DEFAULT_TOOL_OUTPUT_TRIM_CHARS,
     DEFAULT_MAX_HISTORY_MESSAGES,
-    DEFAULT_KNOWLEDGE_RERANKER_PROVIDER,
+    DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
+    DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL,
     DEFAULT_KNOWLEDGE_EMBED_API_URL,
-    DEFAULT_KNOWLEDGE_RERANK_API_URL,
     DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
     DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
     DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
     DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT,
     DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT,
-    DEFAULT_KNOWLEDGE_RERANKER_MODEL,
     DEFAULT_MEMORY_MAX_COUNT,
     DEFAULT_MEMORY_DEDUP_WINDOW_DAYS,
     DEFAULT_MEMORY_DEDUP_THRESHOLD,
@@ -140,16 +139,15 @@ class CoConfig:
     tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
-    knowledge_search_backend: str = "fts5"
-    knowledge_reranker_provider: str = DEFAULT_KNOWLEDGE_RERANKER_PROVIDER
+    knowledge_search_backend: str = DEFAULT_KNOWLEDGE_SEARCH_BACKEND
+    knowledge_cross_encoder_reranker_url: str | None = DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
+    knowledge_llm_reranker: "ModelEntry | None" = None
     knowledge_embed_api_url: str = DEFAULT_KNOWLEDGE_EMBED_API_URL
-    knowledge_rerank_api_url: str = DEFAULT_KNOWLEDGE_RERANK_API_URL
     knowledge_embedding_provider: str = DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER
     knowledge_embedding_model: str = DEFAULT_KNOWLEDGE_EMBEDDING_MODEL
     knowledge_embedding_dims: int = DEFAULT_KNOWLEDGE_EMBEDDING_DIMS
     knowledge_hybrid_vector_weight: float = DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT
     knowledge_hybrid_text_weight: float = DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT
-    knowledge_reranker_model: str = DEFAULT_KNOWLEDGE_RERANKER_MODEL
     theme: str = "light"
     mcp_servers: dict[str, "MCPServerConfig"] = field(default_factory=dict)
     role_models: dict[str, ModelEntry] = field(default_factory=dict)
@@ -227,15 +225,14 @@ class CoConfig:
             tool_output_trim_chars=s.tool_output_trim_chars,
             doom_loop_threshold=s.doom_loop_threshold,
             max_reflections=s.max_reflections,
-            knowledge_reranker_provider=s.knowledge_reranker_provider,
+            knowledge_cross_encoder_reranker_url=s.knowledge_cross_encoder_reranker_url,
+            knowledge_llm_reranker=s.knowledge_llm_reranker,
             knowledge_embed_api_url=s.knowledge_embed_api_url,
-            knowledge_rerank_api_url=s.knowledge_rerank_api_url,
             knowledge_embedding_provider=s.knowledge_embedding_provider,
             knowledge_embedding_model=s.knowledge_embedding_model,
             knowledge_embedding_dims=s.knowledge_embedding_dims,
             knowledge_hybrid_vector_weight=s.knowledge_hybrid_vector_weight,
             knowledge_hybrid_text_weight=s.knowledge_hybrid_text_weight,
-            knowledge_reranker_model=s.knowledge_reranker_model,
             # library_dir: resolved here so tools and bootstrap always see the fully-resolved
             # path rather than the relative default. library_path is optional in Settings;
             # fall back to the XDG data dir when unset.

@@ -5,11 +5,10 @@ import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from rich.table import Table
 
-from co_cli.bootstrap._check import check_settings, check_llm
+from co_cli.bootstrap._check import check_settings, check_agent_llm
 from co_cli.config import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, ROLE_REASONING
 from co_cli.deps import CoConfig
 from co_cli.display import console
@@ -67,16 +66,17 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
     elif provider == "gemini":
         active_model = reasoning_entry.model
         llm_provider = f"Gemini ({active_model})"
-        provider_check = check_llm(config)
+        provider_check = check_agent_llm(config)
         llm_status = "configured" if provider_check.status == "ok" else "missing key"
     else:
         active_model = reasoning_entry.model
         llm_provider = f"Ollama ({active_model})"
-        provider_check = check_llm(config)
+        provider_check = check_agent_llm(config)
         if provider_check.status == "error":
             llm_status = "misconfigured"
         elif provider_check.status == "warn":
-            llm_status = "offline"
+            # "unreachable" reason means host is down; otherwise host is up but optional models degraded
+            llm_status = "offline" if provider_check.extra.get("reason") == "unreachable" else "online"
         else:
             llm_status = "online"
 
@@ -95,7 +95,12 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
         google_detail = "Run 'co chat' to auto-setup or install gcloud"
 
     obsidian_item = doctor.by_name("obsidian")
-    obsidian = "configured" if obsidian_item and obsidian_item.status == "ok" else "not found"
+    if obsidian_item and obsidian_item.status == "ok":
+        obsidian = "configured"
+    elif obsidian_item and obsidian_item.status == "skipped":
+        obsidian = "not configured"
+    else:
+        obsidian = "not found"
 
     brave_item = doctor.by_name("brave")
     web_search = "configured" if brave_item and brave_item.status == "ok" else "not configured"
@@ -146,9 +151,9 @@ class SecurityFinding:
 
 
 def check_security(
-    _user_config_path: Optional[Path] = None,
-    _project_config_path: Optional[Path] = None,
-    _approvals_path: Optional[Path] = None,
+    _user_config_path: Path | None = None,
+    _project_config_path: Path | None = None,
+    _approvals_path: Path | None = None,
 ) -> list[SecurityFinding]:
     """Run security posture checks. Returns a list of findings (empty = all clear).
 

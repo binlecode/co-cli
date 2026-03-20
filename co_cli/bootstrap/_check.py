@@ -1,12 +1,20 @@
 """System-wide integration health checks.
 
-Provides CheckResult (IO check return type), CheckItem/DoctorResult data model,
-IO check functions (check_llm, check_mcp_server, check_tei),
-and the check_settings() entry point.
+Data types: CheckResult, CheckItem, DoctorResult, RuntimeCheck.
 
-Callers:
-  check_settings(config)  — bootstrap/_render_status.py (settings-level check; no runtime services)
-  check_runtime(deps)     — bootstrap/_bootstrap.py, tools/capabilities.py (full runtime diagnostic)
+IO check functions (internal helpers called by the entry points below):
+  check_agent_llm, check_reranker_llm, check_embedder,
+  check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
+
+Public entry points:
+  check_settings(config)  — bootstrap/_render_status.py (settings-level check)
+  check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
+
+Bootstrap callers (direct, not via entry points):
+  check_agent_llm         — bootstrap/_bootstrap.py (fail-fast gate in create_deps)
+  check_reranker_llm      — bootstrap/_bootstrap.py (resolve_reranker)
+  check_cross_encoder     — bootstrap/_bootstrap.py (resolve_reranker)
+  check_embedder          — bootstrap/_bootstrap.py (resolve_knowledge_backend)
 """
 
 import os
@@ -90,8 +98,38 @@ class DoctorResult:
         return lines
 
 
-def check_llm(config: "CoConfig") -> CheckResult:
-    """Check LLM provider credentials and model availability in one pass.
+def check_ollama_model(host: str, model: str) -> CheckResult:
+    """Check a single Ollama model by querying /api/tags.
+
+    Unreachable host → warn (Ollama may still be starting; caller decides impact).
+    Model absent     → error (hard fail; caller must degrade).
+    Model present    → ok.
+    """
+    try:
+        import httpx
+        resp = httpx.get(f"{host}/api/tags", timeout=5)
+        resp.raise_for_status()
+        installed = {m["name"] for m in resp.json().get("models", [])}
+    except Exception as err:
+        return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}")
+
+    if model not in installed:
+        return CheckResult(ok=False, status="error", detail=f"Model not available: {model}")
+    return CheckResult(ok=True, status="ok", detail=f"Model available: {model}")
+
+
+def _check_gemini_key(api_key: str | None) -> CheckResult:
+    if api_key:
+        return CheckResult(ok=True, status="ok", detail="Gemini API key configured")
+    return CheckResult(
+        ok=False,
+        status="error",
+        detail="LLM_API_KEY not set — required for Gemini provider",
+    )
+
+
+def check_agent_llm(config: "CoConfig") -> CheckResult:
+    """Check session agent LLM credentials and model availability in one pass.
 
     Gemini: validates API key presence (no HTTP call).
     Ollama: one GET /api/tags call — checks reachability and all configured model names.
@@ -100,13 +138,7 @@ def check_llm(config: "CoConfig") -> CheckResult:
       - Optional role model missing → warn (soft fail; those tools degrade silently)
     """
     if config.uses_gemini():
-        if config.llm_api_key:
-            return CheckResult(ok=True, status="ok", detail="Gemini API key configured")
-        return CheckResult(
-            ok=False,
-            status="error",
-            detail="LLM_API_KEY not set — required for Gemini provider",
-        )
+        return _check_gemini_key(config.llm_api_key)
 
     try:
         import httpx
@@ -114,7 +146,7 @@ def check_llm(config: "CoConfig") -> CheckResult:
         resp.raise_for_status()
         installed = {m["name"] for m in resp.json().get("models", [])}
     except Exception as err:
-        return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}")
+        return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}", extra={"reason": "unreachable"})
 
     reasoning_entry = config.role_models.get(ROLE_REASONING)
     if reasoning_entry and reasoning_entry.model not in installed:
@@ -138,6 +170,54 @@ def check_llm(config: "CoConfig") -> CheckResult:
         )
 
     return CheckResult(ok=True, status="ok", detail="Provider and models configured")
+
+
+def check_reranker_llm(config: "CoConfig") -> CheckResult:
+    """Check LLM reranker availability.
+
+    Skipped if no LLM reranker is configured.
+    Gemini: validates API key presence.
+    Ollama: probes the reranker model specifically (not the agent reasoning model).
+    """
+    if config.knowledge_llm_reranker is None:
+        return CheckResult(ok=True, status="skipped", detail="LLM reranker not configured")
+
+    reranker = config.knowledge_llm_reranker
+    # provider=None means inherit from session provider; explicit provider overrides session
+    if reranker.provider == "gemini" or (reranker.provider is None and config.uses_gemini()):
+        return _check_gemini_key(config.llm_api_key)
+
+    return check_ollama_model(config.llm_host, reranker.model)
+
+
+def check_embedder(config: "CoConfig") -> CheckResult:
+    """Check embedding provider availability.
+
+    Skipped if provider is "none".
+    TEI: HTTP GET probe to embed API URL.
+    Ollama: probes the configured embedding model.
+    Gemini: validates API key presence.
+    """
+    provider = config.knowledge_embedding_provider
+    if provider == "none":
+        return CheckResult(ok=True, status="skipped", detail="Embedding provider is 'none'")
+    if provider == "tei":
+        return check_tei(config.knowledge_embed_api_url)
+    if provider == "ollama":
+        return check_ollama_model(config.llm_host, config.knowledge_embedding_model)
+    if provider == "gemini":
+        return _check_gemini_key(config.llm_api_key)
+    return CheckResult(ok=True, status="skipped", detail=f"Unknown provider: {provider}")
+
+
+def check_cross_encoder(config: "CoConfig") -> CheckResult:
+    """Check TEI cross-encoder reranker availability.
+
+    Skipped if no cross-encoder URL is configured.
+    """
+    if config.knowledge_cross_encoder_reranker_url is None:
+        return CheckResult(ok=True, status="skipped", detail="Cross-encoder not configured")
+    return check_tei(config.knowledge_cross_encoder_reranker_url)
 
 
 def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
@@ -200,15 +280,17 @@ def _check_brave(api_key: str | None) -> CheckResult:
 
 
 def _check_knowledge(knowledge_index: Any, backend: str) -> CheckResult:
-    index_active = knowledge_index is not None
-    return CheckResult(
-        ok=True,
-        status="ok" if index_active else "warn",
-        detail=f"{backend} active" if index_active else "grep mode",
-    )
+    if knowledge_index is None:
+        return CheckResult(ok=True, status="warn", detail="grep mode")
+    # Probe: run a minimal health check that raises on FTS/vector schema errors.
+    try:
+        knowledge_index.probe()
+    except Exception as e:
+        return CheckResult(ok=False, status="error", detail=str(e))
+    return CheckResult(ok=True, status="ok", detail=f"{backend} active")
 
 
-def _check_skills(skill_registry: dict) -> CheckResult:
+def _check_skills(skill_registry: list[dict]) -> CheckResult:
     skill_count = len(skill_registry)
     return CheckResult(
         ok=True,
@@ -260,26 +342,21 @@ def check_settings(config: "CoConfig") -> DoctorResult:
     return DoctorResult(checks=checks)
 
 
-def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "RuntimeCheck":
+def check_runtime(deps: "CoDeps") -> "RuntimeCheck":
     """Assemble a full runtime diagnostic snapshot.
 
     Calls IO check functions and inlines trivial checks, combines capabilities from
     config and integration state with session state from deps. No startup policy —
     failures are recorded as findings, not raised as exceptions.
-
-    skip_provider_checks: when True, substitute a static ok result for check_llm
-        (avoids a duplicate HTTP call when bootstrap already validated the provider at startup).
     """
     from co_cli.config import ADC_PATH, GOOGLE_TOKEN_PATH
 
     # IO checks
-    if skip_provider_checks:
-        provider_result = CheckResult(ok=True, status="ok", detail="validated at startup")
-    else:
-        provider_result = check_llm(deps.config)
+    provider_result = check_agent_llm(deps.config)
 
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
-    obsidian_result = _check_obsidian(deps.config.obsidian_vault_path)
+    _obsidian_vault = str(deps.config.obsidian_vault_path) if deps.config.obsidian_vault_path else None
+    obsidian_result = _check_obsidian(_obsidian_vault)
     brave_result = _check_brave(deps.config.brave_search_api_key)
     knowledge_result = _check_knowledge(deps.services.knowledge_index, deps.config.knowledge_search_backend)
     skills_result = _check_skills(deps.session.skill_registry)
@@ -336,14 +413,14 @@ def check_runtime(deps: "CoDeps", *, skip_provider_checks: bool = False) -> "Run
         "knowledge_mode": deps.config.knowledge_search_backend,
     }
 
-    # Findings: checks that returned ok=False
+    # Findings: checks that returned a non-ok status (error or warn)
     findings: list[dict[str, str]] = []
     for name, result in named_checks:
-        if not result.ok:
+        if result.status not in ("ok", "skipped"):
             findings.append({
                 "component": name,
                 "issue": result.detail,
-                "severity": "error" if result.status == "error" else "warn",
+                "severity": "warn" if result.status == "warn" else "error",
             })
 
     # Fallbacks: active degraded-mode operations

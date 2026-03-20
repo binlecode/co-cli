@@ -43,6 +43,29 @@ Conditional registration: `delegate_*` tools are registered only when the matchi
 | Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web policy | Depends on `web_policy.search` / `web_policy.fetch` setting | `web_search`, `web_fetch` |
 
+### Approval Tier Ordering
+
+When a deferred tool call arrives, `_collect_deferred_tool_approvals()` in `co_cli/context/_orchestrate.py` resolves each tool's approval state in this order:
+
+```
+Tier 1 — skill grant (eligibility-gated — two ineligibility conditions apply)
+Tier 2 — session auto-approval (user previously chose "a" for this tool)
+Tier 3 — user prompt (y / n / a [always])
+```
+
+The first tier that grants approval short-circuits the chain. Tier 3 is only reached when Tiers 1 and 2 both decline.
+
+### Skill Grants
+
+Skill grants are turn-scoped: populated at skill dispatch in `_commands.py` via `skill_tool_grants`, cleared at turn end. They form Tier 1 of the approval chain — but only for eligible tools.
+
+**Two distinct ineligibility conditions prevent skill grants from bypassing protected tools:**
+
+- **Registry check:** tool is registered `requires_approval=True` (caught via `deps.session.tool_approvals.get(tool_name, False)`). Any tool in the "Always deferred" approval class is blocked by this condition.
+- **Explicit carve-out:** `run_shell_command` — registered `requires_approval=False` at the registry level but raises `ApprovalRequired` internally under `REQUIRE_APPROVAL` shell policy. The registry check alone does not catch this; the explicit carve-out is defensive, guarding against future registration changes or unusual code paths.
+
+Eligible tools (those passing both conditions) are auto-approved for the active turn only. Implementation: `_check_skill_grant()` in `co_cli/context/_orchestrate.py`.
+
 ### Return Shape
 
 Every user-facing tool returns `dict[str, Any]` with:

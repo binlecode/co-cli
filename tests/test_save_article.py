@@ -713,11 +713,11 @@ def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp
         tags=["reference"],
     ))
 
-    docs_vec_count = idx._conn.execute("SELECT COUNT(*) FROM docs_vec").fetchone()[0]
-    chunks_vec_count = idx._conn.execute("SELECT COUNT(*) FROM chunks_vec").fetchone()[0]
+    docs_vec_count = idx._conn.execute(f"SELECT COUNT(*) FROM {idx._docs_vec_table}").fetchone()[0]
+    chunks_vec_count = idx._conn.execute(f"SELECT COUNT(*) FROM {idx._chunks_vec_table}").fetchone()[0]
 
-    assert docs_vec_count >= 2, "Configured embedder must populate docs_vec for hybrid retrieval"
-    assert chunks_vec_count >= 2, "Configured embedder must populate chunks_vec for hybrid retrieval"
+    assert docs_vec_count >= 2, "Configured embedder must populate docs_vec_{dims} for hybrid retrieval"
+    assert chunks_vec_count >= 2, "Configured embedder must populate chunks_vec_{dims} for hybrid retrieval"
 
     result = _run(search_knowledge(ctx, "wholeflow-real-embedder-token"))
     assert result["count"] >= 2
@@ -732,7 +732,7 @@ def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_pat
     from co_cli.bootstrap._check import check_tei
     from co_cli.config import settings
 
-    if not check_tei(settings.knowledge_rerank_api_url).ok:
+    if not check_tei(settings.knowledge_cross_encoder_reranker_url).ok:
         pytest.fail("TEI rerank service not reachable — start the service before running hybrid tests")
 
     library_dir = tmp_path / ".co-cli" / "library"
@@ -744,7 +744,7 @@ def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_pat
     deps = CoDeps(
         services=CoServices(
             shell=ShellBackend(),
-            knowledge_index=KnowledgeIndex(config=replace(config, knowledge_db_path=tmp_path / "search.db", knowledge_reranker_provider="none")),
+            knowledge_index=KnowledgeIndex(config=replace(config, knowledge_db_path=tmp_path / "search.db", knowledge_cross_encoder_reranker_url=None)),
         ),
         config=config,
     )

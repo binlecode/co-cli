@@ -27,7 +27,6 @@ What is your question?
                     DESIGN-tools
                     DESIGN-llm-models
                     DESIGN-logging-and-tracking
-                    DESIGN-eval-llm-judge
                             │
                             ▼
                 follow 'See Also' links for depth
@@ -79,7 +78,6 @@ Use these when you already know the subsystem and need the owning deep-dive doc.
 | [DESIGN-tools.md](DESIGN-tools.md) | Native tools, MCP tools, approval classes, return/error contracts |
 | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Provider/model selection and role-model chains |
 | [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | Tracing, SQLite exporter, viewers |
-| [DESIGN-eval-llm-judge.md](DESIGN-eval-llm-judge.md) | LLM-as-judge eval design |
 | `DESIGN-index.md` | Navigation, consolidated config reference, and module index |
 
 ---
@@ -127,10 +125,9 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimensionality (1024 = bge-m3; legacy Ollama embeddinggemma used 256) |
 | `knowledge_hybrid_vector_weight` | `—` | `0.7` | Retained for backward compatibility; ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
 | `knowledge_hybrid_text_weight` | `—` | `0.3` | Retained for backward compatibility; ignored — hybrid merge uses RRF (rank-based, not score-weighted) |
-| `knowledge_reranker_provider` | `CO_KNOWLEDGE_RERANKER_PROVIDER` | `"tei"` | Reranker provider (`none`, `local`, `ollama`, `gemini`, `tei`) |
-| `knowledge_reranker_model` | `CO_KNOWLEDGE_RERANKER_MODEL` | `""` | Optional reranker model override |
+| `knowledge_cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `"http://127.0.0.1:8282"` | TEI cross-encoder rerank URL (`POST /rerank`); `null` disables cross-encoder reranking |
+| `knowledge_llm_reranker` | `—` | `null` | LLM listwise reranker (`ModelEntry`: `provider:model`); used when cross-encoder is absent |
 | `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | Base URL for TEI embed service (`POST /embed`) |
-| `knowledge_rerank_api_url` | `CO_KNOWLEDGE_RERANK_API_URL` | `"http://127.0.0.1:8282"` | Base URL for TEI rerank service (`POST /rerank`) |
 | `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | Max stored memories |
 | `memory_dedup_window_days` | `CO_CLI_MEMORY_DEDUP_WINDOW_DAYS` | `7` | Duplicate-detection lookback window |
 | `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | Fuzzy similarity threshold for dedup |
@@ -206,7 +203,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `bootstrap/_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
 | 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory |
 | 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
-| 4. Knowledge + Memory | `knowledge/_index.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
+| 4. Knowledge + Memory | `knowledge/_index_store.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
 | 4. Knowledge + Memory | `knowledge/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |
 | 4. Knowledge + Memory | `memory/_lifecycle.py` | Write entrypoint for all memory saves: dedup → consolidation → write → retention |

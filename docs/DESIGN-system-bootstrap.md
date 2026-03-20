@@ -40,17 +40,19 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      # resolves all cwd-relative paths and settings fields in one call
 │  │
 │  │  Step 2 — fail-fast gate (provider credentials + model availability)
-│  ├─ check_llm(config)     → "error": raise ValueError  # session never starts
+│  ├─ check_agent_llm(config)  → "error": raise ValueError  # session never starts
 │  ├─ _build_system_prompt(provider, model_name, config)  # file I/O; safe after gate
 │  │      loads soul seed, memories, mindsets, examples, critique
 │  │      └─ assemble_prompt(...)  →  config = dataclasses.replace(config, system_prompt=assembled_prompt)
 │  │
 │  │  Step 3 — construct services
+│  ├─ resolve_reranker(config)
+│  │      → (config, reranker_statuses)   # nulls unavailable reranker fields
 │  ├─ resolve_knowledge_backend(config)
-│  │      configured "hybrid" → try hybrid → fallback to fts5 → fallback to grep
-│  │      configured "fts5"   → try fts5   → fallback to grep
-│  │      configured "grep"   → use grep
-│  │      returns (resolved_config, knowledge_index, startup_statuses)
+│  │      "grep" in config → hard stop, grep only (no index)
+│  │      otherwise        → try hybrid first (if embedder available), then fts5, then grep
+│  │      returns (resolved_config, knowledge_index, knowledge_statuses)
+│  │      startup_statuses = reranker_statuses + knowledge_statuses
 │  ├─ TaskRunner(
 │  │      storage=TaskStorage(resolved_config.tasks_dir),
 │  │      max_concurrent, inactivity_timeout, auto_cleanup, retention_days,
@@ -123,7 +125,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │
 ├─ frontend.on_status(f"{len(deps.session.skill_registry)} skill(s) loaded")
 │
-└─ display_welcome_banner(deps, deps.config)
+└─ display_welcome_banner(deps)
    │    tool_count  = len(deps.session.tool_names)
    │    skill_count = len(deps.session.skill_registry)
    │    mcp_count   = len(deps.config.mcp_servers or {})
@@ -165,7 +167,7 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) converts the `Settings` singleton into `CoServices`, `CoConfig`, `CoSessionState`, and `CoRuntimeState`, then assembles `CoDeps`. It calls `check_llm` (from `bootstrap/_check.py`) as a single fail-fast gate: one sync HTTP call to Ollama (`/api/tags`, timeout=5) checking both reachability and model availability. Hard errors raise `ValueError` immediately; the session never starts.
+`create_deps()` (in `bootstrap/_bootstrap.py`) converts the `Settings` singleton into `CoServices`, `CoConfig`, `CoSessionState`, and `CoRuntimeState`, then assembles `CoDeps`. It calls `check_agent_llm` (from `bootstrap/_check.py`) as a single fail-fast gate: one sync HTTP call to Ollama (`/api/tags`, timeout=5) checking both reachability and model availability. Hard errors raise `ValueError` immediately; the session never starts.
 
 ```text
 create_deps():
@@ -174,7 +176,7 @@ create_deps():
     # from_settings() resolves all cwd-relative paths, library_dir, and settings fields
 
     # Step 2: fail-fast gates (ordered: provider → model → prompt assembly)
-    result = check_llm(config)
+    result = check_agent_llm(config)
     if result.status == "error":
         raise ValueError(result.detail)
 
@@ -184,8 +186,10 @@ create_deps():
     )
     # _build_system_prompt: loads soul seed, memories, mindsets, examples, critique; calls assemble_prompt()
 
-    # Step 3: resolve knowledge backend and construct services (lazy imports inside function body)
-    config, knowledge_index, startup_statuses = resolve_knowledge_backend(config)
+    # Step 3: resolve reranker and knowledge backend, construct services (lazy imports inside function body)
+    config, reranker_statuses = resolve_reranker(config)
+    config, knowledge_index, knowledge_statuses = resolve_knowledge_backend(config)
+    startup_statuses = reranker_statuses + knowledge_statuses
     task_runner = TaskRunner(
         storage=TaskStorage(config.tasks_dir),
         max_concurrent=config.background_max_concurrent,
@@ -226,14 +230,14 @@ The session group holds tool-visible mutable state such as approvals, todos, and
 
 ## 2. Provider And Model Checks
 
-`check_llm` (from `bootstrap/_check.py`) runs inside `create_deps()` as the single fail-fast gate. Error status raises `ValueError` immediately — session never starts. Any other status continues. After the gate passes, `_build_system_prompt()` assembles the static system prompt (file I/O; safe here because credentials are known-valid). `ModelRegistry` is built in Step 3 immediately after.
+`check_agent_llm` (from `bootstrap/_check.py`) runs inside `create_deps()` as the single fail-fast gate. Error status raises `ValueError` immediately — session never starts. Any other status continues. After the gate passes, `_build_system_prompt()` assembles the static system prompt (file I/O; safe here because credentials are known-valid). `ModelRegistry` is built in Step 3 immediately after.
 
 | Condition | Behavior |
 |-----------|----------|
 | Gemini provider with missing key | `ValueError`; session never starts |
-| Reasoning chain fully unavailable under Ollama | `ValueError`; session never starts |
-| Ollama unreachable | Continues; model registry built with configured chains |
-| One or more chains advanced | Continues; pruned `role_models` written to config |
+| Reasoning model missing from Ollama (host reachable) | `ValueError`; session never starts |
+| Ollama unreachable | `warn`; session continues, model registry built with configured role_models |
+| Optional role model missing (host reachable) | `warn`; session continues, affected role tools degrade silently |
 
 ## 3. Entry Conditions
 
@@ -289,7 +293,7 @@ chat_loop():
         completer.words = _build_completer_words()   ← updated to COMMANDS + skills
 
         [inline wakeup steps 1–3]
-        display_welcome_banner(deps, deps.config)
+        display_welcome_banner(deps)
         begin REPL loop
     finally:
         cleanup
@@ -318,7 +322,7 @@ inline wakeup (in chat_loop()):
     Step 3: skills_loaded_report  (reads len(deps.session.skill_registry) directly)
 ```
 
-`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps, deps.config)` reads counts directly from `deps.session` and `deps.config` — no separate health probe.
+`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps)` reads counts directly from `deps.session` and `deps.config` — no separate health probe.
 
 ### Step 1 - Knowledge Sync
 
@@ -406,9 +410,9 @@ Live skill reloading happens after startup in the main loop: before each REPL pr
 `create_deps()` resolves the knowledge backend before bootstrap:
 
 ```text
-configured "hybrid" -> try hybrid -> fallback to fts5 -> fallback to grep
-configured "fts5" -> try fts5 -> fallback to grep
-configured "grep" -> use grep
+"grep" in config → hard stop, grep only (no index)
+otherwise        → try hybrid first (if embedder available), then fts5, then grep
+                   (configured "fts5" still attempts hybrid when embedder is reachable)
 
 deps.config.knowledge_search_backend = resolved backend
 deps.services.knowledge_index = KnowledgeIndex instance or None
@@ -421,11 +425,11 @@ By the time the inline wakeup steps run, the system already knows whether FTS or
 
 ### Welcome Banner Boundary
 
-`display_welcome_banner(deps, deps.config)` is called immediately after the three inline wakeup steps complete, still inside the `async with agent` block:
+`display_welcome_banner(deps)` is called immediately after the three inline wakeup steps complete, still inside the `async with agent` block:
 
 ```text
 [inline steps 1-3]
-display_welcome_banner(deps, deps.config)
+display_welcome_banner(deps)
 begin REPL loop
 ```
 
@@ -468,9 +472,9 @@ The banner marks the boundary between startup and interactive use. All status me
 |------|------|
 | `co_cli/main.py` | `_chat_loop()` startup assembly |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — all startup functions live here |
-| `co_cli/bootstrap/_check.py` | `check_runtime()`, `RuntimeCheck` — integration health aggregator; invoked by `/status` tool, not by bootstrap |
+| `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
 | `co_cli/context/_session.py` | Session helpers: new/load/save/touch/is_fresh/increment_compaction |
-| `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps, config: CoConfig)` — welcome banner |
+| `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps)` — welcome banner |
 | `co_cli/commands/_commands.py` | Skill loading helpers |
 | `co_cli/deps.py` | `CoDeps` groups and sub-agent isolation |
 | `co_cli/knowledge/_index_store.py` | `KnowledgeIndex.sync_dir()` and `close()` |

@@ -642,39 +642,8 @@ def main() -> None:
                 "skip_reason": f"Ollama not reachable at {args.ollama_host}",
             })
 
-        # Config 3: fastembed cross-encoder
-        local_ok = False
-        try:
-            from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: F401
-            local_ok = True
-        except ImportError:
-            pass
-
-        if local_ok:
-            print("Running fastembed cross-encoder (BAAI/bge-reranker-base)...")
-            idx = build_index(
-                tmp / "local" / "search.db",
-                backend="fts5",
-                reranker_provider="local",
-                reranker_model="BAAI/bge-reranker-base",
-            )
-            rows.append(run_benchmark(
-                idx, "Cross-encoder (fastembed)",
-                notes="BAAI/bge-reranker-base",
-                runs=args.runs,
-            ))
-            idx.close()
-        else:
-            rows.append({
-                "label": "Cross-encoder (fastembed)",
-                "skip_reason": "fastembed not installed (uv sync --group reranker)",
-            })
-
     print()
     print_table(rows)
-    print()
-    print("Install fastembed cross-encoder (~90MB ONNX model, no GPU required):")
-    print("  uv sync --group reranker")
 
 
 if __name__ == "__main__":
