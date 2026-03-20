@@ -6,6 +6,8 @@
 
 Native tools are Python functions registered on the pydantic-ai `Agent` via `_register()` in `agent.py`. Every tool receives a `RunContext[CoDeps]` as its first argument and returns `dict[str, Any]` with a `display` field (pre-formatted string shown to the user) plus metadata fields.
 
+Tool progress reporting is opt-in. Tools do not write to the terminal directly. When a tool has meaningful multi-phase latency, it may emit progress through turn-scoped runtime state (`ctx.deps.runtime.status_callback`) as structured `StatusEvent` payloads and let the frontend render those messages.
+
 Tools are grouped into ten families:
 
 ```
@@ -33,6 +35,89 @@ tools/
 All native tools are registered via `_register(fn, requires_approval)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
 
 Conditional registration: `delegate_*` tools are registered only when the matching role model chain is configured. If `reasoning` only is set, all three delegation tools may be unavailable.
+
+### Tool Lifecycle — Call Stack
+
+Four phases: discovery at session startup, then per-turn: request, approval (deferred path only), execution and return.
+
+**Phase 1 — Tool Discovery** (`main.py` → `agent.py`)
+
+```
+main.py:build_chat_app()
+  ├─ build_agent(config, resolved)                          # agent.py:84
+  │    ├─ MCPServerStdio/StreamableHTTP/SSE(...)            # one per config.mcp_servers entry
+  │    │    └─ .approval_required()                         # wraps server when cfg.approval=="auto"
+  │    ├─ Agent(resolved.model, deps_type=CoDeps,           # pydantic-ai agent construction
+  │    │        output_type=[str, DeferredToolRequests],
+  │    │        toolsets=mcp_toolsets)
+  │    ├─ _register(fn, requires_approval)                  # agent.py:196; called per native tool
+  │    │    ├─ agent.tool(fn, requires_approval=...)        # registers fn with pydantic-ai
+  │    │    └─ tool_approvals[fn.__name__] = requires_approval
+  │    ├─ [conditional] _register(delegate_*, False)        # only when role_models has matching role
+  │    └─ [web policy]  _register(web_search/fetch, policy.search/fetch == "ask")
+  │    └─ return (agent, list(tool_approvals.keys()), tool_approvals)
+  ├─ deps.session.tool_names = list(tool_approvals.keys())  # native names only
+  ├─ deps.session.tool_approvals = tool_approvals
+  ├─ await stack.enter_async_context(agent)                 # starts MCP server subprocesses
+  └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py:264
+       └─ for toolset in agent.toolsets:
+            ├─ inner.list_tools()                           # MCPServer: enumerate via stdio/HTTP
+            └─ name = f"{prefix}_{t.name}" if prefix else t.name
+  └─ deps.session.tool_names += mcp_tool_names             # native + MCP names in session
+```
+
+**Phase 2 — Execution Request** (`_orchestrate.py` → pydantic-ai)
+
+```
+run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:417
+  └─ _stream_events(agent, user_input, deps, ...)            # _orchestrate.py:279
+       └─ agent.run_stream_events(user_input, deps,
+                                  message_history, ...)      # pydantic-ai streams model output
+            ├─ [auto tool]     FunctionToolCallEvent         # requires_approval=False
+            │    └─ pydantic-ai calls fn(ctx, **args)        # executes immediately → Phase 4
+            └─ [deferred tool] result.output =               # requires_approval=True (or MCP auto)
+                               DeferredToolRequests          # stream paused → Phase 3
+```
+
+**Phase 3 — Approval** (deferred path only, `_orchestrate.py`)
+
+```
+run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:464
+  └─ _collect_deferred_tool_approvals(result, deps, frontend) # _orchestrate.py:370
+       └─ for call in result.output.approvals:
+            ├─ Tier 1: _check_skill_grant(call.tool_name, deps)
+            │    ├─ tool not in session.skill_tool_grants?        → skip tier
+            │    ├─ tool_approvals.get(name, False) == True?      → ineligible (deferred class)
+            │    ├─ name == "run_shell_command"?                  → ineligible (explicit carve-out)
+            │    └─ eligible → approvals[call.tool_call_id] = True; continue
+            ├─ Tier 2: is_session_auto_approved(call.tool_name, deps)
+            │    └─ user previously chose "a" → approvals[call.tool_call_id] = True; continue
+            └─ Tier 3: frontend.prompt_approval(desc)             # user: y / n / a
+                 └─ record_approval_choice(approvals, tool_call_id,
+                                           approved=choice in ("y","a"),
+                                           remember=choice=="a")
+  └─ return DeferredToolResults
+```
+
+**Phase 4 — Execution and Return**
+
+```
+_stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
+  └─ agent.run_stream_events(user_input=None,
+                              deferred_tool_results=approvals, ...)
+       ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
+       │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
+       │    ├─ ctx.deps.config.*     (read-only settings scalars)
+       │    ├─ ctx.deps.session.*    (tool_approvals, skill_grants, todos)
+       │    └─ ctx.deps.runtime.*    (turn_usage, status_callback, safety_state)
+       │    └─ return dict[str, Any]
+       │         ├─ "display"        pre-formatted string shown to the user
+       │         └─ metadata fields  (count, task_id, article_id, ...)
+       │    └─ FunctionToolResultEvent → frontend.on_tool_result(name, content["display"])
+       └─ [rejected] pydantic-ai notifies model that tool_call_id was denied
+```
+
+---
 
 ### Approval Classes
 
@@ -216,7 +301,22 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 |------|----------|---------------|---------|
 | `todo_write` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
 | `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
-| `check_capabilities` | auto | — | Runs `check_runtime(deps)`; returns probe results, active integrations, reasoning chain, skill grants, tool count |
+| `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.status_callback)`; returns probe results, active integrations, reasoning chain, skill grants, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped status callback is present, it emits staged `/doctor` progress as transient `StatusEvent(key="doctor")` updates such as provider, integration, knowledge, skills, and per-MCP-server checks |
+
+`check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
+
+```text
+run_turn() sets deps.runtime.status_callback = frontend.on_status
+check_capabilities() reads ctx.deps.runtime.status_callback
+check_runtime(progress=...) emits phase messages
+TerminalFrontend renders those status lines in the CLI
+```
+
+This pattern is intentionally optional:
+- fast tools stay silent and return only their final `display`
+- long-running or multi-phase tools may emit progress when the intermediate states are user-meaningful
+- tools never import display code or print directly to the terminal
+- plain string statuses remain valid, but structured `StatusEvent` is the preferred way to request transient live-line rendering
 
 #### Delegation (`tools/delegation.py`)
 

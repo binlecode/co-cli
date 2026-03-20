@@ -81,6 +81,7 @@ class TaskStorage:
             "status": TaskStatus.pending.value,
             "command": command,
             "cwd": cwd,
+            "description": approval_record.get("description", "") if approval_record else "",
             "pid": None,
             "exit_code": None,
             "created_at": datetime.now(timezone.utc).isoformat(),

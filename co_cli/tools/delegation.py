@@ -38,6 +38,7 @@ async def delegate_coder(
     if not registry or not registry.is_configured(ROLE_CODING):
         raise ModelRetry("Coding sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_CODING, ResolvedModel(model=ctx.model, settings=None))
+    model_name = str(rm.model)
     agent = make_coder_agent(rm)
     try:
         result = await agent.run(
@@ -53,13 +54,21 @@ async def delegate_coder(
         ctx.deps.runtime.turn_usage = result.usage()
     else:
         ctx.deps.runtime.turn_usage.incr(result.usage())
+    requests_used = result.usage().requests
+    request_limit = max_requests
     data = result.output
+    role = ROLE_CODING
+    display = f"Coder analysis complete.\n{data.summary}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return {
-        "display": f"Coder analysis complete.\n{data.summary}",
+        "display": display,
         "summary": data.summary,
         "diff_preview": data.diff_preview,
         "files_touched": data.files_touched,
         "confidence": data.confidence,
+        "role": role,
+        "model_name": model_name,
+        "requests_used": requests_used,
+        "request_limit": request_limit,
     }
 
 
@@ -105,6 +114,7 @@ async def delegate_research(
     if not registry or not registry.is_configured(ROLE_RESEARCH):
         raise ModelRetry("Research sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_RESEARCH, ResolvedModel(model=ctx.model, settings=None))
+    model_name = str(rm.model)
     sub_deps = make_subagent_deps(ctx.deps)
     agent = make_research_agent(rm)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
@@ -124,6 +134,7 @@ async def delegate_research(
         ctx.deps.runtime.turn_usage.incr(result.usage())
     data = result.output
 
+    retry_result = None
     # Empty-result retry: rephrased query when budget remains and result is empty
     remaining = max_requests - result.usage().requests
     if remaining > 0 and (not data.summary or not data.sources):
@@ -141,13 +152,20 @@ async def delegate_research(
     if not data.summary or not data.sources:
         data = data.model_copy(update={"confidence": 0.0, "summary": data.summary or "No results found despite multiple searches."})
 
+    requests_used = result.usage().requests + (retry_result.usage().requests if retry_result is not None else 0)
+    request_limit = max_requests
+    role = ROLE_RESEARCH
     sources_text = "\n".join(f"- {s}" for s in data.sources) if data.sources else "No sources"
-    display = f"{data.summary}\n\nSources:\n{sources_text}"
+    display = f"{data.summary}\n\nSources:\n{sources_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return {
         "display": display,
         "summary": data.summary,
         "sources": data.sources,
         "confidence": data.confidence,
+        "role": role,
+        "model_name": model_name,
+        "requests_used": requests_used,
+        "request_limit": request_limit,
     }
 
 
@@ -190,6 +208,7 @@ async def delegate_analysis(
     if not registry or not registry.is_configured(ROLE_ANALYSIS):
         raise ModelRetry("Analysis sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_ANALYSIS, ResolvedModel(model=ctx.model, settings=None))
+    model_name = str(rm.model)
     scoped_question = question
     if inputs:
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question
@@ -209,15 +228,22 @@ async def delegate_analysis(
         ctx.deps.runtime.turn_usage = result.usage()
     else:
         ctx.deps.runtime.turn_usage.incr(result.usage())
+    requests_used = result.usage().requests
+    request_limit = max_requests
     data = result.output
 
+    role = ROLE_ANALYSIS
     evidence_text = "\n".join(f"- {e}" for e in data.evidence) if data.evidence else "No evidence"
-    display = f"{data.conclusion}\n\nEvidence:\n{evidence_text}"
+    display = f"{data.conclusion}\n\nEvidence:\n{evidence_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return {
         "display": display,
         "conclusion": data.conclusion,
         "evidence": data.evidence,
         "reasoning": data.reasoning,
+        "role": role,
+        "model_name": model_name,
+        "requests_used": requests_used,
+        "request_limit": request_limit,
     }
 
 
@@ -254,6 +280,7 @@ async def delegate_think(
     if not registry or not registry.is_configured(ROLE_REASONING):
         raise ModelRetry("Thinking sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_REASONING, ResolvedModel(model=ctx.model, settings=None))
+    model_name = str(rm.model)
     agent = make_thinking_agent(rm)
     try:
         result = await agent.run(
@@ -269,12 +296,19 @@ async def delegate_think(
         ctx.deps.runtime.turn_usage = result.usage()
     else:
         ctx.deps.runtime.turn_usage.incr(result.usage())
+    requests_used = result.usage().requests
+    request_limit = max_requests
     data = result.output
+    role = ROLE_REASONING
     steps_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(data.steps))
-    display = f"{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}"
+    display = f"{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return {
         "display": display,
         "plan": data.plan,
         "steps": data.steps,
         "conclusion": data.conclusion,
+        "role": role,
+        "model_name": model_name,
+        "requests_used": requests_used,
+        "request_limit": request_limit,
     }

@@ -178,7 +178,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
 | 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
-| 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, summary_lines); `check_llm`, `check_settings` |
+| 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, mcp_probes, summary_lines); `check_agent_llm`, `check_settings` |
 | 2. Runtime Deps + Session State | `context/_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | 2. Runtime Deps + Session State | `context/_history.py` | History processors and `summarize_messages()` |
 | 2. Runtime Deps + Session State | `tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
@@ -200,7 +200,6 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `tools/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | 3. Tool Layer | `tools/_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
 | 3. Tool Layer | `tools/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
-| 3. Tool Layer | `bootstrap/_checkpoint.py` | Workspace checkpoint + rewind: `create_checkpoint()`, `restore_checkpoint()` |
 | 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory |
 | 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
 | 4. Knowledge + Memory | `knowledge/_index_store.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |

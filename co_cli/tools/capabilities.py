@@ -32,7 +32,10 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     - mcp_mode: "mcp" or "native-only"
     - knowledge_mode: active knowledge search backend
     """
-    result = check_runtime(ctx.deps)
+    progress = ctx.deps.runtime.status_callback
+    if progress is not None:
+        progress("Doctor: starting runtime diagnostics...")
+    result = check_runtime(ctx.deps, progress=progress)
 
     caps = result.capabilities
     st = result.status
@@ -70,8 +73,24 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     if skill_grants:
         lines.append(f"Active skill grants: {', '.join(skill_grants)}")
 
-    if st["tool_count"]:
-        lines.append(f"Tools: {st['tool_count']} ({st['mcp_mode']})")
+    mcp_configured = len(ctx.deps.config.mcp_servers or {})
+    mcp_live = caps["mcp_count"]
+    # Invariant: tool_approvals keys == native tool names; tool_names = native + MCP (see build_agent)
+    # This formula holds only while tool_names is seeded from tool_approvals.keys() in build_agent()
+    # and extended exclusively by discover_mcp_tools(). Any future addition to tool_names outside
+    # that path will silently corrupt this count.
+    native_tool_count = len(ctx.deps.session.tool_approvals)
+    mcp_tool_count = len(ctx.deps.session.tool_names) - native_tool_count
+
+    if mcp_configured == 0:
+        lines.append("MCP: none configured")
+    else:
+        lines.append(
+            f"MCP: {mcp_live}/{mcp_configured} servers connected · {mcp_tool_count} tools"
+        )
+        for name, probe in result.mcp_probes:
+            status_str = "ok" if probe.ok else f"degraded — {probe.detail}"
+            lines.append(f"  {name}: {status_str}")
 
     display = "\n".join(lines)
 
@@ -83,6 +102,11 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
         "obsidian": caps["obsidian"],
         "brave": caps["brave"],
         "mcp_count": caps["mcp_count"],
+        "mcp_configured_server_count": mcp_configured,
+        "mcp_tool_count": mcp_tool_count,
+        "mcp_server_health": [
+            {"name": n, "ok": r.ok, "detail": r.detail} for n, r in result.mcp_probes
+        ],
         "reasoning_model": reasoning_model,
         "reasoning_ready": caps["reasoning_ready"],
         "checks": caps["checks"],

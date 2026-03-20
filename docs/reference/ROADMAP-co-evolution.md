@@ -148,7 +148,6 @@ Goal: make co safe and dependable enough that users willingly hand it longer wor
 
 Priority work:
 
-- strengthen workspace checkpoints and `rewind` semantics around all write-capable actions
 - add better action previews before destructive or broad edits
 - tighten approval ergonomics around patterns, scopes, and expiry
 - harden task observability: richer task events, live progress, resumable status views

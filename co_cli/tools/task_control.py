@@ -200,6 +200,7 @@ async def list_background_tasks(
             "status": t.get("status"),
             "command": t.get("command"),
             "started_at": t.get("started_at"),
+            "description": t.get("description", ""),
         }
         for t in tasks
     ]
@@ -211,7 +212,8 @@ async def list_background_tasks(
         lines = [f"Background tasks ({len(rows)}{' — ' + status_filter if status_filter else ''}):\n"]
         for r in rows:
             started = (r["started_at"] or "queued")[:19]
-            lines.append(f"  [{r['task_id']}] {r['status']} — {r['command']}  ({started})")
+            desc_prefix = f"{r['description']}: " if r.get("description") else ""
+            lines.append(f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})")
         display = "\n".join(lines)
 
     return {"display": display, "tasks": rows, "count": len(rows)}

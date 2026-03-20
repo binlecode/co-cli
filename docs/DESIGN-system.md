@@ -373,7 +373,7 @@ Frontend contract:
 | `on_thinking_commit(final)` | Final thinking panel |
 | `on_tool_call(name, args_display)` | Tool call annotation |
 | `on_tool_result(title, content)` | Result panel |
-| `on_status(message)` | Status messages |
+| `on_status(message \| StatusEvent)` | Status messages; plain strings are persistent, structured `StatusEvent` can request transient live rendering |
 | `on_final_output(text)` | Fallback Markdown render |
 | `prompt_approval(description) -> str` | y/n/a approval prompt |
 | `cleanup()` | Exception teardown |
@@ -387,7 +387,7 @@ CLI command surface:
 
 REPL slash-command surface:
 - `/help`, `/clear`, `/new`, `/status`, `/tools`, `/history`, `/compact`
-- `/forget`, `/approvals`, `/checkpoint`, `/rewind`
+- `/forget`, `/approvals`
 - `/skills`, `/background`, `/tasks`, `/cancel`
 
 Execution sequencing for startup and one user turn lives in [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) and [DESIGN-core-loop.md](DESIGN-core-loop.md).

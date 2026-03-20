@@ -21,7 +21,7 @@ import os
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps, CoConfig
@@ -35,6 +35,7 @@ class RuntimeCheck:
     status: dict[str, Any]
     findings: list[dict[str, str]] = field(default_factory=list)
     fallbacks: list[str] = field(default_factory=list)
+    mcp_probes: list[tuple[str, "CheckResult"]] = field(default_factory=list)  # bare server names
 
     def summary_lines(self) -> list[str]:
         lines: list[str] = []
@@ -342,7 +343,19 @@ def check_settings(config: "CoConfig") -> DoctorResult:
     return DoctorResult(checks=checks)
 
 
-def check_runtime(deps: "CoDeps") -> "RuntimeCheck":
+def _emit_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+) -> None:
+    if progress is not None:
+        progress(message)
+
+
+def check_runtime(
+    deps: "CoDeps",
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> "RuntimeCheck":
     """Assemble a full runtime diagnostic snapshot.
 
     Calls IO check functions and inlines trivial checks, combines capabilities from
@@ -352,18 +365,25 @@ def check_runtime(deps: "CoDeps") -> "RuntimeCheck":
     from co_cli.config import ADC_PATH, GOOGLE_TOKEN_PATH
 
     # IO checks
+    _emit_progress(progress, "Doctor: checking provider and model availability...")
     provider_result = check_agent_llm(deps.config)
 
+    _emit_progress(progress, "Doctor: checking configured integrations...")
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
     _obsidian_vault = str(deps.config.obsidian_vault_path) if deps.config.obsidian_vault_path else None
     obsidian_result = _check_obsidian(_obsidian_vault)
     brave_result = _check_brave(deps.config.brave_search_api_key)
+
+    _emit_progress(progress, "Doctor: checking knowledge backend...")
     knowledge_result = _check_knowledge(deps.services.knowledge_index, deps.config.knowledge_search_backend)
+
+    _emit_progress(progress, "Doctor: checking loaded skills...")
     skills_result = _check_skills(deps.session.skill_registry)
 
     # Probe each configured MCP server; count live ones
     mcp_probes: list[tuple[str, CheckResult]] = []
     for name, cfg in (deps.config.mcp_servers or {}).items():
+        _emit_progress(progress, f"Doctor: checking MCP server '{name}'...")
         mcp_probes.append((f"mcp:{name}", check_mcp_server(cfg.command, cfg.url)))
     mcp_count = sum(1 for _, r in mcp_probes if r.ok)
 
@@ -433,4 +453,5 @@ def check_runtime(deps: "CoDeps") -> "RuntimeCheck":
         status=status,
         findings=findings,
         fallbacks=fallbacks,
+        mcp_probes=[(name.removeprefix("mcp:"), result) for name, result in mcp_probes],
     )

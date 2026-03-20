@@ -48,3 +48,42 @@ def test_new_runtime_fields_present() -> None:
     assert "mcp_mode" in result
     assert result["mcp_mode"] in ("mcp", "native-only")
     assert isinstance(result["tool_count"], int)
+
+
+def test_capabilities_emits_doctor_progress_updates() -> None:
+    statuses: list[str] = []
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+    )
+    deps.runtime.status_callback = statuses.append
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    asyncio.run(check_capabilities(ctx))
+
+    assert statuses[0] == "Doctor: starting runtime diagnostics..."
+    assert "Doctor: checking provider and model availability..." in statuses
+    assert "Doctor: checking configured integrations..." in statuses
+    assert "Doctor: checking knowledge backend..." in statuses
+    assert "Doctor: checking loaded skills..." in statuses
+
+
+def test_capabilities_routes_progress_into_frontend_status_sink() -> None:
+    events: list[tuple[str, str]] = []
+
+    def _on_status(message: str) -> None:
+        events.append(("status", message))
+
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+    )
+    deps.runtime.status_callback = _on_status
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    asyncio.run(check_capabilities(ctx))
+
+    status_messages = [message for kind, message in events if kind == "status"]
+    assert status_messages[0] == "Doctor: starting runtime diagnostics..."
+    assert any(message == "Doctor: checking provider and model availability..." for message in status_messages)
+    assert any(message == "Doctor: checking configured integrations..." for message in status_messages)

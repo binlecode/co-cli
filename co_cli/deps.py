@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic_ai.usage import RunUsage
 
@@ -291,6 +291,7 @@ class CoRuntimeState:
     precomputed_compaction: Any = field(default=None, repr=False)
     turn_usage: RunUsage | None = None
     startup_statuses: list[str] = field(default_factory=list)
+    status_callback: Callable[[str], None] | None = field(default=None, repr=False)
     # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
     # TODO: resolve by extracting a _types.py module to break the circular import properly.
     opening_ctx_state: "OpeningContextState | None" = field(default=None, repr=False)

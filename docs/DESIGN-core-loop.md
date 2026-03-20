@@ -94,18 +94,18 @@ flowchart TD
 
     subgraph RUN ["run_turn()"]
         direction TB
-        R1["reset SafetyState\nset UsageLimits(request_limit)\nturn_usage = None"] --> STRM
+        R1["reset SafetyState\nbind runtime.status_callback = frontend.on_status\nset UsageLimits(request_limit)\nturn_usage = None"] --> STRM
         STRM["_stream_events(user_input, history)"] --> CHK
         CHK{result.output}
         CHK -- DeferredToolRequests --> AP
         AP["_collect_deferred_tool_approvals()\nskill grant -> session auto -> prompt y/n/a"] --> RESUME
         RESUME["_stream_events(None, deferred_results)"] --> CHK
-        CHK -- str or done --> DONE["finish checks\nctx ratio checks\nreturn TurnResult"]
+        CHK -- str or done --> DONE["finish checks\nctx ratio checks\nclear runtime.status_callback\nreturn TurnResult"]
         STRM -.->|UsageLimitExceeded| GR["grace summary turn\nreturn continue"]
         STRM -.->|"HTTP 400"| REF["inject reflection request\nretry"]
         STRM -.->|"429 / 5xx / network"| BAK["backoff retry"]
-        STRM -.->|"401 / 403 / 404 or exhausted"| ERR["return error"]
-        STRM -.->|KeyboardInterrupt / CancelledError| INT["patch dangling calls\nappend abort marker\nreturn interrupted"]
+        STRM -.->|"401 / 403 / 404 or exhausted"| ERR["clear runtime.status_callback\nreturn error"]
+        STRM -.->|KeyboardInterrupt / CancelledError| INT["patch dangling calls\nappend abort marker\nclear runtime.status_callback\nreturn interrupted"]
     end
 
     DONE --> POST
@@ -219,27 +219,31 @@ Key invariant:
 
 ```text
 deps.runtime.safety_state = SafetyState()
+deps.runtime.status_callback = frontend.on_status
 turn_limits = UsageLimits(request_limit=max_request_limit)
 turn_usage = None
 current_input = user_input
 
-enter retry loop (up to model_http_retries):
-    result = _stream_events(...)
-    turn_usage = result.usage()
-
-    while result.output is DeferredToolRequests:
-        approvals = _collect_deferred_tool_approvals(result, deps, frontend)
-        result, streamed_text = await _stream_events(None, deferred_results=approvals)
+try:
+    enter retry loop (up to model_http_retries):
+        result = _stream_events(...)
         turn_usage = result.usage()
 
-    if non-streaming string result:
-        frontend.on_final_output(result.output)
+        while result.output is DeferredToolRequests:
+            approvals = _collect_deferred_tool_approvals(result, deps, frontend)
+            result, streamed_text = await _stream_events(None, deferred_results=approvals)
+            turn_usage = result.usage()
 
-    if finish_reason == "length":
-        frontend.on_status("Response may be truncated... Use /continue to extend.")
+        if non-streaming string result:
+            frontend.on_final_output(result.output)
 
-    check Ollama ctx ratio thresholds
-    return TurnResult(...)
+        if finish_reason == "length":
+            frontend.on_status("Response may be truncated... Use /continue to extend.")
+
+        check Ollama ctx ratio thresholds
+        return TurnResult(...)
+finally:
+    deps.runtime.status_callback = None
 ```
 
 One `UsageLimits` object and the accumulated `turn_usage` span:
@@ -248,6 +252,12 @@ One `UsageLimits` object and the accumulated `turn_usage` span:
 - provider retries inside the same turn
 
 Approval hops do not reset the turn budget.
+
+`deps.runtime.status_callback` is also turn-scoped:
+- set at `run_turn()` entry to `frontend.on_status`
+- available to long-running tool paths that need user-visible progress
+- always cleared in `finally`, regardless of success, retry exhaustion, or interrupt
+- accepts plain strings for persistent statuses and structured `StatusEvent` payloads for transient progress updates
 
 ### 4.4 Streaming Phase In `_stream_events()`
 
@@ -295,6 +305,8 @@ build and return DeferredToolResults
 ```
 
 `run_turn()` then calls `_stream_events(None, deferred_results=approvals)` to resume the turn.
+
+The same frontend binding also supports streamed status output from long-running tool paths. Example: the packaged `/doctor` skill calls `check_capabilities`, which reads `ctx.deps.runtime.status_callback` and forwards staged diagnostics from `check_runtime(...)` back to the CLI as transient `StatusEvent(key="doctor")` updates through `frontend.on_status(...)`.
 
 Approval-chain semantics:
 - active skill grants only apply during the current skill-expanded turn

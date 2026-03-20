@@ -68,7 +68,7 @@ Roles are resolved at registry build time by iterating `role_models`. Empty or a
 
 ### Model Dependency Checks
 
-`check_llm()` runs inside `create_deps()` (before `build_agent()`) as a single fail-fast gate. Error status raises `ValueError` immediately — session never starts.
+`check_agent_llm()` runs inside `create_deps()` (before `build_agent()`) as a single fail-fast gate. Error status raises `ValueError` immediately — session never starts.
 
 - `gemini` + key absent → `status="error"` (cannot proceed)
 - `gemini` + key present → `status="ok"` (no HTTP call)
@@ -221,7 +221,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 |------|---------|
 | `co_cli/config.py` | `role_models` setting, `ModelEntry` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
 | `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
-| `co_cli/bootstrap/_check.py` | `check_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
+| `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
 | `co_cli/context/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |

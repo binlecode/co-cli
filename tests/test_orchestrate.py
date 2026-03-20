@@ -316,6 +316,24 @@ async def test_stream_events_no_status_when_text_preceded_tool():
     assert all(e[0] != "status" for e in frontend.events)
 
 
+@pytest.mark.asyncio
+async def test_stream_events_uses_doctor_specific_preamble_for_check_capabilities():
+    """check_capabilities gets a doctor-specific preamble instead of the generic one."""
+    frontend = RecordingFrontend()
+    tool_part = ToolCallPart(tool_name="check_capabilities", args="{}", tool_call_id="doctor1")
+    agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    await _stream_events(
+        agent, user_input="/doctor", deps=deps, message_history=[],
+        model_settings={}, usage_limits=UsageLimits(request_limit=5),
+        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    )
+
+    status_messages = [payload for kind, payload in frontend.events if kind == "status"]
+    assert status_messages == ["Starting doctor diagnostics."]
+
+
 # ---------------------------------------------------------------------------
 # Bug-finding: preamble emitted exactly once for multiple tool calls
 # ---------------------------------------------------------------------------

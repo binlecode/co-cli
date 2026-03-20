@@ -379,44 +379,6 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     return []
 
 
-async def _cmd_checkpoint(ctx: CommandContext, args: str) -> None:
-    """Create a workspace snapshot."""
-    from co_cli.bootstrap._checkpoint import create_checkpoint
-
-    label = args.strip()
-    try:
-        cid = create_checkpoint(Path.cwd(), label=label)
-        console.print(f"[success]✓ Checkpoint created: {cid}[/success]")
-    except RuntimeError as e:
-        console.print(f"[bold red]Checkpoint failed:[/bold red] {e}")
-    return None
-
-
-async def _cmd_rewind(ctx: CommandContext, args: str) -> None:
-    """Restore a workspace snapshot."""
-    from co_cli.bootstrap._checkpoint import list_checkpoints, restore_checkpoint
-
-    target = args.strip()
-    if not target or target == "last":
-        entries = list_checkpoints(Path.cwd())
-        if not entries:
-            console.print("[dim]No checkpoints found.[/dim]")
-            return None
-        target = entries[0]["id"]
-
-    answer = console.input(f"Restore to checkpoint '{target}'? [y/N] ")
-    if answer.strip().lower() != "y":
-        console.print("[dim]Rewind cancelled.[/dim]")
-        return None
-
-    try:
-        restore_checkpoint(Path.cwd(), target, confirmed=True)
-        console.print(f"[success]✓ Restored to checkpoint {target}[/success]")
-    except RuntimeError as e:
-        console.print(f"[bold red]Rewind failed:[/bold red] {e}")
-    return None
-
-
 async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     """List and inspect loaded skills, or install a new one."""
     from rich.table import Table
@@ -948,8 +910,6 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
     "approvals": SlashCommand("approvals", "Manage persistent exec approval patterns", _cmd_approvals),
-    "checkpoint": SlashCommand("checkpoint", "Create a workspace snapshot", _cmd_checkpoint),
-    "rewind": SlashCommand("rewind", "Restore a workspace snapshot", _cmd_rewind),
     "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),
     "background": SlashCommand("background", "Run a command in the background", _cmd_background),
     "tasks": SlashCommand("tasks", "List background tasks", _cmd_tasks),

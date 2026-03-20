@@ -201,8 +201,19 @@ class TerminalFrontend:
     def __init__(self) -> None:
         self._live: Live | None = None
         self._thinking_live: Live | None = None
+        self._status_live: Live | None = None
+
+    def _is_transient_status(self, message: str) -> bool:
+        return message == "Starting doctor diagnostics." or message.startswith("Doctor:")
+
+    def _clear_status_live(self) -> None:
+        if self._status_live is not None:
+            self._status_live.stop()
+            self._status_live = None
+            console.print("")
 
     def on_text_delta(self, accumulated: str) -> None:
+        self._clear_status_live()
         if self._live is None:
             self._live = Live(
                 Markdown(accumulated), console=console, auto_refresh=False,
@@ -213,6 +224,7 @@ class TerminalFrontend:
             self._live.refresh()
 
     def on_text_commit(self, final: str) -> None:
+        self._clear_status_live()
         if self._live:
             self._live.update(Markdown(final))
             self._live.refresh()
@@ -220,6 +232,7 @@ class TerminalFrontend:
             self._live = None
 
     def on_thinking_delta(self, accumulated: str) -> None:
+        self._clear_status_live()
         renderable = Text(accumulated or "...", style="thinking")
         if self._thinking_live is None:
             self._thinking_live = Live(
@@ -231,6 +244,7 @@ class TerminalFrontend:
             self._thinking_live.refresh()
 
     def on_thinking_commit(self, final: str) -> None:
+        self._clear_status_live()
         if self._thinking_live:
             self._thinking_live.stop()
             self._thinking_live = None
@@ -238,12 +252,14 @@ class TerminalFrontend:
             console.print(Text(final, style="thinking"))
 
     def on_tool_call(self, name: str, args_display: str) -> None:
+        self._clear_status_live()
         if args_display:
             console.print(f"[dim]  {name}({args_display})[/dim]")
         else:
             console.print(f"[dim]  {name}()[/dim]")
 
     def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
+        self._clear_status_live()
         if isinstance(content, dict) and "display" in content:
             console.print(Panel(
                 content["display"], title=title, border_style="shell",
@@ -254,13 +270,28 @@ class TerminalFrontend:
             ))
 
     def on_status(self, message: str) -> None:
+        if self._is_transient_status(message):
+            renderable = Text(message, style="dim")
+            if self._status_live is None:
+                self._status_live = Live(
+                    renderable, console=console, auto_refresh=False, transient=False,
+                )
+                self._status_live.start()
+                self._status_live.refresh()
+            else:
+                self._status_live.update(renderable)
+                self._status_live.refresh()
+            return
+        self._clear_status_live()
         console.print(f"[dim]{message}[/dim]")
 
     def on_final_output(self, text: str) -> None:
+        self._clear_status_live()
         console.print(Markdown(text))
 
     def prompt_approval(self, description: str) -> str:
         """Prompt user for y/n with SIGINT handler swap for blocking input."""
+        self._clear_status_live()
         console.print(f"Approve [bold]{description}[/bold]?" + _CHOICES_HINT, end=" ")
 
         prev_handler = signal.getsignal(signal.SIGINT)
@@ -277,11 +308,12 @@ class TerminalFrontend:
 
     def cleanup(self) -> None:
         """Stop any active Live instances to restore terminal state."""
-        for lv in (self._thinking_live, self._live):
+        for lv in (self._status_live, self._thinking_live, self._live):
             if lv:
                 try:
                     lv.stop()
                 except Exception:
                     pass
+        self._status_live = None
         self._thinking_live = None
         self._live = None
