@@ -192,7 +192,11 @@ async def _persist_memory_inner(
             apply_plan_atomically(plan, alias_map, deps)
 
             has_add = any(a.action == "ADD" for a in plan.actions)
-            if not has_add:
+            # Only exit early when there are non-ADD actions (MERGEs): content was
+            # absorbed into an existing memory — no new entry needed.
+            # Empty plan (0 actions) means the LLM had no opinion; fall through to
+            # Step 3 so the memory is written rather than silently dropped.
+            if not has_add and plan.actions:
                 return {
                     "display": "\u2713 Memory consolidated (no new entry needed)",
                     "action": "consolidated",
