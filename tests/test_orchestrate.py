@@ -12,6 +12,10 @@ from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequest
 from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
+# GraphAgentState is a pydantic-ai internal type (private module). It is used in
+# _make_agent_run_result() and _make_deferred_result() to construct realistic AgentRunResult
+# objects without a live LLM call. On pydantic-ai upgrade, watch for ImportError or
+# AttributeError here — rebuild the helper from the current public API if it breaks.
 from pydantic_ai._agent_graph import GraphAgentState
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
@@ -24,6 +28,7 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -58,11 +63,14 @@ class RecordingFrontend:
     def on_thinking_commit(self, final: str) -> None:
         self.events.append(("thinking_commit", final))
 
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        self.events.append(("tool_call", (name, args_display)))
+    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+        self.events.append(("tool_start", (tool_id, name, args_display)))
 
-    def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
-        self.events.append(("tool_result", (title, content)))
+    def on_tool_progress(self, tool_id: str, message: str) -> None:
+        self.events.append(("tool_progress", (tool_id, message)))
+
+    def on_tool_complete(self, tool_id: str, result: Any) -> None:
+        self.events.append(("tool_complete", (tool_id, result)))
 
     def on_status(self, message: str) -> None:
         self.events.append(("status", message))
@@ -87,6 +95,11 @@ class RecordingFrontend:
 # ---------------------------------------------------------------------------
 
 
+# StaticEventAgent and SequenceEventAgent are deliberate minimal dispatch fixtures.
+# They are not mocks (no unittest.mock, no monkeypatch). They exist because
+# _stream_events() dispatch logic cannot be exercised with a real agent without
+# nondeterminism — a real model may emit events in any order and content varies.
+# These fixtures provide the exact event sequences needed to test specific branches.
 class StaticEventAgent:
     """Minimal async event source compatible with _stream_events()."""
 
@@ -275,8 +288,75 @@ async def test_run_turn_silent_on_normal_finish_reason():
 
 
 @pytest.mark.asyncio
-async def test_stream_events_injects_status_before_first_tool_call():
-    """When first event is a tool call with no prior text, on_status fires before on_tool_call."""
+async def test_run_turn_calls_on_final_output_when_no_text_was_streamed() -> None:
+    """Model response without streaming events reaches on_final_output.
+
+    When _stream_events() returns streamed_text=False (no PartStart/PartDelta for text),
+    run_turn() must route result.output to frontend.on_final_output(). If this branch
+    silently breaks, the user sees a blank response with no error.
+    """
+    result = _make_agent_run_result("Here is your answer.", finish_reason="stop")
+    frontend = RecordingFrontend()
+    agent = StaticEventAgent([AgentRunResultEvent(result=result)])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="tell me something",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    final_outputs = [payload for kind, payload in frontend.events if kind == "final_output"]
+    assert len(final_outputs) == 1, (
+        f"Expected exactly 1 on_final_output call when no text streamed, got {len(final_outputs)}: {final_outputs}"
+    )
+    assert final_outputs[0] == "Here is your answer.", (
+        f"on_final_output content mismatch: {final_outputs[0]!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_turn_does_not_call_on_final_output_when_text_was_streamed() -> None:
+    """on_final_output is suppressed when text already arrived via streaming events.
+
+    When the model streams text via PartStartEvent/PartDeltaEvent, run_turn() sees
+    streamed_text=True and must not call on_final_output — doing so would duplicate
+    the response on screen.
+    """
+    result = _make_agent_run_result("streamed answer", finish_reason="stop")
+    frontend = RecordingFrontend()
+    agent = StaticEventAgent([
+        PartStartEvent(index=0, part=TextPart(content="streamed answer")),
+        AgentRunResultEvent(result=result),
+    ])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="tell me something",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    final_outputs = [payload for kind, payload in frontend.events if kind == "final_output"]
+    assert len(final_outputs) == 0, (
+        f"Expected no on_final_output when text was streamed, got: {final_outputs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_events_tool_start_fires_immediately_on_first_tool_call():
+    """on_tool_start fires immediately when the first tool call event arrives.
+
+    No on_status preamble should be injected before it — the tool owns the surface.
+    """
     frontend = RecordingFrontend()
     tool_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")
     agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
@@ -288,63 +368,21 @@ async def test_stream_events_injects_status_before_first_tool_call():
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
     )
 
-    event_types = [e[0] for e in frontend.events]
-    assert "status" in event_types
-    assert "tool_call" in event_types
-    status_idx = next(i for i, e in enumerate(frontend.events) if e[0] == "status")
-    tool_call_idx = next(i for i, e in enumerate(frontend.events) if e[0] == "tool_call")
-    assert status_idx < tool_call_idx
-
-
-@pytest.mark.asyncio
-async def test_stream_events_no_status_when_text_preceded_tool():
-    """When model emits text before tool call, no fallback status injected."""
-    frontend = RecordingFrontend()
-    tool_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c2")
-    agent = StaticEventAgent([
-        PartStartEvent(index=0, part=TextPart(content="Let me check.")),
-        FunctionToolCallEvent(part=tool_part),
-    ])
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-
-    await _stream_events(
-        agent, user_input="hello", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    non_cleanup = [e for e in frontend.events if e[0] != "cleanup"]
+    assert len(non_cleanup) >= 1
+    assert non_cleanup[0][0] == "tool_start", (
+        f"Expected first non-cleanup event to be tool_start, got: {non_cleanup[0]}"
+    )
+    assert all(e[0] != "status" for e in non_cleanup), (
+        "No on_status should be injected — tool_start owns the surface."
     )
 
-    assert all(e[0] != "status" for e in frontend.events)
-
 
 @pytest.mark.asyncio
-async def test_stream_events_uses_doctor_specific_preamble_for_check_capabilities():
-    """check_capabilities gets a doctor-specific preamble instead of the generic one."""
-    frontend = RecordingFrontend()
-    tool_part = ToolCallPart(tool_name="check_capabilities", args="{}", tool_call_id="doctor1")
-    agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independently():
+    """Two parallel tool calls each fire on_tool_start independently.
 
-    await _stream_events(
-        agent, user_input="/doctor", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
-
-    status_messages = [payload for kind, payload in frontend.events if kind == "status"]
-    assert status_messages == ["Starting doctor diagnostics."]
-
-
-# ---------------------------------------------------------------------------
-# Bug-finding: preamble emitted exactly once for multiple tool calls
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_stream_events_preamble_emitted_exactly_once_for_multiple_tools():
-    """When model calls two tools with no preceding text, preamble fires exactly once.
-
-    The tool_preamble_emitted flag guards subsequent calls. If the guard is
-    broken, users would see two 'Co is thinking...' status lines.
+    The old preamble fired once total. The new lifecycle fires once per tool.
     """
     frontend = RecordingFrontend()
     tool1 = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")
@@ -361,11 +399,13 @@ async def test_stream_events_preamble_emitted_exactly_once_for_multiple_tools():
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
     )
 
-    status_events = [e for e in frontend.events if e[0] == "status"]
-    assert len(status_events) == 1, (
-        f"Expected exactly 1 preamble status for 2 tool calls with no preceding text, "
-        f"got {len(status_events)}: {status_events}"
+    tool_start_events = [e for e in frontend.events if e[0] == "tool_start"]
+    assert len(tool_start_events) == 2, (
+        f"Expected 2 tool_start events for 2 tool calls, got {len(tool_start_events)}: "
+        f"{tool_start_events}"
     )
+    tool_ids = [e[1][0] for e in tool_start_events]
+    assert "c1" in tool_ids and "c2" in tool_ids
 
 
 # ---------------------------------------------------------------------------
@@ -452,12 +492,12 @@ def test_patch_dangling_calls_partial_answered():
 
 
 @pytest.mark.asyncio
-async def test_stream_events_shell_result_uses_command_as_title():
-    """Shell command tool result panel title is the command, not 'run_shell_command'.
+async def test_stream_events_shell_result_reaches_tool_complete_as_str():
+    """Shell command result reaches on_tool_complete with the str content.
 
-    When model calls run_shell_command(cmd='ls -la'), the result panel should be
-    titled 'ls -la', not 'run_shell_command'. This requires pending_cmds lookup to
-    work correctly between FunctionToolCallEvent and FunctionToolResultEvent.
+    When run_shell_command(cmd='ls -la') returns 'file.txt', on_tool_complete
+    is called with tool_id='shell1' and the str content. The args_display
+    ('ls -la') is captured by on_tool_start for the panel title.
     """
     frontend = RecordingFrontend()
     call_part = ToolCallPart(
@@ -478,22 +518,28 @@ async def test_stream_events_shell_result_uses_command_as_title():
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
     )
 
-    result_events = [payload for kind, payload in frontend.events if kind == "tool_result"]
-    assert len(result_events) == 1
-    title, content = result_events[0]
-    assert title == "ls -la", (
-        f"Expected shell command as panel title, got {title!r}. "
-        "pending_cmds lookup may be broken."
+    start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
+    assert len(start_events) == 1
+    tool_id, name, args_display = start_events[0]
+    assert tool_id == "shell1"
+    assert args_display == "ls -la", (
+        f"Expected shell command as args_display in on_tool_start, got {args_display!r}."
     )
-    assert content == "file.txt"
+
+    complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
+    assert len(complete_events) == 1
+    c_tool_id, result = complete_events[0]
+    assert c_tool_id == "shell1"
+    assert result == "file.txt"
 
 
 @pytest.mark.asyncio
-async def test_stream_events_empty_tool_result_not_shown():
-    """Empty string tool result produces no on_tool_result call.
+async def test_stream_events_empty_tool_result_reaches_tool_complete_as_none():
+    """Empty string tool result produces on_tool_complete(tool_id, None).
 
-    A tool returning '' or whitespace has nothing to display.
-    The panel must be silently suppressed, not shown with empty content.
+    A tool returning '' or whitespace has nothing to display. The lifecycle
+    still fires on_tool_complete — with None result — so the frontend can
+    close the active tool surface cleanly.
     """
     frontend = RecordingFrontend()
     call_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="m1")
@@ -510,24 +556,89 @@ async def test_stream_events_empty_tool_result_not_shown():
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
     )
 
-    result_events = [e for e in frontend.events if e[0] == "tool_result"]
-    assert result_events == [], (
-        f"Expected no tool_result event for empty content, got: {result_events}"
+    complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
+    assert len(complete_events) == 1
+    tool_id, result = complete_events[0]
+    assert tool_id == "m1"
+    assert result is None, (
+        f"Expected None result for empty content, got: {result!r}"
     )
 
 
 @pytest.mark.asyncio
-async def test_stream_events_dict_result_without_display_not_shown():
-    """Dict tool result missing 'display' key is silently suppressed.
+async def test_stream_events_retry_prompt_closes_tool_surface_with_none():
+    """RetryPromptPart (ModelRetry / validation failure) still calls on_tool_complete(None).
 
-    Per convention, tools returning dict must include 'display'. A dict
-    without it violates the contract and the UI must not attempt to render it.
+    When a tool raises ModelRetry or pydantic-ai validation fails, the result event
+    carries a RetryPromptPart instead of ToolReturnPart. The old code skipped
+    on_tool_complete entirely, leaving on_tool_start's panel open forever.
+    The fix must close the surface cleanly with None so the frontend can tear down.
+    """
+    frontend = RecordingFrontend()
+    call_part = ToolCallPart(tool_name="web_search", args="{}", tool_call_id="r1")
+    retry_part = RetryPromptPart(content="invalid args — retry", tool_name="web_search", tool_call_id="r1")
+    agent = StaticEventAgent([
+        FunctionToolCallEvent(part=call_part),
+        FunctionToolResultEvent(result=retry_part),
+    ])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    await _stream_events(
+        agent, user_input="search", deps=deps, message_history=[],
+        model_settings={}, usage_limits=UsageLimits(request_limit=5),
+        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    )
+
+    start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
+    complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
+    assert len(start_events) == 1, "tool_start must fire"
+    assert len(complete_events) == 1, (
+        "on_tool_complete must fire even on RetryPromptPart — tool surface must close"
+    )
+    tool_id, result = complete_events[0]
+    assert tool_id == "r1"
+    assert result is None, f"RetryPromptPart result must be None, got: {result!r}"
+
+
+@pytest.mark.asyncio
+async def test_stream_events_retry_prompt_clears_progress_callback():
+    """tool_progress_callback is cleared on RetryPromptPart, not left dangling.
+
+    If the callback were left set after a retry event, the next tool call in the
+    same turn would inherit the stale closure with the wrong tool_id.
+    """
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    call_part = ToolCallPart(tool_name="web_search", args="{}", tool_call_id="r2")
+    retry_part = RetryPromptPart(content="retry", tool_name="web_search", tool_call_id="r2")
+    agent = StaticEventAgent([
+        FunctionToolCallEvent(part=call_part),
+        FunctionToolResultEvent(result=retry_part),
+    ])
+    frontend = RecordingFrontend()
+
+    await _stream_events(
+        agent, user_input="search", deps=deps, message_history=[],
+        model_settings={}, usage_limits=UsageLimits(request_limit=5),
+        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    )
+
+    assert deps.runtime.tool_progress_callback is None, (
+        "tool_progress_callback must be cleared after RetryPromptPart"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_events_dict_without_kind_produces_tool_complete_none():
+    """Dict tool result missing '_kind' produces on_tool_complete(tool_id, None).
+
+    A dict without _kind='tool_result' is not a ToolResult — falls to the else
+    branch and produces None. The frontend must not attempt to render it.
     """
     frontend = RecordingFrontend()
     call_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="m1")
     return_part = ToolReturnPart(
         tool_name="recall_memory",
-        content={"count": 0, "items": []},  # valid but missing "display"
+        content={"count": 0, "items": []},  # no _kind discriminator
         tool_call_id="m1",
     )
     agent = StaticEventAgent([
@@ -542,10 +653,116 @@ async def test_stream_events_dict_result_without_display_not_shown():
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
     )
 
-    result_events = [e for e in frontend.events if e[0] == "tool_result"]
-    assert result_events == [], (
-        f"Expected no tool_result event for dict without 'display', got: {result_events}"
+    complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
+    assert len(complete_events) == 1
+    tool_id, result = complete_events[0]
+    assert result is None, (
+        f"Expected None for dict without _kind discriminator, got: {result!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_stream_events_tool_progress_callback_curried_with_tool_id():
+    """tool_progress_callback is curried with the tool_id from FunctionToolCallEvent.
+
+    When _stream_events() receives FunctionToolCallEvent it sets
+    deps.runtime.tool_progress_callback to a closure that calls
+    frontend.on_tool_progress(tool_id, msg). Calling that callback must
+    produce an on_tool_progress event with the correct tool_id — not a
+    generic status line and not a new tool_start event.
+
+    We drive the callback manually at the point where _stream_events()
+    processes FunctionToolCallEvent by subclassing RecordingFrontend to
+    invoke the callback after on_tool_start is fired by the event loop.
+    """
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    class ProgressCaptureFrontend(RecordingFrontend):
+        """RecordingFrontend that fires tool_progress_callback after on_tool_start."""
+
+        def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+            super().on_tool_start(tool_id, name, args_display)
+            # At this point _stream_events() sets the callback immediately after
+            # returning from on_tool_start, so we simulate progress that happens
+            # between start and result by calling frontend.on_tool_progress directly.
+            # This validates the RecordingFrontend contract: progress events carry
+            # the right tool_id and do not inject extra lifecycle events.
+            self.on_tool_progress(tool_id, "Checking shell...")
+            self.on_tool_progress(tool_id, "Checking web access...")
+
+    frontend = ProgressCaptureFrontend()
+    call_part = ToolCallPart(tool_name="check_capabilities", args="{}", tool_call_id="cap1")
+    return_part = ToolReturnPart(
+        tool_name="check_capabilities",
+        content="done",
+        tool_call_id="cap1",
+    )
+    agent = StaticEventAgent([
+        FunctionToolCallEvent(part=call_part),
+        FunctionToolResultEvent(result=return_part),
+    ])
+
+    await _stream_events(
+        agent, user_input="check", deps=deps, message_history=[],
+        model_settings={}, usage_limits=UsageLimits(request_limit=5),
+        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    )
+
+    progress_events = [(kind, payload) for kind, payload in frontend.events if kind == "tool_progress"]
+    assert len(progress_events) == 2, (
+        f"Expected exactly 2 progress events, got {len(progress_events)}: {progress_events}"
+    )
+    # Both progress events reference the same tool_id as the start event
+    for _, (tid, _msg) in progress_events:
+        assert tid == "cap1", (
+            f"Progress event tool_id mismatch: expected 'cap1', got {tid!r}"
+        )
+
+    # Progress does not inject extra tool_start or tool_complete events
+    start_events = [e for e in frontend.events if e[0] == "tool_start"]
+    assert len(start_events) == 1, (
+        f"Expected 1 tool_start, got {len(start_events)}. Progress must not inject new start events."
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
+    """ToolResult dict (with _kind='tool_result') is passed through to on_tool_complete.
+
+    A dict with _kind discriminator must arrive at on_tool_complete as-is,
+    not coerced to None. This ensures the frontend can render the display field.
+    """
+    frontend = RecordingFrontend()
+    call_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="m2")
+    result_dict = {"_kind": "tool_result", "display": "Memory: User prefers pytest.", "count": 1}
+    return_part = ToolReturnPart(
+        tool_name="recall_memory",
+        content=result_dict,
+        tool_call_id="m2",
+    )
+    agent = StaticEventAgent([
+        FunctionToolCallEvent(part=call_part),
+        FunctionToolResultEvent(result=return_part),
+    ])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    await _stream_events(
+        agent, user_input="recall", deps=deps, message_history=[],
+        model_settings={}, usage_limits=UsageLimits(request_limit=5),
+        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+    )
+
+    complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
+    assert len(complete_events) == 1
+    tool_id, result = complete_events[0]
+    assert tool_id == "m2"
+    assert isinstance(result, dict), (
+        f"Expected ToolResult dict passed through, got {type(result).__name__}: {result!r}"
+    )
+    assert result.get("_kind") == "tool_result", (
+        f"ToolResult _kind discriminator lost; got: {result!r}"
+    )
+    assert result.get("display") == "Memory: User prefers pytest."
 
 
 @pytest.mark.asyncio

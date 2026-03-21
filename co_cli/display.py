@@ -1,7 +1,7 @@
-"""Themed terminal display — console, semantic styles, display helpers."""
+"""Themed terminal display — console, semantic styles, display helpers, FrontendProtocol, TerminalFrontend."""
 
 import signal
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.live import Live
@@ -12,6 +12,9 @@ from rich.text import Text
 from rich.theme import Theme
 
 from co_cli.config import settings
+
+if TYPE_CHECKING:
+    from co_cli.tools._result import ToolResultPayload
 
 # -- Theme palettes (keyed by theme name) ------------------------------------
 
@@ -161,12 +164,16 @@ class FrontendProtocol(Protocol):
         """Final thinking panel render."""
         ...
 
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        """Dim annotation when tool is invoked."""
+    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+        """Tool lifecycle: tool invocation started."""
         ...
 
-    def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
-        """Panel for tool output."""
+    def on_tool_progress(self, tool_id: str, message: str) -> None:
+        """Tool lifecycle: in-progress update from a running tool."""
+        ...
+
+    def on_tool_complete(self, tool_id: str, result: "ToolResultPayload") -> None:
+        """Tool lifecycle: tool completed with optional final result payload."""
         ...
 
     def on_status(self, message: str) -> None:
@@ -202,9 +209,11 @@ class TerminalFrontend:
         self._live: Live | None = None
         self._thinking_live: Live | None = None
         self._status_live: Live | None = None
-
-    def _is_transient_status(self, message: str) -> bool:
-        return message == "Starting doctor diagnostics." or message.startswith("Doctor:")
+        self._tool_live: Live | None = None
+        # tool_call_id → current display label (overwritten by progress messages)
+        self._active_tools: dict[str, str] = {}
+        # tool_call_id → stable original label (set once in on_tool_start, never overwritten)
+        self._tool_labels: dict[str, str] = {}
 
     def _clear_status_live(self) -> None:
         if self._status_live is not None:
@@ -251,39 +260,77 @@ class TerminalFrontend:
         if final:
             console.print(Text(final, style="thinking"))
 
-    def on_tool_call(self, name: str, args_display: str) -> None:
-        self._clear_status_live()
-        if args_display:
-            console.print(f"[dim]  {name}({args_display})[/dim]")
-        else:
-            console.print(f"[dim]  {name}()[/dim]")
+    def _stop_tool_live(self) -> None:
+        if self._tool_live is not None:
+            self._tool_live.stop()
+            self._tool_live = None
 
-    def on_tool_result(self, title: str, content: str | dict[str, Any]) -> None:
+    def _refresh_tool_live(self) -> None:
+        """Render all active tool labels as one Text block in a single Live instance."""
+        if not self._active_tools:
+            self._stop_tool_live()
+            return
+        lines = "\n".join(f"  {label}" for label in self._active_tools.values())
+        renderable = Text(lines, style="dim")
+        if self._tool_live is None:
+            self._tool_live = Live(
+                renderable, console=console, auto_refresh=False, transient=False,
+            )
+            self._tool_live.start()
+        else:
+            self._tool_live.update(renderable)
+        self._tool_live.refresh()
+
+    def _close_tool(self, tool_id: str) -> str:
+        """Pop both dicts and manage _tool_live. Returns stable label for panel title."""
+        self._active_tools.pop(tool_id, None)
+        label = self._tool_labels.pop(tool_id, tool_id)
+        if not self._active_tools:
+            self._stop_tool_live()
+        else:
+            self._refresh_tool_live()
+        return label
+
+    def _render_tool_panel(self, label: str, result: "ToolResultPayload") -> None:
+        """Single dispatch point for all result types.
+
+        Extracted so new result types (v2) require one edit here, not in on_tool_complete.
+        """
+        if isinstance(result, str) and result.strip():
+            console.print(Panel(result.rstrip(), title=f"$ {label}", border_style="shell"))
+        elif isinstance(result, dict) and result.get("_kind") == "tool_result":
+            display_text = result.get("display", "")
+            if display_text:
+                console.print(Panel(display_text, title=label, border_style="shell"))
+
+    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+        """Tool lifecycle: tool invocation started."""
         self._clear_status_live()
-        if isinstance(content, dict) and "display" in content:
-            console.print(Panel(
-                content["display"], title=title, border_style="shell",
-            ))
-        elif isinstance(content, str):
-            console.print(Panel(
-                content.rstrip(), title=f"$ {title}", border_style="shell",
-            ))
+        label = args_display if args_display else name
+        self._active_tools[tool_id] = label
+        self._tool_labels[tool_id] = label
+        self._refresh_tool_live()
+
+    def on_tool_progress(self, tool_id: str, message: str) -> None:
+        """Tool lifecycle: in-progress update from a running tool."""
+        self._active_tools[tool_id] = message
+        self._refresh_tool_live()
+
+    def on_tool_complete(self, tool_id: str, result: "ToolResultPayload") -> None:
+        """Tool lifecycle: tool completed with optional final result payload."""
+        label = self._close_tool(tool_id)
+        self._render_tool_panel(label, result)
 
     def on_status(self, message: str) -> None:
-        if self._is_transient_status(message):
-            renderable = Text(message, style="dim")
-            if self._status_live is None:
-                self._status_live = Live(
-                    renderable, console=console, auto_refresh=False, transient=False,
-                )
-                self._status_live.start()
-                self._status_live.refresh()
-            else:
-                self._status_live.update(renderable)
-                self._status_live.refresh()
-            return
-        self._clear_status_live()
-        console.print(f"[dim]{message}[/dim]")
+        renderable = Text(message, style="dim")
+        if self._status_live is None:
+            self._status_live = Live(
+                renderable, console=console, auto_refresh=False, transient=False,
+            )
+            self._status_live.start()
+        else:
+            self._status_live.update(renderable)
+        self._status_live.refresh()
 
     def on_final_output(self, text: str) -> None:
         self._clear_status_live()
@@ -308,12 +355,15 @@ class TerminalFrontend:
 
     def cleanup(self) -> None:
         """Stop any active Live instances to restore terminal state."""
-        for lv in (self._status_live, self._thinking_live, self._live):
+        for lv in (self._tool_live, self._status_live, self._thinking_live, self._live):
             if lv:
                 try:
                     lv.stop()
                 except Exception:
                     pass
+        self._tool_live = None
         self._status_live = None
         self._thinking_live = None
         self._live = None
+        self._active_tools.clear()
+        self._tool_labels.clear()

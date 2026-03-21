@@ -101,7 +101,6 @@ class _StreamState:
     last_thinking_render_at: float = 0.0
     thinking_active: bool = False
     streamed_text: bool = False
-    tool_preamble_emitted: bool = False
 
 
 def _flush_thinking(state: _StreamState, frontend: FrontendProtocol) -> None:
@@ -248,27 +247,15 @@ def _patch_dangling_tool_calls(
 
 
 # ---------------------------------------------------------------------------
-# Tool preamble — fallback status when model emits no text before first tool call
+# _tool_args_display — per-tool args extraction for on_tool_start
 # ---------------------------------------------------------------------------
 
-_TOOL_PREAMBLE: dict[str, str] = {
-    "check_capabilities": "Starting doctor diagnostics.",
-    "recall_memory": "Checking saved context before answering.",
-    "web_search": "Looking up current sources.",
-    "web_fetch": "Reading that source for details.",
-    "run_shell_command": "Running a quick check.",
-    "save_memory": "Saving that to memory.",
-    "list_memories": "Checking saved context.",
-    "search_notes": "Searching notes.",
-    "read_note": "Reading that note.",
-    "search_drive_files": "Checking Drive.",
-    "list_emails": "Checking email.",
-    "list_calendar_events": "Checking calendar.",
-}
 
-
-def _tool_preamble_message(tool_name: str) -> str:
-    return _TOOL_PREAMBLE.get(tool_name, "Running a quick check before answering.")
+def _tool_args_display(tool_name: str, part: ToolCallPart) -> str:
+    """Isolate per-tool args extraction so FunctionToolCallEvent handler stays uniform."""
+    if tool_name == "run_shell_command":
+        return part.args_as_dict().get("cmd", "")
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +272,6 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
 
     Returns (result, streamed_text).
     """
-    pending_cmds: dict[str, str] = {}
     result = None
     state = _StreamState()
 
@@ -322,30 +308,31 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
 
             if isinstance(event, FunctionToolCallEvent):
                 _flush_for_tool_output(state, frontend)
-                tool = event.part.tool_name
-                # Fallback: if model emitted no text before the first tool call, inject a
-                # user-visible status line so there is no perceived silence.
-                if not state.streamed_text and not state.tool_preamble_emitted:
-                    frontend.on_status(_tool_preamble_message(tool))
-                    state.tool_preamble_emitted = True
-                if tool == "run_shell_command":
-                    cmd = event.part.args_as_dict().get("cmd", "")
-                    pending_cmds[event.tool_call_id] = cmd
-                    frontend.on_tool_call(tool, cmd)
-                else:
-                    frontend.on_tool_call(tool, "")
+                tool_id = event.tool_call_id
+                name = event.part.tool_name
+                args_display = _tool_args_display(name, event.part)
+                frontend.on_tool_start(tool_id, name, args_display)
+                deps.runtime.tool_progress_callback = (
+                    lambda msg, _tid=tool_id: frontend.on_tool_progress(_tid, msg)
+                )
                 continue
 
             if isinstance(event, FunctionToolResultEvent):
                 _flush_for_tool_output(state, frontend)
+                deps.runtime.tool_progress_callback = None
+                tool_id = event.tool_call_id
                 if not isinstance(event.result, ToolReturnPart):
+                    # RetryPromptPart: tool raised ModelRetry or validation failed.
+                    # Close the tool surface cleanly — no result to display.
+                    frontend.on_tool_complete(tool_id, None)
                     continue
                 content = event.result.content
                 if isinstance(content, str) and content.strip():
-                    title = pending_cmds.get(event.tool_call_id, event.result.tool_name)
-                    frontend.on_tool_result(title, content)
-                elif isinstance(content, dict) and "display" in content:
-                    frontend.on_tool_result(event.result.tool_name, content)
+                    frontend.on_tool_complete(tool_id, content)
+                elif isinstance(content, dict) and content.get("_kind") == "tool_result":
+                    frontend.on_tool_complete(tool_id, content)
+                else:
+                    frontend.on_tool_complete(tool_id, None)
                 continue
 
             if isinstance(event, AgentRunResultEvent):
@@ -439,7 +426,6 @@ async def run_turn(
     # Reset turn-scoped safety state (doom loop + shell reflection tracking)
     from co_cli.context._history import SafetyState
     deps.runtime.safety_state = SafetyState()
-    deps.runtime.status_callback = frontend.on_status
 
     try:
         result = None
@@ -533,7 +519,7 @@ async def run_turn(
                         message_history=msgs + [grace_msg],
                         model_settings=model_settings,
                         usage_limits=UsageLimits(request_limit=1),
-                        verbose=verbose, frontend=frontend, model=model,
+                        verbose=verbose, frontend=frontend,
                     )
                     message_history = grace_result.all_messages()
                     if not grace_streamed and isinstance(grace_result.output, str):
@@ -652,7 +638,7 @@ async def run_turn(
                     outcome="continue",
                 )
     finally:
-        deps.runtime.status_callback = None
+        deps.runtime.tool_progress_callback = None
 
 
 async def run_turn_with_fallback(

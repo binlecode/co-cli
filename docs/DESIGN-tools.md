@@ -4,9 +4,9 @@
 
 ## 1. What & How
 
-Native tools are Python functions registered on the pydantic-ai `Agent` via `_register()` in `agent.py`. Every tool receives a `RunContext[CoDeps]` as its first argument and returns `dict[str, Any]` with a `display` field (pre-formatted string shown to the user) plus metadata fields.
+Native tools are Python functions registered on the pydantic-ai `Agent` via `_register()` in `agent.py`. Every tool receives a `RunContext[CoDeps]` as its first argument and returns a `ToolResult` (from `co_cli/tools/_result.py`) via `make_result(display, **metadata)` — a `TypedDict` with a `_kind="tool_result"` discriminator, a `display` field (pre-formatted string shown to the user), and optional metadata fields.
 
-Tool progress reporting is opt-in. Tools do not write to the terminal directly. When a tool has meaningful multi-phase latency, it may emit progress through turn-scoped runtime state (`ctx.deps.runtime.status_callback`) as structured `StatusEvent` payloads and let the frontend render those messages.
+Tool progress reporting is opt-in. Tools do not write to the terminal directly. When a tool has meaningful multi-phase latency, it may emit progress through turn-scoped runtime state (`ctx.deps.runtime.tool_progress_callback`) and let the frontend render those messages through the `on_tool_progress` lifecycle callback.
 
 Tools are grouped into ten families:
 
@@ -46,7 +46,7 @@ Four phases: discovery at session startup, then per-turn: request, approval (def
 main.py:build_chat_app()
   ├─ build_agent(config, resolved)                          # agent.py:84
   │    ├─ MCPServerStdio/StreamableHTTP/SSE(...)            # one per config.mcp_servers entry
-  │    │    └─ .approval_required()                         # wraps server when cfg.approval=="auto"
+  │    │    └─ .approval_required()                         # wraps server when cfg.approval=="ask"
   │    ├─ Agent(resolved.model, deps_type=CoDeps,           # pydantic-ai agent construction
   │    │        output_type=[str, DeferredToolRequests],
   │    │        toolsets=mcp_toolsets)
@@ -109,11 +109,12 @@ _stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:4
        │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
        │    ├─ ctx.deps.session.*    (tool_approvals, skill_grants, todos)
-       │    └─ ctx.deps.runtime.*    (turn_usage, status_callback, safety_state)
-       │    └─ return dict[str, Any]
+       │    └─ ctx.deps.runtime.*    (turn_usage, tool_progress_callback, safety_state)
+       │    └─ return ToolResult     (make_result(display, **metadata) from _result.py)
+       │         ├─ "_kind"          "tool_result" discriminator
        │         ├─ "display"        pre-formatted string shown to the user
        │         └─ metadata fields  (count, task_id, article_id, ...)
-       │    └─ FunctionToolResultEvent → frontend.on_tool_result(name, content["display"])
+       │    └─ FunctionToolResultEvent → frontend.on_tool_complete(tool_id, result)
        └─ [rejected] pydantic-ai notifies model that tool_call_id was denied
 ```
 
@@ -153,11 +154,12 @@ Eligible tools (those passing both conditions) are auto-approved for the active 
 
 ### Return Shape
 
-Every user-facing tool returns `dict[str, Any]` with:
+Every user-facing tool returns a `ToolResult` via `make_result(display, **metadata)` (from `co_cli/tools/_result.py`):
+- `_kind` — `"tool_result"` discriminator (used by `_stream_events()` to route to `on_tool_complete`)
 - `display` — pre-formatted string, shown directly to the user
 - metadata fields (`count`, `path`, `task_id`, `article_id`, etc.)
 
-Tools returning raw strings (e.g. `read_note`) are the exception — legacy; avoid this pattern.
+All tools must return `make_result()`. Never return a raw `str`, bare `dict`, or `None`.
 
 ### Error Classes
 
@@ -301,22 +303,22 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 |------|----------|---------------|---------|
 | `todo_write` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
 | `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
-| `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.status_callback)`; returns probe results, active integrations, reasoning chain, skill grants, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped status callback is present, it emits staged `/doctor` progress as transient `StatusEvent(key="doctor")` updates such as provider, integration, knowledge, skills, and per-MCP-server checks |
+| `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.tool_progress_callback)`; returns probe results, active integrations, reasoning chain, skill grants, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped progress callback is present, it emits staged `/doctor` progress messages such as provider, integration, knowledge, skills, and per-MCP-server checks through `on_tool_progress` |
 
 `check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
 
 ```text
-run_turn() sets deps.runtime.status_callback = frontend.on_status
-check_capabilities() reads ctx.deps.runtime.status_callback
+_stream_events() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
+check_capabilities() reads ctx.deps.runtime.tool_progress_callback
 check_runtime(progress=...) emits phase messages
-TerminalFrontend renders those status lines in the CLI
+TerminalFrontend renders those progress lines in the CLI
 ```
 
 This pattern is intentionally optional:
 - fast tools stay silent and return only their final `display`
 - long-running or multi-phase tools may emit progress when the intermediate states are user-meaningful
 - tools never import display code or print directly to the terminal
-- plain string statuses remain valid, but structured `StatusEvent` is the preferred way to request transient live-line rendering
+- plain string progress messages are passed directly through `tool_progress_callback`
 
 #### Delegation (`tools/delegation.py`)
 
@@ -345,22 +347,22 @@ MCP servers extend the native tool surface at session start. Each server is conf
     "args": [...],
     "timeout": 5,
     "env": {...},
-    "approval": "auto",     // "auto" = always deferred; "never" = always auto
-    "prefix": "ns_"         // optional tool name prefix to avoid collisions
+    "approval": "ask",      // "ask" = always deferred; "auto" = always auto
+    "prefix": "ns_"         // tool name prefix; when omitted, server name is used as prefix
   }
 }
 ```
 
 **Transport:** `command`+`args` launches a stdio subprocess; `url` connects to a remote HTTP server. `command` and `url` are mutually exclusive.
 
-**Approval inheritance:** MCP tools use the same `DeferredToolRequests` mechanism as native tools. `approval="auto"` defers all calls from that server; `approval="never"` auto-approves them.
+**Approval inheritance:** MCP tools use the same `DeferredToolRequests` mechanism as native tools. `approval="ask"` defers all calls from that server (prompts the user); `approval="auto"` auto-approves them.
 
 **Default servers** (shipped, gracefully skipped when `npx` is absent):
 
 | Server | Tool prefix | Approval |
 |--------|-------------|---------|
-| `github` | (none) | `auto` |
-| `context7` | (none) | `never` |
+| `github` | `github` | `ask` |
+| `context7` | `context7` | `auto` |
 
 ## 3. Config
 
@@ -411,6 +413,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `record_approval_choice()` |
 | `co_cli/tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `prune_stale()` |
 | `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
+| `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |
 | `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` — shared error helpers |
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `co_cli/tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |

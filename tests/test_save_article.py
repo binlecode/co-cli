@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
@@ -683,7 +684,8 @@ def test_save_article_long_article_second_half_retrievable(tmp_path):
     idx.close()
 
 
-def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp_path):
+@pytest.mark.asyncio
+async def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp_path):
     """Real whole-flow hybrid retrieval must populate vec rows using configured embedder settings."""
     from dataclasses import replace
 
@@ -710,20 +712,22 @@ def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     idx = ctx.deps.services.knowledge_index
 
-    _run(save_article(
-        ctx,
-        content="wholeflow-real-embedder-token alpha content for configured provider",
-        title="Alpha Real Embedder Doc",
-        origin_url="https://example.com/real-embedder-alpha",
-        tags=["reference"],
-    ))
-    _run(save_article(
-        ctx,
-        content="wholeflow-real-embedder-token beta content for configured provider",
-        title="Beta Real Embedder Doc",
-        origin_url="https://example.com/real-embedder-beta",
-        tags=["reference"],
-    ))
+    async with asyncio.timeout(15):
+        await save_article(
+            ctx,
+            content="wholeflow-real-embedder-token alpha content for configured provider",
+            title="Alpha Real Embedder Doc",
+            origin_url="https://example.com/real-embedder-alpha",
+            tags=["reference"],
+        )
+    async with asyncio.timeout(15):
+        await save_article(
+            ctx,
+            content="wholeflow-real-embedder-token beta content for configured provider",
+            title="Beta Real Embedder Doc",
+            origin_url="https://example.com/real-embedder-beta",
+            tags=["reference"],
+        )
 
     docs_vec_count = idx._conn.execute(f"SELECT COUNT(*) FROM {idx._docs_vec_table}").fetchone()[0]
     chunks_vec_count = idx._conn.execute(f"SELECT COUNT(*) FROM {idx._chunks_vec_table}").fetchone()[0]
@@ -731,12 +735,14 @@ def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_rows(tmp
     assert docs_vec_count >= 2, "Configured embedder must populate docs_vec_{dims} for hybrid retrieval"
     assert chunks_vec_count >= 2, "Configured embedder must populate chunks_vec_{dims} for hybrid retrieval"
 
-    result = _run(search_knowledge(ctx, "wholeflow-real-embedder-token"))
+    async with asyncio.timeout(15):
+        result = await search_knowledge(ctx, "wholeflow-real-embedder-token")
     assert result["count"] >= 2
     idx.close()
 
 
-def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_path):
+@pytest.mark.asyncio
+async def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_path):
     """Real whole-flow hybrid retrieval must apply the configured reranker, not fallback passthrough."""
     from dataclasses import replace
 
@@ -763,22 +769,25 @@ def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_pat
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     idx_none = ctx.deps.services.knowledge_index
 
-    _run(save_article(
-        ctx,
-        content="wholeflow-real-reranker-token alpha content for configured reranker",
-        title="Alpha Real Reranker Doc",
-        origin_url="https://example.com/real-reranker-alpha",
-        tags=["reference"],
-    ))
-    _run(save_article(
-        ctx,
-        content="wholeflow-real-reranker-token beta content for configured reranker",
-        title="Beta Real Reranker Doc",
-        origin_url="https://example.com/real-reranker-beta",
-        tags=["reference"],
-    ))
+    async with asyncio.timeout(15):
+        await save_article(
+            ctx,
+            content="wholeflow-real-reranker-token alpha content for configured reranker",
+            title="Alpha Real Reranker Doc",
+            origin_url="https://example.com/real-reranker-alpha",
+            tags=["reference"],
+        )
+    async with asyncio.timeout(15):
+        await save_article(
+            ctx,
+            content="wholeflow-real-reranker-token beta content for configured reranker",
+            title="Beta Real Reranker Doc",
+            origin_url="https://example.com/real-reranker-beta",
+            tags=["reference"],
+        )
 
-    baseline = _run(search_knowledge(ctx, "wholeflow-real-reranker-token"))
+    async with asyncio.timeout(15):
+        baseline = await search_knowledge(ctx, "wholeflow-real-reranker-token")
     assert baseline["count"] >= 2
     idx_none.close()
 
@@ -789,7 +798,8 @@ def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(tmp_pat
         config=config,
     )
     ctx_real = RunContext(deps=deps_real, model=_AGENT.model, usage=RunUsage())
-    reranked = _run(search_knowledge(ctx_real, "wholeflow-real-reranker-token"))
+    async with asyncio.timeout(15):
+        reranked = await search_knowledge(ctx_real, "wholeflow-real-reranker-token")
 
     baseline_scores = [r["score"] for r in baseline["results"]]
     reranked_scores = [r["score"] for r in reranked["results"]]
