@@ -162,18 +162,31 @@ def truncate_tool_returns(
     safe_tail = 2
     boundary = max(0, len(messages) - safe_tail)
 
-    for msg in messages[:boundary]:
-        if not isinstance(msg, ModelRequest):
+    out: list[ModelMessage] = []
+    for i, msg in enumerate(messages):
+        if i >= boundary or not isinstance(msg, ModelRequest):
+            out.append(msg)
             continue
+        new_parts = []
+        modified = False
         for part in msg.parts:
-            if not isinstance(part, ToolReturnPart):
-                continue
-            text, length = _content_length(part.content)
-            if length > threshold:
-                truncated = text[:threshold] + f"\n[…truncated, {length} chars total]"
-                part.content = truncated
-
-    return messages
+            if isinstance(part, ToolReturnPart):
+                text, length = _content_length(part.content)
+                if length > threshold:
+                    truncated = text[:threshold] + f"\n[…truncated, {length} chars total]"
+                    new_parts.append(ToolReturnPart(
+                        tool_name=part.tool_name,
+                        content=truncated,
+                        tool_call_id=part.tool_call_id,
+                    ))
+                    modified = True
+                    continue
+            new_parts.append(part)
+        if modified:
+            out.append(ModelRequest(parts=new_parts))
+        else:
+            out.append(msg)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -415,19 +428,6 @@ async def truncate_history_window(
             "Sliding window: using pre-computed summary (%d messages)",
             dropped_count,
         )
-    else:
-        # Fall through to inline summarization
-        fallback = ResolvedModel(model=ctx.model, settings=None)
-        resolved = (
-            ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, fallback)
-            if ctx.deps.services.model_registry else fallback
-        )
-        summary_text = await _run_summarization_with_policy(
-            dropped, resolved,
-            max_retries=ctx.deps.config.model_http_retries,
-            personality_active=False,
-        )
-
     if summary_text is not None:
         summary_marker = ModelRequest(parts=[
             UserPromptPart(
@@ -438,7 +438,7 @@ async def truncate_history_window(
         ])
         log.info("Sliding window: summarised %d messages", dropped_count)
     else:
-        log.warning("Sliding window: summarisation failed, using static marker")
+        log.warning("Sliding window: precomputed summary absent or stale, using static marker")
         summary_marker = _static_marker(dropped_count)
 
     return messages[:head_end] + [summary_marker] + messages[tail_start:]
@@ -613,6 +613,9 @@ async def inject_opening_context(
 
     # Inject as a system message at the end of the message list
     memory_content = result["display"]
+    max_chars = ctx.deps.config.memory_injection_max_chars
+    if len(memory_content) > max_chars:
+        memory_content = memory_content[:max_chars]
     injection = ModelRequest(parts=[
         SystemPromptPart(
             content=f"Relevant memories:\n{memory_content}",

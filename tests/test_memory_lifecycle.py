@@ -90,19 +90,20 @@ def _make_deps(
 
 
 def test_update_action_sets_updated_timestamp(tmp_path: Path):
-    """apply_plan_atomically UPDATE refreshes the entry's updated timestamp."""
+    """apply_plan_atomically UPDATE writes new_content into the target entry."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     entry = _seed_memory(memory_dir, 1, "User prefers dark mode", tags=["preference"])
 
     plan = ConsolidationPlan(actions=[MemoryAction(action="UPDATE", target_alias="M1")])
     alias_map = {"M1": entry}
-    deps = _make_deps(memory_dir=memory_dir)
+    new_content = "User prefers light mode (changed from dark)"
 
-    apply_plan_atomically(plan, alias_map, deps)
+    apply_plan_atomically(plan, alias_map, new_content)
 
     reloaded = _load_memories(memory_dir)
     m1 = [e for e in reloaded if e.id == 1][0]
     assert m1.updated is not None, "UPDATE action must set the updated timestamp"
+    assert "light mode" in m1.content, "UPDATE action must write new_content into entry"
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +123,8 @@ def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path):
         MemoryAction(action="DELETE", target_alias="M2"),
     ])
     alias_map = {"M1": non_protected, "M2": protected}
-    deps = _make_deps(memory_dir=memory_dir)
 
-    apply_plan_atomically(plan, alias_map, deps)
+    apply_plan_atomically(plan, alias_map, "irrelevant content")
 
     assert not non_protected.path.exists(), "Non-protected memory should be deleted"
     assert protected.path.exists(), "Protected memory must survive DELETE action"

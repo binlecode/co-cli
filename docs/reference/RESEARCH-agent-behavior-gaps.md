@@ -1,6 +1,10 @@
 # RESEARCH: agent-behavior-gaps — Remaining Behavioral Gaps for co-cli
 _Date: 2026-03-16_
 
+Status: forward-looking
+Aspect: behavior quality and evidence quality
+Pydantic-AI patterns: reflection, critique, retrieval quality
+
 This document keeps only the non-overlapping conclusions from the earlier agentic-design-patterns review.
 
 Baseline coverage that is now better handled elsewhere has been removed:

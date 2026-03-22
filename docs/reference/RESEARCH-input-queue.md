@@ -1,5 +1,9 @@
 # RESEARCH: Input Queue — Peer System Comparison
 
+Status: forward-looking
+Aspect: interaction loop and queued user turns
+Pydantic-AI patterns: turn ownership around `run_turn()` and `run_stream_events`
+
 ## Executive Summary
 
 This review compares user-input queue behavior in `codex`, `gemini-cli`, and `openclaw` and proposes an adoption plan for `co-cli`.

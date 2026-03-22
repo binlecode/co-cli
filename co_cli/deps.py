@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal, NamedTuple
 
 from pydantic_ai.usage import RunUsage
 
@@ -18,6 +18,7 @@ from co_cli.config import (
     DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
     DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL,
     DEFAULT_KNOWLEDGE_EMBED_API_URL,
+    DEFAULT_SUBAGENT_SCOPE_CHARS,
     DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
     DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
     DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
@@ -28,6 +29,7 @@ from co_cli.config import (
     DEFAULT_MEMORY_CONSOLIDATION_TOP_K,
     DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS,
     DEFAULT_MEMORY_AUTO_SAVE_TAGS,
+    DEFAULT_MEMORY_INJECTION_MAX_CHARS,
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
     DEFAULT_KNOWLEDGE_CHUNK_OVERLAP,
     DEFAULT_SHELL_MAX_TIMEOUT,
@@ -52,7 +54,6 @@ from co_cli.config import (
 from co_cli.tools._shell_backend import ShellBackend
 
 # CoConfig-specific path defaults (relative to cwd; overridden at runtime in create_deps())
-DEFAULT_EXEC_APPROVALS_PATH = Path(".co-cli/exec-approvals.json")
 DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
 DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
@@ -63,6 +64,22 @@ if TYPE_CHECKING:
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
     from co_cli.context._history import OpeningContextState, SafetyState
+
+
+class SessionApprovalRule(NamedTuple):
+    """A session-scoped approval rule recorded when the user chooses 'a'.
+
+    kind: category of the approved subject
+      "shell"    — shell utility (value = first token, e.g. "git")
+      "path"     — file write/edit (value = "{tool_name}:{parent_dir}", e.g. "write_file:/proj/src")
+      "domain"   — web fetch (value = hostname, e.g. "docs.python.org")
+      "mcp_tool" — MCP tool (value = "server_prefix:tool_name")
+      "tool"     — generic fallback (not actually stored; can_remember=False)
+    value: the scoped key used for matching future requests
+    """
+
+    kind: Literal["shell", "path", "domain", "mcp_tool", "tool"]
+    value: str
 
 
 @dataclass
@@ -93,7 +110,6 @@ class CoConfig:
     google_credentials_path: str | None = None
     shell_safe_commands: list[str] = field(default_factory=list)
     shell_max_timeout: int = DEFAULT_SHELL_MAX_TIMEOUT
-    exec_approvals_path: Path = field(default_factory=lambda: DEFAULT_EXEC_APPROVALS_PATH)
     skills_dir: Path = field(default_factory=lambda: DEFAULT_SKILLS_DIR)
     memory_dir: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR)
     library_dir: Path = field(default_factory=lambda: DEFAULT_LIBRARY_DIR)
@@ -129,6 +145,8 @@ class CoConfig:
     memory_consolidation_top_k: int = DEFAULT_MEMORY_CONSOLIDATION_TOP_K
     memory_consolidation_timeout_seconds: int = DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS
     memory_auto_save_tags: list[str] = field(default_factory=lambda: list(DEFAULT_MEMORY_AUTO_SAVE_TAGS))
+    memory_injection_max_chars: int = DEFAULT_MEMORY_INJECTION_MAX_CHARS
+    subagent_scope_chars: int = DEFAULT_SUBAGENT_SCOPE_CHARS
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
@@ -192,7 +210,6 @@ class CoConfig:
             google_credentials_path=s.google_credentials_path,
             shell_safe_commands=list(s.shell_safe_commands),
             shell_max_timeout=s.shell_max_timeout,
-            exec_approvals_path=cwd / ".co-cli" / "exec-approvals.json",
             memory_dir=cwd / ".co-cli" / "memory",
             skills_dir=cwd / ".co-cli" / "skills",
             session_path=cwd / ".co-cli" / "session.json",
@@ -213,6 +230,8 @@ class CoConfig:
             memory_consolidation_top_k=s.memory_consolidation_top_k,
             memory_consolidation_timeout_seconds=s.memory_consolidation_timeout_seconds,
             memory_auto_save_tags=list(s.memory_auto_save_tags),
+            memory_injection_max_chars=s.memory_injection_max_chars,
+            subagent_scope_chars=s.subagent_scope_chars,
             knowledge_chunk_size=s.knowledge_chunk_size,
             knowledge_chunk_overlap=s.knowledge_chunk_overlap,
             personality=s.personality,
@@ -260,7 +279,7 @@ class CoSessionState:
 
     google_creds: Any | None = field(default=None, repr=False)
     google_creds_resolved: bool = False
-    session_tool_approvals: set[str] = field(default_factory=set)
+    session_approval_rules: list[SessionApprovalRule] = field(default_factory=list)
     active_skill_env: dict[str, str] = field(default_factory=dict)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)

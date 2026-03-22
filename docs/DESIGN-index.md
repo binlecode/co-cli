@@ -134,6 +134,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `memory_consolidation_top_k` | `CO_MEMORY_CONSOLIDATION_TOP_K` | `5` | Recent memories considered for LLM consolidation |
 | `memory_consolidation_timeout_seconds` | `CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS` | `20` | Per-call timeout for consolidation LLM calls |
 | `memory_auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["correction","preference"]` | Allowlist of signal tags eligible for auto-save; empty list disables all auto-signal saves |
+| `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Cap on injected recall content in `inject_opening_context` (chars) |
 | `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Character window per chunk (0 = disable chunking) |
 | `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Character overlap between adjacent chunks |
 | `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life (days) for temporal decay scoring in FTS-backed recall (`fts5` and `hybrid`) |
@@ -143,6 +144,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `background_task_retention_days` | `CO_BACKGROUND_TASK_RETENTION_DAYS` | `7` | Days to keep completed/failed/cancelled task data |
 | `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Clean up old tasks on startup |
 | `background_task_inactivity_timeout` | `CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT` | `0` | Auto-cancel if no output for N seconds (0 = disabled) |
+| `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | Max chars of primary input captured as `scope` in sub-agent tool results |
 
 ---
 
@@ -162,7 +164,6 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
     ├── memory/            # Memory files (kind: memory); articles stored in ~/.local/share/co-cli/library/
     ├── skills/            # Project-local skill .md files (override package-default on name collision)
     ├── session.json       # Session persistence (mode 0o600): session_id, created_at, last_used_at, compaction_count
-    ├── exec-approvals.json # Persistent exec approval patterns (mode 0o600)
     └── settings.json      # Project configuration (overrides user)
 ```
 
@@ -175,16 +176,15 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup |
 | 1. Agents + Orchestration | `bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — startup assembly and inline wakeup steps |
 | 1. Agents + Orchestration | `agent.py` | `build_agent()` factory — model selection, tool registration, system prompt |
-| 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
-| 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `format_tool_call_description()`, `decode_tool_args()` |
-| 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext` |
+| 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_run_stream_turn()`, `_collect_deferred_tool_approvals()` |
+| 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
+| 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext`; `SessionApprovalRule` frozen dataclass |
 | 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, mcp_probes, summary_lines); `check_agent_llm`, `check_settings` |
 | 2. Runtime Deps + Session State | `context/_session.py` | Session persistence: `new_session()`, `load_session()`, `save_session()`, `is_fresh()`, `touch_session()`, `increment_compaction()` |
 | 2. Runtime Deps + Session State | `context/_history.py` | History processors and `summarize_messages()` |
-| 2. Runtime Deps + Session State | `tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `update_last_used()`, `prune_stale()` |
-| 3. Tool Layer | `tools/shell.py` | `run_shell_command` — approval-gated shell execution |
+| 3. Tool Layer | `tools/shell.py` | `run_shell_command` — conditionally approved shell execution (command-scoped policy) |
 | 3. Tool Layer | `tools/files.py` | Native file tools: `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
-| 3. Tool Layer | `tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` — sub-agent delegation tools |
+| 3. Tool Layer | `tools/subagent.py` | `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent` — sub-agent tools |
 | 3. Tool Layer | `tools/todo.py` | Session todo tools: `todo_write`, `todo_read` |
 | 3. Tool Layer | `tools/obsidian.py` | `search_notes`, `list_notes`, `read_note` |
 | 3. Tool Layer | `tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
@@ -195,13 +195,13 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 3. Tool Layer | `tools/task_control.py` | Background task tools: `start_background_task` (approval), `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | 3. Tool Layer | `tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | 3. Tool Layer | `tools/_errors.py` | Shared error helpers: `terminal_error()`, `http_status_code()` |
-| 3. Tool Layer | `tools/_shell_backend.py` | `ShellBackend` — approval-gated subprocess execution |
+| 3. Tool Layer | `tools/_shell_backend.py` | `ShellBackend` — subprocess execution backend used by command-scoped shell approval policy |
 | 3. Tool Layer | `tools/_shell_policy.py` | Shell policy engine: `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | 3. Tool Layer | `tools/_approval.py` | Shell safe-command classification (`_is_safe_command`) |
 | 3. Tool Layer | `tools/_shell_env.py` | Shell env sanitizer + process-group kill helpers (`restricted_env`, `kill_process_tree`) |
 | 3. Tool Layer | `tools/_background.py` | `TaskStatus` enum, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) — background task execution |
 | 2. Runtime Deps + Session State | `_model_factory.py` | `ResolvedModel` (model + settings pair), `ModelRegistry` (session-scoped role registry built via `ModelRegistry.from_config(config)`), `build_model(model_entry, provider, llm_host, api_key)` — provider-aware model factory |
-| 3. Tool Layer | `tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
+| 3. Tool Layer | `tools/_subagent_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — sub-agent helpers |
 | 4. Knowledge + Memory | `knowledge/_index_store.py` | FTS5/hybrid index for memory/article/obsidian/drive search; `index_chunks`, `remove_chunks` |
 | 4. Knowledge + Memory | `knowledge/_chunker.py` | `chunk_text()` — paragraph-boundary chunker with token estimation and overlap; used by all non-memory index paths |
 | 4. Knowledge + Memory | `tools/articles.py` | Article/knowledge tools: `save_article`, `search_knowledge`, `read_article_detail`, `recall_article` |

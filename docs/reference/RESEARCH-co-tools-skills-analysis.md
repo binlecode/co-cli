@@ -1,8 +1,13 @@
 # RESEARCH: co-tools-skills-analysis
 
+Status: shipped-foundations
+
+Aspect: tool harness, skills, MCP, delegation
+Pydantic-AI patterns: tool registration, deferred approvals, structured outputs, toolsets, isolated sub-agents
+
 This note covers the harness side of `co`: native tools, MCP, slash-command skills, delegated subagents, and how those surfaces should evolve without over-engineering the system.
 
-The companion context paper is [RESEARCH-co-agent-context.md](/Users/binle/workspace_genai/co-cli/docs/reference/RESEARCH-co-agent-context.md). That document owns the context model. This document owns harness implications and pragmatic adoption.
+The companion context paper is [RESEARCH-co-agent-context-gap.md](/Users/binle/workspace_genai/co-cli/docs/reference/RESEARCH-co-agent-context-gap.md). That document owns the context model. This document owns harness implications and pragmatic adoption.
 
 This revision is grounded in a deeper scan of current `co` code plus current local heads of the main reference repos:
 
@@ -44,11 +49,11 @@ The harness today is spread across a small number of decisive seams:
   - exposes available skills to the model as a prompt-layer list
 - `co_cli/context/_orchestrate.py`
   - handles deferred approvals and resume flow
-  - respects skill tool grants and session approvals
+  - respects session approvals and explicit user prompts
 - `co_cli/commands/_commands.py`
   - dispatches built-in slash commands first
   - resolves skill invocations after built-ins
-  - applies turn-scoped env vars and allowed-tool grants
+  - applies turn-scoped env vars and skill identity only
 - `co_cli/deps.py`
   - provides grouped shared state and subagent isolation
 - `co_cli/tools/delegation.py` and `co_cli/tools/_delegation_agents.py`
@@ -129,7 +134,6 @@ The approval model is strong because it is layered but still understandable:
 
 - shell policy can deny, allow, or defer
 - tool-level `requires_approval` flags drive deferred approval
-- skill grants can auto-approve for the active turn
 - session approvals can persist user trust decisions
 
 This is close to the right tradeoff. The frontier lesson is not to add more approval states. It is to keep the trust UX predictable.
@@ -151,7 +155,7 @@ Skills in `co` are not a full agent framework. They are markdown-backed slash-co
 - a name and description
 - a body injected as the synthetic user turn
 - optional env vars
-- optional turn-scoped allowed-tool grants
+- optional turn-scoped skill identity
 
 This is a strong design choice.
 
@@ -172,7 +176,7 @@ The next improvements should stay within the current shape:
 
 - make skill metadata and constraints more explicit
 - keep built-in commands higher priority than skills
-- keep tool grants strictly turn-scoped
+- keep skill side effects strictly turn-scoped
 - improve visibility into which skills changed after reload
 
 What `co` should not do yet:
@@ -271,6 +275,14 @@ Relative to the current reference heads, the main harness gaps are now:
 - if subagent usage grows, add stricter scope controls before adding more specialist types
 - if skills become more important, improve validation and metadata before adding lifecycle machinery
 - if MCP usage grows, improve compatibility reporting and trust-on-first-use before adding more wrappers
+
+## Guardrails
+
+The following directions are prohibited for `co` unless new code evidence explicitly justifies them:
+
+- **No multi-tier durable memory without new code evidence**: do not add tiered or layered memory storage systems before a concrete failure mode in the current flat substrate is demonstrated in code.
+- **No MCP-centric runtime**: MCP must remain an additive extension surface attached at agent construction. Do not restructure the agent runtime so that MCP toolsets become the primary capability path or replace native tool registration.
+- **No generic multi-agent orchestration without a concrete product requirement**: do not introduce a general-purpose agent-spawning, task-routing, or orchestration framework. Subagents must remain purpose-built read-only specialists tied to a specific product use case.
 
 ## Strategic Conclusion
 

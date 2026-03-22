@@ -2,6 +2,11 @@
 
 **Date:** 2026-03-20
 
+Status: shipped-foundations
+
+Aspect: observability and operator visibility
+Pydantic-AI patterns: OTel tracing, streaming lifecycle events, durable execution visibility
+
 ## Verdict
 
 `co` should not adopt "observability" as a new standalone subsystem. It should converge on one canonical execution record and expose better operator-facing views on top of it.

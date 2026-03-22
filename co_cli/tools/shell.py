@@ -2,7 +2,6 @@ from typing import Any
 
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 
-from co_cli.tools._tool_approvals import is_shell_command_persistently_approved
 from co_cli.deps import CoDeps
 from co_cli.tools._shell_policy import ShellDecision, evaluate_shell_command
 from co_cli.tools._errors import terminal_error
@@ -37,14 +36,14 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
         timeout: Max seconds to wait (default 120). Increase for builds or
                  long scripts (e.g. 300). Capped by shell_max_timeout.
     """
-    # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → check persistent or defer
+    # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
     if policy.decision == ShellDecision.DENY:
         return terminal_error(policy.reason)
     if policy.decision == ShellDecision.REQUIRE_APPROVAL:
-        if not is_shell_command_persistently_approved(cmd, ctx.deps) and not ctx.tool_call_approved:
+        if not ctx.tool_call_approved:
             raise ApprovalRequired(metadata={"cmd": cmd})
-    # ALLOW, persistent approval, or tool_call_approved: fall through to execution
+    # ALLOW or tool_call_approved: fall through to execution
 
     effective = min(timeout, ctx.deps.config.shell_max_timeout)
     try:

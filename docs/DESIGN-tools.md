@@ -13,7 +13,7 @@ Tools are grouped into ten families:
 ```
 tools/
   files.py          — workspace filesystem (list, read, find, write, edit)
-  shell.py          — approval-gated subprocess execution
+  shell.py          — conditionally approved subprocess execution
   memory.py         — memory write/recall/edit
   articles.py       — knowledge article save and search
   obsidian.py       — Obsidian vault notes search and read
@@ -24,17 +24,19 @@ tools/
   task_control.py   — background task lifecycle
   todo.py           — session-scoped task list
   capabilities.py   — integration health introspection
-  delegation.py     — sub-agent delegation
-  _delegation_agents.py — CoderResult, ResearchResult, AnalysisResult, ThinkingResult + agent factories
+  subagent.py       — sub-agent tools
+  _subagent_agents.py — CoderResult, ResearchResult, AnalysisResult, ThinkingResult + agent factories
 ```
 
 ## 2. Core Logic
 
 ### Registration
 
-All native tools are registered via `_register(fn, requires_approval)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
+All native tools are registered via `_register(fn, requires_approval, retries=None)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Most tools map directly to a tool-wide approval flag. `run_shell_command` is the exception: it is registered with `requires_approval=False`, then applies command-level DENY / ALLOW / REQUIRE_APPROVAL policy inside the tool body. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
 
-Conditional registration: `delegate_*` tools are registered only when the matching role model chain is configured. If `reasoning` only is set, all three delegation tools may be unavailable.
+Per-tool retry budget: tools are annotated at registration by tier. Write-once tools (`write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_email_draft`) use `retries=1` — a second mutation attempt on transient failure is safe but more than one is not. Network read tools (`web_search`, `web_fetch`, `list_emails`, `search_emails`, `search_drive_files`, `read_drive_file`, `list_calendar_events`, `search_calendar_events`) use `retries=3`. All other tools inherit the agent-level default (`config.tool_retries`).
+
+Conditional registration: `run_*_subagent` tools are registered only when the matching role model chain is configured. If `reasoning` only is set, all three sub-agent tools may be unavailable.
 
 ### Tool Lifecycle — Call Stack
 
@@ -50,8 +52,8 @@ main.py:build_chat_app()
   │    ├─ Agent(resolved.model, deps_type=CoDeps,           # pydantic-ai agent construction
   │    │        output_type=[str, DeferredToolRequests],
   │    │        toolsets=mcp_toolsets)
-  │    ├─ _register(fn, requires_approval)                  # agent.py:196; called per native tool
-  │    │    ├─ agent.tool(fn, requires_approval=...)        # registers fn with pydantic-ai
+  │    ├─ _register(fn, requires_approval, retries?)        # agent.py:196; called per native tool
+  │    │    ├─ agent.tool(fn, requires_approval=..., [retries=...])  # pydantic-ai registration
   │    │    └─ tool_approvals[fn.__name__] = requires_approval
   │    ├─ [conditional] _register(delegate_*, False)        # only when role_models has matching role
   │    └─ [web policy]  _register(web_search/fetch, policy.search/fetch == "ask")
@@ -63,14 +65,16 @@ main.py:build_chat_app()
        └─ for toolset in agent.toolsets:
             ├─ inner.list_tools()                           # MCPServer: enumerate via stdio/HTTP
             └─ name = f"{prefix}_{t.name}" if prefix else t.name
-  └─ deps.session.tool_names += mcp_tool_names             # native + MCP names in session
+  ├─ deps.session.tool_names += mcp_tool_names             # native + MCP names in session
+  └─ for prefix, err in discovery_errors:                 # surface failed servers to user
+       └─ frontend.on_status("MCP server {prefix!r} failed...")  # empty on happy path
 ```
 
 **Phase 2 — Execution Request** (`_orchestrate.py` → pydantic-ai)
 
 ```
 run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:417
-  └─ _stream_events(agent, user_input, deps, ...)            # _orchestrate.py:279
+  └─ _run_stream_turn(agent, user_input, deps, ...)           # _orchestrate.py:279
        └─ agent.run_stream_events(user_input, deps,
                                   message_history, ...)      # pydantic-ai streams model output
             ├─ [auto tool]     FunctionToolCallEvent         # requires_approval=False
@@ -85,26 +89,27 @@ run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:4
 run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:464
   └─ _collect_deferred_tool_approvals(result, deps, frontend) # _orchestrate.py:370
        └─ for call in result.output.approvals:
-            ├─ Step 1: resolve_approval_subject(call.tool_name, args)  # → ToolApprovalSubject or CommandPatternApprovalSubject
+            ├─ Step 1: resolve_approval_subject(call.tool_name, args, mcp_prefixes)  # → ApprovalSubject
             ├─ Step 2: is_auto_approved(subject, deps)
-            │    └─ user previously chose "a" → approvals[call.tool_call_id] = True; continue
-            └─ Step 3: frontend.prompt_approval(desc)             # user: y / n / a
+            │    └─ SessionApprovalRule match → approvals[call.tool_call_id] = True; continue
+            └─ Step 3: frontend.prompt_approval(subject.display)  # user: y / n / a
                  └─ record_approval_choice(approvals, tool_call_id,
                                            approved=choice in ("y","a"),
-                                           subject=subject, remember=choice=="a")
+                                           subject=subject,
+                                           remember=choice=="a" and subject.can_remember)
   └─ return DeferredToolResults
 ```
 
 **Phase 4 — Execution and Return**
 
 ```
-_stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
+_run_stream_turn(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
   └─ agent.run_stream_events(user_input=None,
                               deferred_tool_results=approvals, ...)
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
        │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
-       │    ├─ ctx.deps.session.*    (tool_approvals, session_tool_approvals, todos)
+       │    ├─ ctx.deps.session.*    (session_approval_rules, todos, active_skill_env)
        │    └─ ctx.deps.runtime.*    (turn_usage, tool_progress_callback, safety_state)
        │    └─ return ToolResult     (make_result(display, **metadata) from _result.py)
        │         ├─ "_kind"          "tool_result" discriminator
@@ -121,8 +126,8 @@ _stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:4
 | Class | Condition | Examples |
 |-------|-----------|---------|
 | Always deferred | `requires_approval=True`, unconditional | `write_file`, `edit_file`, `save_memory`, `save_article`, `create_email_draft`, `start_background_task`, `update_memory`, `append_memory` |
-| Shell inline policy | `requires_approval` depends on `evaluate_shell_command()` | `run_shell_command` |
-| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Shell inline policy | Tool registered auto; command payload classified inside tool as DENY / ALLOW / REQUIRE_APPROVAL | `run_shell_command` |
+| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web policy | Depends on `web_policy.search` / `web_policy.fetch` setting | `web_search`, `web_fetch` |
 
 ### Approval Tier Ordering
@@ -130,16 +135,22 @@ _stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:4
 When a deferred tool call arrives, `_collect_deferred_tool_approvals()` in `co_cli/context/_orchestrate.py` resolves each tool's approval state in this order:
 
 ```
-Step 1 — session auto-approval (user previously chose "a" for this tool)
+Step 1 — auto-approval check:
+  resolve_approval_subject() → ApprovalSubject(kind, value, display, can_remember)
+  is_auto_approved() → SessionApprovalRule(kind, value) in deps.session.session_approval_rules
+  if match: approve silently and continue
+
 Step 2 — user prompt (y / n / a)
+  choice = frontend.prompt_approval(subject.display)
+  if "a" and subject.can_remember: remember_tool_approval() stores SessionApprovalRule
 ```
 
-Step 1 short-circuits the chain; Step 2 is only reached when Step 1 declines.
+Step 1 short-circuits the chain; Step 2 is only reached when Step 1 finds no matching rule. All approval rules are session-scoped — cleared when the session ends.
 
 ### Return Shape
 
 Every user-facing tool returns a `ToolResult` via `make_result(display, **metadata)` (from `co_cli/tools/_result.py`):
-- `_kind` — `"tool_result"` discriminator (used by `_stream_events()` to route to `on_tool_complete`)
+- `_kind` — `"tool_result"` discriminator (used by `_run_stream_turn()` to route to `on_tool_complete`)
 - `display` — pre-formatted string, shown directly to the user
 - metadata fields (`count`, `path`, `task_id`, `article_id`, etc.)
 
@@ -178,14 +189,13 @@ evaluate_shell_command(cmd, safe_commands)
     → DENY      → terminal_error (blocked command class)
     → ALLOW     → execute immediately (safe prefix match)
     → REQUIRE_APPROVAL
-        → is_shell_command_persistently_approved? → execute
-        → ctx.tool_call_approved?                 → execute
-        → else                                    → ApprovalRequired
+        → ctx.tool_call_approved?  → execute
+        → else                     → ApprovalRequired
 ```
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `run_shell_command` | policy | `cmd`, `timeout=120` | Runs in project cwd; stdout+stderr combined; `timeout` capped by `shell_max_timeout`; `ModelRetry` on timeout or failure |
+| `run_shell_command` | conditional | `cmd`, `timeout=120` | Tool is registered with `requires_approval=False`; command string is classified inline as DENY, ALLOW, or REQUIRE_APPROVAL. Runs in project cwd; stdout+stderr combined; `timeout` capped by `shell_max_timeout`; `ModelRetry` on timeout or failure |
 
 DENY patterns include: `rm -rf /`, `dd if=`, `mkfs`, process kill with broad scope, and other destructive commands. See `tools/_shell_policy.py` for the full list.
 
@@ -195,7 +205,7 @@ Memories are YAML-frontmatter markdown files stored in `.co-cli/memory/`. All re
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `save_memory` | deferred | `content`, `tags?`, `category?`, `provenance?` | Writes new memory file; triggers dedup check via `memory/_lifecycle.py` write path |
+| `save_memory` | deferred | `content`, `tags?`, `category?`, `provenance?`, `always_on?` | Writes new memory file; triggers dedup check via `memory/_lifecycle.py` write path; `always_on=True` pins entry as standing context injected every turn |
 | `update_memory` | deferred | `memory_id`, `content` | Replaces body of existing memory; `terminal_error` if ID not found |
 | `append_memory` | deferred | `memory_id`, `content` | Appends to existing memory body |
 | `list_memories` | auto | `tags?`, `category?`, `limit=20`, `offset=0` | Paginated list of memories; sorted by recency |
@@ -292,7 +302,7 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 `check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
 
 ```text
-_stream_events() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
+_run_stream_turn() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
 check_capabilities() reads ctx.deps.runtime.tool_progress_callback
 check_runtime(progress=...) emits phase messages
 TerminalFrontend renders those progress lines in the CLI
@@ -304,18 +314,18 @@ This pattern is intentionally optional:
 - tools never import display code or print directly to the terminal
 - plain string progress messages are passed directly through `tool_progress_callback`
 
-#### Delegation (`tools/delegation.py`)
+#### Sub-Agent Tools (`tools/subagent.py`)
 
-Delegation tools spawn isolated sub-agents using `make_subagent_deps(base)`. Sub-agents share `services` and `config` but get fresh `session` and `runtime`. They run to completion and return a structured result.
+Sub-agent tools spawn isolated sub-agents using `make_subagent_deps(base)`. Sub-agents share `services` and `config` but get fresh `session` and `runtime`. They run to completion and return a structured result.
 
 | Tool | Approval | Sub-agent tool surface | Behavior |
 |------|----------|----------------------|---------|
-| `delegate_coder` | auto | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; no shell, no web |
-| `delegate_research` | auto | `web_search`, `web_fetch` | Web-only research; no memory writes, no filesystem. Raises `ModelRetry` when `web_policy.search` or `web_policy.fetch` is not `"allow"` — web policy gate checked before spawning the sub-agent |
-| `delegate_analysis` | auto | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; no shell, no direct web |
-| `delegate_think` | auto | none | Structured problem decomposition via native reasoning model; no tools — pure extended thinking |
+| `run_coder_subagent` | auto | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; no shell, no web |
+| `run_research_subagent` | auto | `web_search`, `web_fetch` | Web-only research; no memory writes, no filesystem. Raises `ModelRetry` when `web_policy.search` or `web_policy.fetch` is not `"allow"` — web policy gate checked before spawning the sub-agent |
+| `run_analysis_subagent` | auto | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; no shell, no direct web |
+| `run_thinking_subagent` | auto | none | Structured problem decomposition via native reasoning model; no tools — pure extended thinking |
 
-Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`. `delegate_think` is gated on `ROLE_REASONING` (same as the primary model).
+Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`. `run_thinking_subagent` is gated on `ROLE_REASONING` (same as the primary model).
 
 ---
 
@@ -371,14 +381,15 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Auto-cleanup old tasks on startup |
 | `background_task_inactivity_timeout` | `CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT` | `0` | Auto-cancel task after N seconds of no output (0 = disabled) |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server map (JSON) |
-| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget (applies to all tools) |
+| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level default retry budget; write-once tools override to 1, network tools override to 3 at registration |
+| `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | Max chars of primary input captured as `scope` metadata in sub-agent tool results |
 
 ## 4. Files
 
 | File | Purpose |
 |------|---------|
 | `co_cli/tools/files.py` | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` — workspace filesystem tools |
-| `co_cli/tools/shell.py` | `run_shell_command` — approval-gated subprocess execution |
+| `co_cli/tools/shell.py` | `run_shell_command` — conditionally approved subprocess execution |
 | `co_cli/tools/memory.py` | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories` |
 | `co_cli/tools/articles.py` | `save_article`, `recall_article`, `search_knowledge`, `read_article_detail` — knowledge article tools |
 | `co_cli/tools/obsidian.py` | `list_notes`, `search_notes`, `read_note` — Obsidian vault tools |
@@ -389,17 +400,16 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `todo_write`, `todo_read` — session-scoped task list |
 | `co_cli/tools/capabilities.py` | `check_capabilities` — integration health introspection |
-| `co_cli/tools/delegation.py` | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` — sub-agent delegation |
+| `co_cli/tools/subagent.py` | `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent` — sub-agent tools |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` — env sanitizer and process-group kill |
 | `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
-| `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject` types, `resolve_approval_subject()`, `is_auto_approved()`, `is_shell_command_persistently_approved()`, `record_approval_choice()` |
-| `co_cli/tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `prune_stale()` |
+| `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
 | `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
 | `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |
 | `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` — shared error helpers |
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
-| `co_cli/tools/_delegation_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — delegation agent helpers |
+| `co_cli/tools/_subagent_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — sub-agent helpers |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` — provider-aware model factory |
 | `co_cli/agent.py` | `build_agent()` — `_register()` helper and full tool registration sequence |

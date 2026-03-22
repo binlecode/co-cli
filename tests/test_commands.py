@@ -4,7 +4,6 @@ All tests use real agent/deps — no mocks, no stubs.
 """
 
 import asyncio
-import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -187,25 +186,18 @@ async def test_skills_install_url_error(tmp_path):
 
 @pytest.mark.asyncio
 async def test_cmd_approvals_routing_and_clear(tmp_path):
-    """/approvals list routes correctly; /approvals clear removes persisted approvals from disk."""
-    approvals_path = tmp_path / ".co-cli" / "exec-approvals.json"
-    approvals_path.parent.mkdir(parents=True)
-    approvals_path.write_text(json.dumps([{
-        "id": "abc123",
-        "pattern": "git commit *",
-        "tool_name": "run_shell_command",
-        "created_at": "2026-03-10T00:00:00Z",
-        "last_used_at": "2026-03-10T00:00:00Z",
-    }]), encoding="utf-8")
+    """/approvals list routes correctly; /approvals clear removes session approval rules."""
+    from co_cli.deps import SessionApprovalRule
 
     ctx = _make_ctx()
-    ctx.deps.config = replace(ctx.deps.config, exec_approvals_path=approvals_path)
+    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind="shell", value="git"))
+    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind="domain", value="docs.python.org"))
 
     result = await dispatch("/approvals list", ctx)
     assert result.handled is True
 
     await dispatch("/approvals clear", ctx)
-    assert json.loads(approvals_path.read_text(encoding="utf-8")) == []
+    assert ctx.deps.session.session_approval_rules == []
 
 
 # --- Approval flow (programmatic, no TTY) ---
@@ -345,6 +337,12 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
 
     content = session_files[0].read_text(encoding="utf-8")
     assert "provenance: session" in content, "frontmatter must contain provenance: session"
+
+    from co_cli.knowledge._frontmatter import parse_frontmatter
+    fm, _ = parse_frontmatter(content)
+    assert fm.get("artifact_type") == "session_summary", (
+        "session checkpoint must have artifact_type: session_summary in frontmatter"
+    )
 
 
 # --- /forget FTS eviction ---

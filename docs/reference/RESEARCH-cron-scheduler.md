@@ -1,5 +1,9 @@
 # RESEARCH: Cron Scheduler — Peer Review & Adoption Design
 
+Status: forward-looking
+Aspect: asynchronous execution and scheduling
+Pydantic-AI patterns: durable workflows, bounded background execution, resumed runs
+
 **Date:** 2026-03-11
 
 **Scope:** OpenClaw's cron system reviewed as primary reference; adoption analysis and design

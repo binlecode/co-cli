@@ -1,4 +1,4 @@
-"""Tools for delegating focused tasks to read-only sub-agents."""
+"""Tools for running focused tasks via purpose-built sub-agents."""
 
 from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry, RunContext
@@ -9,10 +9,10 @@ from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASON
 from co_cli.deps import CoDeps, make_subagent_deps
 from co_cli.tools._result import ToolResult, make_result
 
-_TRACER = otel_trace.get_tracer("co-cli.delegation")
+_TRACER = otel_trace.get_tracer("co-cli.subagent")
 
 
-async def delegate_coder(
+async def run_coder_subagent(
     ctx: RunContext[CoDeps],
     task: str,
     max_requests: int = 10,
@@ -34,7 +34,7 @@ async def delegate_coder(
     if max_requests < 1:
         raise ModelRetry("max_requests must be at least 1")
 
-    from co_cli.tools._delegation_agents import make_coder_agent
+    from co_cli.tools._subagent_agents import make_coder_agent
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured(ROLE_CODING):
@@ -44,10 +44,10 @@ async def delegate_coder(
     role = ROLE_CODING
     request_limit = max_requests
     agent = make_coder_agent(rm)
-    with _TRACER.start_as_current_span(f"delegate_{role}") as span:
-        span.set_attribute("delegation.role", role)
-        span.set_attribute("delegation.model", model_name)
-        span.set_attribute("delegation.request_limit", request_limit)
+    with _TRACER.start_as_current_span(f"subagent_{role}") as span:
+        span.set_attribute("subagent.role", role)
+        span.set_attribute("subagent.model", model_name)
+        span.set_attribute("subagent.request_limit", request_limit)
         try:
             result = await agent.run(
                 task,
@@ -63,9 +63,10 @@ async def delegate_coder(
         else:
             ctx.deps.runtime.turn_usage.incr(result.usage())
         requests_used = result.usage().requests
-        span.set_attribute("delegation.requests_used", requests_used)
+        span.set_attribute("subagent.requests_used", requests_used)
         data = result.output
-    display = f"Coder analysis complete.\n{data.summary}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
+    scope = task[:ctx.deps.config.subagent_scope_chars]
+    display = f"Scope: {scope}\nCoder analysis complete.\n{data.summary}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return make_result(
         display,
         summary=data.summary,
@@ -76,10 +77,11 @@ async def delegate_coder(
         model_name=model_name,
         requests_used=requests_used,
         request_limit=request_limit,
+        scope=scope,
     )
 
 
-async def delegate_research(
+async def run_research_subagent(
     ctx: RunContext[CoDeps],
     query: str,
     domains: list[str] | None = None,
@@ -115,7 +117,7 @@ async def delegate_research(
             "web_policy is not 'allow'. Handle this task directly."
         )
 
-    from co_cli.tools._delegation_agents import make_research_agent
+    from co_cli.tools._subagent_agents import make_research_agent
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured(ROLE_RESEARCH):
@@ -127,10 +129,10 @@ async def delegate_research(
     sub_deps = make_subagent_deps(ctx.deps)
     agent = make_research_agent(rm)
     scoped_query = query if not domains else f"{query}\nRestrict searches to these domains: {', '.join(domains)}"
-    with _TRACER.start_as_current_span(f"delegate_{role}") as span:
-        span.set_attribute("delegation.role", role)
-        span.set_attribute("delegation.model", model_name)
-        span.set_attribute("delegation.request_limit", request_limit)
+    with _TRACER.start_as_current_span(f"subagent_{role}") as span:
+        span.set_attribute("subagent.role", role)
+        span.set_attribute("subagent.model", model_name)
+        span.set_attribute("subagent.request_limit", request_limit)
         try:
             result = await agent.run(
                 scoped_query,
@@ -166,9 +168,10 @@ async def delegate_research(
             data = data.model_copy(update={"confidence": 0.0, "summary": data.summary or "No results found despite multiple searches."})
 
         requests_used = result.usage().requests + (retry_result.usage().requests if retry_result is not None else 0)
-        span.set_attribute("delegation.requests_used", requests_used)
+        span.set_attribute("subagent.requests_used", requests_used)
+    scope = query[:ctx.deps.config.subagent_scope_chars]
     sources_text = "\n".join(f"- {s}" for s in data.sources) if data.sources else "No sources"
-    display = f"{data.summary}\n\nSources:\n{sources_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
+    display = f"Scope: {scope}\n{data.summary}\n\nSources:\n{sources_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return make_result(
         display,
         summary=data.summary,
@@ -178,10 +181,11 @@ async def delegate_research(
         model_name=model_name,
         requests_used=requests_used,
         request_limit=request_limit,
+        scope=scope,
     )
 
 
-async def delegate_analysis(
+async def run_analysis_subagent(
     ctx: RunContext[CoDeps],
     question: str,
     inputs: list[str] | None = None,
@@ -212,9 +216,9 @@ async def delegate_analysis(
 
     # No web_policy gate here: analysis sub-agent uses search_knowledge and
     # search_drive_files only — no web tools. If Drive ever gets a policy
-    # setting, the gate belongs here, mirroring delegate_research above.
+    # setting, the gate belongs here, mirroring run_research_subagent above.
 
-    from co_cli.tools._delegation_agents import make_analysis_agent
+    from co_cli.tools._subagent_agents import make_analysis_agent
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured(ROLE_ANALYSIS):
@@ -228,10 +232,10 @@ async def delegate_analysis(
         scoped_question = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + question
 
     agent = make_analysis_agent(rm)
-    with _TRACER.start_as_current_span(f"delegate_{role}") as span:
-        span.set_attribute("delegation.role", role)
-        span.set_attribute("delegation.model", model_name)
-        span.set_attribute("delegation.request_limit", request_limit)
+    with _TRACER.start_as_current_span(f"subagent_{role}") as span:
+        span.set_attribute("subagent.role", role)
+        span.set_attribute("subagent.model", model_name)
+        span.set_attribute("subagent.request_limit", request_limit)
         try:
             result = await agent.run(
                 scoped_question,
@@ -247,10 +251,11 @@ async def delegate_analysis(
         else:
             ctx.deps.runtime.turn_usage.incr(result.usage())
         requests_used = result.usage().requests
-        span.set_attribute("delegation.requests_used", requests_used)
+        span.set_attribute("subagent.requests_used", requests_used)
         data = result.output
+    scope = question[:ctx.deps.config.subagent_scope_chars]
     evidence_text = "\n".join(f"- {e}" for e in data.evidence) if data.evidence else "No evidence"
-    display = f"{data.conclusion}\n\nEvidence:\n{evidence_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
+    display = f"Scope: {scope}\n{data.conclusion}\n\nEvidence:\n{evidence_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return make_result(
         display,
         conclusion=data.conclusion,
@@ -260,10 +265,11 @@ async def delegate_analysis(
         model_name=model_name,
         requests_used=requests_used,
         request_limit=request_limit,
+        scope=scope,
     )
 
 
-async def delegate_think(
+async def run_thinking_subagent(
     ctx: RunContext[CoDeps],
     problem: str,
     max_requests: int = 5,
@@ -290,7 +296,7 @@ async def delegate_think(
     if max_requests < 1:
         raise ModelRetry("max_requests must be at least 1")
 
-    from co_cli.tools._delegation_agents import make_thinking_agent
+    from co_cli.tools._subagent_agents import make_thinking_agent
 
     registry = ctx.deps.services.model_registry
     if not registry or not registry.is_configured(ROLE_REASONING):
@@ -300,10 +306,10 @@ async def delegate_think(
     role = ROLE_REASONING
     request_limit = max_requests
     agent = make_thinking_agent(rm)
-    with _TRACER.start_as_current_span(f"delegate_{role}") as span:
-        span.set_attribute("delegation.role", role)
-        span.set_attribute("delegation.model", model_name)
-        span.set_attribute("delegation.request_limit", request_limit)
+    with _TRACER.start_as_current_span(f"subagent_{role}") as span:
+        span.set_attribute("subagent.role", role)
+        span.set_attribute("subagent.model", model_name)
+        span.set_attribute("subagent.request_limit", request_limit)
         try:
             result = await agent.run(
                 problem,
@@ -319,10 +325,11 @@ async def delegate_think(
         else:
             ctx.deps.runtime.turn_usage.incr(result.usage())
         requests_used = result.usage().requests
-        span.set_attribute("delegation.requests_used", requests_used)
+        span.set_attribute("subagent.requests_used", requests_used)
         data = result.output
+    scope = problem[:ctx.deps.config.subagent_scope_chars]
     steps_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(data.steps))
-    display = f"{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
+    display = f"Scope: {scope}\n{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
     return make_result(
         display,
         plan=data.plan,
@@ -332,4 +339,5 @@ async def delegate_think(
         model_name=model_name,
         requests_used=requests_used,
         request_limit=request_limit,
+        scope=scope,
     )

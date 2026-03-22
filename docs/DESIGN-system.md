@@ -189,17 +189,20 @@ build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool
     create Agent with:
         model=resolved.model, deps_type=CoDeps, instructions=config.system_prompt, retries=tool_retries
         output_type = [str, DeferredToolRequests]
-        history_processors = [inject_opening_context, truncate_tool_returns,
-                               detect_safety_issues, truncate_history_window]
+        history_processors = [truncate_tool_returns, detect_safety_issues,
+                               inject_opening_context, truncate_history_window]
 
     # per-turn dynamic layers (fresh each request, never accumulated)
     @agent.instructions: inject current date
     @agent.instructions: inject shell guidance when available
     @agent.instructions: inject project instructions from .co-cli/instructions.md
+    @agent.instructions: inject always_on standing-context memories
     @agent.instructions: inject personality-context memories
 
     for each tool fn: register via _register(fn, requires_approval)
         append (fn.__name__, requires_approval) to tool_registry
+    special case: run_shell_command registers with requires_approval=False
+        and applies command-level DENY / ALLOW / REQUIRE_APPROVAL policy inside the tool
 
     tool_names = [name for name, _ in tool_registry]
     tool_approval = {name: flag for name, flag in tool_registry}
@@ -210,9 +213,9 @@ History processors are attached at agent construction and run before every model
 
 | Processor | Role |
 |-----------|------|
-| `inject_opening_context` | Proactively recalls relevant memories and injects them into the message stream |
 | `truncate_tool_returns` | Trims old tool outputs to preserve context budget |
 | `detect_safety_issues` | Runtime guards: doom-loop detection, shell-error-streak detection |
+| `inject_opening_context` | Proactively recalls relevant memories and injects them into the message stream |
 | `truncate_history_window` | Applies sliding-window compaction for long sessions |
 
 See [DESIGN-core-loop.md](DESIGN-core-loop.md) for turn execution ordering and [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider/model configuration.
@@ -242,7 +245,7 @@ graph TD
 |---------------|-------------|------------|
 | `CoServices` | Service handles | `shell`, `knowledge_index`, `task_runner`, `model_registry` |
 | `CoConfig` | Read-only config | paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
-| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_tool_approvals`, `active_skill_env`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
+| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_approval_rules`, `active_skill_env`, `drive_page_tokens`, `session_todos`, `skill_registry`, `active_skill_name` |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction`, `turn_usage`, `opening_ctx_state`, `safety_state` |
 
 Sub-agent isolation:
@@ -253,6 +256,12 @@ Sub-agent isolation:
 ### 4.3 System Capability Surface
 
 The agent's effective capability is the interaction of native tools, skill overlays, MCP extensions, `CoDeps` service handles, and approval policy gates. Capability is declared explicitly.
+
+Shell is the main approval nuance:
+- approval is command-scoped, not tool-scoped
+- `run_shell_command` is not blanket approval-gated at registration
+- the tool runs far enough to classify `cmd` as DENY, ALLOW, or REQUIRE_APPROVAL
+- only the `REQUIRE_APPROVAL` branch defers for user confirmation
 
 #### Native Tool Inventory
 
@@ -266,7 +275,7 @@ The agent's effective capability is the interaction of native tools, skill overl
 | Personal data: Google | `search_drive_files`, `read_drive_file`, `list_emails`, `search_emails`, `create_email_draft`, `list_calendar_events`, `search_calendar_events` | Draft deferred; reads auto |
 | Background tasks | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` | Start deferred; status/cancel/list auto |
 | Session utilities | `todo_write`, `todo_read`, `check_capabilities` | Auto |
-| Delegation | `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think` | Auto |
+| Sub-agent tools | `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent` | Auto |
 
 #### Delegated Sub-Agents
 
@@ -305,8 +314,8 @@ The approval tier determines whether a tool executes immediately or requires use
 | Category | Approval | Rationale |
 |----------|----------|-----------|
 | Side-effectful always | Always deferred | `create_email_draft`, `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task`, `update_memory`, `append_memory` |
-| Shell conditional | Policy inside tool | `run_shell_command`: DENY -> terminal error, ALLOW -> execute, else approval |
-| Always auto-execute | Never deferred | `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Shell conditional | Tool registered auto; policy enforced inside tool | `run_shell_command`: classify command as DENY -> terminal error, ALLOW -> execute, else approval |
+| Always auto-execute | Never deferred | `check_capabilities`, `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web tools | Policy driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask` |
 | MCP tools with `approval=ask` | Deferred | External tools default to requiring approval |
 | MCP tools with `approval=auto` | Auto | Explicitly trusted by user config |
@@ -443,7 +452,7 @@ System-relevant settings called out here:
 | `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
 | `co_cli/main.py` | `chat_loop()`, startup assembly, REPL |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` |
-| `co_cli/context/_orchestrate.py` | `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()` |
+| `co_cli/context/_orchestrate.py` | `run_turn()`, `_run_stream_turn()`, `_collect_deferred_tool_approvals()` |
 | `co_cli/context/_history.py` | History processors and compaction |
 | `co_cli/commands/_commands.py` | Slash commands and skill dispatch surface |
 | `co_cli/config.py` | Settings model and precedence rules |

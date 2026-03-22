@@ -1,6 +1,11 @@
 # RESEARCH: co-agent-context-gap
 _Date: 2026-03-17_
 
+Status: shipped-with-gaps
+
+Aspect: context, memory, session semantics
+Pydantic-AI patterns: dependency injection, history processors, opening-context injection, specialist isolation
+
 ## Executive Summary
 
 This document re-evaluates `co`'s context-management gaps against the current codebase, not against an aspirational Pydantic-AI rewrite.
@@ -17,8 +22,8 @@ The main remaining gaps are narrower and more concrete than earlier drafts sugge
 1. memory recall still mutates files on read
 2. session summaries still share the same primary type and recall path as durable memories
 3. standing context is still accidental topic recall rather than explicit metadata
-4. skill grants still function as a second approval channel for deferred tools
-5. several docs still understate current background-task and boundary contracts
+4. several docs still understate current background-task and boundary contracts
+5. delegated-work visibility is still weaker than the isolation boundary itself
 
 The earlier recommendation to replace current flows with `@agent.system_prompt`, typed specialist payloads, or explicit compaction agents is not supported as near-term implementation guidance by the latest code review. Those ideas remain possible future directions, but they are not the confirmed next steps for `co` today.
 
@@ -128,15 +133,14 @@ The main background-task gap is therefore operational legibility:
 
 ### 8. Approval Semantics
 
-`_collect_deferred_tool_approvals()` still resolves approvals in this order:
+The current approval flow is narrower than earlier drafts described:
 
-1. skill grant
-2. session auto-approval
-3. user prompt
+1. session auto-approval
+2. user prompt
 
-Because `run_shell_command()` treats `ctx.tool_call_approved` as sufficient after a deferred approval path, a skill grant can still bypass the normal shell approval prompt for commands that are not DENY-classified.
+Skill dispatch currently sets turn-scoped env and active skill identity, but it is no longer a second approval channel for deferred tools.
 
-This is the highest-trust contract mismatch in the current context/harness model.
+That closes the earlier shell-bypass concern. The remaining approval work is therefore more about scope legibility and documentation than about a live trust-model break.
 
 ## Confirmed Gaps
 
@@ -192,23 +196,7 @@ Add bounded `always_on` metadata inside the existing memory substrate and inject
 
 This keeps the current architecture while making standing context explicit.
 
-### Gap 4: Skill Grants Still Bypass Protected Approval Flow
-
-#### Current behavior
-
-Skill grants are checked before the prompt path for deferred tools.
-
-#### Why it matters
-
-- skill grants behave like a parallel approval channel
-- this is especially problematic for shell execution
-- the trust model becomes harder to explain to users
-
-#### Confirmed adoption
-
-Restrict skill-grant auto-approval so it cannot approve approval-gated tools such as shell execution.
-
-### Gap 5: Docs Lag the Real Runtime Contracts
+### Gap 4: Docs Lag the Real Runtime Contracts
 
 #### Current behavior
 
@@ -292,19 +280,18 @@ The recommended path is the current canonical TODO, summarized here from highest
 1. remove write-on-read behavior from `recall_memory()`
 2. type session-summary artifacts explicitly and exclude them from default recall
 3. add bounded `always_on` standing-context metadata
-4. prevent skill grants from bypassing approval-gated tools
 
 ### P1: Contract Sync
 
-5. update canonical DESIGN and research docs to match the shipped runtime contracts
-6. add forward-looking guardrails that block overbuilt rewrites disconnected from current product needs
+4. update canonical DESIGN and research docs to match the shipped runtime contracts
+5. add forward-looking guardrails that block overbuilt rewrites disconnected from current product needs
 
 ### P2: Operational Legibility
 
-7. improve MCP operational visibility
-8. improve delegated-work observability
-9. improve background-task visibility
-10. add explicit context-boundary docs for delegated specialists and future background turns
+6. improve MCP operational visibility
+7. improve delegated-work observability
+8. improve background-task visibility
+9. add explicit context-boundary docs for delegated specialists and future background turns
 
 ## Relationship to the Canonical TODO
 
@@ -313,6 +300,14 @@ The authoritative implementation plan is:
 - `docs/TODO-context-harness-research-alignment.md`
 
 This research document is diagnostic support for that TODO. It should not be treated as an independent roadmap.
+
+## Guardrails
+
+The following directions are prohibited for `co` unless new code evidence explicitly justifies them:
+
+- **No multi-tier durable memory without new code evidence**: do not add tiered or layered memory storage systems (e.g., working memory + episodic + semantic) before a concrete failure mode in the current flat substrate is demonstrated in code.
+- **No MCP-centric runtime**: MCP must remain an additive extension surface. Do not restructure the agent runtime so that MCP toolsets become the primary capability path or replace native tool registration.
+- **No generic multi-agent orchestration without a concrete product requirement**: do not introduce a general-purpose agent-spawning, task-routing, or orchestration framework. Subagents must remain purpose-built read-only specialists tied to a specific product use case.
 
 ## Bottom Line
 

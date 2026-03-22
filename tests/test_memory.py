@@ -15,8 +15,6 @@ from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import (
-    _touch_memory,
-    _dedup_pulled,
     _load_memories,
     recall_memory,
     list_memories,
@@ -80,64 +78,23 @@ def _write_memory(memory_dir: Path, memory_id: int, content: str,
 
 
 # ---------------------------------------------------------------------------
-# _dedup_pulled
+# recall_memory read-only invariant
 # ---------------------------------------------------------------------------
 
 
-def test_dedup_pulled_merges_similar(tmp_path: Path):
-    """Similar pulled memories get consolidated."""
-    _write_memory(tmp_path, 1, "User prefers pytest for testing",
-                  tags=["preference"],
-                  created=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
-    _write_memory(tmp_path, 2, "User prefers pytest for testing purposes",
-                  tags=["testing"],
-                  created=datetime.now(timezone.utc).isoformat())
-
-    entries = _load_memories(tmp_path)
-    assert len(entries) == 2
-
-    result = _dedup_pulled(entries, threshold=80)
-    # One should be merged away
-    assert len(result) == 1
-    # Remaining file should have merged tags
-    remaining = _load_memories(tmp_path)
-    assert len(remaining) == 1
-    assert len(list(tmp_path.glob("*.md"))) == 1, "Older file must be deleted from disk"
-
-
-def test_dedup_pulled_keeps_distinct(tmp_path: Path):
-    """Distinct memories are NOT merged."""
-    _write_memory(tmp_path, 1, "User prefers pytest over unittest",
-                  tags=["preference"])
-    _write_memory(tmp_path, 2, "Project uses PostgreSQL for storage",
-                  tags=["context"])
-
-    entries = _load_memories(tmp_path)
-    result = _dedup_pulled(entries, threshold=85)
-    assert len(result) == 2
-
-
-# ---------------------------------------------------------------------------
-# recall_memory gravity integration
-# ---------------------------------------------------------------------------
-
-
-def test_recall_touches_pulled_memories(tmp_path: Path):
-    """Recalled memories get their updated timestamp refreshed."""
+def test_recall_does_not_mutate_files(tmp_path: Path):
+    """recall_memory must not change any file's mtime (read-only path)."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
 
+    before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
     result = asyncio.run(
         recall_memory(_make_ctx(memory_dir=memory_dir), "dark theme")
     )
     assert result["count"] >= 1
-
-    # Verify the file was touched (updated timestamp set)
-    reloaded = _load_memories(memory_dir)
-    touched = [m for m in reloaded if "dark" in m.content.lower()]
-    assert len(touched) == 1
-    assert touched[0].updated is not None
+    after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
+    assert before == after, "recall_memory must not modify any file's mtime"
 
 
 # ---------------------------------------------------------------------------
@@ -210,37 +167,6 @@ def test_fts_freshness_after_consolidation(tmp_path: Path):
         "FTS result must reflect consolidated tags"
     )
     idx.close()
-
-
-def test_gravity_affects_recency_order(tmp_path: Path):
-    """Pulled memory appears first in next recall due to gravity."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-
-    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-    new_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-
-    # Older memory about testing
-    _write_memory(memory_dir, 1, "User prefers testing with pytest",
-                  tags=["preference", "testing"], created=old_time)
-    # Newer memory about testing
-    _write_memory(memory_dir, 2, "User uses coverage reports for testing",
-                  tags=["context", "testing"], created=new_time)
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-
-    # First recall — memory 2 should be first (newer)
-    result1 = asyncio.run(recall_memory(ctx, "testing"))
-    assert result1["count"] == 2
-
-    # Now recall just memory 1 (by specific keyword "pytest")
-    result2 = asyncio.run(recall_memory(ctx, "pytest"))
-    assert result2["count"] >= 1
-
-    # After being touched, memory 1 should have a fresh updated timestamp
-    entries = _load_memories(memory_dir)
-    m1 = [e for e in entries if e.id == 1][0]
-    assert m1.updated is not None
 
 
 # ---------------------------------------------------------------------------
@@ -396,49 +322,6 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
         asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
 
 
-def test_dedup_pulled_removes_stale_fts_entry(tmp_path: Path):
-    """After dedup-on-read deletes an older file, its FTS entry is also evicted."""
-    from co_cli.knowledge._index_store import KnowledgeIndex
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-
-    old_time = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
-    new_time = datetime.now(timezone.utc).isoformat()
-
-    # Near-duplicate pair — same pattern as test_dedup_pulled_merges_similar (which passes)
-    # ensuring similarity >= 85% so dedup fires with default threshold
-    path_old = _write_memory(
-        memory_dir, 1, "User prefers xylodedup-test pytest for testing",
-        tags=["preference"], created=old_time,
-    )
-    path_new = _write_memory(
-        memory_dir, 2, "User prefers xylodedup-test pytest for testing purposes",
-        tags=["preference"], created=new_time,
-    )
-
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
-    idx.sync_dir("memory", memory_dir)
-
-    # Both paths should be findable before recall
-    before = idx.search("xylodedup")
-    before_paths = {r.path for r in before}
-    assert str(path_old) in before_paths, "Older memory should be in FTS before recall"
-    assert str(path_new) in before_paths, "Newer memory should be in FTS before recall"
-
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
-    asyncio.run(recall_memory(ctx, "xylodedup", max_results=5))
-
-    # The merged-away (older) entry must be gone from FTS
-    after = idx.search("xylodedup")
-    after_paths = {r.path for r in after}
-    assert str(path_old) not in after_paths, "Dedup-deleted memory must be evicted from FTS"
-    assert not path_old.exists(), "Dedup-deleted file must be removed from disk"
-
-    # The surviving (newer) entry must still be findable
-    assert str(path_new) in after_paths, "Surviving memory must remain in FTS after dedup"
-    idx.close()
-
 
 def test_composite_bm25_decay_scoring(tmp_path: Path):
     """High-relevance older memory outranks low-relevance newer memory via composite scoring.
@@ -566,3 +449,169 @@ def test_search_memories_grep_fallback(tmp_path: Path):
     result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "xyloquartz-grep-test"))
     assert result["count"] >= 1
     assert all(r["source"] == "memory" for r in result["results"])
+
+
+# ---------------------------------------------------------------------------
+# TASK-2: artifact_type / session_summary exclusion
+# ---------------------------------------------------------------------------
+
+
+def _write_memory_with_artifact_type(
+    memory_dir: Path,
+    memory_id: int,
+    content: str,
+    artifact_type: str | None = None,
+    tags: list[str] | None = None,
+) -> Path:
+    """Write a memory file with optional artifact_type frontmatter field."""
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    slug = content[:30].lower().replace(" ", "-")
+    filename = f"{memory_id:03d}-{slug}.md"
+    fm: dict[str, Any] = {
+        "id": memory_id,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "tags": tags or [],
+    }
+    if artifact_type is not None:
+        fm["artifact_type"] = artifact_type
+    md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
+    path = memory_dir / filename
+    path.write_text(md, encoding="utf-8")
+    return path
+
+
+def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
+    """recall_memory must not return entries with artifact_type == session_summary."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    keyword = "artifact-exclusion-test-recall"
+
+    _write_memory_with_artifact_type(memory_dir, 1, f"{keyword} durable memory", artifact_type=None)
+    _write_memory_with_artifact_type(memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    result = asyncio.run(recall_memory(ctx, keyword))
+
+    ids_returned = [r["id"] for r in result["results"]]
+    assert 1 in ids_returned, "durable memory must be returned"
+    assert 2 not in ids_returned, "session_summary artifact must be excluded"
+
+
+def test_search_memories_excludes_session_summary_artifacts(tmp_path: Path):
+    """search_memories must not return entries with artifact_type == session_summary."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    keyword = "artifact-exclusion-test-search"
+
+    _write_memory_with_artifact_type(memory_dir, 1, f"{keyword} durable memory", artifact_type=None)
+    _write_memory_with_artifact_type(memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    result = asyncio.run(search_memories(ctx, keyword))
+
+    paths_returned = [r["path"] for r in result["results"]]
+    assert not any("002-" in p for p in paths_returned), "session_summary artifact must be excluded"
+    assert any("001-" in p for p in paths_returned), "durable memory must be returned"
+
+
+def test_list_memories_displays_artifact_type(tmp_path: Path):
+    """list_memories display contains artifact_type value when present."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+
+    _write_memory_with_artifact_type(memory_dir, 1, "Session summary content", artifact_type="session_summary")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    result = asyncio.run(list_memories(ctx))
+
+    assert "session_summary" in result["display"]
+
+
+def test_load_memories_without_artifact_type_defaults_none(tmp_path: Path):
+    """MemoryEntry.artifact_type is None when the frontmatter field is absent."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    _write_memory(memory_dir, 1, "No artifact type field", tags=[])
+
+    entries = _load_memories(memory_dir)
+    assert len(entries) == 1
+    assert entries[0].artifact_type is None
+
+
+# ---------------------------------------------------------------------------
+# TASK-3: always_on standing-context field
+# ---------------------------------------------------------------------------
+
+
+from co_cli.tools.memory import load_always_on_memories
+
+
+def _write_always_on_memory(memory_dir: Path, memory_id: int, content: str, always_on: bool) -> Path:
+    """Write a memory file with always_on frontmatter field."""
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    slug = content[:30].lower().replace(" ", "-")
+    filename = f"{memory_id:03d}-{slug}.md"
+    fm: dict[str, Any] = {
+        "id": memory_id,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "tags": [],
+    }
+    if always_on:
+        fm["always_on"] = True
+    md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
+    path = memory_dir / filename
+    path.write_text(md, encoding="utf-8")
+    return path
+
+
+def test_always_on_helper_returns_only_always_on_entries(tmp_path: Path):
+    """load_always_on_memories returns only entries with always_on=True."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+
+    _write_always_on_memory(memory_dir, 1, "always on entry one", always_on=True)
+    _write_always_on_memory(memory_dir, 2, "regular memory entry", always_on=False)
+    _write_always_on_memory(memory_dir, 3, "always on entry two", always_on=True)
+
+    entries = load_always_on_memories(memory_dir)
+    assert len(entries) == 2
+    assert all(e.always_on for e in entries)
+
+
+def test_always_on_helper_caps_at_five(tmp_path: Path):
+    """load_always_on_memories returns at most 5 entries."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+
+    for i in range(1, 8):
+        _write_always_on_memory(memory_dir, i, f"always on entry number {i}", always_on=True)
+
+    entries = load_always_on_memories(memory_dir)
+    assert len(entries) == 5
+
+
+def test_always_on_helper_empty_when_dir_missing(tmp_path: Path):
+    """load_always_on_memories returns [] when memory_dir does not exist."""
+    missing_dir = tmp_path / "nonexistent" / "memory"
+    assert load_always_on_memories(missing_dir) == []
+
+
+def test_always_on_default_false_no_field_in_file(tmp_path: Path):
+    """MemoryEntry.always_on is False when frontmatter has no always_on field."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    _write_memory(memory_dir, 1, "No always_on field present", tags=[])
+
+    entries = _load_memories(memory_dir)
+    assert entries[0].always_on is False
+
+
+def test_persist_memory_writes_always_on_to_frontmatter(tmp_path: Path):
+    """persist_memory with always_on=True writes always_on: true to frontmatter."""
+    from co_cli.knowledge._frontmatter import parse_frontmatter
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    config = CoConfig()
+    from dataclasses import replace
+    config = replace(config, memory_dir=memory_dir)
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=config)
+
+    asyncio.run(_save_memory_impl(deps, "Always-on standing context test", tags=["test"], related=[], always_on=True))
+
+    files = list(memory_dir.glob("*.md"))
+    assert len(files) == 1
+    fm, _ = parse_frontmatter(files[0].read_text(encoding="utf-8"))
+    assert fm.get("always_on") is True

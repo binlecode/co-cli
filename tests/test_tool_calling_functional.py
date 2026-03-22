@@ -13,6 +13,7 @@ from pathlib import Path
 from dataclasses import replace
 
 import pytest
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import UsageLimits
 
@@ -114,7 +115,7 @@ async def test_tool_selection_and_arg_extraction(
                     deps=deps,
                     model=resolved.model,
                     model_settings=resolved.settings,
-                    usage_limits=UsageLimits(request_limit=2),
+                    usage_limits=UsageLimits(request_limit=3),
                 )
             # Extract first tool call from message history (works for both
             # deferred/unapproved tools and normal tool executions).
@@ -127,7 +128,7 @@ async def test_tool_selection_and_arg_extraction(
                             break
                 if tool_name:
                     break
-        except Exception as e:
+        except (ModelHTTPError, ModelAPIError) as e:
             last_details = f"agent.run error: {type(e).__name__}: {e}"
             continue
 
@@ -224,3 +225,40 @@ async def test_intent_routing_observation_no_tool():
                 assert not isinstance(part, ToolCallPart), (
                     f"Expected no tool call for observation statement, got {part.tool_name!r}"
                 )
+
+
+@pytest.mark.asyncio
+async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
+    """check_task_status result includes description and started_at from task metadata."""
+    import asyncio
+    from co_cli.tools._background import TaskRunner
+    from co_cli.tools.task_control import check_task_status
+    from pydantic_ai._run_context import RunContext
+    from pydantic_ai.usage import RunUsage
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+
+    tasks_dir = tmp_path / "tasks"
+    runner = TaskRunner(tasks_dir=tasks_dir)
+    config = CoConfig(tasks_dir=tasks_dir)
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), task_runner=runner),
+        config=config,
+    )
+    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
+
+    task_description = "test-background-task-description"
+    async with asyncio.timeout(30):
+        task_id = await runner.start_task(
+            "echo hello",
+            str(tmp_path),
+            {"description": task_description},
+            None,
+        )
+        # Give it a moment to start
+        await asyncio.sleep(0.5)
+        result = await check_task_status(ctx, task_id)
+
+    assert result.get("description") == task_description
+    assert result.get("started_at") is not None

@@ -188,7 +188,9 @@ DEFAULT_MEMORY_DEDUP_THRESHOLD = 85
 DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS = 30
 DEFAULT_MEMORY_CONSOLIDATION_TOP_K = 5
 DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS = 20
+DEFAULT_MEMORY_INJECTION_MAX_CHARS = 2000
 DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["correction", "preference"]
+DEFAULT_SUBAGENT_SCOPE_CHARS = 120
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_SHELL_MAX_TIMEOUT = 600
@@ -252,6 +254,10 @@ class Settings(BaseModel):
     memory_consolidation_timeout_seconds: int = Field(default=DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS, ge=0)
     # Auto-save allowlist: only signals with these tags are saved without prompting
     memory_auto_save_tags: list[str] = Field(default=DEFAULT_MEMORY_AUTO_SAVE_TAGS)
+    # Max characters injected into context from memory recall per turn
+    memory_injection_max_chars: int = Field(default=DEFAULT_MEMORY_INJECTION_MAX_CHARS, ge=100)
+    # Max chars of the delegated task/query shown in delegation result scope line
+    subagent_scope_chars: int = Field(default=DEFAULT_SUBAGENT_SCOPE_CHARS, ge=10)
 
     # Knowledge chunking
     knowledge_chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
@@ -419,6 +425,8 @@ class Settings(BaseModel):
             "memory_consolidation_top_k": "CO_MEMORY_CONSOLIDATION_TOP_K",
             "memory_consolidation_timeout_seconds": "CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS",
             "memory_auto_save_tags": "CO_CLI_MEMORY_AUTO_SAVE_TAGS",
+            "memory_injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
+            "subagent_scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",
             "knowledge_chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
             "knowledge_chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
             "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",

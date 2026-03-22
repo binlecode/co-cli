@@ -1,61 +1,117 @@
-"""Helpers for deferred tool approvals and shell approval persistence."""
+"""Helpers for deferred tool approvals — unified session-scoped model.
+
+All approval subjects resolve to a single ApprovalSubject dataclass.
+'a' (always) stores a SessionApprovalRule in deps.session.session_approval_rules.
+No cross-session persistence — approval rules are cleared when the session ends.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic_ai import DeferredToolResults, ToolDenied
 
-from co_cli.tools._exec_approvals import add_approval, derive_pattern, find_approved, load_approvals, update_last_used
-from co_cli.deps import CoDeps
-
-
-# ---------------------------------------------------------------------------
-# Approval subjects — explicit representation of what is being approved
-# ---------------------------------------------------------------------------
+from co_cli.deps import CoDeps, SessionApprovalRule
 
 
 @dataclass(frozen=True)
-class ToolApprovalSubject:
-    """Direct tool approval — session-scoped by tool name."""
+class ApprovalSubject:
+    """Resolved representation of what is being approved.
 
-    tool_name: str
-
-
-@dataclass(frozen=True)
-class CommandPatternApprovalSubject:
-    """Shell meta-tool approval — persistent, command-pattern-based.
-
-    run_shell_command is a meta-tool: the approval subject is not the tool
-    name but a derived command pattern extracted from the payload.
+    tool_name:   the registered tool name (e.g. "run_shell_command")
+    kind:        category matching SessionApprovalRule.kind
+    value:       the scoped key used for session rule matching
+    display:     human-readable description shown in the approval prompt
+    can_remember: whether 'a' should store a session rule
     """
 
     tool_name: str
-    cmd: str
-    pattern: str
+    kind: str
+    value: str
+    display: str
+    can_remember: bool
 
 
-ApprovalSubject = ToolApprovalSubject | CommandPatternApprovalSubject
-
-
-def resolve_approval_subject(tool_name: str, args: dict[str, Any]) -> ApprovalSubject:
+def resolve_approval_subject(
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    mcp_prefixes: frozenset[str] = frozenset(),
+) -> ApprovalSubject:
     """Map a deferred tool call to its approval subject.
 
-    run_shell_command is a meta-tool — its approval subject is a derived
-    command pattern, not the tool name. All other tools use the tool name
-    as the subject directly.
+    Resolution order:
+      run_shell_command → shell subject (utility = first token)
+      write_file / edit_file → path subject (parent directory)
+      web_fetch → domain subject (parsed hostname)
+      MCP tool (prefix match) → mcp_tool subject
+      everything else → generic tool subject (can_remember=False)
     """
     if tool_name == "run_shell_command":
         cmd = args.get("cmd", "")
-        return CommandPatternApprovalSubject(tool_name=tool_name, cmd=cmd, pattern=derive_pattern(cmd))
-    return ToolApprovalSubject(tool_name=tool_name)
+        tokens = cmd.split()
+        utility = tokens[0] if tokens else cmd
+        hint = f"[always → session: {utility} *]" if utility else ""
+        return ApprovalSubject(
+            tool_name=tool_name,
+            kind="shell",
+            value=utility,
+            display=f"run_shell_command(cmd={cmd!r})\n  {hint}" if hint else f"run_shell_command(cmd={cmd!r})",
+            can_remember=bool(utility),
+        )
 
+    if tool_name in ("write_file", "edit_file"):
+        path = args.get("path", "")
+        parent = str(Path(path).parent) if path else ""
+        # scope by tool_name so write_file and edit_file don't cross-approve
+        value = f"{tool_name}:{parent}" if parent else ""
+        hint = f"[always → session: {parent}/**]" if parent else ""
+        return ApprovalSubject(
+            tool_name=tool_name,
+            kind="path",
+            value=value,
+            display=f"{tool_name}(path={path!r})\n  {hint}" if hint else f"{tool_name}(path={path!r})",
+            can_remember=bool(parent),
+        )
 
-# ---------------------------------------------------------------------------
-# Approval helpers — all operate on ApprovalSubject, not raw tool names
-# ---------------------------------------------------------------------------
+    if tool_name == "web_fetch":
+        url = args.get("url", "")
+        domain = urlparse(url).hostname or ""
+        hint = f"[always → session: {domain}]" if domain else ""
+        return ApprovalSubject(
+            tool_name=tool_name,
+            kind="domain",
+            value=domain,
+            display=f"web_fetch(url={url!r})\n  {hint}" if hint else f"web_fetch(url={url!r})",
+            can_remember=bool(domain),
+        )
+
+    for prefix in sorted(mcp_prefixes, key=len, reverse=True):
+        if tool_name.startswith(f"{prefix}_"):
+            mcp_tool_name = tool_name[len(prefix) + 1:]
+            if not mcp_tool_name:
+                continue
+            value = f"{prefix}:{mcp_tool_name}"
+            return ApprovalSubject(
+                tool_name=tool_name,
+                kind="mcp_tool",
+                value=value,
+                display=f"{tool_name}(...)\n  [always → session: {value}]",
+                can_remember=True,
+            )
+
+    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+    return ApprovalSubject(
+        tool_name=tool_name,
+        kind="tool",
+        value=tool_name,
+        display=f"{tool_name}({args_str})",
+        can_remember=False,
+    )
 
 
 def decode_tool_args(raw_args: str | dict[str, Any] | None) -> dict[str, Any]:
@@ -69,52 +125,21 @@ def decode_tool_args(raw_args: str | dict[str, Any] | None) -> dict[str, Any]:
     return raw_args or {}
 
 
-def format_tool_call_description(subject: ApprovalSubject, args: dict[str, Any]) -> str:
-    """Build the user-facing approval description for one tool call."""
-    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    description = f"{subject.tool_name}({args_str})"
-    remember_hint = approval_remember_hint(subject)
-    if remember_hint:
-        description = f"{description}\n  {remember_hint}"
-    return description
-
-
-def approval_remember_hint(subject: ApprovalSubject) -> str | None:
-    """Return the prompt hint shown for an approval choice that can be remembered."""
-    if isinstance(subject, CommandPatternApprovalSubject):
-        return f"[always -> will remember: {subject.pattern}]"
-    return None
-
-
 def is_auto_approved(subject: ApprovalSubject, deps: CoDeps) -> bool:
-    """Return True when this approval subject is already auto-approved.
-
-    ToolApprovalSubject: checks the session approval set.
-    CommandPatternApprovalSubject: always False — the persistent approval
-    check already occurred inside run_shell_command before the deferred
-    request was raised.
-    """
-    if isinstance(subject, ToolApprovalSubject):
-        return subject.tool_name in deps.session.session_tool_approvals
-    return False
+    """Return True when this subject matches a remembered session approval rule."""
+    if not subject.can_remember:
+        return False
+    rule = SessionApprovalRule(kind=subject.kind, value=subject.value)
+    return rule in deps.session.session_approval_rules
 
 
 def remember_tool_approval(subject: ApprovalSubject, deps: CoDeps) -> None:
-    """Persist an approval choice using the subject-specific persistence strategy."""
-    if isinstance(subject, CommandPatternApprovalSubject):
-        add_approval(deps.config.exec_approvals_path, subject.cmd, subject.tool_name)
+    """Store a session approval rule for this subject if rememberable."""
+    if not subject.can_remember:
         return
-    deps.session.session_tool_approvals.add(subject.tool_name)
-
-
-def is_shell_command_persistently_approved(cmd: str, deps: CoDeps) -> bool:
-    """Return True when cmd matches a remembered shell approval pattern."""
-    entries = load_approvals(deps.config.exec_approvals_path)
-    found = find_approved(cmd, entries)
-    if found is None:
-        return False
-    update_last_used(deps.config.exec_approvals_path, found["id"])
-    return True
+    rule = SessionApprovalRule(kind=subject.kind, value=subject.value)
+    if rule not in deps.session.session_approval_rules:
+        deps.session.session_approval_rules.append(rule)
 
 
 def record_approval_choice(

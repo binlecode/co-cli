@@ -1,4 +1,4 @@
-"""Delegation agent helpers — result types and agent factories for co_cli/tools/delegation.py."""
+"""Sub-agent helpers — result types and agent factories for co_cli/tools/subagent.py."""
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -24,7 +24,7 @@ def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult
     """Create a read-only coder sub-agent with file tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps in the
-    delegation tool) and only has access to read-only file tools — no writes,
+    subagent tool) and only has access to read-only file tools — no writes,
     no shell, no network.
 
     Caller passes model_settings=resolved_model.settings to agent.run().

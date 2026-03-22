@@ -9,7 +9,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.context._orchestrate import _stream_events
+from co_cli.context._orchestrate import _run_stream_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
@@ -58,7 +58,7 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     """Progress callback wired as curried lambda routes to RecordingFrontend.on_tool_progress.
 
     Validates the join between the tool's tool_progress_callback usage and the frontend
-    protocol using the same curried lambda pattern _stream_events() applies at
+    protocol using the same curried lambda pattern _run_stream_turn() applies at
     FunctionToolCallEvent time. Existing tests wire a plain list appender; this test
     wires via the lambda so the tool_id binding and RecordingFrontend are both exercised.
     """
@@ -85,10 +85,10 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
 
 @pytest.mark.asyncio
 async def test_stream_events_real_check_capabilities_result_dispatches_correctly() -> None:
-    """Real check_capabilities() ToolResult shape survives _stream_events() dispatch.
+    """Real check_capabilities() ToolResult shape survives _run_stream_turn() dispatch.
 
     Gets the actual return value of check_capabilities (not a hand-crafted dict) and
-    feeds it through StaticEventAgent → _stream_events() → RecordingFrontend. Validates
+    feeds it through StaticEventAgent → _run_stream_turn() → RecordingFrontend. Validates
     that the real tool output shape triggers on_tool_complete with the full ToolResult,
     not None (which would happen if the _kind discriminator were missing or misspelled
     in the tool's make_result() call).
@@ -111,7 +111,7 @@ async def test_stream_events_real_check_capabilities_result_dispatches_correctly
     ])
     deps2 = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="check", deps=deps2, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -130,4 +130,41 @@ async def test_stream_events_real_check_capabilities_result_dispatches_correctly
     assert result.get("display"), "display field missing or empty in dispatched ToolResult"
     assert isinstance(result.get("tool_count"), int), (
         "tool_count metadata field missing — real ToolResult not passed through intact"
+    )
+
+
+def test_build_agent_per_tool_retry_budget() -> None:
+    """Per-tool retry budgets are set correctly by tier.
+
+    Write-once tier: retries=1 (write_file, edit_file).
+    Network tier: retries=3 (web_search, web_fetch).
+    Default tier: max_retries matches the agent-level default (list_directory has no
+    explicit override, so pydantic-ai propagates config.tool_retries to max_retries).
+
+    Note: pydantic-ai stores the agent-level default in Tool.max_retries when no
+    per-tool retries kwarg is passed — there is no None sentinel for "use default".
+    The invariant tested here is that default-tier tools are NOT in the write-once
+    bucket (max_retries != 1), distinguishing them from write-once tools.
+    """
+    config = CoConfig()
+    agent, _, _ = build_agent(config=config)
+    tools = agent._function_toolset.tools
+    assert tools["write_file"].max_retries == 1, (
+        f"write_file expected max_retries=1, got {tools['write_file'].max_retries}"
+    )
+    assert tools["edit_file"].max_retries == 1, (
+        f"edit_file expected max_retries=1, got {tools['edit_file'].max_retries}"
+    )
+    assert tools["web_search"].max_retries == 3, (
+        f"web_search expected max_retries=3, got {tools['web_search'].max_retries}"
+    )
+    assert tools["web_fetch"].max_retries == 3, (
+        f"web_fetch expected max_retries=3, got {tools['web_fetch'].max_retries}"
+    )
+    # Default tier: no explicit retries kwarg — pydantic-ai propagates the agent-level
+    # default (config.tool_retries) so max_retries equals the agent default, not the
+    # write-once budget of 1. Assert it equals the configured agent-level default.
+    assert tools["list_directory"].max_retries == config.tool_retries, (
+        f"list_directory expected agent-level default ({config.tool_retries}), "
+        f"got {tools['list_directory'].max_retries}"
     )

@@ -1,5 +1,9 @@
 # REVIEW: Voice for Co
 
+Status: forward-looking
+Aspect: multimodal interaction surface
+Pydantic-AI patterns: transcript-first interaction, interruption correctness, streaming I/O boundaries
+
 This document replaces the earlier split between `TODO-voice.md` and the older review. It is the single source of truth for whether voice is worth shipping in co-cli, what the current codebase can support, and what 2026 best practice says we should and should not copy.
 
 ## Verdict

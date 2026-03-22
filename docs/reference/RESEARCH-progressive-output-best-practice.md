@@ -1,5 +1,10 @@
 # RESEARCH — Progressive Output And Display Best Practice
 
+Status: shipped-with-gaps
+
+Aspect: interaction loop and display
+Pydantic-AI patterns: streaming events, frontend ownership, progress rendering around `run_stream_events`
+
 ## Goal
 
 Identify what actually converges across reference CLI assistant systems for progressive output and display, then translate that into a practical design direction for Co.
@@ -84,7 +89,7 @@ Current Co behavior:
 - there is no persistent config default for this behavior
 - `Co is thinking...` can sit on screen for the whole pre-tool model delay
 - tool-owned progress, generic waiting, and tool-call annotations can overlap awkwardly
-- `check_capabilities` returns a single final panel, not incremental tool-result streaming
+- `check_capabilities` now emits incremental progress updates, but the control-plane model is still only `--verbose`
 
 Main gaps relative to converged practice:
 - no config-backed default

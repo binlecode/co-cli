@@ -8,8 +8,9 @@ from typing import Any
 
 import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
-from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _stream_events, run_turn
+from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _run_stream_turn, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 # GraphAgentState is a pydantic-ai internal type (private module). It is used in
@@ -97,11 +98,11 @@ class RecordingFrontend:
 
 # StaticEventAgent and SequenceEventAgent are deliberate minimal dispatch fixtures.
 # They are not mocks (no unittest.mock, no monkeypatch). They exist because
-# _stream_events() dispatch logic cannot be exercised with a real agent without
+# _run_stream_turn() dispatch logic cannot be exercised with a real agent without
 # nondeterminism — a real model may emit events in any order and content varies.
 # These fixtures provide the exact event sequences needed to test specific branches.
 class StaticEventAgent:
-    """Minimal async event source compatible with _stream_events()."""
+    """Minimal async event source compatible with _run_stream_turn()."""
 
     def __init__(self, events: list[Any]) -> None:
         self._events = events
@@ -125,8 +126,30 @@ class SequenceEventAgent:
             yield event
 
 
+class InspectingSequenceAgent:
+    """Event source that records each call and can raise on a specific run."""
+
+    def __init__(self, runs: list[list[Any] | Exception]) -> None:
+        self._runs = runs
+        self._index = 0
+        self.calls: list[dict[str, Any]] = []
+
+    async def run_stream_events(self, user_input: Any, **kwargs: Any):
+        self.calls.append({
+            "user_input": user_input,
+            "message_history": kwargs.get("message_history"),
+            "deferred_tool_results": kwargs.get("deferred_tool_results"),
+        })
+        run = self._runs[self._index]
+        self._index += 1
+        if isinstance(run, Exception):
+            raise run
+        for event in run:
+            yield event
+
+
 # ---------------------------------------------------------------------------
-# _stream_events regression coverage
+# _run_stream_turn regression coverage
 # ---------------------------------------------------------------------------
 
 
@@ -141,7 +164,7 @@ async def test_stream_events_preserves_text_from_part_start_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _stream_events(
+    _, streamed_text = await _run_stream_turn(
         agent,
         user_input="hello",
         deps=deps,
@@ -169,7 +192,7 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _stream_events(
+    _, streamed_text = await _run_stream_turn(
         agent,
         user_input="why",
         deps=deps,
@@ -198,7 +221,7 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _stream_events(
+    _, streamed_text = await _run_stream_turn(
         agent,
         user_input="why",
         deps=deps,
@@ -291,7 +314,7 @@ async def test_run_turn_silent_on_normal_finish_reason():
 async def test_run_turn_calls_on_final_output_when_no_text_was_streamed() -> None:
     """Model response without streaming events reaches on_final_output.
 
-    When _stream_events() returns streamed_text=False (no PartStart/PartDelta for text),
+    When _run_stream_turn() returns streamed_text=False (no PartStart/PartDelta for text),
     run_turn() must route result.output to frontend.on_final_output(). If this branch
     silently breaks, the user sees a blank response with no error.
     """
@@ -362,7 +385,7 @@ async def test_stream_events_tool_start_fires_immediately_on_first_tool_call():
     agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="hello", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -393,7 +416,7 @@ async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independen
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="hello", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -512,7 +535,7 @@ async def test_stream_events_shell_result_reaches_tool_complete_as_str():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="list files", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -550,7 +573,7 @@ async def test_stream_events_empty_tool_result_reaches_tool_complete_as_none():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="hi", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -583,7 +606,7 @@ async def test_stream_events_retry_prompt_closes_tool_surface_with_none():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="search", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -616,7 +639,7 @@ async def test_stream_events_retry_prompt_clears_progress_callback():
     ])
     frontend = RecordingFrontend()
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="search", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -628,11 +651,12 @@ async def test_stream_events_retry_prompt_clears_progress_callback():
 
 
 @pytest.mark.asyncio
-async def test_stream_events_dict_without_kind_produces_tool_complete_none():
-    """Dict tool result missing '_kind' produces on_tool_complete(tool_id, None).
+async def test_stream_events_raw_dict_result_renders_as_summary():
+    """Raw dict tool result (no '_kind') renders as a compact key: value summary.
 
-    A dict without _kind='tool_result' is not a ToolResult — falls to the else
-    branch and produces None. The frontend must not attempt to render it.
+    MCP tools return raw JSON dicts without a _kind discriminator. The branch
+    renders them as a human-readable summary string rather than silently dropping
+    them as None.
     """
     frontend = RecordingFrontend()
     call_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="m1")
@@ -647,7 +671,7 @@ async def test_stream_events_dict_without_kind_produces_tool_complete_none():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="hi", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -656,8 +680,11 @@ async def test_stream_events_dict_without_kind_produces_tool_complete_none():
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
     tool_id, result = complete_events[0]
-    assert result is None, (
-        f"Expected None for dict without _kind discriminator, got: {result!r}"
+    assert isinstance(result, str), (
+        f"Expected str summary for raw dict result, got: {type(result).__name__!r} {result!r}"
+    )
+    assert "count" in result, (
+        f"Expected 'count' key in summary, got: {result!r}"
     )
 
 
@@ -665,13 +692,13 @@ async def test_stream_events_dict_without_kind_produces_tool_complete_none():
 async def test_stream_events_tool_progress_callback_curried_with_tool_id():
     """tool_progress_callback is curried with the tool_id from FunctionToolCallEvent.
 
-    When _stream_events() receives FunctionToolCallEvent it sets
+    When _run_stream_turn() receives FunctionToolCallEvent it sets
     deps.runtime.tool_progress_callback to a closure that calls
     frontend.on_tool_progress(tool_id, msg). Calling that callback must
     produce an on_tool_progress event with the correct tool_id — not a
     generic status line and not a new tool_start event.
 
-    We drive the callback manually at the point where _stream_events()
+    We drive the callback manually at the point where _run_stream_turn()
     processes FunctionToolCallEvent by subclassing RecordingFrontend to
     invoke the callback after on_tool_start is fired by the event loop.
     """
@@ -682,7 +709,7 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
 
         def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
             super().on_tool_start(tool_id, name, args_display)
-            # At this point _stream_events() sets the callback immediately after
+            # At this point _run_stream_turn() sets the callback immediately after
             # returning from on_tool_start, so we simulate progress that happens
             # between start and result by calling frontend.on_tool_progress directly.
             # This validates the RecordingFrontend contract: progress events carry
@@ -702,7 +729,7 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
         FunctionToolResultEvent(result=return_part),
     ])
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="check", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -746,7 +773,7 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _stream_events(
+    await _run_stream_turn(
         agent, user_input="recall", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -766,8 +793,10 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
 
 
 @pytest.mark.asyncio
-async def test_run_turn_shell_always_remembers_pattern(tmp_path) -> None:
-    """Choosing 'a' for a shell approval persists a remembered exec pattern."""
+async def test_run_turn_shell_always_stores_session_rule() -> None:
+    """Choosing 'a' for a shell approval stores a session rule for the git utility."""
+    from co_cli.deps import SessionApprovalRule
+
     approval_result = _make_deferred_result(
         "run_shell_command",
         {"cmd": "git commit -m 'fix'"},
@@ -781,7 +810,7 @@ async def test_run_turn_shell_always_remembers_pattern(tmp_path) -> None:
     frontend = RecordingFrontend(approval_policy="always")
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
-        config=CoConfig(exec_approvals_path=tmp_path / "exec-approvals.json"),
+        config=CoConfig(),
     )
 
     turn = await run_turn(
@@ -794,8 +823,7 @@ async def test_run_turn_shell_always_remembers_pattern(tmp_path) -> None:
     )
 
     assert turn.outcome == "continue"
-    prompt_events = [payload for kind, payload in frontend.events if kind == "prompt_approval"]
-    assert any("will remember: git commit *" in payload for payload in prompt_events)
+    assert SessionApprovalRule(kind="shell", value="git") in deps.session.session_approval_rules
 
 
 @pytest.mark.asyncio
@@ -840,8 +868,12 @@ async def test_run_turn_active_skill_does_not_bypass_deferred_prompt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_turn_non_shell_always_sets_session_auto_approval() -> None:
-    """Choosing 'a' for a non-shell tool stores a session-scoped tool approval."""
+async def test_run_turn_generic_tool_always_does_not_store_session_rule() -> None:
+    """'a' for a generic tool (save_memory) approves this call but stores no session rule.
+
+    Generic tools (can_remember=False) have no meaningful scope to remember —
+    'a' is treated as 'y' for the current call only.
+    """
     approval_result = _make_deferred_result(
         "save_memory",
         {"text": "remember this"},
@@ -865,4 +897,207 @@ async def test_run_turn_non_shell_always_sets_session_auto_approval() -> None:
     )
 
     assert turn.outcome == "continue"
-    assert "save_memory" in deps.session.session_tool_approvals
+    # Tool was approved (turn succeeded) but no rule was stored
+    assert deps.session.session_approval_rules == []
+
+
+@pytest.mark.asyncio
+async def test_run_turn_web_fetch_always_stores_domain_session_rule() -> None:
+    """'a' for web_fetch stores a domain session rule; same domain is auto-approved next call."""
+    approval_result = _make_deferred_result(
+        "web_fetch",
+        {"url": "https://docs.python.org/3/"},
+        "fetch1",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    # Second deferred call for the same domain — should be auto-approved (no prompt)
+    approval_result2 = _make_deferred_result(
+        "web_fetch",
+        {"url": "https://docs.python.org/2/"},
+        "fetch2",
+    )
+    final_result2 = _make_agent_run_result("done again", finish_reason="stop")
+    agent = SequenceEventAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        [AgentRunResultEvent(result=final_result)],
+        [AgentRunResultEvent(result=approval_result2)],
+        [AgentRunResultEvent(result=final_result2)],
+    ])
+    frontend = RecordingFrontend(approval_policy="always")
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    # First turn: user chooses 'a'
+    turn1 = await run_turn(
+        agent=agent,
+        user_input="fetch it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+    assert turn1.outcome == "continue"
+    assert len(deps.session.session_approval_rules) == 1
+    assert deps.session.session_approval_rules[0].kind == "domain"
+    assert deps.session.session_approval_rules[0].value == "docs.python.org"
+
+    # Second turn: same domain — auto-approved, no prompt_approval event
+    prompts_before = [e for e in frontend.events if e[0] == "prompt_approval"]
+    turn2 = await run_turn(
+        agent=agent,
+        user_input="fetch again",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+    assert turn2.outcome == "continue"
+    prompts_after = [e for e in frontend.events if e[0] == "prompt_approval"]
+    # No new prompt fired for the second fetch (auto-approved by session rule)
+    assert len(prompts_after) == len(prompts_before)
+
+
+@pytest.mark.asyncio
+async def test_run_turn_retries_resume_segment_after_network_error() -> None:
+    """Network retry after deferred approval must preserve the resumed segment state."""
+    approval_result = _make_deferred_result(
+        "save_memory",
+        {"text": "remember this"},
+        "mem-retry-1",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    agent = InspectingSequenceAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        ModelAPIError("test-model", "temporary network failure"),
+        [AgentRunResultEvent(result=final_result)],
+    ])
+    frontend = RecordingFrontend(approval_policy="approve")
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="save it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    assert len(agent.calls) == 3
+
+    resume_history = approval_result.all_messages()
+
+    first_call = agent.calls[0]
+    assert first_call["user_input"] == "save it"
+    assert first_call["message_history"] == []
+    assert first_call["deferred_tool_results"] is None
+
+    resumed_call = agent.calls[1]
+    assert resumed_call["user_input"] is None
+    assert resumed_call["message_history"] == resume_history
+    assert resumed_call["deferred_tool_results"] is not None
+    assert resumed_call["deferred_tool_results"].approvals["mem-retry-1"] is True
+
+    retried_call = agent.calls[2]
+    assert retried_call["user_input"] is None
+    assert retried_call["message_history"] == resume_history
+    assert retried_call["deferred_tool_results"] is not None
+    assert retried_call["deferred_tool_results"].approvals["mem-retry-1"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_turn_reflection_after_resume_uses_resume_history() -> None:
+    """HTTP 400 after deferred approval must append reflection to the resumed history."""
+    approval_result = _make_deferred_result(
+        "save_memory",
+        {"text": "remember this"},
+        "mem-retry-2",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    agent = InspectingSequenceAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        ModelHTTPError(400, "test-model", {"error": "bad tool args"}),
+        [AgentRunResultEvent(result=final_result)],
+    ])
+    frontend = RecordingFrontend(approval_policy="approve")
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="save it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    assert len(agent.calls) == 3
+
+    resume_history = approval_result.all_messages()
+    resumed_call = agent.calls[1]
+    assert resumed_call["user_input"] is None
+    assert resumed_call["message_history"] == resume_history
+    assert resumed_call["deferred_tool_results"] is not None
+
+    reflected_call = agent.calls[2]
+    assert reflected_call["user_input"] is None
+    assert reflected_call["deferred_tool_results"] is not None
+    assert len(reflected_call["message_history"]) == len(resume_history) + 1
+
+    reflection_msg = reflected_call["message_history"][-1]
+    assert isinstance(reflection_msg, ModelRequest)
+    assert isinstance(reflection_msg.parts[0], UserPromptPart)
+    assert "Please reformulate your tool call with valid JSON arguments." in reflection_msg.parts[0].content
+
+
+@pytest.mark.asyncio
+async def test_tool_args_display_known_tools() -> None:
+    """_tool_args_display returns the primary arg value for registered tools and '' for unknown.
+
+    Drives three cases through _run_stream_turn and checks on_tool_start args_display:
+    - web_search with query arg
+    - run_shell_command with cmd arg
+    - unknown tool name falls back to empty string
+    """
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    async def _run_single_tool(tool_name: str, args: dict) -> str:
+        """Run a single FunctionToolCallEvent and return the args_display captured."""
+        import json
+        frontend = RecordingFrontend()
+        call_part = ToolCallPart(tool_name=tool_name, args=json.dumps(args), tool_call_id="t1")
+        return_part = ToolReturnPart(tool_name=tool_name, content="ok", tool_call_id="t1")
+        agent = StaticEventAgent([
+            FunctionToolCallEvent(part=call_part),
+            FunctionToolResultEvent(result=return_part),
+        ])
+        await _run_stream_turn(
+            agent, user_input="x", deps=deps, message_history=[],
+            model_settings={}, usage_limits=UsageLimits(request_limit=5),
+            usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
+        )
+        start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
+        assert len(start_events) == 1
+        _tool_id, _name, args_display = start_events[0]
+        return args_display
+
+    # web_search: query arg
+    result = await _run_single_tool("web_search", {"query": "climate change"})
+    assert result == "climate change", f"web_search args_display wrong: {result!r}"
+
+    # run_shell_command: cmd arg
+    result = await _run_single_tool("run_shell_command", {"cmd": "ls -la"})
+    assert result == "ls -la", f"run_shell_command args_display wrong: {result!r}"
+
+    # write_file: path arg (not file_path — real tool param is "path")
+    result = await _run_single_tool("write_file", {"path": "/proj/src/foo.py", "content": "x"})
+    assert result == "/proj/src/foo.py", f"write_file args_display wrong: {result!r}"
+
+    # read_file: path arg
+    result = await _run_single_tool("read_file", {"path": "/proj/src/foo.py"})
+    assert result == "/proj/src/foo.py", f"read_file args_display wrong: {result!r}"
+
+    # unknown tool: empty string fallback
+    result = await _run_single_tool("unknown_tool_xyz", {"foo": "bar"})
+    assert result == "", f"unknown tool should return '', got: {result!r}"

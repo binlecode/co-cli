@@ -17,6 +17,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
+from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn_with_fallback
 from co_cli.context._history import precompute_compaction
 from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
@@ -30,7 +31,6 @@ from co_cli.commands._commands import (
     dispatch as dispatch_command, CommandContext, BUILTIN_COMMANDS,
     _load_skills, _build_completer_words, set_skill_commands,
 )
-from co_cli.tools._exec_approvals import prune_stale as _prune_stale_approvals
 from co_cli.context._session import touch_session, increment_compaction, save_session
 from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session
 
@@ -68,6 +68,25 @@ def _default(ctx: typer.Context):
         chat()
 
 
+def _consume_bg_compaction(
+    task: asyncio.Task | None,
+    deps: CoDeps,
+) -> None:
+    if task is None:
+        return
+    if task.done():
+        try:
+            deps.runtime.precomputed_compaction = task.result()
+        except asyncio.CancelledError:
+            # CancelledError is BaseException, not Exception — catch explicitly.
+            deps.runtime.precomputed_compaction = None
+        except Exception:
+            deps.runtime.precomputed_compaction = None
+    else:
+        task.cancel()
+        deps.runtime.precomputed_compaction = None
+
+
 async def _chat_loop(verbose: bool = False):
     frontend = TerminalFrontend()
 
@@ -77,7 +96,6 @@ async def _chat_loop(verbose: bool = False):
         completer=completer,
         complete_while_typing=False,
     )
-    _prune_stale_approvals(Path.cwd() / ".co-cli" / "exec-approvals.json", max_age_days=90)
     deps = create_deps()
     for status in deps.runtime.startup_statuses:
         frontend.on_status(status)
@@ -108,6 +126,10 @@ async def _chat_loop(verbose: bool = False):
         if deps.config.mcp_servers:
             mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
             deps.session.mcp_discovery_errors = discovery_errors
+            for prefix, err in discovery_errors.items():
+                frontend.on_status(
+                    f"MCP server {prefix!r} failed to list tools: {err} — those tools unavailable."
+                )
             tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 
@@ -156,14 +178,10 @@ async def _chat_loop(verbose: bool = False):
                         else:
                             continue
 
-                # Join background compaction if it completed while user was typing
-                if bg_compaction_task is not None:
-                    try:
-                        compaction_result = await bg_compaction_task
-                        deps.runtime.precomputed_compaction = compaction_result
-                    except Exception:
-                        deps.runtime.precomputed_compaction = None
-                    bg_compaction_task = None
+                # Opportunistically harvest a completed bg compaction result; cancel if still
+                # running — never block. Correctness falls back to inline compaction.
+                _consume_bg_compaction(bg_compaction_task, deps)
+                bg_compaction_task = None
 
                 # LLM turn — delegated to _orchestrate.run_turn_with_fallback()
                 # try/finally guarantees skill-env rollback on all exit paths
@@ -210,7 +228,8 @@ async def _chat_loop(verbose: bool = False):
                 session_data = touch_session(session_data)
                 save_session(deps.config.session_path, session_data)
 
-                # Spawn background compaction for the next turn
+                # Best-effort latency optimization — correctness does not depend on this task.
+                # Spawn background compaction for the next turn.
                 bg_compaction_task = asyncio.create_task(
                     precompute_compaction(
                         message_history, deps, primary_model,

@@ -5,15 +5,18 @@ LLM tests require a running provider (GEMINI_API_KEY or OLLAMA_HOST).
 """
 
 import asyncio
+import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    SystemPromptPart,
     TextPart,
     ToolReturnPart,
     UserPromptPart,
@@ -21,14 +24,17 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 
 from co_cli.context._history import (
+    CompactionResult,
+    OpeningContextState,
     summarize_messages,
     truncate_tool_returns,
     truncate_history_window,
+    inject_opening_context,
 )
 from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings as _settings, ROLE_REASONING
-from co_cli.deps import CoConfig
+from co_cli.deps import CoConfig, CoRuntimeState
 from tests._ollama import ensure_ollama_warm
 
 _CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
@@ -245,6 +251,54 @@ async def test_truncate_history_window_triggers_compaction():
     assert found_summary, "Expected a summary or static marker in compacted history"
 
 
+@pytest.mark.asyncio
+async def test_truncate_history_window_uses_precomputed_result():
+    """When precomputed_compaction holds a matching snapshot, its summary is used
+    directly — no LLM call is made.
+
+    Failure mode: snapshot guard broken, precomputed_compaction not read, or
+    summary not substituted → the precomputed text would not appear in output.
+    """
+    msgs: list[ModelMessage] = [
+        _user("What is Docker?"),
+        _assistant("Docker is a containerisation platform."),
+        _user("Tell me about images"),
+        _assistant("Images are read-only templates."),
+        _user("What about containers?"),
+        _assistant("Containers are running instances of images."),
+        _user("How do volumes work?"),
+        _assistant("Volumes persist data outside containers."),
+        _user("What about networks?"),
+        _assistant("Networks connect containers together."),
+    ]
+    assert len(msgs) == 10
+
+    # Boundaries for 10 plain messages with max_history_messages=6:
+    # head_end=2 (first TextPart response at index 1), tail_start=6 (index 10-4)
+    precomputed = CompactionResult(
+        summary_text="PRECOMPUTED_SUMMARY_MARKER",
+        head_end=2,
+        tail_start=6,
+        message_count=10,
+    )
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), max_history_messages=6)
+    ctx.deps.runtime.precomputed_compaction = precomputed
+
+    # No LLM is called in the precomputed path — no asyncio.timeout needed.
+    result = await truncate_history_window(ctx, msgs)
+
+    assert len(result) < len(msgs)
+    assert result[0] is msgs[0]
+    assert result[-1] is msgs[-1]
+    found = any(
+        isinstance(part, UserPromptPart) and "PRECOMPUTED_SUMMARY_MARKER" in part.content
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+    )
+    assert found, "Expected precomputed summary text in compacted history"
+
+
 # ---------------------------------------------------------------------------
 # /compact via dispatch — requires running LLM provider
 # ---------------------------------------------------------------------------
@@ -298,4 +352,120 @@ async def test_compact_produces_two_message_history():
     ack_part = result.history[1].parts[0]
     assert isinstance(ack_part, TextPart)
     assert "Understood" in ack_part.content
+
+
+# ---------------------------------------------------------------------------
+# truncate_tool_returns — no mutation
+# ---------------------------------------------------------------------------
+
+
+def test_trim_does_not_mutate_input():
+    """truncate_tool_returns must not mutate the original messages or their parts."""
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), tool_output_trim_chars=50)
+    long_content = "a" * 200
+    msgs: list[ModelMessage] = [
+        _user("q"),
+        _tool_return("shell", long_content),
+        _assistant("ok"),
+        _user("next"),
+        _assistant("done"),
+    ]
+    original_content = msgs[1].parts[0].content
+    result = truncate_tool_returns(ctx, msgs)
+    # Original message must be unchanged
+    assert msgs[1].parts[0].content == original_content
+    # Returned result must be truncated
+    assert len(result[1].parts[0].content) < len(long_content)
+    assert "truncated" in result[1].parts[0].content
+
+
+# ---------------------------------------------------------------------------
+# truncate_history_window — static marker fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_truncate_history_window_static_marker_when_no_precomputed():
+    """When precomputed_compaction is None and history exceeds threshold, static marker is used."""
+    msgs: list[ModelMessage] = [
+        _user("What is Docker?"),
+        _assistant("Docker is a containerisation platform."),
+        _user("Tell me about images"),
+        _assistant("Images are read-only templates."),
+        _user("What about containers?"),
+        _assistant("Containers are running instances of images."),
+        _user("How do volumes work?"),
+        _assistant("Volumes persist data outside containers."),
+        _user("What about networks?"),
+        _assistant("Networks connect containers together."),
+    ]
+    assert len(msgs) == 10
+    ctx = _real_run_context(FunctionModel(lambda m, i: None), max_history_messages=6)
+    # precomputed_compaction is None by default
+    assert ctx.deps.runtime.precomputed_compaction is None
+    result = await truncate_history_window(ctx, msgs)
+    assert len(result) < len(msgs)
+    found = any(
+        isinstance(part, UserPromptPart)
+        and re.search(r"\[Earlier conversation trimmed", part.content)
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+    )
+    assert found, "Expected static marker when precomputed_compaction is None"
+
+
+# ---------------------------------------------------------------------------
+# inject_opening_context — memory_injection_max_chars cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_inject_opening_context_caps_memory_content(tmp_path: Path):
+    """inject_opening_context truncates injected content to memory_injection_max_chars."""
+    from dataclasses import replace as dc_replace
+    from pydantic_ai._run_context import RunContext
+    from co_cli.deps import CoDeps, CoServices
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write 5 memories with 1000-char bodies matching query keyword "kw-cap-test"
+    for i in range(1, 6):
+        long_body = "x" * 1000
+        fm: dict = {"id": i, "created": "2026-01-01T00:00:00+00:00", "tags": ["kw-cap-test"]}
+        md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\nkw-cap-test {long_body}\n"
+        (memory_dir / f"{i:03d}-kw-cap-test.md").write_text(md, encoding="utf-8")
+
+    max_chars = 200
+    config = dc_replace(
+        CoConfig(knowledge_search_backend="grep", memory_injection_max_chars=max_chars),
+        memory_dir=memory_dir,
+    )
+    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState())
+    from co_cli.tools._shell_backend import ShellBackend
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=config,
+        runtime=runtime,
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    msgs: list[ModelMessage] = [_user("kw-cap-test")]
+    async with asyncio.timeout(30):
+        result = await inject_opening_context(ctx, msgs)
+
+    injected_parts = [
+        part
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, SystemPromptPart)
+    ]
+    assert len(injected_parts) >= 1, "Expected at least one injected SystemPromptPart"
+    prefix = "Relevant memories:\n"
+    for part in injected_parts:
+        assert len(part.content) <= max_chars + len(prefix), (
+            f"Injected content length {len(part.content)} exceeds cap {max_chars + len(prefix)}"
+        )
 

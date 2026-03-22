@@ -29,7 +29,7 @@ class StatusInfo:
     google_detail: str
     obsidian: str  # "configured" | "not found"
     web_search: str  # "configured" | "not configured"
-    mcp_servers: list[tuple[str, str]]  # [(name, "configured"), ...]
+    mcp_servers: list[tuple[str, str, bool]]  # [(name, status, approval_required), ...]
     tool_count: int
     db_size: str  # "1.2 KB" | "0 KB"
     project_config: str | None  # path to .co-cli/settings.json or None
@@ -105,7 +105,7 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
     brave_item = doctor.by_name("brave")
     web_search = "configured" if brave_item and brave_item.status == "ok" else "not configured"
 
-    mcp_status: list[tuple[str, str]] = []
+    mcp_status: list[tuple[str, str, bool]] = []
     for item in doctor.checks:
         if not item.name.startswith("mcp:"):
             continue
@@ -116,7 +116,9 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
             status_str = "ready"
         else:
             status_str = item.detail
-        mcp_status.append((server_name, status_str))
+        mcp_cfg = config.mcp_servers.get(server_name)
+        approval_required = mcp_cfg.approval == "ask" if mcp_cfg else False
+        mcp_status.append((server_name, status_str, approval_required))
 
     # -- db size --
     db_size = f"{os.path.getsize(LOGS_DB) / 1024:.1f} KB" if LOGS_DB.exists() else "0 KB"
@@ -153,7 +155,6 @@ class SecurityFinding:
 def check_security(
     _user_config_path: Path | None = None,
     _project_config_path: Path | None = None,
-    _approvals_path: Path | None = None,
 ) -> list[SecurityFinding]:
     """Run security posture checks. Returns a list of findings (empty = all clear).
 
@@ -188,20 +189,6 @@ def check_security(
                 remediation=f"chmod 600 {project_cfg}",
             ))
 
-    # Check 3: exec-approvals wildcard catch-all entries
-    approvals_path = _approvals_path or (Path.cwd() / ".co-cli" / "exec-approvals.json")
-    if approvals_path.exists():
-        from co_cli.tools._exec_approvals import load_approvals
-        entries = load_approvals(approvals_path)
-        wildcards = [e for e in entries if e.get("pattern") == "*"]
-        if wildcards:
-            findings.append(SecurityFinding(
-                severity="warn",
-                check_id="exec-approval-wildcard",
-                detail=f"{len(wildcards)} exec approval(s) with catch-all pattern '*' (approves any shell command)",
-                remediation="Run /approvals clear to review and remove wildcard entries",
-            ))
-
     return findings
 
 
@@ -228,12 +215,14 @@ def render_status_table(info: StatusInfo) -> Table:
     table.add_row("Obsidian", info.obsidian.title(), info.obsidian_vault_path or "None")
     table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")
     if info.mcp_servers:
-        ready = sum(1 for _, s in info.mcp_servers if s == "ready")
+        ready = sum(1 for _, s, _approval in info.mcp_servers if s == "ready")
         total = len(info.mcp_servers)
         status_str = f"{ready}/{total} ready" if ready < total else f"{total} ready"
         details = ", ".join(
-            name if s == "ready" else f"{name} ({s})"
-            for name, s in info.mcp_servers
+            (
+                f"{name} (ready, approval-gated)" if approval_req else f"{name} (ready, auto-approved)"
+            ) if s == "ready" else f"{name} ({s})"
+            for name, s, approval_req in info.mcp_servers
         )
         table.add_row("MCP Servers", status_str, details)
     table.add_row("Database", "Active", info.db_size)

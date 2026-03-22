@@ -1,6 +1,10 @@
 # RESEARCH: Pydantic-AI vs Pi-Mono
 _Date: 2026-03-16_
 
+Status: framework-pattern reference
+Aspect: framework comparison
+Pydantic-AI patterns: dependency injection, typed outputs, streaming FSMs, workflow ownership
+
 This technical review provides a deep architectural comparison between **Pydantic-AI** and **pi-mono**, two prominent 2025/2026-era agentic SDKs that solve the "autonomous assistant" problem from radically different angles. 
 
 While **Pydantic-AI** is a robust, type-driven Python framework focused on building production-grade GenAI applications (the "FastAPI for GenAI"), **pi-mono** is an aggressively extensible, minimalist TypeScript terminal harness optimized for personal workflows and local operation.

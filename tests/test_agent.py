@@ -54,10 +54,10 @@ EXPECTED_TOOLS_CORE = {
 
 # Delegation tools are registered iff their role model is configured
 _ROLE_TO_TOOL = {
-    "coding": "delegate_coder",
-    "research": "delegate_research",
-    "analysis": "delegate_analysis",
-    "reasoning": "delegate_think",
+    "coding": "run_coder_subagent",
+    "research": "run_research_subagent",
+    "analysis": "run_analysis_subagent",
+    "reasoning": "run_thinking_subagent",
 }
 
 EXPECTED_TOOLS = EXPECTED_TOOLS_CORE | {

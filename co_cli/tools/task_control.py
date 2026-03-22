@@ -93,6 +93,8 @@ async def check_task_status(
     status = meta.get("status", "unknown")
     exit_code = meta.get("exit_code")
     is_binary = meta.get("is_binary", False)
+    description = meta.get("description", "")
+    started_at = meta.get("started_at")
 
     # Read duration from result.json when available
     duration: float | None = None
@@ -120,8 +122,8 @@ async def check_task_status(
 
     dur_str = f"{duration:.1f}s" if duration is not None else "in progress"
     display = (
-        f"Task {task_id}\n"
-        f"  Status: {status}  Exit: {exit_code}  Duration: {dur_str}\n"
+        f"Task {task_id}: {description}\n"
+        f"  Started: {started_at}  Status: {status}  Exit: {exit_code}  Duration: {dur_str}\n"
         f"  Output (last {tail_lines} lines):\n{output_display}"
     )
 
@@ -133,6 +135,8 @@ async def check_task_status(
         exit_code=exit_code,
         output_lines=output_lines,
         is_binary=is_binary,
+        description=description,
+        started_at=started_at,
     )
 
 

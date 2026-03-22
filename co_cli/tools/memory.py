@@ -26,7 +26,7 @@ from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
 from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
-from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD
+from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS
 from co_cli.deps import CoDeps
 from co_cli.tools._result import ToolResult, make_result
 
@@ -53,6 +53,8 @@ class MemoryEntry:
     decay_protected: bool = False
     related: list[str] | None = None
     kind: str = "memory"
+    artifact_type: str | None = None
+    always_on: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,8 @@ def _load_memories(
                     decay_protected=fm.get("decay_protected", False),
                     related=fm.get("related"),
                     kind=entry_kind,
+                    artifact_type=fm.get("artifact_type"),
+                    always_on=fm.get("always_on", False),
                 )
             )
         except Exception as e:
@@ -179,7 +183,7 @@ def _detect_provenance(tags: list[str] | None) -> str:
     if not tags:
         return "user-told"
 
-    signal_tags = {"preference", "correction", "decision", "context", "pattern"}
+    signal_tags = set(DEFAULT_MEMORY_AUTO_SAVE_TAGS)
     return "detected" if any(t in signal_tags for t in tags) else "user-told"
 
 
@@ -280,62 +284,6 @@ def _touch_memory(entry: MemoryEntry) -> None:
         logger.warning(f"Failed to touch memory {entry.id}: {e}")
 
 
-def _dedup_pulled(
-    entries: list[MemoryEntry], threshold: int = DEFAULT_MEMORY_DEDUP_THRESHOLD
-) -> list[MemoryEntry]:
-    """Deduplicate pulled results by pairwise similarity.
-
-    When two pulled memories are too similar, consolidates them: merges tags,
-    keeps newer content, deletes the older file.
-
-    Args:
-        entries: List of pulled MemoryEntry objects
-        threshold: Similarity threshold percentage
-
-    Returns:
-        Deduplicated list of MemoryEntry objects
-    """
-    if len(entries) <= 1:
-        return entries
-
-    # Track which entries are still alive (not merged away)
-    alive = list(entries)
-    to_remove: set[int] = set()
-
-    for i in range(len(alive)):
-        if alive[i].id in to_remove:
-            continue
-        for j in range(i + 1, len(alive)):
-            if alive[j].id in to_remove:
-                continue
-
-            similarity = fuzz.token_sort_ratio(
-                alive[i].content.lower().strip(),
-                alive[j].content.lower().strip(),
-            )
-
-            if similarity >= threshold:
-                # Keep the newer one, consolidate into it
-                newer, older = alive[i], alive[j]
-                if _parse_created(older.created) > _parse_created(newer.created):
-                    newer, older = older, newer
-
-                # Merge tags and update
-                try:
-                    _update_existing_memory(
-                        newer, newer.content, list(set(newer.tags + older.tags))
-                    )
-                    older.path.unlink()
-                    to_remove.add(older.id)
-                    logger.info(
-                        f"Dedup: merged memory {older.id} into {newer.id} "
-                        f"(similarity: {similarity:.1f}%)"
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to dedup memories {older.id}/{newer.id}: {e}")
-
-    return [e for e in alive if e.id not in to_remove]
-
 
 # ---------------------------------------------------------------------------
 # Dedup
@@ -420,9 +368,6 @@ def _update_existing_memory(
     existing_fm["certainty"] = _classify_certainty(new_content)
     existing_fm.setdefault("kind", "memory")
 
-    # Clean up dead metadata from old files
-    existing_fm.pop("consolidation_reason", None)
-
     # Write back to same file (in-place update)
     md_content = (
         f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n"
@@ -442,6 +387,26 @@ def _update_existing_memory(
 
 
 # ---------------------------------------------------------------------------
+# Always-on standing context
+# ---------------------------------------------------------------------------
+
+
+_ALWAYS_ON_CAP = 5
+
+
+def load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
+    """Return up to _ALWAYS_ON_CAP memories with always_on=True.
+
+    Loads all memories, filters to always_on entries, and caps at 5.
+    Returns an empty list when memory_dir does not exist.
+    """
+    if not memory_dir.exists():
+        return []
+    memories = _load_memories(memory_dir)
+    return [m for m in memories if m.always_on][:_ALWAYS_ON_CAP]
+
+
+# ---------------------------------------------------------------------------
 # Public tools
 # ---------------------------------------------------------------------------
 
@@ -451,6 +416,7 @@ async def save_memory(
     content: str,
     tags: list[str] | None = None,
     related: list[str] | None = None,
+    always_on: bool = False,
 ) -> ToolResult:
     """Save a memory for cross-session persistence. Duplicates are
     auto-detected and consolidated — safe to call without checking first.
@@ -495,7 +461,7 @@ async def save_memory(
 
     with _TRACER.start_as_current_span("co.memory.save") as span:
         span.set_attribute("memory.tags", ",".join(tags or []))
-        result = await persist_memory(ctx.deps, content, tags, related, on_failure="add", model=ctx.model)
+        result = await persist_memory(ctx.deps, content, tags, related, on_failure="add", model=ctx.model, always_on=always_on)
         span.set_attribute("memory.action", result.get("action", "unknown"))
         span.set_attribute("memory.memory_id", result.get("memory_id", 0))
         if "similarity" in result:
@@ -597,21 +563,25 @@ async def recall_memory(
                         decay_protected=fm.get("decay_protected", False),
                         related=fm.get("related"),
                         kind=fm.get("kind", "memory"),
+                        artifact_type=fm.get("artifact_type"),
+                        always_on=fm.get("always_on", False),
                     ))
                 except Exception as e:
                     logger.warning(f"Failed to load FTS match {r.path}: {e}")
-            # Composite BM25 + decay scoring — preserves lexical signal alongside recency.
+            # Exclude session-summary artifacts from default recall
+            raw_matches = [m for m in raw_matches if m.artifact_type != "session_summary"]
+            # Composite relevance + decay scoring — preserves lexical signal alongside recency.
             # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
-            # so higher bm25 = better match before combining with decay.
+            # so higher relevance = better match before combining with decay.
             half_life = ctx.deps.config.memory_recall_half_life_days
             scored: list[tuple[float, MemoryEntry]] = []
             for entry in raw_matches:
-                bm25 = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
+                relevance = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
                 if entry.decay_protected:
                     decay = 1.0
                 else:
                     decay = _decay_multiplier(entry.created, half_life)
-                composite = 0.6 * bm25 + 0.4 * decay
+                composite = 0.6 * relevance + 0.4 * decay
                 scored.append((composite, entry))
             scored.sort(key=lambda x: x[0], reverse=True)
             matches = [e for _, e in scored][:max_results]
@@ -628,6 +598,7 @@ async def recall_memory(
                 memories = [m for m in memories if m.created and m.created >= created_after]
             if created_before:
                 memories = [m for m in memories if m.created and m.created <= created_before]
+            memories = [m for m in memories if m.artifact_type != "session_summary"]
             matches = _grep_recall(memories, query, max_results)
     else:
         memories = _load_memories(memory_dir)
@@ -640,6 +611,7 @@ async def recall_memory(
             memories = [m for m in memories if m.created and m.created >= created_after]
         if created_before:
             memories = [m for m in memories if m.created and m.created <= created_before]
+        memories = [m for m in memories if m.artifact_type != "session_summary"]
         matches = _grep_recall(memories, query, max_results)
 
     if not matches:
@@ -648,18 +620,6 @@ async def recall_memory(
             count=0,
             results=[],
         )
-
-    # Gravity: dedup collisions among pulled results
-    before_paths = {str(m.path) for m in matches}
-    matches = _dedup_pulled(matches, threshold=ctx.deps.config.memory_dedup_threshold)
-    after_paths = {str(m.path) for m in matches}
-    deleted_paths = before_paths - after_paths
-    if deleted_paths and ctx.deps.services.knowledge_index is not None:
-        for p in deleted_paths:
-            try:
-                ctx.deps.services.knowledge_index.remove("memory", p)
-            except Exception as e:
-                logger.warning(f"Failed to remove stale FTS entry {p}: {e}")
 
     # One-hop traversal: surface related memories (§14.1)
     match_ids = {m.id for m in matches}
@@ -684,10 +644,6 @@ async def recall_memory(
                 break
         if len(related_entries) >= 5:
             break
-
-    # Gravity: touch pulled memories (refresh updated timestamp)
-    for match in matches:
-        _touch_memory(match)
 
     # Format as markdown list
     lines = [
@@ -790,6 +746,21 @@ async def search_memories(
             if not results:
                 return make_result(f"No memories found matching '{query}'", count=0, results=[])
 
+            # Exclude session-summary artifacts by reading each hit's frontmatter
+            filtered = []
+            for r in results:
+                if r.path:
+                    try:
+                        fm, _ = parse_frontmatter(Path(r.path).read_text(encoding="utf-8"))
+                        if fm.get("artifact_type") == "session_summary":
+                            continue
+                    except Exception:
+                        pass
+                filtered.append(r)
+            results = filtered
+            if not results:
+                return make_result(f"No memories found matching '{query}'", count=0, results=[])
+
             lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
             result_dicts = []
             for r in results:
@@ -826,6 +797,7 @@ async def search_memories(
         memories = [m for m in memories if m.created and m.created >= created_after]
     if created_before:
         memories = [m for m in memories if m.created and m.created <= created_before]
+    memories = [m for m in memories if m.artifact_type != "session_summary"]
 
     matches = _grep_recall(memories, query, limit)
     if not matches:
@@ -918,6 +890,7 @@ async def list_memories(
             {
                 "id": m.id,
                 "kind": m.kind,
+                "artifact_type": m.artifact_type,
                 "created": m.created,
                 "updated": m.updated,
                 "tags": m.tags,
@@ -950,8 +923,9 @@ async def list_memories(
         protected_str = " 🔒" if md.get("decay_protected") else ""
 
         kind_str = f" [{md.get('kind', 'memory')}]"
+        artifact_str = f" ({md['artifact_type']})" if md.get("artifact_type") else ""
         lines.append(
-            f"**{md['id']:03d}** ({date_str}){kind_str}{category_str}{protected_str} "
+            f"**{md['id']:03d}** ({date_str}){kind_str}{artifact_str}{category_str}{protected_str} "
             f": {md['summary']}"
         )
 

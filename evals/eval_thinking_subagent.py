@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Eval: delegate_think — verify the thinking subagent is called and returns structured reasoning.
+"""Eval: run_thinking_subagent — verify the thinking subagent is called and returns structured reasoning.
 
 Gates:
-  tool_call_rate     >= 1.00  (delegate_think called on every case)
+  tool_call_rate     >= 1.00  (run_thinking_subagent called on every case)
   plan_nonempty      >= 1.00  (plan field non-empty on every case)
   steps_sufficient   >= 1.00  (steps list has >= 2 entries on every case)
   conclusion_nonempty >= 1.00 (conclusion field non-empty on every case)
@@ -53,7 +53,7 @@ CASES: list[ThinkCase] = [
     ThinkCase(
         id="rca-ci-timeout",
         prompt=(
-            "Use delegate_think to reason through this: "
+            "Use run_thinking_subagent to reason through this: "
             "A production CI pipeline runs integration tests that pass locally every time "
             "but fail with a 30-second timeout on exactly one step — `docker exec` into a "
             "running container — only on the second test run within the same CI job, never "
@@ -64,7 +64,7 @@ CASES: list[ThinkCase] = [
     ThinkCase(
         id="architecture-tradeoff",
         prompt=(
-            "Use delegate_think to reason through this: "
+            "Use run_thinking_subagent to reason through this: "
             "co-cli currently stores all knowledge as flat markdown files with FTS5 full-text "
             "search in SQLite. A user asks whether to migrate to a vector database for semantic "
             "search. Decompose the tradeoff: what does FTS5 do well that vectors don't, what "
@@ -75,7 +75,7 @@ CASES: list[ThinkCase] = [
     ThinkCase(
         id="context-window-degradation",
         prompt=(
-            "Use delegate_think to reason through this: "
+            "Use run_thinking_subagent to reason through this: "
             "A user reports that after approximately 40 turns in a single co-cli session, "
             "responses become noticeably slower and less accurate — the agent starts repeating "
             "itself, misses context from earlier in the conversation, and occasionally calls "
@@ -125,10 +125,10 @@ async def run_case(
 
     calls = extract_tool_calls(result.messages)
     tool_names = [name for name, _ in calls]
-    think_calls = [(name, args) for name, args in calls if name == "delegate_think"]
+    think_calls = [(name, args) for name, args in calls if name == "run_thinking_subagent"]
 
     # Extract ThinkingResult fields from the ToolReturnPart in message history.
-    # ToolReturnPart.content is the dict returned by delegate_think.
+    # ToolReturnPart.content is the dict returned by run_thinking_subagent.
     plan = ""
     steps: list[str] = []
     conclusion = ""
@@ -138,7 +138,7 @@ async def run_case(
         for part in msg.parts:
             if not isinstance(part, ToolReturnPart):
                 continue
-            if part.tool_name != "delegate_think":
+            if part.tool_name != "run_thinking_subagent":
                 continue
             content = part.content
             if isinstance(content, dict):
@@ -149,7 +149,7 @@ async def run_case(
     return {
         "id": case.id,
         "tool_names": tool_names,
-        "delegate_think_called": len(think_calls) > 0,
+        "run_thinking_subagent_called": len(think_calls) > 0,
         "plan_nonempty": bool(plan),
         "steps_sufficient": len(steps) >= 2,
         "conclusion_nonempty": bool(conclusion),
@@ -172,7 +172,7 @@ def compute_metrics(results: list[dict]) -> dict[str, float]:
     if n == 0:
         return {k: 0.0 for k in THRESHOLDS}
     return {
-        "tool_call_rate": sum(1 for r in results if r["delegate_think_called"]) / n,
+        "tool_call_rate": sum(1 for r in results if r["run_thinking_subagent_called"]) / n,
         "plan_nonempty": sum(1 for r in results if r["plan_nonempty"]) / n,
         "steps_sufficient": sum(1 for r in results if r["steps_sufficient"]) / n,
         "conclusion_nonempty": sum(1 for r in results if r["conclusion_nonempty"]) / n,
@@ -192,7 +192,7 @@ def print_report(results: list[dict], metrics: dict, failures: list[str]) -> Non
     print("\n=== Thinking Subagent Eval ===\n")
     for r in results:
         status = "PASS" if (
-            r["delegate_think_called"]
+            r["run_thinking_subagent_called"]
             and r["plan_nonempty"]
             and r["steps_sufficient"]
             and r["conclusion_nonempty"]
@@ -226,14 +226,14 @@ def print_report(results: list[dict], metrics: dict, failures: list[str]) -> Non
 
 async def main() -> int:
     print("=" * 60)
-    print("  Eval: Thinking Subagent (delegate_think)")
+    print("  Eval: Thinking Subagent (run_thinking_subagent)")
     print("=" * 60)
 
     config = CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())
     registry = ModelRegistry.from_config(config)
 
     if not registry.is_configured(ROLE_REASONING):
-        print(f"\nSKIP: ROLE_REASONING not configured — delegate_think cannot run.")
+        print(f"\nSKIP: ROLE_REASONING not configured — run_thinking_subagent cannot run.")
         return 0
 
     agent, _, _ = build_agent(config=config)
@@ -250,7 +250,7 @@ async def main() -> int:
             r = await run_case(case, agent, deps, model_settings)
             results.append(r)
             status = "PASS" if (
-                r["delegate_think_called"] and r["plan_nonempty"]
+                r["run_thinking_subagent_called"] and r["plan_nonempty"]
                 and r["steps_sufficient"] and r["conclusion_nonempty"]
                 and r["final_text"]
             ) else "FAIL"
@@ -258,7 +258,7 @@ async def main() -> int:
         except asyncio.TimeoutError:
             print("  → TIMEOUT (180s)")
             results.append({
-                "id": case.id, "tool_names": [], "delegate_think_called": False,
+                "id": case.id, "tool_names": [], "run_thinking_subagent_called": False,
                 "plan_nonempty": False, "steps_sufficient": False,
                 "conclusion_nonempty": False, "final_text": False,
                 "elapsed": 120.0, "outcome": "timeout",
@@ -267,7 +267,7 @@ async def main() -> int:
         except Exception as exc:
             print(f"  → ERROR: {exc}")
             results.append({
-                "id": case.id, "tool_names": [], "delegate_think_called": False,
+                "id": case.id, "tool_names": [], "run_thinking_subagent_called": False,
                 "plan_nonempty": False, "steps_sufficient": False,
                 "conclusion_nonempty": False, "final_text": False,
                 "elapsed": 0.0, "outcome": f"error: {exc}",

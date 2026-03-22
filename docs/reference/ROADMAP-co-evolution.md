@@ -1,5 +1,7 @@
 # ROADMAP: co evolution
 
+Status: shipped-foundations
+
 This roadmap replaces the earlier phase plan that assumed co still lacked core agentic infrastructure. That assumption is no longer true. The current codebase already ships a capable local agent runtime with files, shell, memory, knowledge retrieval, background tasks, skills, MCP, and read-only delegation. The strategic question is no longer "how do we become agentic?" It is "what kind of personal agent should co become, and what must improve for that to be meaningfully better than the frontier?"
 
 ---
@@ -93,7 +95,7 @@ The previous roadmap listed several items as future phases that are now present 
 | Capability/health inspection | shipped in `co_cli/_doctor.py` and `co_cli/tools/capabilities.py` |
 | Knowledge/article system | shipped in `co_cli/tools/articles.py` and `_knowledge_index.py` |
 
-## 3.2 What is partially shipped but not yet frontier-grade
+## 3.2 Shipped foundations with remaining gaps
 
 - compaction exists, but auto-governance quality still matters more than existence
 - memory exists, but the user model is still mostly fact storage rather than a durable profile/habit system

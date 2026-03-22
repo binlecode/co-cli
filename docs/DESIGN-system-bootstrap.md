@@ -31,7 +31,6 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      completer=completer,
 │      complete_while_typing=False,
 │  )
-├─ prune_stale(.co-cli/exec-approvals.json, max_age_days=90)
 │
 ├─ create_deps()                             # bootstrap/_bootstrap.py
 │  │
@@ -80,17 +79,18 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      deps_type=CoDeps,
 │  │      retries=config.tool_retries,
 │  │      output_type=[str, DeferredToolRequests],
-│  │      history_processors=[inject_opening_context, truncate_tool_returns,
-│  │                          detect_safety_issues, truncate_history_window],
+│  │      history_processors=[truncate_tool_returns, detect_safety_issues,
+│  │                          inject_opening_context, truncate_history_window],
 │  │      toolsets=mcp_toolsets,             # None if no mcp_servers
 │  │  )
 │  ├─ @agent.instructions add_current_date          # today's date, fresh each turn
 │  ├─ @agent.instructions add_shell_guidance        # shell policy reminder
 │  ├─ @agent.instructions add_project_instructions  # .co-cli/instructions.md if present
+│  ├─ @agent.instructions add_always_on_memories    # always_on standing-context memories
 │  ├─ @agent.instructions add_personality_memories  # personality-context memories
-│  ├─ agent.tool(run_shell_command, requires_approval=False)  # ~30 tools registered
+│  ├─ agent.tool(run_shell_command, requires_approval=False)  # shell approval is command-scoped inside the tool
 │  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
-│  ├─ agent.tool(delegate_coder), agent.tool(delegate_think), ...  # only if role model is configured
+│  ├─ agent.tool(run_coder_subagent), agent.tool(run_thinking_subagent), ...  # only if role model is configured
 │  └─ returns (agent, tool_names, tool_approvals)
 │
 ├─ deps.session.tool_names     = tool_names
@@ -260,7 +260,6 @@ chat_loop():
     completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)  ← BUILTIN_COMMANDS-only
     session = PromptSession(history=..., completer=completer, ...)
 
-    _prune_stale_approvals(exec-approvals.json, max_age_days=90)
     deps = create_deps()   ← fail-fast on provider/model error; TaskRunner/TaskStorage constructed inside
 
     resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)

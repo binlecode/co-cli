@@ -374,10 +374,11 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     await _save_memory_impl(
         ctx.deps,
         content=summary,
-        tags=["session"],
+        tags=[],
         related=[],
         provenance="session",
         title=f"session-{timestamp}",
+        artifact_type="session_summary",
     )
 
     console.print(f"[dim]Session checkpointed as session-{timestamp}.md. Starting fresh.[/dim]")
@@ -590,54 +591,45 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
 
 
 async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
-    """Manage persistent exec approval patterns."""
-    from co_cli.tools._exec_approvals import load_approvals, save_approvals
-
-    path = ctx.deps.config.exec_approvals_path
+    """Manage session approval rules."""
     sub = args.strip().split(maxsplit=1)
     subcmd = sub[0].lower() if sub else "list"
-    subargs = sub[1] if len(sub) > 1 else ""
+    subargs = sub[1].strip() if len(sub) > 1 else ""
+
+    rules = ctx.deps.session.session_approval_rules
 
     if subcmd == "list":
-        entries = load_approvals(path)
-        if not entries:
-            console.print("[dim]No persistent approvals saved.[/dim]")
+        if not rules:
+            console.print("[dim]No session approval rules this session.[/dim]")
             return None
         from rich.table import Table
-        table = Table(title="Persistent Exec Approvals", border_style="accent")
-        table.add_column("ID", style="accent")
-        table.add_column("Pattern")
-        table.add_column("Last Used")
-        for e in entries:
-            table.add_row(
-                e.get("id", "?"),
-                e.get("pattern", "?"),
-                (e.get("last_used_at") or e.get("created_at", "?"))[:19],
-            )
+        table = Table(title="Session Approval Rules", border_style="accent")
+        table.add_column("#", style="dim")
+        table.add_column("Kind")
+        table.add_column("Value")
+        for i, rule in enumerate(rules):
+            table.add_row(str(i), rule.kind, rule.value)
         console.print(table)
 
     elif subcmd == "clear":
-        entries = load_approvals(path)
-        if not entries:
-            console.print("[dim]No approvals to clear.[/dim]")
+        if not rules:
+            console.print("[dim]No approval rules to clear.[/dim]")
             return None
         if subargs:
-            # Clear specific entry by ID
-            entry_id = subargs.strip()
-            new_entries = [e for e in entries if e.get("id") != entry_id]
-            if len(new_entries) == len(entries):
-                console.print(f"[bold red]No approval with id:[/bold red] {entry_id}")
-            else:
-                save_approvals(path, new_entries)
-                console.print(f"[success]✓ Removed approval {entry_id}[/success]")
+            try:
+                idx = int(subargs)
+                rules.pop(idx)
+                console.print(f"[success]✓ Removed approval rule {idx}[/success]")
+            except (ValueError, IndexError):
+                console.print(f"[bold red]No rule at index:[/bold red] {subargs}")
         else:
-            # Clear all
-            save_approvals(path, [])
-            console.print(f"[success]✓ Cleared {len(entries)} approval(s)[/success]")
+            count = len(rules)
+            rules.clear()
+            console.print(f"[success]✓ Cleared {count} approval rule(s)[/success]")
 
     else:
         console.print(f"[bold red]Unknown /approvals subcommand:[/bold red] {subcmd}")
-        console.print("[dim]Usage: /approvals [list|clear [id]][/dim]")
+        console.print("[dim]Usage: /approvals [list|clear [index]][/dim]")
 
     return None
 
@@ -889,7 +881,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
-    "approvals": SlashCommand("approvals", "Manage persistent exec approval patterns", _cmd_approvals),
+    "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),
     "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),
     "background": SlashCommand("background", "Run a command in the background", _cmd_background),
     "tasks": SlashCommand("tasks", "List background tasks", _cmd_tasks),

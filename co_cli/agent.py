@@ -21,12 +21,12 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories
+from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, load_always_on_memories
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.todo import todo_write, todo_read
 from co_cli.tools.capabilities import check_capabilities
 from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
-from co_cli.tools.delegation import delegate_coder, delegate_research, delegate_analysis, delegate_think
+from co_cli.tools.subagent import run_coder_subagent, run_research_subagent, run_analysis_subagent, run_thinking_subagent
 from co_cli.tools.task_control import (
     start_background_task,
     check_task_status,
@@ -133,9 +133,9 @@ def build_agent(
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[
-            inject_opening_context,
             truncate_tool_returns,
             detect_safety_issues,
+            inject_opening_context,
             truncate_history_window,
         ],
         toolsets=mcp_toolsets if mcp_toolsets else None,
@@ -165,6 +165,17 @@ def build_agent(
         return ""
 
     @agent.instructions
+    def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
+        """Inject always_on memories as standing context every turn."""
+        memory_dir = ctx.deps.config.memory_dir
+        entries = load_always_on_memories(memory_dir)
+        if not entries:
+            return ""
+        max_chars = ctx.deps.config.memory_injection_max_chars
+        text = "\n\n".join(e.content for e in entries)[:max_chars]
+        return f"Standing context:\n{text}"
+
+    @agent.instructions
     def add_personality_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject personality-context memories for relationship continuity."""
         if not ctx.deps.config.personality:
@@ -174,8 +185,11 @@ def build_agent(
 
     tool_approvals: dict[str, bool] = {}
 
-    def _register(fn, requires_approval: bool) -> None:
-        agent.tool(fn, requires_approval=requires_approval)
+    def _register(fn, requires_approval: bool, retries: int | None = None) -> None:
+        kwargs: dict[str, Any] = {"requires_approval": requires_approval}
+        if retries is not None:
+            kwargs["retries"] = retries
+        agent.tool(fn, **kwargs)
         tool_approvals[fn.__name__] = requires_approval
 
     # Background task management
@@ -187,32 +201,33 @@ def build_agent(
     # Capability introspection — no approval (read-only, no side effects)
     _register(check_capabilities, False)
 
-    # Sub-agent delegation — registered only when the role model is configured
+    # Sub-agent tools — registered only when the role model is configured
     if config.role_models.get(ROLE_CODING):
-        _register(delegate_coder, False)
+        _register(run_coder_subagent, False)
     if config.role_models.get(ROLE_RESEARCH):
-        _register(delegate_research, False)
+        _register(run_research_subagent, False)
     if config.role_models.get(ROLE_ANALYSIS):
-        _register(delegate_analysis, False)
+        _register(run_analysis_subagent, False)
     if config.role_models.get(ROLE_REASONING):
-        _register(delegate_think, False)
+        _register(run_thinking_subagent, False)
 
-    # Native file tools
+    # Native file tools — write-once tier: retries=1 (a second attempt on failure is safe)
     _register(list_directory, False)
     _register(read_file, False)
     _register(find_in_files, False)
-    _register(write_file, True)
-    _register(edit_file, True)
+    _register(write_file, True, retries=1)
+    _register(edit_file, True, retries=1)
 
     # Shell: fine-grained policy lives inside the tool (DENY/safe-prefix/ask).
     # Agent-layer approval is False; the tool raises ApprovalRequired for commands
     # that need user confirmation.
     _register(run_shell_command, False)
-    _register(create_email_draft, True)
-    _register(save_memory, True)
-    _register(save_article, True)
-    _register(update_memory, True)
-    _register(append_memory, True)
+    # Write-once tier: single retry for transient failures
+    _register(create_email_draft, True, retries=1)
+    _register(save_memory, True, retries=1)
+    _register(save_article, True, retries=1)
+    _register(update_memory, True, retries=1)
+    _register(append_memory, True, retries=1)
 
     # Session task tracking — no approval (in-memory only, no external side effects)
     _register(todo_write, False)
@@ -227,17 +242,19 @@ def build_agent(
     _register(search_notes, False)
     _register(read_note, False)
     _register(recall_article, False)
-    _register(search_drive_files, False)
-    _register(read_drive_file, False)
-    _register(list_emails, False)
-    _register(search_emails, False)
-    _register(list_calendar_events, False)
-    _register(search_calendar_events, False)
+    # Network tier: retries=3 for transient connectivity failures
+    _register(search_drive_files, False, retries=3)
+    _register(read_drive_file, False, retries=3)
+    _register(list_emails, False, retries=3)
+    _register(search_emails, False, retries=3)
+    _register(list_calendar_events, False, retries=3)
+    _register(search_calendar_events, False, retries=3)
     policy = config.web_policy
     search_approval = policy.search == "ask"
     fetch_approval = policy.fetch == "ask"
-    _register(web_search, search_approval)
-    _register(web_fetch, fetch_approval)
+    # Network tier: retries=3 for transient connectivity failures
+    _register(web_search, search_approval, retries=3)
+    _register(web_fetch, fetch_approval, retries=3)
 
     return agent, list(tool_approvals.keys()), tool_approvals
 

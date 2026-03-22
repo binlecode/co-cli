@@ -1,4 +1,4 @@
-"""Functional tests for the delegate_coder, delegate_research, and delegate_analysis tool wiring."""
+"""Functional tests for the run_coder_subagent, run_research_subagent, and run_analysis_subagent tool wiring."""
 
 import pytest
 from pathlib import Path
@@ -9,11 +9,11 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
-from co_cli.tools._delegation_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
+from co_cli.tools._subagent_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
 from co_cli.config import ModelEntry, settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.delegation import delegate_analysis, delegate_coder, delegate_research, delegate_think
+from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
@@ -29,13 +29,13 @@ def _make_ctx() -> RunContext:
 
 
 @pytest.mark.asyncio
-async def test_delegate_coder_no_model() -> None:
+async def test_run_coder_subagent_no_model() -> None:
     """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await delegate_coder(ctx, "analyze foo")
+        await run_coder_subagent(ctx, "analyze foo")
 
 
 def test_coder_result_model() -> None:
@@ -69,7 +69,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
         ),
         session=CoSessionState(
             session_id="parent-session",
-            session_tool_approvals={"run_shell_command", "write_file"},
             active_skill_env={"MY_VAR": "value"},
             drive_page_tokens={"folder": ["tok1"]},
             session_todos=[{"task": "do something"}],
@@ -83,7 +82,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
     isolated = make_subagent_deps(dirty)
 
     # Session resets to clean defaults
-    assert isolated.session.session_tool_approvals == set()
+    assert isolated.session.session_approval_rules == []
     assert isolated.session.active_skill_env == {}
     assert isolated.session.drive_page_tokens == {}
     assert isolated.session.session_todos == []
@@ -122,23 +121,23 @@ def test_make_research_agent_registers_web_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delegate_research_no_model() -> None:
+async def test_run_research_subagent_no_model() -> None:
     """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await delegate_research(ctx, "latest Python news")
+        await run_research_subagent(ctx, "latest Python news")
 
 
 @pytest.mark.asyncio
-async def test_delegate_research_max_requests_guard() -> None:
+async def test_run_research_subagent_max_requests_guard() -> None:
     """max_requests < 1 raises ModelRetry (checked before registry lookup)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="max_requests must be at least 1"):
-        await delegate_research(ctx, "any query", max_requests=0)
+        await run_research_subagent(ctx, "any query", max_requests=0)
 
 
 def test_analysis_result_model() -> None:
@@ -160,13 +159,13 @@ def test_make_analysis_agent_returns_agent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delegate_analysis_no_model() -> None:
+async def test_run_analysis_subagent_no_model() -> None:
     """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await delegate_analysis(ctx, "compare these documents")
+        await run_analysis_subagent(ctx, "compare these documents")
 
 
 def test_confidence_out_of_range_fails_validation() -> None:
@@ -203,30 +202,52 @@ def test_make_thinking_agent_no_tools() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delegate_think_no_model() -> None:
+async def test_run_thinking_subagent_no_model() -> None:
     """Raises ModelRetry matching 'unavailable' when model_registry is None."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await delegate_think(ctx, "solve this problem")
+        await run_thinking_subagent(ctx, "solve this problem")
 
 
 @pytest.mark.asyncio
-async def test_delegate_think_max_requests_guard() -> None:
+async def test_run_thinking_subagent_max_requests_guard() -> None:
     """max_requests=0 raises ModelRetry matching 'max_requests' (checked before registry lookup)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="max_requests"):
-        await delegate_think(ctx, "any problem", max_requests=0)
+        await run_thinking_subagent(ctx, "any problem", max_requests=0)
 
 
 @pytest.mark.asyncio
-async def test_delegate_coder_max_requests_guard() -> None:
-    """max_requests=0 raises ModelRetry matching 'max_requests' (parity with delegate_research/analysis)."""
+async def test_run_coder_subagent_max_requests_guard() -> None:
+    """max_requests=0 raises ModelRetry matching 'max_requests' (parity with run_research/analysis)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="max_requests"):
-        await delegate_coder(ctx, "analyze foo", max_requests=0)
+        await run_coder_subagent(ctx, "analyze foo", max_requests=0)
+
+
+def test_run_coder_subagent_make_result_scope_kwarg():
+    """make_result for run_coder_subagent must include scope from task input."""
+    from co_cli.tools._result import make_result
+    task = "a" * 200
+    scope = task[:120]
+    result = make_result(
+        f"Scope: {scope}\nCoder analysis complete.\ntest summary\n[coding · model · 1/10 req]",
+        summary="test summary",
+        diff_preview="",
+        files_touched=[],
+        confidence=0.8,
+        role="coding",
+        model_name="model",
+        requests_used=1,
+        request_limit=10,
+        scope=scope,
+    )
+    assert result.get("scope") == scope
+    assert len(result["scope"]) <= 120
+    assert result["display"].startswith("Scope: ")

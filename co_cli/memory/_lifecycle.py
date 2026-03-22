@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 def apply_plan_atomically(
     plan: Any,
     alias_map: dict[str, Any],
-    deps: CoDeps,
+    new_content: str,
 ) -> None:
     """Apply a ConsolidationPlan against resolved MemoryEntry objects.
 
@@ -36,7 +36,8 @@ def apply_plan_atomically(
     Args:
         plan: ConsolidationPlan with action decisions.
         alias_map: Dict mapping alias strings ("M1"...) to MemoryEntry objects.
-        deps: CoDeps (currently unused; retained for future config access).
+        new_content: The incoming content that triggered consolidation; used as the
+            replacement body for UPDATE actions.
     """
     from co_cli.tools.memory import _update_existing_memory
 
@@ -45,7 +46,7 @@ def apply_plan_atomically(
             if action.target_alias and action.target_alias in alias_map:
                 entry = alias_map[action.target_alias]
                 try:
-                    _update_existing_memory(entry, entry.content, entry.tags)
+                    _update_existing_memory(entry, new_content, entry.tags)
                 except Exception as e:
                     logger.warning(f"apply_plan_atomically UPDATE failed for {action.target_alias}: {e}")
         elif action.action == "DELETE":
@@ -72,6 +73,8 @@ async def persist_memory(
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
     model: Any = None,
+    artifact_type: str | None = None,
+    always_on: bool = False,
 ) -> ToolResult:
     """Write a memory through the full lifecycle: dedup → consolidate → write → retention.
 
@@ -95,7 +98,7 @@ async def persist_memory(
     """
     with _TRACER.start_as_current_span("co.memory.write") as span:
         span.set_attribute("memory.provenance", provenance or "auto")
-        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, model)
+        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, model, artifact_type, always_on)
 
 
 async def _persist_memory_inner(
@@ -107,6 +110,8 @@ async def _persist_memory_inner(
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
     model: Any = None,
+    artifact_type: str | None = None,
+    always_on: bool = False,
 ) -> dict[str, Any]:
     # Import here to avoid module-level circular import
     from co_cli.tools.memory import (
@@ -190,7 +195,7 @@ async def _persist_memory_inner(
             )[:deps.config.memory_consolidation_top_k]
             plan = await resolve(facts, candidates, model, timeout_seconds=timeout)
             alias_map = build_alias_map(candidates)
-            apply_plan_atomically(plan, alias_map, deps)
+            apply_plan_atomically(plan, alias_map, content)
 
             has_add = any(a.action == "ADD" for a in plan.actions)
             # Only exit early when there are non-ADD actions (MERGEs): content was
@@ -231,6 +236,10 @@ async def _persist_memory_inner(
     }
     if related:
         frontmatter["related"] = related
+    if artifact_type is not None:
+        frontmatter["artifact_type"] = artifact_type
+    if always_on:
+        frontmatter["always_on"] = True
 
     md_content = (
         f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"

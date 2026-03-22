@@ -93,7 +93,6 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         - tags: list[str]
         - auto_category: str (preference | correction | decision | context | pattern)
         - updated: ISO8601 timestamp string (added when consolidated)
-        - consolidation_reason: str (reason for consolidation)
         - decay_protected: bool (prevent decay if true)
 
     Args:
@@ -157,14 +156,6 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
                 "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
             )
 
-    if "consolidation_reason" in fm:
-        if fm["consolidation_reason"] is not None and not isinstance(
-            fm["consolidation_reason"], str
-        ):
-            raise ValueError(
-                "memory frontmatter field 'consolidation_reason' must be a string or null"
-            )
-
     if "decay_protected" in fm:
         if not isinstance(fm["decay_protected"], bool):
             raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
@@ -179,3 +170,11 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
                 raise ValueError("memory frontmatter field 'related' must be a list or null")
             if not all(isinstance(s, str) for s in fm["related"]):
                 raise ValueError("memory frontmatter field 'related' must contain only strings")
+
+    if "artifact_type" in fm:
+        if fm["artifact_type"] is not None and not isinstance(fm["artifact_type"], str):
+            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
+
+    if "always_on" in fm:
+        if not isinstance(fm["always_on"], bool):
+            raise ValueError("memory frontmatter field 'always_on' must be a boolean")

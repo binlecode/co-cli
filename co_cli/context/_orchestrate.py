@@ -34,7 +34,6 @@ from co_cli.tools._http_retry import parse_retry_after
 from co_cli.tools._tool_approvals import (
     ApprovalSubject,
     decode_tool_args,
-    format_tool_call_description,
     is_auto_approved,
     record_approval_choice,
     resolve_approval_subject,
@@ -226,25 +225,50 @@ def _patch_dangling_tool_calls(
 # _tool_args_display — per-tool args extraction for on_tool_start
 # ---------------------------------------------------------------------------
 
+_TOOL_DISPLAY_ARG: dict[str, str] = {
+    "run_shell_command": "cmd",
+    "web_search": "query",
+    "web_fetch": "url",
+    "read_file": "path",
+    "write_file": "path",
+    "edit_file": "path",
+    "find_in_files": "pattern",
+    "list_directory": "path",
+    "save_memory": "content",
+    "recall_article": "query",
+    "search_knowledge": "query",
+    "search_memories": "query",
+    "search_notes": "query",
+    "read_note": "filename",
+    "run_coder_subagent": "task",
+    "run_research_subagent": "query",
+    "run_analysis_subagent": "question",
+    "run_thinking_subagent": "problem",
+    "start_background_task": "command",
+    "check_task_status": "task_id",
+}
+
 
 def _tool_args_display(tool_name: str, part: ToolCallPart) -> str:
     """Isolate per-tool args extraction so FunctionToolCallEvent handler stays uniform."""
-    if tool_name == "run_shell_command":
-        return part.args_as_dict().get("cmd", "")
-    return ""
+    key = _TOOL_DISPLAY_ARG.get(tool_name)
+    if not key:
+        return ""
+    val = part.args_as_dict().get(key, "")
+    return str(val)[:120]
 
 
 # ---------------------------------------------------------------------------
-# _stream_events — extracted from _stream_agent_run
+# _run_stream_turn — per-turn stream driver: runs agent stream, dispatches frontend events
 # ---------------------------------------------------------------------------
 
 
-async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
+async def _run_stream_turn(agent: Agent, *, user_input: str | None, deps: CoDeps,
                          message_history: list, model_settings: dict | None = None,
                          usage_limits: UsageLimits, usage=None,
                          deferred_tool_results=None, verbose: bool,
                          frontend: FrontendProtocol):
-    """Stream agent events, dispatching to frontend callbacks.
+    """Run the agent stream for one turn segment, dispatching SDK events to frontend callbacks.
 
     Returns (result, streamed_text).
     """
@@ -307,6 +331,12 @@ async def _stream_events(agent: Agent, *, user_input: str | None, deps: CoDeps,
                     frontend.on_tool_complete(tool_id, content)
                 elif isinstance(content, dict) and content.get("_kind") == "tool_result":
                     frontend.on_tool_complete(tool_id, content)
+                elif isinstance(content, dict):
+                    # MCP tools return raw JSON dicts — render as compact key: value summary
+                    summary = "; ".join(f"{k}: {str(v)[:60]}" for k, v in list(content.items())[:5])
+                    if len(content) > 5:
+                        summary += f" (+{len(content) - 5} more)"
+                    frontend.on_tool_complete(tool_id, summary[:300] or None)
                 else:
                     frontend.on_tool_complete(tool_id, None)
                 continue
@@ -338,13 +368,17 @@ async def _collect_deferred_tool_approvals(
     """Collect approval decisions for all pending deferred tool requests.
 
     Returns DeferredToolResults without resuming the stream.
-    run_turn() resumes via _stream_events() as a separate step.
+    run_turn() resumes via _run_stream_turn() as a separate step.
     """
+    mcp_prefixes = frozenset(
+        cfg.prefix or name
+        for name, cfg in deps.config.mcp_servers.items()
+    )
     approvals = DeferredToolResults()
 
     for call in result.output.approvals:
         args = decode_tool_args(call.args)
-        subject = resolve_approval_subject(call.tool_name, args)
+        subject = resolve_approval_subject(call.tool_name, args, mcp_prefixes=mcp_prefixes)
 
         # Auto-approval — skip prompt if subject already approved this session
         if is_auto_approved(subject, deps):
@@ -352,8 +386,7 @@ async def _collect_deferred_tool_approvals(
             continue
 
         # User prompt
-        desc = format_tool_call_description(subject, args)
-        choice = frontend.prompt_approval(desc) if frontend is not None else "n"
+        choice = frontend.prompt_approval(subject.display) if frontend is not None else "n"
 
         record_approval_choice(
             approvals,
@@ -361,7 +394,7 @@ async def _collect_deferred_tool_approvals(
             approved=choice in ("y", "a"),
             subject=subject,
             deps=deps,
-            remember=choice == "a",
+            remember=choice == "a" and subject.can_remember,
         )
 
     return approvals
@@ -403,31 +436,39 @@ async def run_turn(
         streamed_text = False
         http_retries_left = http_retries
         current_input: str | None = user_input
+        current_history = message_history
+        current_deferred_results = None
         turn_limits = UsageLimits(request_limit=max_request_limit)
         turn_usage = None
         backoff_base = 1.0
 
         while True:
             try:
-                result, streamed_text = await _stream_events(
+                result, streamed_text = await _run_stream_turn(
                     agent, user_input=current_input, deps=deps,
-                    message_history=message_history, model_settings=model_settings,
+                    message_history=current_history, model_settings=model_settings,
                     usage_limits=turn_limits, usage=turn_usage,
+                    deferred_tool_results=current_deferred_results,
                     verbose=verbose, frontend=frontend,
                 )
                 turn_usage = result.usage()
+                current_deferred_results = None
 
                 # Approval flow interception loop: collect decisions, then resume the same stream
                 while isinstance(result.output, DeferredToolRequests):
                     approvals = await _collect_deferred_tool_approvals(result, deps, frontend)
-                    result, streamed_text = await _stream_events(
+                    current_input = None
+                    current_history = result.all_messages()
+                    current_deferred_results = approvals
+                    result, streamed_text = await _run_stream_turn(
                         agent, user_input=None, deps=deps,
-                        message_history=result.all_messages(),
+                        message_history=current_history,
                         model_settings=model_settings, usage_limits=turn_limits,
-                        usage=turn_usage, deferred_tool_results=approvals,
+                        usage=turn_usage, deferred_tool_results=current_deferred_results,
                         verbose=verbose, frontend=frontend,
                     )
                     turn_usage = result.usage()
+                    current_deferred_results = None
 
                 message_history = result.all_messages()
                 if not streamed_text and isinstance(result.output, str):
@@ -475,7 +516,7 @@ async def run_turn(
                     f"Turn limit reached ({max_request_limit} requests). "
                     "Asking for a progress summary..."
                 )
-                msgs = result.all_messages() if result else message_history
+                msgs = result.all_messages() if result else current_history
                 msgs = _patch_dangling_tool_calls(msgs)
                 grace_msg = ModelRequest(parts=[UserPromptPart(
                     content=(
@@ -485,7 +526,7 @@ async def run_turn(
                     ),
                 )])
                 try:
-                    grace_result, grace_streamed = await _stream_events(
+                    grace_result, grace_streamed = await _run_stream_turn(
                         agent, user_input=None, deps=deps,
                         message_history=msgs + [grace_msg],
                         model_settings=model_settings,
@@ -535,7 +576,7 @@ async def run_turn(
                             "your tool call with valid JSON arguments."
                         ),
                     )])
-                    message_history = message_history + [reflection]
+                    current_history = current_history + [reflection]
                     current_input = None
                     continue
 
@@ -553,7 +594,7 @@ async def run_turn(
 
                 # 401/403/404, unknown 4xx, or retries exhausted
                 frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
-                msgs = result.all_messages() if result else message_history
+                msgs = result.all_messages() if result else current_history
                 return TurnResult(
                     messages=msgs,
                     output=None,
@@ -577,7 +618,7 @@ async def run_turn(
                     continue
 
                 frontend.on_status(f"Network error: {e}")
-                msgs = result.all_messages() if result else message_history
+                msgs = result.all_messages() if result else current_history
                 return TurnResult(
                     messages=msgs,
                     output=None,
@@ -588,7 +629,7 @@ async def run_turn(
                 )
 
             except (KeyboardInterrupt, asyncio.CancelledError):
-                msgs = result.all_messages() if result else message_history
+                msgs = result.all_messages() if result else current_history
                 message_history = _patch_dangling_tool_calls(msgs)
                 # Abort marker — model sees this on the next turn so it knows
                 # the previous turn was interrupted and can verify state.

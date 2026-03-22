@@ -9,7 +9,6 @@ import pytest
 
 from pydantic_ai import ApprovalRequired, ModelRetry
 
-from co_cli.tools._exec_approvals import add_approval
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.deps import CoDeps, CoServices, CoConfig
@@ -115,20 +114,18 @@ async def test_shell_requires_deferred_approval_for_unknown_command():
 
 
 @pytest.mark.asyncio
-async def test_shell_persistent_approval_bypasses_deferred_prompt(tmp_path):
-    """Remembered shell approvals allow later matching commands to execute directly."""
-    path = tmp_path / "exec-approvals.json"
-    add_approval(path, "echo hello world | wc -w", "run_shell_command")
+async def test_shell_requires_approval_without_tool_call_approved():
+    """Shell commands that need approval raise ApprovalRequired when tool_call_approved=False."""
     ctx = Context(
         deps=CoDeps(
             services=CoServices(shell=ShellBackend()),
-            config=CoConfig(exec_approvals_path=path),
+            config=CoConfig(),
         ),
         tool_call_approved=False,
     )
 
-    result = await run_shell_command(ctx, "echo hello world | wc -w")
-    assert result.strip() == "2"
+    with pytest.raises(ApprovalRequired):
+        await run_shell_command(ctx, "echo hello world | wc -w")
 
 
 @pytest.mark.asyncio

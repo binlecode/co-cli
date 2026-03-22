@@ -32,21 +32,6 @@ from co_cli.tools._result import ToolResult, make_result
 
 logger = logging.getLogger(__name__)
 
-_PROVENANCE_WEIGHTS: dict[str, float] = {
-    "user-told": 1.0,
-    "planted": 0.8,
-    "detected": 0.7,
-    "session": 0.6,
-    "web-fetch": 0.5,
-    "auto_decay": 0.3,
-}
-
-_CERTAINTY_MULTIPLIERS: dict[str, float] = {
-    "high": 1.0,
-    "medium": 0.8,
-    "low": 0.6,
-}
-
 
 _NEGATION_MARKERS: frozenset[str] = frozenset({
     "not", "no", "never", "don't", "do not", "stopped", "changed",
@@ -163,8 +148,13 @@ def _compute_confidence(r: SearchResult, half_life_days: int) -> float:
     else:
         decay = 1.0
 
-    prov_w = _PROVENANCE_WEIGHTS.get(r.provenance or "", 0.5)
-    cert_m = _CERTAINTY_MULTIPLIERS.get(r.certainty or "", 0.8)
+    provenance_weights = {
+        "user-told": 1.0, "planted": 0.8, "detected": 0.7,
+        "session": 0.6, "web-fetch": 0.5, "auto_decay": 0.3,
+    }
+    certainty_multipliers = {"high": 1.0, "medium": 0.8, "low": 0.6}
+    prov_w = provenance_weights.get(r.provenance or "", 0.5)
+    cert_m = certainty_multipliers.get(r.certainty or "", 0.8)
     return 0.5 * r.score + 0.3 * decay + 0.2 * (prov_w * cert_m)
 
 
