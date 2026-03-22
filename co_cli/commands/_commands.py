@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
@@ -29,21 +28,30 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CommandContext:
-    """Grab-bag passed to every slash-command handler.
-
-    Mutable so skill dispatch can set skill_body to fall through to the LLM turn.
-    """
+    """Input bag passed to every slash-command handler."""
 
     message_history: list[Any]
     deps: Any  # CoDeps — typed as Any to avoid circular import
     agent: Any  # Agent[CoDeps, ...] — same reason
     tool_names: list[str]
-    # Set by dispatch() when a skill matches — chat_loop uses this to feed
-    # the skill body as user input into the LLM turn instead of continuing.
-    skill_body: str | None = None
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
+
+
+@dataclass
+class DispatchResult:
+    """Explicit return type encoding the two dispatch modes.
+
+    System-op commands set history when they modify it; agent_body is None.
+    Delegation commands (skills) set agent_body; history is None.
+    compacted=True when /compact produced a new history — caller increments counter.
+    """
+
+    handled: bool
+    history: list[Any] | None = None
+    agent_body: str | None = None
+    compacted: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,9 +75,6 @@ class SkillCommand:
     disable_model_invocation: bool = False
     requires: dict = field(default_factory=dict)
     skill_env: dict[str, str] = field(default_factory=dict)
-    # Per-skill tool grants — auto-approve listed tools during this skill's LLM turn.
-    # Turn-scoped: propagated to CoDeps.session.skill_tool_grants by dispatch().
-    allowed_tools: list[str] = field(default_factory=list)
 
 
 # Module-level skill registry — populated by chat_loop() via _load_skills().
@@ -463,8 +468,23 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                         console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
                 except Exception:
                     pass
+        old_names = set(SKILL_COMMANDS.keys())
         set_skill_commands(new_skills, ctx.deps.session)
         _refresh_completer(ctx)
+        added = set(new_skills.keys()) - old_names
+        removed = old_names - set(new_skills.keys())
+        if added:
+            if len(added) <= 5:
+                console.print(f"[success]+ Added ({len(added)}): {', '.join(sorted(added))}[/success]")
+            else:
+                console.print(f"[success]+ Added: {len(added)} skill(s)[/success]")
+        if removed:
+            if len(removed) <= 5:
+                console.print(f"[dim]- Removed ({len(removed)}): {', '.join(sorted(removed))}[/dim]")
+            else:
+                console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
+        if not added and not removed:
+            console.print("[dim]No skill changes.[/dim]")
         console.print(f"[success]✓ Reloaded {len(SKILL_COMMANDS)} skill(s)[/success]")
 
     elif subcmd == "upgrade":
@@ -815,10 +835,6 @@ def _load_skill_file(
                 if isinstance(k, str) and isinstance(v, str) and k not in _SKILL_ENV_BLOCKED:
                     skill_env[k] = v
 
-        # Extract allowed-tools with type guard; non-list values default to empty
-        raw_allowed = meta.get("allowed-tools", [])
-        allowed_tools: list[str] = raw_allowed if isinstance(raw_allowed, list) else []
-
         result[name] = SkillCommand(
             name=name,
             description=meta.get("description", ""),
@@ -828,7 +844,6 @@ def _load_skill_file(
             disable_model_invocation=meta.get("disable-model-invocation", False),
             requires=requires,
             skill_env=skill_env,
-            allowed_tools=allowed_tools,
         )
     except Exception as e:
         logger.warning(f"Failed to load skill {path}: {e}")
@@ -863,41 +878,6 @@ def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillComma
     return result
 
 
-# -- Shell preprocessing ---------------------------------------------------
-
-_SHELL_BLOCK_RE = re.compile(r'!`([^`\n]+)`')
-
-
-async def _preprocess_shell_blocks(
-    body: str, *, max_blocks: int = 3, timeout: float = 5.0
-) -> str:
-    """Evaluate !`...` shell blocks in a skill body before the LLM sees it.
-
-    Replaces up to max_blocks shell blocks with their stdout output (trimmed).
-    Blocks beyond max_blocks are left unreplaced in the body.
-    On error or timeout, the block is replaced with empty string.
-
-    Note: uses /bin/sh (POSIX mode). Skill authors must use POSIX sh syntax
-    in shell blocks — zsh-specific constructs will not work here.
-    """
-    matches = list(_SHELL_BLOCK_RE.finditer(body))
-    for match in matches[:max_blocks]:
-        cmd = match.group(1)
-        try:
-            proc = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            output = stdout.decode().strip()
-        except Exception as e:
-            logger.warning(f"Shell block failed: {cmd!r}: {e}")
-            output = ""
-        body = body.replace(match.group(0), output, 1)
-    return body
-
-
 # -- Registry --------------------------------------------------------------
 
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {
@@ -920,20 +900,18 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
 # -- Dispatch --------------------------------------------------------------
 
 
-async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any] | None]:
+async def dispatch(raw_input: str, ctx: CommandContext) -> DispatchResult:
     """Route slash-command input to the appropriate handler.
 
-    Returns (handled, new_history):
-      - handled=False  → input was not a slash command, caller should proceed normally
-      - handled=True, new_history=None → command executed, history unchanged
-      - handled=True, new_history=list → command executed, caller must rebind history
-
-    When a skill matches, ctx.skill_body is set to the (substituted) skill body
-    and (True, None) is returned. The caller must check ctx.skill_body and fall
-    through to the LLM turn instead of continuing the command loop.
+    Returns a DispatchResult encoding the two dispatch modes:
+      - handled=False → input was not a slash command, caller proceeds normally
+      - handled=True, history set → system-op command modified history
+      - handled=True, compacted=True → /compact produced new history; caller increments counter
+      - handled=True, agent_body set → skill dispatch; caller runs an LLM turn with agent_body
+      - handled=True, both None → command executed, no history change, no LLM turn
     """
     if not raw_input.startswith("/"):
-        return False, None
+        return DispatchResult(handled=False)
 
     parts = raw_input[1:].split(maxsplit=1)
     name = parts[0].lower() if parts else ""
@@ -941,8 +919,9 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
 
     cmd = BUILTIN_COMMANDS.get(name)
     if cmd is not None:
-        result = await cmd.handler(ctx, args)
-        return True, result
+        history = await cmd.handler(ctx, args)
+        compacted = name == "compact" and history is not None
+        return DispatchResult(handled=True, history=history, compacted=compacted)
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
     skill = SKILL_COMMANDS.get(name)
@@ -953,26 +932,16 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> tuple[bool, list[Any]
                 "dispatch: active_skill_env non-empty at skill match — double dispatch in one turn?"
             )
         ctx.deps.session.active_skill_env = dict(skill.skill_env)
-        # Propagate per-skill tool grants — cleared by chat_loop() after run_turn()
-        ctx.deps.session.skill_tool_grants = set(skill.allowed_tools)
         ctx.deps.session.active_skill_name = skill.name
         body = skill.body
-        if args:
+        if args and "$ARGUMENTS" in body:
             args_list = args.split()
-            if "$ARGUMENTS" in body:
-                # Structured substitution: replace placeholders
-                body = body.replace("$ARGUMENTS", args)
-                body = body.replace("$0", name)
-                for i, arg in reversed(list(enumerate(args_list, 1))):
-                    body = body.replace(f"${i}", arg)
-            else:
-                # Backward-compat: append args after body
-                body = body.rstrip() + "\n" + args
-        # Shell preprocessing — evaluate !`...` blocks before handing to LLM
-        body = await _preprocess_shell_blocks(body)
-        ctx.skill_body = body
-        return True, None
+            body = body.replace("$ARGUMENTS", args)
+            body = body.replace("$0", name)
+            for i, arg in reversed(list(enumerate(args_list, 1))):
+                body = body.replace(f"${i}", arg)
+        return DispatchResult(handled=True, agent_body=body)
 
     console.print(f"[bold red]Unknown command:[/bold red] /{name}")
     console.print("[dim]Type /help to see available commands.[/dim]")
-    return True, None
+    return DispatchResult(handled=True)

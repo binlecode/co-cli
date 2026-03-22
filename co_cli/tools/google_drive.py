@@ -6,8 +6,9 @@ from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._google_auth import get_cached_google_creds
 from co_cli.tools._errors import terminal_error, handle_google_api_error
+from co_cli.tools._google_auth import get_cached_google_creds
+from co_cli.tools._result import ToolResult, make_result
 
 
 _DRIVE_NOT_CONFIGURED = (
@@ -17,7 +18,7 @@ _DRIVE_NOT_CONFIGURED = (
 )
 
 
-def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> dict[str, Any]:
+def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolResult:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
     full text body contains the query.
@@ -71,8 +72,8 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
         items = results.get("files", [])
         if not items:
             if page == 1:
-                return {"display": "No files found.", "count": 0, "page": 1, "has_more": False}
-            return {"display": "No more results.", "count": 0, "page": page, "has_more": False}
+                return make_result("No files found.", count=0, page=1, has_more=False)
+            return make_result("No more results.", count=0, page=page, has_more=False)
 
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")
@@ -98,7 +99,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> di
         has_more = bool(next_token)
         if has_more:
             display += f"\n\n(More results available — request page {page + 1})"
-        return {"display": display, "page": page, "has_more": has_more}
+        return make_result(display, page=page, has_more=has_more)
     except ModelRetry:
         raise
     except Exception as e:

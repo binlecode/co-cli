@@ -26,7 +26,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli.config import LOGS_DB
 from co_cli.observability._telemetry import SQLiteSpanExporter
 
-_PYPROJECT = Path(__file__).resolve().parent / "pyproject.toml"
+_PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 _VERSION = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
 _SLOW_MS = int(os.getenv("CO_PYTEST_TRACE_SLOW_MS", "2000"))
 _DETAIL_LIMIT = int(os.getenv("CO_PYTEST_TRACE_DETAIL_LIMIT", "12"))

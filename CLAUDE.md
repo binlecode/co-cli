@@ -63,7 +63,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Tool pattern**: new tools must use `agent.tool()` with `RunContext[CoDeps]`. Do not use `tool_plain()` for new tools.
 - **Tool deps**: access runtime resources via `ctx.deps`. Do not import `settings` directly in tool files. Do not put approval prompts inside tools.
 - **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations (file reads, searches, network fetches) do not. Approval UX lives in the chat loop, not inside tools.
-- **Tool return type**: tools returning user-facing data must return `dict[str, Any]` with a `display` field (pre-formatted string with URLs baked in) plus metadata fields such as `count` or `next_page_token`. Never return raw `list[dict]`.
+- **Tool return type**: tools returning user-facing data must return `ToolResult` via `make_result()` from `co_cli.tools._result`. The `display` field is the pre-formatted string shown to the user; additional metadata fields (`count`, `next_page_token`, etc.) are passed as keyword arguments to `make_result()`. Never return a raw `str`, bare `dict`, or `list[dict]`.
 - **No global state in tools**: tools must not hold or mutate module-level state. All runtime resources are accessed through `ctx.deps`.
 - **CoDeps is grouped, not flat**: `CoDeps` holds four sub-groups:
   - `services`: runtime objects such as `ShellBackend`, `KnowledgeIndex`, `TaskRunner`
@@ -109,7 +109,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 ### DESIGN Doc Conventions
 
-DESIGN docs always stay in sync with the latest code; no version stamps are needed.
+DESIGN docs are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in a TODO file: DESIGN doc updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any TODO task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed.
 
 Every component DESIGN doc follows this four-section template:
 
@@ -158,7 +158,7 @@ TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc + delivery-audit → appended to TODO)
+Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc)
     ↓
 👤  Gate 2: TL reviews delivery report    (all done_when passed?)
     ↓
@@ -170,9 +170,9 @@ ship
 ```
 
 - `/orchestrate-plan <slug>`: create or refine `docs/TODO-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
-- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), produce `docs/DELIVERY-<slug>.md`, auto-invoke sync-doc and delivery-audit.
+- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), produce `docs/DELIVERY-<slug>.md`, auto-invoke sync-doc.
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
-- `/delivery-audit <scope>`: inverse coverage check of tools/settings/commands vs DESIGN docs. Results appended to `docs/TODO-<scope>.md`. Auto-invoked by `orchestrate-dev`.
+- `/audit-delivery <scope>`: on-demand inverse coverage check of tools/settings/commands vs DESIGN docs. Results appended to `docs/TODO-<scope>.md`.
 - `/research <scope>`: free-form discovery, producing `docs/reference/RESEARCH-<scope>.md`. Outside the delivery workflow. See reference repos in `docs/reference/` for key files per repo.
 
 ## Reference Repos

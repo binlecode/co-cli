@@ -18,7 +18,10 @@ from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.commands._commands import dispatch, CommandContext, _cmd_help, _cmd_skills
+from co_cli.commands._commands import (
+    dispatch, CommandContext, SKILL_COMMANDS,
+    SkillCommand, _cmd_help, _cmd_skills,
+)
 from co_cli.display import console
 from tests._ollama import ensure_ollama_warm
 
@@ -125,9 +128,9 @@ async def test_cmd_help_includes_status_usage():
 async def test_cmd_clear():
     """/clear returns empty list."""
     ctx = _make_ctx(message_history=["fake_msg_1", "fake_msg_2"])
-    handled, new_history = await dispatch("/clear", ctx)
-    assert handled is True
-    assert new_history == []
+    result = await dispatch("/clear", ctx)
+    assert result.handled is True
+    assert result.history == []
 
 
 @pytest.mark.asyncio
@@ -144,10 +147,11 @@ async def test_cmd_compact():
     ctx = _make_ctx(message_history=msgs)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
-        handled, new_history = await dispatch("/compact", ctx)
-    assert handled is True
-    assert isinstance(new_history, list)
-    assert len(new_history) > 0
+        result = await dispatch("/compact", ctx)
+    assert result.handled is True
+    assert result.compacted is True
+    assert isinstance(result.history, list)
+    assert len(result.history) > 0
 
 
 @pytest.mark.asyncio
@@ -197,8 +201,8 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, exec_approvals_path=approvals_path)
 
-    handled, _ = await dispatch("/approvals list", ctx)
-    assert handled is True
+    result = await dispatch("/approvals list", ctx)
+    assert result.handled is True
 
     await dispatch("/approvals clear", ctx)
     assert json.loads(approvals_path.read_text(encoding="utf-8")) == []
@@ -331,10 +335,10 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
     ctx = _make_ctx(message_history=msgs, memory_dir=memory_dir)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
-        handled, new_history = await dispatch("/new", ctx)
+        result = await dispatch("/new", ctx)
 
-    assert handled is True
-    assert new_history == [], "history must be cleared"
+    assert result.handled is True
+    assert result.history == [], "history must be cleared"
 
     session_files = list(memory_dir.glob("session-*.md"))
     assert len(session_files) == 1, "exactly one session file must be written"
@@ -377,9 +381,9 @@ async def test_forget_command_evicts_fts_row(tmp_path):
         tool_names=tool_names,
     )
 
-    handled, _ = await dispatch("/forget 1", ctx)
+    result = await dispatch("/forget 1", ctx)
 
-    assert handled is True
+    assert result.handled is True
     assert not memory_file.exists(), "File must be deleted by /forget"
     assert len(idx.search("xyloquartz-forget-fts")) == 0, "FTS row must be evicted after /forget"
 
@@ -387,3 +391,88 @@ async def test_forget_command_evicts_fts_row(tmp_path):
 
 
 # --- Safe command classification ---
+
+
+# --- Two-mode dispatch boundary ---
+
+
+@pytest.mark.asyncio
+async def test_dispatch_system_op_sets_history_not_agent_body():
+    """System-op commands (e.g. /clear) must set history and leave agent_body None."""
+    ctx = _make_ctx(message_history=["msg"])
+    result = await dispatch("/clear", ctx)
+    assert result.handled is True
+    assert result.history is not None
+    assert result.agent_body is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_skill_sets_agent_body_not_history():
+    """Skill dispatch must set agent_body and leave history None."""
+    test_skill = SkillCommand(name="test-boundary-skill", body="Do the thing.", description="test")
+    orig = dict(SKILL_COMMANDS)
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS["test-boundary-skill"] = test_skill
+    try:
+        ctx = _make_ctx()
+        result = await dispatch("/test-boundary-skill", ctx)
+        assert result.handled is True
+        assert result.agent_body is not None
+        assert result.history is None
+    finally:
+        SKILL_COMMANDS.clear()
+        SKILL_COMMANDS.update(orig)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_unknown_command_handled_both_payloads_none():
+    """Unknown slash command: handled=True, history=None, agent_body=None."""
+    ctx = _make_ctx()
+    result = await dispatch("/xyzzy-no-such-command", ctx)
+    assert result.handled is True
+    assert result.history is None
+    assert result.agent_body is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
+    """Built-in command must win over a skill registered with the same name."""
+    # 'clear' is a builtin — registering a skill with the same name must not shadow it
+    test_skill = SkillCommand(name="clear", body="skill body", description="test")
+    orig = dict(SKILL_COMMANDS)
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS["clear"] = test_skill
+    try:
+        ctx = _make_ctx(message_history=["msg"])
+        result = await dispatch("/clear", ctx)
+        # Must route to builtin: history cleared, no agent_body
+        assert result.handled is True
+        assert result.history == []
+        assert result.agent_body is None
+    finally:
+        SKILL_COMMANDS.clear()
+        SKILL_COMMANDS.update(orig)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sets_active_skill_env_and_name():
+    """dispatch() must populate active_skill_env and active_skill_name for skill turns."""
+    test_skill = SkillCommand(
+        name="test-env-skill",
+        body="Do work.",
+        description="test",
+        skill_env={"MY_TEST_VAR": "hello"},
+    )
+    orig = dict(SKILL_COMMANDS)
+    SKILL_COMMANDS.clear()
+    SKILL_COMMANDS["test-env-skill"] = test_skill
+    try:
+        ctx = _make_ctx()
+        result = await dispatch("/test-env-skill", ctx)
+        assert result.handled is True
+        assert result.agent_body is not None
+        assert ctx.deps.session.active_skill_name == "test-env-skill"
+        assert ctx.deps.session.active_skill_env == {"MY_TEST_VAR": "hello"}
+    finally:
+        SKILL_COMMANDS.clear()
+        SKILL_COMMANDS.update(orig)

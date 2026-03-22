@@ -1,14 +1,13 @@
 """Google Calendar tools using RunContext pattern."""
 
 from datetime import datetime, timezone, timedelta
-from typing import Any
-
 from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
 from co_cli.tools._errors import terminal_error, handle_google_api_error
+from co_cli.tools._result import ToolResult, make_result
 
 
 _CALENDAR_NOT_CONFIGURED = (
@@ -99,7 +98,7 @@ def list_calendar_events(
     days_back: int = 0,
     days_ahead: int = 1,
     max_results: int = 25,
-) -> dict[str, Any]:
+) -> ToolResult:
     """List calendar events in a time window around today. Auto-paginates
     internally — all matching events up to max_results are returned in one call.
 
@@ -148,9 +147,9 @@ def list_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return {"display": "No events found in the requested time range.", "count": 0}
+            return make_result("No events found in the requested time range.", count=0)
         display = f"Calendar Events ({len(events)}):\n" + _format_events(events)
-        return {"display": display, "count": len(events)}
+        return make_result(display, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:
@@ -163,7 +162,7 @@ def search_calendar_events(
     days_back: int = 0,
     days_ahead: int = 30,
     max_results: int = 25,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search calendar events by keyword in titles, descriptions, and locations.
     Auto-paginates internally — all matching events up to max_results are
     returned in one call.
@@ -211,9 +210,9 @@ def search_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return {"display": f"No events found matching '{query}' in the requested time range.", "count": 0}
+            return make_result(f"No events found matching '{query}' in the requested time range.", count=0)
         display = f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
-        return {"display": display, "count": len(events)}
+        return make_result(display, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:

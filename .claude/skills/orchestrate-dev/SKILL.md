@@ -1,6 +1,6 @@
 ---
 name: orchestrate-dev
-description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates and ships the delivery report. Run after Gate 1 (PO + TL approved the plan).
+description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates, syncs docs, and ships the delivery report. Run after Gate 1 (PO + TL approved the plan).
 ---
 
 # Dev Orchestration Workflow
@@ -46,22 +46,28 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` 
    - 1–2 tasks → TL handles all tasks alone
    - 3+ independent task groups → TL takes the critical-path tasks; spawn one Dev subagent per additional parallel group
    - TL takes tasks touching cross-cutting concerns (renames, schema changes, shared modules) — these benefit from TL's full plan context
-   - Announce assignments before any work begins:
+   - **Execution timing follows the dependency graph, not role:** TL and Dev subagents whose tasks are fully independent run in parallel. When a Dev task has a prerequisite owned by TL, TL completes that prerequisite first, then spawns the Dev subagent. Never spawn a Dev subagent for a task whose prerequisites are unfinished.
+   - Announce assignments and sequencing before any work begins:
      ```
      ## Team
      TL:    TASK-1, TASK-3
-     Dev-1: TASK-2, TASK-4
+     Dev-1: TASK-2 (requires TASK-1 — spawned after TL completes TASK-1)
+     Dev-2: TASK-4 (independent — spawned in parallel with TL)
      ```
 
 ---
 
 ## Phase 2 — Execute Each Task
 
-Each team member (TL and every Dev subagent) executes the same Steps 1–6 for their assigned tasks. Dev subagents run in parallel with TL. TL collects all Dev results before Phase 3.
+Each team member (TL and every Dev subagent) executes the same Steps 1–6 for their assigned tasks. **Whether TL and Dev run in parallel or sequentially depends on the dependency graph, not on role:** independent tasks run in parallel; a Dev task whose prerequisite is owned by TL is spawned only after TL completes that prerequisite. TL collects all Dev results before Phase 3. Before starting Phase 3, TL scans Dev subagent outputs for lines matching `⚠ Extra file: <path>` — these extra files must be included in the Phase 3 integration diff and test scope alongside planned `files:` entries.
 
 **Same-file batching:** When multiple tasks in the execution order modify the same file, read that file once before the first task that touches it. Do not re-read it between tasks — your earlier read is still valid. Make each task's edits in sequence without reloading the file between them.
 
 ### Pre-flight — Validate all tasks before executing any
+
+**Load project coding rules once before executing any task:**
+
+Review CLAUDE.md's Engineering Rules section (imports, tool patterns, testing rules, display conventions, anti-patterns). Keep these in context for all Step 4 self-review checks — do not re-read per task.
 
 Before writing a single line of code, validate every task in execution order:
 - The task MUST have a non-empty `files:` list
@@ -78,7 +84,7 @@ Fix the plan before running /orchestrate-dev.
 
 Fail-fast: stop at the first invalid task. Do not begin implementation until all tasks pass.
 
-If a task requires more than ~20 tool calls without clear progress, stop and report it as blocked rather than continuing — runaway tasks should escalate, not spiral.
+If a task requires more than 20 tool calls without clear progress, stop and report it as blocked rather than continuing — runaway tasks should escalate, not spiral.
 
 ---
 
@@ -96,7 +102,10 @@ Read every file listed in `files:`. If a file does not exist yet (new file to cr
 
 ### Step 3 — Implement
 
-Write or edit only the files listed in `files:`. Do not touch files outside that list unless a prerequisite file (e.g. a new module import) makes it strictly necessary — if so, announce the extra file explicitly.
+Write or edit only the files listed in `files:`. Do not touch files outside that list unless a prerequisite file (e.g. a new module import) makes it strictly necessary — if so, announce it using exactly this format:
+```
+⚠ Extra file: <path> — <reason>
+```
 
 ---
 
@@ -104,18 +113,7 @@ Write or edit only the files listed in `files:`. Do not touch files outside that
 
 After implementing, read every changed file and check:
 
-**CLAUDE.md anti-patterns:**
-- `from X import *` — forbidden; always explicit imports
-- `tool_plain()` used instead of `agent.tool()` with `RunContext`
-- `settings` imported directly in tool files instead of via `ctx.deps`
-- `Settings` object passed into `CoDeps` instead of flattening to scalar fields
-- Approval logic inside a tool instead of `requires_approval=True`
-- Mock or unit tests instead of functional tests
-- `.env` file used instead of `settings.json` or env vars
-- Tool returning raw `list[dict]` instead of `dict[str, Any]` with `display` field
-- `CoDeps` holding a config object instead of flat scalar fields
-- Trailing inline comments instead of comments on the line above
-- IO-bound tests missing `asyncio.timeout(N)` with `N <= 60s` (mandatory per CLAUDE.md testing rules)
+**Project coding rules:** Apply every item from the Engineering Rules loaded at pre-flight.
 
 **Security:**
 - Command injection (user input passed to shell without sanitization)
@@ -153,7 +151,7 @@ Execute the `done_when` criterion literally:
   Do not proceed to next task.
 ```
 
-**Total stop on failure.** When any task is blocked, halt execution for all remaining tasks — including tasks with no prerequisites. Mark every unstarted task as `— skipped` in the delivery report. Partial delivery is not valid; the plan must be re-entered from the blocked task after the issue is resolved.
+**Total stop on failure.** When any task is blocked, halt execution for all remaining tasks — including tasks with no prerequisites. Mark every unstarted task as `— skipped` in the delivery report. Partial delivery is not valid; the plan must be re-entered from the blocked task after the issue is resolved. **Exception: if a Dev subagent was already running on a fully independent task when TL's failure occurred, collect its output — do not discard it. Report it in the delivery report as completed but not integrated; it may be reusable after the blocker is resolved.**
 
 ### Step 6 — Report task result
 
@@ -195,7 +193,7 @@ Record: command run, number passed, number failed, any failure output.
 Spawn a reviewer subagent. Pass it exactly:
 - The output of `git diff HEAD` scoped to files changed by completed tasks
 - The task specs (id, title, done_when) for all completed tasks
-- The CLAUDE.md anti-pattern checklist (same list from Phase 2 Step 4)
+- The Engineering Rules section from CLAUDE.md
 
 The reviewer has no access to the implementation conversation — cold read only.
 
@@ -224,17 +222,16 @@ Record result: clean / N blocking / N minor.
 
 ### Step 3 — Sync docs
 
-Run `/sync-doc` with no args (full scope). This ensures all DESIGN docs are checked for stale refs and inaccuracies introduced by this work — not just docs covering the specific modules touched. For cross-cutting changes (renames, API changes, schema updates), unrelated docs may reference the same symbols and would be missed by a narrower scope.
+Determine scope before running:
+
+- **Full scope** (run `/sync-doc` with no args): any task touches shared modules (config, agent registration, core dependency infrastructure), renames or removes a public API, or changes a schema. Cross-cutting changes may affect docs not directly related to the touched modules.
+- **Narrow scope** (run `/sync-doc <doc>` for affected doc(s) only): all completed tasks are self-contained within a single module with no public API changes and no cross-module dependencies.
+
+State the scope decision and rationale before running (e.g., "narrow — all tasks confined to `co_cli/tools/foo.py`, no API changes" or "full — TASK-2 renames a public tool").
 
 Record result: clean / fixed (what was fixed).
 
-### Step 4 — Coverage audit
-
-Run `/delivery-audit <slug>`. Checks whether delivered features — new agent tools, config settings, CLI commands — have DESIGN doc coverage. `sync-doc` fixes stale claims in existing doc sections; coverage-audit catches features that have no doc section at all. Results are appended directly to `docs/TODO-<slug>.md`.
-
-Record result: clean / gaps found (list missing features by name).
-
-### Step 5 — TODO lifecycle
+### Step 4 — TODO lifecycle
 
 For every task that reached ✓ pass, mark it done in `docs/TODO-<slug>.md` — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
 
@@ -255,49 +252,11 @@ Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
 
 Fix any test failures or doc sync inaccuracies before writing this report — it reflects final state after fixes, not intermediate state.
 
-Write `docs/DELIVERY-<slug>.md`:
+Before writing, read the delivery report template now:
 
-```markdown
-# Delivery: <feature name>
-Date: <ISO 8601 date>
+> Read: .claude/skills/orchestrate-dev/assets/DELIVERY-template.md
 
-## Task Results
-
-| Task | done_when | Status | Notes |
-|------|-----------|--------|-------|
-| TASK-1 | <done_when text> | ✓ pass | |
-| TASK-2 | <done_when text> | ✗ fail | <what broke> |
-| TASK-3 | <done_when text> | — skipped | blocked by TASK-2 |
-
-## Files Changed
-- `<path>` — <one-line description of change>
-- `<path>` — <one-line description of change>
-
-## Tests
-- Scope: full suite (DELIVERED) / touched files only (partial delivery)
-- Result: pass / fail (<N> passed, <N> failed)
-
-## Independent Review
-- Result: clean / <N> blocking / <N> minor
-- (findings table here if any)
-
-## Doc Sync
-- Result: clean / fixed (<what was fixed>)  (full-scope sync-doc run)
-
-## Coverage Audit
-- Result: clean / gaps found (<list missing features>)
-
-## Artifact Lifecycle
-- TODO status: tasks marked ✓ DONE (not removed) / retained through Gate 3 — delete alongside DELIVERY after PO acceptance
-- DELIVERY status: keep for Gate 2 and Gate 3 only
-
-## Gate 3 Cleanup
-- After PO acceptance, delete both `docs/TODO-<slug>.md` and `docs/DELIVERY-<slug>.md` in the same session.
-- If PO acceptance is not part of this run, stop after writing this report and surface both deletes as the next step.
-
-## Overall: DELIVERED / BLOCKED
-<one sentence summary>
-```
+Use that template to write `docs/DELIVERY-<slug>.md`. Fill in every section with the actual results from this delivery run.
 
 **DELIVERED** = all tasks passed, all tests pass, independent review clean or minor only, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed their `done_when` criterion, or tests still failing after fix attempts.

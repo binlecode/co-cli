@@ -4,35 +4,22 @@ Returns a summary of active integrations and their health status so the
 agent can report system state to the user in personality voice.
 """
 
-from typing import Any
-
 from pydantic_ai import RunContext
 
 from co_cli.bootstrap._check import check_runtime
 from co_cli.deps import CoDeps
+from co_cli.tools._result import ToolResult, make_result
 
 
-async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
+async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
     """Return a summary of active capabilities and integration health.
 
-    Returns a dict with:
-    - display: formatted summary string for the user
-    - knowledge_backend: active search backend ("fts5", "hybrid", or "grep")
-    - reranker: active reranker provider name
-    - google: True if Google credentials are configured
-    - obsidian: True if Obsidian vault path is configured
-    - brave: True if Brave Search API key is set
-    - mcp_count: number of MCP servers configured
-    - reasoning_model: name of the active reasoning model, or None
-    - reasoning_ready: True if reasoning chain is configured
-    - checks: list of {"name", "status", "detail"} for each probe
-    - skill_grants: sorted list of active skill tool grants
-    - tool_count: number of tools in the current session surface
-    - active_skill: name of the currently active skill, or None
-    - mcp_mode: "mcp" or "native-only"
-    - knowledge_mode: active knowledge search backend
+    Returns a ToolResult with display (formatted summary string) and metadata:
+    knowledge_backend, reranker, google, obsidian, brave, mcp_count,
+    reasoning_model, reasoning_ready, checks, tool_count,
+    active_skill, mcp_mode, knowledge_mode.
     """
-    progress = ctx.deps.runtime.status_callback
+    progress = ctx.deps.runtime.tool_progress_callback
     if progress is not None:
         progress("Doctor: starting runtime diagnostics...")
     result = check_runtime(ctx.deps, progress=progress)
@@ -69,10 +56,6 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
     if ctx.deps.session.session_id:
         lines.append(f"Session: {ctx.deps.session.session_id[:8]}...")
 
-    skill_grants = st["skill_grants"]
-    if skill_grants:
-        lines.append(f"Active skill grants: {', '.join(skill_grants)}")
-
     mcp_configured = len(ctx.deps.config.mcp_servers or {})
     mcp_live = caps["mcp_count"]
     # Invariant: tool_approvals keys == native tool names; tool_names = native + MCP (see build_agent)
@@ -94,25 +77,24 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> dict[str, Any]:
 
     display = "\n".join(lines)
 
-    return {
-        "display": display,
-        "knowledge_backend": caps["knowledge_backend"],
-        "reranker": reranker,
-        "google": caps["google"],
-        "obsidian": caps["obsidian"],
-        "brave": caps["brave"],
-        "mcp_count": caps["mcp_count"],
-        "mcp_configured_server_count": mcp_configured,
-        "mcp_tool_count": mcp_tool_count,
-        "mcp_server_health": [
+    return make_result(
+        display,
+        knowledge_backend=caps["knowledge_backend"],
+        reranker=reranker,
+        google=caps["google"],
+        obsidian=caps["obsidian"],
+        brave=caps["brave"],
+        mcp_count=caps["mcp_count"],
+        mcp_configured_server_count=mcp_configured,
+        mcp_tool_count=mcp_tool_count,
+        mcp_server_health=[
             {"name": n, "ok": r.ok, "detail": r.detail} for n, r in result.mcp_probes
         ],
-        "reasoning_model": reasoning_model,
-        "reasoning_ready": caps["reasoning_ready"],
-        "checks": caps["checks"],
-        "skill_grants": skill_grants,
-        "tool_count": st["tool_count"],
-        "active_skill": st["active_skill"],
-        "mcp_mode": st["mcp_mode"],
-        "knowledge_mode": st["knowledge_mode"],
-    }
+        reasoning_model=reasoning_model,
+        reasoning_ready=caps["reasoning_ready"],
+        checks=caps["checks"],
+        tool_count=st["tool_count"],
+        active_skill=st["active_skill"],
+        mcp_mode=st["mcp_mode"],
+        knowledge_mode=st["knowledge_mode"],
+    )

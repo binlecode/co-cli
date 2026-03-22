@@ -1,18 +1,18 @@
 """Agent tools for background task management.
 
-All four tools follow the standard pattern: RunContext[CoDeps], return dict[str, Any]
+All four tools follow the standard pattern: RunContext[CoDeps], return ToolResult
 with a display field. Access TaskRunner via ctx.deps.services.task_runner.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._result import ToolResult, make_result
 
 
 async def start_background_task(
@@ -20,7 +20,7 @@ async def start_background_task(
     command: str,
     description: str,
     working_directory: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Start a shell command in the background without blocking the chat session.
 
     Use for long-running operations: test suites, batch processing, research scripts,
@@ -50,26 +50,21 @@ async def start_background_task(
         ctx_otel = otel_trace.get_current_span().get_span_context()
         if ctx_otel.is_valid:
             span_id = format(ctx_otel.span_id, "016x")
-
-    approval_record = {"description": description, "command": command}
-    try:
-        task_id = await runner.start_task(command, cwd, approval_record, span_id)
-    except Exception as e:
-        raise ModelRetry(f"Failed to start background task: {e}")
+        approval_record = {"description": description, "command": command}
+        try:
+            task_id = await runner.start_task(command, cwd, approval_record, span_id)
+        except Exception as e:
+            raise ModelRetry(f"Failed to start background task: {e}")
 
     display = f"[{task_id}] started — command: {command}"
-    return {
-        "display": display,
-        "task_id": task_id,
-        "status": "running",
-    }
+    return make_result(display, task_id=task_id, status="running")
 
 
 async def check_task_status(
     ctx: RunContext[CoDeps],
     task_id: str,
     tail_lines: int = 20,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Check the status and recent output of a background task.
 
     Returns status, duration, exit code, and the last N lines of output.
@@ -85,15 +80,15 @@ async def check_task_status(
 
     meta = runner.get_task(task_id)
     if meta is None:
-        return {
-            "display": f"Task not found: {task_id}",
-            "task_id": task_id,
-            "status": "not_found",
-            "duration": None,
-            "exit_code": None,
-            "output_lines": [],
-            "is_binary": False,
-        }
+        return make_result(
+            f"Task not found: {task_id}",
+            task_id=task_id,
+            status="not_found",
+            duration=None,
+            exit_code=None,
+            output_lines=[],
+            is_binary=False,
+        )
 
     status = meta.get("status", "unknown")
     exit_code = meta.get("exit_code")
@@ -130,21 +125,21 @@ async def check_task_status(
         f"  Output (last {tail_lines} lines):\n{output_display}"
     )
 
-    return {
-        "display": display,
-        "task_id": task_id,
-        "status": status,
-        "duration": duration,
-        "exit_code": exit_code,
-        "output_lines": output_lines,
-        "is_binary": is_binary,
-    }
+    return make_result(
+        display,
+        task_id=task_id,
+        status=status,
+        duration=duration,
+        exit_code=exit_code,
+        output_lines=output_lines,
+        is_binary=is_binary,
+    )
 
 
 async def cancel_background_task(
     ctx: RunContext[CoDeps],
     task_id: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Cancel a running background task (sends SIGTERM, then SIGKILL after 200ms).
 
     No-op if the task has already completed, failed, or been cancelled.
@@ -158,31 +153,31 @@ async def cancel_background_task(
 
     meta = runner.get_task(task_id)
     if meta is None:
-        return {"display": f"Task not found: {task_id}", "task_id": task_id, "status": "not_found"}
+        return make_result(f"Task not found: {task_id}", task_id=task_id, status="not_found")
 
     status = meta.get("status")
     from co_cli.tools._background import TaskStatus
     if status != TaskStatus.running.value:
-        return {
-            "display": f"Task already completed (status={status})",
-            "task_id": task_id,
-            "status": status,
-        }
+        return make_result(
+            f"Task already completed (status={status})",
+            task_id=task_id,
+            status=status,
+        )
 
     cancelled = await runner.cancel_task(task_id)
     if cancelled:
-        return {"display": f"Task {task_id} cancelled.", "task_id": task_id, "status": "cancelled"}
-    return {
-        "display": f"Task {task_id} was not running (status={status})",
-        "task_id": task_id,
-        "status": status,
-    }
+        return make_result(f"Task {task_id} cancelled.", task_id=task_id, status="cancelled")
+    return make_result(
+        f"Task {task_id} was not running (status={status})",
+        task_id=task_id,
+        status=status,
+    )
 
 
 async def list_background_tasks(
     ctx: RunContext[CoDeps],
     status_filter: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """List background tasks, optionally filtered by status.
 
     Args:
@@ -216,4 +211,4 @@ async def list_background_tasks(
             lines.append(f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})")
         display = "\n".join(lines)
 
-    return {"display": display, "tasks": rows, "count": len(rows)}
+    return make_result(display, tasks=rows, count=len(rows))

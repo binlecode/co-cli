@@ -1,17 +1,17 @@
 """Shared primitives for tool error handling."""
 
-from typing import Any
-
 from pydantic_ai import ModelRetry
 
+from co_cli.tools._result import ToolResult, make_result
 
-def terminal_error(message: str) -> dict[str, Any]:
-    """Return an error dict for terminal (non-retryable) tool failures.
+
+def terminal_error(message: str) -> ToolResult:
+    """Return a ToolResult for terminal (non-retryable) tool failures.
 
     Unlike ModelRetry, this stops the retry loop immediately — the model
     sees the error in the tool result and can pick a different tool.
     """
-    return {"display": message, "error": True}
+    return make_result(message, error=True)
 
 
 def http_status_code(e: Exception) -> int | None:
@@ -34,7 +34,7 @@ def http_status_code(e: Exception) -> int | None:
         return None
 
 
-def handle_google_api_error(label: str, e: Exception) -> dict[str, Any]:
+def handle_google_api_error(label: str, e: Exception) -> ToolResult:
     """Route Google API errors to terminal_error or ModelRetry.
 
     401 → terminal (auth failure, user must fix credentials)

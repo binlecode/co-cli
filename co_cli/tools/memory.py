@@ -28,6 +28,7 @@ from pydantic_ai import RunContext
 from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
 from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD
 from co_cli.deps import CoDeps
+from co_cli.tools._result import ToolResult, make_result
 
 _TRACER = otel_trace.get_tracer("co.memory")
 
@@ -386,7 +387,7 @@ def _check_duplicate(
 
 def _update_existing_memory(
     entry: MemoryEntry, new_content: str, new_tags: list[str] | None
-) -> dict[str, Any]:
+) -> ToolResult:
     """Update existing memory with new content (consolidation).
 
     Takes a MemoryEntry (with path already known) to avoid re-scanning.
@@ -431,15 +432,13 @@ def _update_existing_memory(
 
     logger.info(f"Updated memory {entry.id} (consolidation)")
 
-    return {
-        "display": (
-            f"✓ Updated memory {entry.id} (consolidated duplicate)\n"
-            f"Location: {entry.path}"
-        ),
-        "path": str(entry.path),
-        "memory_id": entry.id,
-        "action": "consolidated",
-    }
+    return make_result(
+        f"✓ Updated memory {entry.id} (consolidated duplicate)\n"
+        f"Location: {entry.path}",
+        path=str(entry.path),
+        memory_id=entry.id,
+        action="consolidated",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +451,7 @@ async def save_memory(
     content: str,
     tags: list[str] | None = None,
     related: list[str] | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Save a memory for cross-session persistence. Duplicates are
     auto-detected and consolidated — safe to call without checking first.
     For targeted in-place edits to an existing memory, use update_memory (exact-match replace)
@@ -517,7 +516,7 @@ async def recall_memory(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search the internal memory system by keyword. Memories hold cross-session
     knowledge: preferences, decisions, corrections, and research findings.
     Call proactively at conversation start to load context relevant to the
@@ -572,11 +571,11 @@ async def recall_memory(
                 limit=max_results * 4,
             )
             if not fts_results:
-                return {
-                    "display": f"No memories found matching '{query}'",
-                    "count": 0,
-                    "results": [],
-                }
+                return make_result(
+                    f"No memories found matching '{query}'",
+                    count=0,
+                    results=[],
+                )
             # Load only the FTS-pointed files — O(k) not O(N)
             path_to_bm25: dict[str, float] = {r.path: r.score for r in fts_results}
             raw_matches: list[MemoryEntry] = []
@@ -644,11 +643,11 @@ async def recall_memory(
         matches = _grep_recall(memories, query, max_results)
 
     if not matches:
-        return {
-            "display": f"No memories found matching '{query}'",
-            "count": 0,
-            "results": [],
-        }
+        return make_result(
+            f"No memories found matching '{query}'",
+            count=0,
+            results=[],
+        )
 
     # Gravity: dedup collisions among pulled results
     before_paths = {str(m.path) for m in matches}
@@ -730,11 +729,11 @@ async def recall_memory(
                 }
             )
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(matches) + len(related_entries),
-        "results": result_dicts,
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(matches) + len(related_entries),
+        results=result_dicts,
+    )
 
 
 async def search_memories(
@@ -746,7 +745,7 @@ async def search_memories(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Dedicated semantic search over saved memories. Use this to look up
     preferences, decisions, corrections, and context facts saved across sessions.
 
@@ -766,9 +765,9 @@ async def search_memories(
         created_before: ISO8601 date string; only return items created on or before this date.
     """
     if not query.strip():
-        return {"display": "Query is required.", "count": 0, "results": []}
+        return make_result("Query is required.", count=0, results=[])
     if limit < 1:
-        return {"display": "limit must be >= 1.", "count": 0, "results": []}
+        return make_result("limit must be >= 1.", count=0, results=[])
 
     memory_dir = ctx.deps.config.memory_dir
 
@@ -789,7 +788,7 @@ async def search_memories(
                 limit=limit,
             )
             if not results:
-                return {"display": f"No memories found matching '{query}'", "count": 0, "results": []}
+                return make_result(f"No memories found matching '{query}'", count=0, results=[])
 
             lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
             result_dicts = []
@@ -808,11 +807,11 @@ async def search_memories(
                     "score": r.score,
                     "path": r.path,
                 })
-            return {
-                "display": "\n".join(lines).rstrip(),
-                "count": len(results),
-                "results": result_dicts,
-            }
+            return make_result(
+                "\n".join(lines).rstrip(),
+                count=len(results),
+                results=result_dicts,
+            )
         except Exception as e:
             logger.warning(f"search_memories FTS error, falling back to grep: {e}")
 
@@ -830,7 +829,7 @@ async def search_memories(
 
     matches = _grep_recall(memories, query, limit)
     if not matches:
-        return {"display": f"No memories found matching '{query}'", "count": 0, "results": []}
+        return make_result(f"No memories found matching '{query}'", count=0, results=[])
 
     lines = [f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"]
     result_dicts = []
@@ -844,7 +843,7 @@ async def search_memories(
             "score": 0.0,
             "path": str(m.path),
         })
-    return {"display": "\n".join(lines), "count": len(matches), "results": result_dicts}
+    return make_result("\n".join(lines), count=len(matches), results=result_dicts)
 
 
 async def list_memories(
@@ -852,7 +851,7 @@ async def list_memories(
     offset: int = 0,
     limit: int = 20,
     kind: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """List saved memories with IDs, dates, tags, and one-line summaries.
     Returns one page at a time (default 20 per page).
 
@@ -889,16 +888,16 @@ async def list_memories(
         no_dir = not memory_dir.exists()
         kind_note = f" (kind={kind})" if kind else ""
         msg = "No memories saved yet." if no_dir else f"No memories found{kind_note}."
-        return {
-            "display": msg,
-            "count": 0,
-            "total": 0,
-            "offset": offset,
-            "limit": limit,
-            "has_more": False,
-            "capacity": ctx.deps.config.memory_max_count,
-            "memories": [],
-        }
+        return make_result(
+            msg,
+            count=0,
+            total=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+            capacity=ctx.deps.config.memory_max_count,
+            memories=[],
+        )
 
     # Sort by ID
     memories.sort(key=lambda m: m.id)
@@ -962,16 +961,16 @@ async def list_memories(
             f"More available \u2014 call with offset={offset + limit}."
         )
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(page),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "capacity": ctx.deps.config.memory_max_count,
-        "memories": memory_dicts,
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(page),
+        total=total,
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
+        capacity=ctx.deps.config.memory_max_count,
+        memories=memory_dicts,
+    )
 
 
 async def update_memory(
@@ -979,7 +978,7 @@ async def update_memory(
     slug: str,
     old_content: str,
     new_content: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Surgically replace a specific passage in a memory file without rewriting
     the entire body.  Safer than save_memory for targeted edits — no dedup
     path, no full-body replacement.
@@ -1074,17 +1073,17 @@ async def update_memory(
             except Exception as e:
                 logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
 
-    return {
-        "display": f"Updated memory '{slug}'.\n{updated_body.strip()}",
-        "slug": slug,
-    }
+    return make_result(
+        f"Updated memory '{slug}'.\n{updated_body.strip()}",
+        slug=slug,
+    )
 
 
 async def append_memory(
     ctx: RunContext[CoDeps],
     slug: str,
     content: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Append content to the end of an existing memory file.
 
     Use when new information extends a memory rather than replacing it.
@@ -1139,7 +1138,7 @@ async def append_memory(
             except Exception as e:
                 logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
 
-    return {
-        "display": f"Appended to '{slug}'.",
-        "slug": slug,
-    }
+    return make_result(
+        f"Appended to '{slug}'.",
+        slug=slug,
+    )

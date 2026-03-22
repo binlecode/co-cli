@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-This doc is the canonical design for the agent main loop. It covers what happens from the moment the interactive session starts accepting input through one user turn completing: slash-command dispatch, skill expansion, `run_turn()`, streaming, shell policy checks, approval re-entry, retries, interrupt recovery, post-turn hooks, and the runtime contracts that keep the loop stable across turns.
+This doc is the canonical design for the agent main loop. It covers what happens from the moment the interactive session starts accepting input through one user turn completing: slash-command dispatch, skill expansion, `run_turn()`, streaming, shell policy checks, approval flow interception, retries, interrupt recovery, post-turn hooks, and the runtime contracts that keep the loop stable across turns.
 
 Scope boundary:
 - In scope: `chat_loop()`, `run_turn()`, `_stream_events()`, `_collect_deferred_tool_approvals()`, shell approval gating, turn outcomes, runtime safety guards, REPL-facing control flow
@@ -19,6 +19,7 @@ graph LR
         CliTui[CLI TUI<br/>PromptSession + TerminalFrontend]
         Dispatch{Dispatch}
         History[message_history]
+        PostTurn["post-turn hooks<br/>signal detection, session save,<br/>spawn bg compaction"]
     end
 
     subgraph Orchestration ["Orchestration (_orchestrate.py)"]
@@ -45,7 +46,8 @@ graph LR
     CliTui --> Dispatch
     Dispatch -->|text or expanded skill| RunTurn
     Dispatch -->|/cmd| SlashCmd[_commands.py]
-    RunTurn -->|post-turn| Precompact
+    RunTurn -->|TurnResult| PostTurn
+    PostTurn -->|spawn next-turn task| Precompact
     RunTurn --> Stream
     Stream --> PydanticAgent
     PydanticAgent --> ReadOnly
@@ -53,28 +55,13 @@ graph LR
     PydanticAgent --> MCP
     SideEffect -->|DeferredToolRequests| Approve
     Approve -->|approved| Stream
-    RunTurn -->|TurnResult| History
+    PostTurn --> History
 ```
 
-Upstream dependencies:
-- startup has completed successfully
-- `agent` and `CoDeps` (with `services.model_registry`) are ready
-- session data and message history exist
-
-Downstream consumers:
-- terminal frontend rendering
-- memory signal persistence
-- session persistence
-- background compaction preparation
-
-Cross-component touchpoints:
-- approval classification originates in [DESIGN-system.md](DESIGN-system.md) and executes here
-- prompt assembly and history processors are defined elsewhere but run through the turn loop here
-
-Approval-specific touchpoints:
-- `run_shell_command()` can deny, allow, or defer before orchestration sees the request
-- MCP tools configured with approval wrapping enter the same deferred approval loop as native tools
-- skill `allowed-tools` grants and session approvals feed directly into `_collect_deferred_tool_approvals()`
+Loop boundaries:
+- Before the REPL can run a turn, startup must already have created `deps`, built the main `agent`, and loaded `message_history` plus `session_data`.
+- During a turn, the core loop directly drives frontend rendering, deferred approval collection and resume, post-turn signal analysis, session persistence, and background compaction scheduling for the next turn.
+- The core loop uses but does not define adjacent subsystems: shell approval classification lives in `run_shell_command()` and `_shell_policy.py`; prompt assembly and history processors are attached in `build_agent()`; `_collect_deferred_tool_approvals()` handles session auto-approvals and user prompts for deferred native or MCP tool calls.
 
 ## 3. Flows
 
@@ -86,39 +73,62 @@ flowchart TD
 
     CMD{slash command?}
     CMD -- "/cmd not skill" --> SKIP["dispatch_command\nno LLM turn"]
-    CMD -- "/skill" --> SKILL["expand skill body\nset active_skill_env\nset skill_tool_grants"]
+    CMD -- "/skill" --> SKILL["expand skill body\nset active_skill_env"]
     CMD -- plain text --> PRE
     SKILL --> PRE
 
-    PRE["join bg_compaction if done\ncapture pre_turn_history\nstatus: Co is thinking"] --> RUN
+    PRE["await prior bg_compaction task\nstatus: Co is thinking"] --> R1
 
     subgraph RUN ["run_turn()"]
         direction TB
-        R1["reset SafetyState\nbind runtime.status_callback = frontend.on_status\nset UsageLimits(request_limit)\nturn_usage = None"] --> STRM
-        STRM["_stream_events(user_input, history)"] --> CHK
-        CHK{result.output}
-        CHK -- DeferredToolRequests --> AP
-        AP["_collect_deferred_tool_approvals()\nskill grant -> session auto -> prompt y/n/a"] --> RESUME
-        RESUME["_stream_events(None, deferred_results)"] --> CHK
-        CHK -- str or done --> DONE["finish checks\nctx ratio checks\nclear runtime.status_callback\nreturn TurnResult"]
-        STRM -.->|UsageLimitExceeded| GR["grace summary turn\nreturn continue"]
-        STRM -.->|"HTTP 400"| REF["inject reflection request\nretry"]
-        STRM -.->|"429 / 5xx / network"| BAK["backoff retry"]
-        STRM -.->|"401 / 403 / 404 or exhausted"| ERR["clear runtime.status_callback\nreturn error"]
-        STRM -.->|KeyboardInterrupt / CancelledError| INT["patch dangling calls\nappend abort marker\nclear runtime.status_callback\nreturn interrupted"]
+        R1["reset SafetyState\nset UsageLimits(request_limit)\nturn_usage = None\ncurrent_input = user_input"] --> RETRY
+
+        subgraph RETRY ["HTTP / provider retry loop"]
+            direction TB
+            S1["_stream_events(current_input, history)"] --> U1["turn_usage = result.usage()"]
+            U1 --> OUT1{result.output\nis DeferredToolRequests?}
+            OUT1 -- yes --> AP
+            OUT1 -- no --> DONE["message_history = result.all_messages()\nfinal output if needed\nfinish checks\nctx ratio checks\nreturn TurnResult"]
+
+            subgraph APPROVAL ["Deferred approval resume loop"]
+                direction TB
+                AP["_collect_deferred_tool_approvals()\nsession auto -> prompt y/n/a"] --> S2["_stream_events(None,\ndeferred_results=approvals)"]
+                S2 --> U2["turn_usage = result.usage()"]
+                U2 --> OUT2{result.output\nis DeferredToolRequests?}
+                OUT2 -- yes --> AP
+                OUT2 -- no --> DONE
+            end
+
+            S1 -.->|UsageLimitExceeded| GR["patch dangling calls\nbuild grace summary request"]
+            S2 -.->|UsageLimitExceeded| GR
+            GR --> GS["_stream_events(None,\nmessage_history + grace_msg)"]
+            GS --> GRET["return continue\nor fallback continue if grace fails"]
+
+            S1 -.->|"HTTP 400"| REF["append reflection request\ncurrent_input = None\nretry"]
+            S2 -.->|"HTTP 400"| REF
+            S1 -.->|"429 / 5xx / network"| BAK["sleep with backoff\nretry"]
+            S2 -.->|"429 / 5xx / network"| BAK
+            S1 -.->|"401 / 403 / 404 or exhausted"| ERR["return error"]
+            S2 -.->|"401 / 403 / 404 or exhausted"| ERR
+            S1 -.->|KeyboardInterrupt / CancelledError| INT["patch dangling calls\nappend abort marker\nreturn interrupted"]
+            S2 -.->|KeyboardInterrupt / CancelledError| INT
+
+            REF --> S1
+            BAK --> S1
+        end
     end
 
-    DONE --> POST
-    GR --> POST
-    ERR --> POST
-    INT --> POST
+    DONE --> CLEAN
+    GRET --> CLEAN
+    ERR --> CLEAN
+    INT --> CLEAN
 
-    POST{error?} -- yes --> CHAIN["run_turn_with_fallback\nwraps run_turn (no chain advance)"]
-    POST -- no --> SIG
-    CHAIN --> SIG
-
-    SIG["analyze_for_signals\nhandle auto-save or prompt flow"] --> SAVE
-    SAVE["touch_session\nsave_session\nrestore env\nclear skill state"] --> BG
+    CLEAN["restore env\nclear skill state"] --> SIGCHK
+    SIGCHK{interrupted or error?}
+    SIGCHK -- no --> SIG["analyze_for_signals\nhandle auto-save or prompt flow"]
+    SIGCHK -- yes --> SAVE
+    SIG --> SAVE
+    SAVE["touch_session\nsave_session"] --> BG
     BG["spawn bg_compaction task"] --> A
 ```
 
@@ -126,16 +136,20 @@ flowchart TD
 
 1. `chat_loop()` receives raw user input.
 2. Slash commands are dispatched immediately; non-skill commands bypass the LLM.
-3. Skill commands expand into a synthetic user turn and stage temporary env/tool grants.
-4. Pre-turn bookkeeping joins completed compaction work and snapshots history for retry/fallback.
-5. `run_turn()` streams the agent response and loops through approval re-entry until a terminal result is reached.
+3. Skill commands expand into a synthetic user turn and stage temporary env vars.
+4. Pre-turn bookkeeping waits for any prior background compaction task and stages any precomputed summary result for the next request.
+5. `run_turn()` enters an outer provider-retry loop, makes one initial `_stream_events(...)` call, then may enter a nested approval-resume loop that makes additional `_stream_events(None, deferred_tool_results=...)` calls until the turn reaches a terminal result.
 6. Post-turn hooks update session state, optionally persist memory signals, clear skill state, and launch background compaction.
 
 Failure and fallback inline:
 - provider/network failures are classified into reflection, backoff retry, or abort
 - budget exhaustion triggers one grace turn rather than a hard stop
 - interrupts patch dangling tool calls and recover to the prompt
-- provider/network failures exit to `run_turn_with_fallback` (no chain-swap currently)
+- provider/network failures return `TurnResult(outcome="error")` after retries are exhausted
+
+### Command Ownership Model
+
+Slash commands are dispatched entirely by the CLI (`chat_loop()` in `main.py`) — the agent never dispatches a slash command. System-op commands (non-skill, e.g. `/status`, `/logs`) call services directly and return without entering an LLM turn; the agent does not see them. Delegation commands (skills) expand into a synthetic `agent_body` string that enters a normal agent turn as user text; the agent sees plain text, not a command token. The agent is not told which slash commands exist — that vocabulary is a CLI concern, not an agent concern, and the CLI is the authoritative responder to any unrecognised slash input.
 
 ### Approval Flow
 
@@ -149,14 +163,12 @@ flowchart TD
     P -->|Yes| E
     P -->|No| F[Deferred approval chain]
     B -->|No, requires_approval=True| F
-    B -->|MCP approval=auto| F
-    F --> G{Tier 1: skill grant?<br/>eligibility-gated}
-    G -->|Eligible + granted| H[Auto-approve]
-    G -->|Denied or absent| I{Tier 2: session_tool_approvals?}
-    I -->|Match| H
-    I -->|No match| L[Tier 3: user prompt y/n/a]
+    B -->|MCP approval=ask| F
+    F --> I{session_tool_approvals?}
+    I -->|Match| H[Auto-approve]
+    I -->|No match| L[user prompt y/n/a]
     L -->|y| H
-    L -->|a| M[Persist approval + approve]
+    L -->|a| M[Persist session approval + approve]
     L -->|n| N[ToolDenied result]
     H --> O[Resume _stream_events with DeferredToolResults]
     M --> O
@@ -170,7 +182,7 @@ Ordered approval phases:
 1. A tool call is emitted by the model.
 2. Shell commands first pass inline DENY/ALLOW checks in `run_shell_command()`.
 3. If the shell policy result is `REQUIRE_APPROVAL`, the shell tool checks persistent exec approvals and `ctx.tool_call_approved`.
-4. Deferred calls enter `_collect_deferred_tool_approvals()` and run the three-tier decision chain.
+4. Deferred calls enter `_collect_deferred_tool_approvals()` and run the two-step decision chain: session auto-approval then user prompt.
 5. `_collect_deferred_tool_approvals()` records the approval outcomes as `DeferredToolResults`.
 6. `run_turn()` then resumes by calling `_stream_events(None, deferred_tool_results=...)` directly; co-cli does not insert any separate user-to-LLM step between the approval answer and the approved continuation.
 7. The same turn can re-enter approval multiple times if the resumed run emits more deferred calls.
@@ -193,33 +205,52 @@ Before the first loop iteration:
 
 ### 4.2 Pre-Turn Setup In `chat_loop()`
 
-Before calling `run_turn()`:
+`chat_loop()` does not hand raw REPL input directly to `run_turn()`. It first normalizes the input into one of three outcomes:
+
+- built-in slash command: execute locally and do not start an LLM turn
+- skill slash command: expand into synthetic turn input, stage temporary skill state, then enter the normal LLM turn
+- plain text: use as-is for the normal LLM turn
+
+This means skill dispatch is part of pre-turn setup, not a separate phase before it. Dispatch determines whether there is an LLM turn at all, and if there is, what the actual `user_input` for that turn should be.
+
+Normalization path:
 
 ```text
-if bg_compaction_task is done:
-    deps.runtime.precomputed_compaction = bg_compaction_task.result()
-
-pre_turn_history = message_history
+result = dispatch_command(user_input)
+if result.handled and result.agent_body is None:
+    continue REPL loop  # no LLM turn
+if result.agent_body is not None:
+    user_input = result.agent_body
+    _saved_env = current values for deps.session.active_skill_env keys
+    os.environ.update(deps.session.active_skill_env)
 ```
 
-Skill dispatch path:
+Why the skill rewrite must happen before `run_turn()`:
+
+- `run_turn()` must receive the expanded skill body, not the literal `/skill-name`
+- any tool calls made during that turn must see the skill's temporary env vars already injected
+- built-in slash commands must be filtered out before turn orchestration so they do not consume model budget or enter agent history as fake user turns
+
+After input normalization, pre-turn setup completes by joining any finished background compaction work and staging the result for the next request:
 
 ```text
-ctx = dispatch_command(user_input)
-if ctx.skill_body:
-    deps.session.active_skill_env = ctx.skill_env
-    deps.session.skill_tool_grants = ctx.allowed_tools
-    user_input = ctx.skill_body
+if bg_compaction_task exists:
+    await it
+    if it succeeded:
+        deps.runtime.precomputed_compaction = result
+    else:
+        deps.runtime.precomputed_compaction = None
+
+run_turn_with_fallback(...)  # thin wrapper; sets thinking status then calls run_turn()
 ```
 
 Key invariant:
-- skill env vars and allowed-tool grants are temporary and must be cleared after the turn regardless of success or failure
+- skill env vars are temporary and must be cleared after the turn regardless of success or failure
 
 ### 4.3 `run_turn()` Entry And Retry Model
 
 ```text
 deps.runtime.safety_state = SafetyState()
-deps.runtime.status_callback = frontend.on_status
 turn_limits = UsageLimits(request_limit=max_request_limit)
 turn_usage = None
 current_input = user_input
@@ -242,83 +273,130 @@ try:
 
         check Ollama ctx ratio thresholds
         return TurnResult(...)
-finally:
-    deps.runtime.status_callback = None
 ```
 
 One `UsageLimits` object and the accumulated `turn_usage` span:
 - the initial request
-- all approval re-entry hops
+- all approval interception/resume hops
 - provider retries inside the same turn
 
 Approval hops do not reset the turn budget.
 
-`deps.runtime.status_callback` is also turn-scoped:
-- set at `run_turn()` entry to `frontend.on_status`
-- available to long-running tool paths that need user-visible progress
-- always cleared in `finally`, regardless of success, retry exhaustion, or interrupt
-- accepts plain strings for persistent statuses and structured `StatusEvent` payloads for transient progress updates
-
 ### 4.4 Streaming Phase In `_stream_events()`
 
-`_stream_events()` wraps `agent.run_stream_events()` and routes stream events to the frontend. `_StreamState` and pending shell command titles are per-call state.
+`_stream_events()` is the adapter between the SDK event stream and the CLI frontend.
+
+Its job is narrow:
+
+- subscribe to `agent.run_stream_events(...)`
+- translate each SDK event into frontend updates
+- keep a small amount of per-call render state
+- capture the final `AgentRunResult`
+- return `(result, streamed_text)` to `run_turn()`
+
+It does not make approval decisions, retry the model, or mutate conversation history. Those responsibilities stay in `run_turn()` and `_collect_deferred_tool_approvals()`.
+
+Minimal mental model:
 
 ```text
-PartStartEvent(TextPart)      -> flush thinking panel, begin text accumulation
-PartStartEvent(ThinkingPart)  -> accumulate when verbose
-TextPartDelta                 -> throttle text rendering (~20 FPS)
-ThinkingPartDelta             -> throttle thinking rendering when verbose
-FunctionToolCallEvent         -> flush buffers, annotate tool call, maybe emit tool preamble
-FunctionToolResultEvent       -> flush buffers, render string or display-bearing dict results
-AgentRunResultEvent           -> capture final result object
-finally                       -> frontend.cleanup()
+agent emits stream events
+-> _stream_events translates them into UI callbacks
+-> when the SDK emits the final result event, capture it
+-> flush any buffered text/thinking
+-> return the final result object to run_turn()
 ```
 
-Tool preamble injection fires at most once per `_stream_events()` call when the model emits no user-visible text before its first tool call. This prevents silent tool-first turns.
+`_StreamState` is per-call scratch state only. It tracks:
+
+- buffered assistant text not yet rendered
+- buffered thinking text when verbose mode is enabled
+- render timestamps for throttling
+- whether any visible assistant text was streamed
+
+```text
+text/thinking start or delta events
+-> append to local buffers
+-> render at a throttled cadence
+
+tool call event
+-> flush buffered text/thinking first
+-> show "tool started"
+-> install tool_progress_callback for that tool
+
+tool result event
+-> flush buffered text/thinking first
+-> clear tool_progress_callback
+-> show "tool completed"
+
+final result event
+-> store the final AgentRunResult object
+
+function exit
+-> flush remaining buffers
+-> frontend.cleanup()
+```
+
+Why text/thinking buffers are flushed before tool events:
+
+- the CLI should not interleave half-rendered assistant text with tool start/finish messages
+- flushing preserves a stable order on screen: assistant output up to the tool call, then tool UI, then later assistant output
+
+`tool_progress_callback` is turn-local runtime plumbing for long-running tools. When `FunctionToolCallEvent` arrives, `_stream_events()` binds the active `tool_call_id` into a callback that forwards progress messages to `frontend.on_tool_progress(tool_id, msg)`. When the corresponding `FunctionToolResultEvent` arrives, that callback is cleared.
+
+Concrete example:
+
+```text
+assistant starts streaming text
+-> model decides to call a tool
+-> _stream_events flushes the partial assistant text
+-> frontend shows tool start
+-> tool emits progress updates through tool_progress_callback
+-> frontend shows tool completion
+-> assistant text resumes streaming
+```
+
+Important boundary:
+
+- `_stream_events()` only observes and renders events
+- the meaning of the final result still lives in `result.output`
+- if `result.output` is `DeferredToolRequests`, `_stream_events()` does not resolve them; it simply returns that result to `run_turn()`
 
 `run_stream_events()` is required because `DeferredToolRequests` is part of the output type; `run_stream()` and `iter()` are not compatible with this turn model.
 
-### 4.5 Approval Re-Entry
+### 4.5 Approval Flow Interception
 
-Approval flow activates on any agent turn where at least one tool call is:
-- a shell command that is neither inline-allowed nor already persistently approved
-- a native tool registered with `requires_approval=True`
-- an MCP tool on a server configured with `approval="auto"`
-
-Required state:
-- `CoDeps` is fully initialized
-- `deps.session.session_tool_approvals` and `deps.session.skill_tool_grants` are populated for the current turn
-- `deps.config.exec_approvals_path` resolves to `.co-cli/exec-approvals.json` when shell persistence is used
-
-When the model emits `DeferredToolRequests`, `_collect_deferred_tool_approvals()` resolves each request in order:
+Approval flow interception is the human-in-the-loop checkpoint for deferred tool calls inside a streamed turn.
 
 ```text
-for each deferred tool request:
-    if allowed by active skill grant:
-        auto-approve
-    elif allowed by session auto-approval:
-        auto-approve
-    else:
-        prompt user for y / n / a
-
-build and return DeferredToolResults
+_stream_events(...) returns DeferredToolRequests
+-> co-cli collects y / n / a decisions
+-> run_turn() calls _stream_events(user_input=None, deferred_tool_results=...)
+-> the same turn resumes
 ```
 
-`run_turn()` then calls `_stream_events(None, deferred_results=approvals)` to resume the turn.
+Applies to:
 
-The same frontend binding also supports streamed status output from long-running tool paths. Example: the packaged `/doctor` skill calls `check_capabilities`, which reads `ctx.deps.runtime.status_callback` and forwards staged diagnostics from `check_runtime(...)` back to the CLI as transient `StatusEvent(key="doctor")` updates through `frontend.on_status(...)`.
+- native tools registered with `requires_approval=True`
+- MCP tools on servers configured with `approval="ask"`
+- shell commands that reach deferred approval instead of inline `ALLOW` or `DENY`
 
-Approval-chain semantics:
-- active skill grants only apply during the current skill-expanded turn
-- session approvals persist for the current REPL session
-- `"a"` can persist shell approval patterns to the approval store
-- shell DENY and ALLOW decisions happen inside `run_shell_command()` before `_collect_deferred_tool_approvals()` is involved
+`_collect_deferred_tool_approvals()` applies a two-step chain per deferred call:
 
-Clarification on the resume boundary:
-- `_collect_deferred_tool_approvals()` does not send the user's approval text back to the model as a new user message
-- co-cli hands `DeferredToolResults` back to the SDK via `_stream_events()` and resumes the same turn
-- from the co-cli layer, the approved tool continuation happens without any extra app-level LLM decision step between approval input and the approved execution path
-- the exact internal ordering between tool execution and model continuation after `DeferredToolResults` are passed back is SDK-managed, but the resulting tool outputs are what feed the continued turn
+- if the tool is already session-auto-approved (user previously chose `"a"`), approve it
+- otherwise prompt the user for `y / n / a`
+
+Choice semantics:
+
+- `y`: approve this call only
+- `n`: deny this call
+- `a`: auto-approve this tool for the rest of the REPL session
+
+Boundaries:
+
+- this is not a new turn
+- the approval answer is not sent back as a chat message
+- shell `DENY` and `ALLOW` happen before this path
+- shell `"a"` stores a derived command-pattern approval instead of blanket shell approval
 
 ### 4.6 Shell-Specific Inline Policy Path
 
@@ -361,40 +439,60 @@ Pattern derivation:
 
 When the user selects `"a"` for a shell command, `_collect_deferred_tool_approvals()` stores a new derived pattern through `remember_tool_approval()` in `_tool_approvals.py`. The approval prompt displays that derived pattern before the user answers.
 
-### 4.7 Three-Tier Decision Chain In `_collect_deferred_tool_approvals()`
+### 4.7 Two-Step Decision Chain In `_collect_deferred_tool_approvals()`
 
-`_collect_deferred_tool_approvals()` iterates over each pending tool call in `result.output.approvals`. The tiers run in order and the first match short-circuits. Arg decoding, description formatting, and persistence dispatch are delegated to `_tool_approvals.py`.
+`_collect_deferred_tool_approvals()` is the approval collector for deferred tool calls. Its job is simple:
+
+- if the user already chose "always approve" for this tool in the current REPL session, do not prompt again
+- otherwise ask the user now
+
+This keeps the approval flow efficient without creating a new user turn. The approval answer is consumed locally by co-cli and converted into `DeferredToolResults`, which `run_turn()` passes back into the suspended tool-call flow.
+
+The function iterates over each pending tool call in `result.output.approvals`. The checks run in order and stop at the first match. Arg decoding, prompt formatting, and approval persistence are delegated to `_tool_approvals.py`.
+
+Ordered behavior:
+
+1. Normalize the tool args into a dict.
+2. Resolve the approval subject via `resolve_approval_subject(tool_name, args)` — maps to `ToolApprovalSubject` (direct tools) or `CommandPatternApprovalSubject` (shell meta-tool).
+3. Check whether this subject is already auto-approved via `is_auto_approved(subject, deps)`.
+4. If yes, approve immediately and skip the prompt.
+5. If no, show a `y / n / a` approval prompt.
+6. Record the result in `DeferredToolResults`.
+7. If the user chose `"a"`, remember the approval using the subject-specific persistence rule described below.
 
 ```text
 _collect_deferred_tool_approvals(result, deps, frontend):
     approvals = DeferredToolResults()
 
     for each call in result.output.approvals:
-        args = decode_tool_args(call.args)          # normalize str | dict | None → dict
+        args = decode_tool_args(call.args)                    # normalize str | dict | None → dict
+        subject = resolve_approval_subject(call.tool_name, args)  # ToolApprovalSubject or CommandPatternApprovalSubject
 
-        if _check_skill_grant(call.tool_name, deps):  # eligibility-gated — see _check_skill_grant()
+        if is_auto_approved(subject, deps):
             approvals[call.tool_call_id] = True
             continue
 
-        if is_session_auto_approved(call.tool_name, deps):
-            approvals[call.tool_call_id] = True
-            continue
-
-        desc = format_tool_call_description(call.tool_name, args)  # includes shell hint
+        desc = format_tool_call_description(subject, args)   # includes shell pattern hint
         choice = frontend.prompt_approval(desc) if frontend else "n"
 
         record_approval_choice(
             approvals,
             tool_call_id=call.tool_call_id,
             approved=(choice in ("y", "a")),
-            tool_name=call.tool_name, args=args, deps=deps,
+            subject=subject, deps=deps,
             remember=(choice == "a"),
         )
 
     return approvals
 ```
 
-The inline shell policy is never bypassed by orchestration-level grants. `_collect_deferred_tool_approvals()` only sees shell commands that have already reached `ApprovalRequired`.
+What this function does not do:
+
+- it does not evaluate shell safety rules
+- it does not resume the model stream
+- it does not create a new chat turn
+
+The inline shell policy is never bypassed. `_collect_deferred_tool_approvals()` only sees shell commands that have already reached `ApprovalRequired`, after earlier `DENY` and `ALLOW` checks have already run.
 
 ### 4.8 `"a"` Persistence Semantics By Tool Class
 
@@ -405,7 +503,7 @@ The inline shell policy is never bypassed by orchestration-level grants. `_colle
 
 Shell patterns use fnmatch. `git commit *` matches any `git commit` invocation regardless of trailing arguments. Patterns are not deleted automatically; `/approvals clear [id]` manages them.
 
-### 4.9 Approval Re-Entry Loop And Budget Sharing
+### 4.9 Approval Interception Loop And Budget Sharing
 
 The `while result.output is DeferredToolRequests` loop in `run_turn()` supports multi-hop approval chains. A single user turn may require multiple rounds of approval if:
 - the agent calls several tools requiring approval in parallel
@@ -422,8 +520,8 @@ Token usage is accumulated across the initial run and all approval re-entries wi
 
 ```text
 initial run: usage_limits passed in, accumulated_usage starts at 0
-first re-entry: usage_limits unchanged, accumulated_usage += usage from initial run
-second re-entry: accumulated_usage += usage from first re-entry
+first resume: usage_limits unchanged, accumulated_usage += usage from initial run
+second resume: accumulated_usage += usage from first resume
 ...
 ```
 
@@ -435,19 +533,19 @@ MCP tools use the same `DeferredToolRequests` pipeline. No separate MCP approval
 
 ```text
 Per-server config:
-    approval = "auto"  -> server wrapped in ApprovalRequiredToolset
+    approval = "ask"   -> server wrapped in ApprovalRequiredToolset
                           every tool call becomes a DeferredToolRequest
                           flows through _collect_deferred_tool_approvals() like a native tool
 
-    approval = "never" -> server passed unwrapped
+    approval = "auto"  -> server passed unwrapped
                           tool calls execute without prompting
 ```
 
-`_is_safe_command()` does not apply to MCP tools. If a skill's `allowed-tools` frontmatter lists the prefixed MCP tool name, Tier 1 grants auto-approval for that turn.
+`_is_safe_command()` does not apply to MCP tools.
 
 ### 4.11 Per-Turn Safety Guards
 
-Three mechanisms run every turn:
+Three mechanisms shape turn safety, but they do not all live in `run_turn()` itself:
 
 | Guard | Behavior |
 |-------|----------|
@@ -455,11 +553,37 @@ Three mechanisms run every turn:
 | Grace turn on budget exhaustion | `UsageLimitExceeded` triggers one final summary request with `request_limit=1`, then returns `TurnResult(outcome="continue")` |
 | Shell reflection cap | Repeated shell-error retries past `max_reflections` inject a prompt telling the model to ask the user or change approach |
 
-These guards are implemented through history processors and turn-scoped runtime state.
+Implementation split:
+- `run_turn()` resets `deps.runtime.safety_state = SafetyState()` at turn start.
+- `detect_safety_issues()` in [`co_cli/context/_history.py`](../co_cli/context/_history.py) scans recent messages before each model request and may append one or two `SystemPromptPart` interventions.
+- `UsageLimitExceeded` is handled directly inside `run_turn()` with a one-request grace summary attempt.
+
+`SafetyState` is intentionally minimal:
+
+```text
+SafetyState(
+    doom_loop_injected: bool = False,
+    reflection_injected: bool = False,
+)
+```
+
+The history processor logic:
+
+```text
+scan recent messages in reverse
+track contiguous streak of identical ToolCallPart hashes
+track contiguous streak of run_shell_command error returns
+
+if doom streak >= doom_loop_threshold and not yet injected:
+    append SystemPromptPart("You are repeating the same tool call...")
+
+if shell-error streak >= max_reflections and not yet injected:
+    append SystemPromptPart("Shell reflection limit reached...")
+```
 
 ### 4.12 Provider Error Handling And Reasoning Fallback
 
-`classify_provider_error()` drives retry behavior:
+Error classification drives retry behavior (handled inline in `run_turn()` via `except` clauses):
 
 | Exception | Status | Action | Details |
 |-----------|--------|--------|---------|
@@ -471,7 +595,10 @@ These guards are implemented through history processors and turn-scoped runtime 
 
 All retries are capped by `model_http_retries`.
 
-Reasoning fallback: `run_turn_with_fallback()` in `co_cli/context/_orchestrate.py` wraps `run_turn()` — passes through to a single turn with no chain advancement.
+`run_turn_with_fallback()` is currently just the REPL entry wrapper:
+- emits `frontend.on_status("Co is thinking...")`
+- forwards the call into `run_turn()` with config-derived retry and request-limit settings
+- does not perform model-chain switching or secondary fallback behavior
 
 ### 4.13 Interrupt Recovery
 
@@ -501,13 +628,14 @@ After `run_turn()` returns:
 ```text
 message_history = turn_result.messages
 
-if outcome == "error":
-    run_turn_with_fallback handles the turn (currently no chain advance)
-
 finally:
     restore os.environ
     clear active_skill_env
-    clear skill_tool_grants
+    clear active_skill_name
+
+if not interrupted and outcome != "error":
+    analyze_for_signals(message_history, primary_model, services=deps.services)
+    handle_signal(...)
 
 deps.runtime.precomputed_compaction = None
 touch_session(session_data)
@@ -568,7 +696,7 @@ Recovery behavior:
 | `co_cli/tools/_shell_policy.py` | Shell DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_approval.py` | Safe-prefix shell classification |
 | `co_cli/tools/_exec_approvals.py` | Persistent shell approval pattern derivation and storage |
-| `co_cli/tools/_tool_approvals.py` | Extracted approval helpers: session auto-approval, shell remembered-approval routing, approval formatting |
+| `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject` types, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, approval formatting |
 | `co_cli/context/_history.py` | Compaction helpers and safety processors consulted during turns |
 | `co_cli/commands/_commands.py` | Slash command handlers and skill dispatch |
 | `co_cli/context/_session.py` | Session persistence touched on every completed turn |

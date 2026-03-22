@@ -1,12 +1,7 @@
 """Functional tests for agent factory — tool registration and approval wiring."""
 
-import asyncio
 import dataclasses
-from datetime import date
 from pathlib import Path
-
-from pydantic_ai.models.function import FunctionModel, AgentInfo
-from pydantic_ai.messages import ModelResponse, TextPart, ModelMessage
 
 from co_cli.agent import build_agent
 from co_cli.config import WebPolicy, settings
@@ -135,38 +130,3 @@ def test_web_fetch_ask_requires_approval():
     assert tool_approval["web_search"] is False
     assert tool_approval["web_fetch"] is True
 
-
-def test_instructions_reevaluated_on_turn2():
-    """@agent.instructions are freshly evaluated on every turn, not accumulated in history.
-
-    Verifies that a turn-2 run (with non-empty message_history) receives
-    current-date instructions from @agent.instructions, confirming the
-    channel is not stale.
-    """
-    from co_cli.deps import CoDeps, CoServices
-    from co_cli.tools._shell_backend import ShellBackend
-
-    captured: list[str | None] = []
-
-    def capture_model(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        captured.append(info.instructions)
-        return ModelResponse(parts=[TextPart(content="ok")])
-
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-    agent._model = FunctionModel(capture_model)
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-
-    # Turn 1
-    r1 = asyncio.run(agent.run("turn 1", deps=deps))
-
-    # Turn 2 — simulated continuation with history from turn 1
-    history = list(r1.all_messages())
-    asyncio.run(agent.run("turn 2", deps=deps, message_history=history))
-
-    assert len(captured) == 2, "Expected model called exactly twice"
-    today = date.today().isoformat()
-    for i, instructions in enumerate(captured):
-        assert instructions is not None, f"Turn {i + 1}: instructions must not be None"
-        assert today in instructions, (
-            f"Turn {i + 1}: expected current date '{today}' in instructions, got: {instructions!r}"
-        )

@@ -167,10 +167,11 @@ def test_storage_cleanup_skips_running(storage: TaskStorage):
 @pytest.mark.asyncio
 async def test_runner_start_and_complete(runner: TaskRunner):
     """Start a real echo command, wait for completion."""
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(5):
         task_id = await runner.start_task("echo hello_world", str(Path.cwd()))
-        assert task_id.startswith("task_")
+    assert task_id.startswith("task_")
 
+    async with asyncio.timeout(10):
         for _ in range(50):
             await asyncio.sleep(0.1)
             meta = runner.get_task(task_id)
@@ -190,9 +191,10 @@ async def test_runner_start_and_complete(runner: TaskRunner):
 @pytest.mark.asyncio
 async def test_runner_failed_command(runner: TaskRunner):
     """Non-zero exit sets status=failed."""
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(5):
         task_id = await runner.start_task("false", str(Path.cwd()))
 
+    async with asyncio.timeout(10):
         for _ in range(30):
             await asyncio.sleep(0.1)
             meta = runner.get_task(task_id)
@@ -207,21 +209,23 @@ async def test_runner_failed_command(runner: TaskRunner):
 @pytest.mark.asyncio
 async def test_runner_cancel_running_task(runner: TaskRunner):
     """Cancel a running sleep — status becomes cancelled."""
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(5):
         task_id = await runner.start_task("sleep 60", str(Path.cwd()))
 
-        # Give process time to start
+    # Give process time to start
+    async with asyncio.timeout(5):
         for _ in range(20):
             await asyncio.sleep(0.1)
             meta = runner.get_task(task_id)
             if meta and meta["status"] == TaskStatus.running.value:
                 break
 
+    async with asyncio.timeout(5):
         cancelled = await runner.cancel_task(task_id)
-        assert cancelled is True
+    assert cancelled is True
 
-        meta = runner.get_task(task_id)
-        assert meta["status"] == TaskStatus.cancelled.value
+    meta = runner.get_task(task_id)
+    assert meta["status"] == TaskStatus.cancelled.value
 
 
 @pytest.mark.asyncio
@@ -234,24 +238,27 @@ async def test_runner_cancel_nonexistent(runner: TaskRunner):
 @pytest.mark.asyncio
 async def test_runner_shutdown_kills_running(tmp_tasks_dir: Path):
     """Shutdown kills live tasks and marks them cancelled."""
-    async with asyncio.timeout(10):
-        r = TaskRunner(
-            storage=TaskStorage(tmp_tasks_dir),
-            max_concurrent=5,
-            auto_cleanup=False,
-        )
+    r = TaskRunner(
+        storage=TaskStorage(tmp_tasks_dir),
+        max_concurrent=5,
+        auto_cleanup=False,
+    )
+    async with asyncio.timeout(5):
         task_id = await r.start_task("sleep 60", str(Path.cwd()))
 
+    # Give process time to start
+    async with asyncio.timeout(5):
         for _ in range(20):
             await asyncio.sleep(0.1)
             meta = r.get_task(task_id)
             if meta and meta["status"] == TaskStatus.running.value:
                 break
 
+    async with asyncio.timeout(5):
         await r.shutdown()
 
-        meta = r.get_task(task_id)
-        assert meta["status"] == TaskStatus.cancelled.value
+    meta = r.get_task(task_id)
+    assert meta["status"] == TaskStatus.cancelled.value
 
 
 @pytest.mark.asyncio

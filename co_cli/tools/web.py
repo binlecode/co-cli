@@ -12,6 +12,7 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 from co_cli.tools._errors import terminal_error
 from co_cli.tools._http_retry import classify_web_http_error, compute_backoff_delay
+from co_cli.tools._result import ToolResult, make_result
 from co_cli.tools._url_safety import is_url_safe
 
 _MAX_RESULTS = 8
@@ -133,7 +134,7 @@ async def _http_get_with_retries(
     backoff_max_seconds: float,
     backoff_jitter_ratio: float,
     cf_fallback_headers: dict[str, str] | None = None,
-) -> httpx.Response | dict[str, Any]:
+) -> "httpx.Response | ToolResult":
     attempts_total = max(0, max_retries) + 1
 
     for attempt in range(1, attempts_total + 1):
@@ -180,7 +181,7 @@ async def web_search(
     query: str,
     max_results: int = 5,
     domains: list[str] | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search the web via Brave Search. Returns ranked result snippets with
     titles and URLs. Each result includes a short text preview.
 
@@ -254,7 +255,7 @@ async def web_search(
     ]
 
     if not results:
-        return {"display": f"No results for '{query}'.", "results": [], "count": 0}
+        return make_result(f"No results for '{query}'.", results=[], count=0)
 
     lines = []
     for i, r in enumerate(results, 1):
@@ -263,13 +264,13 @@ async def web_search(
         lines.append("")
 
     display = f"Web search results for '{query}':\n\n" + "\n".join(lines).rstrip()
-    return {"display": display, "results": results, "count": len(results)}
+    return make_result(display, results=results, count=len(results))
 
 
 async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Fetch a web page and return its content converted to readable markdown.
     HTML pages are converted to markdown; JSON and XML are returned as-is.
 
@@ -359,9 +360,9 @@ async def web_fetch(
 
     display = f"Content from {final_url}:\n\n{text}"
 
-    return {
-        "display": display,
-        "url": final_url,
-        "content_type": content_type,
-        "truncated": truncated,
-    }
+    return make_result(
+        display,
+        url=final_url,
+        content_type=content_type,
+        truncated=truncated,
+    )

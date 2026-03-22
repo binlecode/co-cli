@@ -108,7 +108,7 @@ def test_project_config_partially_overrides_mcp_server(tmp_path):
             "github": {
                 "command": "npx",
                 "args": ["-y", "@modelcontextprotocol/server-github"],
-                "approval": "auto",
+                "approval": "ask",
             }
         }
     }))
@@ -118,7 +118,7 @@ def test_project_config_partially_overrides_mcp_server(tmp_path):
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
         "mcp_servers": {
             "github": {
-                "approval": "never",
+                "approval": "auto",
             }
         }
     }))
@@ -127,7 +127,7 @@ def test_project_config_partially_overrides_mcp_server(tmp_path):
     github = settings.mcp_servers["github"]
     assert github.command == "npx"
     assert github.args == ["-y", "@modelcontextprotocol/server-github"]
-    assert github.approval == "never"
+    assert github.approval == "auto"
 
 
 def test_project_config_partially_overrides_role_models(tmp_path):

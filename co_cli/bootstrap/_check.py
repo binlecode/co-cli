@@ -381,10 +381,22 @@ def check_runtime(
     skills_result = _check_skills(deps.session.skill_registry)
 
     # Probe each configured MCP server; count live ones
+    # Prefer discovery errors from session (reflects actual connectivity at session start)
+    # over binary PATH/URL probe when available.
     mcp_probes: list[tuple[str, CheckResult]] = []
     for name, cfg in (deps.config.mcp_servers or {}).items():
         _emit_progress(progress, f"Doctor: checking MCP server '{name}'...")
-        mcp_probes.append((f"mcp:{name}", check_mcp_server(cfg.command, cfg.url)))
+        prefix = cfg.prefix or name
+        discovery_error = deps.session.mcp_discovery_errors.get(prefix)
+        if discovery_error is not None:
+            result = CheckResult(
+                ok=False,
+                status="error",
+                detail=f"discovery failed: {discovery_error}",
+            )
+        else:
+            result = check_mcp_server(cfg.command, cfg.url)
+        mcp_probes.append((f"mcp:{name}", result))
     mcp_count = sum(1 for _, r in mcp_probes if r.ok)
 
     # Assemble named check list for checks display and findings scan
@@ -424,7 +436,6 @@ def check_runtime(
     status: dict[str, Any] = {
         "session_id": deps.session.session_id,
         "active_skill": deps.session.active_skill_name,
-        "skill_grants": sorted(deps.session.skill_tool_grants),
         "tool_names": list(deps.session.tool_names),
         "tool_approvals": dict(deps.session.tool_approvals),
         "tool_count": len(deps.session.tool_names),

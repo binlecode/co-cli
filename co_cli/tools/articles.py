@@ -28,6 +28,7 @@ from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_fro
 from co_cli.deps import CoDeps
 from co_cli.knowledge._index_store import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
+from co_cli.tools._result import ToolResult, make_result
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ async def search_knowledge(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Primary cross-source knowledge search — use this when the source is unknown
     or when you want unified results across memories, articles, Obsidian notes,
     and Drive docs in a single ranked result set.
@@ -212,7 +213,7 @@ async def search_knowledge(
     if ctx.deps.services.knowledge_index is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
-            return {"display": f"No results for '{query}' (source={source!r} requires FTS)", "count": 0, "results": []}
+            return make_result(f"No results for '{query}' (source={source!r} requires FTS)", count=0, results=[])
         # Derive effective_kind so the source="memory" escape hatch works in grep mode.
         # Default (source=None or source="library"): library only (articles).
         if kind is not None:
@@ -238,7 +239,7 @@ async def search_knowledge(
             memories = [m for m in memories if m.created and m.created <= created_before]
         matches = _grep_recall(memories, query, limit)
         if not matches:
-            return {"display": f"No results found for '{query}'", "count": 0, "results": []}
+            return make_result(f"No results found for '{query}'", count=0, results=[])
         lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
         result_dicts = []
         for m in matches:
@@ -247,7 +248,7 @@ async def search_knowledge(
             lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
             result_dicts.append({"source": result_source, "kind": m.kind, "title": m.path.stem,
                                   "snippet": m.content[:100], "score": 0.0, "path": str(m.path)})
-        return {"display": "\n".join(lines), "count": len(matches), "results": result_dicts}
+        return make_result("\n".join(lines), count=len(matches), results=result_dicts)
 
     # Sync Obsidian vault into index before searching
     if ctx.deps.config.obsidian_vault_path and source in (None, "obsidian"):
@@ -272,10 +273,10 @@ async def search_knowledge(
         )
     except Exception as e:
         logger.warning(f"search_knowledge FTS error: {e}")
-        return {"display": f"Search error: {e}", "count": 0, "results": []}
+        return make_result(f"Search error: {e}", count=0, results=[])
 
     if not results:
-        return {"display": f"No results found for '{query}'", "count": 0, "results": []}
+        return make_result(f"No results found for '{query}'", count=0, results=[])
 
     # Compute confidence for each result (post-retrieval, tool layer)
     half_life_days = ctx.deps.config.memory_recall_half_life_days or 0
@@ -308,11 +309,11 @@ async def search_knowledge(
             "conflict": r.path in conflict_paths,
         })
 
-    return {
-        "display": "\n".join(lines).rstrip(),
-        "count": len(results),
-        "results": result_dicts,
-    }
+    return make_result(
+        "\n".join(lines).rstrip(),
+        count=len(results),
+        results=result_dicts,
+    )
 
 
 async def save_article(
@@ -322,7 +323,7 @@ async def save_article(
     origin_url: str,
     tags: list[str] | None = None,
     related: list[str] | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Save external reference material (web page, documentation, research) as
     a knowledge article for future retrieval. Articles are decay-protected and
     persist indefinitely unlike memories.
@@ -440,15 +441,13 @@ async def save_article(
         except Exception as e:
             logger.warning(f"Failed to index article {article_id}: {e}")
 
-    return {
-        "display": (
-            f"✓ Saved article {article_id}: {filename}\n"
-            f"Source: {origin_url}\n"
-            f"Location: {file_path}"
-        ),
-        "article_id": article_id,
-        "action": "saved",
-    }
+    return make_result(
+        f"✓ Saved article {article_id}: {filename}\n"
+        f"Source: {origin_url}\n"
+        f"Location: {file_path}",
+        article_id=article_id,
+        action="saved",
+    )
 
 
 async def recall_article(
@@ -459,7 +458,7 @@ async def recall_article(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search saved articles by keyword and return summary index only
     (title, origin_url, tags, first paragraph). Use read_article_detail
     to load the full body after identifying an article here.
@@ -498,11 +497,11 @@ async def recall_article(
                 limit=max_results,
             )
             if not fts_results:
-                return {
-                    "display": f"No articles found matching '{query}'",
-                    "count": 0,
-                    "results": [],
-                }
+                return make_result(
+                    f"No articles found matching '{query}'",
+                    count=0,
+                    results=[],
+                )
             result_dicts = []
             lines = [f"Found {len(fts_results)} article(s) matching '{query}':\n"]
             for r in fts_results:
@@ -535,11 +534,11 @@ async def recall_article(
                     "snippet": r.snippet,
                     "slug": Path(r.path).stem if r.path else "",
                 })
-            return {
-                "display": "\n".join(lines),
-                "count": len(fts_results),
-                "results": result_dicts,
-            }
+            return make_result(
+                "\n".join(lines),
+                count=len(fts_results),
+                results=result_dicts,
+            )
         except Exception as e:
             logger.warning(f"FTS search failed, falling back to grep: {e}")
 
@@ -564,11 +563,11 @@ async def recall_article(
     matches = matches[:max_results]
 
     if not matches:
-        return {
-            "display": f"No articles found matching '{query}'",
-            "count": 0,
-            "results": [],
-        }
+        return make_result(
+            f"No articles found matching '{query}'",
+            count=0,
+            results=[],
+        )
 
     lines = [f"Found {len(matches)} article(s) matching '{query}':\n"]
     result_dicts = []
@@ -600,17 +599,17 @@ async def recall_article(
             "slug": a.path.stem,
         })
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(matches),
-        "results": result_dicts,
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(matches),
+        results=result_dicts,
+    )
 
 
 async def read_article_detail(
     ctx: RunContext[CoDeps],
     slug: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Load the full markdown body of a saved article on demand.
 
     Always call recall_article first to find the slug, then call
@@ -638,13 +637,13 @@ async def read_article_detail(
         # Try prefix match (slug might be partial)
         candidates = list(library_dir.glob(f"{slug}*.md"))
     if not candidates:
-        return {
-            "display": f"Article '{slug}' not found.",
-            "article_id": None,
-            "title": None,
-            "origin_url": None,
-            "content": None,
-        }
+        return make_result(
+            f"Article '{slug}' not found.",
+            article_id=None,
+            title=None,
+            origin_url=None,
+            content=None,
+        )
 
     path = candidates[0]
     raw = path.read_text(encoding="utf-8")
@@ -659,13 +658,13 @@ async def read_article_detail(
         header_parts.append(f"Source: {origin_url}")
     header = "\n".join(header_parts)
 
-    return {
-        "display": f"{header}\n\n{body.strip()}",
-        "article_id": article_id,
-        "title": title,
-        "origin_url": origin_url,
-        "content": body.strip(),
-    }
+    return make_result(
+        f"{header}\n\n{body.strip()}",
+        article_id=article_id,
+        title=title,
+        origin_url=origin_url,
+        content=body.strip(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -700,7 +699,7 @@ def _consolidate_article(
     new_title: str,
     new_tags: list[str] | None,
     origin_url: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Consolidate an existing article (same origin_url) with new content."""
     raw = path.read_text(encoding="utf-8")
     fm, _ = parse_frontmatter(raw)
@@ -719,15 +718,13 @@ def _consolidate_article(
     path.write_text(md_content, encoding="utf-8")
     logger.info(f"Consolidated article {fm.get('id')} (same origin_url)")
 
-    return {
-        "display": (
-            f"✓ Updated article {fm.get('id')}: {path.name}\n"
-            f"Source: {origin_url}\n"
-            f"Location: {path}"
-        ),
-        "article_id": fm.get("id"),
-        "action": "consolidated",
-    }
+    return make_result(
+        f"✓ Updated article {fm.get('id')}: {path.name}\n"
+        f"Source: {origin_url}\n"
+        f"Location: {path}",
+        article_id=fm.get("id"),
+        action="consolidated",
+    )
 
 
 def _content_hash(content: str) -> str:

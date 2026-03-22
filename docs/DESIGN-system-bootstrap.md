@@ -88,7 +88,6 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ @agent.instructions add_shell_guidance        # shell policy reminder
 │  ├─ @agent.instructions add_project_instructions  # .co-cli/instructions.md if present
 │  ├─ @agent.instructions add_personality_memories  # personality-context memories
-│  ├─ @agent.instructions add_available_skills      # skill registry list (capped 2KB)
 │  ├─ agent.tool(run_shell_command, requires_approval=False)  # ~30 tools registered
 │  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
 │  ├─ agent.tool(delegate_coder), agent.tool(delegate_think), ...  # only if role model is configured
@@ -101,7 +100,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      Exception → print warning, continue with native tools only
 │
 ├─ [if mcp_servers]
-│      mcp_tool_names = discover_mcp_tools(agent, exclude=set(tool_names))
+│      mcp_tool_names, discovery_errors = discover_mcp_tools(agent, exclude=set(tool_names))
+│      deps.session.mcp_discovery_errors = discovery_errors
 │      tool_names = tool_names + mcp_tool_names
 │      deps.session.tool_names = tool_names
 │
@@ -225,7 +225,7 @@ Key transformation:
 | `session` | `CoSessionState` | Session, fresh for sub-agents | Reset for sub-agents |
 | `runtime` | `CoRuntimeState` | Orchestration-layer transient state | Reset for sub-agents |
 
-The session group holds tool-visible mutable state such as approvals, todos, and skill grants. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
+The session group holds tool-visible mutable state such as approvals, todos, and skill registry. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
 `runtime.startup_statuses` carries one-time bootstrap status lines such as knowledge backend degradation notices; the chat loop prints them before the welcome banner and then treats them as transient state.
 
 ## 2. Provider And Model Checks
@@ -284,7 +284,8 @@ chat_loop():
             # startup continues with native tools only
 
         if mcp_servers:
-            mcp_tool_names = await discover_mcp_tools(agent, exclude=set(tool_names))
+            mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
+            deps.session.mcp_discovery_errors = discovery_errors
             tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 
@@ -445,6 +446,7 @@ The banner marks the boundary between startup and interactive use. All status me
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
 | `deps.session.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
 | `deps.session.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
+| `deps.session.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
 | `deps.session.skill_registry` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Non-hidden skill dicts |
 | `SKILL_COMMANDS` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Module-level dict of all loaded skills |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |

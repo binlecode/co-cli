@@ -237,8 +237,6 @@ class KnowledgeIndex:
         self._llm_api_key = config.llm_api_key
         self._embed_api_url = config.knowledge_embed_api_url
         self._cross_encoder_url = config.knowledge_cross_encoder_reranker_url
-        self._hybrid_vector_weight = config.knowledge_hybrid_vector_weight
-        self._hybrid_text_weight = config.knowledge_hybrid_text_weight
         self._llm_reranker = config.knowledge_llm_reranker
         self._chunk_size = config.knowledge_chunk_size
         self._chunk_overlap = max(0, min(config.knowledge_chunk_overlap, config.knowledge_chunk_size - 1)) if config.knowledge_chunk_size > 0 else 0
@@ -590,10 +588,7 @@ class KnowledgeIndex:
                     tag_match_mode=tag_match_mode, created_after=created_after,
                     created_before=created_before, limit=limit * 4,
                 )
-                merged = self._hybrid_merge(
-                    fts_mem, fts_chunks, vec_mem, vec_chunks,
-                    self._hybrid_vector_weight, self._hybrid_text_weight,
-                )
+                merged = self._hybrid_merge(fts_mem, fts_chunks, vec_mem, vec_chunks)
                 return self._rerank_results(query, merged, limit)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
@@ -1051,8 +1046,6 @@ class KnowledgeIndex:
         fts_chunks: list[SearchResult],
         vec_mem: list[SearchResult],
         vec_chunks: list[SearchResult],
-        vector_weight: float,
-        text_weight: float,
     ) -> list[SearchResult]:
         """RRF on chunk-level lists; collapse to doc-level after fusion.
 
@@ -1061,7 +1054,6 @@ class KnowledgeIndex:
         After RRF, doc score = sum of its chunks' RRF scores; winning chunk
         (highest per-key score) carries its snippet/chunk_index/start_line/end_line.
         k=60: Cormack 2009 standard.
-        vector_weight and text_weight are kept for API compatibility but unused (RRF is rank-only).
         """
         k = 60
 

@@ -20,8 +20,8 @@ description: Orchestrate the planning phase. TL drafts the plan, then spawns Cor
 | Type | Description | TL extras |
 |------|-------------|-----------|
 | `code-feature` | New functionality, new tools, schema additions | Standard |
-| `doc-restructure` | Reorganizing or rewriting design/TODO docs | Add Code Accuracy Verification step |
-| `doc+code` | Doc update + corresponding code changes | Both extras |
+| `doc-restructure` | Reorganizing or rewriting non-DESIGN docs (reference/, TODO, CLAUDE.md) | Add Code Accuracy Verification step |
+| `doc+code` | Non-DESIGN doc update + corresponding code changes (reference/, TODO, CLAUDE.md) | Both extras |
 | `refactor` | Code reorganization without behavior change | Add regression surface check |
 
 State the task type at the top of the TL draft (e.g. "Task type: code-feature").
@@ -59,7 +59,7 @@ Submitting for Core Dev review.
 ...
 ```
 
-Note: the `---` separator and `# Audit Log` section are stripped at the end before the Gate 1 section is appended.
+Note: the Gate 1 final section is appended first, then the `---` separator and `# Audit Log` section are stripped — leaving only tasks, plan content, and the Final section.
 
 ---
 
@@ -90,6 +90,7 @@ Note: the `---` separator and `# Audit Log` section are stripped at the end befo
     Omit if there are no dependencies. Always use list syntax, even for a single dependency.
   - For `code-feature`: Red-Green-Refactor test requirement
   - For `doc-restructure`: Accuracy check requirement (grep/read the code, confirm claim is correct)
+- **No DESIGN doc update tasks:** DESIGN docs are updated automatically by `sync-doc` post-delivery — they are outputs of delivery, not inputs. Any task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed before implementation begins.
 - **Guard condition parity:** For each new tool that mirrors an existing one, list its guard conditions (e.g. `max_requests < 1`, empty-string check) and compare against the nearest existing peer tool. Note intentional divergences inline in the task — do not leave them implicit for Core Dev to catch.
 - Decisions must include rationale and alternatives considered.
 
@@ -111,21 +112,11 @@ Spawn Core Dev and PO as parallel subagents. Both read `docs/TODO-<slug>.md` and
 
 Core Dev critiques from an implementation and risk perspective.
 
-**Core Dev checklist — implementation quality:**
-- Missing or ambiguous steps
-- Hidden coupling / migration gotchas
-- Tasks too large for a single agent session or missing `done_when`
-- "Hallucinated" success (outcomes assumed without validation steps)
-- Test coverage gaps
-- All `done_when:` criteria are machine-verifiable. Acceptable: `grep/test/file/doc-match`.
-  Not acceptable: subjective phrases like "code is clean", "developer is satisfied",
-  "feature works as expected" with no concrete check command.
+Before critiquing, read the full checklist now:
 
-**Core Dev checklist — operational risk:**
-- Schema or data model changes without migration or rollback path
-- Irreversible operations (deletes, overwrites, publishes, prunes) without safeguards
-- External API integrations or third-party side effects without error handling
-- Tools marked `requires_approval=True` missing approval wiring
+> Read: .claude/skills/orchestrate-plan/references/core-dev-checklist.md
+
+Apply every item in that file to your critique.
 
 **For `doc-restructure` and `doc+code` tasks, also check:**
 - Are all inaccuracies identified in TL's Code Accuracy Verification addressed by tasks?
@@ -134,7 +125,7 @@ Core Dev critiques from an implementation and risk perspective.
 - Scope creep: is the plan restructuring more than intended without justification?
 - Are deleted/merged docs properly retired (no dangling links in CLAUDE.md or other DESIGN docs)?
 
-**On C2+:** Before raising new issues, explicitly verify each blocking item from the previous cycle is resolved. Call out any that are still unaddressed — these remain blocking regardless of new findings.
+**On C2+:** Before raising new issues, explicitly verify each blocking item from the previous cycle is resolved. For each `adopt` or `modify` entry in TL's decision table, read the specific plan section cited in the `Change` column — not just the decision table — and confirm the concern is substantively addressed. A superficial or missing change re-raises the original issue. Call out any that are still unaddressed — these remain blocking regardless of new findings.
 
 Output appended to the workbench under `## Cycle C1 — Core Dev`:
 
@@ -154,12 +145,11 @@ Output appended to the workbench under `## Cycle C1 — Core Dev`:
 
 PO critiques from a scope, value, and first-principles perspective. Does not re-raise implementation issues already flagged by Core Dev.
 
-**PO checklist:**
-- **Right problem?** Does the plan address the actual user need, or a proxy/assumed version of it?
-- **Correct scope?** Is the scope the minimum needed to solve the problem — no more, no less?
-- **First principles?** Does the design start from fundamentals, or does it layer complexity on top of existing complexity without necessity?
-- **Non-over-engineering?** Are any tasks, abstractions, or design choices more elaborate than the problem warrants? Flag gold-plating, premature generalization, and speculative future-proofing.
-- **Effectiveness?** Will this plan, if fully executed, actually solve the stated problem for the user?
+Before critiquing, read the full checklist now:
+
+> Read: .claude/skills/orchestrate-plan/references/po-checklist.md
+
+Apply every item in that file to your critique.
 
 Output appended to the workbench under `## Cycle C1 — PO`:
 
@@ -185,14 +175,16 @@ TL reads the updated workbench and processes every Core Dev and PO issue. Decide
 ```
 ## Cycle C1 — Team Lead Decisions
 
-| Issue ID | Decision | Rationale |
-|----------|----------|-----------|
-| CD-M-1   | adopt    | Added migration rollback step to TASK-3 |
-| CD-M-2   | modify   | Added test stub; kept scope narrow |
-| CD-m-1   | reject   | Style preference — matches existing codebase convention |
-| PO-M-1   | adopt    | Removed speculative caching layer — not needed for MVP |
-| PO-m-1   | reject   | Abstraction is justified by 3 existing callers |
+| Issue ID | Decision | Rationale | Change |
+|----------|----------|-----------|--------|
+| CD-M-1   | adopt    | Added migration rollback step to TASK-3 | Added `rollback: drop column X` to TASK-3 files: |
+| CD-M-2   | modify   | Added test stub; kept scope narrow | Added done_when stub to TASK-2 |
+| CD-m-1   | reject   | Style preference — matches existing codebase convention | — |
+| PO-M-1   | adopt    | Removed speculative caching layer — not needed for MVP | Removed caching task from Implementation Plan |
+| PO-m-1   | reject   | Abstraction is justified by 3 existing callers | — |
 ```
+
+For every **adopt** or **modify** decision, the `Change` column must describe the specific change with enough detail for Core Dev to locate and verify it in the plan (e.g. which task, which field, what was added). A vague summary like "updated plan" is not acceptable. `reject` entries use `—`.
 
 **Update the plan section** of `docs/TODO-<slug>.md` applying all adopted and modified changes.
 
@@ -218,11 +210,7 @@ Human decision required before proceeding.
 
 When stopping normally:
 
-1. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
-   `# Audit Log` to the end of `docs/TODO-<slug>.md`. The TODO file must be clean after
-   this step: only tasks and plan content remain.
-
-2. **Append the final section** to `docs/TODO-<slug>.md`:
+1. **Append the final section** to `docs/TODO-<slug>.md`:
 ```
 ## Final — Team Lead
 
@@ -232,6 +220,10 @@ Plan approved.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev <slug>`
 ```
+
+2. **Strip the Audit Log from the TODO** — remove the `---` separator and everything from
+   `# Audit Log` to (but not including) the `## Final — Team Lead` section just appended.
+   The TODO file must be clean after this step: only tasks, plan content, and the Final section remain.
 
 ---
 

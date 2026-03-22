@@ -14,6 +14,7 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
+from co_cli.tools._result import ToolResult, make_result
 
 # Valid status and priority values
 _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
@@ -23,7 +24,7 @@ _VALID_PRIORITY = {"high", "medium", "low"}
 def todo_write(
     ctx: RunContext[CoDeps],
     todos: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> ToolResult:
     """Replace the session todo list with the provided items.
 
     Call this to create or update the task list for a multi-step directive.
@@ -80,14 +81,14 @@ def todo_write(
         validated.append({"content": content, "status": status, "priority": priority})
 
     if errors:
-        return {
-            "display": "Todo list NOT saved — validation errors:\n"
+        return make_result(
+            "Todo list NOT saved — validation errors:\n"
             + "\n".join(f"  - {e}" for e in errors),
-            "count": 0,
-            "pending": 0,
-            "in_progress": 0,
-            "errors": errors,
-        }
+            count=0,
+            pending=0,
+            in_progress=0,
+            errors=errors,
+        )
 
     ctx.deps.session.session_todos = validated
 
@@ -119,17 +120,17 @@ def todo_write(
         summary_parts.append(f"{cancelled} cancelled")
     lines.append("\n" + ", ".join(summary_parts))
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(validated),
-        "pending": pending,
-        "in_progress": in_progress,
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(validated),
+        pending=pending,
+        in_progress=in_progress,
+    )
 
 
 def todo_read(
     ctx: RunContext[CoDeps],
-) -> dict[str, Any]:
+) -> ToolResult:
     """Read the current session todo list.
 
     Call before ending a turn to verify completeness — if any items are
@@ -148,13 +149,13 @@ def todo_read(
     todos = ctx.deps.session.session_todos
 
     if not todos:
-        return {
-            "display": "No active todo list for this session.",
-            "count": 0,
-            "pending": 0,
-            "in_progress": 0,
-            "todos": [],
-        }
+        return make_result(
+            "No active todo list for this session.",
+            count=0,
+            pending=0,
+            in_progress=0,
+            todos=[],
+        )
 
     pending = sum(1 for t in todos if t["status"] == "pending")
     in_progress = sum(1 for t in todos if t["status"] == "in_progress")
@@ -178,10 +179,10 @@ def todo_read(
     else:
         lines.append("\nAll items completed or cancelled.")
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(todos),
-        "pending": pending,
-        "in_progress": in_progress,
-        "todos": list(todos),
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(todos),
+        pending=pending,
+        in_progress=in_progress,
+        todos=list(todos),
+    )

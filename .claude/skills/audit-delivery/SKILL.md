@@ -1,6 +1,6 @@
 ---
-name: delivery-audit
-description: Post-delivery inverse coverage check. Single agent scans source for agent-registered tools, config settings, and CLI commands, then checks each has a corresponding DESIGN doc section. Reports gaps only — does not fix. Also invoked automatically by orchestrate-dev after sync-doc.
+name: audit-delivery
+description: On-demand inverse coverage check. Single agent scans source for agent-registered tools, config settings, and CLI commands, then checks each has a corresponding DESIGN doc section. Reports gaps only — does not fix.
 ---
 
 # Delivery Audit Workflow
@@ -20,8 +20,11 @@ Inventory every shipped feature from source. For each, verify it has honest DESI
 ## Phase 1 — Scope Resolution
 
 **1. Resolve source modules.**
-- `scope = all`: scan all `co_cli/**/*.py` excluding `_*.py` helpers and `__init__.py`.
-- Otherwise: match scope as prefix or substring against module filenames in `co_cli/`. If no match: list available modules and stop.
+
+First, identify the project's source root from CLAUDE.md's architecture section.
+
+- `scope = all`: scan all `<source_root>/**/*.py` excluding `_*.py` helpers and `__init__.py`.
+- Otherwise: match scope as prefix or substring against module filenames under the source root. If no match: list available modules and stop.
 
 **2. Resolve DESIGN docs.**
 - `scope = all`: glob `docs/DESIGN-*.md`.
@@ -41,14 +44,22 @@ Inventory every shipped feature from source. For each, verify it has honest DESI
 
 ## Phase 2 — Feature Inventory
 
-Scan in-scope source modules for three feature classes. **Be exhaustive — missing an item from the inventory is a worse failure than a false positive.**
+Scan in-scope source modules for the project's feature classes. **Be exhaustive — missing an item from the inventory is a worse failure than a false positive.**
+
+Use CLAUDE.md to identify the project's architecture and derive inventory methods. At minimum, inventory:
 
 | Feature class | How to find |
 |--------------|-------------|
-| **Agent tools (main)** | Grep `_register(` in `co_cli/agent.py` — each call is one registered tool. `agent.tool` is called inside `_register`; grepping `agent.tool` finds only the helper, not individual registrations. |
-| **Agent tools (sub-agents)** | Grep `agent\.tool(` in `co_cli/agents/*.py` — tools registered directly in sub-agent factories |
-| **Config settings** | Read `co_cli/config.py` in full — every `Field(...)` on `Settings` and every key in `env_map`. Settings not in `env_map` are still in scope. |
-| **CLI commands** | Grep `@app\.command` in `co_cli/main.py` and `co_cli/_commands.py` — every registered Typer command |
+| **Agent tools** | From CLAUDE.md: identify the tool registration pattern and agent entry points. Grep for registration calls across agent source files. Where sub-agent factories exist, grep those separately. |
+| **Config settings** | From CLAUDE.md: identify the config module. Read it in full — every setting field and env var mapping. Settings without env vars are still in scope. |
+| **CLI commands** | From CLAUDE.md: identify the CLI framework and entry point. Grep for command registration decorators or dispatch patterns. |
+
+**Zero-result guard:** If any grep returns 0 results, stop immediately and report:
+```
+✗ Inventory incomplete: grep for <pattern> in <file> returned 0 results.
+The registration pattern may have changed. Check CLAUDE.md for current architecture before proceeding.
+```
+Do not produce a coverage report against an empty inventory — a false-clean result is worse than no result.
 
 For each found item record: name, source file, line number, feature class.
 
@@ -91,10 +102,11 @@ For each item, read the DESIGN docs and make a determination. **Do not accept a 
 Before writing the verdict, re-scan the inventory against your findings:
 
 1. **Any item marked full coverage** — confirm the doc section actually describes behavior, not just names the feature. If a "full" entry only lists the tool name in a table row with no description, downgrade to partial/blocking.
-2. **Any config setting not in `env_map`** — verify it is explicitly noted as "no env var" or equivalent. Silence is not documentation.
-3. **Any agent tool registered but not in DESIGN-tools.md approval table** — flag as blocking regardless of other doc coverage (approval behavior must be documented for every tool).
+2. **Any item marked partial** — re-read the relevant doc section one more time. If all required elements are now present (behavior, parameters, default for config), upgrade to full and remove the finding. Items marked `none` are not eligible for upgrade here — absent means absent.
+3. **Any config setting not in `env_map`** — verify it is explicitly noted as "no env var" or equivalent. Silence is not documentation.
+4. **Any agent tool registered but not in the project's tool approval table** (identify from CLAUDE.md which DESIGN doc owns tool approval documentation) — flag as blocking regardless of other doc coverage (approval behavior must be documented for every tool).
 
-Add or revise findings from the second pass before proceeding.
+Add or revise findings from the second pass — both downgrades and upgrades — before proceeding.
 
 ---
 

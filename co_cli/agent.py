@@ -121,7 +121,7 @@ def build_agent(
                     env=env or None,
                     tool_prefix=cfg.prefix or name,
                 )
-            if cfg.approval == "auto":
+            if cfg.approval == "ask":
                 server = server.approval_required()
             mcp_toolsets.append(server)
 
@@ -171,25 +171,6 @@ def build_agent(
             return ""
         from co_cli.tools.personality import _load_personality_memories
         return _load_personality_memories()
-
-    @agent.instructions
-    def add_available_skills(ctx: RunContext[CoDeps]) -> str:
-        """Inject the list of available skills so the model can route /skill commands."""
-        if not ctx.deps.session.skill_registry:
-            return ""
-        lines = ["## Available Skills"]
-        for entry in ctx.deps.session.skill_registry:
-            lines.append(f"/{entry['name']} — {entry['description']}")
-        text = "\n".join(lines)
-        # Cap at 2KB; append truncation notice if needed
-        if len(text) > 2048:
-            # Count skills that fit within budget
-            budget = 2048 - 40
-            truncated = text[:budget]
-            shown = truncated.count("\n")
-            remaining = len(ctx.deps.session.skill_registry) - shown
-            text = truncated + f"\n(+{remaining} more — type / to see all)"
-        return text
 
     tool_approvals: dict[str, bool] = {}
 
@@ -261,33 +242,37 @@ def build_agent(
     return agent, list(tool_approvals.keys()), tool_approvals
 
 
-async def discover_mcp_tools(agent: Agent, exclude: set[str]) -> list[str]:
+async def discover_mcp_tools(
+    agent: Agent, exclude: set[str]
+) -> tuple[list[str], dict[str, str]]:
     """Discover MCP tool names from connected servers (after async with agent).
 
-    Returns only MCP tool names, excluding any names already in ``exclude``.
-    Skips servers where list_tools() is unavailable — contributes nothing for those.
+    Returns a tuple of (tool_names, errors) where errors maps server prefix to
+    the error string for each server where list_tools() failed. Tool names
+    exclude any names already in ``exclude``.
     """
     from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
+    errors: dict[str, str] = {}
 
     for toolset in agent.toolsets:
         # Unwrap approval wrappers to reach the MCPServer base instance
         inner = getattr(toolset, "wrapped", toolset)
         if not isinstance(inner, MCPServer):
             continue
+        prefix = inner.tool_prefix or ""
         try:
             tools = await inner.list_tools()
-            prefix = inner.tool_prefix or ""
             for t in tools:
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in exclude:
                     mcp_tool_names.append(name)
         except Exception as e:
             logger.warning(
-                "MCP tool list failed for %r: %s", inner.tool_prefix, e
+                "MCP tool list failed for %r: %s", prefix or "(no prefix)", e
             )
-            # contribute nothing — real tool names unknown
+            errors[prefix] = str(e)
 
-    return sorted(mcp_tool_names)
+    return sorted(mcp_tool_names), errors
 

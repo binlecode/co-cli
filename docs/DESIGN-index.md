@@ -73,7 +73,7 @@ Use these when you already know the subsystem and need the owning deep-dive doc.
 | Doc | Role |
 |-----|------|
 | [DESIGN-system.md](DESIGN-system.md) | Top-level architecture, `CoDeps`, capability surface, security boundaries |
-| [DESIGN-core-loop.md](DESIGN-core-loop.md) | Per-turn execution and approval re-entry |
+| [DESIGN-core-loop.md](DESIGN-core-loop.md) | Per-turn execution and approval flow interception |
 | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | Startup and bootstrap sequence |
 | [DESIGN-tools.md](DESIGN-tools.md) | Native tools, MCP tools, approval classes, return/error contracts |
 | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Provider/model selection and role-model chains |
@@ -230,7 +230,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| `pydantic-ai` | `==1.59.0` | LLM orchestration |
+| `pydantic-ai` | `==1.70.0` | LLM orchestration |
 | `typer` | `>=0.21.1` | CLI framework |
 | `rich` | `>=14.3.2` | Terminal UI |
 | `prompt-toolkit` | `>=3.0.52` | Interactive REPL |
@@ -246,6 +246,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | `rapidfuzz` | `>=3.14.3` | Fuzzy similarity for memory deduplication |
 | `pysqlite3` | `>=0.6.0` | SQLite compatibility/runtime support |
 | `sqlite-vec` | `>=0.1.6` | Vector search extension for hybrid knowledge backend |
+| `ollama` | `>=0.6.1` | Ollama Python client (model availability checks) |
 
 ### Development
 

@@ -117,6 +117,8 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
 | `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `tool_arguments`, `tool_response` |
+| `delegate_{role}` | INTERNAL | `delegation.role`, `delegation.model`, `delegation.request_limit`, `delegation.requests_used` — emitted by `co-cli.delegation` tracer; covers full sub-agent run including retry loop |
+| `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `TaskRunner.start_task()` for cross-session task linkage |
 
 ### Trace HTML Viewer (`co traces`)
 

@@ -106,7 +106,8 @@ async def _chat_loop(verbose: bool = False):
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
         if deps.config.mcp_servers:
-            mcp_tool_names = await discover_mcp_tools(agent, exclude=set(tool_names))
+            mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
+            deps.session.mcp_discovery_errors = discovery_errors
             tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 
@@ -139,17 +140,16 @@ async def _chat_loop(verbose: bool = False):
                         tool_names=tool_names,
                         completer=completer,
                     )
-                    handled, new_history = await dispatch_command(user_input, cmd_ctx)
-                    if handled:
-                        if new_history is not None:
-                            message_history = new_history
-                            # Track compaction count in session (compact cmd returns new history)
-                            if user_input.lstrip("/").split()[0] == "compact":
+                    result = await dispatch_command(user_input, cmd_ctx)
+                    if result.handled:
+                        if result.history is not None:
+                            message_history = result.history
+                            if result.compacted:
                                 session_data = increment_compaction(session_data)
                                 save_session(deps.config.session_path, session_data)
-                        if cmd_ctx.skill_body is not None:
-                            # Skill dispatched — fall through to LLM turn with skill body
-                            user_input = cmd_ctx.skill_body
+                        if result.agent_body is not None:
+                            # Skill dispatched — fall through to LLM turn with agent body
+                            user_input = result.agent_body
                             # Save current env values and inject skill-env vars
                             _saved_env = {k: os.environ.get(k) for k in deps.session.active_skill_env}
                             os.environ.update(deps.session.active_skill_env)
@@ -159,8 +159,8 @@ async def _chat_loop(verbose: bool = False):
                 # Join background compaction if it completed while user was typing
                 if bg_compaction_task is not None:
                     try:
-                        result = await bg_compaction_task
-                        deps.runtime.precomputed_compaction = result
+                        compaction_result = await bg_compaction_task
+                        deps.runtime.precomputed_compaction = compaction_result
                     except Exception:
                         deps.runtime.precomputed_compaction = None
                     bg_compaction_task = None
@@ -185,10 +185,8 @@ async def _chat_loop(verbose: bool = False):
                             os.environ[k] = v
                         else:
                             os.environ.pop(k, None)
-                    # Both clears in finally — guaranteed on all exit paths including exceptions.
-                    # Prevents stale skill grants from bleeding into the next turn.
+                    # Clear in finally — guaranteed on all exit paths including exceptions.
                     deps.session.active_skill_env.clear()
-                    deps.session.skill_tool_grants.clear()
                     deps.session.active_skill_name = None
 
                 # Signal detection — CC hookify pattern, auto-triggered post-turn.

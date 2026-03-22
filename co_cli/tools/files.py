@@ -9,6 +9,7 @@ from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
 from co_cli.tools._errors import terminal_error
+from co_cli.tools._result import ToolResult, make_result
 
 
 def _resolve_workspace_path(raw: str, workspace_root: Path) -> Path:
@@ -27,7 +28,7 @@ async def list_directory(
     path: str = ".",
     pattern: str = "*",
     max_entries: int = 200,
-) -> dict[str, Any]:
+) -> ToolResult:
     """List directory contents, optionally filtered by a glob pattern.
 
     Returns files and subdirectories matching the pattern up to max_entries.
@@ -61,12 +62,12 @@ async def list_directory(
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
     display = "\n".join(lines) if lines else "(empty)"
 
-    return {
-        "display": display,
-        "path": str(resolved),
-        "count": len(entries),
-        "entries": entries,
-    }
+    return make_result(
+        display,
+        path=str(resolved),
+        count=len(entries),
+        entries=entries,
+    )
 
 
 async def read_file(
@@ -74,7 +75,7 @@ async def read_file(
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Read a file's contents, optionally restricted to a line range.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
@@ -109,11 +110,11 @@ async def read_file(
     else:
         display = content
 
-    return {
-        "display": display,
-        "path": str(resolved),
-        "lines": total_line_count,
-    }
+    return make_result(
+        display,
+        path=str(resolved),
+        lines=total_line_count,
+    )
 
 
 async def find_in_files(
@@ -121,7 +122,7 @@ async def find_in_files(
     pattern: str,
     glob: str = "**/*",
     max_matches: int = 50,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search for a regex pattern across files in the workspace.
 
     Skips binary files. Returns up to max_matches results formatted as
@@ -162,19 +163,19 @@ async def find_in_files(
 
     display = "\n".join(lines_output) if lines_output else "(no matches)"
 
-    return {
-        "display": display,
-        "pattern": pattern,
-        "count": len(matches),
-        "matches": matches,
-    }
+    return make_result(
+        display,
+        pattern=pattern,
+        count=len(matches),
+        matches=matches,
+    )
 
 
 async def write_file(
     ctx: RunContext[CoDeps],
     path: str,
     content: str,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Write content to a file, creating parent directories as needed.
 
     Overwrites the file if it already exists.
@@ -192,11 +193,11 @@ async def write_file(
     resolved.write_text(content, encoding="utf-8")
     byte_count = len(content.encode("utf-8"))
 
-    return {
-        "display": f"Written: {path} ({byte_count} bytes)",
-        "path": str(resolved),
-        "bytes": byte_count,
-    }
+    return make_result(
+        f"Written: {path} ({byte_count} bytes)",
+        path=str(resolved),
+        bytes=byte_count,
+    )
 
 
 async def edit_file(
@@ -205,7 +206,7 @@ async def edit_file(
     search: str,
     replacement: str,
     replace_all: bool = False,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Edit a file by replacing a search string with a replacement.
 
     Raises ValueError if the search string is not found or if there are multiple
@@ -239,8 +240,8 @@ async def edit_file(
     updated = content.replace(search, replacement)
     resolved.write_text(updated, encoding="utf-8")
 
-    return {
-        "display": f"Edited: {path} ({count} replacement(s))",
-        "path": str(resolved),
-        "replacements": count,
-    }
+    return make_result(
+        f"Edited: {path} ({count} replacement(s))",
+        path=str(resolved),
+        replacements=count,
+    )

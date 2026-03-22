@@ -10,39 +10,12 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.context._orchestrate import _stream_events
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 from tests.test_orchestrate import RecordingFrontend, StaticEventAgent
 
 _AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-
-
-@pytest.mark.asyncio
-async def test_skill_grants_field() -> None:
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(),
-        session=CoSessionState(skill_tool_grants={"run_shell_command"}),
-    )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    async with asyncio.timeout(15):
-        result = await check_capabilities(ctx)
-    assert result["skill_grants"] == ["run_shell_command"]
-    assert "Active skill grants" in result["display"]
-
-
-@pytest.mark.asyncio
-async def test_no_skill_grants_field_when_empty() -> None:
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(),
-    )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    async with asyncio.timeout(15):
-        result = await check_capabilities(ctx)
-    assert result["skill_grants"] == []
-    assert "Active skill grants" not in result["display"]
 
 
 @pytest.mark.asyncio

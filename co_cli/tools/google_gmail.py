@@ -8,8 +8,9 @@ from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._google_auth import get_cached_google_creds
 from co_cli.tools._errors import terminal_error, handle_google_api_error
+from co_cli.tools._google_auth import get_cached_google_creds
+from co_cli.tools._result import ToolResult, make_result
 
 
 _GMAIL_NOT_CONFIGURED = (
@@ -51,7 +52,7 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 def _get_gmail_service(ctx: RunContext[CoDeps]):
     """Extract and validate Gmail service from context.
 
-    Returns (service, None) on success, or (None, error_dict) for terminal config errors.
+    Returns (service, None) on success, or (None, ToolResult) for terminal config errors.
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
@@ -59,7 +60,7 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     return build("gmail", "v1", credentials=creds), None
 
 
-def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]:
+def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResult:
     """List the most recent emails from the user's Gmail inbox.
 
     Use this for a quick inbox overview. For targeted queries (by sender,
@@ -86,16 +87,16 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> dict[str, Any]
         )
         messages = response.get("messages", [])
         if not messages:
-            return {"display": "No emails found.", "count": 0}
+            return make_result("No emails found.", count=0)
         display = f"Recent Emails ({len(messages)}):\n" + _format_messages(service, messages)
-        return {"display": display, "count": len(messages)}
+        return make_result(display, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:
         return handle_google_api_error("Gmail", e)
 
 
-def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> dict[str, Any]:
+def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolResult:
     """Search emails in Gmail using Gmail search syntax.
 
     Supports the full Gmail query language. Common operators:
@@ -129,9 +130,9 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         )
         messages = response.get("messages", [])
         if not messages:
-            return {"display": f"No emails found for query: {query}", "count": 0}
+            return make_result(f"No emails found for query: {query}", count=0)
         display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(service, messages)
-        return {"display": display, "count": len(messages)}
+        return make_result(display, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:

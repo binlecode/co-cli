@@ -799,6 +799,47 @@ async def test_run_turn_shell_always_remembers_pattern(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_turn_active_skill_does_not_bypass_deferred_prompt() -> None:
+    """An active skill does not auto-approve a deferred tool — prompt fires regardless.
+
+    Under the old three-tier model, a skill with allowed_tools could bypass the
+    approval prompt for listed tools. After simplification, setting active_skill_name
+    must have no effect on the deferred approval flow — the prompt always fires.
+    """
+    approval_result = _make_deferred_result(
+        "save_memory",
+        {"text": "remember this"},
+        "mem2",
+    )
+    final_result = _make_agent_run_result("done", finish_reason="stop")
+    agent = SequenceEventAgent([
+        [AgentRunResultEvent(result=approval_result)],
+        [AgentRunResultEvent(result=final_result)],
+    ])
+    frontend = RecordingFrontend(approval_policy="approve")
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    # Simulate an active skill (as if dispatch() just ran)
+    deps.session.active_skill_name = "some-skill"
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="save it",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    # The approval prompt must have fired — skill state did not bypass it
+    prompt_events = [payload for kind, payload in frontend.events if kind == "prompt_approval"]
+    assert len(prompt_events) == 1, (
+        f"Expected exactly 1 approval prompt despite active skill, got {len(prompt_events)}: "
+        f"{prompt_events}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_turn_non_shell_always_sets_session_auto_approval() -> None:
     """Choosing 'a' for a non-shell tool stores a session-scoped tool approval."""
     approval_result = _make_deferred_result(

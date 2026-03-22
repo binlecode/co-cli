@@ -116,7 +116,7 @@ class MCPServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list, description="Command-line arguments (stdio only)")
     timeout: int = Field(default=5, ge=1, le=60)
     env: dict[str, str] = Field(default_factory=dict, description="Extra environment variables passed to subprocess (stdio only)")
-    approval: Literal["auto", "never"] = Field(default="auto")
+    approval: Literal["ask", "auto"] = Field(default="ask")
     prefix: str | None = Field(default=None)
 
     @model_validator(mode="after")
@@ -134,12 +134,12 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
     "github": MCPServerConfig(
         command="npx",
         args=["-y", "@modelcontextprotocol/server-github"],
-        approval="auto",
+        approval="ask",
     ),
     "context7": MCPServerConfig(
         command="npx",
         args=["-y", "@upstash/context7-mcp@latest"],
-        approval="never",
+        approval="auto",
     ),
 }
 
@@ -182,8 +182,6 @@ DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
 DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
 DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
-DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT = 0.7
-DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT = 0.3
 DEFAULT_MEMORY_MAX_COUNT = 200
 DEFAULT_MEMORY_DEDUP_WINDOW_DAYS = 7
 DEFAULT_MEMORY_DEDUP_THRESHOLD = 85
@@ -238,8 +236,6 @@ class Settings(BaseModel):
     knowledge_embedding_provider: Literal["ollama", "gemini", "tei", "none"] = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER)
     knowledge_embedding_model: str = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_MODEL)
     knowledge_embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
-    knowledge_hybrid_vector_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT, ge=0.0, le=1.0)
-    knowledge_hybrid_text_weight: float = Field(default=DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT, ge=0.0, le=1.0)
     knowledge_cross_encoder_reranker_url: str | None = Field(default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL)
     knowledge_llm_reranker: ModelEntry | None = Field(default=None)
     knowledge_embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
@@ -316,11 +312,6 @@ class Settings(BaseModel):
             return {}
         parsed: dict[str, dict] = {}
         for role, model in v.items():
-            if isinstance(model, list):
-                # Backwards-compat: take first element if a list is supplied
-                model = model[0] if model else None
-                if model is None:
-                    continue
             if isinstance(model, str):
                 parsed[str(role)] = {"model": model.strip()}
             elif isinstance(model, dict):
@@ -421,8 +412,6 @@ class Settings(BaseModel):
             "knowledge_embedding_dims": "CO_KNOWLEDGE_EMBEDDING_DIMS",
             "knowledge_cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
             "knowledge_embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
-            "knowledge_hybrid_vector_weight": "CO_KNOWLEDGE_HYBRID_VECTOR_WEIGHT",
-            "knowledge_hybrid_text_weight": "CO_KNOWLEDGE_HYBRID_TEXT_WEIGHT",
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
             "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
             "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",

@@ -71,7 +71,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
             session_id="parent-session",
             session_tool_approvals={"run_shell_command", "write_file"},
             active_skill_env={"MY_VAR": "value"},
-            skill_tool_grants={"web_search"},
             drive_page_tokens={"folder": ["tok1"]},
             session_todos=[{"task": "do something"}],
             skill_registry=[{"name": "my-skill"}],
@@ -86,7 +85,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # Session resets to clean defaults
     assert isolated.session.session_tool_approvals == set()
     assert isolated.session.active_skill_env == {}
-    assert isolated.session.skill_tool_grants == set()
     assert isolated.session.drive_page_tokens == {}
     assert isolated.session.session_todos == []
     assert isolated.session.skill_registry == []

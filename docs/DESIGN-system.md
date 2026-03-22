@@ -197,7 +197,6 @@ build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool
     @agent.instructions: inject shell guidance when available
     @agent.instructions: inject project instructions from .co-cli/instructions.md
     @agent.instructions: inject personality-context memories
-    @agent.instructions: inject available skills list
 
     for each tool fn: register via _register(fn, requires_approval)
         append (fn.__name__, requires_approval) to tool_registry
@@ -235,7 +234,7 @@ graph TD
     CoServices --> S4[model_registry: ModelRegistry]
 
     CoConfig --> C1["paths, API keys,\nlimits, web_policy, role_models"]
-    CoSessionState --> SE1["session_id, google_creds, session approvals,\nskill grants, todos, page tokens, skill registry"]
+    CoSessionState --> SE1["session_id, google_creds, session approvals,\ntodos, page tokens, skill registry"]
     CoRuntimeState --> R1["precomputed_compaction,\nturn_usage, opening_ctx_state, safety_state"]
 ```
 
@@ -243,7 +242,7 @@ graph TD
 |---------------|-------------|------------|
 | `CoServices` | Service handles | `shell`, `knowledge_index`, `task_runner`, `model_registry` |
 | `CoConfig` | Read-only config | paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
-| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_tool_approvals`, `active_skill_env`, `skill_tool_grants`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
+| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_tool_approvals`, `active_skill_env`, `drive_page_tokens`, `session_todos`, `skill_registry`, `tool_names`, `tool_approvals`, `active_skill_name` |
 | `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction`, `turn_usage`, `opening_ctx_state`, `safety_state` |
 
 Sub-agent isolation:
@@ -289,13 +288,13 @@ See [DESIGN-tools.md](DESIGN-tools.md) §Delegation for sub-agent details.
 | `prompts` | User-invocable skills | Deferred pending pydantic-ai native prompt support |
 | `resources` | Read-only context injection | Out of scope |
 
-MCP tools inherit the same orchestration and approval model as native tools. Per-server `approval` config (`"auto"` or `"never"`) controls the default trust tier.
+MCP tools inherit the same orchestration and approval model as native tools. Per-server `approval` config (`"ask"` or `"auto"`) controls the default trust tier.
 
 See [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers for transport and approval inheritance.
 
 #### Skills As Capability Overlays
 
-Skills are user-invocable slash-command workflows that expand into LLM turns. They orchestrate existing tools and may temporarily grant auto-approval for listed tools during the turn they run. They do not add new primitive capabilities.
+Skills are user-invocable slash-command workflows that expand into LLM turns. They orchestrate existing tools via prompt expansion and optional environment injection. They do not add new primitive capabilities and do not affect tool approval decisions.
 
 See [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Skills Load and [DESIGN-core-loop.md](DESIGN-core-loop.md) §Pre-Turn Setup for loader, dispatch, and security details.
 
@@ -309,8 +308,8 @@ The approval tier determines whether a tool executes immediately or requires use
 | Shell conditional | Policy inside tool | `run_shell_command`: DENY -> terminal error, ALLOW -> execute, else approval |
 | Always auto-execute | Never deferred | `check_capabilities`, `delegate_coder`, `delegate_research`, `delegate_analysis`, `delegate_think`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
 | Web tools | Policy driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask` |
-| MCP tools with `approval=auto` | Deferred | External tools default to requiring approval |
-| MCP tools with `approval=never` | Auto | Explicitly trusted by user config |
+| MCP tools with `approval=ask` | Deferred | External tools default to requiring approval |
+| MCP tools with `approval=auto` | Auto | Explicitly trusted by user config |
 
 See [DESIGN-core-loop.md](DESIGN-core-loop.md) for the runtime approval decision chain.
 
@@ -330,7 +329,7 @@ Shared contracts for all native tools:
 | Naming | `verb_noun` pattern; explicit family prefixes such as `web_*`, `todo_*`; delegation tools use explicit `delegate_*` names |
 | Registration | All native tools use `agent.tool()` with `RunContext[CoDeps]` |
 | Data access | Settings via `ctx.deps.config`, services via `ctx.deps.services`, session state via `ctx.deps.session` |
-| Return shape | User-facing data tools return `dict[str, Any]` with `display` plus metadata fields |
+| Return shape | User-facing data tools return `ToolResult` via `make_result(display, **metadata)` from `co_cli/tools/_result.py` |
 | Error classes | `ModelRetry` for LLM-fixable params, `terminal_error()` for unrecoverable user-facing failure, empty result for valid no-match cases |
 | Request budget | Shared tool retry budget comes from `tool_retries`; turn request budget comes from the main loop |
 
@@ -371,9 +370,10 @@ Frontend contract:
 | `on_text_commit(final)` | Final render and tear down Live |
 | `on_thinking_delta(accumulated)` | Thinking panel when verbose |
 | `on_thinking_commit(final)` | Final thinking panel |
-| `on_tool_call(name, args_display)` | Tool call annotation |
-| `on_tool_result(title, content)` | Result panel |
-| `on_status(message \| StatusEvent)` | Status messages; plain strings are persistent, structured `StatusEvent` can request transient live rendering |
+| `on_tool_start(tool_id, name, args_display)` | Tool call annotation at call time |
+| `on_tool_progress(tool_id, message)` | Intermediate progress from long-running tools |
+| `on_tool_complete(tool_id, result)` | Result panel; result is `ToolResultPayload` (str, ToolResult, or None) |
+| `on_status(message)` | Non-tool status messages (startup, session restore, etc.) |
 | `on_final_output(text)` | Fallback Markdown render |
 | `prompt_approval(description) -> str` | y/n/a approval prompt |
 | `cleanup()` | Exception teardown |

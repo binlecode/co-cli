@@ -17,6 +17,7 @@ from opentelemetry import trace as otel_trace
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
+from co_cli.tools._result import ToolResult, make_result
 
 _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
@@ -71,7 +72,7 @@ async def persist_memory(
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
     model: Any = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Write a memory through the full lifecycle: dedup → consolidate → write → retention.
 
     Entry point for all write paths (explicit save_memory tool and
@@ -197,18 +198,18 @@ async def _persist_memory_inner(
             # Empty plan (0 actions) means the LLM had no opinion; fall through to
             # Step 3 so the memory is written rather than silently dropped.
             if not has_add and plan.actions:
-                return {
-                    "display": "\u2713 Memory consolidated (no new entry needed)",
-                    "action": "consolidated",
-                    "memory_id": None,
-                }
+                return make_result(
+                    "\u2713 Memory consolidated (no new entry needed)",
+                    action="consolidated",
+                    memory_id=None,
+                )
         except asyncio.TimeoutError:
             if on_failure == "skip":
                 logger.info("persist_memory: consolidation timeout, skipping (auto-signal path)")
-                return {
-                    "display": "\u26a0 Memory save skipped (consolidation timeout)",
-                    "action": "skipped",
-                }
+                return make_result(
+                    "\u26a0 Memory save skipped (consolidation timeout)",
+                    action="skipped",
+                )
             logger.info("persist_memory: consolidation timeout, falling back to ADD")
 
     # Step 3: No duplicate — create new memory
@@ -260,15 +261,13 @@ async def _persist_memory_inner(
         except Exception as e:
             logger.warning(f"Failed to index memory {memory_id}: {e}")
 
-    result: dict[str, Any] = {
-        "display": (
-            f"✓ Saved memory {memory_id}: {filename}\n"
-            f"Location: {file_path}"
-        ),
-        "path": str(file_path),
-        "memory_id": memory_id,
-        "action": "saved",
-    }
+    result: ToolResult = make_result(
+        f"✓ Saved memory {memory_id}: {filename}\n"
+        f"Location: {file_path}",
+        path=str(file_path),
+        memory_id=memory_id,
+        action="saved",
+    )
 
     # Step 4: Retention cap — trigger if strictly exceeded (memories only;
     # articles are decay_protected and must not be evicted by memory pressure)
@@ -280,7 +279,7 @@ async def _persist_memory_inner(
             f"Memory limit exceeded ({total_count}/{deps.config.memory_max_count}) "
             f"- triggering retention cut"
         )
-        decay_result = await enforce_retention(memory_dir, deps, all_memories)
+        decay_result = await enforce_retention(deps, all_memories)
         result["decay_triggered"] = True
         result["decay_count"] = decay_result["decayed"]
         result["decay_strategy"] = decay_result["strategy"]

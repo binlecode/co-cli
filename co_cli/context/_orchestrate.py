@@ -32,38 +32,14 @@ logger = logging.getLogger(__name__)
 from co_cli.display import FrontendProtocol
 from co_cli.tools._http_retry import parse_retry_after
 from co_cli.tools._tool_approvals import (
+    ApprovalSubject,
     decode_tool_args,
     format_tool_call_description,
-    is_session_auto_approved,
+    is_auto_approved,
     record_approval_choice,
+    resolve_approval_subject,
 )
 from co_cli.deps import CoDeps
-
-
-def _check_skill_grant(tool_name: str, deps: CoDeps) -> bool:
-    """Return True if tool_name is granted by the active skill's allowed-tools."""
-    if tool_name not in deps.session.skill_tool_grants:
-        return False
-    # Eligibility gate: skill grants must not bypass protected tools.
-    # Condition 1 — registry-level: tool registered with requires_approval=True.
-    if deps.session.tool_approvals.get(tool_name, False):
-        logger.debug("Skill grant denied: tool=%s is approval-gated", tool_name)
-        return False
-    # Condition 2 — explicit carve-out: run_shell_command is registered requires_approval=False
-    # at the registry level but raises ApprovalRequired internally under REQUIRE_APPROVAL policy.
-    # The registry dict alone does not catch it. This guard is defensive — run_shell_command
-    # normally never reaches the deferred path (it is requires_approval=False). It exists to
-    # prevent a future registration change or unusual code path from silently bypassing shell
-    # approval via skill grant.
-    if tool_name == "run_shell_command":
-        logger.debug("Skill grant denied: run_shell_command requires explicit user approval")
-        return False
-    logger.debug(
-        "Skill grant: tool=%s active_grants=%s",
-        tool_name,
-        sorted(deps.session.skill_tool_grants),
-    )
-    return True
 
 
 # ---------------------------------------------------------------------------
@@ -368,27 +344,22 @@ async def _collect_deferred_tool_approvals(
 
     for call in result.output.approvals:
         args = decode_tool_args(call.args)
+        subject = resolve_approval_subject(call.tool_name, args)
 
-        # Tier 1: skill grant — auto-approve if in active skill's allowed-tools
-        if _check_skill_grant(call.tool_name, deps):
+        # Auto-approval — skip prompt if subject already approved this session
+        if is_auto_approved(subject, deps):
             approvals.approvals[call.tool_call_id] = True
             continue
 
-        # Tier 2: session auto-approval — skip prompt if user previously chose "a"
-        if is_session_auto_approved(call.tool_name, deps):
-            approvals.approvals[call.tool_call_id] = True
-            continue
-
-        # Tier 3: user prompt
-        desc = format_tool_call_description(call.tool_name, args)
+        # User prompt
+        desc = format_tool_call_description(subject, args)
         choice = frontend.prompt_approval(desc) if frontend is not None else "n"
 
         record_approval_choice(
             approvals,
             tool_call_id=call.tool_call_id,
             approved=choice in ("y", "a"),
-            tool_name=call.tool_name,
-            args=args,
+            subject=subject,
             deps=deps,
             remember=choice == "a",
         )
@@ -446,7 +417,7 @@ async def run_turn(
                 )
                 turn_usage = result.usage()
 
-                # Approval re-entry loop: collect decisions then resume stream separately
+                # Approval flow interception loop: collect decisions, then resume the same stream
                 while isinstance(result.output, DeferredToolRequests):
                     approvals = await _collect_deferred_tool_approvals(result, deps, frontend)
                     result, streamed_text = await _stream_events(

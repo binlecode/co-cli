@@ -85,17 +85,13 @@ run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:4
 run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:464
   └─ _collect_deferred_tool_approvals(result, deps, frontend) # _orchestrate.py:370
        └─ for call in result.output.approvals:
-            ├─ Tier 1: _check_skill_grant(call.tool_name, deps)
-            │    ├─ tool not in session.skill_tool_grants?        → skip tier
-            │    ├─ tool_approvals.get(name, False) == True?      → ineligible (deferred class)
-            │    ├─ name == "run_shell_command"?                  → ineligible (explicit carve-out)
-            │    └─ eligible → approvals[call.tool_call_id] = True; continue
-            ├─ Tier 2: is_session_auto_approved(call.tool_name, deps)
+            ├─ Step 1: resolve_approval_subject(call.tool_name, args)  # → ToolApprovalSubject or CommandPatternApprovalSubject
+            ├─ Step 2: is_auto_approved(subject, deps)
             │    └─ user previously chose "a" → approvals[call.tool_call_id] = True; continue
-            └─ Tier 3: frontend.prompt_approval(desc)             # user: y / n / a
+            └─ Step 3: frontend.prompt_approval(desc)             # user: y / n / a
                  └─ record_approval_choice(approvals, tool_call_id,
                                            approved=choice in ("y","a"),
-                                           remember=choice=="a")
+                                           subject=subject, remember=choice=="a")
   └─ return DeferredToolResults
 ```
 
@@ -108,7 +104,7 @@ _stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:4
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
        │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
-       │    ├─ ctx.deps.session.*    (tool_approvals, skill_grants, todos)
+       │    ├─ ctx.deps.session.*    (tool_approvals, session_tool_approvals, todos)
        │    └─ ctx.deps.runtime.*    (turn_usage, tool_progress_callback, safety_state)
        │    └─ return ToolResult     (make_result(display, **metadata) from _result.py)
        │         ├─ "_kind"          "tool_result" discriminator
@@ -134,23 +130,11 @@ _stream_events(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:4
 When a deferred tool call arrives, `_collect_deferred_tool_approvals()` in `co_cli/context/_orchestrate.py` resolves each tool's approval state in this order:
 
 ```
-Tier 1 — skill grant (eligibility-gated — two ineligibility conditions apply)
-Tier 2 — session auto-approval (user previously chose "a" for this tool)
-Tier 3 — user prompt (y / n / a [always])
+Step 1 — session auto-approval (user previously chose "a" for this tool)
+Step 2 — user prompt (y / n / a)
 ```
 
-The first tier that grants approval short-circuits the chain. Tier 3 is only reached when Tiers 1 and 2 both decline.
-
-### Skill Grants
-
-Skill grants are turn-scoped: populated at skill dispatch in `_commands.py` via `skill_tool_grants`, cleared at turn end. They form Tier 1 of the approval chain — but only for eligible tools.
-
-**Two distinct ineligibility conditions prevent skill grants from bypassing protected tools:**
-
-- **Registry check:** tool is registered `requires_approval=True` (caught via `deps.session.tool_approvals.get(tool_name, False)`). Any tool in the "Always deferred" approval class is blocked by this condition.
-- **Explicit carve-out:** `run_shell_command` — registered `requires_approval=False` at the registry level but raises `ApprovalRequired` internally under `REQUIRE_APPROVAL` shell policy. The registry check alone does not catch this; the explicit carve-out is defensive, guarding against future registration changes or unusual code paths.
-
-Eligible tools (those passing both conditions) are auto-approved for the active turn only. Implementation: `_check_skill_grant()` in `co_cli/context/_orchestrate.py`.
+Step 1 short-circuits the chain; Step 2 is only reached when Step 1 declines.
 
 ### Return Shape
 
@@ -303,7 +287,7 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 |------|----------|---------------|---------|
 | `todo_write` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
 | `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
-| `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.tool_progress_callback)`; returns probe results, active integrations, reasoning chain, skill grants, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped progress callback is present, it emits staged `/doctor` progress messages such as provider, integration, knowledge, skills, and per-MCP-server checks through `on_tool_progress` |
+| `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.tool_progress_callback)`; returns probe results, active integrations, reasoning chain, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped progress callback is present, it emits staged `/doctor` progress messages such as provider, integration, knowledge, skills, and per-MCP-server checks through `on_tool_progress` |
 
 `check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
 
@@ -410,7 +394,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` — env sanitizer and process-group kill |
 | `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
-| `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `is_shell_command_persistently_approved()`, `record_approval_choice()` |
+| `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject` types, `resolve_approval_subject()`, `is_auto_approved()`, `is_shell_command_persistently_approved()`, `record_approval_choice()` |
 | `co_cli/tools/_exec_approvals.py` | Persistent exec approvals: `derive_pattern()`, `find_approved()`, `add_approval()`, `prune_stale()` |
 | `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
 | `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |

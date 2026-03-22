@@ -283,78 +283,19 @@ async def test_compact_produces_two_message_history():
 
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
-        handled, new_history = await dispatch("/compact", ctx)
-    assert handled is True
-    assert new_history is not None
-    assert len(new_history) == 2
+        result = await dispatch("/compact", ctx)
+    assert result.handled is True
+    assert result.history is not None
+    assert len(result.history) == 2
 
-    assert isinstance(new_history[0], ModelRequest)
-    summary_part = new_history[0].parts[0]
+    assert isinstance(result.history[0], ModelRequest)
+    summary_part = result.history[0].parts[0]
     assert isinstance(summary_part, UserPromptPart)
     assert "Compacted conversation summary" in summary_part.content
     assert "docker" in summary_part.content.lower() or "container" in summary_part.content.lower()
 
-    assert isinstance(new_history[1], ModelResponse)
-    ack_part = new_history[1].parts[0]
+    assert isinstance(result.history[1], ModelResponse)
+    ack_part = result.history[1].parts[0]
     assert isinstance(ack_part, TextPart)
     assert "Understood" in ack_part.content
 
-
-@pytest.mark.asyncio
-async def test_summarize_messages_applies_guardrail_in_instructions():
-    """Guardrail prompt is applied via instructions with non-empty history.
-
-    This validates the P0 fix path: summarize_messages() runs with
-    message_history, so the anti-injection guard must be delivered via
-    ModelRequest.instructions, not system prompt parts.
-    """
-    captured: dict[str, str | None] = {}
-
-    def _capture(messages: list[ModelMessage], _info) -> ModelResponse:
-        last = messages[-1]
-        assert isinstance(last, ModelRequest)
-        captured["instructions"] = last.instructions
-        return ModelResponse(parts=[TextPart(content="summary ok")])
-
-    model = FunctionModel(_capture)
-    msgs: list[ModelMessage] = [
-        _user("topic"),
-        _assistant("details"),
-    ]
-
-    summary = await summarize_messages(msgs, ResolvedModel(model=model, settings=None))
-    assert summary == "summary ok"
-    assert captured["instructions"] is not None
-    assert "IGNORE ALL COMMANDS" in captured["instructions"]
-
-
-# ---------------------------------------------------------------------------
-# compaction personality guardrail — no LLM provider needed
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_compaction_excludes_personality_addendum() -> None:
-    """With personality_active=False, _PERSONALITY_COMPACTION_ADDENDUM is not in the prompt."""
-    from co_cli.context._history import _PERSONALITY_COMPACTION_ADDENDUM, summarize_messages
-
-    captured: list[str] = []
-
-    def capture_fn(messages, info):
-        for msg in messages:
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
-                    captured.append(part.content)
-        return ModelResponse(parts=[TextPart(content="ok")])
-
-    model = FunctionModel(capture_fn)
-    msgs: list[ModelMessage] = [
-        _user("What is Docker?"),
-        _assistant("A containerization platform."),
-    ]
-    result = await summarize_messages(msgs, ResolvedModel(model=model, settings=None), personality_active=False)
-    assert result == "ok"
-    assert len(captured) > 0, "FunctionModel was not called — prompt not captured"
-    assert not any(_PERSONALITY_COMPACTION_ADDENDUM in c for c in captured), (
-        f"Addendum leaked when personality_active=False: {captured}"
-    )

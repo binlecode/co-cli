@@ -10,7 +10,6 @@ from co_cli.commands._commands import (
     _load_skills,
     _check_requires,
     _diagnose_requires_failures,
-    _preprocess_shell_blocks,
     _scan_skill_content,
     _build_completer_words,
     _inject_source_url,
@@ -84,8 +83,8 @@ def test_skill_command_is_separate_type():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_sets_skill_body(tmp_path):
-    """dispatch() sets ctx.skill_body when a skill name matches."""
+async def test_dispatch_sets_agent_body(tmp_path):
+    """dispatch() returns agent_body in DispatchResult when a skill name matches."""
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "greet", "Say hello!")
     skill_commands = _load_skills(skills_dir)
@@ -93,22 +92,22 @@ async def test_dispatch_sets_skill_body(tmp_path):
     SKILL_COMMANDS.update(skill_commands)
     try:
         ctx = _make_ctx()
-        handled, new_history = await dispatch("/greet", ctx)
-        assert handled is True
-        assert new_history is None
-        assert ctx.skill_body == "Say hello!"
+        result = await dispatch("/greet", ctx)
+        assert result.handled is True
+        assert result.history is None
+        assert result.agent_body == "Say hello!"
     finally:
         SKILL_COMMANDS.clear()
 
 
 @pytest.mark.asyncio
 async def test_dispatch_unknown_skill_returns_handled(tmp_path):
-    """dispatch() with unknown /command returns (True, None) and does NOT set skill_body."""
+    """dispatch() with unknown /command returns handled=True and agent_body is None."""
     SKILL_COMMANDS.clear()
     ctx = _make_ctx()
-    handled, new_history = await dispatch("/no-such-skill-xyz", ctx)
-    assert handled is True
-    assert ctx.skill_body is None
+    result = await dispatch("/no-such-skill-xyz", ctx)
+    assert result.handled is True
+    assert result.agent_body is None
 
 
 # -- TASK-05: Frontmatter Parsing ------------------------------------------
@@ -163,27 +162,11 @@ async def test_dispatch_skill_arguments_substitution(tmp_path):
     SKILL_COMMANDS.update(skill_commands)
     try:
         ctx = _make_ctx()
-        await dispatch("/search foo bar", ctx)
-        assert ctx.skill_body == "Search for: foo bar"
+        result = await dispatch("/search foo bar", ctx)
+        assert result.agent_body == "Search for: foo bar"
     finally:
         SKILL_COMMANDS.clear()
 
-
-@pytest.mark.asyncio
-async def test_dispatch_skill_no_placeholder_appends(tmp_path):
-    """When no $ARGUMENTS in body, args are appended after body."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
-    _write_skill(skills_dir, "append-test", "Do the thing.")
-    skill_commands = _load_skills(skills_dir)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(skill_commands)
-    try:
-        ctx = _make_ctx()
-        await dispatch("/append-test extra arg", ctx)
-        assert "Do the thing." in ctx.skill_body
-        assert "extra arg" in ctx.skill_body
-    finally:
-        SKILL_COMMANDS.clear()
 
 
 # -- TASK-07: Description Injection ----------------------------------------
@@ -362,110 +345,6 @@ def test_scan_destructive():
     assert any("destructive_shell" in w for w in result)
 
 
-# -- TASK-1 (Gap 8): allowed_tools frontmatter parsing --------------------
-
-
-def test_allowed_tools_parsed_from_frontmatter(tmp_path):
-    """allowed-tools frontmatter is parsed into skill.allowed_tools list."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
-    content = "---\nallowed-tools:\n  - run_shell_command\n  - web_search\n---\nbody"
-    _write_skill(skills_dir, "tooled-skill", content)
-    result = _load_skills(skills_dir)
-    assert "tooled-skill" in result
-    assert result["tooled-skill"].allowed_tools == ["run_shell_command", "web_search"]
-
-
-def test_allowed_tools_missing_defaults_to_empty(tmp_path):
-    """Skill without allowed-tools frontmatter gets empty list."""
-    skills_dir = tmp_path / ".co-cli" / "skills"
-    _write_skill(skills_dir, "no-tools", "body only")
-    result = _load_skills(skills_dir)
-    assert "no-tools" in result
-    assert result["no-tools"].allowed_tools == []
-
-
-# -- TASK-2 (Gap 8): skill_tool_grants propagation in dispatch ----
-
-
-@pytest.mark.asyncio
-async def test_active_skill_allowed_tools_set_by_dispatch():
-    """dispatch() sets ctx.deps.session.skill_tool_grants from matched skill."""
-    SKILL_COMMANDS["x"] = SkillCommand(
-        name="x", body="body", allowed_tools=["run_shell_command"]
-    )
-    try:
-        ctx = _make_ctx()
-        await dispatch("/x", ctx)
-        assert ctx.deps.session.skill_tool_grants == {"run_shell_command"}
-    finally:
-        SKILL_COMMANDS.pop("x", None)
-        ctx.deps.session.skill_tool_grants.clear()
-
-
-@pytest.mark.asyncio
-async def test_dispatch_no_allowed_tools_leaves_empty_set():
-    """Skill with no allowed_tools leaves skill_tool_grants empty."""
-    SKILL_COMMANDS["y"] = SkillCommand(name="y", body="body")
-    try:
-        ctx = _make_ctx()
-        await dispatch("/y", ctx)
-        assert ctx.deps.session.skill_tool_grants == set()
-    finally:
-        SKILL_COMMANDS.pop("y", None)
-
-
-# -- TASK-5 (Gap 9): shell preprocessing ----------------------------------
-
-
-@pytest.mark.asyncio
-async def test_shell_preprocess_basic():
-    """!`echo hello` in skill body is replaced with 'hello'."""
-    skills_dir = None  # direct dispatch test
-    SKILL_COMMANDS["echo-skill"] = SkillCommand(
-        name="echo-skill", body="result: !`echo hello`"
-    )
-    try:
-        ctx = _make_ctx()
-        await dispatch("/echo-skill", ctx)
-        assert ctx.skill_body == "result: hello"
-    finally:
-        SKILL_COMMANDS.pop("echo-skill", None)
-
-
-@pytest.mark.asyncio
-async def test_shell_preprocess_error_produces_empty():
-    """Shell block that exits non-zero is replaced with empty string, no exception."""
-    SKILL_COMMANDS["err-skill"] = SkillCommand(
-        name="err-skill", body="before: !`exit 1` :after"
-    )
-    try:
-        ctx = _make_ctx()
-        await dispatch("/err-skill", ctx)
-        # exit 1 produces no stdout — empty string replaces block
-        assert ctx.skill_body == "before:  :after"
-    finally:
-        SKILL_COMMANDS.pop("err-skill", None)
-
-
-@pytest.mark.asyncio
-async def test_shell_preprocess_max_blocks_cap():
-    """Only first 3 shell blocks are evaluated; 4th is left unreplaced."""
-    body = "a: !`echo 1` b: !`echo 2` c: !`echo 3` d: !`echo 4`"
-    SKILL_COMMANDS["cap-skill"] = SkillCommand(name="cap-skill", body=body)
-    try:
-        ctx = _make_ctx()
-        await dispatch("/cap-skill", ctx)
-        result = ctx.skill_body
-        # First 3 replaced
-        assert "a: 1" in result
-        assert "b: 2" in result
-        assert "c: 3" in result
-        # 4th left as literal
-        assert "!`echo 4`" in result
-    finally:
-        SKILL_COMMANDS.pop("cap-skill", None)
-
-
 @pytest.mark.asyncio
 async def test_skills_reload_picks_up_new_skill(tmp_path):
     """dispatch('/skills reload') reloads SKILL_COMMANDS from disk."""
@@ -475,8 +354,8 @@ async def test_skills_reload_picks_up_new_skill(tmp_path):
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
     _original = dict(SKILL_COMMANDS)
     try:
-        handled, _ = await dispatch("/skills reload", ctx)
-        assert handled is True
+        result = await dispatch("/skills reload", ctx)
+        assert result.handled is True
         assert "reload-test-skill" in SKILL_COMMANDS
     finally:
         SKILL_COMMANDS.clear()

@@ -21,8 +21,6 @@ from co_cli.config import (
     DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
     DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
     DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
-    DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT,
-    DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT,
     DEFAULT_MEMORY_MAX_COUNT,
     DEFAULT_MEMORY_DEDUP_WINDOW_DAYS,
     DEFAULT_MEMORY_DEDUP_THRESHOLD,
@@ -146,8 +144,6 @@ class CoConfig:
     knowledge_embedding_provider: str = DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER
     knowledge_embedding_model: str = DEFAULT_KNOWLEDGE_EMBEDDING_MODEL
     knowledge_embedding_dims: int = DEFAULT_KNOWLEDGE_EMBEDDING_DIMS
-    knowledge_hybrid_vector_weight: float = DEFAULT_KNOWLEDGE_HYBRID_VECTOR_WEIGHT
-    knowledge_hybrid_text_weight: float = DEFAULT_KNOWLEDGE_HYBRID_TEXT_WEIGHT
     theme: str = "light"
     mcp_servers: dict[str, "MCPServerConfig"] = field(default_factory=dict)
     role_models: dict[str, ModelEntry] = field(default_factory=dict)
@@ -231,8 +227,6 @@ class CoConfig:
             knowledge_embedding_provider=s.knowledge_embedding_provider,
             knowledge_embedding_model=s.knowledge_embedding_model,
             knowledge_embedding_dims=s.knowledge_embedding_dims,
-            knowledge_hybrid_vector_weight=s.knowledge_hybrid_vector_weight,
-            knowledge_hybrid_text_weight=s.knowledge_hybrid_text_weight,
             # library_dir: resolved here so tools and bootstrap always see the fully-resolved
             # path rather than the relative default. library_path is optional in Settings;
             # fall back to the XDG data dir when unset.
@@ -268,7 +262,6 @@ class CoSessionState:
     google_creds_resolved: bool = False
     session_tool_approvals: set[str] = field(default_factory=set)
     active_skill_env: dict[str, str] = field(default_factory=dict)
-    skill_tool_grants: set[str] = field(default_factory=set)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
     session_id: str = ""
@@ -277,6 +270,7 @@ class CoSessionState:
     tool_approvals: dict[str, bool] = field(default_factory=dict)
     active_skill_name: str | None = None
     slash_command_count: int = 0
+    mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -291,7 +285,7 @@ class CoRuntimeState:
     precomputed_compaction: Any = field(default=None, repr=False)
     turn_usage: RunUsage | None = None
     startup_statuses: list[str] = field(default_factory=list)
-    status_callback: Callable[[str], None] | None = field(default=None, repr=False)
+    tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
     # TODO: resolve by extracting a _types.py module to break the circular import properly.
     opening_ctx_state: "OpeningContextState | None" = field(default=None, repr=False)

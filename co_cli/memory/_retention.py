@@ -6,7 +6,6 @@ No summary memories are created — cut-only is deterministic and reversible.
 """
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from co_cli.deps import CoDeps
@@ -15,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 async def enforce_retention(
-    memory_dir: Path,
     deps: CoDeps,
     all_memories: list,
 ) -> dict[str, Any]:
@@ -25,7 +23,6 @@ async def enforce_retention(
     Protected entries (decay_protected=True) are never deleted.
 
     Args:
-        memory_dir: Path to knowledge directory (unused; retained for API compat).
         deps: CoDeps with memory_max_count scalar.
         all_memories: Already-loaded list of all memories.
 

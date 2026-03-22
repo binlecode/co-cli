@@ -7,6 +7,7 @@ from typing import Any
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
+from co_cli.tools._result import ToolResult, make_result
 
 
 def _extract_frontmatter_tags(content: str) -> set[str]:
@@ -59,7 +60,7 @@ def search_notes(
     limit: int = 10,
     folder: str | None = None,
     tag: str | None = None,
-) -> dict[str, Any]:
+) -> ToolResult:
     """Search Obsidian vault notes by keyword. All keywords must match
     (AND logic, whole words, case-insensitive). Returns matching filenames
     with text snippets around the first match.
@@ -130,11 +131,11 @@ def search_notes(
             fts_results = fts_results[:limit]
 
             if not fts_results:
-                return {
-                    "display": f"No notes found matching: {' '.join(keywords)}",
-                    "count": 0,
-                    "has_more": False,
-                }
+                return make_result(
+                    f"No notes found matching: {' '.join(keywords)}",
+                    count=0,
+                    has_more=False,
+                )
 
             lines = []
             for r in fts_results:
@@ -148,11 +149,11 @@ def search_notes(
                     lines.append(f"  {r.snippet}")
                 lines.append("")
 
-            return {
-                "display": "\n".join(lines).rstrip(),
-                "count": len(fts_results),
-                "has_more": has_more,
-            }
+            return make_result(
+                "\n".join(lines).rstrip(),
+                count=len(fts_results),
+                has_more=has_more,
+            )
         except Exception:
             pass  # Fall through to regex path
 
@@ -192,11 +193,11 @@ def search_notes(
         results = results[:limit]
 
     if not results:
-        return {
-            "display": f"No notes found matching: {' '.join(keywords)}",
-            "count": 0,
-            "has_more": False,
-        }
+        return make_result(
+            f"No notes found matching: {' '.join(keywords)}",
+            count=0,
+            has_more=False,
+        )
 
     lines = []
     for r in results:
@@ -204,11 +205,11 @@ def search_notes(
         lines.append(f"  {r['snippet']}")
         lines.append("")
 
-    return {
-        "display": "\n".join(lines).rstrip(),
-        "count": len(results),
-        "has_more": has_more,
-    }
+    return make_result(
+        "\n".join(lines).rstrip(),
+        count=len(results),
+        has_more=has_more,
+    )
 
 
 def list_notes(
@@ -216,7 +217,7 @@ def list_notes(
     tag: str | None = None,
     offset: int = 0,
     limit: int = 20,
-) -> dict[str, Any]:
+) -> ToolResult:
     """List markdown note filenames in the Obsidian vault. Returns one page
     at a time (default 20 per page).
 
@@ -263,14 +264,14 @@ def list_notes(
 
     if not note_paths:
         label = f" with tag {tag}" if tag else ""
-        return {
-            "display": f"No notes found{label}.",
-            "count": 0,
-            "total": 0,
-            "offset": offset,
-            "limit": limit,
-            "has_more": False,
-        }
+        return make_result(
+            f"No notes found{label}.",
+            count=0,
+            total=0,
+            offset=offset,
+            limit=limit,
+            has_more=False,
+        )
 
     # Stable sort for consistent pagination
     note_paths.sort()
@@ -287,14 +288,14 @@ def list_notes(
             f"More available \u2014 call with offset={offset + limit}."
         )
 
-    return {
-        "display": "\n".join(lines),
-        "count": len(page),
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-    }
+    return make_result(
+        "\n".join(lines),
+        count=len(page),
+        total=total,
+        offset=offset,
+        limit=limit,
+        has_more=has_more,
+    )
 
 
 def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
