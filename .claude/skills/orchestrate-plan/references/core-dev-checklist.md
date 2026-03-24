@@ -11,6 +11,9 @@
 - All `done_when:` criteria are machine-verifiable. Acceptable: `grep/test/file/doc-match`.
   Not acceptable: subjective phrases like "code is clean", "developer is satisfied",
   "feature works as expected" with no concrete check command.
+- **Behavioral Constraints section:** present and non-empty; each constraint is specific
+  enough to test or enforce without interpretation (not "should not fail" — must be
+  "must never do X in condition Y"). Absence or vague constraints are blocking.
 
 ## Operational risk
 

@@ -1,13 +1,15 @@
 ---
 name: orchestrate-plan
 description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev (implementation risk) and PO (scope + first principles) as parallel subagents to critique it. All roles share docs/TODO-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
+disable-model-invocation: true
+argument-hint: "<slug>"
 ---
 
 # Plan Orchestration Workflow
 
 **TL is the orchestrator and the planning gate.** Plan will create or refine `docs/TODO-<slug>.md` — creating it for new work, refining an existing one before dev. TL validates current state before drafting — review is not a separate prerequisite. Two subagents are spawned after each TL draft: **Core Dev** critiques from an implementation and risk perspective; **PO** challenges scope, first principles, and over-engineering. All roles share `docs/TODO-<slug>.md` as the convergence workbench — every role reads from it and appends its output to it.
 
-**Derive the slug** from the feature name: lowercase, hyphenated (e.g. `sqlite-fts`, `auth-refresh`, `knowledge-docs-restructure`).
+**Slug for this delivery: `$ARGUMENTS`** — use this value wherever `<slug>` appears below.
 
 **Consumes:** docs/reference/RESEARCH-<scope>.md (if exists), source. **Produces:** docs/TODO-<slug>.md (created or refined)
 
@@ -34,7 +36,7 @@ State the task type at the top of the TL draft (e.g. "Task type: code-feature").
 
 ```
 # TODO: <Feature Name>
-... plan content: Context, Problem & Outcome, Scope, Design, Tasks, Testing, Open Questions ...
+... plan content: Context, Problem & Outcome, Scope, Behavioral Constraints, Failure Modes (conditional), High-Level Design, Tasks, Testing, Open Questions ...
 
 ---
 
@@ -79,13 +81,16 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
 3. If `docs/TODO-<slug>.md` already exists, read it. **Shipped-work check:** For each section or phase, spot-check one key file it names in `files:`. If that file already implements the described behavior, mark the section as "shipped — skip" in your notes and call it out in the Context section. Do not draft tasks for already-implemented work.
 4. For each open question you intend to list, first try to answer it by reading existing source files. An open question answerable by inspection weakens the plan and will be flagged by Core Dev.
 5. **For `doc-restructure` and `doc+code` tasks**: Run a **Code Accuracy Verification** pass — read each source file referenced by the target docs and check every factual claim against the code. List inaccuracies explicitly in the Context section before proposing structure changes.
+6. **For AI behavioral features** (new agents, personality changes, tool-chain modifications affecting model output): before drafting, run N representative inputs through the current system and annotate observed failure modes. List findings in `## Failure Modes` in the TODO before writing `## High-Level Design`. Do not write criteria against imagined failure space — only against observed behavior.
 
 **Draft `docs/TODO-<slug>.md`** filling all sections:
-- **Context, Problem & Outcome, Scope, High-Level Design, Implementation Plan, Testing, Open Questions**
+- **Context, Problem & Outcome, Scope, Behavioral Constraints, Failure Modes (conditional for AI behavioral features), High-Level Design, Implementation Plan, Testing, Open Questions**
+  - **Problem & Outcome** must include a `Failure cost:` line immediately after `Problem:` — what the user cannot do / what silently breaks as a result of the problem.
 - Each task must be atomic (single agent session, ≤5 files touched) with:
   - Stable ID (TASK-1, TASK-2…)
   - `files:` list of paths to create or modify
   - `done_when:` a single, verifiable output (e.g. "test X passes", "file Y exists with field Z", "doc section X matches code behavior"). When `done_when` includes test stub code that captures library output (Rich console, custom fixtures, patched modules), note that the stub is a behavioral spec — Dev is responsible for adapting it to the runtime context. Do not assume plain stdlib output from a project that uses a custom theme or console wrapper. **`done_when` must reflect what the test literally checks** — if you write "registers X tools", provide a concrete check command (e.g. `assert len(agent._function_tools) == 2`). If you cannot write the check, use the simpler assertion the test actually validates.
+  - `success_signal:` one sentence — what a user observes when this works correctly in production. Optional for refactor tasks with no user-visible behavior change (use N/A).
   - `prerequisites: [TASK-1, TASK-2]` — optional; tasks that must complete before this one.
     Omit if there are no dependencies. Always use list syntax, even for a single dependency.
   - For `code-feature`: Red-Green-Refactor test requirement

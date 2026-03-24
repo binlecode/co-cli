@@ -5,6 +5,10 @@
 - **First principles?** Does the design start from fundamentals, or does it layer complexity on top of existing complexity without necessity?
 - **Non-over-engineering?** Are any tasks, abstractions, or design choices more elaborate than the problem warrants? Flag gold-plating, premature generalization, and speculative future-proofing.
 - **Effectiveness?** Will this plan, if fully executed, actually solve the stated problem for the user?
+- **Behavioral constraints consistent with product requirements?** Are the stated constraints
+  appropriately scoped — not more restrictive than the problem requires, not missing
+  constraints that the product clearly needs? A plan with no behavioral constraints is
+  a blocking concern unless the TL explicitly notes why none apply.
 
 ## Assessment threshold
 
