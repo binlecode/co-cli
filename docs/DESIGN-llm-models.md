@@ -3,8 +3,9 @@
 ## 1. What & How
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and one model-selection contract:
-`role_models` — one `ModelEntry` per role. The main agent is created with `model=None` (per-call model passing);
-`run_turn_with_fallback()` resolves `role_models["reasoning"]` from `ModelRegistry` before each turn.
+`role_models` — one `ModelEntry` per role. The `reasoning` model is resolved once in `_chat_loop()` at
+session start via `ModelRegistry`; `build_agent()` is called once with the resolved model. `run_turn()`
+executes turns against that pre-built agent.
 Sub-agent tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
 
 ```

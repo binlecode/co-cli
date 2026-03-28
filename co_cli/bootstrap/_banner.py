@@ -81,7 +81,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",
-        f"    [success]✓ Ready[/success]",
+        f"    [success]✓ Ready{'  (degraded)' if degraded else ''}[/success]",
         f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

@@ -206,7 +206,11 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
             short_id = deps.session.session_id[:8]
             span.set_attribute("status", "new")
             span.set_attribute("session_id", short_id)
-            save_session(deps.config.session_path, session_data)
+            try:
+                save_session(deps.config.session_path, session_data)
+            except OSError as e:
+                # Continue without persistence — session_id is still set in deps.session
+                frontend.on_status(f"  Session save failed — {e}; session will not persist")
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data
 

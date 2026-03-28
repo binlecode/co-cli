@@ -97,9 +97,9 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ deps.session.tool_approvals = tool_approvals
 │
 ├─ AsyncExitStack.enter_async_context(agent)  # MCP server subprocesses start here
-│      Exception → print warning, continue with native tools only
+│      Exception → print warning, _mcp_init_ok stays False
 │
-├─ [if mcp_servers]
+├─ [if mcp_servers and _mcp_init_ok]           # discovery skipped when init failed
 │      mcp_tool_names, discovery_errors = discover_mcp_tools(agent, exclude=set(tool_names))
 │      deps.session.mcp_discovery_errors = discovery_errors
 │      tool_names = tool_names + mcp_tool_names
@@ -276,13 +276,15 @@ chat_loop():
     last_interrupt_time = 0.0
     bg_compaction_task = None
     try:
+        _mcp_init_ok = False
         try:
             await stack.enter_async_context(agent)
+            _mcp_init_ok = True
         except Exception as e:
             console.print("[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
             # startup continues with native tools only
 
-        if mcp_servers:
+        if mcp_servers and _mcp_init_ok:
             mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
             deps.session.mcp_discovery_errors = discovery_errors
             tool_names = tool_names + mcp_tool_names
@@ -356,7 +358,10 @@ if is_fresh(session_data, deps.config.session_ttl_minutes):
 else:
     session_data = new_session()
     deps.session.session_id = session_data["session_id"]
-    save_session(deps.config.session_path, session_data)
+    try:
+        save_session(deps.config.session_path, session_data)
+    except OSError:
+        frontend.on_status("Session save failed — session will not persist")
     frontend.on_status("Session new ...")
 
 return session_data
@@ -433,7 +438,7 @@ display_welcome_banner(deps)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.session.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed.
+The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.session.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` when `deps.runtime.startup_statuses` is empty, or `✓ Ready  (degraded)` when one or more startup fallbacks are active (e.g., hybrid-to-fts5 degradation or reranker unavailability).
 
 ### State Mutations Summary
 
@@ -454,7 +459,8 @@ The banner marks the boundary between startup and interactive use. All status me
 
 | Condition | Outcome |
 |-----------|---------|
-| `create_deps()` raises `ValueError` (provider error, missing reasoning model) | `chat()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 |
+| `create_deps()` raises `ValueError` (provider error, missing reasoning model) | `_chat_loop()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 via `SystemExit(1)` |
+| `load_config()` schema validation fails (`ValidationError`) | re-raised as `ValueError` by `load_config()`; caught by `get_settings()`, which prints `"Configuration error: …"` to stderr and raises `SystemExit(1)` — never reaches `_chat_loop()` |
 | Knowledge sync raises | Index closed, `knowledge_index = None`, grep fallback, session continues |
 | Session file missing or unreadable | New session created |
 | Session TTL expired | New session created |

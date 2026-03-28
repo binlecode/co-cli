@@ -10,6 +10,10 @@ import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
+from opentelemetry import trace as otel_trace
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
 from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _run_stream_turn, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
@@ -1101,3 +1105,35 @@ async def test_tool_args_display_known_tools() -> None:
     # unknown tool: empty string fallback
     result = await _run_single_tool("unknown_tool_xyz", {"foo": "bar"})
     assert result == "", f"unknown tool should return '', got: {result!r}"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_emits_co_turn_span() -> None:
+    """run_turn() must emit a co.turn span with turn attributes."""
+    exporter = InMemorySpanExporter()
+    _orig = otel_trace.get_tracer_provider()
+    # The harness pre-configures a real TracerProvider — add our exporter to it
+    # rather than replacing the provider (which the SDK blocks after first set).
+    _orig.add_span_processor(SimpleSpanProcessor(exporter))
+
+    result = _make_agent_run_result("hi", finish_reason="stop")
+    agent = StaticEventAgent([AgentRunResultEvent(result=result)])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    frontend = RecordingFrontend()
+
+    await run_turn(
+        agent=agent,
+        user_input="hello",
+        deps=deps,
+        message_history=[],
+        verbose=False,
+        frontend=frontend,
+    )
+
+    spans = exporter.get_finished_spans()
+    assert any(s.name == "co.turn" for s in spans)
+
+    co_turn_span = next(s for s in spans if s.name == "co.turn")
+    assert co_turn_span.attributes["turn.outcome"] == "continue"
+    assert co_turn_span.attributes["turn.interrupted"] == False
+    assert otel_trace.get_tracer_provider() is _orig

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 
 from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
@@ -204,6 +205,7 @@ async def search_knowledge(
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
             return make_result(f"No results for '{query}' (source={source!r} requires FTS)", count=0, results=[])
+        otel_trace.get_current_span().set_attribute("rag.backend", "grep")
         # Derive effective_kind so the source="memory" escape hatch works in grep mode.
         # Default (source=None or source="library"): library only (articles).
         if kind is not None:
@@ -247,6 +249,7 @@ async def search_knowledge(
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
+    otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
     # Default scope excludes source="memory" — memories are searched via search_memories.
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]

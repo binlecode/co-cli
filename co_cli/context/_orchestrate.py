@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults, FinishReason
+from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
@@ -412,15 +412,15 @@ async def run_turn(
     deps: CoDeps,
     message_history: list,
     model_settings: dict | None = None,
-    max_request_limit: int = 50,
-    http_retries: int = 2,
     verbose: bool = False,
     frontend: FrontendProtocol,
 ) -> TurnResult:
     """Execute one LLM turn: streaming, approval chaining, error handling.
 
-    Contains the inner retry loop for HTTP errors and the approval loop
-    for deferred tool requests. Delegates all display to the frontend.
+    Single public entrypoint for an orchestrated agent turn. Emits the root
+    `co.turn` span, displays the thinking status, runs the inner retry loop
+    for HTTP errors and the approval loop for deferred tool requests, and
+    reads turn policy (request limit, retries) from deps.config.
 
     Returns TurnResult with outcome field for chat loop pattern-matching:
       "continue" — normal completion, prompt for next input
@@ -431,246 +431,241 @@ async def run_turn(
     from co_cli.context._history import SafetyState
     deps.runtime.safety_state = SafetyState()
 
-    try:
-        result = None
-        streamed_text = False
-        http_retries_left = http_retries
-        current_input: str | None = user_input
-        current_history = message_history
-        current_deferred_results = None
-        turn_limits = UsageLimits(request_limit=max_request_limit)
-        turn_usage = None
-        backoff_base = 1.0
+    # Status before span — matches prior wrapper ordering
+    frontend.on_status("Co is thinking...")
+    _span_result: TurnResult | None = None
+    with _TRACER.start_as_current_span("co.turn") as span:
+        try:
+            result = None
+            streamed_text = False
+            max_request_limit = deps.config.max_request_limit
+            http_retries = deps.config.model_http_retries
+            http_retries_left = http_retries
+            current_input: str | None = user_input
+            current_history = message_history
+            current_deferred_results = None
+            turn_limits = UsageLimits(request_limit=max_request_limit)
+            turn_usage = None
+            backoff_base = 1.0
 
-        while True:
-            try:
-                result, streamed_text = await _run_stream_turn(
-                    agent, user_input=current_input, deps=deps,
-                    message_history=current_history, model_settings=model_settings,
-                    usage_limits=turn_limits, usage=turn_usage,
-                    deferred_tool_results=current_deferred_results,
-                    verbose=verbose, frontend=frontend,
-                )
-                turn_usage = result.usage()
-                current_deferred_results = None
-
-                # Approval flow interception loop: collect decisions, then resume the same stream
-                while isinstance(result.output, DeferredToolRequests):
-                    approvals = await _collect_deferred_tool_approvals(result, deps, frontend)
-                    current_input = None
-                    current_history = result.all_messages()
-                    current_deferred_results = approvals
+            while True:
+                try:
                     result, streamed_text = await _run_stream_turn(
-                        agent, user_input=None, deps=deps,
-                        message_history=current_history,
-                        model_settings=model_settings, usage_limits=turn_limits,
-                        usage=turn_usage, deferred_tool_results=current_deferred_results,
+                        agent, user_input=current_input, deps=deps,
+                        message_history=current_history, model_settings=model_settings,
+                        usage_limits=turn_limits, usage=turn_usage,
+                        deferred_tool_results=current_deferred_results,
                         verbose=verbose, frontend=frontend,
                     )
                     turn_usage = result.usage()
                     current_deferred_results = None
 
-                message_history = result.all_messages()
-                if not streamed_text and isinstance(result.output, str):
-                    frontend.on_final_output(result.output)
+                    # Approval flow interception loop: collect decisions, then resume the same stream
+                    while isinstance(result.output, DeferredToolRequests):
+                        approvals = await _collect_deferred_tool_approvals(result, deps, frontend)
+                        current_input = None
+                        current_history = result.all_messages()
+                        current_deferred_results = approvals
+                        result, streamed_text = await _run_stream_turn(
+                            agent, user_input=None, deps=deps,
+                            message_history=current_history,
+                            model_settings=model_settings, usage_limits=turn_limits,
+                            usage=turn_usage, deferred_tool_results=current_deferred_results,
+                            verbose=verbose, frontend=frontend,
+                        )
+                        turn_usage = result.usage()
+                        current_deferred_results = None
 
-                # Finish reason detection: warn if response was truncated at token limit.
-                if result.response.finish_reason == "length":
-                    frontend.on_status(
-                        "Response may be truncated (hit output token limit). "
-                        "Use /continue to extend."
-                    )
+                    message_history = result.all_messages()
+                    if not streamed_text and isinstance(result.output, str):
+                        frontend.on_final_output(result.output)
 
-                # Context overflow detection: Ollama truncates silently when
-                # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
-                # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-                if turn_usage is not None and deps.config.supports_context_ratio_tracking():
-                    ratio = turn_usage.input_tokens / deps.config.llm_num_ctx
-                    with _TRACER.start_as_current_span("ctx_overflow_check") as span:
-                        span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)
-                        span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
-                        span.set_attribute("ctx.ratio", ratio)
-                        if ratio >= deps.config.ctx_overflow_threshold:
-                            frontend.on_status(
-                                f"Context limit reached ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
-                                " — Ollama likely truncated the prompt. Use /compact or /new."
-                            )
-                        elif ratio >= deps.config.ctx_warn_threshold:
-                            frontend.on_status(
-                                f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
-                                " Consider /compact to free space."
-                            )
+                    # Finish reason detection: warn if response was truncated at token limit.
+                    if result.response.finish_reason == "length":
+                        frontend.on_status(
+                            "Response may be truncated (hit output token limit). "
+                            "Use /continue to extend."
+                        )
 
-                return TurnResult(
-                    messages=message_history,
-                    output=result.output,
-                    usage=turn_usage,
-                    interrupted=False,
-                    streamed_text=streamed_text,
-                    outcome="continue",
-                )
+                    # Context overflow detection: Ollama truncates silently when
+                    # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
+                    # turn_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
+                    if turn_usage is not None and deps.config.supports_context_ratio_tracking():
+                        ratio = turn_usage.input_tokens / deps.config.llm_num_ctx
+                        with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
+                            ctx_span.set_attribute("ctx.input_tokens", turn_usage.input_tokens)
+                            ctx_span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
+                            ctx_span.set_attribute("ctx.ratio", ratio)
+                            if ratio >= deps.config.ctx_overflow_threshold:
+                                frontend.on_status(
+                                    f"Context limit reached ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
+                                    " — Ollama likely truncated the prompt. Use /compact or /new."
+                                )
+                            elif ratio >= deps.config.ctx_warn_threshold:
+                                frontend.on_status(
+                                    f"Context {ratio:.0%} full ({turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
+                                    " Consider /compact to free space."
+                                )
 
-            except UsageLimitExceeded:
-                # Grace turn: ask the model to summarize progress
-                frontend.on_status(
-                    f"Turn limit reached ({max_request_limit} requests). "
-                    "Asking for a progress summary..."
-                )
-                msgs = result.all_messages() if result else current_history
-                msgs = _patch_dangling_tool_calls(msgs)
-                grace_msg = ModelRequest(parts=[UserPromptPart(
-                    content=(
-                        "Turn limit reached. Summarize your progress so far "
-                        "and what remains to be done. The user can /continue "
-                        "to resume with a fresh budget."
-                    ),
-                )])
-                try:
-                    grace_result, grace_streamed = await _run_stream_turn(
-                        agent, user_input=None, deps=deps,
-                        message_history=msgs + [grace_msg],
-                        model_settings=model_settings,
-                        usage_limits=UsageLimits(request_limit=1),
-                        verbose=verbose, frontend=frontend,
-                    )
-                    message_history = grace_result.all_messages()
-                    if not grace_streamed and isinstance(grace_result.output, str):
-                        frontend.on_final_output(grace_result.output)
-                    return TurnResult(
+                    _span_result = TurnResult(
                         messages=message_history,
-                        output=grace_result.output,
-                        usage=turn_usage,
-                        interrupted=False,
-                        streamed_text=grace_streamed,
-                        outcome="continue",
-                    )
-                except Exception:
-                    # Grace turn itself failed — return what we have
-                    frontend.on_status(
-                        "Turn limit reached. Use /continue to resume."
-                    )
-                    return TurnResult(
-                        messages=msgs,
-                        output=None,
+                        output=result.output,
                         usage=turn_usage,
                         interrupted=False,
                         streamed_text=streamed_text,
                         outcome="continue",
                     )
+                    return _span_result
 
-            except ModelHTTPError as e:
-                code = e.status_code
-
-                if code == 400 and http_retries_left > 0:
-                    http_retries_left -= 1
-                    attempt = http_retries - http_retries_left
+                except UsageLimitExceeded:
+                    # Grace turn: ask the model to summarize progress
                     frontend.on_status(
-                        f"Tool call rejected (HTTP {code}), "
-                        f"reflecting to model... ({attempt}/{http_retries})"
+                        f"Turn limit reached ({max_request_limit} requests). "
+                        "Asking for a progress summary..."
                     )
-                    await asyncio.sleep(0.5)
-                    reflection = ModelRequest(parts=[UserPromptPart(
+                    msgs = result.all_messages() if result else current_history
+                    msgs = _patch_dangling_tool_calls(msgs)
+                    grace_msg = ModelRequest(parts=[UserPromptPart(
                         content=(
-                            "Your previous tool call was rejected by the "
-                            f"model provider: {e.body}. Please reformulate "
-                            "your tool call with valid JSON arguments."
+                            "Turn limit reached. Summarize your progress so far "
+                            "and what remains to be done. The user can /continue "
+                            "to resume with a fresh budget."
                         ),
                     )])
-                    current_history = current_history + [reflection]
-                    current_input = None
-                    continue
+                    try:
+                        grace_result, grace_streamed = await _run_stream_turn(
+                            agent, user_input=None, deps=deps,
+                            message_history=msgs + [grace_msg],
+                            model_settings=model_settings,
+                            usage_limits=UsageLimits(request_limit=1),
+                            verbose=verbose, frontend=frontend,
+                        )
+                        message_history = grace_result.all_messages()
+                        if not grace_streamed and isinstance(grace_result.output, str):
+                            frontend.on_final_output(grace_result.output)
+                        _span_result = TurnResult(
+                            messages=message_history,
+                            output=grace_result.output,
+                            usage=turn_usage,
+                            interrupted=False,
+                            streamed_text=grace_streamed,
+                            outcome="continue",
+                        )
+                        return _span_result
+                    except Exception:
+                        # Grace turn itself failed — return what we have
+                        frontend.on_status(
+                            "Turn limit reached. Use /continue to resume."
+                        )
+                        _span_result = TurnResult(
+                            messages=msgs,
+                            output=None,
+                            usage=turn_usage,
+                            interrupted=False,
+                            streamed_text=streamed_text,
+                            outcome="continue",
+                        )
+                        return _span_result
 
-                if (code == 429 or code >= 500) and http_retries_left > 0:
-                    http_retries_left -= 1
-                    attempt = http_retries - http_retries_left
-                    delay = parse_retry_after(None, e.body) or (3.0 if code == 429 else 2.0)
-                    wait = min(delay * (backoff_base ** attempt), 30.0)
-                    frontend.on_status(
-                        f"Provider error (HTTP {code}), retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                except ModelHTTPError as e:
+                    code = e.status_code
+
+                    if code == 400 and http_retries_left > 0:
+                        http_retries_left -= 1
+                        attempt = http_retries - http_retries_left
+                        frontend.on_status(
+                            f"Tool call rejected (HTTP {code}), "
+                            f"reflecting to model... ({attempt}/{http_retries})"
+                        )
+                        await asyncio.sleep(0.5)
+                        reflection = ModelRequest(parts=[UserPromptPart(
+                            content=(
+                                "Your previous tool call was rejected by the "
+                                f"model provider: {e.body}. Please reformulate "
+                                "your tool call with valid JSON arguments."
+                            ),
+                        )])
+                        current_history = current_history + [reflection]
+                        current_input = None
+                        continue
+
+                    if (code == 429 or code >= 500) and http_retries_left > 0:
+                        http_retries_left -= 1
+                        attempt = http_retries - http_retries_left
+                        delay = parse_retry_after(None, e.body) or (3.0 if code == 429 else 2.0)
+                        wait = min(delay * (backoff_base ** attempt), 30.0)
+                        frontend.on_status(
+                            f"Provider error (HTTP {code}), retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                        )
+                        await asyncio.sleep(wait)
+                        backoff_base *= 1.5
+                        continue
+
+                    # 401/403/404, unknown 4xx, or retries exhausted
+                    frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
+                    msgs = result.all_messages() if result else current_history
+                    _span_result = TurnResult(
+                        messages=msgs,
+                        output=None,
+                        usage=turn_usage,
+                        interrupted=False,
+                        streamed_text=streamed_text,
+                        outcome="error",
                     )
-                    await asyncio.sleep(wait)
-                    backoff_base *= 1.5
-                    continue
+                    return _span_result
 
-                # 401/403/404, unknown 4xx, or retries exhausted
-                frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
-                msgs = result.all_messages() if result else current_history
-                return TurnResult(
-                    messages=msgs,
-                    output=None,
-                    usage=turn_usage,
-                    interrupted=False,
-                    streamed_text=streamed_text,
-                    outcome="error",
-                )
+                except ModelAPIError as e:
+                    # Network/timeout — backoff retry
+                    if http_retries_left > 0:
+                        http_retries_left -= 1
+                        attempt = http_retries - http_retries_left
+                        wait = min(2.0 * (backoff_base ** attempt), 30.0)
+                        frontend.on_status(
+                            f"Network error: {e}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                        )
+                        await asyncio.sleep(wait)
+                        backoff_base *= 1.5
+                        continue
 
-            except ModelAPIError as e:
-                # Network/timeout — backoff retry
-                if http_retries_left > 0:
-                    http_retries_left -= 1
-                    attempt = http_retries - http_retries_left
-                    wait = min(2.0 * (backoff_base ** attempt), 30.0)
-                    frontend.on_status(
-                        f"Network error: {e}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
+                    frontend.on_status(f"Network error: {e}")
+                    msgs = result.all_messages() if result else current_history
+                    _span_result = TurnResult(
+                        messages=msgs,
+                        output=None,
+                        usage=turn_usage,
+                        interrupted=False,
+                        streamed_text=streamed_text,
+                        outcome="error",
                     )
-                    await asyncio.sleep(wait)
-                    backoff_base *= 1.5
-                    continue
+                    return _span_result
 
-                frontend.on_status(f"Network error: {e}")
-                msgs = result.all_messages() if result else current_history
-                return TurnResult(
-                    messages=msgs,
-                    output=None,
-                    usage=turn_usage,
-                    interrupted=False,
-                    streamed_text=streamed_text,
-                    outcome="error",
-                )
-
-            except (KeyboardInterrupt, asyncio.CancelledError):
-                msgs = result.all_messages() if result else current_history
-                message_history = _patch_dangling_tool_calls(msgs)
-                # Abort marker — model sees this on the next turn so it knows
-                # the previous turn was interrupted and can verify state.
-                abort_marker = ModelRequest(parts=[UserPromptPart(
-                    content=(
-                        "The user interrupted the previous turn. Some actions "
-                        "may be incomplete. Verify current state before continuing."
-                    ),
-                )])
-                message_history = message_history + [abort_marker]
-                frontend.on_status("Interrupted.")
-                return TurnResult(
-                    messages=message_history,
-                    output=None,
-                    usage=turn_usage,
-                    interrupted=True,
-                    streamed_text=streamed_text,
-                    outcome="continue",
-                )
-    finally:
-        deps.runtime.tool_progress_callback = None
-
-
-async def run_turn_with_fallback(
-    *,
-    agent: Any,
-    user_input: str,
-    deps: "CoDeps",
-    message_history: list,
-    verbose: bool,
-    frontend: "FrontendProtocol",
-) -> "TurnResult":
-    """Run a turn using the agent's baked-in model and settings."""
-    frontend.on_status("Co is thinking...")
-    return await run_turn(
-        agent=agent,
-        user_input=user_input,
-        deps=deps,
-        message_history=message_history,
-        max_request_limit=deps.config.max_request_limit,
-        http_retries=deps.config.model_http_retries,
-        verbose=verbose,
-        frontend=frontend,
-    )
+                except (KeyboardInterrupt, asyncio.CancelledError):
+                    msgs = result.all_messages() if result else current_history
+                    message_history = _patch_dangling_tool_calls(msgs)
+                    # Abort marker — model sees this on the next turn so it knows
+                    # the previous turn was interrupted and can verify state.
+                    abort_marker = ModelRequest(parts=[UserPromptPart(
+                        content=(
+                            "The user interrupted the previous turn. Some actions "
+                            "may be incomplete. Verify current state before continuing."
+                        ),
+                    )])
+                    message_history = message_history + [abort_marker]
+                    frontend.on_status("Interrupted.")
+                    _span_result = TurnResult(
+                        messages=message_history,
+                        output=None,
+                        usage=turn_usage,
+                        interrupted=True,
+                        streamed_text=streamed_text,
+                        outcome="continue",
+                    )
+                    return _span_result
+        finally:
+            span.set_attribute("turn.outcome", _span_result.outcome if _span_result else "error")
+            span.set_attribute("turn.interrupted", _span_result.interrupted if _span_result else False)
+            span.set_attribute("turn.input_tokens",
+                (_span_result.usage.input_tokens or 0) if _span_result and _span_result.usage else 0)
+            span.set_attribute("turn.output_tokens",
+                (_span_result.usage.output_tokens or 0) if _span_result and _span_result.usage else 0)
+            deps.runtime.tool_progress_callback = None

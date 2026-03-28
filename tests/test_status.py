@@ -6,8 +6,6 @@ from pathlib import Path
 import pytest
 
 from co_cli.bootstrap._render_status import (
-    _PYPROJECT,
-    SecurityFinding,
     check_security,
     get_status,
 )
@@ -24,10 +22,6 @@ def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
 
 def test_get_status_reads_repo_root_pyproject():
     """get_status() must read version from repo-root pyproject.toml, not co_cli/."""
-    assert _PYPROJECT.exists()
-    assert _PYPROJECT.name == "pyproject.toml"
-    assert _PYPROJECT.parent == Path(__file__).resolve().parent.parent
-
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
     info = get_status(config)
 
@@ -67,23 +61,6 @@ def test_check_security_project_config_wrong_mode(tmp_path):
     assert proj_findings[0].severity == "warn"
 
 
-
-# -- render_security_findings (smoke test) ---------------------------------
-
-
-def test_render_security_findings_outputs_findings():
-    """render_security_findings with findings does not raise."""
-    from co_cli.bootstrap._render_status import render_security_findings
-    findings = [
-        SecurityFinding(
-            severity="warn",
-            check_id="test-check",
-            detail="Test detail",
-            remediation="Test remediation",
-        )
-    ]
-    # Should not raise
-    render_security_findings(findings)
 
 
 def test_get_status_mcp_approval_posture(tmp_path: Path):

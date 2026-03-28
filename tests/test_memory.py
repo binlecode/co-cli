@@ -615,3 +615,85 @@ def test_persist_memory_writes_always_on_to_frontmatter(tmp_path: Path):
     assert len(files) == 1
     fm, _ = parse_frontmatter(files[0].read_text(encoding="utf-8"))
     assert fm.get("always_on") is True
+
+
+# ---------------------------------------------------------------------------
+# rag.backend OTel annotation
+# ---------------------------------------------------------------------------
+
+
+def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
+    """search_memories and search_knowledge stamp rag.backend on the active OTel span."""
+    from dataclasses import replace
+
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.tools.articles import search_knowledge
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    library_dir = tmp_path / "library"
+    library_dir.mkdir()
+
+    _write_memory(memory_dir, 1, "rag-backend-annotation-fts-test", tags=["test"])
+    article_path = library_dir / "001-rag-backend-test.md"
+    article_path.write_text(
+        "---\nkind: article\ntags: [test]\n---\nrag-backend-annotation-fts-test article\n",
+        encoding="utf-8",
+    )
+
+    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    try:
+        idx.sync_dir("memory", memory_dir)
+        idx.sync_dir("library", library_dir)
+
+        fts_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
+        grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=None)
+        fts_know_ctx = RunContext(
+            deps=CoDeps(
+                services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+                config=replace(CoConfig(), library_dir=library_dir, knowledge_search_backend="fts5"),
+            ),
+            model=_AGENT.model,
+            usage=RunUsage(),
+        )
+        grep_know_ctx = RunContext(
+            deps=CoDeps(
+                services=CoServices(shell=ShellBackend(), knowledge_index=None),
+                config=replace(CoConfig(), library_dir=library_dir),
+            ),
+            model=_AGENT.model,
+            usage=RunUsage(),
+        )
+
+        exporter = InMemorySpanExporter()
+        _orig = otel_trace.get_tracer_provider()
+        # add_span_processor has no corresponding remove in the OTel SDK; the processor
+        # stays registered for the process lifetime, but the exporter goes out of scope
+        # after this test so spans accumulate into a GC-eligible object only.
+        _orig.add_span_processor(SimpleSpanProcessor(exporter))
+
+        tracer = _orig.get_tracer("test.rag_backend")
+        with tracer.start_as_current_span("execute_tool test") as parent_span:
+            # (1) search_memories FTS path
+            asyncio.run(search_memories(fts_mem_ctx, "rag-backend-annotation-fts-test"))
+            assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
+
+            # (2) search_memories grep path
+            asyncio.run(search_memories(grep_mem_ctx, "rag-backend-annotation-fts-test"))
+            assert parent_span.attributes.get("rag.backend") == "grep"
+
+            # (3) search_knowledge FTS path
+            asyncio.run(search_knowledge(fts_know_ctx, "rag-backend-annotation-fts-test"))
+            assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
+
+            # (4) search_knowledge grep path
+            asyncio.run(search_knowledge(grep_know_ctx, "rag-backend-annotation-fts-test"))
+            assert parent_span.attributes.get("rag.backend") == "grep"
+    finally:
+        idx.close()
+
+    assert otel_trace.get_tracer_provider() is _orig

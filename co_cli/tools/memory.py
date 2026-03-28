@@ -743,6 +743,7 @@ async def search_memories(
                 created_before=created_before,
                 limit=limit,
             )
+            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
             if not results:
                 return make_result(f"No memories found matching '{query}'", count=0, results=[])
 
@@ -786,6 +787,7 @@ async def search_memories(
         except Exception as e:
             logger.warning(f"search_memories FTS error, falling back to grep: {e}")
 
+    otel_trace.get_current_span().set_attribute("rag.backend", "grep")
     # Grep fallback
     memories = _load_memories(memory_dir, kind="memory")
     if tags:

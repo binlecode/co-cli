@@ -7,13 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-28
+
 ### Changed
+- **`run_turn()` is the single turn entrypoint**: Removed `run_turn_with_fallback()` — its three responsibilities (status display, `co.turn` span ownership, config plumbing) are now inlined into `run_turn()`. Signature simplified: `max_request_limit` and `http_retries` removed as explicit params, read from `deps.config` directly. `main.py` calls `run_turn()` without the wrapper layer.
 - **Model role governance**: Unified model selection behind `model_roles` role chains. `create_deps()` now resolves summarization via `get_role_head(settings.model_roles, "summarization")` instead of a standalone setting.
 - **Model role env vars**: Standardized on `CO_MODEL_ROLE_<ROLE>` (`REASONING`, `SUMMARIZATION`, `CODING`, `RESEARCH`, `ANALYSIS`). Removed the legacy `CO_CLI_SUMMARIZATION_MODEL` path.
 - **Role validation hardening**: Added explicit role-key validation (`VALID_MODEL_ROLES`) and reject-unknown behavior for `model_roles`.
+- **MCP init guard**: `discover_mcp_tools` is now skipped when `stack.enter_async_context(agent)` fails — prevents tool discovery against a broken MCP connection.
+- **Observability doc renamed**: `DESIGN-logging-and-tracking.md` replaced by `DESIGN-observability.md` with an expanded span table, span hierarchy description, and accurate `co.turn` ownership.
+- **Workflow simplified to 2 gates**: `DELIVERY-*.md` files and Gate 3 eliminated. `orchestrate-dev` appends delivery summary to `TODO`, `review-impl` appends PASS/FAIL verdict, Gate 2 reads the TODO and ships. `TODO` deleted after PASS.
 
 ### Added
+- **RAG backend span attribute**: `search_knowledge` and `search_memories` now stamp `rag.backend` on the active OTel span (`"fts5"`, `"hybrid"`, or `"grep"`) so retrieval path is visible in traces.
+- **Degraded banner indicator**: Welcome banner now shows `✓ Ready  (degraded)` when startup fallbacks are active (hybrid→fts5 degradation, reranker unavailability).
+- **Config validation attribution**: `load_config()` now wraps `ValidationError` with a `ValueError` that names the config files that triggered the error. `get_settings()` catches it, prints cleanly to stderr, and exits — no raw traceback on bad config.
+- **Session save resilience**: `restore_session()` wraps `save_session()` in an `OSError` guard — session continues without persistence rather than crashing on read-only filesystems.
 - **Role governance tests**: Added `tests/test_model_roles_config.py` coverage for unknown role rejection, role-env parsing, and deps summarization-model derivation from `model_roles["summarization"]`.
+
+### Fixed
+- **Stale import removed**: `FinishReason` was imported in `_orchestrate.py` but never used — removed.
 
 ## [0.4.5] - 2026-03-01
 

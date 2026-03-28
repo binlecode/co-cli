@@ -57,6 +57,8 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **`_prefix.py` helpers**: internal/shared helpers in a package use a leading underscore. They are private to the package, not registered as tools, and not part of the public API.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.
+- **After refactoring**: always check for dead code, stale imports, and misplaced lazy imports before reporting done.
+- **Renames and large refactors**: verify all references across code, tests, AND docs in the same change.
 
 ### Agents, Tools, and Config
 
@@ -104,6 +106,19 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Test timing always on**: `pyproject.toml` enforces `-x --durations=0` — fail-fast with per-test wall times. Unexpectedly slow tests indicate over-broad scope or missing `asyncio.timeout`.
 - **Google credentials**: never configure or inject in tests. They resolve automatically through `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`.
 - **Test data isolation and cleanup**: tests must not leave data in shared stores (knowledge index, memory dir, library dir, SQLite DBs). Use `tmp_path` for all filesystem writes. For shared stores, delete test-introduced records in `try/finally` — cleanup failure must fail the test. Records in any shared store must use a `test-` prefix in identifiers (`session_id=”test-...”`, slug `test-...`, tag `test`) to be identifiable for bulk-delete.
+- **Run the full test suite after any code change**: `uv run pytest` piped to a timestamped log (see Build & Run Commands). Do not consider a change done until the suite is green.
+- **Never dismiss a test failure as flaky**: always do proper root cause analysis. If a test fails, stop all testing immediately and diagnose before re-running.
+
+### Review Behavior
+
+- When asked to review a document, plan, or delivery: do a **deep review on the first pass**. Read every source file referenced before giving any assessment. Do not declare something "ready" unless you can cite specific code confirming each item.
+- Never perform a shallow pass that requires 5+ review cycles. If the scope is unclear, ask a clarifying question rather than rubber-stamping and iterating.
+
+### Task Execution
+
+- When asked to analyze or review, do **not** start searching, fetching, or writing before understanding the full request. Read the complete instruction first.
+- When asked to append to an existing file, do **not** create a new file instead.
+- Do not add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
 
 ## Docs
 
@@ -126,7 +141,7 @@ Start at `docs/DESIGN-index.md` for navigation, config reference, and module ind
 
 Workflow artifact placement:
 
-- `REPORT-*.md`, `TODO-*.md`, and `DELIVERY-*.md` live directly in `docs/`, not in subdirectories.
+- `REPORT-*.md` and `TODO-*.md` live directly in `docs/`, not in subdirectories.
 
 Workflow artifact lifecycle:
 
@@ -134,21 +149,20 @@ Workflow artifact lifecycle:
 - **Reporting Structure Guidelines:** 
   - **Qualitative Behavior Evals** (`evals/*-result.md`): Must include "Per-Case Results" tables, "Drift/Error Tracing" (failed turns with prompt/response context), and Pass/Fail Gates.
   - **Quantitative Benchmarks** (`evals/benchmark-*-result.md` or `scripts/*-result.md`): Must include a "Results Summary" table showing Deltas between models (e.g., Throughput, TTFT, Total Time), "Detailed Findings" narratives explaining hardware/context anomalies, and explicitly list "API Parameters Forced" in the header.
-- `TODO-<slug>.md` is the single source of work tracking for a delivery. It holds the plan, the audit log from `/orchestrate-plan`, and the `/delivery-audit` coverage results (appended at the end). `orchestrate-dev` marks shipped tasks `✓ DONE` — tasks are never deleted mid-delivery. The file is deleted only at Gate 3 (PO acceptance), in the same Claude Code workflow session that deletes the DELIVERY file.
-- `DELIVERY-<slug>.md` is temporary scaffolding for Gate 2 and Gate 3 only. After PO acceptance at Gate 3, delete it in the same Claude Code workflow session that records acceptance.
+- `TODO-<slug>.md` is the single source of work tracking for a delivery. It holds: the plan, `✓ DONE` task marks, delivery summary + independent review (appended by `orchestrate-dev`), and implementation verdict (appended by `/review-impl`). Tasks are never deleted mid-delivery. The file is deleted after Gate 2 acceptance (PASS verdict → ship → delete).
 
 TODO lifecycle:
 
-- When a task ships, mark it `✓ DONE` in `docs/TODO-<slug>.md` — do not delete it. The record is preserved for debugging, troubleshooting, and revert until Gate 3.
+- When a task ships, mark it `✓ DONE` in `docs/TODO-<slug>.md` — do not delete it. The record is preserved for debugging, troubleshooting, and revert until Gate 2 PASS.
 - Design details merged into a DESIGN doc (via sync-doc) are noted in the task entry, not stripped from the TODO.
-- The full TODO (done + pending tasks) is deleted at Gate 3 alongside the DELIVERY file.
+- The full TODO (done + pending tasks) is deleted after Gate 2 PASS (review-impl verdict → ship → delete).
 
 ### Skills and Workflow
 
 The workflow skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
 ```text
-[optional] TL:  /research <scope>  → docs/reference/RESEARCH-<scope>.md
+[optional] TL researches scope → docs/reference/RESEARCH-<scope>.md
 [optional] 👤  TL reads research: gaps to address in design?
     ↓
 TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
@@ -158,23 +172,24 @@ TL:  /orchestrate-plan <slug>  → docs/TODO-<slug>.md  (TL + Core Dev + PO)
     ↓
 👤  Gate 1: PO + TL approve plan          (right problem? correct scope?)
     ↓
-Dev: /orchestrate-dev <slug>   → docs/DELIVERY-<slug>.md  (implement + self-review + test + sync-doc)
+Dev: /orchestrate-dev <slug>              (implement + self-review + test + sync-doc → delivery summary appended to TODO)
     ↓
-👤  Gate 2: TL reviews delivery report    (all done_when passed?)
+TL: /review-impl <slug>                   (evidence-first scan + auto-fix + full tests + behavioral verification → verdict appended to TODO)
     ↓
-👤  Gate 3: PO acceptance                 (does it work for the user?)
+👤  Gate 2: TL reads TODO                 (plan + ✓ DONE marks + delivery summary + review-impl verdict — PASS means ship)
     ↓
 ship
     ↓
-🗑  Delete DELIVERY-<slug>.md  (temporary scaffolding — delete immediately after Gate 3)
+🗑  Delete TODO-<slug>.md
 ```
 
 - `/orchestrate-plan <slug>`: create or refine `docs/TODO-<slug>.md` — TL drafts, Core Dev (implementation risk) and PO (scope + first principles) critique in parallel, TL decides. Includes inline current-state validation before drafting.
-- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), produce `docs/DELIVERY-<slug>.md`, auto-invoke sync-doc.
+- `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to TODO, auto-invoke sync-doc.
+- `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to TODO. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
-- `/audit-delivery <scope>`: on-demand inverse coverage check of tools/settings/commands vs DESIGN docs. Results appended to `docs/TODO-<scope>.md`.
-- `/research <scope>`: free-form discovery, producing `docs/reference/RESEARCH-<scope>.md`. Outside the delivery workflow. See reference repos in `docs/reference/` for key files per repo.
 
 ## Reference Repos
 
 Peer CLI tools in `~/workspace_genai/` are used for design research. Key repos: `codex` (shell safety, sandbox), `claude-code` (permission engine), `openclaw` (hybrid memory search), `letta` (three-tier memory), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, and `opencode`. File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`.
+
+- **Proactive research**: before proposing a solution or design, check existing research and best-practice docs in `docs/reference/` first. Do not wait to be pointed to them.

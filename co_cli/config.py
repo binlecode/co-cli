@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from copy import deepcopy
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 APP_NAME = "co-cli"
 
@@ -539,7 +539,14 @@ def load_config(
 
     # Layer 3: Env vars (handled by fill_from_env model_validator)
     context = {"env": _env} if _env is not None else None
-    resolved = Settings.model_validate(data, context=context)
+    try:
+        resolved = Settings.model_validate(data, context=context)
+    except ValidationError as exc:
+        loaded = [str(user_config) if user_config.exists() else None,
+                  str(project_config) if project_config else None]
+        sources = [s for s in loaded if s]
+        hint = f" — check: {', '.join(sources)}" if sources else ""
+        raise ValueError(f"Invalid configuration{hint}:\n{exc}") from exc
 
     # Non-blocking personality file diagnostics surfaced at startup.
     for warning in _validate_personality(resolved.personality):
@@ -560,7 +567,14 @@ def get_settings() -> Settings:
     global _settings
     if _settings is None:
         _ensure_dirs()
-        _settings = load_config()
+        try:
+            _settings = load_config()
+        except ValueError as e:
+            # load_config() raises ValueError for schema errors with file attribution.
+            # Print cleanly and exit — consumers (display.py) access settings at import time.
+            import sys
+            print(f"Configuration error: {e}", file=sys.stderr)
+            raise SystemExit(1)
     return _settings
 
 

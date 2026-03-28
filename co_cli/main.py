@@ -18,7 +18,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli.deps import CoDeps
-from co_cli.context._orchestrate import run_turn_with_fallback
+from co_cli.context._orchestrate import run_turn
 from co_cli.context._history import precompute_compaction
 from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
 from co_cli.agent import build_agent, discover_mcp_tools
@@ -96,7 +96,11 @@ async def _chat_loop(verbose: bool = False):
         completer=completer,
         complete_while_typing=False,
     )
-    deps = create_deps()
+    try:
+        deps = create_deps()
+    except ValueError as e:
+        console.print(f"[bold red]Startup error:[/bold red] {e}")
+        raise SystemExit(1)
     for status in deps.runtime.startup_statuses:
         frontend.on_status(status)
 
@@ -118,12 +122,14 @@ async def _chat_loop(verbose: bool = False):
     last_interrupt_time = 0.0
     bg_compaction_task: asyncio.Task | None = None
     try:
+        _mcp_init_ok = False
         try:
             await stack.enter_async_context(agent)
+            _mcp_init_ok = True
         except Exception as e:
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
-        if deps.config.mcp_servers:
+        if deps.config.mcp_servers and _mcp_init_ok:
             mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
             deps.session.mcp_discovery_errors = discovery_errors
             for prefix, err in discovery_errors.items():
@@ -183,11 +189,10 @@ async def _chat_loop(verbose: bool = False):
                 _consume_bg_compaction(bg_compaction_task, deps)
                 bg_compaction_task = None
 
-                # LLM turn — delegated to _orchestrate.run_turn_with_fallback()
-                # try/finally guarantees skill-env rollback on all exit paths
+                # LLM turn — try/finally guarantees skill-env rollback on all exit paths
                 # (normal completion, KeyboardInterrupt, CancelledError, Exception).
                 try:
-                    turn_result = await run_turn_with_fallback(
+                    turn_result = await run_turn(
                         agent=agent,
                         user_input=user_input,
                         deps=deps,
@@ -273,9 +278,6 @@ def chat(
         asyncio.run(_chat_loop(verbose=verbose))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
-    except ValueError as e:
-        console.print(f"[bold red]Startup error:[/bold red] {e}")
-        raise typer.Exit(code=1)
 
 
 @app.command()

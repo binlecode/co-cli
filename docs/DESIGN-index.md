@@ -26,7 +26,7 @@ What is your question?
                     DESIGN-system
                     DESIGN-tools
                     DESIGN-llm-models
-                    DESIGN-logging-and-tracking
+                    DESIGN-observability
                             │
                             ▼
                 follow 'See Also' links for depth
@@ -77,7 +77,7 @@ Use these when you already know the subsystem and need the owning deep-dive doc.
 | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) | Startup and bootstrap sequence |
 | [DESIGN-tools.md](DESIGN-tools.md) | Native tools, MCP tools, approval classes, return/error contracts |
 | [DESIGN-llm-models.md](DESIGN-llm-models.md) | Provider/model selection and role-model chains |
-| [DESIGN-logging-and-tracking.md](DESIGN-logging-and-tracking.md) | Tracing, SQLite exporter, viewers |
+| [DESIGN-observability.md](DESIGN-observability.md) | Tracing, SQLite exporter, viewers |
 | `DESIGN-index.md` | Navigation, consolidated config reference, and module index |
 
 ---

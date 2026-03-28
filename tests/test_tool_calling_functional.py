@@ -231,7 +231,7 @@ async def test_intent_routing_observation_no_tool():
 async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     """check_task_status result includes description and started_at from task metadata."""
     import asyncio
-    from co_cli.tools._background import TaskRunner
+    from co_cli.tools._background import TaskRunner, TaskStorage
     from co_cli.tools.task_control import check_task_status
     from pydantic_ai._run_context import RunContext
     from pydantic_ai.usage import RunUsage
@@ -239,7 +239,8 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     from co_cli.tools._shell_backend import ShellBackend
 
     tasks_dir = tmp_path / "tasks"
-    runner = TaskRunner(tasks_dir=tasks_dir)
+    storage = TaskStorage(tasks_dir)
+    runner = TaskRunner(storage)
     config = CoConfig(tasks_dir=tasks_dir)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), task_runner=runner),

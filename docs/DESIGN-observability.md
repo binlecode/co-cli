@@ -113,10 +113,11 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 
 | Span Name (v3) | Kind | Key Attributes |
 |----------------|------|----------------|
+| `co.turn` | INTERNAL | `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens` — root span for every user turn; emitted by `co-cli.orchestrate` tracer in `run_turn()`; all pydantic-ai child spans attach under this root automatically |
 | `invoke_agent {name}` | INTERNAL | `gen_ai.request.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `pydantic_ai.all_messages` |
 | `chat {model}` | CLIENT | `gen_ai.request.model`, `gen_ai.response.finish_reasons`, `gen_ai.input.messages`, `gen_ai.output.messages`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
 | `running tools` | INTERNAL | list of tool names |
-| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `tool_arguments`, `tool_response` |
+| `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `tool_arguments`, `tool_response`; `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memories` and `search_knowledge` to identify the active retrieval path |
 | `delegate_{role}` | INTERNAL | `delegation.role`, `delegation.model`, `delegation.request_limit`, `delegation.requests_used` — emitted by `co-cli.delegation` tracer; covers full sub-agent run including retry loop |
 | `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `TaskRunner.start_task()` for cross-session task linkage |
 
