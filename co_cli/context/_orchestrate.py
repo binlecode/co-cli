@@ -353,6 +353,43 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
 
 
 # ---------------------------------------------------------------------------
+# _check_output_limits — finish-reason and context overflow diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _check_output_limits(
+    turn_state: _TurnState,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> None:
+    """Emit finish-reason and context-overflow status warnings after a completed turn.
+
+    Precondition: turn_state.latest_result is non-None (called only on success path).
+    """
+    if turn_state.latest_result.response.finish_reason == "length":
+        frontend.on_status(
+            "Response may be truncated (hit output token limit). "
+            "Use /continue to extend."
+        )
+    if deps.runtime.turn_usage is not None and deps.config.supports_context_ratio_tracking():
+        ratio = deps.runtime.turn_usage.input_tokens / deps.config.llm_num_ctx
+        with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
+            ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
+            ctx_span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
+            ctx_span.set_attribute("ctx.ratio", ratio)
+            if ratio >= deps.config.ctx_overflow_threshold:
+                frontend.on_status(
+                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
+                    " — Ollama likely truncated the prompt. Use /compact or /new."
+                )
+            elif ratio >= deps.config.ctx_warn_threshold:
+                frontend.on_status(
+                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
+                    " Consider /compact to free space."
+                )
+
+
+# ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
 
@@ -410,32 +447,7 @@ async def run_turn(
                     if not turn_state.latest_streamed_text and isinstance(turn_state.latest_result.output, str):
                         frontend.on_final_output(turn_state.latest_result.output)
 
-                    # Finish reason detection: warn if response was truncated at token limit.
-                    if turn_state.latest_result.response.finish_reason == "length":
-                        frontend.on_status(
-                            "Response may be truncated (hit output token limit). "
-                            "Use /continue to extend."
-                        )
-
-                    # Context overflow detection: Ollama truncates silently when
-                    # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
-                    # deps.runtime.turn_usage is the authoritative accumulated total for this turn.
-                    if deps.runtime.turn_usage is not None and deps.config.supports_context_ratio_tracking():
-                        ratio = deps.runtime.turn_usage.input_tokens / deps.config.llm_num_ctx
-                        with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
-                            ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
-                            ctx_span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
-                            ctx_span.set_attribute("ctx.ratio", ratio)
-                            if ratio >= deps.config.ctx_overflow_threshold:
-                                frontend.on_status(
-                                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
-                                    " — Ollama likely truncated the prompt. Use /compact or /new."
-                                )
-                            elif ratio >= deps.config.ctx_warn_threshold:
-                                frontend.on_status(
-                                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
-                                    " Consider /compact to free space."
-                                )
+                    _check_output_limits(turn_state, deps, frontend)
 
                     return TurnResult(
                         messages=turn_state.current_history,

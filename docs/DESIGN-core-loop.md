@@ -253,7 +253,7 @@ Interrupt recovery invariant:
 2. if the turn was not interrupted and not an error, run `analyze_for_signals()` and `handle_signal()`
 3. clear `deps.runtime.precomputed_compaction`
 4. `touch_session()` and `save_session()`
-5. spawn the next `precompute_compaction(...)` task via `_spawn_bg_compaction()`
+5. spawn the next `precompute_compaction(...)` task via `asyncio.create_task()`
 6. if `outcome == "error"`, print a generic error banner
 
 ### 2.6 Comparison Against Common Peer Patterns
@@ -332,7 +332,7 @@ Interrupt recovery invariant:
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop, slash dispatch, skill env injection, post-turn hooks, background compaction scheduling |
-| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle), `_collect_deferred_tool_approvals()`, `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
+| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle), `_collect_deferred_tool_approvals()`, `_check_output_limits()` (finish-reason and context-overflow diagnostics after a completed turn), `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
 | `co_cli/agent.py` | Main agent construction: instructions, history processors, native tools, MCP toolsets |
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |

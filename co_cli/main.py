@@ -80,17 +80,6 @@ def _cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> 
     deps.session.active_skill_name = None
 
 
-def _spawn_bg_compaction(
-    message_history: list,
-    deps: CoDeps,
-    primary_model: str,
-) -> "asyncio.Task":
-    """Spawn background compaction as a best-effort latency optimization."""
-    return asyncio.create_task(
-        precompute_compaction(message_history, deps, primary_model)
-    )
-
-
 async def _finalize_turn(
     turn_result: Any,
     message_history: list,
@@ -122,7 +111,9 @@ async def _finalize_turn(
     save_session(deps.config.session_path, next_session)
 
     # Spawn background compaction for the next turn
-    next_task = _spawn_bg_compaction(next_history, deps, primary_model)
+    next_task = asyncio.create_task(
+        precompute_compaction(next_history, deps, primary_model)
+    )
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":

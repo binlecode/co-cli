@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-03-28
+
+### Changed
+- **Core loop polish**: extracted finish-reason and context-overflow diagnostics from `run_turn()` into `_check_output_limits()`, making the success path read as a clean sequence ending at `return TurnResult(...)`. Inlined `_spawn_bg_compaction()` — a 3-line single-call-site wrapper — directly into `_finalize_turn()`.
+
 ## [0.5.8] - 2026-03-28
 
 ### Changed
