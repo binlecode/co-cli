@@ -302,3 +302,60 @@ Append to `docs/TODO-<slug>.md`:
 
 **DELIVERED** = all tasks passed, tests pass, independent review clean or minor only, doc sync clean or fixed.
 **BLOCKED** = one or more tasks failed `done_when`, or tests still failing after fix attempts.
+
+---
+
+## Phase 5 — Ship
+
+Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only delivery — Gate 2 requires the review-impl PASS verdict first.
+
+### Step 1 — Delete TODO
+
+```
+rm docs/TODO-<slug>.md
+```
+
+### Step 2 — Bump version
+
+Read the current version from `pyproject.toml`. Bump the **third digit** (patch) by 2 unless the user specifies a different version or digit:
+
+- Even patch = feature/enhancement delivery (default for most deliveries)
+- Odd patch = bugfix delivery
+
+```
+# e.g. 0.5.0 → 0.5.2 for a feature delivery
+# e.g. 0.5.0 → 0.5.1 for a pure bugfix delivery
+```
+
+Edit `pyproject.toml` — the `version =` field only. No other changes.
+
+### Step 3 — Sync CHANGELOG.md
+
+Add a new release section above the previous latest release (below `## [Unreleased]`):
+
+```markdown
+## [<new-version>] - <YYYY-MM-DD>
+
+### Changed
+- **<title>**: <one-line description of what changed and why>
+
+### Added
+- **<title>**: <one-line description>
+
+### Fixed
+- **<title>**: <one-line description>
+```
+
+Rules:
+- Use only the sections (Changed / Added / Fixed / Removed) that apply — omit empty sections
+- One bullet per logical change, not per task — group related tasks into one bullet when they form a single user-visible change
+- Each bullet leads with a bold title (the "what") followed by a colon and the "why/impact"
+- Do not paste task IDs or internal implementation details — write for a reader of the changelog, not the plan
+
+### Step 4 — Commit
+
+Stage all delivery files plus `pyproject.toml` and `CHANGELOG.md`. Commit with a message that:
+- Starts with `refactor:`, `feat:`, or `fix:` as appropriate
+- One-line subject summarising the delivery
+- Body bullets for the most significant changes (3–6 lines max)
+- Ends with `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
