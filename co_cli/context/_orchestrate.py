@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UsageLimitExceeded
+
+# Local alias — DeferredToolResults carries approval decisions (allow/deny),
+# not executed tool output. Actual tool output returns later as ToolReturnPart.
+ToolApprovalDecisions = DeferredToolResults
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
     ModelRequest, ModelResponse, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
@@ -21,7 +25,6 @@ from pydantic_ai.messages import (
     ThinkingPart, ThinkingPartDelta,
     ToolCallPart, ToolReturnPart, UserPromptPart,
 )
-from pydantic_ai.usage import UsageLimits
 from opentelemetry import trace as otel_trace
 
 # Typed return value from run_turn() to chat loop
@@ -94,7 +97,7 @@ class _TurnState:
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
     latest_usage: Any = None
-    tool_approval_decisions: DeferredToolResults | None = None
+    tool_approval_decisions: ToolApprovalDecisions | None = None
     # cross-turn outcome flags
     outcome: TurnOutcome = "continue"
     interrupted: bool = False
@@ -131,7 +134,7 @@ def _adopt_segment_result(turn_state: "_TurnState") -> None:
 
 def _prepare_approval_resume(
     turn_state: "_TurnState",
-    approvals: DeferredToolResults,
+    approvals: ToolApprovalDecisions,
 ) -> None:
     """Set up turn_state for an approval-resume segment.
 
@@ -155,8 +158,15 @@ async def _collect_deferred_tool_approvals(
 ) -> DeferredToolResults:
     """Collect approval decisions for all pending deferred tool requests.
 
-    Returns DeferredToolResults without resuming the stream.
-    run_turn() resumes via _execute_stream_segment() as a separate step.
+    For each pending call:
+      - auto-approved or user approves → approvals.approvals[id] = True
+      - user denies                    → approvals.approvals[id] = ToolDenied(...)
+
+    Returns a DeferredToolResults (ToolApprovalDecisions) object consumed by the
+    next _execute_stream_segment() call as deferred_tool_results=.
+
+    Important: this payload carries approval decisions only. Actual tool execution
+    and ToolReturnPart output happen after the resumed segment completes.
     """
     mcp_prefixes = frozenset(
         cfg.prefix or name
@@ -198,7 +208,6 @@ async def _execute_stream_segment(
     agent: Agent,
     deps: CoDeps,
     model_settings: dict | None,
-    turn_limits: UsageLimits,
     verbose: bool,
     frontend: FrontendProtocol,
 ) -> None:
@@ -223,7 +232,6 @@ async def _execute_stream_segment(
             deps=deps,
             message_history=turn_state.current_history,
             model_settings=model_settings,
-            usage_limits=turn_limits,
             usage=turn_state.latest_usage,
             deferred_tool_results=turn_state.tool_approval_decisions,
         ):
@@ -362,7 +370,7 @@ async def run_turn(
     Single public entrypoint for an orchestrated agent turn. Emits the root
     `co.turn` span, displays the thinking status, runs the inner retry loop
     for HTTP errors and the approval loop for deferred tool requests, and
-    reads turn policy (request limit, retries) from deps.config.
+    reads turn policy (retries) from deps.config.
 
     Returns TurnResult with outcome field for chat loop pattern-matching:
       "continue" — normal completion, prompt for next input
@@ -378,9 +386,7 @@ async def run_turn(
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
-    max_request_limit = deps.config.max_request_limit
     http_retries = deps.config.model_http_retries
-    turn_limits = UsageLimits(request_limit=max_request_limit)
     turn_state = _TurnState(
         current_input=user_input,
         current_history=message_history,
@@ -392,7 +398,7 @@ async def run_turn(
             while True:
                 try:
                     await _execute_stream_segment(
-                        turn_state, agent, deps, model_settings, turn_limits, verbose, frontend
+                        turn_state, agent, deps, model_settings, verbose, frontend
                     )
                     _merge_turn_usage(deps, turn_state.latest_usage)
 
@@ -403,7 +409,7 @@ async def run_turn(
                         )
                         _prepare_approval_resume(turn_state, approvals)
                         await _execute_stream_segment(
-                            turn_state, agent, deps, model_settings, turn_limits, verbose, frontend
+                            turn_state, agent, deps, model_settings, verbose, frontend
                         )
                         _merge_turn_usage(deps, turn_state.latest_usage)
 
@@ -441,22 +447,6 @@ async def run_turn(
                     return TurnResult(
                         messages=turn_state.current_history,
                         output=turn_state.latest_result.output,
-                        usage=turn_state.latest_usage,
-                        interrupted=False,
-                        streamed_text=turn_state.latest_streamed_text,
-                        outcome="continue",
-                    )
-
-                except UsageLimitExceeded:
-                    frontend.on_status("Turn limit reached. Use /continue to resume.")
-                    msgs = (
-                        turn_state.latest_result.all_messages()
-                        if turn_state.latest_result
-                        else turn_state.current_history
-                    )
-                    return TurnResult(
-                        messages=msgs,
-                        output=None,
                         usage=turn_state.latest_usage,
                         interrupted=False,
                         streamed_text=turn_state.latest_streamed_text,

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-03-28
+
+### Changed
+- **Usage limits removed**: `UsageLimits(request_limit=N)` ceiling removed from the main turn loop — loop stability is still enforced by `doom_loop_threshold` (identical tool-call streak detection) and `max_reflections` (consecutive shell error cycles). Removes a premature resource guard that constrained long agent turns without providing meaningful safety.
+- **`ToolApprovalDecisions` type alias**: `DeferredToolResults` aliased as `ToolApprovalDecisions` in `_orchestrate.py` to make the SDK type's semantic role self-documenting — approval decisions, not executed tool output.
+- **`_collect_deferred_tool_approvals()` docstring**: States the True/`ToolDenied` return contract explicitly and distinguishes approval decisions from `ToolReturnPart` output.
+- **`tool_progress_callback` ownership documented**: Three-party contract (StreamRenderer installs/clears, tool invokes, `run_turn()` safety-net nulls) recorded as a comment on the `CoRuntimeState` field.
+
+### Fixed
+- **Stale test comments**: 6 comment occurrences of `_run_stream_segment()` in `test_orchestrate.py` updated to `_execute_stream_segment()`.
+
 ## [0.5.4] - 2026-03-28
 
 ### Changed

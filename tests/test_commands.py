@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
-from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry
@@ -93,7 +92,7 @@ async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
                 deps=deps,
                 model=resolved.model,
                 model_settings=resolved.settings,
-                usage_limits=UsageLimits(request_limit=settings.max_request_limit),
+
             )
         if isinstance(result.output, DeferredToolRequests):
             assert len(result.output.approvals) > 0
@@ -238,7 +237,6 @@ async def test_approval_approve():
     Requires running LLM + Docker.
     """
     agent, resolved_trigger, resolved_resume, deps = _make_agent_and_deps()
-    turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
         result = await _trigger_shell_call(agent, deps, resolved_trigger)
 
@@ -254,7 +252,6 @@ async def test_approval_approve():
                 deferred_tool_results=approvals,
                 model=resolved_resume.model,
                 model_settings=resolved_resume.settings,
-                usage_limits=turn_limits,
                 usage=result.usage(),
             )
 
@@ -273,7 +270,6 @@ async def test_approval_approve():
                     deferred_tool_results=more_approvals,
                     model=resolved_resume.model,
                     model_settings=resolved_resume.settings,
-                    usage_limits=turn_limits,
                     usage=resumed.usage(),
                 )
 
@@ -290,7 +286,6 @@ async def test_approval_deny():
     Requires running LLM + Docker.
     """
     agent, resolved_trigger, resolved_resume, deps = _make_agent_and_deps()
-    turn_limits = UsageLimits(request_limit=settings.max_request_limit)
     try:
         result = await _trigger_shell_call(agent, deps, resolved_trigger)
 
@@ -306,7 +301,6 @@ async def test_approval_deny():
                 deferred_tool_results=approvals,
                 model=resolved_resume.model,
                 model_settings=resolved_resume.settings,
-                usage_limits=turn_limits,
                 usage=result.usage(),
             )
 
@@ -325,7 +319,6 @@ async def test_approval_deny():
                     deferred_tool_results=deny_approvals,
                     model=resolved_resume.model,
                     model_settings=resolved_resume.settings,
-                    usage_limits=turn_limits,
                     usage=resumed.usage(),
                 )
 

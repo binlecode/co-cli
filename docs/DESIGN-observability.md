@@ -174,7 +174,7 @@ The HTML file is written to `~/.local/share/co-cli/traces.html` and auto-opened 
 |-----------|-----------------|
 | agent | `gen_ai.request.model` → `model=…`, `gen_ai.usage.input_tokens` + `output_tokens` → `tokens=in→out` |
 | model | `gen_ai.usage.input_tokens` → `in=…`, `gen_ai.usage.output_tokens` → `out=…` |
-| tool | `gen_ai.tool.name` → `tool=…`, `tool_arguments` → `args=…` (truncated to 80 chars) |
+| tool | `gen_ai.tool.name` → `tool=…`, `gen_ai.tool.call.arguments` → `args=…` (truncated to 80 chars) |
 
 **Verbose mode (`-v`):** after each model span, indented lines show the LLM's output content. Parsed from `gen_ai.output.messages` JSON (list of messages, each with `parts` of type `text` or `thinking`). Thinking blocks are prefixed with `[thinking]` in dim italic.
 

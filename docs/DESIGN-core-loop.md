@@ -4,10 +4,10 @@
 
 ## 1. One-Turn Runtime Path
 
-This doc describes the runtime path from one REPL input to one completed turn. The core loop lives in `co_cli/main.py` and `co_cli/context/_orchestrate.py`. `main.py` owns REPL state, slash-command dispatch, skill env injection, background-compaction task harvest/spawn, session persistence, and post-turn signal detection. `run_turn()` is the single turn entrypoint — it owns the `co.turn` span, streaming, approval chaining, and retry handling. `_orchestrate.py` owns streamed agent execution, deferred approval collection, approval resume, retry handling, and interrupt recovery. The agent itself is built in `co_cli/agent.py` with dynamic instructions, history processors, native tools, and optional MCP toolsets.
+This doc describes the runtime path from one REPL input to one completed turn. The core loop lives in `co_cli/main.py` and `co_cli/context/_orchestrate.py`. `main.py` owns the REPL, slash-command dispatch, skill env injection and rollback, best-effort background-compaction harvest/spawn, session persistence, and post-turn signal detection. `run_turn()` is the single turn entrypoint. It resets turn-scoped runtime state, opens the `co.turn` span, streams one or more model segments, handles deferred approvals inside the same turn, applies provider retry policy, and returns a `TurnResult`. `_orchestrate.py` does not mutate REPL-owned history directly; it works through `_TurnState` and returns the next history snapshot to `main.py`. The agent itself is built in `co_cli/agent.py` with static prompt instructions, dynamic per-turn instruction layers, history processors, native tools, and optional MCP toolsets.
 
 ```mermaid
-graph LR
+graph TD
     subgraph REPL ["REPL (main.py)"]
         Input[User input]
         Prompt[PromptSession + TerminalFrontend]
@@ -15,22 +15,25 @@ graph LR
         Dispatch[dispatch_command]
         Consume[_consume_bg_compaction]
         History[message_history]
-        Finalize[turn finalization]
-        Runtime["deps.runtime<br/>precomputed_compaction<br/>opening_ctx_state<br/>safety_state<br/>tool_progress_callback"]
-        SlashDone["built-in slash command<br/>optional history replace<br/>optional compaction counter save<br/>return to REPL"]
-        Skill["skill dispatch<br/>agent_body + skill env injection"]
+        Finalize[_finalize_turn]
+        Restore[_cleanup_skill_run_state]
+        Runtime["deps.runtime<br/>precomputed_compaction<br/>opening_ctx_state<br/>safety_state<br/>tool_progress_callback<br/>turn_usage"]
+        SlashDone["built-in slash commands"]
+        Skill["skill dispatch<br/>agent_body + env injection"]
     end
 
     subgraph Orchestrate ["Orchestration (_orchestrate.py)"]
         RunTurn[run_turn]
-        ExecSegment[_execute_stream_segment<br/>streams segment, updates _TurnState]
-        Approvals[_collect_deferred_tool_approvals]
+        Segment[stream segment]
+        Approvals[approval loop]
+        Retry[provider retry loop]
+        Return[TurnResult]
     end
 
     subgraph Agent ["Agent (agent.py)"]
         RunStream[agent.run_stream_events]
         Hist["history processors<br/>truncate_tool_returns<br/>detect_safety_issues<br/>inject_opening_context<br/>truncate_history_window"]
-        Instr["dynamic instructions"]
+        Instr["instructions<br/>system_prompt + current date + shell guidance + project instructions + standing memories + personality memories"]
         MCPSet[MCP toolsets]
         FinalEvent[AgentRunResultEvent]
     end
@@ -60,8 +63,9 @@ graph LR
     Runtime --> Consume
     Consume -->|harvest if done else cancel| BgTask
     Consume --> RunTurn
-    RunTurn -->|initial or resume| ExecSegment
-    ExecSegment --> RunStream
+    RunTurn --> Retry
+    Retry --> Segment
+    Segment --> RunStream
     Hist --> RunStream
     Instr --> RunStream
     MCPSet --> RunStream
@@ -70,23 +74,30 @@ graph LR
     RunStream --> NativeAsk
     RunStream --> Shell
     RunStream --> MCP
-    RunTurn -->|DeferredToolRequests detected| Approvals
-    Approvals -->|tool_approval_decisions| ExecSegment
     RunStream --> FinalEvent
-    FinalEvent -->|stored in _TurnState| ExecSegment
-    ExecSegment -->|_TurnState updated| RunTurn
-    RunTurn -->|TurnResult| Finalize
-    Finalize --> History
+    Segment -->|latest_result/latest_usage| Approvals
+    Approvals -->|DeferredToolRequests| Segment
+    Approvals -->|final segment complete| Return
+    Return --> Restore
+    Restore --> Finalize
+    Finalize -->|messages| History
     Finalize -->|spawn asyncio task| BgTask
     BgTask --> Precompute
-    Consume -->|store harvested result| Runtime
+    Precompute --> Runtime
 ```
 
 ## 2. Core Logic
 
 ### 2.1 Main Turn Path
 
-The REPL loop in `main.py` reads input, routes slash commands locally, converts skill commands into synthetic user text, opportunistically harvests any completed background compaction result, then calls `run_turn()`. After the turn returns, it restores any temporary skill env vars, optionally runs signal detection, clears `deps.runtime.precomputed_compaction`, saves session state, spawns the next background compaction task, and branches on `turn_result.outcome`.
+- Read REPL input.
+- Route built-in slash commands locally.
+- Expand skill commands into synthetic user text.
+- Harvest completed background compaction if available; otherwise cancel the unfinished task.
+- Call `run_turn()`.
+- Always run `_cleanup_skill_run_state()` in `finally`.
+- Run `_finalize_turn()` to update history, conditionally run signal detection, clear precomputed compaction, persist session state, spawn the next background compaction task, and show the generic error banner for `TurnResult(outcome="error")`.
+- Assign the returned tuple back into `_chat_loop()` local variables only after `_finalize_turn()` completes.
 
 ```mermaid
 flowchart TD
@@ -111,19 +122,12 @@ flowchart TD
     F --> G
 
     G --> H[run_turn]
-    H --> I[message_history = turn_result.messages]
-    I --> J[restore env and clear active skill state]
-    J --> K{interrupted or outcome=error?}
-    K -->|no| L[analyze_for_signals and handle_signal]
-    K -->|yes| M[skip signal detection]
-    L --> N[clear precomputed_compaction]
-    M --> N
-    N --> O[touch_session and save_session]
-    O --> P[spawn precompute_compaction task]
-    P --> Q{turn_result.outcome}
-    Q -->|continue| A
-    Q -->|error| R[print generic error banner]
-    R --> A
+    H --> I[finally: _cleanup_skill_run_state]
+    I --> J[_finalize_turn<br/>conditional signal detection + persistence]
+    J --> K[assign message_history, session_data, next_turn_compaction_task]
+    K --> L{turn_result.outcome}
+    L -->|continue| A
+    L -->|error| A
 ```
 
 Notes:
@@ -134,50 +138,65 @@ Notes:
 
 ### 2.2 `run_turn()` State Machine
 
-`run_turn()` in `_orchestrate.py` is the single public turn entrypoint. It shows `"Co is thinking..."` status, opens the `co.turn` OTel span, resets turn-scoped safety state, resets `deps.runtime.turn_usage` to `None` (the authoritative per-turn usage accumulator), reads `max_request_limit` and `model_http_retries` from `deps.config`, initializes retry state, runs the first streamed segment, calls `_merge_turn_usage()` to accumulate segment usage into `deps.runtime.turn_usage`, loops through approval resumption while `result.output` is `DeferredToolRequests` (merging usage after each resume segment), and then returns a `TurnResult`. Provider errors, budget exhaustion, and interrupts are handled around the whole sequence.
+`run_turn()` in `_orchestrate.py` is the only public turn entrypoint.
+
+Key points:
+- It resets turn-scoped runtime state: `deps.runtime.safety_state` and `deps.runtime.turn_usage`.
+- It shows `frontend.on_status("Co is thinking...")` before opening the `co.turn` span.
+- It creates one `_TurnState` (with `retry_budget_remaining` from `deps.config.model_http_retries`) and one outer retry loop.
+- Each segment runs through `_execute_stream_segment()`, then `_merge_turn_usage()` folds that segment into the per-turn accumulator.
+- If the segment returns `DeferredToolRequests`, the same turn stays open: collect approvals, prepare resume state, and run another segment.
+- On success, `_adopt_segment_result()` promotes `latest_result.all_messages()` into `current_history`, optional final text is rendered, finish-reason and context-ratio warnings run, and the function returns `TurnResult(outcome="continue")`.
+- Unrecoverable provider errors and interrupts return early through dedicated branches.
 
 ```mermaid
 flowchart TD
-    A[reset SafetyState, deps.runtime.turn_usage, and init retry state] --> B[_execute_stream_segment with current_input and current_history]
-    B --> C[turn_state.latest_usage updated; _merge_turn_usage into deps.runtime.turn_usage]
-    C --> D{latest_result.output is DeferredToolRequests?}
+    A["reset SafetyState and turn_usage; init _TurnState with retry_budget_remaining"] --> B{"outer retry loop"}
+    B --> C["_execute_stream_segment()"]
+    C --> D["_merge_turn_usage(latest_usage)"]
+    D --> E{"latest_result.output is DeferredToolRequests"}
 
-    D -->|yes| E[_collect_deferred_tool_approvals]
-    E --> F[_prepare_approval_resume: current_input=None, promote history, store approvals]
-    F --> I[_execute_stream_segment with current_input=None, current_history, tool_approval_decisions]
-    I --> J[turn_state.latest_usage updated; _merge_turn_usage into deps.runtime.turn_usage]
-    J --> D
+    E -->|yes| F["_collect_deferred_tool_approvals()"]
+    F --> G["_prepare_approval_resume()"]
+    G --> H["_execute_stream_segment() resume"]
+    H --> I["_merge_turn_usage(latest_usage)"]
+    I --> E
 
-    D -->|no| K[message_history = result.all_messages]
-    K --> L{non-streamed string output?}
-    L -->|yes| M[frontend.on_final_output]
-    L -->|no| N[skip]
-    M --> O[finish_reason and context-ratio checks]
-    N --> O
-    O --> P[return TurnResult outcome=continue]
+    E -->|no| J["_adopt_segment_result()"]
+    J --> K{"latest_streamed_text is false and output is str"}
+    K -->|yes| L["frontend.on_final_output(output)"]
+    K -->|no| N
+    L --> N["finish_reason check"]
+    N --> O{"turn_usage exists and supports_context_ratio_tracking()"}
+    O -->|yes| P["warn on ctx_warn_threshold or ctx_overflow_threshold"]
+    O -->|no| R
+    P --> R["return TurnResult(messages=current_history, output=latest_result.output, usage=latest_usage, outcome=continue)"]
 
-    B -. UsageLimitExceeded .-> V[print limit-hit status message and return outcome=continue]
-    I -. UsageLimitExceeded .-> V
+    C -. "HTTP 400 with retries left" .-> T["decrement retry budget; status; sleep 0.5s; append reflection ModelRequest to current_history; set current_input to None; continue outer loop"]
+    H -. "HTTP 400 with retries left" .-> T
+    T --> B
 
-    B -. HTTP 400 .-> W[append reflection request to current_history; current_input=None; retry]
-    I -. HTTP 400 .-> W
-    W --> B
+    C -. "HTTP 429 or 5xx with retries left" .-> U["decrement retry budget; status; sleep with Retry-After backoff; increase backoff_base; continue outer loop"]
+    H -. "HTTP 429 or 5xx with retries left" .-> U
+    U --> B
 
-    B -. 429 5xx or ModelAPIError with retries left .-> X[sleep with backoff and retry]
-    I -. 429 5xx or ModelAPIError with retries left .-> X
-    X --> B
+    C -. "ModelAPIError with retries left" .-> V["decrement retry budget; status; sleep backoff; increase backoff_base; continue outer loop"]
+    H -. "ModelAPIError with retries left" .-> V
+    V --> B
 
-    B -. unrecoverable provider error .-> Y[turn_state.outcome=error; return TurnResult outcome=error]
-    I -. unrecoverable provider error .-> Y
+    C -. "unrecoverable ModelHTTPError or retries exhausted" .-> W["frontend.on_status(error); set turn_state.outcome=error; return _build_error_turn_result()"]
+    H -. "unrecoverable ModelHTTPError or retries exhausted" .-> W
 
-    B -. interrupt or cancel .-> AA[turn_state.interrupted=True; truncate last ModelResponse if it has ToolCallParts, append abort marker, return interrupted continue]
-    I -. interrupt or cancel .-> AA
+    C -. "KeyboardInterrupt or CancelledError" .-> X["set turn_state.interrupted=true; return _build_interrupted_turn_result()"]
+    H -. "KeyboardInterrupt or CancelledError" .-> X
 ```
 
-Implementation rules:
-- One `UsageLimits` object spans the entire turn, including approval resumes.
-- `current_history`, not `message_history`, is the retry input after a reflected HTTP 400.
-- Approval resume is part of the same turn. No approval answer is turned into a new chat message.
+Rules that matter:
+- One `_TurnState.retry_budget_remaining` counter spans the full turn, including approval resumes and provider retries.
+- HTTP 400 reflection retries append a `ModelRequest` to `current_history` and set `current_input = None`.
+- Approval resume also uses `current_history`, after promoting `latest_result.all_messages()`.
+- Success returns `messages=current_history`, `output=latest_result.output`, and `usage=latest_usage`.
+- Approval answers never become separate chat messages.
 
 ### 2.3 `_execute_stream_segment()` Responsibilities
 
@@ -203,22 +222,32 @@ What `_execute_stream_segment()` does not do:
 
 ### 2.4 Approval Flow
 
-Deferred approvals are collected only in `_collect_deferred_tool_approvals()`. This function iterates over `result.output.approvals`, decodes args, resolves an `ApprovalSubject`, checks session-scoped auto-approval, otherwise prompts the user, and records `DeferredToolResults`.
+Pydantic-ai uses two types for deferred approval:
+- `DeferredToolRequests` — the pending approval-gated tool calls from the model
+- `DeferredToolResults` — the approval decisions Co records (allow=`True`, deny=`ToolDenied`)
+
+`DeferredToolResults` is **not** tool output. It is a decision payload consumed by the next `_execute_stream_segment()` call as `deferred_tool_results=`. Actual tool execution and the resulting `ToolReturnPart` output happen after the resumed segment runs.
+
+Deferred approvals are collected only in `_collect_deferred_tool_approvals()`. This function iterates over `result.output.approvals`, decodes args, resolves an `ApprovalSubject`, checks session-scoped auto-approval, otherwise prompts the user, and records one entry per tool call in a `DeferredToolResults` object. `_prepare_approval_resume()` then clears `current_input`, promotes `latest_result.all_messages()` into `current_history`, stores that `DeferredToolResults` object on `_TurnState`, and the next `_execute_stream_segment()` consumes it as `deferred_tool_results=...`.
 
 ```mermaid
 flowchart TD
-    A[deferred tool call] --> B[decode args]
-    B --> C[resolve ApprovalSubject]
-    C --> D{is_auto_approved?}
-    D -->|yes| E[record approved=True]
-    D -->|no| F[prompt user y n a]
-    F -->|y| E
-    F -->|n| G[record ToolDenied]
-    F -->|a and can_remember| H[store SessionApprovalRule and record approved=True]
-    F -->|a and not rememberable| E
-    E --> I[next deferred call or resume stream]
-    G --> I
-    H --> I
+    A[result.output.approvals] --> B[for each deferred call]
+    B --> C[decode args]
+    C --> D[resolve ApprovalSubject]
+    D --> E{is_auto_approved?}
+    E -->|yes| F[approvals.approvals[tool_call_id] = True]
+    E -->|no| G[prompt user y n a]
+    G -->|y| F
+    G -->|n| H[approvals.approvals[tool_call_id] = ToolDenied]
+    G -->|a and can_remember| I[record approved=True and store SessionApprovalRule]
+    G -->|a and not rememberable| F
+    F --> J{more deferred calls?}
+    H --> J
+    I --> J
+    J -->|yes| B
+    J -->|no| K[_prepare_approval_resume stores DeferredToolResults on _TurnState]
+    K --> L[next _execute_stream_segment consumes deferred_tool_results]
 ```
 
 Current approval subject scopes:
@@ -308,7 +337,7 @@ Interrupt recovery invariant:
 
 After `run_turn()` returns, `_chat_loop()` delegates post-turn finalization to two helpers:
 
-- `_restore_skill_env(saved_env, deps)` — called in `finally` to restore saved env vars and clear `active_skill_env` / `active_skill_name`
+- `_cleanup_skill_run_state(saved_env, deps)` — called in `finally` to restore saved env vars and clear `active_skill_env` / `active_skill_name`
 - `_finalize_turn(turn_result, ...)` — called after env restore; performs the remaining steps:
 
 1. replace `message_history` with `turn_result.messages`
@@ -352,14 +381,14 @@ After `run_turn()` returns, `_chat_loop()` delegates post-turn finalization to t
 
 | Area | Why it is heavier than the common pattern | Risk |
 |---|---|---|
-| `main.py` split ownership across REPL input, slash dispatch, skill env injection, background-compaction harvest/spawn, session persistence, and post-turn signal detection | Post-turn hooks extracted into `_finalize_turn()` and `_restore_skill_env()` helpers, reducing inline scope in `_chat_loop()`. Remaining split is still above the minimum needed for a single-turn loop. | Higher cognitive load when tracing one turn end-to-end |
+| `main.py` split ownership across REPL input, slash dispatch, skill env injection, background-compaction harvest/spawn, session persistence, and post-turn signal detection | Post-turn hooks extracted into `_finalize_turn()` and `_cleanup_skill_run_state()` helpers, reducing inline scope in `_chat_loop()`. Remaining split is still above the minimum needed for a single-turn loop. | Higher cognitive load when tracing one turn end-to-end |
 | Turn state spread across `message_history`, `current_history`, `deps.runtime.precomputed_compaction`, background task state, and `_TurnState.latest_*` fields | The behavior is correct, but the number of moving pieces is above the minimum needed for a single-turn loop | Harder to reason about retries, resume points, and stale cached state |
 | Approval subject taxonomy (`shell`, `path`, `domain`, `mcp_tool`, `tool`) plus exact-match remembered rules | More nuanced than the simpler allow-once / allow-session patterns seen in Aider and many CLI peers | Trust UX can become harder to explain than the underlying safety gain justifies |
 | Post-turn hook chain in `_chat_loop()` | Signal detection, compaction cache clearing, session save, and next-turn precompute all happen after the core turn returns | The true loop boundary is less obvious in code and docs |
 | `_execute_stream_segment()` stream-state adaptation and frontend rendering policy | Buffer throttling and flush policy extracted to `StreamRenderer` (`co_cli/display/_stream_renderer.py`). Tool display metadata extracted to `_display_hints.py`. `_execute_stream_segment()` now delegates both concerns, keeping only event routing. | Addressed — display changes and orchestration changes are now decoupled |
 
 - Main loop-specific over-design signals today:
-- `main.py` still carries some lifecycle work above the minimum; `_finalize_turn()` and `_restore_skill_env()` extracted the post-turn hook chain, but REPL input, slash dispatch, skill env injection, and compaction scheduling remain inline in `_chat_loop()`.
+- `main.py` still carries some lifecycle work above the minimum; `_finalize_turn()` and `_cleanup_skill_run_state()` extracted the post-turn hook chain, but REPL input, slash dispatch, skill env injection, and compaction scheduling remain inline in `_chat_loop()`.
 - The loop carries multiple state carriers for history and compaction, which increases semantic overhead even though each piece is individually reasonable.
 - Approval remembering has grown more granular than the common peer baseline; the next improvement should be legibility, not more approval states.
 
@@ -378,7 +407,7 @@ After `run_turn()` returns, `_chat_loop()` delegates post-turn finalization to t
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `max_request_limit` | `CO_CLI_MAX_REQUEST_LIMIT` | `50` | Max provider requests allowed inside one user turn |
+
 | `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Retry budget for provider and network errors |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak before doom-loop intervention |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak before reflection-cap intervention |
@@ -399,5 +428,7 @@ After `run_turn()` returns, `_chat_loop()` delegates post-turn finalization to t
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |
 | `co_cli/tools/_tool_approvals.py` | Approval subject resolution, session rule matching, and approval recording |
+| `co_cli/display/_stream_renderer.py` | `StreamRenderer`: text/thinking buffering, flush/throttle policy, progress callback wiring |
+| `co_cli/tools/_display_hints.py` | Tool display metadata: args display key per tool, tool result format helper |
 | `co_cli/commands/_commands.py` | Built-in slash commands, skill dispatch, and `/approvals` management |
 | `co_cli/context/_session.py` | Session persistence helpers |

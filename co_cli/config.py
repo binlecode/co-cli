@@ -171,7 +171,6 @@ DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "finch"
 DEFAULT_TOOL_RETRIES = 3
 DEFAULT_MODEL_HTTP_RETRIES = 2
-DEFAULT_MAX_REQUEST_LIMIT = 50
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
 DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
@@ -223,7 +222,6 @@ class Settings(BaseModel):
     personality: str = Field(default=DEFAULT_PERSONALITY)
     tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
     model_http_retries: int = Field(default=DEFAULT_MODEL_HTTP_RETRIES)
-    max_request_limit: int = Field(default=DEFAULT_MAX_REQUEST_LIMIT)
 
     # Safety
     doom_loop_threshold: int = Field(default=DEFAULT_DOOM_LOOP_THRESHOLD, ge=2, le=10)
@@ -399,7 +397,7 @@ class Settings(BaseModel):
             "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
-            "max_request_limit": "CO_CLI_MAX_REQUEST_LIMIT",
+
             "doom_loop_threshold": "CO_CLI_DOOM_LOOP_THRESHOLD",
             "max_reflections": "CO_CLI_MAX_REFLECTIONS",
             "shell_max_timeout": "CO_CLI_SHELL_MAX_TIMEOUT",

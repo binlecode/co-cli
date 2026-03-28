@@ -6,7 +6,7 @@ import pytest
 from pydantic_ai._run_context import RunContext
 from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent, ToolCallPart, ToolReturnPart
-from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
@@ -114,7 +114,7 @@ async def test_stream_events_real_check_capabilities_result_dispatches_correctly
     deps2 = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="check", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps2, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps2, {}, False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1

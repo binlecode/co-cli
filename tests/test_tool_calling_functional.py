@@ -15,7 +15,7 @@ from dataclasses import replace
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.usage import UsageLimits
+
 
 from co_cli.agent import build_agent
 from co_cli.prompts._assembly import _build_system_prompt
@@ -116,7 +116,7 @@ async def test_tool_selection_and_arg_extraction(
                     deps=deps,
                     model=resolved.model,
                     model_settings=resolved.settings,
-                    usage_limits=UsageLimits(request_limit=3),
+
                 )
             # Extract first tool call from message history (works for both
             # deferred/unapproved tools and normal tool executions).

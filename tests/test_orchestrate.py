@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UsageLimitExceeded
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -40,7 +40,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import UsageLimits
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +103,7 @@ class RecordingFrontend:
 
 # StaticEventAgent, SequenceEventAgent, and InspectingSequenceAgent are deliberate
 # minimal dispatch fixtures. They are not mocks (no unittest.mock, no monkeypatch).
-# They exist because _run_stream_segment() dispatch logic cannot be exercised with a
+# They exist because _execute_stream_segment() dispatch logic cannot be exercised with a
 # real agent without nondeterminism — a real model may emit events in any order and
 # content varies. These fixtures provide the exact event sequences needed to test
 # specific branches and segment boundaries within a turn.
@@ -125,7 +124,7 @@ class StaticEventAgent:
 class SequenceEventAgent:
     """Async event source that advances through a list of event batches, one per call.
 
-    Use for multi-segment turn tests where each _run_stream_segment() call should see
+    Use for multi-segment turn tests where each _execute_stream_segment() call should see
     a different sequence (e.g. initial segment → approval-resume segment).
     """
 
@@ -185,7 +184,7 @@ async def test_stream_events_preserves_text_from_part_start_event():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="hello", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
     streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is True
@@ -205,7 +204,7 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="why", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), True, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, True, frontend)
     streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is False
@@ -226,7 +225,7 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="why", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
     streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is True
@@ -309,7 +308,7 @@ async def test_run_turn_silent_on_normal_finish_reason():
 async def test_run_turn_calls_on_final_output_when_no_text_was_streamed() -> None:
     """Model response without streaming events reaches on_final_output.
 
-    When _run_stream_segment() returns streamed_text=False (no PartStart/PartDelta for text),
+    When _execute_stream_segment() returns streamed_text=False (no PartStart/PartDelta for text),
     run_turn() must route result.output to frontend.on_final_output(). If this branch
     silently breaks, the user sees a blank response with no error.
     """
@@ -384,7 +383,7 @@ async def test_stream_events_tool_start_fires_immediately_on_first_tool_call():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="hello", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     non_cleanup = [e for e in frontend.events if e[0] != "cleanup"]
     assert len(non_cleanup) >= 1
@@ -413,7 +412,7 @@ async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independen
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="hello", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     tool_start_events = [e for e in frontend.events if e[0] == "tool_start"]
     assert len(tool_start_events) == 2, (
@@ -452,7 +451,7 @@ async def test_stream_events_shell_result_reaches_tool_complete_as_str():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="list files", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
     assert len(start_events) == 1
@@ -488,7 +487,7 @@ async def test_stream_events_empty_tool_result_reaches_tool_complete_as_none():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="hi", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -519,7 +518,7 @@ async def test_stream_events_retry_prompt_closes_tool_surface_with_none():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="search", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
@@ -550,7 +549,7 @@ async def test_stream_events_retry_prompt_clears_progress_callback():
     frontend = RecordingFrontend()
 
     _ts = _TurnState(current_input="search", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     assert deps.runtime.tool_progress_callback is None, (
         "tool_progress_callback must be cleared after RetryPromptPart"
@@ -580,7 +579,7 @@ async def test_stream_events_raw_dict_result_renders_as_summary():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="hi", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -597,13 +596,13 @@ async def test_stream_events_raw_dict_result_renders_as_summary():
 async def test_stream_events_tool_progress_callback_curried_with_tool_id():
     """tool_progress_callback is curried with the tool_id from FunctionToolCallEvent.
 
-    When _run_stream_segment() receives FunctionToolCallEvent it sets
+    When _execute_stream_segment() receives FunctionToolCallEvent it sets
     deps.runtime.tool_progress_callback to a closure that calls
     frontend.on_tool_progress(tool_id, msg). Calling that callback must
     produce an on_tool_progress event with the correct tool_id — not a
     generic status line and not a new tool_start event.
 
-    We drive the callback manually at the point where _run_stream_segment()
+    We drive the callback manually at the point where _execute_stream_segment()
     processes FunctionToolCallEvent by subclassing RecordingFrontend to
     invoke the callback after on_tool_start is fired by the event loop.
     """
@@ -614,7 +613,7 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
 
         def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
             super().on_tool_start(tool_id, name, args_display)
-            # At this point _run_stream_segment() sets the callback immediately after
+            # At this point _execute_stream_segment() sets the callback immediately after
             # returning from on_tool_start, so we simulate progress that happens
             # between start and result by calling frontend.on_tool_progress directly.
             # This validates the RecordingFrontend contract: progress events carry
@@ -636,7 +635,7 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
     ])
 
     _ts = _TurnState(current_input="check", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     progress_events = [(kind, payload) for kind, payload in frontend.events if kind == "tool_progress"]
     assert len(progress_events) == 2, (
@@ -678,7 +677,7 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
     _ts = _TurnState(current_input="recall", current_history=[])
-    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -956,7 +955,7 @@ async def test_run_turn_reflection_after_resume_uses_resume_history() -> None:
 async def test_tool_args_display_known_tools() -> None:
     """_tool_args_display returns the primary arg value for registered tools and '' for unknown.
 
-    Drives three cases through _run_stream_segment and checks on_tool_start args_display:
+    Drives three cases through _execute_stream_segment and checks on_tool_start args_display:
     - web_search with query arg
     - run_shell_command with cmd arg
     - unknown tool name falls back to empty string
@@ -975,7 +974,7 @@ async def test_tool_args_display_known_tools() -> None:
             AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
         ])
         _ts = _TurnState(current_input="x", current_history=[])
-        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+        await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
         start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
         assert len(start_events) == 1
         _tool_id, _name, args_display = start_events[0]
@@ -1035,40 +1034,8 @@ async def test_run_turn_emits_co_turn_span() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bug-finding: UsageLimitExceeded and interrupt stop paths
+# Interrupt stop path
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_run_turn_usage_limit_exceeded_emits_status_and_returns_continue() -> None:
-    """UsageLimitExceeded emits a status message and returns outcome=continue immediately.
-
-    No grace summary segment is fired — one model call total. If the grace turn is
-    re-introduced, this test will see a second model call or a missing status event.
-    """
-    agent = InspectingSequenceAgent([UsageLimitExceeded("request_limit=1 exceeded")])
-    frontend = RecordingFrontend()
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-
-    turn = await run_turn(
-        agent=agent,
-        user_input="do something",
-        deps=deps,
-        message_history=[],
-        model_settings={},
-        frontend=frontend,
-    )
-
-    assert turn.outcome == "continue"
-    assert turn.interrupted is False
-    status_messages = [msg for kind, msg in frontend.events if kind == "status"]
-    assert any("Turn limit reached" in msg for msg in status_messages), (
-        f"Expected 'Turn limit reached' status, got: {status_messages}"
-    )
-    # Exactly one model call — no grace segment
-    assert len(agent.calls) == 1, (
-        f"Expected 1 model call (no grace segment), got {len(agent.calls)}"
-    )
 
 
 @pytest.mark.asyncio
@@ -1127,7 +1094,7 @@ async def test_execute_stream_segment_cleanup_on_provider_http_error() -> None:
 
     _ts = _TurnState(current_input="x", current_history=[])
     with pytest.raises(ModelHTTPError):
-        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+        await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     assert ("cleanup", None) in frontend.events, "cleanup must be called on ModelHTTPError exit"
 
@@ -1141,7 +1108,7 @@ async def test_execute_stream_segment_cleanup_on_api_error() -> None:
 
     _ts = _TurnState(current_input="x", current_history=[])
     with pytest.raises(ModelAPIError):
-        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+        await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     assert ("cleanup", None) in frontend.events, "cleanup must be called on ModelAPIError exit"
 
@@ -1155,7 +1122,7 @@ async def test_execute_stream_segment_cleanup_on_interrupt() -> None:
 
     _ts = _TurnState(current_input="x", current_history=[])
     with pytest.raises(asyncio.CancelledError):
-        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+        await _execute_stream_segment(_ts, agent, deps, {}, False, frontend)
 
     assert ("cleanup", None) in frontend.events, "cleanup must be called on CancelledError exit"
 

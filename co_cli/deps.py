@@ -43,7 +43,6 @@ from co_cli.config import (
     DEFAULT_CTX_WARN_THRESHOLD,
     DEFAULT_CTX_OVERFLOW_THRESHOLD,
     DEFAULT_MODEL_HTTP_RETRIES,
-    DEFAULT_MAX_REQUEST_LIMIT,
     DEFAULT_TOOL_RETRIES,
     DEFAULT_SESSION_TTL_MINUTES,
     DEFAULT_BACKGROUND_MAX_CONCURRENT,
@@ -171,7 +170,6 @@ class CoConfig:
     ctx_warn_threshold: float = DEFAULT_CTX_WARN_THRESHOLD
     ctx_overflow_threshold: float = DEFAULT_CTX_OVERFLOW_THRESHOLD
     model_http_retries: int = DEFAULT_MODEL_HTTP_RETRIES
-    max_request_limit: int = DEFAULT_MAX_REQUEST_LIMIT
     tool_retries: int = DEFAULT_TOOL_RETRIES
 
     def uses_ollama_openai(self) -> bool:
@@ -259,7 +257,6 @@ class CoConfig:
             ctx_warn_threshold=s.ctx_warn_threshold,
             ctx_overflow_threshold=s.ctx_overflow_threshold,
             model_http_retries=s.model_http_retries,
-            max_request_limit=s.max_request_limit,
             tool_retries=s.tool_retries,
             session_ttl_minutes=s.session_ttl_minutes,
             background_max_concurrent=s.background_max_concurrent,
@@ -308,6 +305,10 @@ class CoRuntimeState:
     # Sub-agent tools may also merge usage into it during the same turn.
     turn_usage: RunUsage | None = None
     startup_statuses: list[str] = field(default_factory=list)
+    # Installed by StreamRenderer.install_progress() on FunctionToolCallEvent,
+    # cleared by StreamRenderer.clear_progress() on FunctionToolResultEvent.
+    # run_turn() sets this to None in its finally block as a safety net.
+    # Only one tool owns progress at a time (single-owner model).
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
     # TODO: resolve by extracting a _types.py module to break the circular import properly.

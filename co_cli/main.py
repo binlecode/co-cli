@@ -68,8 +68,8 @@ def _default(ctx: typer.Context):
         chat()
 
 
-def _restore_skill_env(saved_env: dict[str, str | None], deps: CoDeps) -> None:
-    """Restore process env vars saved before skill dispatch and clear skill session state."""
+def _cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:
+    """Restore saved skill-run env vars and clear active skill session state."""
     for k, v in saved_env.items():
         if v is not None:
             os.environ[k] = v
@@ -101,7 +101,7 @@ async def _finalize_turn(
     """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
 
     Returns (next_message_history, next_session_data, next_bg_compaction_task).
-    Does NOT handle skill-env rollback — that is done by _restore_skill_env() in finally.
+    Does NOT handle skill-run cleanup — that is done by _cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
     from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
@@ -271,7 +271,7 @@ async def _chat_loop(verbose: bool = False):
                         frontend=frontend,
                     )
                 finally:
-                    _restore_skill_env(_saved_env, deps)
+                    _cleanup_skill_run_state(_saved_env, deps)
 
                 message_history, session_data, next_turn_compaction_task = await _finalize_turn(
                     turn_result, message_history, session_data, deps, frontend, primary_model

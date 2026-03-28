@@ -33,7 +33,7 @@ There is no separate primary/fallback settings tier.
 
 - Mandatory role: `reasoning` (a single `ModelEntry` required — raises `ValueError` at startup if absent).
 - Optional roles: `summarization`, `coding`, `research`, `analysis` (absent/missing disables that role).
-- Each entry is a `ModelEntry(model, api_params, provider?)` — plain model name strings are coerced to `ModelEntry` by `_parse_role_models`. When supplied as a list in JSON, only the first element is used (backwards-compat).
+- Each entry is a `ModelEntry(model, api_params, provider?)` — plain model name strings are coerced to `ModelEntry` by `_parse_role_models`. Dict entries are accepted directly; `ModelEntry` instances on re-validation are serialized via `model_dump()`.
 
 Example:
 
