@@ -66,9 +66,7 @@ graph LR
     RunStream --> NativeAsk
     RunStream --> Shell
     RunStream --> MCP
-    NativeAsk -->|DeferredToolRequests| Approvals
-    Shell -->|ApprovalRequired| Approvals
-    MCP -->|approval=ask| Approvals
+    RunTurn -->|DeferredToolRequests detected| Approvals
     Approvals -->|tool_approval_decisions| ExecSegment
     RunStream --> FinalEvent
     FinalEvent --> SegmentResult
