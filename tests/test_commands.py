@@ -21,7 +21,7 @@ from co_cli.commands._commands import (
     dispatch, CommandContext, SKILL_COMMANDS,
     SkillCommand, _cmd_help, _cmd_skills,
 )
-from co_cli.display import console
+from co_cli.display._core import console
 from tests._ollama import ensure_ollama_warm
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -198,6 +198,34 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
 
     await dispatch("/approvals clear", ctx)
     assert ctx.deps.session.session_approval_rules == []
+
+
+@pytest.mark.asyncio
+async def test_approvals_list_shows_human_readable_scope_labels() -> None:
+    """/approvals list displays human-readable scope labels, not raw kind/value strings."""
+    from co_cli.deps import SessionApprovalRule
+
+    ctx = _make_ctx()
+    rules = ctx.deps.session.session_approval_rules
+    rules.append(SessionApprovalRule(kind="shell", value="git"))
+    rules.append(SessionApprovalRule(kind="domain", value="docs.python.org"))
+    rules.append(SessionApprovalRule(kind="path", value="write_file:/tmp/proj/src"))
+    rules.append(SessionApprovalRule(kind="mcp_tool", value="github:create_issue"))
+
+    with console.capture() as cap:
+        await dispatch("/approvals list", ctx)
+    output = cap.get()
+
+    # Human-readable scope labels must appear
+    assert "shell utility" in output, f"Expected 'shell utility' label in output: {output}"
+    assert "web domain" in output, f"Expected 'web domain' label in output: {output}"
+    assert "file path" in output, f"Expected 'file path' label in output: {output}"
+    assert "MCP tool" in output, f"Expected 'MCP tool' label in output: {output}"
+
+    # Raw kind strings must not appear as column values
+    assert "kind" not in output.lower() or "Scope" in output, (
+        "Column header should say 'Scope', not raw 'kind'"
+    )
 
 
 # --- Approval flow (programmatic, no TTY) ---

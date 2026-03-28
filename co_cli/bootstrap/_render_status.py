@@ -11,7 +11,7 @@ from rich.table import Table
 from co_cli.bootstrap._check import check_settings, check_agent_llm
 from co_cli.config import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, ROLE_REASONING
 from co_cli.deps import CoConfig
-from co_cli.display import console
+from co_cli.display._core import console
 
 
 _PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
@@ -196,7 +196,7 @@ def render_security_findings(findings: list[SecurityFinding]) -> None:
     """Print security findings to the console. No output when findings list is empty."""
     if not findings:
         return
-    from co_cli.display import console
+    from co_cli.display._core import console
     for f in findings:
         console.print(f"[yellow]WARN[/yellow] [{f.check_id}] {f.detail}")
         console.print(f"  Remediation: {f.remediation}")

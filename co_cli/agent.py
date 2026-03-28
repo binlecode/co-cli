@@ -14,7 +14,7 @@ from co_cli.context._history import (
     detect_safety_issues,
     truncate_history_window,
 )
-from co_cli.prompts import assemble_prompt
+from co_cli.prompts._assembly import assemble_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
@@ -180,7 +180,7 @@ def build_agent(
         """Inject personality-context memories for relationship continuity."""
         if not ctx.deps.config.personality:
             return ""
-        from co_cli.tools.personality import _load_personality_memories
+        from co_cli.prompts.personalities._injector import _load_personality_memories
         return _load_personality_memories()
 
     tool_approvals: dict[str, bool] = {}

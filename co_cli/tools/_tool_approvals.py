@@ -51,6 +51,8 @@ def resolve_approval_subject(
       MCP tool (prefix match) → mcp_tool subject
       everything else → generic tool subject (can_remember=False)
     """
+    # Shell branch: scope to the utility (first token of cmd) so "always" approval
+    # covers all future invocations of the same utility, not just the exact command.
     if tool_name == "run_shell_command":
         cmd = args.get("cmd", "")
         tokens = cmd.split()
@@ -64,6 +66,9 @@ def resolve_approval_subject(
             can_remember=bool(utility),
         )
 
+    # File-path branch: scope to the parent directory so "always" approval covers
+    # all writes/edits within the same directory.  Keyed as {tool}:{parent_dir} to
+    # prevent write_file and edit_file rules from cross-approving each other.
     if tool_name in ("write_file", "edit_file"):
         path = args.get("path", "")
         parent = str(Path(path).parent) if path else ""
@@ -78,6 +83,8 @@ def resolve_approval_subject(
             can_remember=bool(parent),
         )
 
+    # Web-domain branch: scope to the hostname so "always" approval covers all
+    # fetches to the same domain regardless of path or query string.
     if tool_name == "web_fetch":
         url = args.get("url", "")
         domain = urlparse(url).hostname or ""
@@ -90,6 +97,8 @@ def resolve_approval_subject(
             can_remember=bool(domain),
         )
 
+    # MCP-tool branch: match by server-name prefix (longest prefix wins).  Value is
+    # "{server}:{tool}" so "always" approval is scoped to one tool on one server.
     for prefix in sorted(mcp_prefixes, key=len, reverse=True):
         if tool_name.startswith(f"{prefix}_"):
             mcp_tool_name = tool_name[len(prefix) + 1:]
@@ -104,6 +113,8 @@ def resolve_approval_subject(
                 can_remember=True,
             )
 
+    # Generic-tool fallback: no rememberable scope can be derived, so "always" is
+    # unavailable.  The user must approve each invocation individually.
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
     return ApprovalSubject(
         tool_name=tool_name,
@@ -126,7 +137,13 @@ def decode_tool_args(raw_args: str | dict[str, Any] | None) -> dict[str, Any]:
 
 
 def is_auto_approved(subject: ApprovalSubject, deps: CoDeps) -> bool:
-    """Return True when this subject matches a remembered session approval rule."""
+    """Return True when this subject matches a remembered session approval rule.
+
+    Approval matching is exact: kind + value must both match the stored rule.
+    There is no wildcard expansion at match time — wildcards are a display
+    hint only.  The stored value is always the resolved scope key produced
+    by resolve_approval_subject() (e.g. the utility name, parent dir, domain).
+    """
     if not subject.can_remember:
         return False
     rule = SessionApprovalRule(kind=subject.kind, value=subject.value)

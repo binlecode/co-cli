@@ -12,7 +12,7 @@ from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reran
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
-from co_cli.display import TerminalFrontend, console
+from co_cli.display._core import TerminalFrontend, console
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools._shell_backend import ShellBackend
 

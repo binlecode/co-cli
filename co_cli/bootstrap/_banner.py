@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.config import ROLE_REASONING
-from co_cli.display import console
+from co_cli.display._core import console
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

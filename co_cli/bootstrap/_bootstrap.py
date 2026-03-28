@@ -10,7 +10,7 @@ from co_cli.config import settings, ROLE_REASONING
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
-from co_cli.display import TerminalFrontend
+from co_cli.display._core import TerminalFrontend
 from co_cli.tools._shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)

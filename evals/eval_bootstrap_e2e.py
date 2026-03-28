@@ -40,7 +40,7 @@ from co_cli.bootstrap._check import check_agent_llm
 from co_cli.context._history import OpeningContextState, SafetyState
 from co_cli.context._session import new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
-from co_cli.display import console
+from co_cli.display._core import console
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools._shell_backend import ShellBackend
 

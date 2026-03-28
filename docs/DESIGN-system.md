@@ -1,462 +1,222 @@
-# Co CLI — System Design
+# Co CLI System Design
 
-> For doc navigation, config reference, and module index: [DESIGN-index.md](DESIGN-index.md).
+This doc describes the current runtime shape of `co-cli` as implemented today. It is intentionally narrower than the old version: startup lives in `DESIGN-bootstrap.md`, turn execution lives in `DESIGN-core-loop.md`, tool detail lives in `DESIGN-tools.md`, and skill loading/dispatch lives in `DESIGN-skills.md`.
 
 ## 1. What & How
 
-This doc is the structural design of co-cli as a system. It defines the stable top-level architecture: the main agent factory, dependency injection via `CoDeps`, the capability surface exposed to the model, the trust and approval boundary, and the system-wide contracts that connect loop orchestration to subsystem docs.
+`co-cli` is a local-first REPL around one main `pydantic_ai.Agent`. The running system is assembled in three stages:
 
-Scope boundary:
-- In scope: system topology, runtime dependency model, capability composition, tool and skill contracts, session-state tiers, security and config boundaries
-- Out of scope: startup sequencing in [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md), end-to-end turn execution in [DESIGN-core-loop.md](DESIGN-core-loop.md), and subsystem-owned lifecycle detail in the relevant subsystem docs
-
-## 2. Component In System Architecture
-
-### System Context
-
-```mermaid
-graph TB
-    subgraph User Interface
-        CLI[Typer CLI]
-        REPL[Prompt Toolkit REPL]
-    end
-
-    subgraph Core Brain
-        Agent[Pydantic AI Agent]
-        LLM{LLM Provider}
-        Ollama[Ollama Local]
-        Gemini[Gemini Cloud]
-    end
-
-    subgraph Tool Layer
-        ToolShell[Shell Tool]
-        ToolFiles[File Tools]
-        ToolMemory[Memory/Article Tools]
-        ToolTodo[Todo Tools]
-        ToolDelegate[Delegation Tool]
-        ToolCapabilities[Capabilities Tool]
-        ToolObsidian[Obsidian Tool]
-        ToolDrive[Drive Tool]
-        ToolGmail[Gmail Tool]
-        ToolCalendar[Calendar Tool]
-        ToolWeb[Web Tools]
-        ToolBackground[Background Task Tools]
-        MCP[MCP Toolsets]
-    end
-
-    subgraph External Services
-        ObsVault[Obsidian Vault]
-        GDrive[Google Drive API]
-        GmailAPI[Gmail API]
-        GCal[Calendar API]
-        BraveAPI[Brave Search API]
-        HTTP[HTTP / Web]
-        MCPServers[MCP Servers stdio/HTTP]
-        Workspace[Workspace Filesystem]
-        MemoryDir[.co-cli/memory]
-        LibraryDir[~/.local/share/co-cli/library]
-        TasksDir[.co-cli/tasks]
-    end
-
-    subgraph Infrastructure
-        Config[Config Manager]
-        Telemetry[OpenTelemetry]
-        SQLite[(SQLite DB)]
-    end
-
-    CLI --> REPL
-    REPL --> Agent
-    Agent --> LLM
-    LLM --> Ollama
-    LLM --> Gemini
-
-    Agent --> ToolShell
-    Agent --> ToolFiles
-    Agent --> ToolMemory
-    Agent --> ToolTodo
-    Agent --> ToolDelegate
-    Agent --> ToolCapabilities
-    Agent --> ToolObsidian
-    Agent --> ToolDrive
-    Agent --> ToolGmail
-    Agent --> ToolCalendar
-    Agent --> ToolWeb
-    Agent --> ToolBackground
-
-    ToolObsidian --> ObsVault
-    ToolDrive --> GDrive
-    ToolGmail --> GmailAPI
-    ToolCalendar --> GCal
-    ToolWeb --> BraveAPI
-    ToolWeb --> HTTP
-    ToolFiles --> Workspace
-    ToolMemory --> MemoryDir
-    ToolMemory --> LibraryDir
-    ToolBackground --> TasksDir
-    MCP --> MCPServers
-
-    Config --> Agent
-    Agent --> Telemetry
-    Telemetry --> SQLite
-```
-
-### Ownership Map
-
-| Concern | Canonical doc |
-|---------|---------------|
-| Startup and bootstrap | [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) |
-| Main chat loop and turn state machine | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
-| Approval decision chain | [DESIGN-core-loop.md](DESIGN-core-loop.md) |
-| Prompt assembly and history processors | [DESIGN-system.md](DESIGN-system.md) §Agent Factory (this doc) |
-| Tool families and execution detail | [DESIGN-tools.md](DESIGN-tools.md) |
-
-Upstream dependencies:
-- `config.py` settings and provider/model configuration
-- local workspace state, knowledge files, session files, approval store
-- external integrations such as MCP, Brave, Google, and Obsidian
-
-Downstream consumers:
-- `chat_loop()` startup assembly and REPL runtime
-- `run_turn()` orchestration and approval handling
-- all native tools via `RunContext[CoDeps]`
-- sub-agents created through delegation tools
-
-Cross-component touchpoints:
-- `CoDeps` is the shared runtime contract between agent, loop, and tools
-- approval policy classification is declared at agent registration and executed in the loop
-- memory, knowledge, skills, and MCP extend the capability surface without changing the main loop contract
-
-## 3. Flows
-
-### System Composition Flow
+1. `main.py` starts the CLI, telemetry, REPL, and session loop.
+2. `create_deps()` builds a fully resolved `CoDeps` object, including prompt text, model registry, knowledge backend, background task runner, and startup degradation decisions.
+3. `build_agent()` constructs the main agent from that `CoDeps.config`, adds dynamic per-turn instruction layers, and registers native tools plus configured MCP servers.
 
 ```mermaid
 flowchart LR
-    A[Settings + bootstrap outputs] --> B[create_deps]
-    B --> C[build_agent]
-    C --> D[Register native tools]
-    C --> E[Attach history processors]
-    C --> F[Attach MCP toolsets]
-    D --> G[Capability surface]
-    E --> G
-    F --> G
-    B --> H[RunContext CoDeps]
-    G --> I[chat_loop and run_turn]
-    H --> I
-    I --> J[Tool calls and approvals]
+    User[User] --> REPL[PromptSession REPL]
+    REPL --> Main[co_cli/main.py]
+    Main --> Bootstrap[create_deps]
+    Bootstrap --> Deps[CoDeps]
+    Main --> AgentFactory[build_agent]
+    Deps --> AgentFactory
+    AgentFactory --> Agent[Main Agent]
+    Agent --> Tools[Native Tools]
+    Agent --> MCP[MCP Toolsets]
+    Agent --> Models[Role Models]
+    Tools --> Workspace[Workspace + .co-cli]
+    Tools --> Data[XDG data stores]
+    Main --> Loop[run_turn]
+    Loop --> Agent
 ```
 
-Ordered composition:
-1. Bootstrap resolves settings, provider viability, knowledge backend, skill registry, and session identity.
-2. `create_deps()` materializes grouped runtime state in `CoDeps`, including pre-assembling the system prompt into `config.system_prompt`.
-3. `build_agent()` creates the agent from `config.system_prompt`, registers native tools with approval policies, and registers MCP toolsets.
-4. The resulting agent plus `CoDeps` define the model-visible capability surface.
-5. [DESIGN-core-loop.md](DESIGN-core-loop.md) executes turns against that surface.
+## 2. Core Logic
 
-Failure and fallback inline:
-- Missing optional integrations degrade the active capability surface rather than removing the agent itself.
-- MCP init failure removes extension tools but keeps the native agent alive.
-- Knowledge backend degradation preserves retrieval through grep fallback.
+### Doc Map
 
-### Session-State Tier Flow
-
-```mermaid
-flowchart TD
-    A[Process lifetime] --> B[Agent config]
-    A --> C[Session deps]
-    C --> D[Session mutable state]
-    C --> E[Turn runtime state]
-    D --> F[Tool-visible approvals, creds, todos, skills]
-    E --> G[Usage, safety, compaction, opening context]
-```
-
-Rules:
-1. Agent configuration is process-level and mostly immutable after creation.
-2. `CoDeps.services` and `CoDeps.config` are session-level inputs shared across turns.
-3. `CoDeps.session` stores mutable session state visible to tools.
-4. `CoDeps.runtime` stores orchestration-layer transient state and resets per turn when required.
-5. Sub-agents inherit `services` and `config`, but get fresh `session` and `runtime`.
-
-## 4. Core Logic
-
-### 4.1 Agent Factory
-
-`build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool_names, tool_approval)` creates the agent from the pre-assembled `config.system_prompt` (set by `create_deps()` before this call), attaches per-turn `@agent.instructions` layers, registers native tools with approval policies, and registers MCP toolsets. Provider credential validation and system prompt assembly happen upstream in `create_deps()`, not here.
+Use the DESIGN docs with these ownership boundaries:
 
 ```text
-build_agent(*, config: CoConfig, resolved: ResolvedModel | None) -> (agent, tool_names, tool_approval):
-    # system_prompt already assembled by create_deps() — read directly
-    create Agent with:
-        model=resolved.model, deps_type=CoDeps, instructions=config.system_prompt, retries=tool_retries
-        output_type = [str, DeferredToolRequests]
-        history_processors = [truncate_tool_returns, detect_safety_issues,
-                               inject_opening_context, truncate_history_window]
-
-    # per-turn dynamic layers (fresh each request, never accumulated)
-    @agent.instructions: inject current date
-    @agent.instructions: inject shell guidance when available
-    @agent.instructions: inject project instructions from .co-cli/instructions.md
-    @agent.instructions: inject always_on standing-context memories
-    @agent.instructions: inject personality-context memories
-
-    for each tool fn: register via _register(fn, requires_approval)
-        append (fn.__name__, requires_approval) to tool_registry
-    special case: run_shell_command registers with requires_approval=False
-        and applies command-level DENY / ALLOW / REQUIRE_APPROVAL policy inside the tool
-
-    tool_names = [name for name, _ in tool_registry]
-    tool_approval = {name: flag for name, flag in tool_registry}
-    register MCP toolsets with per-server approval config
+DESIGN-system.md            top-level runtime shape, config/path summary, module map
+├── DESIGN-core-loop.md         per-turn execution
+├── DESIGN-bootstrap.md         startup assembly and recovery
+├── DESIGN-tools.md             tool contracts and approval model
+├── DESIGN-skills.md            skill loading and dispatch
+├── DESIGN-llm-models.md        provider/model selection
+└── DESIGN-observability.md     tracing and viewers
 ```
 
-History processors are attached at agent construction and run before every model request:
+### Runtime Composition
 
-| Processor | Role |
-|-----------|------|
-| `truncate_tool_returns` | Trims old tool outputs to preserve context budget |
-| `detect_safety_issues` | Runtime guards: doom-loop detection, shell-error-streak detection |
-| `inject_opening_context` | Proactively recalls relevant memories and injects them into the message stream |
-| `truncate_history_window` | Applies sliding-window compaction for long sessions |
+The top-level runtime is owned by a small set of modules with clear boundaries:
 
-See [DESIGN-core-loop.md](DESIGN-core-loop.md) for turn execution ordering and [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider/model configuration.
+| Module | Owns |
+| --- | --- |
+| `co_cli/main.py` | chat loop, slash command dispatch, MCP connection, background compaction, post-turn signal handling |
+| `co_cli/bootstrap/_bootstrap.py` | resolved config, provider/model gate, knowledge backend fallback, reranker fallback, `TaskRunner`, session restore |
+| `co_cli/agent.py` | agent construction, history processors, dynamic instructions, native tool registration, MCP server objects |
+| `co_cli/deps.py` | dependency contract shared by the loop, tools, and sub-agents |
+| `co_cli/context/_orchestrate.py` | per-turn execution and approval interception |
 
-### 4.2 `CoDeps` Runtime Contract
+The system does not have a separate service container beyond `CoDeps`. That dataclass is the runtime contract.
 
-`CoDeps` is the nested dataclass injected into every tool via `RunContext[CoDeps]`. It is split into four grouped dataclasses by responsibility and never carries a raw `Settings` object.
+### `CoDeps`
 
-```mermaid
-graph TD
-    CoDeps --> CoServices
-    CoDeps --> CoConfig
-    CoDeps --> CoSessionState
-    CoDeps --> CoRuntimeState
+`CoDeps` is the single object passed to tools through `RunContext[CoDeps]`. It is grouped by responsibility:
 
-    CoServices --> S1[shell: ShellBackend]
-    CoServices --> S2[knowledge_index: KnowledgeIndex]
-    CoServices --> S3[task_runner: TaskRunner]
-    CoServices --> S4[model_registry: ModelRegistry]
-
-    CoConfig --> C1["paths, API keys,\nlimits, web_policy, role_models"]
-    CoSessionState --> SE1["session_id, google_creds, session approvals,\ntodos, page tokens, skill registry"]
-    CoRuntimeState --> R1["precomputed_compaction,\nturn_usage, opening_ctx_state, safety_state"]
+```text
+CoDeps
+├── services  shared runtime handles
+├── config    resolved read-only session config
+├── session   mutable tool-visible session state
+└── runtime   mutable orchestration state
 ```
 
-| Sub-dataclass | Field group | Key fields |
-|---------------|-------------|------------|
-| `CoServices` | Service handles | `shell`, `knowledge_index`, `task_runner`, `model_registry` |
-| `CoConfig` | Read-only config | paths, API keys, limits, `web_policy`, `role_models`, backend/config scalars |
-| `CoSessionState` | Mutable session state | `session_id`, `google_creds`, `session_approval_rules`, `active_skill_env`, `drive_page_tokens`, `session_todos`, `skill_registry`, `active_skill_name` |
-| `CoRuntimeState` | Mutable orchestration state | `precomputed_compaction`, `turn_usage`, `opening_ctx_state`, `safety_state` |
+At the system level, the important rule is ownership:
+- `services` holds shared runtime handles
+- `config` holds resolved read-only session config
+- `session` holds mutable tool-visible state
+- `runtime` holds mutable orchestration state
 
-Sub-agent isolation:
-- `make_subagent_deps(base)` shares `services` and `config` by reference
-- `session` and `runtime` are reset to clean defaults
-- sub-agents never inherit the parent agent's approvals, todos, pagination tokens, or compaction cache
+Sub-agents reuse `services` and `config`, but get fresh `session` and `runtime`.
 
-### 4.3 System Capability Surface
+See:
+- `co_cli/deps.py` for the exact dataclasses and fields
+- [DESIGN-tools.md](DESIGN-tools.md) for how tools use `CoDeps`
+- [DESIGN-skills.md](DESIGN-skills.md) for the skill-related session fields
 
-The agent's effective capability is the interaction of native tools, skill overlays, MCP extensions, `CoDeps` service handles, and approval policy gates. Capability is declared explicitly.
+### Startup Boundary
 
-Shell is the main approval nuance:
-- approval is command-scoped, not tool-scoped
-- `run_shell_command` is not blanket approval-gated at registration
-- the tool runs far enough to classify `cmd` as DENY, ALLOW, or REQUIRE_APPROVAL
-- only the `REQUIRE_APPROVAL` branch defers for user confirmation
+`create_deps()` is the system assembly point. At the architecture level it does four jobs:
 
-#### Native Tool Inventory
+1. resolve settings into a cwd-aware session config
+2. fail fast on primary model/provider misconfiguration
+3. apply startup degradation decisions for reranking and knowledge backends
+4. construct the shared runtime handles and initial processor state
 
-| Category | Tools | Approval |
-|----------|-------|----------|
-| Workspace and files | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` | Read auto; writes deferred |
-| Shell | `run_shell_command` | Policy-classified: DENY / ALLOW / REQUIRE_APPROVAL |
-| Web | `web_search`, `web_fetch` | Policy-driven by `web_policy.search` / `web_policy.fetch` (`allow` or `ask`) |
-| Memory and knowledge | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories`, `search_knowledge`, `save_article`, `recall_article`, `read_article_detail` | `save_memory`, `save_article`, `update_memory`, `append_memory` deferred; reads auto |
-| Personal data: Obsidian | `list_notes`, `search_notes`, `read_note` | Auto |
-| Personal data: Google | `search_drive_files`, `read_drive_file`, `list_emails`, `search_emails`, `create_email_draft`, `list_calendar_events`, `search_calendar_events` | Draft deferred; reads auto |
-| Background tasks | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` | Start deferred; status/cancel/list auto |
-| Session utilities | `todo_write`, `todo_read`, `check_capabilities` | Auto |
-| Sub-agent tools | `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent` | Auto |
+See:
+- [DESIGN-bootstrap.md](DESIGN-bootstrap.md) for startup order and fallback behavior
+- [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider and role-model rules
 
-#### Delegated Sub-Agents
+### Agent Construction
 
-| Sub-agent | Tool surface | Notes |
-|-----------|-------------|-------|
-| Coder | `list_directory`, `read_file`, `find_in_files` | Read-only workspace; no shell, no web |
-| Research | `web_search`, `web_fetch` | Web-only; no memory writes, no shell. Requires `web_policy.search == "allow"` and `web_policy.fetch == "allow"` — raises `ModelRetry` otherwise |
-| Analysis | `search_knowledge`, `search_drive_files` | Knowledge and Drive read; no shell, no direct web |
-| Think | none | Pure reasoning via native model thinking capability; no tools. Gated on `ROLE_REASONING` |
+`build_agent()` turns the resolved system state into one main agent.
 
-See [DESIGN-tools.md](DESIGN-tools.md) §Delegation for sub-agent details.
+At the system boundary, three facts matter:
 
+1. the static system prompt is already assembled before agent construction
+2. the agent adds dynamic per-turn instruction layers on top of that base prompt
+3. the agent registers native tools plus configured MCP toolsets
 
-#### MCP Extension Plane
+See:
+- [DESIGN-tools.md](DESIGN-tools.md) for native tool registration and approval behavior
+- [DESIGN-skills.md](DESIGN-skills.md) for skills, which are not registered as tools
+- [DESIGN-core-loop.md](DESIGN-core-loop.md) for how the running agent is used per turn
 
-| MCP capability | Co-cli concept | Status |
-|----------------|----------------|--------|
-| `tools` | Agent-callable tools registered via `toolsets=` in `build_agent()` | Implemented |
-| `prompts` | User-invocable skills | Deferred pending pydantic-ai native prompt support |
-| `resources` | Read-only context injection | Out of scope |
+### Capability Surface
 
-MCP tools inherit the same orchestration and approval model as native tools. Per-server `approval` config (`"ask"` or `"auto"`) controls the default trust tier.
+The model-visible capability surface is the union of:
 
-See [DESIGN-tools.md](DESIGN-tools.md) §MCP Tool Servers for transport and approval inheritance.
+1. native tools registered in `build_agent()`
+2. optional sub-agent tools gated by configured role models
+3. configured MCP toolsets
+4. slash-command-dispatched skill prompts that route back into the same main agent
 
-#### Skills As Capability Overlays
+This doc does not enumerate tool families or skill behavior in depth.
 
-Skills are user-invocable slash-command workflows that expand into LLM turns. They orchestrate existing tools via prompt expansion and optional environment injection. They do not add new primitive capabilities and do not affect tool approval decisions.
+See:
+- [DESIGN-tools.md](DESIGN-tools.md) for tool families, approvals, and return contracts
+- [DESIGN-skills.md](DESIGN-skills.md) for skill loading and dispatch
+- [DESIGN-bootstrap.md](DESIGN-bootstrap.md) for when MCP tools and skills become available in a live session
 
-See [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) §Skills Load and [DESIGN-core-loop.md](DESIGN-core-loop.md) §Pre-Turn Setup for loader, dispatch, and security details.
+### Session and Persistence
 
-#### Approval Boundary
+The live session state is split across three places:
 
-The approval tier determines whether a tool executes immediately or requires user confirmation.
+| Location | Purpose |
+| --- | --- |
+| `deps.session` | mutable in-memory state visible to tools and slash commands |
+| `deps.runtime` | mutable in-memory orchestration state |
+| `<cwd>/.co-cli/session.json` | persisted session id, timestamps, and compaction count across REPL restarts |
 
-| Category | Approval | Rationale |
-|----------|----------|-----------|
-| Side-effectful always | Always deferred | `create_email_draft`, `save_memory`, `save_article`, `write_file`, `edit_file`, `start_background_task`, `update_memory`, `append_memory` |
-| Shell conditional | Tool registered auto; policy enforced inside tool | `run_shell_command`: classify command as DENY -> terminal error, ALLOW -> execute, else approval |
-| Always auto-execute | Never deferred | `check_capabilities`, `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent`, `list_directory`, `read_file`, `find_in_files`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
-| Web tools | Policy driven | `web_policy.search` and `web_policy.fetch`: `allow` or `ask` |
-| MCP tools with `approval=ask` | Deferred | External tools default to requiring approval |
-| MCP tools with `approval=auto` | Auto | Explicitly trusted by user config |
+`main.py` restores or creates the persisted session after knowledge sync. It then updates the session timestamp after each completed turn.
 
-See [DESIGN-core-loop.md](DESIGN-core-loop.md) for the runtime approval decision chain.
+### Data Stores
 
-#### Graceful Degradation
+The current system writes to a small set of persistent stores:
 
-- Knowledge backend resolves adaptively: `hybrid -> fts5 -> grep`
-- MCP server failures degrade gracefully and remove only extension tools
-- Missing Google credentials keep integration tools registered but degraded
-- `check_capabilities` exposes the active capability state so the model can route around degraded integrations
+| Store | Written by |
+| --- | --- |
+| `~/.local/share/co-cli/co-cli-logs.db` | `SQLiteSpanExporter` |
+| `~/.local/share/co-cli/co-cli-search.db` | `KnowledgeIndex` |
+| `<cwd>/.co-cli/memory/` | memory tools and memory lifecycle |
+| configured library dir, default `~/.local/share/co-cli/library/` | article tools |
+| `<cwd>/.co-cli/tasks/` | background task storage |
+| `<cwd>/.co-cli/session.json` | session restore/touch logic |
 
-### 4.4 Tool Surface Contracts
+### Configuration Precedence And Paths
 
-Shared contracts for all native tools:
+`co_cli/config.py` is the only complete settings inventory. The current load order is:
 
-| Concern | Contract |
-|---------|----------|
-| Naming | `verb_noun` pattern; explicit family prefixes such as `web_*`, `todo_*`; delegation tools use explicit `delegate_*` names |
-| Registration | All native tools use `agent.tool()` with `RunContext[CoDeps]` |
-| Data access | Settings via `ctx.deps.config`, services via `ctx.deps.services`, session state via `ctx.deps.session` |
-| Return shape | User-facing data tools return `ToolResult` via `make_result(display, **metadata)` from `co_cli/tools/_result.py` |
-| Error classes | `ModelRetry` for LLM-fixable params, `terminal_error()` for unrecoverable user-facing failure, empty result for valid no-match cases |
-| Request budget | Shared tool retry budget comes from `tool_retries`; turn request budget comes from the main loop |
+```text
+built-in defaults
+→ ~/.config/co-cli/settings.json
+→ <cwd>/.co-cli/settings.json
+→ environment variables
+```
 
-See [DESIGN-tools.md](DESIGN-tools.md) for the full tool index and per-family detail.
+Important resolved paths and stores:
 
-### 4.5 Memory And Knowledge In System Context
+| Path | Owned by | Purpose |
+| --- | --- | --- |
+| `~/.config/co-cli/settings.json` | `co_cli/config.py` | user-level config |
+| `<cwd>/.co-cli/settings.json` | `co_cli/config.py` | project overrides |
+| `<cwd>/.co-cli/memory/` | tools + memory lifecycle | project memory markdown |
+| `~/.local/share/co-cli/library/` or configured `library_path` | article tools | global article store |
+| `~/.local/share/co-cli/co-cli-search.db` | knowledge index | FTS5 / hybrid search DB |
+| `~/.local/share/co-cli/co-cli-logs.db` | telemetry exporter | span storage |
+| `<cwd>/.co-cli/session.json` | session layer | persisted session id and compaction count |
+| `<cwd>/.co-cli/tasks/` | background task runner | task metadata and output |
 
-These subsystems are structurally part of the system capability surface but own their lifecycle documentation within their component docs.
+## 3. Config
 
-Memory:
-- Files are YAML-frontmatter markdown in `.co-cli/memory/`
-- runtime injection happens through `inject_opening_context`
-- write path runs signal detection, dedup, consolidation, persistence, and retention
+Full field definitions live in `co_cli/config.py`. The system layer depends on these groups:
 
-Knowledge:
-- `KnowledgeIndex` provides cross-source retrieval
-- sources include local knowledge, saved articles, Obsidian, and Google Drive when configured
-- primary retrieval entrypoint is `search_knowledge`
-- backend degradation chain is `hybrid -> fts5 -> grep`
+| Setting Group | Used by |
+| --- | --- |
+| `role_models`, `llm_provider`, `llm_host`, `llm_api_key`, `llm_num_ctx` | bootstrap, model registry, agent construction |
+| `personality` | prompt assembly |
+| `mcp_servers` | agent construction and MCP connection |
+| `knowledge_search_backend`, `knowledge_embedding_*`, `knowledge_cross_encoder_reranker_url`, `knowledge_llm_reranker` | bootstrap degradation and knowledge index |
+| `memory_*` | history processors and memory lifecycle |
+| `shell_safe_commands`, `shell_max_timeout` | shell policy |
+| `web_policy`, `web_fetch_allowed_domains`, `web_fetch_blocked_domains`, `web_http_*` | web tools |
+| `background_*` | task runner |
+| `obsidian_vault_path`, `google_credentials_path`, `brave_search_api_key`, `library_path`, `theme` | integration and UX wiring |
 
-See [DESIGN-tools.md](DESIGN-tools.md) §Memory and §Knowledge for per-tool detail.
+Component-level setting semantics are owned elsewhere:
+- [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider and role-model settings
+- [DESIGN-tools.md](DESIGN-tools.md) for tool-facing policy settings
+- [DESIGN-bootstrap.md](DESIGN-bootstrap.md) for startup config resolution
 
-### 4.6 Session, Frontend, And CLI Structural Contracts
-
-Session-state tiers:
-
-| Tier | Scope | Lifetime | Example |
-|------|-------|----------|---------|
-| Agent config | Process | Entire process | Model, system prompt, tool registrations |
-| Session deps | Session | One REPL loop | `CoDeps`: shell, creds, page tokens |
-| Run state | Single run | One `run_turn()` | Per-turn usage and safety counters |
-
-Frontend contract:
-
-| Method | Purpose |
-|--------|---------|
-| `on_text_delta(accumulated)` | Incremental Markdown render |
-| `on_text_commit(final)` | Final render and tear down Live |
-| `on_thinking_delta(accumulated)` | Thinking panel when verbose |
-| `on_thinking_commit(final)` | Final thinking panel |
-| `on_tool_start(tool_id, name, args_display)` | Tool call annotation at call time |
-| `on_tool_progress(tool_id, message)` | Intermediate progress from long-running tools |
-| `on_tool_complete(tool_id, result)` | Result panel; result is `ToolResultPayload` (str, ToolResult, or None) |
-| `on_status(message)` | Non-tool status messages (startup, session restore, etc.) |
-| `on_final_output(text)` | Fallback Markdown render |
-| `prompt_approval(description) -> str` | y/n/a approval prompt |
-| `cleanup()` | Exception teardown |
-
-CLI command surface:
-- `co chat [--theme dark|light] [--verbose]` — start interactive REPL; `--verbose` streams LLM thinking tokens
-- `co config` — show system configuration and integration health (pre-agent check)
-- `co tail [--trace ID] [--tools-only] [--models-only] [--poll N] [--no-follow] [--last N] [--verbose]` — real-time OTel span stream
-- `co logs` — launch Datasette dashboard for ad-hoc trace SQL queries
-- `co traces` — generate and open static HTML nested span tree viewer
-
-REPL slash-command surface:
-- `/help`, `/clear`, `/new`, `/status`, `/tools`, `/history`, `/compact`
-- `/forget`, `/approvals`
-- `/skills`, `/background`, `/tasks`, `/cancel`
-
-Execution sequencing for startup and one user turn lives in [DESIGN-system-bootstrap.md](DESIGN-system-bootstrap.md) and [DESIGN-core-loop.md](DESIGN-core-loop.md).
-
-### 4.7 Security, Configuration, And Concurrency
-
-Configuration precedence:
-1. Environment variables
-2. `.co-cli/settings.json` in the current working directory
-3. `~/.config/co-cli/settings.json`
-4. Built-in defaults
-
-MCP servers are configured via `settings.json` or `CO_CLI_MCP_SERVERS` and specify `command`, `args`, `timeout`, `env`, `approval`, and optional `prefix`.
-
-Security model:
-1. Configuration: secrets in `settings.json` or env vars, never hardcoded
-2. Confirmation: human approval for high-impact side effects
-3. Environment sanitization: allowlist-only env vars, safe pagers, process-group cleanup on timeout
-4. Input validation: path traversal protection and integration-specific scoping
-5. Security posture checks: file permissions and wildcard approval warnings in `bootstrap/_render_status.py`
-
-Concurrency model:
-- model turns are single-threaded
-- background compaction can run asynchronously between turns
-- `TaskRunner` executes `/background` subprocesses with bounded concurrency
-
-## 5. Config
-
-This doc does not own the full settings table. Use [DESIGN-index.md](DESIGN-index.md) for the consolidated config reference, [DESIGN-llm-models.md](DESIGN-llm-models.md) for provider/model settings, and subsystem docs for family-specific settings.
-
-System-relevant settings called out here:
-
-| Setting | Env Var | Default | Description |
-|---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Main provider selection (`ollama-openai` or `gemini`) |
-| `role_models` | `CO_MODEL_ROLE_REASONING`, `CO_MODEL_ROLE_SUMMARIZATION`, `CO_MODEL_ROLE_CODING`, `CO_MODEL_ROLE_RESEARCH`, `CO_MODEL_ROLE_ANALYSIS` | provider defaults for all roles (`ollama-openai`) or reasoning-only (`gemini`) | Role model chains |
-| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Shared tool retry budget |
-| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Provider/network retry budget per turn |
-| `web_policy.search` | `CO_CLI_WEB_POLICY_SEARCH` | `"allow"` | `web_search` approval policy |
-| `web_policy.fetch` | `CO_CLI_WEB_POLICY_FETCH` | `"allow"` | `web_fetch` approval policy |
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `"hybrid"` | Configured retrieval backend before fallback resolution (`hybrid → fts5 → grep`) |
-| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `"tei"` | Embedding provider for hybrid vec leg: `tei`, `ollama`, `gemini`, or `none` |
-| `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `"embeddinggemma"` | Model name passed to the embedding provider |
-| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Vector dimensions — must match the model. If changed, delete `~/.local/share/co-cli/search.db` to rebuild the vec schema |
-| `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `"http://127.0.0.1:8283"` | TEI or compatible embedding API endpoint |
-| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session restore TTL |
-
-## 6. Files
+## 4. Files
 
 | File | Purpose |
-|------|---------|
-| `co_cli/agent.py` | `build_agent()`, prompt assembly wiring, native tool and MCP registration |
-| `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
-| `co_cli/main.py` | `chat_loop()`, startup assembly, REPL |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` |
-| `co_cli/context/_orchestrate.py` | `run_turn()`, `_run_stream_segment()`, `_collect_deferred_tool_approvals()` |
-| `co_cli/context/_history.py` | History processors and compaction |
-| `co_cli/commands/_commands.py` | Slash commands and skill dispatch surface |
-| `co_cli/config.py` | Settings model and precedence rules |
-| `co_cli/tools/` | Native tool families |
-| `docs/DESIGN-system-bootstrap.md` | Canonical startup and bootstrap flow |
-| `docs/DESIGN-core-loop.md` | Main loop and per-turn runtime state machine |
-| `docs/DESIGN-tools.md` | Tool subsystem details |
+| --- | --- |
+| `co_cli/main.py` | top-level CLI and REPL runtime |
+| `co_cli/bootstrap/_bootstrap.py` | dependency assembly and startup degradation |
+| `co_cli/agent.py` | main agent factory and tool registration |
+| `co_cli/deps.py` | grouped dependency dataclasses and sub-agent isolation |
+| `co_cli/context/_orchestrate.py` | turn execution engine |
+| `co_cli/context/_history.py` | compaction, opening context, and safety processors |
+| `co_cli/bootstrap/_check.py` | health-check primitives used by bootstrap, status, and capability tools |
+| `co_cli/bootstrap/_render_status.py` | status and security rendering |
+| `co_cli/tools/` | native tool implementations and helpers |
+| `co_cli/knowledge/` | indexing, chunking, frontmatter parsing, and reranking |
+| `co_cli/memory/` | signal detection, consolidation, retention, and persistence |
+| `co_cli/commands/_commands.py` | slash command registry, skill loading, and REPL command dispatch |
+| `co_cli/observability/` | SQLite span export and trace viewers |
+| `docs/DESIGN-bootstrap.md` | startup details intentionally kept out of this doc |
+| `docs/DESIGN-core-loop.md` | turn-flow details intentionally kept out of this doc |
+| `docs/DESIGN-tools.md` | tool-level details intentionally kept out of this doc |
+| `docs/DESIGN-skills.md` | skill-level details intentionally kept out of this doc |
+| `docs/DESIGN-llm-models.md` | provider and role-model details intentionally kept out of this doc |
+| `docs/DESIGN-observability.md` | tracing details intentionally kept out of this doc |

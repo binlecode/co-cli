@@ -360,6 +360,9 @@ def _estimate_message_tokens(messages: list[ModelMessage]) -> int:
 _DEFAULT_TOKEN_BUDGET = 100_000
 
 
+# truncate_history_window is the sole consumer of the compaction cache.
+# It reads deps.runtime.precomputed_compaction and uses it when valid (message count matches).
+# It never writes back to precomputed_compaction — that is main.py's job after each turn.
 async def truncate_history_window(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -454,6 +457,9 @@ _PRECOMPACT_TOKEN_RATIO = 0.70
 _PRECOMPACT_MSG_RATIO = 0.80
 
 
+# precompute_compaction is the write-only producer of the compaction cache.
+# It runs as a background asyncio.Task (spawned by main.py after each turn).
+# It writes only via its return value — the caller stores that in deps.runtime.precomputed_compaction.
 async def precompute_compaction(
     messages: list[ModelMessage],
     deps: CoDeps,

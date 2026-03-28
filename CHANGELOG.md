@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-03-28
+
+### Changed
+- **Core loop simplification**: Unified per-turn usage ownership — `deps.runtime.turn_usage` is now the single authoritative accumulator, reset by `run_turn()` and merged via `_merge_turn_usage()` after every segment (foreground and sub-agent paths).
+- **`main.py` extracted helpers**: Post-turn lifecycle split into `_finalize_turn()`, `_restore_skill_env()`, and `_spawn_bg_compaction()`. `_chat_loop()` now reads as input → dispatch → turn → finalize.
+- **`display.py` → `display/` package**: `co_cli/display.py` converted to a package; content in `_core.py`, `StreamRenderer` in `_stream_renderer.py`. All import sites updated to `co_cli.display._core`.
+- **`StreamRenderer` extracted**: Text/thinking buffering, flush policy, and progress-callback lifecycle moved from `_execute_stream_segment()` into `co_cli/display/_stream_renderer.py`. Orchestration now only routes events.
+- **`_display_hints.py` extracted**: Tool display metadata (`TOOL_START_DISPLAY_ARG`, `get_tool_start_args_display`, `format_tool_result_for_display`) moved from the orchestrator to `co_cli/tools/_display_hints.py`.
+- **Approval legibility**: `/approvals list` shows human-readable "Scope" and "Approved For" columns instead of raw `kind`/`value` strings. `resolve_approval_subject()` annotated with per-branch comments.
+- **`_TurnState` phase-owner comments**: Each field annotated with its lifecycle phase (pre-turn, in-turn, cross-turn). `_adopt_segment_result()` and `_prepare_approval_resume()` helpers centralize approval-resume state transitions.
+- **Background compaction renamed**: `bg_compaction_task` → `next_turn_compaction_task` for clarity.
+- **`__init__.py` policy hardened**: Rule updated to "must be docstring-only — never add imports or code"; module-to-package conversions must put content in named private submodules.
+
 ## [0.5.0] - 2026-03-28
 
 ### Changed

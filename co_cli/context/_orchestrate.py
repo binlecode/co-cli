@@ -1,13 +1,14 @@
 """Orchestration state machine — extracted from main.py for testability.
 
 Contains TurnResult, run_turn(), and supporting private functions.
-FrontendProtocol lives in co_cli/display.py. The chat loop in main.py
-delegates all LLM interaction here.
+FrontendProtocol lives in co_cli/display/_core.py. Stream rendering policy
+lives in co_cli/display/_stream_renderer.py. Tool display metadata lives in
+co_cli/tools/_display_hints.py. The chat loop in main.py delegates all LLM
+interaction here.
 """
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -29,7 +30,9 @@ TurnOutcome = Literal["continue", "error"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-from co_cli.display import FrontendProtocol
+from co_cli.display._core import FrontendProtocol
+from co_cli.display._stream_renderer import StreamRenderer
+from co_cli.tools._display_hints import get_tool_start_args_display, format_tool_result_for_display
 from co_cli.tools._http_retry import parse_retry_after
 from co_cli.tools._tool_approvals import (
     decode_tool_args,
@@ -66,168 +69,78 @@ class _TurnState:
 
     Collects fields that would otherwise be parallel locals in run_turn(),
     making invariants explicit and mutation paths auditable.
+
+    Phase ownership:
+      pre-turn (run_turn init):
+        current_input         — user text or None for approval-resume segments
+        current_history       — REPL-owned message list at turn entry
+        retry_budget_remaining, backoff_base — HTTP retry counters, set from config
+      in-turn (per segment, via _adopt_segment_result / _prepare_approval_resume):
+        latest_result         — AgentRunResult from the most recent segment
+        latest_streamed_text  — whether the last segment streamed visible text
+        latest_usage          — usage from the most recent segment (payload for TurnResult)
+        tool_approval_decisions — deferred approvals to pass to the next segment resume
+      cross-turn (accumulates during the turn):
+        outcome               — set on error exit; read by run_turn() return and span
+        interrupted           — set on CancelledError; drives _build_interrupted_turn_result
     """
+    # pre-turn
     current_input: str | None
     current_history: list
-    tool_approval_decisions: DeferredToolResults | None = None
+    # HTTP retry budget — set from config at turn start
+    retry_budget_remaining: int = 0
+    backoff_base: float = 1.0
+    # in-turn (updated after each segment via _adopt_segment_result)
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
     latest_usage: Any = None
-    retry_budget_remaining: int = 0
-    backoff_base: float = 1.0
+    tool_approval_decisions: DeferredToolResults | None = None
+    # cross-turn outcome flags
     outcome: TurnOutcome = "continue"
     interrupted: bool = False
 
 
 # ---------------------------------------------------------------------------
-# Rendering interval
-# ---------------------------------------------------------------------------
-
-_RENDER_INTERVAL = 0.05  # 20 FPS
-
-
-# ---------------------------------------------------------------------------
-# _StreamState — explicit transient streaming state
+# _merge_turn_usage — accumulate segment usage into the authoritative per-turn total
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class _StreamState:
-    text_buffer: str = ""
-    last_text_render_at: float = 0.0
-    thinking_buffer: str = ""
-    last_thinking_render_at: float = 0.0
-    thinking_active: bool = False
-    streamed_text: bool = False
+def _merge_turn_usage(deps: CoDeps, usage: Any | None) -> None:
+    """Merge one segment's usage into deps.runtime.turn_usage (the authoritative accumulator).
 
-
-def _flush_thinking(state: _StreamState, frontend: FrontendProtocol) -> None:
-    if state.thinking_buffer:
-        frontend.on_thinking_commit(state.thinking_buffer.rstrip())
-        state.thinking_buffer = ""
-        state.last_thinking_render_at = 0.0
-        state.thinking_active = False
-
-
-def _append_thinking(
-    state: _StreamState,
-    frontend: FrontendProtocol,
-    content: str,
-) -> None:
-    if not content:
+    Called after every _execute_stream_segment() completes. Sub-agent tools call
+    their own variant; this one is owned by the foreground orchestrator.
+    """
+    if usage is None:
         return
-    state.thinking_buffer += content
-    now = time.monotonic()
-    if now - state.last_thinking_render_at >= _RENDER_INTERVAL:
-        state.thinking_active = True
-        frontend.on_thinking_delta(state.thinking_buffer.rstrip() or "...")
-        state.last_thinking_render_at = now
+    if deps.runtime.turn_usage is None:
+        deps.runtime.turn_usage = usage
+    else:
+        deps.runtime.turn_usage.incr(usage)
 
 
-def _append_text(
-    state: _StreamState,
-    frontend: FrontendProtocol,
-    content: str,
+# ---------------------------------------------------------------------------
+# _adopt_segment_result / _prepare_approval_resume — turn-state transitions
+# ---------------------------------------------------------------------------
+
+
+def _adopt_segment_result(turn_state: "_TurnState") -> None:
+    """Promote latest_result into current_history after a segment completes."""
+    turn_state.current_history = turn_state.latest_result.all_messages()
+
+
+def _prepare_approval_resume(
+    turn_state: "_TurnState",
+    approvals: DeferredToolResults,
 ) -> None:
-    if not content:
-        return
-    if state.thinking_active or state.thinking_buffer:
-        _flush_thinking(state, frontend)
-    state.text_buffer += content
-    state.streamed_text = True
-    now = time.monotonic()
-    if now - state.last_text_render_at >= _RENDER_INTERVAL:
-        frontend.on_text_delta(state.text_buffer)
-        state.last_text_render_at = now
+    """Set up turn_state for an approval-resume segment.
 
-
-def _commit_text(state: _StreamState, frontend: FrontendProtocol) -> None:
-    if state.text_buffer:
-        frontend.on_text_commit(state.text_buffer)
-        state.text_buffer = ""
-        state.last_text_render_at = 0.0
-
-
-def _flush_for_tool_output(state: _StreamState, frontend: FrontendProtocol) -> None:
-    """Flush thinking/text before inline tool annotations and output panels."""
-    if state.thinking_active or state.thinking_buffer:
-        _flush_thinking(state, frontend)
-    _commit_text(state, frontend)
-
-
-def _handle_part_start_event(
-    event: PartStartEvent,
-    state: _StreamState,
-    frontend: FrontendProtocol,
-    *,
-    verbose: bool,
-) -> bool:
-    """Handle part start event. Returns True if consumed."""
-    if isinstance(event.part, ThinkingPart):
-        if not verbose:
-            return True
-        _append_thinking(state, frontend, event.part.content)
-        return True
-    if isinstance(event.part, TextPart):
-        _append_text(state, frontend, event.part.content)
-        return True
-    return False
-
-
-def _handle_part_delta_event(
-    event: PartDeltaEvent,
-    state: _StreamState,
-    frontend: FrontendProtocol,
-    *,
-    verbose: bool,
-) -> bool:
-    """Handle part delta event. Returns True if consumed."""
-    if isinstance(event.delta, ThinkingPartDelta):
-        if not verbose:
-            return True
-        _append_thinking(state, frontend, event.delta.content_delta or "")
-        return True
-    if isinstance(event.delta, TextPartDelta):
-        _append_text(state, frontend, event.delta.content_delta)
-        return True
-    return False
-
-
-# ---------------------------------------------------------------------------
-# _tool_args_display — per-tool args extraction for on_tool_start
-# ---------------------------------------------------------------------------
-
-_TOOL_DISPLAY_ARG: dict[str, str] = {
-    "run_shell_command": "cmd",
-    "web_search": "query",
-    "web_fetch": "url",
-    "read_file": "path",
-    "write_file": "path",
-    "edit_file": "path",
-    "find_in_files": "pattern",
-    "list_directory": "path",
-    "save_memory": "content",
-    "recall_article": "query",
-    "search_knowledge": "query",
-    "search_memories": "query",
-    "search_notes": "query",
-    "read_note": "filename",
-    "run_coder_subagent": "task",
-    "run_research_subagent": "query",
-    "run_analysis_subagent": "question",
-    "run_thinking_subagent": "problem",
-    "start_background_task": "command",
-    "check_task_status": "task_id",
-}
-
-
-def _tool_args_display(tool_name: str, part: ToolCallPart) -> str:
-    """Isolate per-tool args extraction so FunctionToolCallEvent handler stays uniform."""
-    key = _TOOL_DISPLAY_ARG.get(tool_name)
-    if not key:
-        return ""
-    val = part.args_as_dict().get(key, "")
-    return str(val)[:120]
+    Clears current_input (pydantic-ai uses deferred_tool_results instead),
+    promotes latest_result messages to current_history, and stores approvals.
+    """
+    turn_state.current_input = None
+    turn_state.current_history = turn_state.latest_result.all_messages()
+    turn_state.tool_approval_decisions = approvals
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +210,12 @@ async def _execute_stream_segment(
     - latest_streamed_text reflects whether text was streamed
     - latest_usage is updated from the result
     - tool_approval_decisions is cleared (consumed)
+
+    Stream rendering policy (buffering, flush, thinking gating) is owned by
+    StreamRenderer. Tool display metadata is owned by _display_hints.
     """
     result = None
-    state = _StreamState()
+    renderer = StreamRenderer(frontend)
 
     try:
         async for event in agent.run_stream_events(
@@ -312,11 +228,19 @@ async def _execute_stream_segment(
             deferred_tool_results=turn_state.tool_approval_decisions,
         ):
             if isinstance(event, PartStartEvent):
-                if _handle_part_start_event(event, state, frontend, verbose=verbose):
+                if isinstance(event.part, ThinkingPart):
+                    renderer.append_thinking(event.part.content, verbose=verbose)
+                    continue
+                if isinstance(event.part, TextPart):
+                    renderer.append_text(event.part.content)
                     continue
 
             if isinstance(event, PartDeltaEvent):
-                if _handle_part_delta_event(event, state, frontend, verbose=verbose):
+                if isinstance(event.delta, ThinkingPartDelta):
+                    renderer.append_thinking(event.delta.content_delta or "", verbose=verbose)
+                    continue
+                if isinstance(event.delta, TextPartDelta):
+                    renderer.append_text(event.delta.content_delta)
                     continue
 
             # Readiness/meta events are intentionally side-effect free for
@@ -325,48 +249,33 @@ async def _execute_stream_segment(
                 continue
 
             if isinstance(event, FunctionToolCallEvent):
-                _flush_for_tool_output(state, frontend)
+                renderer.flush_for_tool_output()
                 tool_id = event.tool_call_id
                 name = event.part.tool_name
-                args_display = _tool_args_display(name, event.part)
-                frontend.on_tool_start(tool_id, name, args_display)
-                deps.runtime.tool_progress_callback = (
-                    lambda msg, _tid=tool_id: frontend.on_tool_progress(_tid, msg)
-                )
+                frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+                renderer.install_progress(deps, tool_id)
                 continue
 
             if isinstance(event, FunctionToolResultEvent):
-                _flush_for_tool_output(state, frontend)
-                deps.runtime.tool_progress_callback = None
+                renderer.flush_for_tool_output()
+                renderer.clear_progress(deps)
                 tool_id = event.tool_call_id
                 if not isinstance(event.result, ToolReturnPart):
                     # RetryPromptPart: tool raised ModelRetry or validation failed.
                     # Close the tool surface cleanly — no result to display.
                     frontend.on_tool_complete(tool_id, None)
                     continue
-                content = event.result.content
-                if isinstance(content, str) and content.strip():
-                    frontend.on_tool_complete(tool_id, content)
-                elif isinstance(content, dict) and content.get("_kind") == "tool_result":
-                    frontend.on_tool_complete(tool_id, content)
-                elif isinstance(content, dict):
-                    # MCP tools return raw JSON dicts — render as compact key: value summary
-                    summary = "; ".join(f"{k}: {str(v)[:60]}" for k, v in list(content.items())[:5])
-                    if len(content) > 5:
-                        summary += f" (+{len(content) - 5} more)"
-                    frontend.on_tool_complete(tool_id, summary[:300] or None)
-                else:
-                    frontend.on_tool_complete(tool_id, None)
+                frontend.on_tool_complete(
+                    tool_id, format_tool_result_for_display(event.result.content)
+                )
                 continue
 
             if isinstance(event, AgentRunResultEvent):
                 result = event.result
                 continue
 
-        # Normal completion — final render
-        if state.thinking_active or state.thinking_buffer:
-            _flush_thinking(state, frontend)
-        _commit_text(state, frontend)
+        # Normal completion — commit remaining buffers
+        renderer.finish()
     finally:
         frontend.cleanup()
 
@@ -375,7 +284,7 @@ async def _execute_stream_segment(
             "_execute_stream_segment: stream ended without AgentRunResultEvent — segment contract violated"
         )
     turn_state.latest_result = result
-    turn_state.latest_streamed_text = state.streamed_text
+    turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
 
@@ -463,6 +372,10 @@ async def run_turn(
     from co_cli.context._history import SafetyState
     deps.runtime.safety_state = SafetyState()
 
+    # Reset turn-scoped usage accumulator — authoritative per-turn total.
+    # Sub-agent tools contribute via their own _merge_turn_usage calls during the turn.
+    deps.runtime.turn_usage = None
+
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
     max_request_limit = deps.config.max_request_limit
@@ -481,20 +394,20 @@ async def run_turn(
                     await _execute_stream_segment(
                         turn_state, agent, deps, model_settings, turn_limits, verbose, frontend
                     )
+                    _merge_turn_usage(deps, turn_state.latest_usage)
 
                     # Approval flow: collect decisions, update state, resume segment
                     while isinstance(turn_state.latest_result.output, DeferredToolRequests):
                         approvals = await _collect_deferred_tool_approvals(
                             turn_state.latest_result, deps, frontend
                         )
-                        turn_state.current_input = None
-                        turn_state.current_history = turn_state.latest_result.all_messages()
-                        turn_state.tool_approval_decisions = approvals
+                        _prepare_approval_resume(turn_state, approvals)
                         await _execute_stream_segment(
                             turn_state, agent, deps, model_settings, turn_limits, verbose, frontend
                         )
+                        _merge_turn_usage(deps, turn_state.latest_usage)
 
-                    turn_state.current_history = turn_state.latest_result.all_messages()
+                    _adopt_segment_result(turn_state)
                     if not turn_state.latest_streamed_text and isinstance(turn_state.latest_result.output, str):
                         frontend.on_final_output(turn_state.latest_result.output)
 
@@ -507,21 +420,21 @@ async def run_turn(
 
                     # Context overflow detection: Ollama truncates silently when
                     # input_tokens > num_ctx. Gemini enforces its own hard limit via HTTP 400.
-                    # latest_usage.input_tokens is always int (defaults to 0 when provider reports no usage).
-                    if turn_state.latest_usage is not None and deps.config.supports_context_ratio_tracking():
-                        ratio = turn_state.latest_usage.input_tokens / deps.config.llm_num_ctx
+                    # deps.runtime.turn_usage is the authoritative accumulated total for this turn.
+                    if deps.runtime.turn_usage is not None and deps.config.supports_context_ratio_tracking():
+                        ratio = deps.runtime.turn_usage.input_tokens / deps.config.llm_num_ctx
                         with _TRACER.start_as_current_span("ctx_overflow_check") as ctx_span:
-                            ctx_span.set_attribute("ctx.input_tokens", turn_state.latest_usage.input_tokens)
+                            ctx_span.set_attribute("ctx.input_tokens", deps.runtime.turn_usage.input_tokens)
                             ctx_span.set_attribute("ctx.num_ctx", deps.config.llm_num_ctx)
                             ctx_span.set_attribute("ctx.ratio", ratio)
                             if ratio >= deps.config.ctx_overflow_threshold:
                                 frontend.on_status(
-                                    f"Context limit reached ({turn_state.latest_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
+                                    f"Context limit reached ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)"
                                     " — Ollama likely truncated the prompt. Use /compact or /new."
                                 )
                             elif ratio >= deps.config.ctx_warn_threshold:
                                 frontend.on_status(
-                                    f"Context {ratio:.0%} full ({turn_state.latest_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
+                                    f"Context {ratio:.0%} full ({deps.runtime.turn_usage.input_tokens:,} / {deps.config.llm_num_ctx:,} tokens)."
                                     " Consider /compact to free space."
                                 )
 

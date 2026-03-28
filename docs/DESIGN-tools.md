@@ -1,10 +1,12 @@
 # Co CLI — Tools
 
-> For system overview and approval boundary: [DESIGN-system.md](DESIGN-system.md). For shell inline policy and approval decision chain: see §Approval below and [DESIGN-core-loop.md](DESIGN-core-loop.md).
+> For system overview and approval boundary: [DESIGN-system.md](DESIGN-system.md). For shell inline policy and approval decision chain: see §Approval below and [DESIGN-core-loop.md](DESIGN-core-loop.md). For skill loading, file format, and slash-command dispatch, see [DESIGN-skills.md](DESIGN-skills.md).
 
 ## 1. What & How
 
 Native tools are Python functions registered on the pydantic-ai `Agent` via `_register()` in `agent.py`. Every tool receives a `RunContext[CoDeps]` as its first argument and returns a `ToolResult` (from `co_cli/tools/_result.py`) via `make_result(display, **metadata)` — a `TypedDict` with a `_kind="tool_result"` discriminator, a `display` field (pre-formatted string shown to the user), and optional metadata fields.
+
+This doc owns callable tool capabilities only. Skills are a separate layer built on slash-command dispatch plus prompt expansion; they are documented in [DESIGN-skills.md](DESIGN-skills.md).
 
 Tool progress reporting is opt-in. Tools do not write to the terminal directly. When a tool has meaningful multi-phase latency, it may emit progress through turn-scoped runtime state (`ctx.deps.runtime.tool_progress_callback`) and let the frontend render those messages through the `on_tool_progress` lifecycle callback.
 
@@ -73,8 +75,8 @@ main.py:build_chat_app()
 **Phase 2 — Execution Request** (`_orchestrate.py` → pydantic-ai)
 
 ```
-run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:417
-  └─ _run_stream_segment(agent, user_input, deps, ...)        # _orchestrate.py:279
+run_turn(agent, user_input, deps, ...)                       # _orchestrate.py
+  └─ _execute_stream_segment(_TurnState, agent, deps, ...)    # _orchestrate.py
        └─ agent.run_stream_events(user_input, deps,
                                   message_history, ...)      # pydantic-ai streams model output
             ├─ [auto tool]     FunctionToolCallEvent         # requires_approval=False
@@ -103,14 +105,14 @@ run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:4
 **Phase 4 — Execution and Return**
 
 ```
-_run_stream_segment(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
+_execute_stream_segment(_TurnState, agent, deferred_tool_results=approvals, ...)  # _orchestrate.py
   └─ agent.run_stream_events(user_input=None,
                               deferred_tool_results=approvals, ...)
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
        │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
        │    ├─ ctx.deps.session.*    (session_approval_rules, todos, active_skill_env)
-       │    └─ ctx.deps.runtime.*    (turn_usage, tool_progress_callback, safety_state)
+       │    └─ ctx.deps.runtime.*    (tool_progress_callback, safety_state)
        │    └─ return ToolResult     (make_result(display, **metadata) from _result.py)
        │         ├─ "_kind"          "tool_result" discriminator
        │         ├─ "display"        pre-formatted string shown to the user
@@ -150,7 +152,7 @@ Step 1 short-circuits the chain; Step 2 is only reached when Step 1 finds no mat
 ### Return Shape
 
 Every user-facing tool returns a `ToolResult` via `make_result(display, **metadata)` (from `co_cli/tools/_result.py`):
-- `_kind` — `"tool_result"` discriminator (used by `_run_stream_segment()` to route to `on_tool_complete`)
+- `_kind` — `"tool_result"` discriminator (used by `_execute_stream_segment()` to route to `on_tool_complete`)
 - `display` — pre-formatted string, shown directly to the user
 - metadata fields (`count`, `path`, `task_id`, `article_id`, etc.)
 
@@ -299,10 +301,10 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 | `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
 | `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.tool_progress_callback)`; returns probe results, active integrations, reasoning chain, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped progress callback is present, it emits staged `/doctor` progress messages such as provider, integration, knowledge, skills, and per-MCP-server checks through `on_tool_progress` |
 
-`check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
+`check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special skill execution path. Progressive doctor output is produced by an optional callback path:
 
 ```text
-_run_stream_segment() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
+_execute_stream_segment() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
 check_capabilities() reads ctx.deps.runtime.tool_progress_callback
 check_runtime(progress=...) emits phase messages
 TerminalFrontend renders those progress lines in the CLI
@@ -405,6 +407,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` — env sanitizer and process-group kill |
 | `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
+| `co_cli/tools/_display_hints.py` | Tool display metadata: `TOOL_START_DISPLAY_ARG`, `get_tool_start_args_display()`, `format_tool_result_for_display()` — maps tool names to display arg keys and formats tool results for the stream renderer |
 | `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
 | `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
 | `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |

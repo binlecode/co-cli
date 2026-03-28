@@ -53,7 +53,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Python 3.12+** with type hints everywhere.
 - **Imports**: always explicit; never `from X import *`.
 - **Comments**: no trailing comments; put comments on the line above, not at end of code lines.
-- **`__init__.py`**: prefer empty (docstring-only); no re-exports.
+- **`__init__.py`**: must be docstring-only (one-line module docstring or empty); never add imports, re-exports, or code. When converting a module to a package, all content goes into `_core.py` or named private submodules — never into `__init__.py`.
 - **`_prefix.py` helpers**: internal/shared helpers in a package use a leading underscore. They are private to the package, not registered as tools, and not part of the public API.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.

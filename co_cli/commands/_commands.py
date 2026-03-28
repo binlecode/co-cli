@@ -17,7 +17,7 @@ from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import ROLE_SUMMARIZATION, ROLE_REASONING
-from co_cli.display import console
+from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoSessionState
 
@@ -603,12 +603,32 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
             console.print("[dim]No session approval rules this session.[/dim]")
             return None
         from rich.table import Table
+
+        def _rule_label(kind: str, value: str) -> tuple[str, str]:
+            """Return (human-readable scope label, human-readable value hint)."""
+            if kind == "shell":
+                return "shell utility", value
+            if kind == "path":
+                # value is "{tool}:{parent_dir}"
+                if ":" in value:
+                    tool, parent_dir = value.split(":", 1)
+                    return "file path", f"{tool}: {parent_dir}/**"
+                return "file path", value
+            if kind == "domain":
+                return "web domain", value
+            if kind == "mcp_tool":
+                # value is "{server}:{tool}"
+                return "MCP tool", value
+            # kind == "tool" (generic fallback)
+            return "tool", value
+
         table = Table(title="Session Approval Rules", border_style="accent")
         table.add_column("#", style="dim")
-        table.add_column("Kind")
-        table.add_column("Value")
+        table.add_column("Scope")
+        table.add_column("Approved For")
         for i, rule in enumerate(rules):
-            table.add_row(str(i), rule.kind, rule.value)
+            label, hint = _rule_label(rule.kind, rule.value)
+            table.add_row(str(i), label, hint)
         console.print(table)
 
     elif subcmd == "clear":

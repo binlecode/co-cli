@@ -2,7 +2,7 @@
 
 from opentelemetry import trace as otel_trace
 from pydantic_ai import ModelRetry, RunContext
-from pydantic_ai.usage import UsageLimits
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
@@ -10,6 +10,14 @@ from co_cli.deps import CoDeps, make_subagent_deps
 from co_cli.tools._result import ToolResult, make_result
 
 _TRACER = otel_trace.get_tracer("co-cli.subagent")
+
+
+def _merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
+    """Merge sub-agent usage into the parent turn's authoritative usage accumulator."""
+    if ctx.deps.runtime.turn_usage is None:
+        ctx.deps.runtime.turn_usage = usage
+    else:
+        ctx.deps.runtime.turn_usage.incr(usage)
 
 
 async def run_coder_subagent(
@@ -58,10 +66,7 @@ async def run_coder_subagent(
             )
         except Exception as exc:
             raise ModelRetry(f"Coding sub-agent failed: {exc} — handle this task directly.") from exc
-        if ctx.deps.runtime.turn_usage is None:
-            ctx.deps.runtime.turn_usage = result.usage()
-        else:
-            ctx.deps.runtime.turn_usage.incr(result.usage())
+        _merge_turn_usage(ctx, result.usage())
         requests_used = result.usage().requests
         span.set_attribute("subagent.requests_used", requests_used)
         data = result.output
@@ -143,10 +148,7 @@ async def run_research_subagent(
             )
         except Exception as exc:
             raise ModelRetry(f"Research sub-agent failed: {exc} — handle this task directly.") from exc
-        if ctx.deps.runtime.turn_usage is None:
-            ctx.deps.runtime.turn_usage = result.usage()
-        else:
-            ctx.deps.runtime.turn_usage.incr(result.usage())
+        _merge_turn_usage(ctx, result.usage())
         data = result.output
 
         retry_result = None
@@ -161,7 +163,7 @@ async def run_research_subagent(
                 usage_limits=UsageLimits(request_limit=remaining),
                 model_settings=rm.settings,
             )
-            ctx.deps.runtime.turn_usage.incr(retry_result.usage())
+            _merge_turn_usage(ctx, retry_result.usage())
             data = retry_result.output
         # Fallback: if result still empty (retry skipped or returned nothing), mark confidence=0.0
         if not data.summary or not data.sources:
@@ -246,10 +248,7 @@ async def run_analysis_subagent(
             )
         except Exception as exc:
             raise ModelRetry(f"Analysis sub-agent failed: {exc} — handle this task directly.") from exc
-        if ctx.deps.runtime.turn_usage is None:
-            ctx.deps.runtime.turn_usage = result.usage()
-        else:
-            ctx.deps.runtime.turn_usage.incr(result.usage())
+        _merge_turn_usage(ctx, result.usage())
         requests_used = result.usage().requests
         span.set_attribute("subagent.requests_used", requests_used)
         data = result.output
@@ -320,10 +319,7 @@ async def run_thinking_subagent(
             )
         except Exception as exc:
             raise ModelRetry(f"Thinking sub-agent failed: {exc} — handle this task directly.") from exc
-        if ctx.deps.runtime.turn_usage is None:
-            ctx.deps.runtime.turn_usage = result.usage()
-        else:
-            ctx.deps.runtime.turn_usage.incr(result.usage())
+        _merge_turn_usage(ctx, result.usage())
         requests_used = result.usage().requests
         span.set_attribute("subagent.requests_used", requests_used)
         data = result.output

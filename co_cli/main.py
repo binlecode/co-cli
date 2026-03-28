@@ -5,6 +5,7 @@ import time
 import tomllib
 from contextlib import AsyncExitStack
 from pathlib import Path
+from typing import Any
 import typer
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -20,11 +21,10 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn
 from co_cli.context._history import precompute_compaction
-from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
 from co_cli.agent import build_agent, discover_mcp_tools
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB
-from co_cli.display import console, set_theme, PROMPT_CHAR, TerminalFrontend
+from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.commands._commands import (
@@ -68,10 +68,79 @@ def _default(ctx: typer.Context):
         chat()
 
 
+def _restore_skill_env(saved_env: dict[str, str | None], deps: CoDeps) -> None:
+    """Restore process env vars saved before skill dispatch and clear skill session state."""
+    for k, v in saved_env.items():
+        if v is not None:
+            os.environ[k] = v
+        else:
+            os.environ.pop(k, None)
+    deps.session.active_skill_env.clear()
+    deps.session.active_skill_name = None
+
+
+def _spawn_bg_compaction(
+    message_history: list,
+    deps: CoDeps,
+    primary_model: str,
+) -> "asyncio.Task":
+    """Spawn background compaction as a best-effort latency optimization."""
+    return asyncio.create_task(
+        precompute_compaction(message_history, deps, primary_model)
+    )
+
+
+async def _finalize_turn(
+    turn_result: Any,
+    message_history: list,
+    session_data: Any,
+    deps: CoDeps,
+    frontend: Any,
+    primary_model: str,
+) -> tuple[list, Any, "asyncio.Task | None"]:
+    """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
+
+    Returns (next_message_history, next_session_data, next_bg_compaction_task).
+    Does NOT handle skill-env rollback — that is done by _restore_skill_env() in finally.
+    Does NOT handle /compact or built-in slash-command persistence.
+    """
+    from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
+
+    next_history = turn_result.messages
+
+    # Signal detection — only on clean (non-interrupted, non-error) turns
+    if not turn_result.interrupted and turn_result.outcome != "error":
+        signal = await analyze_for_signals(next_history, primary_model, services=deps.services)
+        await handle_signal(signal, deps, frontend, primary_model)
+
+    # Clear precomputed result (consumed or stale after this turn)
+    deps.runtime.precomputed_compaction = None
+
+    # Touch session and persist
+    next_session = touch_session(session_data)
+    save_session(deps.config.session_path, next_session)
+
+    # Spawn background compaction for the next turn
+    next_task = _spawn_bg_compaction(next_history, deps, primary_model)
+
+    # Emit error banner when outcome is error
+    if turn_result.outcome == "error":
+        console.print("[error]An error occurred during this turn.[/error]")
+
+    return next_history, next_session, next_task
+
+
 def _consume_bg_compaction(
     task: asyncio.Task | None,
     deps: CoDeps,
 ) -> None:
+    """Harvest a completed background compaction task or cancel an unfinished one.
+
+    Contract:
+    - Only reads completed tasks (never awaits or blocks).
+    - Cancels tasks still running — compaction falls back to inline on the next turn.
+    - Writes only deps.runtime.precomputed_compaction (no other state touched).
+    """
     if task is None:
         return
     if task.done():
@@ -118,9 +187,10 @@ async def _chat_loop(verbose: bool = False):
     deps.session.tool_approvals = tool_approvals
 
     stack = AsyncExitStack()
+    # REPL-owned canonical history — updated after each turn; never shared into run_turn() by ref.
     message_history = []
     last_interrupt_time = 0.0
-    bg_compaction_task: asyncio.Task | None = None
+    next_turn_compaction_task: asyncio.Task | None = None
     try:
         _mcp_init_ok = False
         try:
@@ -186,8 +256,8 @@ async def _chat_loop(verbose: bool = False):
 
                 # Opportunistically harvest a completed bg compaction result; cancel if still
                 # running — never block. Correctness falls back to inline compaction.
-                _consume_bg_compaction(bg_compaction_task, deps)
-                bg_compaction_task = None
+                _consume_bg_compaction(next_turn_compaction_task, deps)
+                next_turn_compaction_task = None
 
                 # LLM turn — try/finally guarantees skill-env rollback on all exit paths
                 # (normal completion, KeyboardInterrupt, CancelledError, Exception).
@@ -200,50 +270,12 @@ async def _chat_loop(verbose: bool = False):
                         verbose=verbose,
                         frontend=frontend,
                     )
-                    message_history = turn_result.messages
                 finally:
-                    # Restore env vars saved before skill dispatch. No-op on non-skill turns.
-                    for k, v in _saved_env.items():
-                        if v is not None:
-                            os.environ[k] = v
-                        else:
-                            os.environ.pop(k, None)
-                    # Clear in finally — guaranteed on all exit paths including exceptions.
-                    deps.session.active_skill_env.clear()
-                    deps.session.active_skill_name = None
+                    _restore_skill_env(_saved_env, deps)
 
-                # Signal detection — CC hookify pattern, auto-triggered post-turn.
-                # Structured LLM extraction classifies every completed turn; guardrails in the
-                # prompt prevent false positives on neutral messages.
-                if (
-                    not turn_result.interrupted
-                    and turn_result.outcome != "error"
-                ):
-                    signal = await analyze_for_signals(
-                        message_history,
-                        primary_model,
-                        services=deps.services,
-                    )
-                    await handle_signal(signal, deps, frontend, primary_model)
-
-                # Clear precomputed result (consumed or stale)
-                deps.runtime.precomputed_compaction = None
-
-                # Touch session after each turn
-                session_data = touch_session(session_data)
-                save_session(deps.config.session_path, session_data)
-
-                # Best-effort latency optimization — correctness does not depend on this task.
-                # Spawn background compaction for the next turn.
-                bg_compaction_task = asyncio.create_task(
-                    precompute_compaction(
-                        message_history, deps, primary_model,
-                    )
+                message_history, session_data, next_turn_compaction_task = await _finalize_turn(
+                    turn_result, message_history, session_data, deps, frontend, primary_model
                 )
-
-                # Pattern-match on TurnOutcome
-                if turn_result.outcome == "error":
-                    console.print("[error]An error occurred during this turn.[/error]")
 
             except EOFError:
                 break
@@ -256,8 +288,8 @@ async def _chat_loop(verbose: bool = False):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        if bg_compaction_task is not None:
-            bg_compaction_task.cancel()
+        if next_turn_compaction_task is not None:
+            next_turn_compaction_task.cancel()
         await deps.services.task_runner.shutdown()
         await stack.aclose()
         deps.services.shell.cleanup()

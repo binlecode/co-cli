@@ -302,6 +302,10 @@ class CoRuntimeState:
     """
 
     precomputed_compaction: Any = field(default=None, repr=False)
+    # turn_usage: authoritative per-turn usage accumulator.
+    # Reset to None at the start of each foreground turn by run_turn().
+    # The foreground orchestrator merges each segment's usage after _execute_stream_segment().
+    # Sub-agent tools may also merge usage into it during the same turn.
     turn_usage: RunUsage | None = None
     startup_statuses: list[str] = field(default_factory=list)
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)

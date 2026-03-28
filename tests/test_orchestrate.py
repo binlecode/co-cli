@@ -15,7 +15,8 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from co_cli.context._orchestrate import FrontendProtocol, _TurnState, _execute_stream_segment, run_turn
+from co_cli.context._orchestrate import _TurnState, _execute_stream_segment, run_turn
+from co_cli.display._core import FrontendProtocol
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 # GraphAgentState is a pydantic-ai internal type (private module). It is used in
@@ -1109,4 +1110,99 @@ async def test_run_turn_interrupt_drops_dangling_tool_call_response() -> None:
     # The dangling ModelResponse (with ToolCallPart) must have been dropped
     assert dangling_response not in turn.messages, (
         "Dangling ModelResponse with ToolCallPart should be truncated from history"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 8 regression coverage: cleanup on all _execute_stream_segment exit paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_segment_cleanup_on_provider_http_error() -> None:
+    """frontend.cleanup() must be called even when the stream raises ModelHTTPError."""
+    frontend = RecordingFrontend()
+    agent = InspectingSequenceAgent([ModelHTTPError(503, "test-model", {"error": "server error"})])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    _ts = _TurnState(current_input="x", current_history=[])
+    with pytest.raises(ModelHTTPError):
+        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+
+    assert ("cleanup", None) in frontend.events, "cleanup must be called on ModelHTTPError exit"
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_segment_cleanup_on_api_error() -> None:
+    """frontend.cleanup() must be called even when the stream raises ModelAPIError."""
+    frontend = RecordingFrontend()
+    agent = InspectingSequenceAgent([ModelAPIError("test-model", "network failure")])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    _ts = _TurnState(current_input="x", current_history=[])
+    with pytest.raises(ModelAPIError):
+        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+
+    assert ("cleanup", None) in frontend.events, "cleanup must be called on ModelAPIError exit"
+
+
+@pytest.mark.asyncio
+async def test_execute_stream_segment_cleanup_on_interrupt() -> None:
+    """frontend.cleanup() must be called when the stream raises CancelledError."""
+    frontend = RecordingFrontend()
+    agent = InspectingSequenceAgent([asyncio.CancelledError()])
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    _ts = _TurnState(current_input="x", current_history=[])
+    with pytest.raises(asyncio.CancelledError):
+        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+
+    assert ("cleanup", None) in frontend.events, "cleanup must be called on CancelledError exit"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_usage_reset_and_populated() -> None:
+    """deps.runtime.turn_usage is reset at turn start and populated after the segment.
+
+    Any stale value on deps.runtime.turn_usage before the turn must be cleared, and
+    after the turn completes, turn_usage must be non-None (populated from the segment result).
+    """
+    import json
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    call_part = ToolCallPart(tool_name="run_shell_command", args=json.dumps({"cmd": "ls"}), tool_call_id="t1")
+    return_part = ToolReturnPart(tool_name="run_shell_command", content="file.txt", tool_call_id="t1")
+
+    deferred_result = _make_deferred_result("run_shell_command", {"cmd": "ls"}, "t1")
+    normal_result = _make_agent_run_result("done", finish_reason="stop")
+
+    agent = SequenceEventAgent([
+        [AgentRunResultEvent(result=deferred_result)],
+        [
+            FunctionToolCallEvent(part=call_part),
+            FunctionToolResultEvent(result=return_part),
+            AgentRunResultEvent(result=normal_result),
+        ],
+    ])
+    frontend = RecordingFrontend(approval_policy="approve")
+
+    # Seed stale turn_usage to verify it gets reset at turn start
+    from pydantic_ai.usage import RunUsage
+    deps.runtime.turn_usage = RunUsage(requests=99)
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="list files",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    # turn_usage must be populated (not the stale pre-turn value of 99 requests)
+    assert deps.runtime.turn_usage is not None
+    assert deps.runtime.turn_usage.requests != 99, (
+        "turn_usage should be reset at turn start, not carry over stale value"
     )
