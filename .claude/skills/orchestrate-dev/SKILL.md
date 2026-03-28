@@ -1,6 +1,6 @@
 ---
 name: orchestrate-dev
-description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates, syncs docs, and ships the delivery report. Run after Gate 1 (PO + TL approved the plan).
+description: Execute a reviewed plan as a dev team — TL leads and codes alongside Dev subagents. TL assigns tasks, everyone implements, TL integrates, syncs docs, and appends delivery summary to TODO. Run after Gate 1 (PO + TL approved the plan).
 ---
 
 # Dev Orchestration Workflow
@@ -9,9 +9,9 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 **Invocation:** `/orchestrate-dev <slug>`
 
-Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Produces `docs/DELIVERY-<slug>.md`. Deletes TODO alongside DELIVERY at Gate 3.
+Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` — never deletes mid-delivery. Appends delivery summary to TODO. TODO deleted after Gate 2 PASS.
 
-**Consumes:** docs/TODO-<slug>.md. **Produces:** docs/DELIVERY-<slug>.md (temporary)
+**Consumes:** docs/TODO-<slug>.md. **Produces:** ✓ DONE marks + delivery summary appended to TODO.
 
 ---
 
@@ -47,6 +47,17 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` 
    - 3+ independent task groups → TL takes the critical-path tasks; spawn one Dev subagent per additional parallel group
    - TL takes tasks touching cross-cutting concerns (renames, schema changes, shared modules) — these benefit from TL's full plan context
    - **Execution timing follows the dependency graph, not role:** TL and Dev subagents whose tasks are fully independent run in parallel. When a Dev task has a prerequisite owned by TL, TL completes that prerequisite first, then spawns the Dev subagent. Never spawn a Dev subagent for a task whose prerequisites are unfinished.
+   - **When spawning each Dev subagent**, pass the task spec AND this explicit contract alongside it:
+     ```
+     Constraints (non-negotiable):
+     - No unit tests under any circumstances (repo policy)
+     - No over-engineering — implement the minimal change that satisfies the spec
+     - No dead code — remove any unreachable code your change leaves behind
+     - No stale imports — remove any import unused after your edit
+     - No lazy imports outside patterns already present in the file
+     - Run pytest scoped to your affected test files before reporting back
+     - Report: files changed, what was done, test results, any ⚠ Extra file: paths
+     ```
    - Announce assignments and sequencing before any work begins:
      ```
      ## Team
@@ -75,6 +86,7 @@ Before writing a single line of code, validate every task in execution order:
 - `done_when:` must be machine-verifiable (a command that returns a result, not a subjective
   judgment). Acceptable forms: `grep <pattern> <file>`, `test X passes`, `file <path> exists`,
   `file <path> contains field Z`, `doc section X matches code behavior`.
+- **For tasks with a non-N/A `success_signal`** (user-facing behavior): `done_when` must be a test run or behavioral command, not only a grep or file-exists check. A grep confirms structure; it does not confirm the feature works. If `done_when` is grep-only for a user-facing task, stop and ask TL to strengthen it before proceeding.
 
 If any task fails validation, stop immediately with:
 ```
@@ -115,6 +127,17 @@ After implementing, read every changed file and check:
 
 **Project coding rules:** Apply every item from the Engineering Rules loaded at pre-flight.
 
+**Do NOT ship with any of the following — fix before Step 5:**
+
+| Check | What to look for |
+|-------|-----------------|
+| **Dead code** | Any function, variable, or import defined but unreachable after this change — including renamed leftovers (e.g. `_OLD_NAME`, `_AGENT_FOR_RETRY`) |
+| **Stale imports** | Anything imported but unused after the edit |
+| **Misplaced lazy imports** | Lazy imports added outside patterns already present in the file |
+| **Unit tests** | Any test using mocks, patches, `monkeypatch`, or isolated helpers with no real services — blocking, remove it |
+| **Scope creep** | Changes outside `files:` not announced as `⚠ Extra file:` |
+| **Over-engineering** | Abstractions, utilities, or helpers not required by the task spec — if a junior wrote it and you'd push back, remove it |
+
 **Security:**
 - Command injection (user input passed to shell without sanitization)
 - Path traversal (unvalidated paths used in file operations)
@@ -151,7 +174,7 @@ Execute the `done_when` criterion literally:
   Do not proceed to next task.
 ```
 
-**Total stop on failure.** When any task is blocked, halt execution for all remaining tasks — including tasks with no prerequisites. Mark every unstarted task as `— skipped` in the delivery report. Partial delivery is not valid; the plan must be re-entered from the blocked task after the issue is resolved. **Exception: if a Dev subagent was already running on a fully independent task when TL's failure occurred, collect its output — do not discard it. Report it in the delivery report as completed but not integrated; it may be reusable after the blocker is resolved.**
+**Total stop on failure.** When any task is blocked, halt execution for all remaining tasks — including tasks with no prerequisites. Mark every unstarted task as `— skipped` in the delivery summary. Partial delivery is not valid; the plan must be re-entered from the blocked task after the issue is resolved. **Exception: if a Dev subagent was already running on a fully independent task when TL's failure occurred, collect its output — do not discard it. Record it in the delivery summary as completed but not integrated; it may be reusable after the blocker is resolved.**
 
 ### Step 6 — Report task result
 
@@ -186,6 +209,8 @@ uv run pytest <test_file_1> <test_file_2> ... -v 2>&1 | tee .pytest-logs/$(date 
 Collect touched test files from completed tasks only. If none were touched, skip and record
 "no tests run — no test files touched by completed tasks."
 
+**Any failure = stop. Do RCA: read the failing test, trace to root cause in source, fix it, re-run. Never dismiss a failure as flaky without running it 3 times and identifying the specific cause. Do not proceed to Step 2 with a red suite.**
+
 Record: command run, number passed, number failed, any failure output.
 
 ### Step 2 — Independent code review
@@ -202,8 +227,12 @@ The reviewer has no access to the implementation conversation — cold read only
 - Spec fidelity: does the diff implement exactly the task spec, no more, no less
 - Security: command injection, path traversal, SQL injection, missing input validation
 - Cross-task coherence: do the combined changes from all tasks form a consistent whole
+- **Dead code:** any function, variable, or import in the diff that is unreachable or unused after the change
+- **Stale imports:** anything imported but not used in the post-change file
+- **Unit tests:** any test in the diff using mocks, patches, or isolated helpers — blocking regardless of other quality
+- **Over-engineering:** any abstraction, utility, or helper in the diff not required by the task spec — if found, simplify it before integration, do not just flag it
 
-**Reviewer output** (append to `docs/DELIVERY-<slug>.md` under `## Independent Review`):
+**Reviewer output** (append to `docs/TODO-<slug>.md` under `## Independent Review`):
 
 ```markdown
 ## Independent Review
@@ -215,7 +244,7 @@ The reviewer has no access to the implementation conversation — cold read only
 **Overall: clean / <N> blocking / <N> minor**
 ```
 
-If any blocking findings: fix before writing the final delivery report. Minor findings:
+If any blocking findings: fix before proceeding to Step 3. Minor findings:
 record and proceed — TL decides at Gate 2.
 
 Record result: clean / N blocking / N minor.
@@ -240,31 +269,36 @@ Mark a completed task by prepending `✓ DONE` to its heading, e.g.:
 ### ✓ DONE — TASK-1: <title>
 ```
 
-- **All tasks shipped (done or deferred):** mark all shipped tasks `✓ DONE`. Keep the file — it tracks the full delivery through Gate 3. Delete it only after PO acceptance at Gate 3, in the same session that deletes `DELIVERY-<slug>.md`.
-- **Deferred items remain:** mark shipped tasks done; leave deferred tasks unmarked. Same Gate 3 deletion rule applies.
+- **All tasks shipped (done or deferred):** mark all shipped tasks `✓ DONE`. Keep the file — it tracks the full delivery through Gate 2 PASS. Delete after review-impl returns PASS verdict.
+- **Deferred items remain:** mark shipped tasks done; leave deferred tasks unmarked. Same Gate 2 PASS deletion rule applies.
 - **Partial delivery (some tasks blocked):** mark ✓ DONE for passed tasks; leave blocked and unstarted tasks unmarked.
-- Apply this update before writing the delivery report. The report must describe the current TODO state.
+- Apply this update before appending the delivery summary. The summary must describe the current TODO state.
 - If a passed task is not marked `✓ DONE` in `docs/TODO-<slug>.md`, the delivery tracking is incomplete. Fix before proceeding.
 
 ---
 
-## Phase 4 — Delivery Report
+## Phase 4 — Delivery Summary
 
-Fix any test failures or doc sync inaccuracies before writing this report — it reflects final state after fixes, not intermediate state.
+Fix any test failures or doc sync inaccuracies before appending this summary — it reflects final state after fixes, not intermediate state.
 
-Before writing, read the delivery report template now:
+Append to `docs/TODO-<slug>.md`:
 
-> Read: .claude/skills/orchestrate-dev/assets/DELIVERY-template.md
+```markdown
+## Delivery Summary — <date>
 
-Use that template to write `docs/DELIVERY-<slug>.md`. Fill in every section with the actual results from this delivery run.
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | <done_when text> | ✓ pass |
+| TASK-2 | <done_when text> | ✗ blocked: <reason> |
+| TASK-3 | <done_when text> | — skipped |
 
-**DELIVERED** = all tasks passed, all tests pass, independent review clean or minor only, doc sync clean or fixed.
-**BLOCKED** = one or more tasks failed their `done_when` criterion, or tests still failing after fix attempts.
+**Tests:** <full suite / touched files> — <N> passed, <N> failed
+**Independent Review:** clean / <N> blocking / <N> minor
+**Doc Sync:** clean / fixed (<what was fixed>)
 
-**If BLOCKED — escalation note for TL:**
-Blocked task(s): [list tasks that failed `done_when`]. Review needed:
-- If the plan is wrong (bad done_when, missing step): revise `docs/TODO-<slug>.md` and re-run
-- If the code is fixable without plan changes: fix and re-run from the blocked task
-- If the issue requires new work: open a follow-up TODO
+**Overall: DELIVERED / BLOCKED**
+<one sentence summary. If BLOCKED: list blocked tasks and whether the fix needs plan revision, code fix, or follow-up TODO.>
+```
 
-**Lifecycle:** This file is the artifact for Gate 2 (TL delivery check) and Gate 3 (PO acceptance). It must include an explicit `## Gate 3 Cleanup` section. After Gate 3, delete `docs/DELIVERY-<slug>.md` in the same session — it is temporary scaffolding, not a permanent project record.
+**DELIVERED** = all tasks passed, tests pass, independent review clean or minor only, doc sync clean or fixed.
+**BLOCKED** = one or more tasks failed `done_when`, or tests still failing after fix attempts.

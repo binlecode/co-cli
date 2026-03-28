@@ -71,7 +71,7 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
 1. Search the codebase for relevant modules, patterns, and tests related to the feature.
 2. Read related DESIGN and TODO docs in `docs/`. **Current-state validation:** Before drafting, do two checks:
    - **Doc/source accuracy:** Scan relevant source files and DESIGN docs for accuracy against the planned scope. Flag phantom features, schema mismatches, and stale module names.
-   - **Workflow artifact hygiene:** Check for orphaned DELIVERY docs (delivered but not deleted) and stale TODO files with no remaining unshipped work. Note any hygiene issues in the Context section.
+   - **Workflow artifact hygiene:** Check for stale TODO files with no remaining unshipped work (all tasks `✓ DONE` and no pending review). Note any hygiene issues in the Context section.
    If the current state is too inconsistent to plan safely, stop and surface it:
    ```
    ✗ Current state is too inconsistent to plan safely.
@@ -90,6 +90,7 @@ Note: the Gate 1 final section is appended first, then the `---` separator and `
   - Stable ID (TASK-1, TASK-2…)
   - `files:` list of paths to create or modify
   - `done_when:` a single, verifiable output (e.g. "test X passes", "file Y exists with field Z", "doc section X matches code behavior"). When `done_when` includes test stub code that captures library output (Rich console, custom fixtures, patched modules), note that the stub is a behavioral spec — Dev is responsible for adapting it to the runtime context. Do not assume plain stdlib output from a project that uses a custom theme or console wrapper. **`done_when` must reflect what the test literally checks** — if you write "registers X tools", provide a concrete check command (e.g. `assert len(agent._function_tools) == 2`). If you cannot write the check, use the simpler assertion the test actually validates.
+    **For tasks with a non-N/A `success_signal`** (user-facing behavior): `done_when` must be a test run or behavioral command — not only a grep or file-exists check. A grep confirms structure; it does not confirm the feature works. Prefer: `uv run pytest tests/test_<feature>.py`, `uv run co <command> succeeds`, or a specific assertion that exercises the runtime behavior. Core Dev will flag grep-only `done_when` on user-facing tasks as a minor issue.
   - `success_signal:` one sentence — what a user observes when this works correctly in production. Optional for refactor tasks with no user-visible behavior change (use N/A).
   - `prerequisites: [TASK-1, TASK-2]` — optional; tasks that must complete before this one.
     Omit if there are no dependencies. Always use list syntax, even for a single dependency.
