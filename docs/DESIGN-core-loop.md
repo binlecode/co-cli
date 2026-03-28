@@ -21,7 +21,7 @@ graph LR
 
     subgraph Orchestrate ["Orchestration (_orchestrate.py)"]
         RunTurn[run_turn]
-        Segment[_run_stream_turn<br/>stream one segment]
+        Segment[_run_stream_segment<br/>stream one segment]
         Approvals[_collect_deferred_tool_approvals]
         SegmentResult["AgentRunResult + streamed_text"]
     end
@@ -115,13 +115,12 @@ flowchart TD
     Q -->|continue| A
     Q -->|error| R[print generic error banner]
     R --> A
-    Q -->|stop| Z
 ```
 
 Notes:
 - Built-in slash commands never enter the agent turn.
 - Skill commands are expanded before `run_turn()` so the agent sees normal user text, not a slash token.
-- The current `run_turn()` implementation returns `"continue"` and `"error"`; `"stop"` is checked by `main.py` but is not emitted by `_orchestrate.py` today.
+- `TurnOutcome` is `Literal["continue", "error"]`. Both values are emitted by `run_turn()`.
 
 ### 2.2 `run_turn()` State Machine
 
@@ -129,15 +128,15 @@ Notes:
 
 ```mermaid
 flowchart TD
-    A[reset SafetyState and init retry state] --> B[_run_stream_turn with current_input and current_history]
+    A[reset SafetyState and init retry state] --> B[_run_stream_segment with current_input and current_history]
     B --> C[turn_usage = result.usage]
     C --> D{result.output is DeferredToolRequests?}
 
     D -->|yes| E[_collect_deferred_tool_approvals]
     E --> F[current_input = None]
     F --> G[current_history = result.all_messages]
-    G --> H[current_deferred_results = approvals]
-    H --> I[_run_stream_turn with user_input=None, current_history, deferred_tool_results]
+    G --> H[tool_approval_decisions = approvals]
+    H --> I[_run_stream_segment with user_input=None, current_history, deferred_tool_results]
     I --> J[turn_usage = result.usage]
     J --> D
 
@@ -173,9 +172,9 @@ Implementation rules:
 - `current_history`, not `message_history`, is the retry input after a reflected HTTP 400.
 - Approval resume is part of the same turn. No approval answer is turned into a new chat message.
 
-### 2.3 `_run_stream_turn()` Responsibilities
+### 2.3 `_run_stream_segment()` Responsibilities
 
-`_run_stream_turn()` is a stream adapter. It calls `agent.run_stream_events(...)`, forwards text, thinking, tool start, tool progress, and tool completion events to `TerminalFrontend`, captures the final `AgentRunResult`, flushes any buffered output, and returns `(result, streamed_text)`.
+`_run_stream_segment()` is a stream adapter. It calls `agent.run_stream_events(...)`, forwards text, thinking, tool start, tool progress, and tool completion events to `TerminalFrontend`, captures the final `AgentRunResult`, flushes any buffered output, and returns `(result, streamed_text)`.
 
 Processing outline:
 
@@ -188,7 +187,7 @@ run_stream_events(...)
   -> function exit flushes any remaining buffers and calls frontend.cleanup()
 ```
 
-What `_run_stream_turn()` does not do:
+What `_run_stream_segment()` does not do:
 - no retry logic
 - no approval decisions
 - no conversation-history mutation beyond returning `result.all_messages()`
@@ -317,7 +316,7 @@ After `run_turn()` returns, `_chat_loop()` does the rest of the turn-finalizatio
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop, slash dispatch, skill env injection, post-turn hooks, background compaction scheduling |
-| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_run_stream_turn()`, `_collect_deferred_tool_approvals()`, interrupt patching |
+| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_run_stream_segment()`, `_collect_deferred_tool_approvals()`, interrupt patching |
 | `co_cli/agent.py` | Main agent construction: instructions, history processors, native tools, MCP toolsets |
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |

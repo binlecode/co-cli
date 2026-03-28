@@ -452,7 +452,7 @@ System-relevant settings called out here:
 | `co_cli/deps.py` | `CoDeps` groups, sub-agent dependency isolation |
 | `co_cli/main.py` | `chat_loop()`, startup assembly, REPL |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` |
-| `co_cli/context/_orchestrate.py` | `run_turn()`, `_run_stream_turn()`, `_collect_deferred_tool_approvals()` |
+| `co_cli/context/_orchestrate.py` | `run_turn()`, `_run_stream_segment()`, `_collect_deferred_tool_approvals()` |
 | `co_cli/context/_history.py` | History processors and compaction |
 | `co_cli/commands/_commands.py` | Slash commands and skill dispatch surface |
 | `co_cli/config.py` | Settings model and precedence rules |
