@@ -176,7 +176,7 @@ Settings relevant to the agent loop. Full settings inventory in `co_cli/config.p
 | 1. Agents + Orchestration | `main.py` | CLI entry point, chat loop, OTel setup |
 | 1. Agents + Orchestration | `bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — startup assembly and inline wakeup steps |
 | 1. Agents + Orchestration | `agent.py` | `build_agent()` factory — model selection, tool registration, system prompt |
-| 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_run_stream_turn()`, `_collect_deferred_tool_approvals()` |
+| 1. Agents + Orchestration | `context/_orchestrate.py` | `TurnResult`, `run_turn()`, `_run_stream_segment()`, `_collect_deferred_tool_approvals()` |
 | 1. Agents + Orchestration | `tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
 | 2. Runtime Deps + Session State | `deps.py` | `CoDeps` dataclass — runtime dependencies injected via `RunContext`; `SessionApprovalRule` frozen dataclass |
 | 2. Runtime Deps + Session State | `bootstrap/_check.py` | `RuntimeCheck` dataclass + `check_runtime(deps) → RuntimeCheck` — primary runtime diagnostic aggregator (capabilities, status, findings, fallbacks, mcp_probes, summary_lines); `check_agent_llm`, `check_settings` |

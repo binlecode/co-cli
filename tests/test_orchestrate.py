@@ -4,17 +4,18 @@ RecordingFrontend is a real FrontendProtocol implementation (not a mock)
 that records all events for assertions.
 """
 
+import asyncio
 from typing import Any
 
 import pytest
 from pydantic_ai import AgentRunResult, AgentRunResultEvent, DeferredToolRequests, FinalResultEvent
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UsageLimitExceeded
 
 from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from co_cli.context._orchestrate import FrontendProtocol, _patch_dangling_tool_calls, _run_stream_turn, run_turn
+from co_cli.context._orchestrate import FrontendProtocol, _run_stream_segment, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 # GraphAgentState is a pydantic-ai internal type (private module). It is used in
@@ -100,13 +101,17 @@ class RecordingFrontend:
 # ---------------------------------------------------------------------------
 
 
-# StaticEventAgent and SequenceEventAgent are deliberate minimal dispatch fixtures.
-# They are not mocks (no unittest.mock, no monkeypatch). They exist because
-# _run_stream_turn() dispatch logic cannot be exercised with a real agent without
-# nondeterminism — a real model may emit events in any order and content varies.
-# These fixtures provide the exact event sequences needed to test specific branches.
+# StaticEventAgent, SequenceEventAgent, and InspectingSequenceAgent are deliberate
+# minimal dispatch fixtures. They are not mocks (no unittest.mock, no monkeypatch).
+# They exist because _run_stream_segment() dispatch logic cannot be exercised with a
+# real agent without nondeterminism — a real model may emit events in any order and
+# content varies. These fixtures provide the exact event sequences needed to test
+# specific branches and segment boundaries within a turn.
 class StaticEventAgent:
-    """Minimal async event source compatible with _run_stream_turn()."""
+    """Async event source that yields a fixed event sequence on every call.
+
+    Use for single-segment tests where the same deterministic event list is sufficient.
+    """
 
     def __init__(self, events: list[Any]) -> None:
         self._events = events
@@ -117,7 +122,11 @@ class StaticEventAgent:
 
 
 class SequenceEventAgent:
-    """Event source that returns a different event batch on each run."""
+    """Async event source that advances through a list of event batches, one per call.
+
+    Use for multi-segment turn tests where each _run_stream_segment() call should see
+    a different sequence (e.g. initial segment → approval-resume segment).
+    """
 
     def __init__(self, runs: list[list[Any]]) -> None:
         self._runs = runs
@@ -131,7 +140,12 @@ class SequenceEventAgent:
 
 
 class InspectingSequenceAgent:
-    """Event source that records each call and can raise on a specific run."""
+    """Async event source that records each call's kwargs and can raise on a specific run.
+
+    Each entry in `.calls` captures user_input, message_history, and deferred_tool_results
+    (tool approval decisions passed at the pydantic-ai boundary) for the corresponding call.
+    Pass an Exception instance in `runs` to simulate a segment failure on that run.
+    """
 
     def __init__(self, runs: list[list[Any] | Exception]) -> None:
         self._runs = runs
@@ -146,14 +160,14 @@ class InspectingSequenceAgent:
         })
         run = self._runs[self._index]
         self._index += 1
-        if isinstance(run, Exception):
+        if isinstance(run, BaseException):
             raise run
         for event in run:
             yield event
 
 
 # ---------------------------------------------------------------------------
-# _run_stream_turn regression coverage
+# _run_stream_segment regression coverage
 # ---------------------------------------------------------------------------
 
 
@@ -164,11 +178,12 @@ async def test_stream_events_preserves_text_from_part_start_event():
     agent = StaticEventAgent([
         PartStartEvent(index=0, part=TextPart(content="Hel")),
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta="lo")),
+        AgentRunResultEvent(result=_make_agent_run_result("Hello", finish_reason="stop")),
     ])
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_turn(
+    _, streamed_text = await _run_stream_segment(
         agent,
         user_input="hello",
         deps=deps,
@@ -192,11 +207,12 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
     agent = StaticEventAgent([
         PartStartEvent(index=0, part=ThinkingPart(content="Sure")),
         PartDeltaEvent(index=0, delta=ThinkingPartDelta(content_delta=", thing")),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_turn(
+    _, streamed_text = await _run_stream_segment(
         agent,
         user_input="why",
         deps=deps,
@@ -221,11 +237,12 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
         PartStartEvent(index=0, part=TextPart(content="The")),
         FinalResultEvent(tool_name=None, tool_call_id=None),
         PartDeltaEvent(index=0, delta=TextPartDelta(content_delta=" sky")),
+        AgentRunResultEvent(result=_make_agent_run_result("The sky", finish_reason="stop")),
     ])
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_turn(
+    _, streamed_text = await _run_stream_segment(
         agent,
         user_input="why",
         deps=deps,
@@ -318,7 +335,7 @@ async def test_run_turn_silent_on_normal_finish_reason():
 async def test_run_turn_calls_on_final_output_when_no_text_was_streamed() -> None:
     """Model response without streaming events reaches on_final_output.
 
-    When _run_stream_turn() returns streamed_text=False (no PartStart/PartDelta for text),
+    When _run_stream_segment() returns streamed_text=False (no PartStart/PartDelta for text),
     run_turn() must route result.output to frontend.on_final_output(). If this branch
     silently breaks, the user sees a blank response with no error.
     """
@@ -386,10 +403,13 @@ async def test_stream_events_tool_start_fires_immediately_on_first_tool_call():
     """
     frontend = RecordingFrontend()
     tool_part = ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")
-    agent = StaticEventAgent([FunctionToolCallEvent(part=tool_part)])
+    agent = StaticEventAgent([
+        FunctionToolCallEvent(part=tool_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
+    ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="hello", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -417,10 +437,11 @@ async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independen
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=tool1),
         FunctionToolCallEvent(part=tool2),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="hello", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -433,84 +454,6 @@ async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independen
     )
     tool_ids = [e[1][0] for e in tool_start_events]
     assert "c1" in tool_ids and "c2" in tool_ids
-
-
-# ---------------------------------------------------------------------------
-# Bug-finding: _patch_dangling_tool_calls edge cases
-# ---------------------------------------------------------------------------
-
-
-def test_patch_dangling_calls_already_answered_not_patched():
-    """Calls that already have a ToolReturnPart are not patched again."""
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="hi")]),
-        ModelResponse(parts=[ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1")]),
-        ModelRequest(parts=[ToolReturnPart(tool_name="recall_memory", content="memories", tool_call_id="c1")]),
-    ]
-    result = _patch_dangling_tool_calls(msgs)
-    # No new messages added — c1 is already answered
-    assert len(result) == len(msgs), (
-        "Patching added messages for an already-answered tool call. "
-        "The answered_ids check should have prevented this."
-    )
-
-
-def test_patch_dangling_calls_empty_returns_unchanged():
-    """Empty message list is returned unchanged without error."""
-    result = _patch_dangling_tool_calls([])
-    assert result == []
-
-
-def test_patch_dangling_calls_no_model_responses_unchanged():
-    """Message list with no ModelResponse is returned unchanged."""
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="hi")]),
-    ]
-    result = _patch_dangling_tool_calls(msgs)
-    assert result == msgs
-
-
-def test_patch_dangling_calls_multiple_unanswered_in_one_response():
-    """Multiple dangling calls from one ModelResponse all get patched.
-
-    When a model response contains two tool calls and neither has a return,
-    both must be patched in a single appended ModelRequest — not two separate ones.
-    """
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="hi")]),
-        ModelResponse(parts=[
-            ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1"),
-            ToolCallPart(tool_name="web_search", args="{}", tool_call_id="c2"),
-        ]),
-    ]
-    result = _patch_dangling_tool_calls(msgs)
-    assert len(result) == len(msgs) + 1, "Expected exactly one appended ModelRequest"
-    patch_msg = result[-1]
-    assert isinstance(patch_msg, ModelRequest)
-    patched_ids = {p.tool_call_id for p in patch_msg.parts if isinstance(p, ToolReturnPart)}
-    assert patched_ids == {"c1", "c2"}, (
-        f"Expected both c1 and c2 to be patched, got: {patched_ids}"
-    )
-
-
-def test_patch_dangling_calls_partial_answered():
-    """Only the unanswered call is patched when one of two calls already has a return."""
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="hi")]),
-        ModelResponse(parts=[
-            ToolCallPart(tool_name="recall_memory", args="{}", tool_call_id="c1"),
-            ToolCallPart(tool_name="web_search", args="{}", tool_call_id="c2"),
-        ]),
-        # c1 answered, c2 dangling
-        ModelRequest(parts=[ToolReturnPart(tool_name="recall_memory", content="result", tool_call_id="c1")]),
-    ]
-    result = _patch_dangling_tool_calls(msgs)
-    assert len(result) == len(msgs) + 1
-    patch_msg = result[-1]
-    patched_ids = {p.tool_call_id for p in patch_msg.parts if isinstance(p, ToolReturnPart)}
-    assert patched_ids == {"c2"}, (
-        f"Expected only c2 (unanswered) to be patched, got: {patched_ids}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -536,10 +479,11 @@ async def test_stream_events_shell_result_reaches_tool_complete_as_str():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="list files", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -574,10 +518,11 @@ async def test_stream_events_empty_tool_result_reaches_tool_complete_as_none():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="hi", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -607,10 +552,11 @@ async def test_stream_events_retry_prompt_closes_tool_surface_with_none():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=retry_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="search", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -640,10 +586,11 @@ async def test_stream_events_retry_prompt_clears_progress_callback():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=retry_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     frontend = RecordingFrontend()
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="search", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -672,10 +619,11 @@ async def test_stream_events_raw_dict_result_renders_as_summary():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="hi", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -696,13 +644,13 @@ async def test_stream_events_raw_dict_result_renders_as_summary():
 async def test_stream_events_tool_progress_callback_curried_with_tool_id():
     """tool_progress_callback is curried with the tool_id from FunctionToolCallEvent.
 
-    When _run_stream_turn() receives FunctionToolCallEvent it sets
+    When _run_stream_segment() receives FunctionToolCallEvent it sets
     deps.runtime.tool_progress_callback to a closure that calls
     frontend.on_tool_progress(tool_id, msg). Calling that callback must
     produce an on_tool_progress event with the correct tool_id — not a
     generic status line and not a new tool_start event.
 
-    We drive the callback manually at the point where _run_stream_turn()
+    We drive the callback manually at the point where _run_stream_segment()
     processes FunctionToolCallEvent by subclassing RecordingFrontend to
     invoke the callback after on_tool_start is fired by the event loop.
     """
@@ -713,7 +661,7 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
 
         def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
             super().on_tool_start(tool_id, name, args_display)
-            # At this point _run_stream_turn() sets the callback immediately after
+            # At this point _run_stream_segment() sets the callback immediately after
             # returning from on_tool_start, so we simulate progress that happens
             # between start and result by calling frontend.on_tool_progress directly.
             # This validates the RecordingFrontend contract: progress events carry
@@ -731,9 +679,10 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="check", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -774,10 +723,11 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="recall", deps=deps, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -1059,7 +1009,7 @@ async def test_run_turn_reflection_after_resume_uses_resume_history() -> None:
 async def test_tool_args_display_known_tools() -> None:
     """_tool_args_display returns the primary arg value for registered tools and '' for unknown.
 
-    Drives three cases through _run_stream_turn and checks on_tool_start args_display:
+    Drives three cases through _run_stream_segment and checks on_tool_start args_display:
     - web_search with query arg
     - run_shell_command with cmd arg
     - unknown tool name falls back to empty string
@@ -1075,8 +1025,9 @@ async def test_tool_args_display_known_tools() -> None:
         agent = StaticEventAgent([
             FunctionToolCallEvent(part=call_part),
             FunctionToolResultEvent(result=return_part),
+            AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
         ])
-        await _run_stream_turn(
+        await _run_stream_segment(
             agent, user_input="x", deps=deps, message_history=[],
             model_settings={}, usage_limits=UsageLimits(request_limit=5),
             usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
@@ -1137,3 +1088,82 @@ async def test_run_turn_emits_co_turn_span() -> None:
     assert co_turn_span.attributes["turn.outcome"] == "continue"
     assert co_turn_span.attributes["turn.interrupted"] == False
     assert otel_trace.get_tracer_provider() is _orig
+
+
+# ---------------------------------------------------------------------------
+# Bug-finding: UsageLimitExceeded and interrupt stop paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_turn_usage_limit_exceeded_emits_status_and_returns_continue() -> None:
+    """UsageLimitExceeded emits a status message and returns outcome=continue immediately.
+
+    No grace summary segment is fired — one model call total. If the grace turn is
+    re-introduced, this test will see a second model call or a missing status event.
+    """
+    agent = InspectingSequenceAgent([UsageLimitExceeded("request_limit=1 exceeded")])
+    frontend = RecordingFrontend()
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="do something",
+        deps=deps,
+        message_history=[],
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue"
+    assert turn.interrupted is False
+    status_messages = [msg for kind, msg in frontend.events if kind == "status"]
+    assert any("Turn limit reached" in msg for msg in status_messages), (
+        f"Expected 'Turn limit reached' status, got: {status_messages}"
+    )
+    # Exactly one model call — no grace segment
+    assert len(agent.calls) == 1, (
+        f"Expected 1 model call (no grace segment), got {len(agent.calls)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_turn_interrupt_drops_dangling_tool_call_response() -> None:
+    """CancelledError truncates the last ModelResponse if it contains ToolCallParts.
+
+    When a turn is interrupted mid-tool-call, the last ModelResponse (containing the
+    unanswered ToolCallPart) must be dropped. The abort marker is the final message.
+    If the old _patch_dangling_tool_calls behavior is re-introduced, this test will
+    see a fake ToolReturnPart ModelRequest instead of a truncated history.
+    """
+    dangling_response = ModelResponse(parts=[
+        ToolCallPart(tool_name="run_shell_command", args={"cmd": "ls"}, tool_call_id="t1"),
+    ], finish_reason="tool-calls")
+    history = [
+        ModelRequest(parts=[UserPromptPart(content="list files")]),
+        dangling_response,
+    ]
+    agent = InspectingSequenceAgent([asyncio.CancelledError()])
+    frontend = RecordingFrontend()
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="list files",
+        deps=deps,
+        message_history=history,
+        model_settings={},
+        frontend=frontend,
+    )
+
+    assert turn.interrupted is True
+    assert turn.outcome == "continue"
+    # Last message must be the abort marker UserPromptPart
+    last = turn.messages[-1]
+    assert isinstance(last, ModelRequest), f"Expected ModelRequest abort marker, got {type(last)}"
+    assert isinstance(last.parts[0], UserPromptPart)
+    assert "interrupted" in last.parts[0].content.lower()
+    # The dangling ModelResponse (with ToolCallPart) must have been dropped
+    assert dangling_response not in turn.messages, (
+        "Dangling ModelResponse with ToolCallPart should be truncated from history"
+    )

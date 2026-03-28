@@ -1,7 +1,7 @@
 """Typed tool result payload for the tool lifecycle contract.
 
 ToolResult is a TypedDict with a _kind discriminator. pydantic-ai serializes
-tool returns to dict before _run_stream_turn() sees them, so isinstance(content,
+tool returns to dict before _run_stream_segment() sees them, so isinstance(content,
 ToolResult) would never be True. The _kind discriminator is the only reliable
 detection mechanism.
 
@@ -30,6 +30,6 @@ def make_result(display: str, **metadata: Any) -> ToolResult:
     return ToolResult(_kind="tool_result", display=display, **metadata)  # type: ignore[misc]
 
 
-# Shared type alias for FrontendProtocol.on_tool_complete, _run_stream_turn dispatch,
+# Shared type alias for FrontendProtocol.on_tool_complete, _run_stream_segment dispatch,
 # and TerminalFrontend._render_tool_panel — one edit point if a new result type is added.
 ToolResultPayload = str | ToolResult | None

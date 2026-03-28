@@ -193,57 +193,6 @@ def _handle_part_delta_event(
 
 
 # ---------------------------------------------------------------------------
-# _patch_dangling_tool_calls — moved verbatim from main.py
-# ---------------------------------------------------------------------------
-
-
-def _patch_dangling_tool_calls(
-    messages: list, error_message: str = "Interrupted by user."
-) -> list:
-    """Patch message history so all ToolCallParts have matching ToolReturnParts.
-
-    LLM models expect both a tool call and its corresponding return in
-    history. Without this patch, the next agent.run() would fail.
-
-    Scans *all* ModelResponse messages (not just the last one) to handle
-    interrupts during multi-tool approval loops where earlier responses may
-    also have dangling calls.
-    """
-    if not messages:
-        return messages
-
-    # Collect all tool_call_ids that already have a ToolReturnPart
-    answered_ids: set[str] = set()
-    for msg in messages:
-        if isinstance(msg, ModelRequest):
-            for p in msg.parts:
-                if isinstance(p, ToolReturnPart) and p.tool_call_id:
-                    answered_ids.add(p.tool_call_id)
-
-    # Scan all ModelResponse messages for unanswered ToolCallParts
-    dangling: list[ToolCallPart] = []
-    for msg in messages:
-        if not isinstance(msg, ModelResponse):
-            continue
-        for p in msg.parts:
-            if isinstance(p, ToolCallPart) and p.tool_call_id not in answered_ids:
-                dangling.append(p)
-
-    if not dangling:
-        return messages
-
-    return_parts = [
-        ToolReturnPart(
-            tool_name=tc.tool_name,
-            tool_call_id=tc.tool_call_id,
-            content=error_message,
-        )
-        for tc in dangling
-    ]
-    return messages + [ModelRequest(parts=return_parts)]
-
-
-# ---------------------------------------------------------------------------
 # _tool_args_display — per-tool args extraction for on_tool_start
 # ---------------------------------------------------------------------------
 
@@ -298,11 +247,22 @@ async def _run_stream_segment(
     verbose: bool,
     frontend: FrontendProtocol,
 ) -> tuple[AgentRunResult, bool]:
-    """Run the agent stream for one turn segment, dispatching SDK events to frontend callbacks.
+    """Consume one streamed segment and return its final result.
 
-    Guarantees: always returns (AgentRunResult, streamed_text). Raises RuntimeError if the
-    stream ends without a final AgentRunResultEvent — callers can treat this as a trustworthy
-    primitive without guarding for None.
+    Iterates `agent.run_stream_events(...)` for one contiguous segment — the initial model
+    run or an approval-resume after deferred tool calls — and dispatches each SDK event to
+    the corresponding frontend callback (text streaming, thinking, tool start/complete).
+
+    `deferred_tool_results` carries tool approval decisions from a prior approval step,
+    not actual tool output. Real tool output arrives later as ToolReturnPart events within
+    the resumed segment.
+
+    Returns (AgentRunResult, streamed_text) where streamed_text is True when at least one
+    PartStart/PartDelta text event was dispatched live. If False, the caller should route
+    result.output to frontend.on_final_output() instead.
+
+    Raises RuntimeError if the stream ends without AgentRunResultEvent — callers can treat
+    this as a trustworthy primitive without guarding for None.
     """
     result = None
     state = _StreamState()
@@ -480,63 +440,25 @@ async def _execute_stream_segment(
 # ---------------------------------------------------------------------------
 
 
-async def _handle_usage_limit_exceeded(
+def _handle_usage_limit_exceeded(
     turn_state: _TurnState,
-    agent: Agent,
-    deps: CoDeps,
-    model_settings: dict | None,
-    verbose: bool,
     frontend: FrontendProtocol,
-    max_request_limit: int,
 ) -> TurnResult:
-    """Run a one-request grace summary after UsageLimitExceeded, return TurnResult."""
-    frontend.on_status(
-        f"Turn limit reached ({max_request_limit} requests). "
-        "Asking for a progress summary..."
-    )
+    """Emit stop message and return TurnResult directly."""
+    frontend.on_status("Turn limit reached. Use /continue to resume.")
     msgs = (
         turn_state.latest_result.all_messages()
         if turn_state.latest_result
         else turn_state.current_history
     )
-    msgs = _patch_dangling_tool_calls(msgs)
-    grace_msg = ModelRequest(parts=[UserPromptPart(
-        content=(
-            "Turn limit reached. Summarize your progress so far "
-            "and what remains to be done. The user can /continue "
-            "to resume with a fresh budget."
-        ),
-    )])
-    try:
-        grace_result, grace_streamed = await _run_stream_segment(
-            agent, user_input=None, deps=deps,
-            message_history=msgs + [grace_msg],
-            model_settings=model_settings,
-            usage_limits=UsageLimits(request_limit=1),
-            verbose=verbose, frontend=frontend,
-        )
-        message_history = grace_result.all_messages()
-        if not grace_streamed and isinstance(grace_result.output, str):
-            frontend.on_final_output(grace_result.output)
-        return TurnResult(
-            messages=message_history,
-            output=grace_result.output,
-            usage=turn_state.latest_usage,
-            interrupted=False,
-            streamed_text=grace_streamed,
-            outcome="continue",
-        )
-    except Exception:
-        # Grace turn itself failed — return what we have
-        frontend.on_status("Turn limit reached. Use /continue to resume.")
-        return TurnResult(
-            messages=msgs,
-            output=None,
-            usage=turn_state.latest_usage,
-            interrupted=False,
-            streamed_text=turn_state.latest_streamed_text,
-            outcome="continue",
-        )
+    return TurnResult(
+        messages=msgs,
+        output=None,
+        usage=turn_state.latest_usage,
+        interrupted=False,
+        streamed_text=turn_state.latest_streamed_text,
+        outcome="continue",
+    )
 
 
 async def _reflect_http_400(
@@ -618,13 +540,24 @@ def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
 
 
 def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
-    """Patch dangling tool calls, append abort marker, return interrupted TurnResult."""
+    """Truncate to last clean ModelResponse, append abort marker, return interrupted TurnResult.
+
+    Drops the last ModelResponse if it contains any unanswered ToolCallPart entries,
+    so history ends at a clean point before the interrupted tool call sequence.
+    The abort marker carries sufficient context for the next turn.
+    """
     msgs = (
         turn_state.latest_result.all_messages()
         if turn_state.latest_result
         else turn_state.current_history
     )
-    message_history = _patch_dangling_tool_calls(msgs)
+    # Drop last ModelResponse if it has unanswered ToolCallParts
+    if (
+        msgs
+        and isinstance(msgs[-1], ModelResponse)
+        and any(isinstance(p, ToolCallPart) for p in msgs[-1].parts)
+    ):
+        msgs = msgs[:-1]
     # Abort marker — model sees this on the next turn so it knows
     # the previous turn was interrupted and can verify state.
     abort_marker = ModelRequest(parts=[UserPromptPart(
@@ -633,9 +566,8 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
             "may be incomplete. Verify current state before continuing."
         ),
     )])
-    message_history = message_history + [abort_marker]
     return TurnResult(
-        messages=message_history,
+        messages=msgs + [abort_marker],
         output=None,
         usage=turn_state.latest_usage,
         interrupted=True,
@@ -748,9 +680,7 @@ async def run_turn(
                     return _span_result
 
                 except UsageLimitExceeded:
-                    _span_result = await _handle_usage_limit_exceeded(
-                        turn_state, agent, deps, model_settings, verbose, frontend, max_request_limit
-                    )
+                    _span_result = _handle_usage_limit_exceeded(turn_state, frontend)
                     return _span_result
 
                 except ModelHTTPError as e:

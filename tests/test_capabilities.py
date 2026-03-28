@@ -4,16 +4,17 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai._run_context import RunContext
+from pydantic_ai import AgentRunResultEvent
 from pydantic_ai.messages import FunctionToolCallEvent, FunctionToolResultEvent, ToolCallPart, ToolReturnPart
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.context._orchestrate import _run_stream_turn
+from co_cli.context._orchestrate import _run_stream_segment
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
-from tests.test_orchestrate import RecordingFrontend, StaticEventAgent
+from tests.test_orchestrate import RecordingFrontend, StaticEventAgent, _make_agent_run_result
 
 _AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
@@ -58,7 +59,7 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     """Progress callback wired as curried lambda routes to RecordingFrontend.on_tool_progress.
 
     Validates the join between the tool's tool_progress_callback usage and the frontend
-    protocol using the same curried lambda pattern _run_stream_turn() applies at
+    protocol using the same curried lambda pattern _run_stream_segment() applies at
     FunctionToolCallEvent time. Existing tests wire a plain list appender; this test
     wires via the lambda so the tool_id binding and RecordingFrontend are both exercised.
     """
@@ -85,10 +86,10 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
 
 @pytest.mark.asyncio
 async def test_stream_events_real_check_capabilities_result_dispatches_correctly() -> None:
-    """Real check_capabilities() ToolResult shape survives _run_stream_turn() dispatch.
+    """Real check_capabilities() ToolResult shape survives _run_stream_segment() dispatch.
 
     Gets the actual return value of check_capabilities (not a hand-crafted dict) and
-    feeds it through StaticEventAgent → _run_stream_turn() → RecordingFrontend. Validates
+    feeds it through StaticEventAgent → _run_stream_segment() → RecordingFrontend. Validates
     that the real tool output shape triggers on_tool_complete with the full ToolResult,
     not None (which would happen if the _kind discriminator were missing or misspelled
     in the tool's make_result() call).
@@ -108,10 +109,11 @@ async def test_stream_events_real_check_capabilities_result_dispatches_correctly
     agent = StaticEventAgent([
         FunctionToolCallEvent(part=call_part),
         FunctionToolResultEvent(result=return_part),
+        AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
     deps2 = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_turn(
+    await _run_stream_segment(
         agent, user_input="check", deps=deps2, message_history=[],
         model_settings={}, usage_limits=UsageLimits(request_limit=5),
         usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,

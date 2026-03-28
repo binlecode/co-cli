@@ -244,8 +244,6 @@ async def _chat_loop(verbose: bool = False):
                 # Pattern-match on TurnOutcome
                 if turn_result.outcome == "error":
                     console.print("[error]An error occurred during this turn.[/error]")
-                elif turn_result.outcome == "stop":
-                    break
 
             except EOFError:
                 break

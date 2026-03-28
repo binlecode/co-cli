@@ -74,7 +74,7 @@ main.py:build_chat_app()
 
 ```
 run_turn(agent, user_input, deps, ...)                       # _orchestrate.py:417
-  └─ _run_stream_turn(agent, user_input, deps, ...)           # _orchestrate.py:279
+  └─ _run_stream_segment(agent, user_input, deps, ...)        # _orchestrate.py:279
        └─ agent.run_stream_events(user_input, deps,
                                   message_history, ...)      # pydantic-ai streams model output
             ├─ [auto tool]     FunctionToolCallEvent         # requires_approval=False
@@ -103,7 +103,7 @@ run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:4
 **Phase 4 — Execution and Return**
 
 ```
-_run_stream_turn(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
+_run_stream_segment(agent, deferred_tool_results=approvals, ...)  # _orchestrate.py:466
   └─ agent.run_stream_events(user_input=None,
                               deferred_tool_results=approvals, ...)
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
@@ -150,7 +150,7 @@ Step 1 short-circuits the chain; Step 2 is only reached when Step 1 finds no mat
 ### Return Shape
 
 Every user-facing tool returns a `ToolResult` via `make_result(display, **metadata)` (from `co_cli/tools/_result.py`):
-- `_kind` — `"tool_result"` discriminator (used by `_run_stream_turn()` to route to `on_tool_complete`)
+- `_kind` — `"tool_result"` discriminator (used by `_run_stream_segment()` to route to `on_tool_complete`)
 - `display` — pre-formatted string, shown directly to the user
 - metadata fields (`count`, `path`, `task_id`, `article_id`, etc.)
 
@@ -302,7 +302,7 @@ Config: `background_max_concurrent` caps concurrent running tasks. `background_t
 `check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special slash-command execution path. Progressive doctor output is produced by an optional callback path:
 
 ```text
-_run_stream_turn() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
+_run_stream_segment() curries tool_progress_callback = frontend.on_tool_progress(tool_id, msg)
 check_capabilities() reads ctx.deps.runtime.tool_progress_callback
 check_runtime(progress=...) emits phase messages
 TerminalFrontend renders those progress lines in the CLI

@@ -6,7 +6,7 @@ This delivery targets concrete anti-pattern drift and unnecessary complexity in 
 
 The deep code scan found that the system is still broadly pydantic-ai idiomatic, but the orchestration layer has accumulated avoidable complexity:
 
-- `run_turn()` in `co_cli/context/_orchestrate.py` owns too many state transitions at once: stream driving, deferred approval resume, provider retry policy, grace-turn fallback, interrupt repair, and user-facing output coordination.
+- `run_turn()` in `co_cli/context/_orchestrate.py` owns too many state transitions at once: stream driving, deferred approval resume, provider retry policy, interrupt repair, and user-facing output coordination.
 - the turn state is split across parallel locals (`message_history` vs `current_history`, `current_input` vs `current_deferred_results`, local `turn_usage` vs `deps.runtime.turn_usage` elsewhere), which is correct today but easy to break
 - `TurnOutcome` contains reserved variants (`"stop"`, `"compact"`) that are not emitted by the current implementation
 - post-turn lifecycle remains split between `main.py`, `_orchestrate.py`, and `_history.py`, which is acceptable for a CLI but should be made more explicit and less ad hoc
@@ -131,7 +131,6 @@ The current `run_turn()` function is doing several distinct jobs in one block:
 
 - initial stream segment execution
 - deferred approval collection and resume
-- grace-turn fallback
 - provider error classification and retry policy
 - interrupt recovery
 - final output / status handling
@@ -152,7 +151,7 @@ Refactor `run_turn()` into a few private helpers with narrow contracts. Example 
 2. `_resume_after_approvals(...)`
    - applies `_collect_deferred_tool_approvals()`, updates state, and runs one resume segment
 3. `_handle_usage_limit_exceeded(...)`
-   - owns grace-turn logic
+   - emits stop message and returns TurnResult directly
 4. `_handle_model_http_error(...)`
    - owns reflection/backoff/abort classification
 5. `_handle_model_api_error(...)`

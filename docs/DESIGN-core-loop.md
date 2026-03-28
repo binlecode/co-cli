@@ -149,9 +149,8 @@ flowchart TD
     N --> O
     O --> P[return TurnResult outcome=continue]
 
-    B -. UsageLimitExceeded .-> U[patch dangling calls and request one grace summary turn]
-    I -. UsageLimitExceeded .-> U
-    U --> V{return outcome=continue}
+    B -. UsageLimitExceeded .-> V[print limit-hit status message and return outcome=continue]
+    I -. UsageLimitExceeded .-> V
 
     B -. HTTP 400 .-> W[append reflection request to current_history; current_input=None; retry]
     I -. HTTP 400 .-> W
@@ -164,7 +163,7 @@ flowchart TD
     B -. unrecoverable provider error .-> Y[return TurnResult outcome=error]
     I -. unrecoverable provider error .-> Y
 
-    B -. interrupt or cancel .-> AA[patch dangling calls, append abort marker, return interrupted continue]
+    B -. interrupt or cancel .-> AA[truncate last ModelResponse if it has ToolCallParts, append abort marker, return interrupted continue]
     I -. interrupt or cancel .-> AA
 ```
 
@@ -276,14 +275,13 @@ Safety and error handling are split across the loop:
 |---|---|---|
 | doom-loop detection | `detect_safety_issues()` | injects a system prompt after repeated identical tool calls |
 | shell reflection cap | `detect_safety_issues()` | injects a system prompt after repeated shell failures |
-| request-budget exhaustion | `run_turn()` | performs one grace summary request with `request_limit=1` |
 | HTTP 400 tool-call rejection | `run_turn()` | appends a reflection request to `current_history` and retries |
 | 429, 5xx, network errors | `run_turn()` | retries with backoff until retry budget is exhausted |
 | unrecoverable provider errors | `run_turn()` | returns `TurnResult(outcome="error")` |
-| `KeyboardInterrupt` / `CancelledError` during turn | `run_turn()` | patches dangling tool calls, appends an abort marker, returns `interrupted=True` |
+| `KeyboardInterrupt` / `CancelledError` during turn | `run_turn()` | truncates to last clean `ModelResponse`, appends an abort marker, returns `interrupted=True` |
 
 Interrupt recovery invariant:
-- the next turn must see balanced tool call / tool return history, so `_patch_dangling_tool_calls()` runs before returning from an interrupted turn.
+- the next turn must see history ending at a clean point, so the last `ModelResponse` is dropped if it contains any unanswered `ToolCallPart` entries before the abort marker is appended.
 
 ### 2.8 Post-Turn Hooks In `main.py`
 
@@ -317,7 +315,7 @@ After `run_turn()` returns, `_chat_loop()` does the rest of the turn-finalizatio
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop, slash dispatch, skill env injection, post-turn hooks, background compaction scheduling |
-| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_run_stream_segment()`, `_collect_deferred_tool_approvals()`, interrupt patching |
+| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_run_stream_segment()`, `_collect_deferred_tool_approvals()`, `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt) |
 | `co_cli/agent.py` | Main agent construction: instructions, history processors, native tools, MCP toolsets |
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |
