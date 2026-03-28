@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from co_cli.deps import CoServices, CoDeps
-    from co_cli.display._core import FrontendProtocol
+    from co_cli.display._core import Frontend
 
 from co_cli.config import ROLE_ANALYSIS
 from co_cli.memory._lifecycle import persist_memory as _persist_memory
@@ -134,7 +134,7 @@ async def analyze_for_signals(
 async def handle_signal(
     signal: SignalResult,
     deps: "CoDeps",
-    frontend: "FrontendProtocol",
+    frontend: "Frontend",
     model: Any,
 ) -> None:
     """Apply admission policy then persist or prompt for a detected signal."""

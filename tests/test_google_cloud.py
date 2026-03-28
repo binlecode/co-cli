@@ -5,12 +5,37 @@ from dataclasses import dataclass
 import pytest
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.google_drive import search_drive_files, read_drive_file
+from co_cli.tools.google_drive import search_drive_files
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools._google_auth import get_google_credentials, ALL_GOOGLE_SCOPES
+
+
+def _google_creds_available() -> bool:
+    """Return True if Google credentials work for Drive/Gmail/Calendar scopes.
+
+    Does a lightweight Drive API probe to confirm the token actually has
+    the required scopes — a refresh alone does not validate scope access.
+    """
+    try:
+        from googleapiclient.discovery import build
+        creds = get_google_credentials(settings.google_credentials_path, ALL_GOOGLE_SCOPES)
+        if creds is None:
+            return False
+        service = build("drive", "v3", credentials=creds)
+        service.files().list(pageSize=1, fields="files(id)").execute()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _google_creds_available(),
+    reason="Google credentials not available or missing required scopes (Drive/Gmail/Calendar)",
+)
 
 
 @dataclass

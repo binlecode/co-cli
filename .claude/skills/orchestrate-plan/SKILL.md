@@ -1,7 +1,6 @@
 ---
 name: orchestrate-plan
 description: Orchestrate the planning phase. TL drafts the plan, then spawns Core Dev (implementation risk) and PO (scope + first principles) as parallel subagents to critique it. All roles share docs/TODO-<slug>.md as the workbench. Use when starting a new major feature, doc restructuring, or refactoring.
-disable-model-invocation: true
 argument-hint: "<slug>"
 ---
 

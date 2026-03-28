@@ -5,6 +5,7 @@ import time
 import tomllib
 from contextlib import AsyncExitStack
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 import typer
 from prompt_toolkit import PromptSession
@@ -24,7 +25,7 @@ from co_cli.context._history import precompute_compaction
 from co_cli.agent import build_agent, discover_mcp_tools
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB
-from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend
+from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.commands._commands import (
@@ -156,6 +157,47 @@ def _consume_bg_compaction(
         deps.runtime.precomputed_compaction = None
 
 
+@dataclass
+class _ChatTurnState:
+    message_history: list[Any]
+    session_data: Any
+    next_turn_compaction_task: asyncio.Task | None = None
+
+
+async def _run_foreground_turn(
+    state: "_ChatTurnState",
+    *,
+    agent: Agent,
+    user_input: str,
+    saved_env: dict[str, str | None],
+    deps: CoDeps,
+    frontend: Frontend,
+    primary_model: str,
+    verbose: bool,
+) -> None:
+    """Execute one foreground turn: consume bg compaction, run turn, cleanup, finalize.
+
+    _cleanup_skill_run_state is guaranteed via finally. State fields
+    (message_history, session_data, next_turn_compaction_task) are updated
+    in-place through the shared state object.
+    """
+    _consume_bg_compaction(state.next_turn_compaction_task, deps)
+    try:
+        turn_result = await run_turn(
+            agent=agent,
+            user_input=user_input,
+            deps=deps,
+            message_history=state.message_history,
+            verbose=verbose,
+            frontend=frontend,
+        )
+    finally:
+        _cleanup_skill_run_state(saved_env, deps)
+    state.message_history, state.session_data, state.next_turn_compaction_task = await _finalize_turn(
+        turn_result, state.message_history, state.session_data, deps, frontend, primary_model
+    )
+
+
 async def _chat_loop(verbose: bool = False):
     frontend = TerminalFrontend()
 
@@ -187,10 +229,8 @@ async def _chat_loop(verbose: bool = False):
     deps.session.tool_approvals = tool_approvals
 
     stack = AsyncExitStack()
-    # REPL-owned canonical history — updated after each turn; never shared into run_turn() by ref.
-    message_history = []
+    state = _ChatTurnState(message_history=[], session_data=None)
     last_interrupt_time = 0.0
-    next_turn_compaction_task: asyncio.Task | None = None
     try:
         _mcp_init_ok = False
         try:
@@ -214,7 +254,7 @@ async def _chat_loop(verbose: bool = False):
         completer.words = _build_completer_words()
 
         sync_knowledge(deps, frontend)
-        session_data = restore_session(deps, frontend)
+        state.session_data = restore_session(deps, frontend)
         frontend.on_status(f"  {len(deps.session.skill_registry)} skill(s) loaded")
 
         display_welcome_banner(deps)
@@ -232,7 +272,7 @@ async def _chat_loop(verbose: bool = False):
                 # /command — slash commands, no LLM
                 if user_input.startswith("/"):
                     cmd_ctx = CommandContext(
-                        message_history=message_history,
+                        message_history=state.message_history,
                         deps=deps,
                         agent=agent,
                         tool_names=tool_names,
@@ -241,10 +281,10 @@ async def _chat_loop(verbose: bool = False):
                     result = await dispatch_command(user_input, cmd_ctx)
                     if result.handled:
                         if result.history is not None:
-                            message_history = result.history
+                            state.message_history = result.history
                             if result.compacted:
-                                session_data = increment_compaction(session_data)
-                                save_session(deps.config.session_path, session_data)
+                                state.session_data = increment_compaction(state.session_data)
+                                save_session(deps.config.session_path, state.session_data)
                         if result.agent_body is not None:
                             # Skill dispatched — fall through to LLM turn with agent body
                             user_input = result.agent_body
@@ -254,27 +294,15 @@ async def _chat_loop(verbose: bool = False):
                         else:
                             continue
 
-                # Opportunistically harvest a completed bg compaction result; cancel if still
-                # running — never block. Correctness falls back to inline compaction.
-                _consume_bg_compaction(next_turn_compaction_task, deps)
-                next_turn_compaction_task = None
-
-                # LLM turn — try/finally guarantees skill-env rollback on all exit paths
-                # (normal completion, KeyboardInterrupt, CancelledError, Exception).
-                try:
-                    turn_result = await run_turn(
-                        agent=agent,
-                        user_input=user_input,
-                        deps=deps,
-                        message_history=message_history,
-                        verbose=verbose,
-                        frontend=frontend,
-                    )
-                finally:
-                    _cleanup_skill_run_state(_saved_env, deps)
-
-                message_history, session_data, next_turn_compaction_task = await _finalize_turn(
-                    turn_result, message_history, session_data, deps, frontend, primary_model
+                await _run_foreground_turn(
+                    state,
+                    agent=agent,
+                    user_input=user_input,
+                    saved_env=_saved_env,
+                    deps=deps,
+                    frontend=frontend,
+                    primary_model=primary_model,
+                    verbose=verbose,
                 )
 
             except EOFError:
@@ -288,8 +316,8 @@ async def _chat_loop(verbose: bool = False):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        if next_turn_compaction_task is not None:
-            next_turn_compaction_task.cancel()
+        if state.next_turn_compaction_task is not None:
+            state.next_turn_compaction_task.cancel()
         await deps.services.task_runner.shutdown()
         await stack.aclose()
         deps.services.shell.cleanup()

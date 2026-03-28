@@ -1,7 +1,7 @@
 """Orchestration state machine — extracted from main.py for testability.
 
 Contains TurnResult, run_turn(), and supporting private functions.
-FrontendProtocol lives in co_cli/display/_core.py. Stream rendering policy
+Frontend lives in co_cli/display/_core.py. Stream rendering policy
 lives in co_cli/display/_stream_renderer.py. Tool display metadata lives in
 co_cli/tools/_display_hints.py. The chat loop in main.py delegates all LLM
 interaction here.
@@ -33,7 +33,7 @@ TurnOutcome = Literal["continue", "error"]
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
 
-from co_cli.display._core import FrontendProtocol
+from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
 from co_cli.tools._display_hints import get_tool_start_args_display, format_tool_result_for_display
 from co_cli.tools._http_retry import parse_retry_after
@@ -78,7 +78,7 @@ class _TurnState:
         current_input         — user text or None for approval-resume segments
         current_history       — REPL-owned message list at turn entry
         retry_budget_remaining, backoff_base — HTTP retry counters, set from config
-      in-turn (per segment, via _adopt_segment_result / _prepare_approval_resume):
+      in-turn (per segment, updated by _execute_stream_segment / _run_approval_loop):
         latest_result         — AgentRunResult from the most recent segment
         latest_streamed_text  — whether the last segment streamed visible text
         latest_usage          — usage from the most recent segment (payload for TurnResult)
@@ -93,7 +93,7 @@ class _TurnState:
     # HTTP retry budget — set from config at turn start
     retry_budget_remaining: int = 0
     backoff_base: float = 1.0
-    # in-turn (updated after each segment via _adopt_segment_result)
+    # in-turn (updated after each segment)
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
     latest_usage: Any = None
@@ -123,30 +123,6 @@ def _merge_turn_usage(deps: CoDeps, usage: Any | None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _adopt_segment_result / _prepare_approval_resume — turn-state transitions
-# ---------------------------------------------------------------------------
-
-
-def _adopt_segment_result(turn_state: "_TurnState") -> None:
-    """Promote latest_result into current_history after a segment completes."""
-    turn_state.current_history = turn_state.latest_result.all_messages()
-
-
-def _prepare_approval_resume(
-    turn_state: "_TurnState",
-    approvals: ToolApprovalDecisions,
-) -> None:
-    """Set up turn_state for an approval-resume segment.
-
-    Clears current_input (pydantic-ai uses deferred_tool_results instead),
-    promotes latest_result messages to current_history, and stores approvals.
-    """
-    turn_state.current_input = None
-    turn_state.current_history = turn_state.latest_result.all_messages()
-    turn_state.tool_approval_decisions = approvals
-
-
-# ---------------------------------------------------------------------------
 # _collect_deferred_tool_approvals — approval collection without resumption
 # ---------------------------------------------------------------------------
 
@@ -154,7 +130,7 @@ def _prepare_approval_resume(
 async def _collect_deferred_tool_approvals(
     result: AgentRunResult,
     deps: CoDeps,
-    frontend: FrontendProtocol | None,
+    frontend: Frontend | None,
 ) -> DeferredToolResults:
     """Collect approval decisions for all pending deferred tool requests.
 
@@ -209,7 +185,7 @@ async def _execute_stream_segment(
     deps: CoDeps,
     model_settings: dict | None,
     verbose: bool,
-    frontend: FrontendProtocol,
+    frontend: Frontend,
 ) -> None:
     """Run one stream segment and update turn state in-place.
 
@@ -295,6 +271,32 @@ async def _execute_stream_segment(
     turn_state.latest_streamed_text = renderer.streamed_text
     turn_state.latest_usage = result.usage()
     turn_state.tool_approval_decisions = None
+    _merge_turn_usage(deps, turn_state.latest_usage)
+
+
+async def _run_approval_loop(
+    turn_state: _TurnState,
+    agent: Agent,
+    deps: CoDeps,
+    model_settings: dict | None,
+    verbose: bool,
+    frontend: Frontend,
+) -> None:
+    """Run approval-resume segments until no deferred tool requests remain.
+
+    Each iteration: collect approvals → prepare resume → execute segment.
+    Exits when latest_result.output is no longer DeferredToolRequests.
+    """
+    while isinstance(turn_state.latest_result.output, DeferredToolRequests):
+        approvals = await _collect_deferred_tool_approvals(
+            turn_state.latest_result, deps, frontend
+        )
+        turn_state.current_input = None
+        turn_state.current_history = turn_state.latest_result.all_messages()
+        turn_state.tool_approval_decisions = approvals
+        await _execute_stream_segment(
+            turn_state, agent, deps, model_settings, verbose, frontend
+        )
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
@@ -363,7 +365,7 @@ async def run_turn(
     message_history: list,
     model_settings: dict | None = None,
     verbose: bool = False,
-    frontend: FrontendProtocol,
+    frontend: Frontend,
 ) -> TurnResult:
     """Execute one LLM turn: streaming, approval chaining, error handling.
 
@@ -400,20 +402,11 @@ async def run_turn(
                     await _execute_stream_segment(
                         turn_state, agent, deps, model_settings, verbose, frontend
                     )
-                    _merge_turn_usage(deps, turn_state.latest_usage)
 
-                    # Approval flow: collect decisions, update state, resume segment
-                    while isinstance(turn_state.latest_result.output, DeferredToolRequests):
-                        approvals = await _collect_deferred_tool_approvals(
-                            turn_state.latest_result, deps, frontend
-                        )
-                        _prepare_approval_resume(turn_state, approvals)
-                        await _execute_stream_segment(
-                            turn_state, agent, deps, model_settings, verbose, frontend
-                        )
-                        _merge_turn_usage(deps, turn_state.latest_usage)
-
-                    _adopt_segment_result(turn_state)
+                    await _run_approval_loop(
+                        turn_state, agent, deps, model_settings, verbose, frontend
+                    )
+                    turn_state.current_history = turn_state.latest_result.all_messages()
                     if not turn_state.latest_streamed_text and isinstance(turn_state.latest_result.output, str):
                         frontend.on_final_output(turn_state.latest_result.output)
 

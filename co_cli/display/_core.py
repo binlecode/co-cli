@@ -1,7 +1,7 @@
-"""Themed terminal display — console, semantic styles, display helpers, FrontendProtocol, TerminalFrontend."""
+"""Themed terminal display — console, semantic styles, display helpers, Frontend, TerminalFrontend."""
 
 import signal
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from rich.console import Console
 from rich.live import Live
@@ -138,11 +138,11 @@ def prompt_selection(
         return None
 
 
-# -- FrontendProtocol — abstraction for display + user interaction ----------
+# -- Frontend — abstraction for display + user interaction ----------
 
 
 @runtime_checkable
-class FrontendProtocol(Protocol):
+class Frontend(Protocol):
     """Display and interaction contract for the orchestration layer.
 
     Implementations: TerminalFrontend (Rich/prompt-toolkit), RecordingFrontend (tests).
@@ -193,13 +193,13 @@ class FrontendProtocol(Protocol):
         ...
 
 
-# -- TerminalFrontend (FrontendProtocol implementation) --------------------
+# -- TerminalFrontend (Frontend implementation) --------------------
 
-_CHOICES_HINT = " [[green]y[/green]/[red]n[/red]/[yellow]a[/yellow]]"
+_CHOICES_HINT = " [[green]y[/green]=once  [yellow]a[/yellow]=session  [red]n[/red]=deny]"
 
 
 class TerminalFrontend:
-    """Rich-based terminal frontend implementing FrontendProtocol.
+    """Rich-based terminal frontend implementing Frontend.
 
     Manages Live instances for streaming text and thinking panels,
     and SIGINT handler swapping for synchronous approval prompts.
@@ -339,7 +339,7 @@ class TerminalFrontend:
     def prompt_approval(self, description: str) -> str:
         """Prompt user for y/n with SIGINT handler swap for blocking input."""
         self._clear_status_live()
-        console.print(f"Approve [bold]{description}[/bold]?" + _CHOICES_HINT, end=" ")
+        console.print(f"Allow [bold]{description}[/bold]?" + _CHOICES_HINT, end=" ")
 
         prev_handler = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, signal.default_int_handler)

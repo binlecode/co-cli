@@ -1,4 +1,4 @@
-"""Eval frontend stubs implementing FrontendProtocol for agent interaction."""
+"""Eval frontend stubs implementing Frontend for agent interaction."""
 
 from typing import Any
 

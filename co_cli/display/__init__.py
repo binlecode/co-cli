@@ -1,1 +1,1 @@
-"""Terminal display package — themed console, FrontendProtocol, TerminalFrontend, StreamRenderer."""
+"""Terminal display package — themed console, Frontend, TerminalFrontend, StreamRenderer."""

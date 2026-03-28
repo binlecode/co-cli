@@ -102,6 +102,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ [if mcp_servers and _mcp_init_ok]           # discovery skipped when init failed
 │      mcp_tool_names, discovery_errors = discover_mcp_tools(agent, exclude=set(tool_names))
 │      deps.session.mcp_discovery_errors = discovery_errors
+│      for each discovery error → frontend.on_status(warning)
 │      tool_names = tool_names + mcp_tool_names
 │      deps.session.tool_names = tool_names
 │
@@ -272,9 +273,8 @@ chat_loop():
 
     # inside async with agent
     stack = AsyncExitStack()
-    message_history = []
+    state = _ChatTurnState(message_history=[], session_data=None)  # groups co-evolving REPL state
     last_interrupt_time = 0.0
-    next_turn_compaction_task: asyncio.Task | None = None
     try:
         _mcp_init_ok = False
         try:
@@ -287,6 +287,8 @@ chat_loop():
         if mcp_servers and _mcp_init_ok:
             mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
             deps.session.mcp_discovery_errors = discovery_errors
+            for prefix, err in discovery_errors.items():
+                frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} — those tools unavailable.")
             tool_names = tool_names + mcp_tool_names
             deps.session.tool_names = tool_names
 

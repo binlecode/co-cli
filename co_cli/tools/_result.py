@@ -30,6 +30,6 @@ def make_result(display: str, **metadata: Any) -> ToolResult:
     return ToolResult(_kind="tool_result", display=display, **metadata)  # type: ignore[misc]
 
 
-# Shared type alias for FrontendProtocol.on_tool_complete, _run_stream_segment dispatch,
+# Shared type alias for Frontend.on_tool_complete, _run_stream_segment dispatch,
 # and TerminalFrontend._render_tool_panel — one edit point if a new result type is added.
 ToolResultPayload = str | ToolResult | None

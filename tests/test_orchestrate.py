@@ -1,6 +1,6 @@
 """Functional tests for the orchestration layer.
 
-RecordingFrontend is a real FrontendProtocol implementation (not a mock)
+RecordingFrontend is a real Frontend implementation (not a mock)
 that records all events for assertions.
 """
 
@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from co_cli.context._orchestrate import _TurnState, _execute_stream_segment, run_turn
-from co_cli.display._core import FrontendProtocol
+from co_cli.display._core import Frontend
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 # GraphAgentState is a pydantic-ai internal type (private module). It is used in
@@ -43,7 +43,7 @@ from pydantic_ai.messages import (
 
 
 # ---------------------------------------------------------------------------
-# RecordingFrontend — real FrontendProtocol for tests
+# RecordingFrontend — real Frontend for tests
 # ---------------------------------------------------------------------------
 
 

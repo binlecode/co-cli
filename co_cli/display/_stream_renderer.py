@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
-    from co_cli.display._core import FrontendProtocol
+    from co_cli.display._core import Frontend
 
 _RENDER_INTERVAL = 0.05  # 20 FPS
 
@@ -35,12 +35,12 @@ class StreamRenderState:
 class StreamRenderer:
     """Text/thinking buffer state machine for one stream segment.
 
-    Accepts a FrontendProtocol and emits display events to it. The renderer
+    Accepts a Frontend and emits display events to it. The renderer
     tracks whether visible text was streamed (streamed_text property), which
     the orchestrator uses to decide whether on_final_output is needed.
     """
 
-    def __init__(self, frontend: "FrontendProtocol") -> None:
+    def __init__(self, frontend: "Frontend") -> None:
         self._frontend = frontend
         self._state = StreamRenderState()
 

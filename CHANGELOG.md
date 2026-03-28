@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-03-28
+
+### Changed
+- **Core loop simplified**: `_run_foreground_turn()` extracted as the single foreground turn owner, replacing an inline four-statement chain in `_chat_loop()`. `_ChatTurnState` dataclass groups the three co-evolving REPL locals (`message_history`, `session_data`, `next_turn_compaction_task`) — loop body is now pure control-plane routing.
+- **Approval loop extracted**: `_run_approval_loop()` pulled out of `run_turn()` in `_orchestrate.py`, and `_merge_turn_usage()` absorbed into `_execute_stream_segment()` — the turn/segment boundary is now explicit and `run_turn()` reads as a clean orchestration sequence.
+- **`Frontend` renamed**: `FrontendProtocol` renamed to `Frontend` across all call sites — the `Protocol` suffix was redundant noise; the type is the public contract name.
+- **Approval UX self-labeling**: `y=once / a=session / n=deny` labels added to the approval prompt hint so users see the scope of each choice without consulting docs.
+
+### Fixed
+- **Google Cloud tests guard**: `test_google_cloud.py` now skips via `pytestmark` when Google credentials lack Drive/Gmail/Calendar scopes — guards against Google's ADC policy change that blocks the default client ID from requesting these scopes.
+
 ## [0.5.6] - 2026-03-28
 
 ### Changed
