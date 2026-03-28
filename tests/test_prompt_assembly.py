@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.prompts import assemble_prompt, _RULES_DIR
+from co_cli.prompts._assembly import assemble_prompt, _RULES_DIR
 from co_cli.prompts.personalities._validator import (
     REQUIRED_MINDSET_TASK_TYPES,
     VALID_PERSONALITIES,

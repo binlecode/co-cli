@@ -21,7 +21,7 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, load_always_on_memories
+from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, _load_always_on_memories
 from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
 from co_cli.tools.todo import todo_write, todo_read
 from co_cli.tools.capabilities import check_capabilities
@@ -37,48 +37,6 @@ from co_cli.tools.task_control import (
 logger = logging.getLogger(__name__)
 
 
-def _build_system_prompt(
-    provider: str,
-    model_name: str,
-    config: CoConfig,
-) -> str:
-    """Build the agent system prompt for the given model and personality.
-
-    Loads soul seed, character base memories, mindsets, examples, and critique
-    from config.personality and config.memory_dir, then calls assemble_prompt().
-    Returns the assembled system prompt string including the critique block.
-    """
-    soul_seed: str | None = None
-    soul_examples: str | None = None
-    soul_critique = ""
-    if config.personality:
-        from co_cli.prompts.personalities._loader import (
-            load_soul_seed,
-            load_soul_examples,
-            load_soul_mindsets,
-            load_character_memories,
-            load_soul_critique,
-        )
-        soul_seed = load_soul_seed(config.personality)
-        base_memories = load_character_memories(config.personality, config.memory_dir)
-        if base_memories:
-            soul_seed = soul_seed + "\n\n" + base_memories
-        soul_mindsets = load_soul_mindsets(config.personality)
-        if soul_mindsets:
-            soul_seed = soul_seed + "\n\n" + soul_mindsets
-        examples = load_soul_examples(config.personality)
-        if examples:
-            soul_examples = examples
-        soul_critique = load_soul_critique(config.personality)
-    system_prompt, _manifest = assemble_prompt(
-        provider,
-        model_name=model_name,
-        soul_seed=soul_seed,
-        soul_examples=soul_examples,
-    )
-    if soul_critique:
-        system_prompt = system_prompt + f"\n\n## Review lens\n\n{soul_critique}"
-    return system_prompt
 
 
 def build_agent(
@@ -168,7 +126,7 @@ def build_agent(
     def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject always_on memories as standing context every turn."""
         memory_dir = ctx.deps.config.memory_dir
-        entries = load_always_on_memories(memory_dir)
+        entries = _load_always_on_memories(memory_dir)
         if not entries:
             return ""
         max_chars = ctx.deps.config.memory_injection_max_chars

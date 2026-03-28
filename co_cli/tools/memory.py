@@ -394,7 +394,7 @@ def _update_existing_memory(
 _ALWAYS_ON_CAP = 5
 
 
-def load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
+def _load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
     """Return up to _ALWAYS_ON_CAP memories with always_on=True.
 
     Loads all memories, filters to always_on entries, and caps at 5.

@@ -124,7 +124,7 @@ def create_deps() -> CoDeps:
     if result.status == "error":
         raise ValueError(result.detail)
 
-    from co_cli.agent import _build_system_prompt
+    from co_cli.prompts._assembly import _build_system_prompt
     from co_cli.prompts.model_quirks._loader import normalize_model_name
     reasoning_entry = config.role_models.get(ROLE_REASONING)
     normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""

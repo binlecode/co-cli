@@ -5,7 +5,7 @@ import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from co_cli.agent import _build_system_prompt
+from co_cli.prompts._assembly import _build_system_prompt
 from co_cli.config import ModelEntry
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reranker, restore_session, sync_knowledge

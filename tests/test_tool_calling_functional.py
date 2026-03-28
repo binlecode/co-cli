@@ -17,7 +17,8 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import build_agent, _build_system_prompt
+from co_cli.agent import build_agent
+from co_cli.prompts._assembly import _build_system_prompt
 from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings, ROLE_REASONING, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState

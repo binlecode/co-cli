@@ -34,7 +34,7 @@ tools/
 
 ### Registration
 
-All native tools are registered via `_register(fn, requires_approval, retries=None)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_registry`. Most tools map directly to a tool-wide approval flag. `run_shell_command` is the exception: it is registered with `requires_approval=False`, then applies command-level DENY / ALLOW / REQUIRE_APPROVAL policy inside the tool body. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
+All native tools are registered via `_register(fn, requires_approval, retries=None)` in `agent.py:build_agent()`. This wraps each function with `agent.tool()` and records the `(name, requires_approval)` pair in `tool_approvals`. Most tools map directly to a tool-wide approval flag. `run_shell_command` is the exception: it is registered with `requires_approval=False`, then applies command-level DENY / ALLOW / REQUIRE_APPROVAL policy inside the tool body. Sub-agent tools are registered directly via `agent.tool()` inside each sub-agent factory.
 
 Per-tool retry budget: tools are annotated at registration by tier. Write-once tools (`write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_email_draft`) use `retries=1` — a second mutation attempt on transient failure is safe but more than one is not. Network read tools (`web_search`, `web_fetch`, `list_emails`, `search_emails`, `search_drive_files`, `read_drive_file`, `list_calendar_events`, `search_calendar_events`) use `retries=3`. All other tools inherit the agent-level default (`config.tool_retries`).
 
@@ -54,7 +54,7 @@ main.py:build_chat_app()
   │    ├─ Agent(resolved.model, deps_type=CoDeps,           # pydantic-ai agent construction
   │    │        output_type=[str, DeferredToolRequests],
   │    │        toolsets=mcp_toolsets)
-  │    ├─ _register(fn, requires_approval, retries?)        # agent.py:196; called per native tool
+  │    ├─ _register(fn, requires_approval, retries?)        # agent.py:146; called per native tool
   │    │    ├─ agent.tool(fn, requires_approval=..., [retries=...])  # pydantic-ai registration
   │    │    └─ tool_approvals[fn.__name__] = requires_approval
   │    ├─ [conditional] _register(delegate_*, False)        # only when role_models has matching role

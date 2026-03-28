@@ -539,7 +539,7 @@ def test_load_memories_without_artifact_type_defaults_none(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-from co_cli.tools.memory import load_always_on_memories
+from co_cli.tools.memory import _load_always_on_memories
 
 
 def _write_always_on_memory(memory_dir: Path, memory_id: int, content: str, always_on: bool) -> Path:
@@ -568,7 +568,7 @@ def test_always_on_helper_returns_only_always_on_entries(tmp_path: Path):
     _write_always_on_memory(memory_dir, 2, "regular memory entry", always_on=False)
     _write_always_on_memory(memory_dir, 3, "always on entry two", always_on=True)
 
-    entries = load_always_on_memories(memory_dir)
+    entries = _load_always_on_memories(memory_dir)
     assert len(entries) == 2
     assert all(e.always_on for e in entries)
 
@@ -580,14 +580,14 @@ def test_always_on_helper_caps_at_five(tmp_path: Path):
     for i in range(1, 8):
         _write_always_on_memory(memory_dir, i, f"always on entry number {i}", always_on=True)
 
-    entries = load_always_on_memories(memory_dir)
+    entries = _load_always_on_memories(memory_dir)
     assert len(entries) == 5
 
 
 def test_always_on_helper_empty_when_dir_missing(tmp_path: Path):
     """load_always_on_memories returns [] when memory_dir does not exist."""
     missing_dir = tmp_path / "nonexistent" / "memory"
-    assert load_always_on_memories(missing_dir) == []
+    assert _load_always_on_memories(missing_dir) == []
 
 
 def test_always_on_default_false_no_field_in_file(tmp_path: Path):

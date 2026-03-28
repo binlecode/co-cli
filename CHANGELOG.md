@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-03-28
+
+### Changed
+- **Prompt assembly extracted**: `_collect_rule_files()`, `assemble_prompt()`, and `_build_system_prompt()` moved from `co_cli/prompts/__init__.py` and `co_cli/agent.py` into `co_cli/prompts/_assembly.py`. `__init__.py` is now docstring-only.
+- **Personality helper relocated**: `co_cli/tools/personality.py` moved to `co_cli/prompts/personalities/_injector.py` — it was never a registered agent tool, only a prompt helper.
+- **Private helper renamed**: `load_always_on_memories` → `_load_always_on_memories` in `co_cli/tools/memory.py` to signal it is an internal helper, not a public tool.
+
 ## [0.5.2] - 2026-03-28
 
 ### Changed
