@@ -21,6 +21,7 @@ graph LR
 
     subgraph Orchestrate ["Orchestration (_orchestrate.py)"]
         RunTurn[run_turn]
+        ExecSegment[_execute_stream_segment<br/>updates _TurnState]
         Segment[_run_stream_segment<br/>stream one segment]
         Approvals[_collect_deferred_tool_approvals]
         SegmentResult["AgentRunResult + streamed_text"]
@@ -54,7 +55,8 @@ graph LR
     Runtime --> Consume
     Consume -->|harvest if done else cancel| BgTask
     Consume --> RunTurn
-    RunTurn -->|initial segment or resume segment| Segment
+    RunTurn -->|initial or resume| ExecSegment
+    ExecSegment --> Segment
     Segment --> RunStream
     Hist --> RunStream
     Instr --> RunStream
@@ -67,10 +69,11 @@ graph LR
     NativeAsk -->|DeferredToolRequests| Approvals
     Shell -->|ApprovalRequired| Approvals
     MCP -->|approval=ask| Approvals
-    Approvals -->|DeferredToolResults| Segment
+    Approvals -->|DeferredToolResults| ExecSegment
     RunStream --> FinalEvent
     FinalEvent --> SegmentResult
-    SegmentResult --> RunTurn
+    SegmentResult --> ExecSegment
+    ExecSegment -->|_TurnState updated| RunTurn
     RunTurn -->|TurnResult| Finalize
     Finalize --> History
     Finalize -->|spawn asyncio task| BgTask
