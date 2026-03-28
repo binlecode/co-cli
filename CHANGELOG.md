@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-03-28
+
+### Changed
+- **Slash dispatch model**: replaced `DispatchResult` with an explicit `SlashOutcome` union (`LocalOnly | ReplaceTranscript | DelegateToAgent`), making command intent visible in the type system and eliminating optional-field guessing in `_chat_loop()`. `/compact` bookkeeping is now carried in `ReplaceTranscript.compaction_applied` rather than a separate flag.
+
 ## [0.5.10] - 2026-03-28
 
 ### Changed

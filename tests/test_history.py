@@ -312,7 +312,7 @@ async def test_compact_produces_two_message_history():
     """
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
-    from co_cli.commands._commands import dispatch, CommandContext
+    from co_cli.commands._commands import dispatch, CommandContext, ReplaceTranscript
 
     _, tool_names, _ = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd()))
     deps = CoDeps(
@@ -338,8 +338,7 @@ async def test_compact_produces_two_message_history():
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     async with asyncio.timeout(60):
         result = await dispatch("/compact", ctx)
-    assert result.handled is True
-    assert result.history is not None
+    assert isinstance(result, ReplaceTranscript)
     assert len(result.history) == 2
 
     assert isinstance(result.history[0], ModelRequest)

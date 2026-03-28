@@ -20,6 +20,8 @@ from co_cli.commands._commands import (
     dispatch,
     CommandContext,
     SKILL_COMMANDS,
+    LocalOnly,
+    DelegateToAgent,
 )
 from co_cli.agent import build_agent
 from co_cli.config import settings
@@ -83,8 +85,8 @@ def test_skill_command_is_separate_type():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_sets_agent_body(tmp_path):
-    """dispatch() returns agent_body in DispatchResult when a skill name matches."""
+async def test_dispatch_skill_returns_delegate_to_agent(tmp_path):
+    """dispatch() returns DelegateToAgent when a skill name matches."""
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "greet", "Say hello!")
     skill_commands = _load_skills(skills_dir)
@@ -93,21 +95,19 @@ async def test_dispatch_sets_agent_body(tmp_path):
     try:
         ctx = _make_ctx()
         result = await dispatch("/greet", ctx)
-        assert result.handled is True
-        assert result.history is None
-        assert result.agent_body == "Say hello!"
+        assert isinstance(result, DelegateToAgent)
+        assert result.delegated_input == "Say hello!"
     finally:
         SKILL_COMMANDS.clear()
 
 
 @pytest.mark.asyncio
-async def test_dispatch_unknown_skill_returns_handled(tmp_path):
-    """dispatch() with unknown /command returns handled=True and agent_body is None."""
+async def test_dispatch_unknown_skill_returns_local_only(tmp_path):
+    """dispatch() with unknown /command returns LocalOnly."""
     SKILL_COMMANDS.clear()
     ctx = _make_ctx()
     result = await dispatch("/no-such-skill-xyz", ctx)
-    assert result.handled is True
-    assert result.agent_body is None
+    assert isinstance(result, LocalOnly)
 
 
 # -- TASK-05: Frontmatter Parsing ------------------------------------------
@@ -163,7 +163,8 @@ async def test_dispatch_skill_arguments_substitution(tmp_path):
     try:
         ctx = _make_ctx()
         result = await dispatch("/search foo bar", ctx)
-        assert result.agent_body == "Search for: foo bar"
+        assert isinstance(result, DelegateToAgent)
+        assert result.delegated_input == "Search for: foo bar"
     finally:
         SKILL_COMMANDS.clear()
 
@@ -355,7 +356,7 @@ async def test_skills_reload_picks_up_new_skill(tmp_path):
     _original = dict(SKILL_COMMANDS)
     try:
         result = await dispatch("/skills reload", ctx)
-        assert result.handled is True
+        assert isinstance(result, LocalOnly)
         assert "reload-test-skill" in SKILL_COMMANDS
     finally:
         SKILL_COMMANDS.clear()

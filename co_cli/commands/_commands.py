@@ -11,7 +11,7 @@ from collections.abc import Callable, Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
@@ -39,19 +39,29 @@ class CommandContext:
     completer: Any = None
 
 
-@dataclass
-class DispatchResult:
-    """Explicit return type encoding the two dispatch modes.
+@dataclass(frozen=True)
+class LocalOnly:
+    """Built-in or unknown slash command ran locally; return to prompt."""
 
-    System-op commands set history when they modify it; agent_body is None.
-    Delegation commands (skills) set agent_body; history is None.
-    compacted=True when /compact produced a new history — caller increments counter.
-    """
 
-    handled: bool
-    history: list[Any] | None = None
-    agent_body: str | None = None
-    compacted: bool = False
+@dataclass(frozen=True)
+class ReplaceTranscript:
+    """Transcript-management command replaced message history."""
+
+    history: list[Any]
+    compaction_applied: bool = False
+
+
+@dataclass(frozen=True)
+class DelegateToAgent:
+    """Skill command delegated into an agent turn."""
+
+    delegated_input: str
+    skill_env: dict[str, str]
+    skill_name: str | None
+
+
+SlashOutcome: TypeAlias = LocalOnly | ReplaceTranscript | DelegateToAgent
 
 
 @dataclass(frozen=True)
@@ -912,18 +922,16 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
 # -- Dispatch --------------------------------------------------------------
 
 
-async def dispatch(raw_input: str, ctx: CommandContext) -> DispatchResult:
+async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
     """Route slash-command input to the appropriate handler.
 
-    Returns a DispatchResult encoding the two dispatch modes:
-      - handled=False → input was not a slash command, caller proceeds normally
-      - handled=True, history set → system-op command modified history
-      - handled=True, compacted=True → /compact produced new history; caller increments counter
-      - handled=True, agent_body set → skill dispatch; caller runs an LLM turn with agent_body
-      - handled=True, both None → command executed, no history change, no LLM turn
+    Returns a SlashOutcome encoding the command intent:
+      - LocalOnly → command ran locally; caller returns to prompt
+      - ReplaceTranscript → command replaced history; caller adopts new history and returns to prompt
+      - DelegateToAgent → skill command; caller enters run_turn() with delegated_input
     """
     if not raw_input.startswith("/"):
-        return DispatchResult(handled=False)
+        return LocalOnly()
 
     parts = raw_input[1:].split(maxsplit=1)
     name = parts[0].lower() if parts else ""
@@ -932,8 +940,9 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> DispatchResult:
     cmd = BUILTIN_COMMANDS.get(name)
     if cmd is not None:
         history = await cmd.handler(ctx, args)
-        compacted = name == "compact" and history is not None
-        return DispatchResult(handled=True, history=history, compacted=compacted)
+        if history is not None:
+            return ReplaceTranscript(history=history, compaction_applied=name == "compact")
+        return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
     skill = SKILL_COMMANDS.get(name)
@@ -952,8 +961,12 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> DispatchResult:
             body = body.replace("$0", name)
             for i, arg in reversed(list(enumerate(args_list, 1))):
                 body = body.replace(f"${i}", arg)
-        return DispatchResult(handled=True, agent_body=body)
+        return DelegateToAgent(
+            delegated_input=body,
+            skill_env=dict(skill.skill_env),
+            skill_name=skill.name,
+        )
 
     console.print(f"[bold red]Unknown command:[/bold red] /{name}")
     console.print("[dim]Type /help to see available commands.[/dim]")
-    return DispatchResult(handled=True)
+    return LocalOnly()

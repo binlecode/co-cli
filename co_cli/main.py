@@ -30,6 +30,7 @@ from co_cli.bootstrap._render_status import get_status, render_status_table, che
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.commands._commands import (
     dispatch as dispatch_command, CommandContext, BUILTIN_COMMANDS,
+    LocalOnly, ReplaceTranscript, DelegateToAgent,
     _load_skills, _build_completer_words, set_skill_commands,
 )
 from co_cli.context._session import touch_session, increment_compaction, save_session
@@ -269,21 +270,20 @@ async def _chat_loop(verbose: bool = False):
                         tool_names=tool_names,
                         completer=completer,
                     )
-                    result = await dispatch_command(user_input, cmd_ctx)
-                    if result.handled:
-                        if result.history is not None:
-                            state.message_history = result.history
-                            if result.compacted:
-                                state.session_data = increment_compaction(state.session_data)
-                                save_session(deps.config.session_path, state.session_data)
-                        if result.agent_body is not None:
-                            # Skill dispatched — fall through to LLM turn with agent body
-                            user_input = result.agent_body
-                            # Save current env values and inject skill-env vars
-                            _saved_env = {k: os.environ.get(k) for k in deps.session.active_skill_env}
-                            os.environ.update(deps.session.active_skill_env)
-                        else:
-                            continue
+                    outcome = await dispatch_command(user_input, cmd_ctx)
+                    if isinstance(outcome, ReplaceTranscript):
+                        state.message_history = outcome.history
+                        if outcome.compaction_applied:
+                            state.session_data = increment_compaction(state.session_data)
+                            save_session(deps.config.session_path, state.session_data)
+                        continue
+                    elif isinstance(outcome, DelegateToAgent):
+                        # Skill dispatched — fall through to LLM turn with delegated input
+                        user_input = outcome.delegated_input
+                        _saved_env = {k: os.environ.get(k) for k in outcome.skill_env}
+                        os.environ.update(outcome.skill_env)
+                    else:  # LocalOnly
+                        continue
 
                 await _run_foreground_turn(
                     state,

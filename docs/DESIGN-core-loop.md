@@ -16,7 +16,7 @@ This section is a system-boundary view of one turn.
 flowchart TD
     A["REPL input in main.py"] --> B{"slash command?"}
     B -->|yes, built-in only| C["dispatch_command() updates local state and returns to prompt"]
-    B -->|yes, skill command| D["dispatch_command() returns agent_body and skill env"]
+    B -->|yes, skill command| D["dispatch_command() returns delegated_input and skill env"]
     B -->|no| E["raw user input"]
 
     D --> F["_consume_bg_compaction()"]
@@ -42,8 +42,8 @@ This diagram is the detailed control flow inside `_chat_loop()` in `main.py`.
 - Read REPL input.
 - Route built-in slash commands locally.
 - Expand skill commands into synthetic user text.
-- Treat unknown slash commands as handled locally: print an error and return to the prompt.
-- For transcript-management slash commands, adopt the replacement transcript locally; `/compact` also records session metadata that a compaction occurred.
+- Treat unknown slash commands as `LocalOnly`: print an error and return to the prompt.
+- For transcript-management slash commands, `dispatch_command()` returns `ReplaceTranscript(history, compaction_applied)`; the caller adopts the replacement transcript and, when `compaction_applied` is true, records session metadata that a compaction occurred.
 - Delegate the full foreground turn lifecycle to `_run_foreground_turn()`, which sequences: compaction harvest, `run_turn()`, `_cleanup_skill_run_state()` in `finally`, and `_finalize_turn()`. `_ChatTurnState` fields (`message_history`, `session_data`, `next_turn_compaction_task`) are mutated in-place by `_run_foreground_turn()` after `_finalize_turn()` completes.
 
 ```mermaid
@@ -56,15 +56,14 @@ flowchart TD
     C -->|no| D["keep raw user_input"]
     C -->|yes| E["dispatch_command()"]
 
-    E -->|handled and history returned| F["replace local message_history"]
-    F --> G{"replacement came from /compact?"}
+    E -->|ReplaceTranscript| F["replace local message_history with outcome.history"]
+    F --> G{"outcome.compaction_applied?"}
     G -->|yes| H["record compaction in session and save_session()"]
     G -->|no| A
     H --> A
 
-    E -->|handled and no history| K{"delegates into agent turn?"}
-    K -->|yes| J["replace user_input with delegated agent body and inject skill env"]
-    K -->|no| A
+    E -->|DelegateToAgent| J["replace user_input with outcome.delegated_input and inject skill env"]
+    E -->|LocalOnly| A
 
     D --> L["pre-turn: harvest or cancel automatic compaction precompute"]
     J --> L
@@ -97,11 +96,11 @@ flowchart TD
 ```
 
 Notes:
-- Built-in slash commands never enter the agent turn.
-- Built-in transcript-management commands may replace local `message_history` before any turn runs.
-- `/compact` does the actual summarization inside `_cmd_compact()` and related history helpers; `increment_compaction()` is only local session bookkeeping after that replacement history is returned.
-- Unknown slash commands are also handled locally: `dispatch_command()` prints an error and `_chat_loop()` continues without calling `run_turn()`.
-- Skill slash commands are explicit delegation commands: they produce delegated agent input, inject skill env, and then enter `run_turn()`.
+- `dispatch_command()` returns a `SlashOutcome` union: `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent`.
+- `LocalOnly` — built-in or unknown slash commands ran locally; `_chat_loop()` continues without calling `run_turn()`.
+- `ReplaceTranscript(history, compaction_applied)` — transcript-management commands; `_chat_loop()` adopts the replacement history and, when `compaction_applied` is true, records session metadata.
+- `DelegateToAgent(delegated_input, skill_env, skill_name)` — skill commands; `_chat_loop()` replaces `user_input` with `outcome.delegated_input`, injects skill env, and enters `run_turn()`.
+- `/compact` does the actual summarization inside `_cmd_compact()` and related history helpers; `increment_compaction()` is only local session bookkeeping after the `ReplaceTranscript` outcome is returned.
 - The pre-turn compaction node is not input transformation; it is the point where `_chat_loop()` harvests or cancels the previous turn's background compaction task before entering a new turn.
 - Retryable provider failures stay inside `run_turn()` and do not return control to `_chat_loop()`.
 - Success, interrupted, and error `TurnResult` values all flow through `_cleanup_skill_run_state()` and `_finalize_turn()`.
