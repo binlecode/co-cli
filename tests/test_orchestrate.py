@@ -15,7 +15,7 @@ from opentelemetry import trace as otel_trace
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from co_cli.context._orchestrate import FrontendProtocol, _run_stream_segment, run_turn
+from co_cli.context._orchestrate import FrontendProtocol, _TurnState, _execute_stream_segment, run_turn
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 # GraphAgentState is a pydantic-ai internal type (private module). It is used in
@@ -167,7 +167,7 @@ class InspectingSequenceAgent:
 
 
 # ---------------------------------------------------------------------------
-# _run_stream_segment regression coverage
+# _execute_stream_segment regression coverage
 # ---------------------------------------------------------------------------
 
 
@@ -183,18 +183,9 @@ async def test_stream_events_preserves_text_from_part_start_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_segment(
-        agent,
-        user_input="hello",
-        deps=deps,
-        message_history=[],
-        model_settings={},
-        usage_limits=UsageLimits(request_limit=5),
-        usage=None,
-        deferred_tool_results=None,
-        verbose=False,
-        frontend=frontend,
-    )
+    _ts = _TurnState(current_input="hello", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is True
     assert ("text_commit", "Hello") in frontend.events
@@ -212,18 +203,9 @@ async def test_stream_events_preserves_thinking_from_part_start_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_segment(
-        agent,
-        user_input="why",
-        deps=deps,
-        message_history=[],
-        model_settings={},
-        usage_limits=UsageLimits(request_limit=5),
-        usage=None,
-        deferred_tool_results=None,
-        verbose=True,
-        frontend=frontend,
-    )
+    _ts = _TurnState(current_input="why", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), True, frontend)
+    streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is False
     assert ("thinking_commit", "Sure, thing") in frontend.events
@@ -242,18 +224,9 @@ async def test_stream_events_does_not_commit_text_on_final_result_event():
 
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    _, streamed_text = await _run_stream_segment(
-        agent,
-        user_input="why",
-        deps=deps,
-        message_history=[],
-        model_settings={},
-        usage_limits=UsageLimits(request_limit=5),
-        usage=None,
-        deferred_tool_results=None,
-        verbose=False,
-        frontend=frontend,
-    )
+    _ts = _TurnState(current_input="why", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
+    streamed_text = _ts.latest_streamed_text
 
     assert streamed_text is True
     commits = [payload for kind, payload in frontend.events if kind == "text_commit"]
@@ -409,11 +382,8 @@ async def test_stream_events_tool_start_fires_immediately_on_first_tool_call():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="hello", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="hello", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     non_cleanup = [e for e in frontend.events if e[0] != "cleanup"]
     assert len(non_cleanup) >= 1
@@ -441,11 +411,8 @@ async def test_stream_events_parallel_tool_calls_each_fire_tool_start_independen
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="hello", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="hello", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     tool_start_events = [e for e in frontend.events if e[0] == "tool_start"]
     assert len(tool_start_events) == 2, (
@@ -483,11 +450,8 @@ async def test_stream_events_shell_result_reaches_tool_complete_as_str():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="list files", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="list files", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
     assert len(start_events) == 1
@@ -522,11 +486,8 @@ async def test_stream_events_empty_tool_result_reaches_tool_complete_as_none():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="hi", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="hi", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -556,11 +517,8 @@ async def test_stream_events_retry_prompt_closes_tool_surface_with_none():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="search", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="search", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
@@ -590,11 +548,8 @@ async def test_stream_events_retry_prompt_clears_progress_callback():
     ])
     frontend = RecordingFrontend()
 
-    await _run_stream_segment(
-        agent, user_input="search", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="search", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     assert deps.runtime.tool_progress_callback is None, (
         "tool_progress_callback must be cleared after RetryPromptPart"
@@ -623,11 +578,8 @@ async def test_stream_events_raw_dict_result_renders_as_summary():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="hi", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="hi", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -682,11 +634,8 @@ async def test_stream_events_tool_progress_callback_curried_with_tool_id():
         AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
     ])
 
-    await _run_stream_segment(
-        agent, user_input="check", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="check", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     progress_events = [(kind, payload) for kind, payload in frontend.events if kind == "tool_progress"]
     assert len(progress_events) == 2, (
@@ -727,11 +676,8 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
     ])
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
 
-    await _run_stream_segment(
-        agent, user_input="recall", deps=deps, message_history=[],
-        model_settings={}, usage_limits=UsageLimits(request_limit=5),
-        usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-    )
+    _ts = _TurnState(current_input="recall", current_history=[])
+    await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
 
     complete_events = [payload for kind, payload in frontend.events if kind == "tool_complete"]
     assert len(complete_events) == 1
@@ -1027,11 +973,8 @@ async def test_tool_args_display_known_tools() -> None:
             FunctionToolResultEvent(result=return_part),
             AgentRunResultEvent(result=_make_agent_run_result("", finish_reason="stop")),
         ])
-        await _run_stream_segment(
-            agent, user_input="x", deps=deps, message_history=[],
-            model_settings={}, usage_limits=UsageLimits(request_limit=5),
-            usage=None, deferred_tool_results=None, verbose=False, frontend=frontend,
-        )
+        _ts = _TurnState(current_input="x", current_history=[])
+        await _execute_stream_segment(_ts, agent, deps, {}, UsageLimits(request_limit=5), False, frontend)
         start_events = [payload for kind, payload in frontend.events if kind == "tool_start"]
         assert len(start_events) == 1
         _tool_id, _name, args_display = start_events[0]
