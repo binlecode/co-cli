@@ -1,13 +1,16 @@
 import dataclasses
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from opentelemetry import trace
+from pydantic_ai import Agent
 
+from co_cli.agent import discover_mcp_tools
 from co_cli.bootstrap._check import check_agent_llm
 from co_cli.config import settings, ROLE_REASONING
-from co_cli.context._history import OpeningContextState, SafetyState
+from co_cli.context._types import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
 from co_cli.display._core import TerminalFrontend
@@ -114,8 +117,13 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
 
 
-def create_deps() -> CoDeps:
-    """Assemble CoDeps from settings. Raises ValueError on provider/model hard errors."""
+def create_deps() -> tuple[CoDeps, list[str]]:
+    """Assemble CoDeps from settings. Raises ValueError on provider/model hard errors.
+
+    Returns (deps, startup_statuses) where startup_statuses is a one-shot list of
+    degradation warnings to display on startup. Callers must consume this list directly
+    rather than storing it on deps.
+    """
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
 
@@ -155,11 +163,10 @@ def create_deps() -> CoDeps:
         model_registry=ModelRegistry.from_config(config),
     )
     runtime = CoRuntimeState(
-        startup_statuses=startup_statuses,
         opening_ctx_state=OpeningContextState(),
         safety_state=SafetyState(),
     )
-    return CoDeps(services=services, config=config, runtime=runtime)
+    return CoDeps(services=services, config=config, runtime=runtime), startup_statuses
 
 
 def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
@@ -213,4 +220,43 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
                 frontend.on_status(f"  Session save failed — {e}; session will not persist")
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data
+
+
+@dataclass(frozen=True)
+class SessionCapabilityResult:
+    """Startup snapshot of session capability completion."""
+
+    skill_count: int
+
+
+async def initialize_session_capabilities(
+    agent: Agent,
+    deps: CoDeps,
+    frontend: TerminalFrontend,
+    mcp_init_ok: bool,
+) -> SessionCapabilityResult:
+    """Complete session capability assembly after agent context entry.
+
+    Owns MCP discovery (conditional on mcp_servers configured and mcp_init_ok)
+    and skill loading. Updates deps.tools in-place; callers read final state
+    from deps after this returns.
+    """
+    # deferred imports to avoid bootstrap→commands module-level cycle
+    from co_cli.commands._commands import _load_skills, set_skill_commands
+
+    # 1. MCP discovery (conditional)
+    if deps.config.mcp_servers and mcp_init_ok:
+        mcp_tool_names, discovery_errors = await discover_mcp_tools(
+            agent, exclude=set(deps.tools.tool_names)
+        )
+        deps.tools.mcp_discovery_errors = discovery_errors
+        for prefix, err in discovery_errors.items():
+            frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} ...")
+        deps.tools.tool_names = deps.tools.tool_names + mcp_tool_names
+
+    # 2. Skill loading
+    skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
+    set_skill_commands(skill_commands, deps.session)
+
+    return SessionCapabilityResult(skill_count=len(deps.session.skill_registry))
 

@@ -59,17 +59,18 @@ main.py:build_chat_app()
   │    │    └─ tool_approvals[fn.__name__] = requires_approval
   │    ├─ [conditional] _register(delegate_*, False)        # only when role_models has matching role
   │    └─ [web policy]  _register(web_search/fetch, policy.search/fetch == "ask")
-  │    └─ return (agent, list(tool_approvals.keys()), tool_approvals)
-  ├─ deps.session.tool_names = list(tool_approvals.keys())  # native names only
-  ├─ deps.session.tool_approvals = tool_approvals
+  │    └─ return AgentCapabilityResult(agent, tool_names, tool_approvals)
+  ├─ deps.tools.tool_names = agent_result.tool_names       # native names only
+  ├─ deps.tools.tool_approvals = agent_result.tool_approvals
   ├─ await stack.enter_async_context(agent)                 # starts MCP server subprocesses
-  └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py:264
-       └─ for toolset in agent.toolsets:
-            ├─ inner.list_tools()                           # MCPServer: enumerate via stdio/HTTP
-            └─ name = f"{prefix}_{t.name}" if prefix else t.name
-  ├─ deps.session.tool_names += mcp_tool_names             # native + MCP names in session
-  └─ for prefix, err in discovery_errors:                 # surface failed servers to user
-       └─ frontend.on_status("MCP server {prefix!r} failed...")  # empty on happy path
+  └─ initialize_session_capabilities(agent, deps, frontend, mcp_init_ok)   # bootstrap/_bootstrap.py
+       └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py:264
+            └─ for toolset in agent.toolsets:
+                 ├─ inner.list_tools()                      # MCPServer: enumerate via stdio/HTTP
+                 └─ name = f"{prefix}_{t.name}" if prefix else t.name
+       ├─ deps.tools.tool_names += mcp_tool_names          # native + MCP names
+       └─ for prefix, err in discovery_errors:             # surface failed servers to user
+            └─ frontend.on_status("MCP server {prefix!r} failed...")  # empty on happy path
 ```
 
 **Phase 2 — Execution Request** (`_orchestrate.py` → pydantic-ai)
@@ -111,7 +112,7 @@ _execute_stream_segment(_TurnState, agent, deferred_tool_results=approvals, ...)
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
        │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
-       │    ├─ ctx.deps.session.*    (session_approval_rules, todos, active_skill_env)
+       │    ├─ ctx.deps.session.*    (session_approval_rules, todos, skill_commands)
        │    └─ ctx.deps.runtime.*    (tool_progress_callback, safety_state)
        │    └─ return ToolResult     (make_result(display, **metadata) from _result.py)
        │         ├─ "_kind"          "tool_result" discriminator

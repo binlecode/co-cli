@@ -151,7 +151,7 @@ async def main() -> int:
     print("=" * 60)
 
     # TODO: source model_settings from make_eval_settings()
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
 
     knowledge_index = KnowledgeIndex(db_path=Path(".co-cli/search.db"))
     deps = make_eval_deps(

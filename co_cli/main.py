@@ -22,7 +22,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn
 from co_cli.context._history import precompute_compaction
-from co_cli.agent import build_agent, discover_mcp_tools
+from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB
 from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
@@ -31,10 +31,10 @@ from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.commands._commands import (
     dispatch as dispatch_command, CommandContext, BUILTIN_COMMANDS,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
-    _load_skills, _build_completer_words, set_skill_commands,
+    _build_completer_words,
 )
 from co_cli.context._session import touch_session, increment_compaction, save_session
-from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session
+from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session, initialize_session_capabilities
 
 exporter = SQLiteSpanExporter()
 
@@ -77,8 +77,7 @@ def _cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> 
             os.environ[k] = v
         else:
             os.environ.pop(k, None)
-    deps.session.active_skill_env.clear()
-    deps.session.active_skill_name = None
+    deps.runtime.active_skill_name = None
 
 
 async def _finalize_turn(
@@ -200,11 +199,11 @@ async def _chat_loop(verbose: bool = False):
         complete_while_typing=False,
     )
     try:
-        deps = create_deps()
+        deps, startup_statuses = create_deps()
     except ValueError as e:
         console.print(f"[bold red]Startup error:[/bold red] {e}")
         raise SystemExit(1)
-    for status in deps.runtime.startup_statuses:
+    for status in startup_statuses:
         frontend.on_status(status)
 
     from co_cli._model_factory import ResolvedModel
@@ -216,9 +215,10 @@ async def _chat_loop(verbose: bool = False):
     )
     primary_model = resolved.model  # used for signal detection and background compaction
 
-    agent, tool_names, tool_approvals = build_agent(config=deps.config, resolved=resolved)
-    deps.session.tool_names = tool_names
-    deps.session.tool_approvals = tool_approvals
+    agent_result = build_agent(config=deps.config, resolved=resolved)
+    agent = agent_result.agent
+    deps.tools.tool_names = agent_result.tool_names
+    deps.tools.tool_approvals = agent_result.tool_approvals
 
     stack = AsyncExitStack()
     state = _ChatTurnState(message_history=[], session_data=None)
@@ -231,25 +231,14 @@ async def _chat_loop(verbose: bool = False):
         except Exception as e:
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
-        if deps.config.mcp_servers and _mcp_init_ok:
-            mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
-            deps.session.mcp_discovery_errors = discovery_errors
-            for prefix, err in discovery_errors.items():
-                frontend.on_status(
-                    f"MCP server {prefix!r} failed to list tools: {err} — those tools unavailable."
-                )
-            tool_names = tool_names + mcp_tool_names
-            deps.session.tool_names = tool_names
-
-        skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
-        set_skill_commands(skill_commands, deps.session)
-        completer.words = _build_completer_words()
+        session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
+        completer.words = _build_completer_words(deps.session.skill_commands)
 
         sync_knowledge(deps, frontend)
         state.session_data = restore_session(deps, frontend)
-        frontend.on_status(f"  {len(deps.session.skill_registry)} skill(s) loaded")
+        frontend.on_status(f"  {session_cap.skill_count} skill(s) loaded")
 
-        display_welcome_banner(deps)
+        display_welcome_banner(deps, startup_statuses)
 
         while True:
             _saved_env: dict[str, str | None] = {}
@@ -267,7 +256,7 @@ async def _chat_loop(verbose: bool = False):
                         message_history=state.message_history,
                         deps=deps,
                         agent=agent,
-                        tool_names=tool_names,
+                        tool_names=deps.tools.tool_names,
                         completer=completer,
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)
@@ -280,6 +269,7 @@ async def _chat_loop(verbose: bool = False):
                     elif isinstance(outcome, DelegateToAgent):
                         # Skill dispatched — fall through to LLM turn with delegated input
                         user_input = outcome.delegated_input
+                        deps.runtime.active_skill_name = outcome.skill_name
                         _saved_env = {k: os.environ.get(k) for k in outcome.skill_env}
                         os.environ.update(outcome.skill_env)
                     else:  # LocalOnly

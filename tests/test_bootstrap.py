@@ -1,15 +1,19 @@
 """Functional tests for bootstrap-sequence behaviors (real components, direct API calls)."""
 
+import asyncio
+import dataclasses
 import os
 import yaml
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from co_cli.prompts._assembly import _build_system_prompt
 from co_cli.config import ModelEntry
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reranker, restore_session, sync_knowledge
-from co_cli.context._history import OpeningContextState, SafetyState
+from co_cli.context._types import OpeningContextState, SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
 from co_cli.display._core import TerminalFrontend, console
@@ -270,16 +274,16 @@ def test_mcp_tool_names_unchanged_when_enter_async_context_fails(tmp_path: Path)
         )
     }
     deps = _make_deps(tmp_path, mcp_servers=mcp_servers)
-    agent, tool_names, _tool_approvals = build_agent(config=deps.config)
-    deps.session.tool_names = list(tool_names)
-    initial_tool_count = len(deps.session.tool_names)
+    agent_result = build_agent(config=deps.config)
+    deps.tools.tool_names = list(agent_result.tool_names)
+    initial_tool_count = len(deps.tools.tool_names)
 
     async def _run() -> None:
         stack = AsyncExitStack()
         _mcp_init_ok = False
         try:
             async with asyncio.timeout(5):
-                await stack.enter_async_context(agent)
+                await stack.enter_async_context(agent_result.agent)
             _mcp_init_ok = True
         except Exception:
             pass
@@ -294,10 +298,10 @@ def test_mcp_tool_names_unchanged_when_enter_async_context_fails(tmp_path: Path)
         # Guard: discover_mcp_tools must NOT be called when _mcp_init_ok is False.
         # We replicate the exact guard from _chat_loop here to confirm its effect.
         if deps.config.mcp_servers and _mcp_init_ok:
-            mcp_tool_names, _errs = await discover_mcp_tools(agent, exclude=set(tool_names))
-            deps.session.tool_names = deps.session.tool_names + mcp_tool_names
+            mcp_tool_names, _errs = await discover_mcp_tools(agent_result.agent, exclude=set(agent_result.tool_names))
+            deps.tools.tool_names = deps.tools.tool_names + mcp_tool_names
 
-        assert len(deps.session.tool_names) == initial_tool_count, (
+        assert len(deps.tools.tool_names) == initial_tool_count, (
             "tool_names must not grow when MCP init fails — discover_mcp_tools must be skipped"
         )
 
@@ -305,22 +309,20 @@ def test_mcp_tool_names_unchanged_when_enter_async_context_fails(tmp_path: Path)
 
 
 def test_display_welcome_banner_reads_counts_from_deps(tmp_path: Path) -> None:
-    """display_welcome_banner() must read tool/skill/MCP counts from deps.session — not from a RuntimeCheck.
+    """display_welcome_banner() must read tool counts from deps.tools and skill counts from deps.session.
     Also verifies that the Ready line shows '(degraded)' when startup_statuses is non-empty and does not
     when it is empty.
     """
-    import dataclasses
-
     deps = _make_deps(tmp_path, mcp_servers={})
-    deps.session.tool_names = ["tool_a", "tool_b", "tool_c"]
+    deps.tools.tool_names = ["tool_a", "tool_b", "tool_c"]
     deps.session.skill_registry = [{"name": "skill_x"}, {"name": "skill_y"}]
     deps.session.slash_command_count = 2
 
     with console.capture() as cap:
-        display_welcome_banner(deps)
+        display_welcome_banner(deps, [])
     output = cap.get()
 
-    assert "Tools: 3" in output, "Banner must show tool count from deps.session.tool_names"
+    assert "Tools: 3" in output, "Banner must show tool count from deps.tools.tool_names"
     assert "Skills: 2" in output, "Banner must show skill count from deps.session.skill_registry"
     assert "MCP: 0" in output, "Banner must show MCP count from deps.config.mcp_servers"
     assert "Commands:" in output, "Banner must show slash command count from BUILTIN_COMMANDS"
@@ -328,18 +330,98 @@ def test_display_welcome_banner_reads_counts_from_deps(tmp_path: Path) -> None:
     assert "(degraded)" not in output, "Banner must not show (degraded) when startup_statuses is empty"
 
     # Verify degraded path: non-empty startup_statuses appends '(degraded)' to the Ready line.
-    degraded_runtime = dataclasses.replace(
-        deps.runtime,
-        startup_statuses=["reranker unavailable"],
-    )
-    deps_degraded = dataclasses.replace(deps, runtime=degraded_runtime)
-
     with console.capture() as cap_degraded:
-        display_welcome_banner(deps_degraded)
+        display_welcome_banner(deps, ["reranker unavailable"])
     output_degraded = cap_degraded.get()
 
     assert "✓ Ready" in output_degraded, "Banner must still show Ready when degraded"
     assert "(degraded)" in output_degraded, "Banner must show (degraded) when startup_statuses is non-empty"
+
+
+@pytest.mark.asyncio
+async def test_initialize_session_capabilities_no_mcp_tool_names_unchanged(tmp_path: Path) -> None:
+    """No MCP servers configured: tool_names must be unchanged after helper call.
+
+    Validates the guard path: when deps.config.mcp_servers is empty,
+    discover_mcp_tools must not be called and tool_names must stay empty.
+    """
+    from co_cli.agent import build_agent
+    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
+
+    deps = _make_deps(tmp_path, mcp_servers={})
+    initial_tool_names = list(deps.tools.tool_names)
+    agent = build_agent(config=deps.config).agent
+
+    async with asyncio.timeout(10):
+        result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=True)
+
+    assert deps.tools.tool_names == initial_tool_names, (
+        "No MCP servers: tool_names must be unchanged after initialize_session_capabilities"
+    )
+    assert result.skill_count >= 1, (
+        "skill_count must include at least one package-default skill (doctor)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_initialize_session_capabilities_mcp_skipped_when_init_failed(tmp_path: Path) -> None:
+    """MCP servers configured but mcp_init_ok=False: discovery skipped; errors dict remains empty.
+
+    Validates the _mcp_init_ok guard: when context entry failed, discover_mcp_tools
+    must not be called and mcp_discovery_errors must be empty.
+    """
+    from co_cli.agent import build_agent
+    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
+    from co_cli.config import MCPServerConfig
+
+    mcp_servers = {
+        "test-server": MCPServerConfig(url="http://127.0.0.1:19998/mcp", prefix="test", timeout=2)
+    }
+    deps = _make_deps(tmp_path, mcp_servers=mcp_servers)
+    initial_tool_names = list(deps.tools.tool_names)
+    agent = build_agent(config=deps.config).agent
+
+    async with asyncio.timeout(10):
+        await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
+
+    assert deps.tools.tool_names == initial_tool_names, (
+        "mcp_init_ok=False: tool_names must be unchanged — discovery must be skipped"
+    )
+    assert deps.tools.mcp_discovery_errors == {}, (
+        "mcp_init_ok=False: mcp_discovery_errors must be empty — no discovery attempt made"
+    )
+
+
+@pytest.mark.asyncio
+async def test_initialize_session_capabilities_project_skill_registered(tmp_path: Path) -> None:
+    """Project skill directory with one valid skill: skill appears in skill_registry and skill_count."""
+    from co_cli.agent import build_agent
+    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
+
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    skill_content = (
+        "---\n"
+        "description: Test skill for bootstrap functional tests\n"
+        "---\n\n"
+        "Perform a test action.\n"
+    )
+    (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
+
+    deps = _make_deps(tmp_path, mcp_servers={})
+    deps = dataclasses.replace(deps, config=dataclasses.replace(deps.config, skills_dir=skills_dir))
+    agent = build_agent(config=deps.config).agent
+
+    async with asyncio.timeout(10):
+        result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
+
+    skill_names = [s["name"] for s in deps.session.skill_registry]
+    assert "test-bootstrap-skill" in skill_names, (
+        "Project skill must appear in skill_registry after initialize_session_capabilities"
+    )
+    assert result.skill_count >= 1, (
+        "skill_count must be at least 1 when a valid project skill is loaded"
+    )
 
 
 def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:

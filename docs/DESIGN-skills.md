@@ -9,7 +9,7 @@ Skills in `co-cli` are prompt overlays loaded from markdown files and exposed th
 ```mermaid
 flowchart LR
     SkillFile[skill .md file] --> Loader[_load_skills]
-    Loader --> Registry[SKILL_COMMANDS + session.skill_registry]
+    Loader --> Registry[session.skill_commands + session.skill_registry]
     Registry --> Dispatch[name args]
     Dispatch --> AgentBody[expanded skill body]
     AgentBody --> MainLoop[main.py]
@@ -21,7 +21,7 @@ flowchart LR
 
 ### Skill Model
 
-The in-memory shape is `SkillCommand` in `co_cli/commands/_commands.py`.
+The in-memory shape is `SkillConfig` in `co_cli/commands/_skill_types.py`.
 
 | Field | Purpose |
 | --- | --- |
@@ -48,7 +48,7 @@ Supported frontmatter fields parsed from the skill file:
 | `disable-model-invocation` | hide from `session.skill_registry` |
 | `requires` | gate loading on bins, anyBins, env, os, or settings |
 | `skill-env` | turn-scoped env injection, filtered through a blocked-key list |
-| `source-url` | installation provenance; read at upgrade time by `_upgrade_skill()`, not stored in `SkillCommand` |
+| `source-url` | installation provenance; read at upgrade time by `_upgrade_skill()`, not stored in `SkillConfig` |
 
 The skill name is always the filename stem. Built-in slash commands are reserved names and cannot be shadowed.
 
@@ -59,11 +59,11 @@ Skills are loaded by `_load_skills(skills_dir, settings)` in two passes:
 1. package defaults from `co_cli/skills/*.md`
 2. project-local overrides from `<cwd>/.co-cli/skills/*.md`
 
-Project-local files win on name collision. Loading happens at startup in `main.py` after MCP initialization and before the welcome banner:
+Project-local files win on name collision. Loading happens at startup inside `initialize_session_capabilities()` (in `bootstrap/_bootstrap.py`) after MCP initialization and before the welcome banner:
 
 1. `_load_skills(deps.config.skills_dir, settings)`
 2. `set_skill_commands(skill_commands, deps.session)`
-3. `completer.words = _build_completer_words()`
+3. `completer.words = _build_completer_words(deps.session.skill_commands)` — called in `main.py` immediately after `initialize_session_capabilities()` returns
 
 ### Load Gating
 
@@ -105,7 +105,7 @@ There are two skill registries:
 
 | Registry | Purpose |
 | --- | --- |
-| module-global `SKILL_COMMANDS` | full loaded skill set used by slash-command dispatch |
+| `deps.session.skill_commands` | full loaded skill set used by slash-command dispatch |
 | `deps.session.skill_registry` | model-facing list of visible skills with name and description only |
 
 `set_skill_commands()` updates both. `session.skill_registry` excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
@@ -117,16 +117,16 @@ Slash-command routing lives in `dispatch(raw_input, ctx)`.
 Dispatch order:
 
 1. built-in commands in `BUILTIN_COMMANDS`
-2. skills in `SKILL_COMMANDS`
+2. skills in `ctx.deps.session.skill_commands`
 3. unknown command error
 
 When a skill matches:
 
-1. `ctx.deps.session.active_skill_env` is populated from the skill
-2. `ctx.deps.session.active_skill_name` is set
-3. the skill body is copied into `delegated_input`
-4. argument placeholders are expanded
-5. `DelegateToAgent(delegated_input, skill_env, skill_name)` is returned
+1. the skill body is copied into `delegated_input`
+2. argument placeholders are expanded
+3. `DelegateToAgent(delegated_input, skill_env, skill_name)` is returned
+
+`main.py` sets `deps.runtime.active_skill_name = outcome.skill_name` after receiving `DelegateToAgent`, before entering `run_turn()`.
 
 The main chat loop receives a `DelegateToAgent` outcome, injects skill env, and runs a normal LLM turn with `delegated_input`. Skills do not bypass the agent loop, approval system, or tool contracts.
 
@@ -148,11 +148,11 @@ Skill env injection is managed in `main.py`, not in the skill loader.
 
 For a dispatched skill turn:
 
-1. current values for the selected keys are saved
-2. `os.environ` is updated from `deps.session.active_skill_env`
-3. `run_turn()` executes
-4. a `finally` block restores previous values
-5. `active_skill_env` and `active_skill_name` are cleared
+1. `deps.runtime.active_skill_name` is set from `outcome.skill_name`
+2. current values for the selected env keys are saved
+3. `os.environ` is updated from `outcome.skill_env`
+4. `run_turn()` executes
+5. a `finally` block restores previous env values and clears `active_skill_name`
 
 This guarantees rollback on success, interruption, or exception.
 
@@ -185,9 +185,11 @@ There is no separate skills config object today.
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/commands/_commands.py` | skill dataclasses, loader, scanner, dispatch, and `/skills` commands |
-| `co_cli/main.py` | startup skill loading and per-turn skill-env lifecycle |
-| `co_cli/deps.py` | `skills_dir`, `active_skill_env`, `active_skill_name`, `skill_registry` |
+| `co_cli/commands/_skill_types.py` | `SkillConfig` frozen dataclass |
+| `co_cli/commands/_commands.py` | skill loader, scanner, dispatch, and `/skills` commands |
+| `co_cli/bootstrap/_bootstrap.py` | `initialize_session_capabilities()` — MCP discovery and skill loading at startup |
+| `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
+| `co_cli/deps.py` | `skills_dir` (config); `skill_commands`, `skill_registry` (session); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `<cwd>/.co-cli/skills/` | project-local skill files and overrides |

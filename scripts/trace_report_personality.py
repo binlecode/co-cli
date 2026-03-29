@@ -324,8 +324,9 @@ async def main() -> None:
 
     # Create agent once (shared across cases)
     # TODO: source model_settings from make_eval_settings()
-    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-    print(f"  Agent tools: {len(tool_names)}")
+    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    agent = _r.agent
+    print(f"  Agent tools: {len(_r.tool_names)}")
 
     # Run cases sequentially to keep span windows clean
     case_traces: list[_CaseRunTrace] = []

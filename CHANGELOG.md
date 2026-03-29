@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-03-28
+
+### Changed
+- **Startup capability ownership**: `build_agent()` now returns `AgentCapabilityResult` instead of a bare 3-tuple, making the agent capability surface explicit in the type system. MCP discovery and skill loading are extracted from `_chat_loop()` into `initialize_session_capabilities()` in `_bootstrap.py`, replacing ~25 lines of inline assembly with a single named boundary that returns `SessionCapabilityResult`.
+
 ## [0.5.12] - 2026-03-28
 
 ### Changed

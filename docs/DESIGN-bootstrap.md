@@ -60,16 +60,17 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      shell=ShellBackend(), knowledge_index=knowledge_index,
 │  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(resolved_config),
 │  │  )
-│  ├─ CoRuntimeState(startup_statuses=startup_statuses, ...)
-│  └─ CoDeps(services, resolved_config, runtime)      # returned; session field is default-fresh
+│  ├─ CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+│  └─ (CoDeps(services, resolved_config, runtime), startup_statuses)   # tuple return
 │
-├─ for status in deps.runtime.startup_statuses: frontend.on_status(status)
+├─ deps, startup_statuses = create_deps()
+├─ for status in startup_statuses: frontend.on_status(status)
 │
 ├─ resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)
 │      if model_registry else ResolvedModel(model=None, settings=None)
 ├─ primary_model = resolved.model            # for signal detection and background compaction
 │
-├─ build_agent(config=deps.config, resolved=resolved)  # agent.py — pure construction, no I/O
+├─ agent_result = build_agent(config=deps.config, resolved=resolved)  # agent.py — pure construction, no I/O
 │  │
 │  ├─ [if mcp_servers] build MCPServerStdio/HTTP toolset objects → mcp_toolsets
 │  ├─ Agent(
@@ -91,27 +92,19 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ agent.tool(run_shell_command, requires_approval=False)  # shell approval is command-scoped inside the tool
 │  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
 │  ├─ agent.tool(run_coder_subagent), agent.tool(run_thinking_subagent), ...  # only if role model is configured
-│  └─ returns (agent, tool_names, tool_approvals)
+│  └─ returns AgentCapabilityResult
 │
-├─ deps.session.tool_names     = tool_names
-├─ deps.session.tool_approvals = tool_approvals
+├─ agent = agent_result.agent
+├─ deps.tools.tool_names     = agent_result.tool_names
+├─ deps.tools.tool_approvals = agent_result.tool_approvals
 │
 ├─ AsyncExitStack.enter_async_context(agent)  # MCP server subprocesses start here
 │      Exception → print warning, _mcp_init_ok stays False
 │
-├─ [if mcp_servers and _mcp_init_ok]           # discovery skipped when init failed
-│      mcp_tool_names, discovery_errors = discover_mcp_tools(agent, exclude=set(tool_names))
-│      deps.session.mcp_discovery_errors = discovery_errors
-│      for each discovery error → frontend.on_status(warning)
-│      tool_names = tool_names + mcp_tool_names
-│      deps.session.tool_names = tool_names
-│
-├─ _load_skills(skills_dir, settings)
-│      pass 1: scan co_cli/skills/*.md    (package defaults)
-│      pass 2: scan .co-cli/skills/*.md  (project-local; wins on collision)
-├─ set_skill_commands(skill_commands, deps.session)
-│      SKILL_COMMANDS dict updated, deps.session.skill_registry populated
-├─ completer.words = _build_completer_words()  # COMMANDS + skills
+├─ session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
+│      [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.tools updated
+│      _load_skills() + set_skill_commands() → deps.session.skill_commands + skill_registry
+├─ completer.words = _build_completer_words(deps.session.skill_commands)  # COMMANDS + skills
 │
 ├─ sync_knowledge(deps, frontend)
 │      knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
@@ -124,10 +117,10 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │               → no:  new_session(); deps.session.session_id = new UUID; save_session()
 │      returns session_data  # kept in chat_loop local state for per-turn persistence
 │
-├─ frontend.on_status(f"{len(deps.session.skill_registry)} skill(s) loaded")
+├─ frontend.on_status(f"{session_cap.skill_count} skill(s) loaded")
 │
-└─ display_welcome_banner(deps)
-   │    tool_count  = len(deps.session.tool_names)
+└─ display_welcome_banner(deps, startup_statuses)
+   │    tool_count  = len(deps.tools.tool_names)
    │    skill_count = len(deps.session.skill_registry)
    │    mcp_count   = len(deps.config.mcp_servers or {})
    ▼
@@ -205,11 +198,10 @@ create_deps():
         model_registry=ModelRegistry.from_config(config),
     )
     runtime = CoRuntimeState(
-        startup_statuses=startup_statuses,
         opening_ctx_state=OpeningContextState(),
         safety_state=SafetyState(),
     )
-    return CoDeps(services=services, config=config, runtime=runtime)
+    return CoDeps(services=services, config=config, runtime=runtime), startup_statuses
 ```
 
 Key transformation:
@@ -223,11 +215,12 @@ Key transformation:
 |-------|------|----------|-----------------------|
 | `services` | `CoServices` | Session | Shared by reference |
 | `config` | `CoConfig` | Session | Shared by reference |
-| `session` | `CoSessionState` | Session, fresh for sub-agents | Reset for sub-agents |
+| `tools` | `CoToolState` | Set during startup | Shared by reference |
+| `session` | `CoSessionState` | Session, partially inherited for sub-agents | Credentials, approval rules, skill commands, and skill registry inherited; per-session fields reset |
 | `runtime` | `CoRuntimeState` | Orchestration-layer transient state | Reset for sub-agents |
 
-The session group holds tool-visible mutable state such as approvals, todos, and skill registry. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
-`runtime.startup_statuses` carries one-time bootstrap status lines such as knowledge backend degradation notices; the chat loop prints them before the welcome banner and then treats them as transient state.
+The `tools` group holds bootstrap-set tool discovery metadata (tool names, approval map, MCP discovery errors) that is constant once startup completes. The session group holds tool-visible mutable state such as approvals, todos, and skill registry. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
+`startup_statuses` is returned as the second element of `create_deps()`'s tuple; the chat loop prints these one-time bootstrap status lines (e.g. knowledge backend degradation notices) before the welcome banner.
 
 ## 2. Provider And Model Checks
 
@@ -246,11 +239,11 @@ The inline wakeup steps run once per `chat_loop()` startup after deps initializa
 
 - `create_deps()` returned without raising (provider/model probes passed)
 - `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after skills load (inside `async with agent`) using `_build_completer_words()`
-- `build_agent()` has returned an agent instance; `deps.session.tool_names` and `tool_approvals` are set immediately after
+- `build_agent()` has returned an `AgentCapabilityResult`; `deps.tools.tool_names` and `deps.tools.tool_approvals` are set immediately after from `agent_result` attributes
 - `async with agent` has been entered; if MCP init fails, a warning is printed and startup continues with native tools only
-- skills are loaded inside `async with agent` after MCP init (`_load_skills`), then `set_skill_commands()` populates `SKILL_COMMANDS` and `skill_registry`, and `completer.words` is updated immediately after
+- `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.session.skill_commands`
 
-The four inline steps run inside the `async with agent` block after MCP init and skills load have completed.
+The three inline wakeup steps run inside the `async with agent` block after `initialize_session_capabilities()` completes.
 
 ## 4. Full Startup Sequence
 
@@ -267,9 +260,10 @@ chat_loop():
     #          if model_registry else ResolvedModel(model=None, settings=None)
     primary_model = resolved.model              ← for signal detection and background compaction
 
-    agent, tool_names, tool_approvals = build_agent(config=deps.config, resolved=resolved)
-    deps.session.tool_names = tool_names        ← set immediately after build_agent
-    deps.session.tool_approvals = tool_approvals
+    agent_result = build_agent(config=deps.config, resolved=resolved)
+    agent = agent_result.agent
+    deps.tools.tool_names     = agent_result.tool_names     ← set immediately after build_agent
+    deps.tools.tool_approvals = agent_result.tool_approvals
 
     # inside async with agent
     stack = AsyncExitStack()
@@ -284,20 +278,13 @@ chat_loop():
             console.print("[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
             # startup continues with native tools only
 
-        if mcp_servers and _mcp_init_ok:
-            mcp_tool_names, discovery_errors = await discover_mcp_tools(agent, exclude=set(tool_names))
-            deps.session.mcp_discovery_errors = discovery_errors
-            for prefix, err in discovery_errors.items():
-                frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} — those tools unavailable.")
-            tool_names = tool_names + mcp_tool_names
-            deps.session.tool_names = tool_names
-
-        skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
-        set_skill_commands(skill_commands, deps.session)   ← SKILL_COMMANDS + skill_registry
-        completer.words = _build_completer_words()   ← updated to COMMANDS + skills
+        session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
+            # [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.tools updated
+            # _load_skills() + set_skill_commands() → session.skill_commands + skill_registry
+        completer.words = _build_completer_words(deps.session.skill_commands)   ← updated to COMMANDS + skills
 
         [inline wakeup steps 1–3]
-        display_welcome_banner(deps)
+        display_welcome_banner(deps, startup_statuses)
         begin REPL loop
     finally:
         cleanup
@@ -317,7 +304,7 @@ MCP failure is non-fatal. A warning is printed and startup continues with native
 
 ## 5. Inline Wakeup Steps
 
-Three sequential steps run inline in `chat_loop()` after MCP init, reporting status via `frontend.on_status()`.
+Three sequential steps run inline in `chat_loop()` after `initialize_session_capabilities()` completes, reporting status via `frontend.on_status()`.
 
 ```text
 inline wakeup (in chat_loop()):
@@ -326,7 +313,7 @@ inline wakeup (in chat_loop()):
     Step 3: skills_loaded_report  (reads len(deps.session.skill_registry) directly)
 ```
 
-`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps)` reads counts directly from `deps.session` and `deps.config` — no separate health probe.
+`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps, startup_statuses)` reads tool counts from `deps.tools`, skill counts from `deps.session`, and MCP server count from `deps.config` — no separate health probe.
 
 ### Step 1 - Knowledge Sync
 
@@ -394,19 +381,22 @@ This is a visibility step only. Skill loading already happened inside `async wit
 
 ### Skills Load
 
-Skills load inside `async with agent`, after MCP init, not before `build_agent()`:
+Skills load inside `initialize_session_capabilities()` (called inside `async with agent`, after MCP connect), not before `build_agent()`:
 
 ```text
-skill_commands = _load_skills(deps.config.skills_dir, settings)
-    pass 1: scan co_cli/skills/*.md
-    pass 2: scan deps.config.skills_dir/*.md
-    parse frontmatter, check requires, scan for security issues
+initialize_session_capabilities(agent, deps, frontend, mcp_init_ok):
+    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → deps.tools.mcp_discovery_errors, deps.tools.tool_names extended
+    skill_commands = _load_skills(deps.config.skills_dir, settings)
+        pass 1: scan co_cli/skills/*.md
+        pass 2: scan deps.config.skills_dir/*.md
+        parse frontmatter, check requires, scan for security issues
+    set_skill_commands(skill_commands, deps.session)   ← session.skill_commands + skill_registry
+    return SessionCapabilityResult(skill_count=len(deps.session.skill_registry))
 
-set_skill_commands(skill_commands, deps.session)   ← SKILL_COMMANDS.clear/update + skill_registry
-completer.words = _build_completer_words()   ← extends COMMANDS-only list to COMMANDS + skills
+completer.words = _build_completer_words(deps.session.skill_commands)   ← extends COMMANDS-only list to COMMANDS + skills
 ```
 
-`PromptSession` is built before `create_deps()` with a COMMANDS-only completer. After skills load (inside `async with agent`), `_build_completer_words()` updates `completer.words` in-place to include skill names.
+`PromptSession` is built before `create_deps()` with a COMMANDS-only completer. After `initialize_session_capabilities()` returns, `_build_completer_words()` updates `completer.words` in-place to include skill names.
 
 `disable_model_invocation: true` skills stay available to the REPL but are hidden from the model-facing `skill_registry`.
 
@@ -423,7 +413,7 @@ otherwise        → try hybrid first (if embedder available), then fts5, then g
 
 deps.config.knowledge_search_backend = resolved backend
 deps.services.knowledge_index = KnowledgeIndex instance or None
-deps.runtime.startup_statuses = one-time degradation messages shown before the banner
+startup_statuses = one-time degradation messages returned from create_deps() and shown before the banner
 ```
 
 By the time the inline wakeup steps run, the system already knows whether FTS or grep is active.
@@ -432,15 +422,15 @@ By the time the inline wakeup steps run, the system already knows whether FTS or
 
 ### Welcome Banner Boundary
 
-`display_welcome_banner(deps)` is called immediately after the three inline wakeup steps complete, still inside the `async with agent` block:
+`display_welcome_banner(deps, startup_statuses)` is called immediately after the three inline wakeup steps complete, still inside the `async with agent` block:
 
 ```text
 [inline steps 1-3]
-display_welcome_banner(deps)
+display_welcome_banner(deps, startup_statuses)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.session.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` when `deps.runtime.startup_statuses` is empty, or `✓ Ready  (degraded)` when one or more startup fallbacks are active (e.g., hybrid-to-fts5 degradation or reranker unavailability).
+The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tools.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` when `startup_statuses` is empty, or `✓ Ready  (degraded)` when one or more startup fallbacks are active (e.g., hybrid-to-fts5 degradation or reranker unavailability).
 
 ### State Mutations Summary
 
@@ -450,11 +440,11 @@ The banner marks the boundary between startup and interactive use. All status me
 | `deps.session.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
 | `deps.services.task_runner` | Constructed inside `create_deps()` | `TaskRunner` instance |
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
-| `deps.session.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
-| `deps.session.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
-| `deps.session.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
-| `deps.session.skill_registry` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Non-hidden skill dicts |
-| `SKILL_COMMANDS` | Inside `async with agent` — `set_skill_commands()` (after MCP init) | Module-level dict of all loaded skills |
+| `deps.tools.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
+| `deps.tools.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
+| `deps.tools.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
+| `deps.session.skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | Non-hidden skill dicts |
+| `deps.session.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Session-owned dict of all loaded skills |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
 
 ### Failure Paths
@@ -480,10 +470,10 @@ The banner marks the boundary between startup and interactive use. All status me
 | File | Role |
 |------|------|
 | `co_cli/main.py` | `_chat_loop()` startup assembly |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()` — all startup functions live here |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, `sync_knowledge()`, `restore_session()`, `initialize_session_capabilities()`, `SessionCapabilityResult` — all startup functions and result types live here |
 | `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
 | `co_cli/context/_session.py` | Session helpers: new/load/save/touch/is_fresh/increment_compaction |
-| `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps)` — welcome banner |
+| `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps, startup_statuses: list[str])` — welcome banner |
 | `co_cli/commands/_commands.py` | Skill loading helpers |
 | `co_cli/deps.py` | `CoDeps` groups and sub-agent isolation |
 | `co_cli/knowledge/_index_store.py` | `KnowledgeIndex.sync_dir()` and `close()` |

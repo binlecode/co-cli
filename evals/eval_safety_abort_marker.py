@@ -39,7 +39,7 @@ async def main() -> int:
     print("=" * 60)
 
     # TODO: source model_settings from make_eval_settings()
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
     deps = make_eval_deps(session_id="e2e-abort-marker")
     deps.runtime.safety_state = SafetyState()
     frontend = SilentFrontend()

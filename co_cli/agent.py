@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -37,13 +38,19 @@ from co_cli.tools.task_control import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class AgentCapabilityResult:
+    """Immutable return value of build_agent()."""
+    agent: Agent[CoDeps, str | DeferredToolRequests]
+    tool_names: list[str]
+    tool_approvals: dict[str, bool]
 
 
 def build_agent(
     *,
     config: CoConfig,
     resolved: "ResolvedModel | None" = None,
-) -> tuple[Agent[CoDeps, str | DeferredToolRequests], list[str], dict[str, bool]]:
+) -> AgentCapabilityResult:
     """Build the main session Agent with model and settings baked in at construction.
 
     Args:
@@ -214,7 +221,11 @@ def build_agent(
     _register(web_search, search_approval, retries=3)
     _register(web_fetch, fetch_approval, retries=3)
 
-    return agent, list(tool_approvals.keys()), tool_approvals
+    return AgentCapabilityResult(
+        agent=agent,
+        tool_names=list(tool_approvals.keys()),
+        tool_approvals=tool_approvals,
+    )
 
 
 async def discover_mcp_tools(

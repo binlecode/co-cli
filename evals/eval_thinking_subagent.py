@@ -236,7 +236,7 @@ async def main() -> int:
         print(f"\nSKIP: ROLE_REASONING not configured — run_thinking_subagent cannot run.")
         return 0
 
-    agent, _, _ = build_agent(config=config)
+    agent = build_agent(config=config).agent
     deps = make_eval_deps(session_id="eval-thinking-subagent", model_registry=registry)
     deps.runtime.safety_state = SafetyState()
 

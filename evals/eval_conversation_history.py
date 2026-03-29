@@ -426,7 +426,7 @@ async def main():
     print("=" * 70)
 
     # TODO: source model_settings from make_eval_settings()
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
     deps = make_eval_deps(session_id="eval-conversation-history")
 
     all_results: list[dict] = []
