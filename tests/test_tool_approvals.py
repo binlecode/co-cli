@@ -50,24 +50,33 @@ def test_web_fetch_bad_url_is_not_rememberable() -> None:
     assert deps.session.session_approval_rules == []
 
 
+def test_generic_tool_empty_name_is_not_rememberable() -> None:
+    """Empty tool_name must not store a malformed tool rule."""
+    deps = _deps()
+    s = resolve_approval_subject("", {})
+    assert s.can_remember is False
+    remember_tool_approval(s, deps)
+    assert deps.session.session_approval_rules == []
+
+
 # ---------------------------------------------------------------------------
 # MCP routing correctness
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_mcp_prefix_longest_match_wins() -> None:
-    """Longest prefix wins when multiple prefixes could match."""
-    s = resolve_approval_subject(
-        "github_foo_bar", {}, mcp_prefixes=frozenset(["github", "github_foo"])
-    )
-    assert s.value == "github_foo:bar"
+def test_mcp_tool_falls_through_to_generic() -> None:
+    """MCP tool names fall through to the generic tool fallback (kind=tool, can_remember=True)."""
+    s = resolve_approval_subject("github_foo_bar", {})
+    assert s.kind == "tool"
+    assert s.can_remember is True
+    assert s.value == "github_foo_bar"
 
 
 def test_resolve_mcp_prefix_only_no_trailing_name() -> None:
-    """tool_name equal to 'prefix_' (no trailing name) falls through to generic subject."""
-    s = resolve_approval_subject("github_", {}, mcp_prefixes=frozenset(["github"]))
+    """tool_name equal to 'github_' falls through to generic subject with can_remember=True."""
+    s = resolve_approval_subject("github_", {})
     assert s.kind == "tool"
-    assert s.can_remember is False
+    assert s.can_remember is True
 
 
 # ---------------------------------------------------------------------------
@@ -106,20 +115,26 @@ def test_path_session_approval() -> None:
     # same directory, different file
     s2 = resolve_approval_subject("write_file", {"path": "/proj/src/bar.py"})
     assert is_auto_approved(s2, deps) is True
+    assert s.value == "/proj/src"
 
     # different directory
     s3 = resolve_approval_subject("write_file", {"path": "/other/foo.py"})
     assert is_auto_approved(s3, deps) is False
 
 
-def test_path_no_cross_tool_leakage() -> None:
-    """write_file approval does not auto-approve edit_file in the same directory."""
+def test_path_cross_tool_approval() -> None:
+    """write_file approval in a directory also auto-approves edit_file in the same directory."""
     deps = _deps()
-    s = resolve_approval_subject("write_file", {"path": "/proj/src/foo.py"})
+    s = resolve_approval_subject("write_file", {"path": "/proj/src/a.py"})
     remember_tool_approval(s, deps)
 
-    s2 = resolve_approval_subject("edit_file", {"path": "/proj/src/foo.py"})
-    assert is_auto_approved(s2, deps) is False
+    # edit_file in the same directory → auto-approved (cross-tool approval is intentional)
+    s2 = resolve_approval_subject("edit_file", {"path": "/proj/src/b.py"})
+    assert is_auto_approved(s2, deps) is True
+
+    # edit_file in a different directory → not approved
+    s3 = resolve_approval_subject("edit_file", {"path": "/other/b.py"})
+    assert is_auto_approved(s3, deps) is False
 
 
 def test_domain_session_approval() -> None:
@@ -135,16 +150,38 @@ def test_domain_session_approval() -> None:
     assert is_auto_approved(s3, deps) is False
 
 
-def test_mcp_session_approval() -> None:
-    """'a' for an MCP tool stores an exact server:tool rule; different tool on same server is not approved."""
+def test_mcp_tool_session_approval() -> None:
+    """MCP tools fall through to generic; 'a' stores a tool-scoped rule; different tool is not approved."""
     deps = _deps()
-    s = resolve_approval_subject("gh_list_issues", {}, mcp_prefixes=frozenset(["gh"]))
-    remember_tool_approval(s, deps)
+    s = resolve_approval_subject("github_list_issues", {})
+    assert s.kind == "tool"
+    assert s.value == "github_list_issues"
+    assert s.can_remember is True
 
-    s2 = resolve_approval_subject("gh_list_issues", {}, mcp_prefixes=frozenset(["gh"]))
+    remember_tool_approval(s, deps)
+    assert len(deps.session.session_approval_rules) == 1
+
+    # same tool name → auto-approved
+    s2 = resolve_approval_subject("github_list_issues", {})
     assert is_auto_approved(s2, deps) is True
 
-    s3 = resolve_approval_subject("gh_create_pr", {}, mcp_prefixes=frozenset(["gh"]))
+    # different tool name → not approved
+    s3 = resolve_approval_subject("github_create_pr", {})
+    assert is_auto_approved(s3, deps) is False
+
+
+def test_generic_tool_session_approval() -> None:
+    """'a' for a generic tool stores a tool-scoped rule; same tool auto-approves, different tool does not."""
+    deps = _deps()
+    s = resolve_approval_subject("save_memory", {"content": "hi"})
+    remember_tool_approval(s, deps)
+
+    # same tool → auto-approved
+    s2 = resolve_approval_subject("save_memory", {"content": "other"})
+    assert is_auto_approved(s2, deps) is True
+
+    # different tool → not approved
+    s3 = resolve_approval_subject("write_file", {"path": "/proj/src/foo.py"})
     assert is_auto_approved(s3, deps) is False
 
 
@@ -155,14 +192,6 @@ def test_remember_tool_approval_deduplicates() -> None:
     remember_tool_approval(s, deps)
     remember_tool_approval(s, deps)
     assert len(deps.session.session_approval_rules) == 1
-
-
-def test_remember_generic_tool_is_noop() -> None:
-    """remember_tool_approval for a generic tool (can_remember=False) stores nothing."""
-    deps = _deps()
-    s = resolve_approval_subject("save_memory", {"content": "hi"})
-    remember_tool_approval(s, deps)
-    assert deps.session.session_approval_rules == []
 
 
 def test_deny_does_not_store_session_rule() -> None:

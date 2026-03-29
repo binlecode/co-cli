@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-03-29
+
+### Changed
+- **Approval scope simplification**: reduced approval subject taxonomy from 5 kinds to 4 — removed `mcp_tool` kind; MCP tools and all generic tools now fall through to `tool` (session-scoped, rememberable). Path approvals now use a bare parent directory as the key, shared across `write_file` and `edit_file` for the same directory. The `mcp_prefixes` prefix-matching machinery is fully removed.
+
 ## [0.5.15] - 2026-03-29
 
 ### Changed

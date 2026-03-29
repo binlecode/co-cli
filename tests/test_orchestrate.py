@@ -747,7 +747,7 @@ async def test_run_turn_active_skill_does_not_bypass_deferred_prompt() -> None:
     frontend = RecordingFrontend(approval_policy="approve")
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     # Simulate an active skill (as if dispatch() just ran)
-    deps.session.active_skill_name = "some-skill"
+    deps.runtime.active_skill_name = "some-skill"
 
     turn = await run_turn(
         agent=agent,
@@ -768,11 +768,11 @@ async def test_run_turn_active_skill_does_not_bypass_deferred_prompt() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_turn_generic_tool_always_does_not_store_session_rule() -> None:
-    """'a' for a generic tool (save_memory) approves this call but stores no session rule.
+async def test_run_turn_generic_tool_always_stores_session_rule() -> None:
+    """'a' for a generic tool (save_memory) approves the call and stores a session rule.
 
-    Generic tools (can_remember=False) have no meaningful scope to remember —
-    'a' is treated as 'y' for the current call only.
+    Generic tools (can_remember=True) scope to the tool name — 'a' stores a session
+    rule so future calls to the same tool are auto-approved.
     """
     approval_result = _make_deferred_result(
         "save_memory",
@@ -797,8 +797,11 @@ async def test_run_turn_generic_tool_always_does_not_store_session_rule() -> Non
     )
 
     assert turn.outcome == "continue"
-    # Tool was approved (turn succeeded) but no rule was stored
-    assert deps.session.session_approval_rules == []
+    # Tool was approved and a session rule was stored for future auto-approval
+    assert len(deps.session.session_approval_rules) == 1
+    rule = deps.session.session_approval_rules[0]
+    assert rule.kind == "tool"
+    assert rule.value == "save_memory"
 
 
 @pytest.mark.asyncio

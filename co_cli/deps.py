@@ -71,15 +71,16 @@ class SessionApprovalRule(NamedTuple):
     """A session-scoped approval rule recorded when the user chooses 'a'.
 
     kind: category of the approved subject
-      "shell"    — shell utility (value = first token, e.g. "git")
-      "path"     — file write/edit (value = "{tool_name}:{parent_dir}", e.g. "write_file:/proj/src")
-      "domain"   — web fetch (value = hostname, e.g. "docs.python.org")
-      "mcp_tool" — MCP tool (value = "server_prefix:tool_name")
-      "tool"     — generic fallback (not actually stored; can_remember=False)
+      "shell"  — shell utility (value = first token, e.g. "git")
+      "path"   — file write/edit (value = bare parent_dir, e.g. "/proj/src");
+                 shared across write_file and edit_file for the same directory
+      "domain" — web fetch (value = hostname, e.g. "docs.python.org")
+      "tool"   — named tool (value = tool_name, e.g. "save_memory");
+                 covers MCP tools and generic tools; can_remember=True
     value: the scoped key used for matching future requests
     """
 
-    kind: Literal["shell", "path", "domain", "mcp_tool", "tool"]
+    kind: Literal["shell", "path", "domain", "tool"]
     value: str
 
 

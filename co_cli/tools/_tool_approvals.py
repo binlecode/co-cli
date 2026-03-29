@@ -39,8 +39,6 @@ class ApprovalSubject:
 def resolve_approval_subject(
     tool_name: str,
     args: dict[str, Any],
-    *,
-    mcp_prefixes: frozenset[str] = frozenset(),
 ) -> ApprovalSubject:
     """Map a deferred tool call to its approval subject.
 
@@ -48,8 +46,7 @@ def resolve_approval_subject(
       run_shell_command → shell subject (utility = first token)
       write_file / edit_file → path subject (parent directory)
       web_fetch → domain subject (parsed hostname)
-      MCP tool (prefix match) → mcp_tool subject
-      everything else → generic tool subject (can_remember=False)
+      everything else → tool subject (can_remember=True)
     """
     # Shell branch: scope to the utility (first token of cmd) so "always" approval
     # covers all future invocations of the same utility, not just the exact command.
@@ -67,18 +64,16 @@ def resolve_approval_subject(
         )
 
     # File-path branch: scope to the parent directory so "always" approval covers
-    # all writes/edits within the same directory.  Keyed as {tool}:{parent_dir} to
-    # prevent write_file and edit_file rules from cross-approving each other.
+    # all writes/edits within the same directory.  Both write_file and edit_file
+    # resolve to the same bare parent_dir value so cross-tool approval is intentional.
     if tool_name in ("write_file", "edit_file"):
         path = args.get("path", "")
         parent = str(Path(path).parent) if path else ""
-        # scope by tool_name so write_file and edit_file don't cross-approve
-        value = f"{tool_name}:{parent}" if parent else ""
         hint = f"[always → session: {parent}/**]" if parent else ""
         return ApprovalSubject(
             tool_name=tool_name,
             kind="path",
-            value=value,
+            value=parent,
             display=f"{tool_name}(path={path!r})\n  {hint}" if hint else f"{tool_name}(path={path!r})",
             can_remember=bool(parent),
         )
@@ -97,31 +92,16 @@ def resolve_approval_subject(
             can_remember=bool(domain),
         )
 
-    # MCP-tool branch: match by server-name prefix (longest prefix wins).  Value is
-    # "{server}:{tool}" so "always" approval is scoped to one tool on one server.
-    for prefix in sorted(mcp_prefixes, key=len, reverse=True):
-        if tool_name.startswith(f"{prefix}_"):
-            mcp_tool_name = tool_name[len(prefix) + 1:]
-            if not mcp_tool_name:
-                continue
-            value = f"{prefix}:{mcp_tool_name}"
-            return ApprovalSubject(
-                tool_name=tool_name,
-                kind="mcp_tool",
-                value=value,
-                display=f"{tool_name}(...)\n  [always → session: {value}]",
-                can_remember=True,
-            )
-
-    # Generic-tool fallback: no rememberable scope can be derived, so "always" is
-    # unavailable.  The user must approve each invocation individually.
+    # Generic-tool fallback: scope to the tool name so "always" approval covers
+    # all future invocations of the same tool, including MCP tools.
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
+    hint = f"[always → session: {tool_name}]" if tool_name else ""
     return ApprovalSubject(
         tool_name=tool_name,
         kind="tool",
         value=tool_name,
-        display=f"{tool_name}({args_str})",
-        can_remember=False,
+        display=f"{tool_name}({args_str})\n  {hint}" if hint else f"{tool_name}({args_str})",
+        can_remember=bool(tool_name),
     )
 
 

@@ -581,6 +581,18 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     await _install_skill(ctx, source_url, force=True)
 
 
+def _rule_label(kind: str, value: str) -> tuple[str, str]:
+    """Return (human-readable scope label, human-readable value hint)."""
+    if kind == "shell":
+        return "shell utility", value
+    if kind == "path":
+        return "writable dir", f"{value}/**"
+    if kind == "domain":
+        return "web domain", value
+    # kind == "tool"
+    return "tool", value
+
+
 async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
     """Manage session approval rules."""
     sub = args.strip().split(maxsplit=1)
@@ -594,24 +606,6 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
             console.print("[dim]No session approval rules this session.[/dim]")
             return None
         from rich.table import Table
-
-        def _rule_label(kind: str, value: str) -> tuple[str, str]:
-            """Return (human-readable scope label, human-readable value hint)."""
-            if kind == "shell":
-                return "shell utility", value
-            if kind == "path":
-                # value is "{tool}:{parent_dir}"
-                if ":" in value:
-                    tool, parent_dir = value.split(":", 1)
-                    return "file path", f"{tool}: {parent_dir}/**"
-                return "file path", value
-            if kind == "domain":
-                return "web domain", value
-            if kind == "mcp_tool":
-                # value is "{server}:{tool}"
-                return "MCP tool", value
-            # kind == "tool" (generic fallback)
-            return "tool", value
 
         table = Table(title="Session Approval Rules", border_style="accent")
         table.add_column("#", style="dim")

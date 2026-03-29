@@ -144,15 +144,11 @@ async def _collect_deferred_tool_approvals(
     Important: this payload carries approval decisions only. Actual tool execution
     and ToolReturnPart output happen after the resumed segment completes.
     """
-    mcp_prefixes = frozenset(
-        cfg.prefix or name
-        for name, cfg in deps.config.mcp_servers.items()
-    )
     approvals = DeferredToolResults()
 
     for call in result.output.approvals:
         args = decode_tool_args(call.args)
-        subject = resolve_approval_subject(call.tool_name, args, mcp_prefixes=mcp_prefixes)
+        subject = resolve_approval_subject(call.tool_name, args)
 
         # Auto-approval — skip prompt if subject already approved this session
         if is_auto_approved(subject, deps):

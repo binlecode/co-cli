@@ -92,7 +92,7 @@ run_turn(agent, user_input, deps, ...)                       # _orchestrate.py
 run_turn(): isinstance(result.output, DeferredToolRequests)  # _orchestrate.py:464
   └─ _collect_deferred_tool_approvals(result, deps, frontend) # _orchestrate.py:370
        └─ for call in result.output.approvals:
-            ├─ Step 1: resolve_approval_subject(call.tool_name, args, mcp_prefixes)  # → ApprovalSubject
+            ├─ Step 1: resolve_approval_subject(call.tool_name, args)  # → ApprovalSubject
             ├─ Step 2: is_auto_approved(subject, deps)
             │    └─ SessionApprovalRule match → approvals[call.tool_call_id] = True; continue
             └─ Step 3: frontend.prompt_approval(subject.display)  # user: y / n / a
