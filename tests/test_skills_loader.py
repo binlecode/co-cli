@@ -89,7 +89,7 @@ async def test_dispatch_skill_returns_delegate_to_agent(tmp_path):
     _write_skill(skills_dir, "greet", "Say hello!")
     skill_commands = _load_skills(skills_dir)
     ctx = _make_ctx()
-    ctx.deps.session.skill_commands.update(skill_commands)
+    ctx.deps.capabilities.skill_commands.update(skill_commands)
     result = await dispatch("/greet", ctx)
     assert isinstance(result, DelegateToAgent)
     assert result.delegated_input == "Say hello!"
@@ -152,7 +152,7 @@ async def test_dispatch_skill_arguments_substitution(tmp_path):
     _write_skill(skills_dir, "search", "Search for: $ARGUMENTS")
     skill_commands = _load_skills(skills_dir)
     ctx = _make_ctx()
-    ctx.deps.session.skill_commands.update(skill_commands)
+    ctx.deps.capabilities.skill_commands.update(skill_commands)
     result = await dispatch("/search foo bar", ctx)
     assert isinstance(result, DelegateToAgent)
     assert result.delegated_input == "Search for: foo bar"
@@ -303,7 +303,7 @@ async def test_skills_reload_picks_up_new_skill(tmp_path):
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
     result = await dispatch("/skills reload", ctx)
     assert isinstance(result, LocalOnly)
-    assert "reload-test-skill" in ctx.deps.session.skill_commands
+    assert "reload-test-skill" in ctx.deps.capabilities.skill_commands
 
 
 # -- P2: Autocompleter live update (TASK-1) --------------------------------
@@ -383,7 +383,7 @@ async def test_skill_upgrade_no_url(tmp_path):
     skill_commands = _load_skills(skills_dir)
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
-    ctx.deps.session.skill_commands.update(skill_commands)
+    ctx.deps.capabilities.skill_commands.update(skill_commands)
 
     await _cmd_skills(ctx, "upgrade noupgrade")
 

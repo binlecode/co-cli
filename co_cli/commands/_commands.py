@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeAlias
 
+from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
@@ -20,7 +21,7 @@ from co_cli.commands._skill_types import SkillConfig
 from co_cli.config import ROLE_SUMMARIZATION, ROLE_REASONING
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.deps import CoSessionState
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoCapabilityState
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ class CommandContext:
     """Input bag passed to every slash-command handler."""
 
     message_history: list[Any]
-    deps: Any  # CoDeps — typed as Any to avoid circular import
-    agent: Any  # Agent[CoDeps, ...] — same reason
+    deps: CoDeps
+    agent: Agent
     tool_names: list[str]
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
@@ -74,15 +75,15 @@ class SlashCommand:
     handler: Callable[[CommandContext, str], Awaitable[list[Any] | None]]
 
 
-def set_skill_commands(new_skills: dict[str, SkillConfig], session: CoSessionState) -> None:
-    """Set session.skill_commands and update session.skill_registry."""
-    session.skill_commands = new_skills
-    session.skill_registry = [
+def set_skill_commands(new_skills: dict[str, SkillConfig], capabilities: CoCapabilityState) -> None:
+    """Set capabilities.skill_commands and update capabilities.skill_registry."""
+    capabilities.skill_commands = new_skills
+    capabilities.skill_registry = [
         {"name": s.name, "description": s.description}
         for s in new_skills.values()
         if s.description and not s.disable_model_invocation
     ]
-    session.slash_command_count = len([s for s in new_skills.values() if s.user_invocable])
+    capabilities.slash_command_count = len([s for s in new_skills.values() if s.user_invocable])
 
 
 # Env vars that skill-env may never override — security boundary.
@@ -134,7 +135,7 @@ def _refresh_completer(ctx: CommandContext) -> None:
     """Refresh the REPL completer words after a skill_commands mutation."""
     if ctx.completer is None:
         return
-    ctx.completer.words = _build_completer_words(ctx.deps.session.skill_commands)
+    ctx.completer.words = _build_completer_words(ctx.deps.capabilities.skill_commands)
 
 
 
@@ -176,8 +177,8 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table.add_column("Description")
     for cmd in BUILTIN_COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
-    if ctx.deps.session.skill_commands:
-        for skill in ctx.deps.session.skill_commands.values():
+    if ctx.deps.capabilities.skill_commands:
+        for skill in ctx.deps.capabilities.skill_commands.values():
             if skill.user_invocable:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
@@ -385,7 +386,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     subargs = sub[1] if len(sub) > 1 else ""
 
     if subcmd in ("", "list"):
-        if not ctx.deps.session.skill_commands:
+        if not ctx.deps.capabilities.skill_commands:
             console.print("[dim]No skills loaded.[/dim]")
             return None
         table = Table(title="Loaded Skills", border_style="accent", expand=False)
@@ -393,7 +394,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         table.add_column("Description")
         table.add_column("Requires")
         table.add_column("User-Invocable")
-        for skill in ctx.deps.session.skill_commands.values():
+        for skill in ctx.deps.capabilities.skill_commands.values():
             req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
             table.add_row(
                 skill.name,
@@ -426,7 +427,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
         for path in all_paths:
             name = path.stem
-            if name in ctx.deps.session.skill_commands:
+            if name in ctx.deps.capabilities.skill_commands:
                 table.add_row(path.name, "[success]✓ Loaded[/success]", "")
             else:
                 try:
@@ -460,8 +461,8 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                         console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
                 except Exception:
                     pass
-        old_names = set(ctx.deps.session.skill_commands.keys())
-        set_skill_commands(new_skills, ctx.deps.session)
+        old_names = set(ctx.deps.capabilities.skill_commands.keys())
+        set_skill_commands(new_skills, ctx.deps.capabilities)
         _refresh_completer(ctx)
         added = set(new_skills.keys()) - old_names
         removed = old_names - set(new_skills.keys())
@@ -477,7 +478,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                 console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
         if not added and not removed:
             console.print("[dim]No skill changes.[/dim]")
-        console.print(f"[success]✓ Reloaded {len(ctx.deps.session.skill_commands)} skill(s)[/success]")
+        console.print(f"[success]✓ Reloaded {len(ctx.deps.capabilities.skill_commands)} skill(s)[/success]")
 
     elif subcmd == "upgrade":
         await _upgrade_skill(ctx, subargs)
@@ -553,7 +554,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
 
     # Reload in-session: package-default + updated project dir
     new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
-    set_skill_commands(new_skills, ctx.deps.session)
+    set_skill_commands(new_skills, ctx.deps.capabilities)
     _refresh_completer(ctx)
 
     console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
@@ -565,7 +566,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if not name:
         console.print("[bold red]Usage:[/bold red] /skills upgrade <name>")
         return
-    if name not in ctx.deps.session.skill_commands:
+    if name not in ctx.deps.capabilities.skill_commands:
         console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
         return
     skill_file = ctx.deps.config.skills_dir / f"{name}.md"
@@ -581,15 +582,15 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     await _install_skill(ctx, source_url, force=True)
 
 
-def _rule_label(kind: str, value: str) -> tuple[str, str]:
+def _rule_label(kind: ApprovalKindEnum, value: str) -> tuple[str, str]:
     """Return (human-readable scope label, human-readable value hint)."""
-    if kind == "shell":
+    if kind == ApprovalKindEnum.SHELL:
         return "shell utility", value
-    if kind == "path":
+    if kind == ApprovalKindEnum.PATH:
         return "writable dir", f"{value}/**"
-    if kind == "domain":
+    if kind == ApprovalKindEnum.DOMAIN:
         return "web domain", value
-    # kind == "tool"
+    # kind == ApprovalKindEnum.TOOL
     return "tool", value
 
 
@@ -707,8 +708,8 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         console.print(f"[bold red]Task not found:[/bold red] {task_id}")
         return None
 
-    from co_cli.tools._background import TaskStatus
-    if meta.get("status") != TaskStatus.running.value:
+    from co_cli.tools._background import TaskStatusEnum
+    if meta.get("status") != TaskStatusEnum.running.value:
         console.print(f"[dim]Task {task_id} is not running (status={meta.get('status')}).[/dim]")
         return None
 
@@ -920,7 +921,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
         return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
-    skill = ctx.deps.session.skill_commands.get(name)
+    skill = ctx.deps.capabilities.skill_commands.get(name)
     if skill is not None:
         body = skill.body
         if args and "$ARGUMENTS" in body:

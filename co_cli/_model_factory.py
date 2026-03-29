@@ -12,7 +12,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import ModelEntry
+from co_cli.config import ModelConfig
 from co_cli.prompts.model_quirks._loader import get_model_inference, normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class ModelRegistry:
 
 
 def build_model(
-    model_entry: ModelEntry,
+    model_entry: ModelConfig,
     provider: str,
     llm_host: str,
     api_key: str | None = None,
@@ -83,9 +83,9 @@ def build_model(
 
     Raises ValueError for unsupported providers.
     """
-    # Coerce plain string to ModelEntry (supports direct settings mutation in tests)
+    # Coerce plain string to ModelConfig (supports direct settings mutation in tests)
     if isinstance(model_entry, str):
-        model_entry = ModelEntry(model=model_entry)
+        model_entry = ModelConfig(model=model_entry)
     model_name = model_entry.model
     normalized = normalize_model_name(model_name)
 

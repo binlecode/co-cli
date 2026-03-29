@@ -2,6 +2,8 @@
 
 import asyncio
 from datetime import datetime, timezone
+
+from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +26,7 @@ from co_cli.knowledge._frontmatter import parse_frontmatter
 # ---------------------------------------------------------------------------
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
 def _make_ctx(
@@ -712,7 +714,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_ro
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     idx = ctx.deps.services.knowledge_index
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await save_article(
             ctx,
             content="wholeflow-real-embedder-token alpha content for configured provider",
@@ -720,7 +722,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_ro
             origin_url="https://example.com/real-embedder-alpha",
             tags=["reference"],
         )
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await save_article(
             ctx,
             content="wholeflow-real-embedder-token beta content for configured provider",
@@ -735,7 +737,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_embedder_populates_vec_ro
     assert docs_vec_count >= 2, "Configured embedder must populate docs_vec_{dims} for hybrid retrieval"
     assert chunks_vec_count >= 2, "Configured embedder must populate chunks_vec_{dims} for hybrid retrieval"
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await search_knowledge(ctx, "wholeflow-real-embedder-token")
     assert result["count"] >= 2
     idx.close()
@@ -769,7 +771,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(t
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     idx_none = ctx.deps.services.knowledge_index
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await save_article(
             ctx,
             content="wholeflow-real-reranker-token alpha content for configured reranker",
@@ -777,7 +779,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(t
             origin_url="https://example.com/real-reranker-alpha",
             tags=["reference"],
         )
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await save_article(
             ctx,
             content="wholeflow-real-reranker-token beta content for configured reranker",
@@ -786,7 +788,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(t
             tags=["reference"],
         )
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         baseline = await search_knowledge(ctx, "wholeflow-real-reranker-token")
     assert baseline["count"] >= 2
     idx_none.close()
@@ -798,7 +800,7 @@ async def test_search_knowledge_hybrid_whole_flow_real_reranker_changes_scores(t
         config=config,
     )
     ctx_real = RunContext(deps=deps_real, model=_AGENT.model, usage=RunUsage())
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         reranked = await search_knowledge(ctx_real, "wholeflow-real-reranker-token")
 
     baseline_scores = [r["score"] for r in baseline["results"]]

@@ -1,7 +1,7 @@
-"""Memory consolidator — fact extraction and contradiction resolution.
+"""Memory consolidator — single-call consolidation planning.
 
-Provides LLM-driven consolidation planning for write-time memory lifecycle.
-Two-phase structured LLM extraction: extract facts, then resolve against existing.
+Module-level Agent singleton for fast write-time dedup and contradiction resolution.
+Single LLM call with token cap for sub-2s latency on non-thinking models.
 """
 
 import asyncio
@@ -9,12 +9,17 @@ import logging
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.settings import ModelSettings
+
+from co_cli._model_factory import ResolvedModel
 
 logger = logging.getLogger(__name__)
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_consolidator.md"
+_CONSOLIDATION_MAX_TOKENS = 512
 
 
 class MemoryAction(BaseModel):
@@ -30,140 +35,62 @@ class ConsolidationPlan(BaseModel):
     actions: list[MemoryAction]
 
 
-class _FactList(BaseModel):
-    """Structured output wrapper for fact extraction."""
-
-    facts: list[str]
-
-
-def _load_prompt_section(path: Path, section_header: str) -> str:
-    """Read a named section from a markdown file.
-
-    Returns content between `section_header` and the next `##` header (or EOF).
-
-    Args:
-        path: Path to the markdown file.
-        section_header: Exact header line to find (e.g. "## Phase 1: Fact Extraction").
-
-    Returns:
-        Section body text, stripped. Empty string if header not found.
-    """
-    text = path.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    in_section = False
-    body_lines: list[str] = []
-
-    for line in lines:
-        if line.strip() == section_header.strip():
-            in_section = True
-            continue
-        if in_section:
-            if line.startswith("## ") and line.strip() != section_header.strip():
-                break
-            body_lines.append(line)
-
-    return "\n".join(body_lines).strip()
+_consolidation_agent: Agent[None, ConsolidationPlan] = Agent(
+    output_type=ConsolidationPlan,
+    system_prompt=_PROMPT_PATH.read_text(encoding="utf-8"),
+    retries=0,
+    output_retries=0,
+)
 
 
-async def extract_facts(
+async def consolidate(
     candidate: str,
-    model: Any,
-    timeout_seconds: float | None = None,
-) -> list[str]:
-    """Extract normalized facts from a candidate memory string.
-
-    Calls a structured LLM extraction (Phase 1 prompt) to decompose the candidate into
-    discrete facts. Falls back to single-fact passthrough on timeout or error.
-
-    Args:
-        candidate: Raw memory content to extract facts from.
-        model: LLM model instance (reuses main agent model).
-        timeout_seconds: Per-call timeout budget. 0 = immediate timeout (test mode).
-                         None = no timeout.
-
-    Returns:
-        List of normalized fact strings. Falls back to [candidate] on failure.
-    """
-    from pydantic_ai import Agent
-
-    try:
-        system_prompt = _load_prompt_section(_PROMPT_PATH, "## Phase 1: Fact Extraction")
-
-        fact_agent: Agent[None, _FactList] = Agent(
-            model=model,
-            output_type=_FactList,
-            system_prompt=system_prompt,
-        )
-
-        coro = fact_agent.run(candidate)
-        if timeout_seconds is not None:
-            result = await asyncio.wait_for(coro, timeout=timeout_seconds)
-        else:
-            result = await coro
-
-        facts = result.output.facts
-        return facts if facts else [candidate]
-
-    except asyncio.TimeoutError:
-        raise
-    except (ModelHTTPError, ModelAPIError):
-        raise
-    except (ValidationError, Exception) as e:
-        logger.debug(f"extract_facts fallback (validation/error): {e}")
-        return [candidate]
-
-
-async def resolve(
-    facts: list[str],
     existing: list[Any],
-    model: Any,
+    resolved: ResolvedModel,
     timeout_seconds: float | None = None,
 ) -> ConsolidationPlan:
-    """Resolve facts against existing memories to produce an action plan.
-
-    Calls a structured LLM extraction (Phase 2 prompt) to determine ADD/UPDATE/DELETE/NONE
-    for each candidate fact. Falls back to ADD plan on timeout or validation error.
+    """Consolidate a candidate memory against existing memories in a single LLM call.
 
     Args:
-        facts: Extracted fact strings from the candidate.
-        existing: Existing MemoryEntry objects to compare against (aliased as M1, M2...).
-        model: LLM model instance (reuses main agent model).
-        timeout_seconds: Per-call timeout budget. 0 = immediate timeout (test mode).
-                         None = no timeout.
+        candidate: Raw memory content to consolidate.
+        existing: Existing MemoryEntry objects to compare against (aliased M1, M2...).
+        resolved: Pre-built model + settings for the consolidation role.
+        timeout_seconds: Per-call timeout. 0 = immediate (test mode). None = no timeout.
 
     Returns:
-        ConsolidationPlan with action decisions. Falls back to ADD plan on failure.
-    """
-    from pydantic_ai import Agent
+        ConsolidationPlan with action decisions. Falls back to ADD on ValidationError.
 
+    Raises:
+        asyncio.TimeoutError: Propagated to caller for on_failure handling.
+        ModelHTTPError, ModelAPIError: Propagated to caller.
+    """
     _add_fallback = ConsolidationPlan(actions=[MemoryAction(action="ADD")])
 
+    # Build token-capped settings — shallow-copy extra_body to avoid corrupting registry cache
+    base: dict[str, Any] = dict(resolved.settings) if resolved.settings is not None else {}
+    base["max_tokens"] = _CONSOLIDATION_MAX_TOKENS
+    extra_body = dict(base.get("extra_body") or {})
+    extra_body["num_predict"] = _CONSOLIDATION_MAX_TOKENS
+    base["extra_body"] = extra_body
+    call_settings = ModelSettings(**base)
+
+    # Build user prompt with alias entries
+    alias_entries = []
+    for i, entry in enumerate(existing):
+        alias = f"M{i + 1}"
+        alias_entries.append(
+            f'{{"alias": "{alias}", "content": {entry.content!r}, "tags": {entry.tags!r}}}'
+        )
+    aliases_text = "\n".join(alias_entries) if alias_entries else "(none)"
+    user_prompt = (
+        f"Candidate:\n{candidate}\n\n"
+        f"Existing memories:\n{aliases_text}"
+    )
+
     try:
-        system_prompt = _load_prompt_section(_PROMPT_PATH, "## Phase 2: Contradiction Resolution")
-
-        # Build alias map for the prompt
-        alias_entries = []
-        for i, entry in enumerate(existing):
-            alias = f"M{i + 1}"
-            alias_entries.append(
-                f'{{"alias": "{alias}", "content": {entry.content!r}, "tags": {entry.tags!r}}}'
-            )
-
-        aliases_text = "\n".join(alias_entries) if alias_entries else "(none)"
-        facts_text = "\n".join(f"- {f}" for f in facts)
-
-        user_prompt = (
-            f"Candidate facts:\n{facts_text}\n\n"
-            f"Existing memories:\n{aliases_text}"
+        coro = _consolidation_agent.run(
+            user_prompt, model=resolved.model, model_settings=call_settings
         )
-
-        resolve_agent: Agent[None, ConsolidationPlan] = Agent(
-            model=model,
-            output_type=ConsolidationPlan,
-            system_prompt=system_prompt,
-        )
-
-        coro = resolve_agent.run(user_prompt)
         if timeout_seconds is not None:
             result = await asyncio.wait_for(coro, timeout=timeout_seconds)
         else:
@@ -176,7 +103,6 @@ async def resolve(
         logger.info(
             "consolidation resolved",
             extra={
-                "facts_count": len(facts),
                 "candidate_set_size": len(existing),
                 "actions": action_counts,
                 "fallback": False,
@@ -188,27 +114,14 @@ async def resolve(
         raise
     except (ModelHTTPError, ModelAPIError):
         raise
-    except (ValidationError, Exception) as e:
+    except Exception as e:
         logger.info(
             "consolidation fallback",
             extra={
-                "facts_count": len(facts),
                 "candidate_set_size": len(existing),
                 "actions": {"ADD": 1},
                 "fallback": True,
             },
         )
-        logger.debug(f"resolve fallback reason: {e}")
+        logger.debug(f"consolidate fallback reason: {e}")
         return _add_fallback
-
-
-def build_alias_map(existing: list[Any]) -> dict[str, Any]:
-    """Build alias → MemoryEntry mapping for use in apply_plan_atomically.
-
-    Args:
-        existing: List of MemoryEntry objects in the same order as passed to resolve().
-
-    Returns:
-        Dict mapping alias strings ("M1", "M2"...) to MemoryEntry objects.
-    """
-    return {f"M{i + 1}": entry for i, entry in enumerate(existing)}

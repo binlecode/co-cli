@@ -32,7 +32,7 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 from pydantic_ai.usage import UsageLimits  # noqa: E402
 
-from co_cli.context._history import OpeningContextState, SafetyState  # noqa: E402
+from co_cli.context._types import MemoryRecallState, SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -139,8 +139,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
             agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
             deps = make_eval_deps(session_id=f"eval-recall-{case.id}")
             deps.runtime.safety_state = SafetyState()
-            # Initialize opening context state (normally done by main.py)
-            deps.runtime.opening_ctx_state = OpeningContextState()
+            deps.session.memory_recall_state = MemoryRecallState()
 
             frontend = SilentFrontend()
 

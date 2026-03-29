@@ -695,7 +695,7 @@ async def test_stream_events_tool_result_dict_with_kind_reaches_tool_complete():
 @pytest.mark.asyncio
 async def test_run_turn_shell_always_stores_session_rule() -> None:
     """Choosing 'a' for a shell approval stores a session rule for the git utility."""
-    from co_cli.deps import SessionApprovalRule
+    from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
     approval_result = _make_deferred_result(
         "run_shell_command",
@@ -723,7 +723,7 @@ async def test_run_turn_shell_always_stores_session_rule() -> None:
     )
 
     assert turn.outcome == "continue"
-    assert SessionApprovalRule(kind="shell", value="git") in deps.session.session_approval_rules
+    assert SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git") in deps.session.session_approval_rules
 
 
 @pytest.mark.asyncio

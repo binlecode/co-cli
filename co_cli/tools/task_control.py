@@ -160,8 +160,8 @@ async def cancel_background_task(
         return make_result(f"Task not found: {task_id}", task_id=task_id, status="not_found")
 
     status = meta.get("status")
-    from co_cli.tools._background import TaskStatus
-    if status != TaskStatus.running.value:
+    from co_cli.tools._background import TaskStatusEnum
+    if status != TaskStatusEnum.running.value:
         return make_result(
             f"Task already completed (status={status})",
             task_id=task_id,

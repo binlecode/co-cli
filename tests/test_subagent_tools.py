@@ -10,8 +10,8 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
 from co_cli.tools._subagent_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
-from co_cli.config import ModelEntry, settings
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoToolState, CoSessionState, CoRuntimeState, make_subagent_deps
+from co_cli.config import ModelConfig, settings
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent
 
@@ -59,26 +59,26 @@ def test_make_coder_agent_registers_file_tools() -> None:
 def test_make_subagent_deps_resets_session_state() -> None:
     """make_subagent_deps() shares tools by reference, inherits session fields, resets isolated fields."""
     from co_cli.commands._skill_types import SkillConfig
-    from co_cli.deps import SessionApprovalRule
+    from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
-    tool_state = CoToolState(
+    skill = SkillConfig(name="my-skill", body="do it")
+    cap_state = CoCapabilityState(
         tool_names=["shell", "memory"],
         tool_approvals={"shell": True, "memory": False},
+        skill_commands={"my-skill": skill},
+        skill_registry=[{"name": "my-skill"}],
     )
-    skill = SkillConfig(name="my-skill", body="do it")
     base = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
             brave_search_api_key="test-key",
             memory_max_count=500,
         ),
-        tools=tool_state,
+        capabilities=cap_state,
         session=CoSessionState(
             session_id="parent-session",
             google_creds_resolved=True,
-            session_approval_rules=[SessionApprovalRule("shell", "git")],
-            skill_commands={"my-skill": skill},
-            skill_registry=[{"name": "my-skill"}],
+            session_approval_rules=[SessionApprovalRule(ApprovalKindEnum.SHELL, "git")],
             drive_page_tokens={"folder": ["tok1"]},
             session_todos=[{"task": "do something"}],
         ),
@@ -89,14 +89,15 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     isolated = make_subagent_deps(base)
 
-    # tools shared by reference (same tool registry)
-    assert isolated.tools is base.tools
+    # capabilities shared by reference (same capability registry)
+    assert isolated.capabilities is base.capabilities
 
     # Session: inherited fields carry over
     assert isolated.session.google_creds_resolved is True
-    assert isolated.session.session_approval_rules == [SessionApprovalRule("shell", "git")]
-    assert isolated.session.skill_commands is base.session.skill_commands
-    assert isolated.session.skill_registry == [{"name": "my-skill"}]
+    assert isolated.session.session_approval_rules == [SessionApprovalRule(ApprovalKindEnum.SHELL, "git")]
+
+    # CoSessionState no longer carries skill fields — they are on capabilities
+    assert not hasattr(CoSessionState(), "skill_commands")
 
     # Approval rules are a copy, not the same list (sub-agent grants must not leak to parent)
     assert isolated.session.session_approval_rules is not base.session.session_approval_rules
@@ -144,16 +145,6 @@ async def test_run_research_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_research_subagent(ctx, "latest Python news")
-
-
-@pytest.mark.asyncio
-async def test_run_research_subagent_max_requests_guard() -> None:
-    """max_requests < 1 raises ModelRetry (checked before registry lookup)."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="max_requests must be at least 1"):
-        await run_research_subagent(ctx, "any query", max_requests=0)
 
 
 def test_analysis_result_model() -> None:
@@ -225,26 +216,6 @@ async def test_run_thinking_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_thinking_subagent(ctx, "solve this problem")
-
-
-@pytest.mark.asyncio
-async def test_run_thinking_subagent_max_requests_guard() -> None:
-    """max_requests=0 raises ModelRetry matching 'max_requests' (checked before registry lookup)."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="max_requests"):
-        await run_thinking_subagent(ctx, "any problem", max_requests=0)
-
-
-@pytest.mark.asyncio
-async def test_run_coder_subagent_max_requests_guard() -> None:
-    """max_requests=0 raises ModelRetry matching 'max_requests' (parity with run_research/analysis)."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="max_requests"):
-        await run_coder_subagent(ctx, "analyze foo", max_requests=0)
 
 
 def test_run_coder_subagent_make_result_scope_kwarg():

@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from pydantic_ai import DeferredToolResults, ToolDenied
 
-from co_cli.deps import CoDeps, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ class ApprovalSubject:
     """
 
     tool_name: str
-    kind: str
+    kind: ApprovalKindEnum
     value: str
     display: str
     can_remember: bool
@@ -57,7 +57,7 @@ def resolve_approval_subject(
         hint = f"[always → session: {utility} *]" if utility else ""
         return ApprovalSubject(
             tool_name=tool_name,
-            kind="shell",
+            kind=ApprovalKindEnum.SHELL,
             value=utility,
             display=f"run_shell_command(cmd={cmd!r})\n  {hint}" if hint else f"run_shell_command(cmd={cmd!r})",
             can_remember=bool(utility),
@@ -72,7 +72,7 @@ def resolve_approval_subject(
         hint = f"[always → session: {parent}/**]" if parent else ""
         return ApprovalSubject(
             tool_name=tool_name,
-            kind="path",
+            kind=ApprovalKindEnum.PATH,
             value=parent,
             display=f"{tool_name}(path={path!r})\n  {hint}" if hint else f"{tool_name}(path={path!r})",
             can_remember=bool(parent),
@@ -86,7 +86,7 @@ def resolve_approval_subject(
         hint = f"[always → session: {domain}]" if domain else ""
         return ApprovalSubject(
             tool_name=tool_name,
-            kind="domain",
+            kind=ApprovalKindEnum.DOMAIN,
             value=domain,
             display=f"web_fetch(url={url!r})\n  {hint}" if hint else f"web_fetch(url={url!r})",
             can_remember=bool(domain),
@@ -98,7 +98,7 @@ def resolve_approval_subject(
     hint = f"[always → session: {tool_name}]" if tool_name else ""
     return ApprovalSubject(
         tool_name=tool_name,
-        kind="tool",
+        kind=ApprovalKindEnum.TOOL,
         value=tool_name,
         display=f"{tool_name}({args_str})\n  {hint}" if hint else f"{tool_name}({args_str})",
         can_remember=bool(tool_name),

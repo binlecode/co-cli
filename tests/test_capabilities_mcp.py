@@ -6,7 +6,7 @@ priority logic and binary probe fallback introduced in TASK-3 (G2 fix).
 
 from co_cli.bootstrap._check import check_runtime
 from co_cli.config import MCPServerConfig
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 
 
@@ -35,9 +35,7 @@ def test_check_runtime_discovery_error_overrides_passing_binary_probe() -> None:
         config=CoConfig(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),
-        session=CoSessionState(
-            mcp_discovery_errors={"mysvr": "connection refused"},
-        ),
+        capabilities=CoCapabilityState(mcp_discovery_errors={"mysvr": "connection refused"}),
     )
     result = check_runtime(deps)
 
@@ -54,9 +52,7 @@ def test_check_runtime_no_discovery_error_binary_probe_passes() -> None:
         config=CoConfig(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),
-        session=CoSessionState(
-            mcp_discovery_errors={},
-        ),
+        capabilities=CoCapabilityState(mcp_discovery_errors={}),
     )
     result = check_runtime(deps)
 

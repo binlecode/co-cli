@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.19] - 2026-03-29
+
+### Changed
+- **State class naming and functional cleanup**: dissolved `_ChatTurnState` (replaced with explicit return values in `main.py`) and `StreamRenderState` (inlined into `StreamRenderer` instance variables). Renamed `OpeningContextState` → `MemoryRecallState` and moved from `CoRuntimeState` to `CoSessionState`. Added `CoRuntimeState.reset_for_turn()` to encapsulate three scattered per-turn resets. Made `TurnResult.outcome` and `TurnResult.interrupted` required fields (no silent defaults). Renamed `CoToolState` → `CoCapabilityState` and promoted `skill_commands`/`skill_registry` out of `CoSessionState` into it. Typed `CommandContext.deps` and `.agent` (removed `Any`). System-wide suffix conformance: `WebRetryDecision` → `WebRetryResult`, `StatusInfo` → `StatusResult`, `ModelEntry` → `ModelConfig`, `RuntimeCheck` → `RuntimeCheckResult`, `SecurityFinding` → `SecurityCheckResult`, `ShellDecision` → `ShellDecisionEnum`, `TaskStatus` → `TaskStatusEnum`, `ApprovalKindEnum` introduced.
+
 ## [0.5.17] - 2026-03-29
 
 ### Changed

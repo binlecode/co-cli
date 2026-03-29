@@ -34,7 +34,7 @@ def _make_ctx(threshold: int = 3) -> RunContext[CoDeps]:
         ),
         runtime=CoRuntimeState(safety_state=SafetyState()),
     )
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     return RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
 

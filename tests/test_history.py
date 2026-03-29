@@ -25,24 +25,25 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.context._history import (
     CompactionResult,
-    OpeningContextState,
     summarize_messages,
     truncate_tool_returns,
     truncate_history_window,
     inject_opening_context,
 )
+from co_cli.context._types import MemoryRecallState
 from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings as _settings, ROLE_REASONING
 from co_cli.deps import CoConfig, CoRuntimeState
 from tests._ollama import ensure_ollama_warm
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 _SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
 _RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd())).agent
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +200,7 @@ async def test_summarize_messages():
     fallback = ResolvedModel(model=None, settings=None)
     resolved = _REGISTRY.get("summarization", fallback)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         summary = await summarize_messages(msgs, resolved)
     assert isinstance(summary, str)
     assert len(summary) > 10
@@ -233,7 +234,7 @@ async def test_truncate_history_window_triggers_compaction():
 
     ctx = _real_run_context(_RESOLVED_MODEL, max_history_messages=6)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await truncate_history_window(ctx, msgs)
 
     assert len(result) < len(msgs)
@@ -314,7 +315,7 @@ async def test_compact_produces_two_message_history():
     from co_cli.tools._shell_backend import ShellBackend
     from co_cli.commands._commands import dispatch, CommandContext, ReplaceTranscript
 
-    _, tool_names, _ = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd()))
+    tool_names = build_agent(config=CoConfig.from_settings(_settings, cwd=Path.cwd())).tool_names
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=CoConfig(),
@@ -336,7 +337,7 @@ async def test_compact_produces_two_message_history():
     )
 
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await dispatch("/compact", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert len(result.history) == 2
@@ -441,7 +442,7 @@ async def test_inject_opening_context_caps_memory_content(tmp_path: Path):
         CoConfig(knowledge_search_backend="grep", memory_injection_max_chars=max_chars),
         memory_dir=memory_dir,
     )
-    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState())
+    runtime = CoRuntimeState()
     from co_cli.tools._shell_backend import ShellBackend
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
@@ -451,7 +452,7 @@ async def test_inject_opening_context_caps_memory_content(tmp_path: Path):
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
     msgs: list[ModelMessage] = [_user("kw-cap-test")]
-    async with asyncio.timeout(30):
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         result = await inject_opening_context(ctx, msgs)
 
     injected_parts = [

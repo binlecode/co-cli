@@ -53,12 +53,12 @@ from co_cli.deps import CoDeps
 
 @dataclass
 class TurnResult:
+    outcome: TurnOutcome
+    interrupted: bool
     messages: list = field(default_factory=list)
     output: Any = None
     usage: Any = None
-    interrupted: bool = False
     streamed_text: bool = False
-    outcome: TurnOutcome = "continue"
 
 
 # ---------------------------------------------------------------------------
@@ -411,13 +411,7 @@ async def run_turn(
       "continue" — normal completion, prompt for next input
       "error"    — unrecoverable error, display and prompt
     """
-    # Reset turn-scoped safety state (doom loop + shell reflection tracking)
-    from co_cli.context._history import SafetyState
-    deps.runtime.safety_state = SafetyState()
-
-    # Reset turn-scoped usage accumulator — authoritative per-turn total.
-    # Sub-agent tools contribute via their own _merge_turn_usage calls during the turn.
-    deps.runtime.turn_usage = None
+    deps.runtime.reset_for_turn()
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
@@ -514,4 +508,4 @@ async def run_turn(
                 (turn_state.latest_usage.input_tokens or 0) if turn_state.latest_usage else 0)
             span.set_attribute("turn.output_tokens",
                 (turn_state.latest_usage.output_tokens or 0) if turn_state.latest_usage else 0)
-            deps.runtime.tool_progress_callback = None
+            deps.runtime.tool_progress_callback = None  # belt-and-suspenders; also cleared by reset_for_turn() at next turn entry

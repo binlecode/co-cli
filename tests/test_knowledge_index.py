@@ -10,13 +10,13 @@ from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings, ModelEntry
+from co_cli.config import settings, ModelConfig
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.knowledge._index_store import KnowledgeIndex, SearchResult
 from co_cli.tools._shell_backend import ShellBackend
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
 # ---------------------------------------------------------------------------
@@ -444,18 +444,18 @@ def test_reranker_provider_tei_takes_priority_over_llm(tmp_path):
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
-        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
+        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="qwen2.5:3b"),
     ))
     assert idx._reranker_provider == "tei"
     idx.close()
 
 
 def test_reranker_provider_ollama_openai_maps_to_ollama(tmp_path):
-    """ModelEntry.provider='ollama-openai' must map _reranker_provider to 'ollama' for build_llm_reranker."""
+    """ModelConfig.provider='ollama-openai' must map _reranker_provider to 'ollama' for build_llm_reranker."""
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
+        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="qwen2.5:3b"),
     ))
     assert idx._reranker_provider == "ollama"
     idx.close()
@@ -478,7 +478,7 @@ def test_rerank_falls_back_on_error(tmp_path):
     idx = KnowledgeIndex(config=CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="qwen2.5:3b"),
+        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="qwen2.5:3b"),
         llm_host="http://localhost:19999",
     ))
     for i in range(5):

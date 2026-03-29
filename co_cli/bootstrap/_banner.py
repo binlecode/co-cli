@@ -27,7 +27,7 @@ _ASCII_ART = {
 }
 
 
-def display_welcome_banner(deps: "CoDeps") -> None:
+def display_welcome_banner(deps: "CoDeps", startup_statuses: list[str]) -> None:
     """Render welcome banner with ASCII art, model, and environment info."""
     from rich.panel import Panel
 
@@ -43,10 +43,10 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         llm_provider = config.llm_provider
 
     from co_cli.commands._commands import BUILTIN_COMMANDS
-    tool_count = len(deps.session.tool_names)
-    skill_count = len(deps.session.skill_registry)
+    tool_count = len(deps.capabilities.tool_names)
+    skill_count = len(deps.capabilities.skill_registry)
     mcp_count = len(deps.config.mcp_servers or {})
-    cmd_count = len(BUILTIN_COMMANDS) + deps.session.slash_command_count
+    cmd_count = len(BUILTIN_COMMANDS) + deps.capabilities.slash_command_count
 
     try:
         git_branch = subprocess.check_output(
@@ -68,7 +68,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     else:
         knowledge_info = "grep (no index)"
 
-    degraded = deps.runtime.startup_statuses
+    degraded = startup_statuses
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"
     if degraded:
         knowledge_line += "  [yellow](degraded)[/yellow]"

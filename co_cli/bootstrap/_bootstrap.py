@@ -10,7 +10,7 @@ from pydantic_ai import Agent
 from co_cli.agent import discover_mcp_tools
 from co_cli.bootstrap._check import check_agent_llm
 from co_cli.config import settings, ROLE_REASONING
-from co_cli.context._types import OpeningContextState, SafetyState
+from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
 from co_cli.display._core import TerminalFrontend
@@ -163,7 +163,6 @@ def create_deps() -> tuple[CoDeps, list[str]]:
         model_registry=ModelRegistry.from_config(config),
     )
     runtime = CoRuntimeState(
-        opening_ctx_state=OpeningContextState(),
         safety_state=SafetyState(),
     )
     return CoDeps(services=services, config=config, runtime=runtime), startup_statuses
@@ -247,16 +246,16 @@ async def initialize_session_capabilities(
     # 1. MCP discovery (conditional)
     if deps.config.mcp_servers and mcp_init_ok:
         mcp_tool_names, discovery_errors = await discover_mcp_tools(
-            agent, exclude=set(deps.tools.tool_names)
+            agent, exclude=set(deps.capabilities.tool_names)
         )
-        deps.tools.mcp_discovery_errors = discovery_errors
+        deps.capabilities.mcp_discovery_errors = discovery_errors
         for prefix, err in discovery_errors.items():
             frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} ...")
-        deps.tools.tool_names = deps.tools.tool_names + mcp_tool_names
+        deps.capabilities.tool_names = deps.capabilities.tool_names + mcp_tool_names
 
     # 2. Skill loading
     skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
-    set_skill_commands(skill_commands, deps.session)
+    set_skill_commands(skill_commands, deps.capabilities)
 
-    return SessionCapabilityResult(skill_count=len(deps.session.skill_registry))
+    return SessionCapabilityResult(skill_count=len(deps.capabilities.skill_registry))
 

@@ -25,6 +25,7 @@ from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.prompts.model_quirks._loader import normalize_model_name
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
+from tests._timeouts import LLM_REASONING_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _reasoning_entry = _CONFIG.role_models.get(ROLE_REASONING)
@@ -35,9 +36,11 @@ _REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 
 
 def _make_deps(session_id: str) -> CoDeps:
+    # personality=None: disable per-request personality memory injection and
+    # memory-saving behavior so tool selection calls complete within the 60s budget.
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG, personality="finch"),
+        config=replace(_CONFIG, personality=None),
         session=CoSessionState(session_id=session_id),
     )
 
@@ -52,7 +55,7 @@ def _make_deps_web_deferred(session_id: str) -> CoDeps:
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
             _CONFIG,
-            personality="finch",
+            personality=None,
             web_policy=WebPolicy(search="ask"),
         ),
         session=CoSessionState(session_id=session_id),
@@ -96,10 +99,10 @@ async def test_tool_selection_and_arg_extraction(
     # Other tools use the default agent and policy.
     if expected_tool == "web_search":
         web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
-        agent, _, _ = build_agent(config=web_cfg)
+        agent = build_agent(config=web_cfg).agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
     else:
-        agent, _, _ = build_agent(config=_CONFIG)
+        agent = build_agent(config=_CONFIG).agent
         deps = _make_deps(f"test-tool-{expected_tool}")
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
 
@@ -110,13 +113,12 @@ async def test_tool_selection_and_arg_extraction(
         tool_name = None
         args = None
         try:
-            async with asyncio.timeout(60):
+            async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
                 result = await agent.run(
                     prompt,
                     deps=deps,
                     model=resolved.model,
                     model_settings=resolved.settings,
-
                 )
             # Extract first tool call from message history (works for both
             # deferred/unapproved tools and normal tool executions).
@@ -185,11 +187,11 @@ async def test_tool_selection_and_arg_extraction(
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = build_agent(config=_CONFIG)
+    agent = build_agent(config=_CONFIG).agent
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-refusal")
     await ensure_ollama_warm(_REASONING_MODEL)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await agent.run(
             "What is 17 times 23?",
             deps=deps,
@@ -208,12 +210,12 @@ async def test_refusal_no_tool_for_simple_math():
 async def test_intent_routing_observation_no_tool():
     """Observation-only statement must not trigger a tool call."""
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = build_agent(config=_CONFIG)
+    agent = build_agent(config=_CONFIG).agent
     resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-intent-routing")
 
     await ensure_ollama_warm(_REASONING_MODEL)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await agent.run(
             "This function has a bug",
             deps=deps,
@@ -247,11 +249,11 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
         services=CoServices(shell=ShellBackend(), task_runner=runner),
         config=config,
     )
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "test-background-task-description"
-    async with asyncio.timeout(30):
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
         task_id = await runner.start_task(
             "echo hello",
             str(tmp_path),

@@ -37,7 +37,7 @@ from typing import Any
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, restore_session, sync_knowledge
 from co_cli.bootstrap._check import check_agent_llm
-from co_cli.context._history import OpeningContextState, SafetyState
+from co_cli.context._types import SafetyState
 from co_cli.context._session import new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
 from co_cli.display._core import console
@@ -80,7 +80,7 @@ def _make_deps(
         library_dir=library_dir or tmp_path / "library",
     )
     services = CoServices(shell=ShellBackend(), knowledge_index=knowledge_index)
-    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+    runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
 
 
@@ -499,7 +499,6 @@ def case_degrade_hybrid_then_sync() -> CaseResult:
             services = CoServices(shell=ShellBackend(), knowledge_index=knowledge_index)
             runtime = CoRuntimeState(
                 startup_statuses=list(statuses),
-                opening_ctx_state=OpeningContextState(),
                 safety_state=SafetyState(),
             )
             deps = CoDeps(

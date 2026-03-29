@@ -13,7 +13,7 @@ from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 
 from co_cli.agent import build_agent
 from co_cli._model_factory import ModelRegistry
-from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
+from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.commands._commands import (
@@ -23,11 +23,14 @@ from co_cli.commands._commands import (
 )
 from co_cli.display._core import console
 from tests._ollama import ensure_ollama_warm
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-_REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
 _SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
+
+
+_AGENT = build_agent(config=_CONFIG)
 
 
 def _make_ctx(
@@ -36,8 +39,6 @@ def _make_ctx(
     memory_dir: "Path | None" = None,
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
-    from pathlib import Path
-    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     config = _CONFIG
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
@@ -49,8 +50,8 @@ def _make_ctx(
     return CommandContext(
         message_history=message_history or [],
         deps=deps,
-        agent=_r.agent,
-        tool_names=_r.tool_names,
+        agent=_AGENT.agent,
+        tool_names=_AGENT.tool_names,
     )
 
 
@@ -58,20 +59,19 @@ def _make_agent_and_deps():
     """Build a real agent + deps for approval flow tests.
 
     Returns (agent, resolved_trigger, resolved_resume, deps):
-    - resolved_trigger: reasoning model for turn 1 tool invocation
+    - resolved_trigger: summarization model (reasoning_effort=none) for turn 1 tool invocation
     - resolved_resume: summarization model for post-approval turns
     """
     from co_cli._model_factory import ResolvedModel
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     _fallback = ResolvedModel(model=None, settings=None)
-    resolved_trigger = _REGISTRY.get(ROLE_REASONING, _fallback)
+    resolved_trigger = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
     resolved_resume = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=_CONFIG,
         session=CoSessionState(session_id="test-approval"),
     )
-    return agent, resolved_trigger, resolved_resume, deps
+    return _AGENT.agent, resolved_trigger, resolved_resume, deps
 
 
 async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
@@ -84,10 +84,10 @@ async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
         "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
         "Do NOT describe what you would do — call the tool now."
     )
-    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
     last_output = None
     for _ in range(retries):
-        async with asyncio.timeout(60):
+        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
             result = await agent.run(
                 prompt,
                 deps=deps,
@@ -145,7 +145,7 @@ async def test_cmd_compact():
     ]
     ctx = _make_ctx(message_history=msgs)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await dispatch("/compact", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert result.compaction_applied is True
@@ -164,7 +164,7 @@ async def test_skills_install_local(tmp_path):
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
     await _cmd_skills(ctx, f"install {src}")
     assert (skills_dir / "myinstallskill.md").exists()
-    assert "myinstallskill" in ctx.deps.session.skill_commands
+    assert "myinstallskill" in ctx.deps.capabilities.skill_commands
 
 
 @pytest.mark.asyncio
@@ -179,11 +179,11 @@ async def test_skills_install_url_error(tmp_path):
 @pytest.mark.asyncio
 async def test_cmd_approvals_routing_and_clear(tmp_path):
     """/approvals list routes correctly; /approvals clear removes session approval rules."""
-    from co_cli.deps import SessionApprovalRule
+    from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
     ctx = _make_ctx()
-    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind="shell", value="git"))
-    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind="domain", value="docs.python.org"))
+    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git"))
+    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind=ApprovalKindEnum.DOMAIN, value="docs.python.org"))
 
     result = await dispatch("/approvals list", ctx)
     assert isinstance(result, LocalOnly)
@@ -225,7 +225,7 @@ async def test_approval_approve():
         for call in result.output.approvals:
             approvals.approvals[call.tool_call_id] = True
 
-        async with asyncio.timeout(45):
+        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
             resumed = await agent.run(
                 None,
                 deps=deps,
@@ -243,7 +243,7 @@ async def test_approval_approve():
             more_approvals = DeferredToolResults()
             for call in resumed.output.approvals:
                 more_approvals.approvals[call.tool_call_id] = True
-            async with asyncio.timeout(45):
+            async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
                 resumed = await agent.run(
                     None,
                     deps=deps,
@@ -274,7 +274,7 @@ async def test_approval_deny():
         for call in result.output.approvals:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 
-        async with asyncio.timeout(45):
+        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
             resumed = await agent.run(
                 None,
                 deps=deps,
@@ -292,7 +292,7 @@ async def test_approval_deny():
             deny_approvals = DeferredToolResults()
             for call in resumed.output.approvals:
                 deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-            async with asyncio.timeout(45):
+            async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
                 resumed = await agent.run(
                     None,
                     deps=deps,
@@ -328,7 +328,7 @@ async def test_cmd_new_checkpoints_and_clears(tmp_path):
     ]
     ctx = _make_ctx(message_history=msgs, memory_dir=memory_dir)
     await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await dispatch("/new", ctx)
 
     assert isinstance(result, ReplaceTranscript)
@@ -369,7 +369,6 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
-    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
@@ -377,8 +376,8 @@ async def test_forget_command_evicts_fts_row(tmp_path):
             config=CoConfig(memory_dir=memory_dir),
             session=CoSessionState(session_id="test-forget-fts"),
         ),
-        agent=_r.agent,
-        tool_names=_r.tool_names,
+        agent=_AGENT.agent,
+        tool_names=_AGENT.tool_names,
     )
 
     result = await dispatch("/forget 1", ctx)
@@ -411,7 +410,7 @@ async def test_dispatch_skill_returns_delegate_to_agent():
     """Skill dispatch must return DelegateToAgent."""
     test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
     ctx = _make_ctx()
-    ctx.deps.session.skill_commands["test-boundary-skill"] = test_skill
+    ctx.deps.capabilities.skill_commands["test-boundary-skill"] = test_skill
     result = await dispatch("/test-boundary-skill", ctx)
     assert isinstance(result, DelegateToAgent)
     assert result.delegated_input == "Do the thing."
@@ -431,7 +430,7 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     # 'clear' is a builtin — registering a skill with the same name must not shadow it
     test_skill = SkillConfig(name="clear", body="skill body", description="test")
     ctx = _make_ctx(message_history=["msg"])
-    ctx.deps.session.skill_commands["clear"] = test_skill
+    ctx.deps.capabilities.skill_commands["clear"] = test_skill
     result = await dispatch("/clear", ctx)
     # Must route to builtin: ReplaceTranscript with cleared history
     assert isinstance(result, ReplaceTranscript)

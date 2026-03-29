@@ -2,6 +2,8 @@
 import asyncio
 from pathlib import Path
 
+from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
+
 import pytest
 from pydantic_ai._run_context import RunContext
 from pydantic_ai import AgentRunResultEvent
@@ -16,7 +18,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 from tests.test_orchestrate import RecordingFrontend, StaticEventAgent, _make_agent_run_result
 
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
 @pytest.mark.asyncio
@@ -26,7 +28,7 @@ async def test_new_runtime_fields_present() -> None:
         config=CoConfig(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await check_capabilities(ctx)
     assert "tool_count" in result
     assert "mcp_mode" in result
@@ -44,7 +46,7 @@ async def test_capabilities_emits_doctor_progress_updates() -> None:
     deps.runtime.tool_progress_callback = statuses.append
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         await check_capabilities(ctx)
 
     assert statuses[0] == "Doctor: starting runtime diagnostics..."
@@ -71,7 +73,7 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await check_capabilities(ctx)
 
     progress_events = [(tid, msg) for kind, (tid, msg) in frontend.events if kind == "tool_progress"]
@@ -96,7 +98,7 @@ async def test_stream_events_real_check_capabilities_result_dispatches_correctly
     """
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         real_result = await check_capabilities(ctx)
 
     frontend = RecordingFrontend()
@@ -146,7 +148,7 @@ def test_build_agent_per_tool_retry_budget() -> None:
     bucket (max_retries != 1), distinguishing them from write-once tools.
     """
     config = CoConfig()
-    agent, _, _ = build_agent(config=config)
+    agent = build_agent(config=config).agent
     tools = agent._function_toolset.tools
     assert tools["write_file"].max_retries == 1, (
         f"write_file expected max_retries=1, got {tools['write_file'].max_retries}"

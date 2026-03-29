@@ -1,13 +1,14 @@
 import os
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic_ai.usage import RunUsage
 
 from co_cli.config import (
     MCPServerConfig,
-    ModelEntry,
+    ModelConfig,
     WebPolicy,
     DATA_DIR,
     SEARCH_DB,
@@ -19,6 +20,10 @@ from co_cli.config import (
     DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL,
     DEFAULT_KNOWLEDGE_EMBED_API_URL,
     DEFAULT_SUBAGENT_SCOPE_CHARS,
+    DEFAULT_SUBAGENT_MAX_REQUESTS_CODER,
+    DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH,
+    DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS,
+    DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING,
     DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER,
     DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
     DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
@@ -60,27 +65,37 @@ DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
 DEFAULT_TASKS_DIR = Path(".co-cli/tasks")
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.context._types import CompactionResult, OpeningContextState, SafetyState
+from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
 
 
-class SessionApprovalRule(NamedTuple):
+class ApprovalKindEnum(str, Enum):
+    """Category of an approval subject — determines the scoping key stored in SessionApprovalRule."""
+
+    SHELL = "shell"
+    PATH = "path"
+    DOMAIN = "domain"
+    TOOL = "tool"
+
+
+@dataclass(frozen=True)
+class SessionApprovalRule:
     """A session-scoped approval rule recorded when the user chooses 'a'.
 
     kind: category of the approved subject
-      "shell"  — shell utility (value = first token, e.g. "git")
-      "path"   — file write/edit (value = bare parent_dir, e.g. "/proj/src");
-                 shared across write_file and edit_file for the same directory
-      "domain" — web fetch (value = hostname, e.g. "docs.python.org")
-      "tool"   — named tool (value = tool_name, e.g. "save_memory");
-                 covers MCP tools and generic tools; can_remember=True
+      SHELL  — shell utility (value = first token, e.g. "git")
+      PATH   — file write/edit (value = bare parent_dir, e.g. "/proj/src");
+               shared across write_file and edit_file for the same directory
+      DOMAIN — web fetch (value = hostname, e.g. "docs.python.org")
+      TOOL   — named tool (value = tool_name, e.g. "save_memory");
+               covers MCP tools and generic tools; can_remember=True
     value: the scoped key used for matching future requests
     """
 
-    kind: Literal["shell", "path", "domain", "tool"]
+    kind: ApprovalKindEnum
     value: str
 
 
@@ -149,6 +164,10 @@ class CoConfig:
     memory_auto_save_tags: list[str] = field(default_factory=lambda: list(DEFAULT_MEMORY_AUTO_SAVE_TAGS))
     memory_injection_max_chars: int = DEFAULT_MEMORY_INJECTION_MAX_CHARS
     subagent_scope_chars: int = DEFAULT_SUBAGENT_SCOPE_CHARS
+    subagent_max_requests_coder: int = DEFAULT_SUBAGENT_MAX_REQUESTS_CODER
+    subagent_max_requests_research: int = DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH
+    subagent_max_requests_analysis: int = DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS
+    subagent_max_requests_thinking: int = DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
@@ -159,14 +178,14 @@ class CoConfig:
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
     knowledge_search_backend: str = DEFAULT_KNOWLEDGE_SEARCH_BACKEND
     knowledge_cross_encoder_reranker_url: str | None = DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
-    knowledge_llm_reranker: "ModelEntry | None" = None
+    knowledge_llm_reranker: "ModelConfig | None" = None
     knowledge_embed_api_url: str = DEFAULT_KNOWLEDGE_EMBED_API_URL
     knowledge_embedding_provider: str = DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER
     knowledge_embedding_model: str = DEFAULT_KNOWLEDGE_EMBEDDING_MODEL
     knowledge_embedding_dims: int = DEFAULT_KNOWLEDGE_EMBEDDING_DIMS
     theme: str = "light"
     mcp_servers: dict[str, "MCPServerConfig"] = field(default_factory=dict)
-    role_models: dict[str, ModelEntry] = field(default_factory=dict)
+    role_models: dict[str, ModelConfig] = field(default_factory=dict)
     llm_host: str = DEFAULT_LLM_HOST
     llm_provider: str = DEFAULT_LLM_PROVIDER
     llm_num_ctx: int = DEFAULT_OLLAMA_NUM_CTX
@@ -233,6 +252,10 @@ class CoConfig:
             memory_auto_save_tags=list(s.memory_auto_save_tags),
             memory_injection_max_chars=s.memory_injection_max_chars,
             subagent_scope_chars=s.subagent_scope_chars,
+            subagent_max_requests_coder=s.subagent_max_requests_coder,
+            subagent_max_requests_research=s.subagent_max_requests_research,
+            subagent_max_requests_analysis=s.subagent_max_requests_analysis,
+            subagent_max_requests_thinking=s.subagent_max_requests_thinking,
             knowledge_chunk_size=s.knowledge_chunk_size,
             knowledge_chunk_overlap=s.knowledge_chunk_overlap,
             personality=s.personality,
@@ -270,17 +293,24 @@ class CoConfig:
 
 
 @dataclass
-class CoToolState:
-    """Bootstrap-set tool discovery metadata — shared by reference with sub-agents.
+class CoCapabilityState:
+    """Bootstrap-set capability registry — shared by reference with sub-agents.
 
-    Populated during agent construction and MCP discovery in main.py; not mutated
-    afterward. Sub-agents receive the same instance via make_subagent_deps
-    (passed by reference), so they always see the correct tool registry.
+    Populated during agent construction and startup (MCP discovery, skill loading)
+    in main.py and bootstrap; not mutated afterward. Sub-agents receive the same
+    instance via make_subagent_deps (passed by reference), so they always see the
+    correct tool and skill registry.
+
+    Covers the complete bootstrap-set capability surface: tool names, approval map,
+    MCP errors, skill commands, skill registry, and slash command count.
     """
 
     tool_names: list[str] = field(default_factory=list)
     tool_approvals: dict[str, bool] = field(default_factory=dict)
     mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
+    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
+    skill_registry: list[dict] = field(default_factory=list)
+    slash_command_count: int = 0
 
 
 @dataclass
@@ -297,9 +327,7 @@ class CoSessionState:
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
     session_id: str = ""
-    skill_registry: list[dict] = field(default_factory=list)
-    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
-    slash_command_count: int = 0
+    memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
 
 
 @dataclass
@@ -309,6 +337,11 @@ class CoRuntimeState:
     State here is owned by the orchestration layer and history processors. Tools
     should not normally reach into runtime — doing so is a design smell that
     should be explicitly justified.
+
+    Per-turn (reset by reset_for_turn() at run_turn() entry):
+      turn_usage, safety_state, tool_progress_callback
+    Cross-turn (managed by orchestration layer):
+      precomputed_compaction, active_skill_name
     """
 
     precomputed_compaction: CompactionResult | None = field(default=None, repr=False)
@@ -322,10 +355,19 @@ class CoRuntimeState:
     # run_turn() sets this to None in its finally block as a safety net.
     # Only one tool owns progress at a time (single-owner model).
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
-    opening_ctx_state: OpeningContextState | None = field(default=None, repr=False)
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
 
+    def reset_for_turn(self) -> None:
+        """Reset per-turn fields at the start of each run_turn() call.
+
+        Called once at run_turn() entry. Clears the usage accumulator,
+        initialises a fresh safety state, and ensures no stale progress
+        callback carries over from an interrupted prior turn.
+        """
+        self.turn_usage = None
+        self.safety_state = SafetyState()
+        self.tool_progress_callback = None
 
 
 @dataclass
@@ -333,11 +375,11 @@ class CoDeps:
     """Runtime dependencies for agent tools — grouped by responsibility.
 
     Ownership rules:
-      services  = injected capabilities (shell, knowledge index, task runner)
-      config    = injected read-only settings (API keys, paths, limits, thresholds)
-      tools     = bootstrap-set tool discovery metadata; shared by reference with sub-agents
-      session   = mutable tool-visible session state (creds, approvals, todos)
-      runtime   = mutable orchestration/processor transient state
+      services      = injected capabilities (shell, knowledge index, task runner)
+      config        = injected read-only settings (API keys, paths, limits, thresholds)
+      capabilities  = bootstrap-set capability registry; shared by reference with sub-agents
+      session       = mutable tool-visible session state (creds, approvals, todos)
+      runtime       = mutable orchestration/processor transient state
 
     pydantic-ai receives this as the single deps_type. Tools access fields via
     ctx.deps.services.shell, ctx.deps.config.memory_dir, etc.
@@ -345,7 +387,7 @@ class CoDeps:
 
     services: CoServices
     config: CoConfig
-    tools: CoToolState = field(default_factory=CoToolState)
+    capabilities: CoCapabilityState = field(default_factory=CoCapabilityState)
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
@@ -353,28 +395,26 @@ class CoDeps:
 def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     """Create an isolated CoDeps copy for a sub-agent.
 
-    Shares services, config, and tools by reference (safe — handles are stateless
-    or thread-safe; config and tools are read-only after bootstrap).
+    Shares services, config, and capabilities by reference (safe — handles are stateless
+    or thread-safe; config and capabilities are read-only after bootstrap).
 
     Session fields:
       Inherited: google_creds, google_creds_resolved (resolved once, safe to share),
-                 session_approval_rules (copied — sub-agent grants must not leak to parent),
-                 skill_commands, skill_registry (loaded once at startup).
-      Fresh:     drive_page_tokens, session_todos, session_id, slash_command_count.
+                 session_approval_rules (copied — sub-agent grants must not leak to parent).
+      Fresh:     drive_page_tokens, session_todos, session_id.
 
+    Capabilities are shared by reference — loaded once at startup, never mutated afterward.
     Runtime is reset to clean defaults (no compaction cache, no turn usage).
     """
     inherited_session = CoSessionState(
         google_creds=base.session.google_creds,
         google_creds_resolved=base.session.google_creds_resolved,
         session_approval_rules=list(base.session.session_approval_rules),
-        skill_commands=base.session.skill_commands,
-        skill_registry=list(base.session.skill_registry),
     )
     return CoDeps(
         services=base.services,
         config=base.config,
-        tools=base.tools,
+        capabilities=base.capabilities,
         session=inherited_session,
         runtime=CoRuntimeState(),
     )

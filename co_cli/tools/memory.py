@@ -26,7 +26,8 @@ from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
 from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
-from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS
+from co_cli._model_factory import ResolvedModel
+from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
 from co_cli.tools._result import ToolResult, make_result
 
@@ -461,7 +462,15 @@ async def save_memory(
 
     with _TRACER.start_as_current_span("co.memory.save") as span:
         span.set_attribute("memory.tags", ",".join(tags or []))
-        result = await persist_memory(ctx.deps, content, tags, related, on_failure="add", model=ctx.model, always_on=always_on)
+        _fallback = ResolvedModel(model=None, settings=None)
+        _consolidation_resolved = (
+            ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _fallback)
+            if ctx.deps.services.model_registry else _fallback
+        )
+        result = await persist_memory(
+            ctx.deps, content, tags, related,
+            on_failure="add", resolved=_consolidation_resolved, always_on=always_on,
+        )
         span.set_attribute("memory.action", result.get("action", "unknown"))
         span.set_attribute("memory.memory_id", result.get("memory_id", 0))
         if "similarity" in result:

@@ -18,7 +18,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -50,22 +49,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class CompactionResult:
-    """Pre-computed compaction summary for background processing.
-
-    Produced by ``precompute_compaction()`` during user idle time and
-    consumed by ``truncate_history_window()`` on the next turn to skip
-    the inline LLM summarization call.
-
-    The ``message_count`` field is a stale-check: if the message list
-    length has changed since computation, the result is discarded.
-    """
-
-    summary_text: str
-    head_end: int
-    tail_start: int
-    message_count: int
+from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
 
 
 # ---------------------------------------------------------------------------
@@ -563,18 +547,6 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     return count
 
 
-@dataclass
-class OpeningContextState:
-    """Session-scoped state for inject_opening_context.
-
-    Persists across turns to debounce recall per user turn. Initialized once
-    per session in create_deps(), stored on CoDeps.runtime.opening_ctx_state.
-    """
-    recall_count: int = 0
-    model_request_count: int = 0
-    last_recall_user_turn: int = 0
-
-
 async def inject_opening_context(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -585,12 +557,9 @@ async def inject_opening_context(
     new user turn — no heuristic gate. recall_memory is FTS5/BM25 or grep
     fallback — zero LLM cost in both cases. Returns empty when nothing matches.
 
-    State is stored on ctx.deps.runtime.opening_ctx_state (session-scoped).
+    State is stored on ctx.deps.session.memory_recall_state.
     """
-    state: OpeningContextState = ctx.deps.runtime.opening_ctx_state
-    if state is None:
-        return messages
-
+    state: MemoryRecallState = ctx.deps.session.memory_recall_state
     state.model_request_count += 1  # keep for observability
 
     user_turn_count = _count_user_turns(messages)
@@ -633,16 +602,6 @@ async def inject_opening_context(
 # ---------------------------------------------------------------------------
 # 5. Safety processor: doom loop detection + shell reflection cap
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class SafetyState:
-    """Turn-scoped state for safety checks.
-
-    Created fresh per turn by run_turn(), stored on CoDeps.runtime.safety_state.
-    """
-    doom_loop_injected: bool = False
-    reflection_injected: bool = False
 
 
 def detect_safety_issues(

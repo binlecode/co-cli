@@ -80,15 +80,15 @@ EXPECTED_APPROVAL_TOOLS = {
 
 def test_build_agent_registers_all_tools():
     """build_agent() registers exactly the expected tools with no duplicates."""
-    _agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-    assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
-    assert set(tool_names) == EXPECTED_TOOLS
+    result = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    assert len(result.tool_names) == len(set(result.tool_names)), "Duplicate tool registration"
+    assert set(result.tool_names) == EXPECTED_TOOLS
 
 
 def test_approval_tools_flagged():
     """Side-effectful tools require approval; read-only tools do not."""
-    _agent, _tool_names, tool_approval = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-    for name, requires_approval in tool_approval.items():
+    result = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    for name, requires_approval in result.tool_approvals.items():
         if name in EXPECTED_APPROVAL_TOOLS:
             assert requires_approval, (
                 f"Tool '{name}' should require approval but doesn't"
@@ -101,7 +101,7 @@ def test_approval_tools_flagged():
 
 def test_history_processors_attached():
     """Agent has all four history processors for context governance (§16)."""
-    agent, _tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     processor_names = [p.__name__ for p in agent.history_processors]
     assert "inject_opening_context" in processor_names
     assert "truncate_tool_returns" in processor_names
@@ -115,9 +115,9 @@ def test_web_search_ask_requires_approval():
         CoConfig.from_settings(settings, cwd=Path.cwd()),
         web_policy=WebPolicy(search="ask", fetch="allow"),
     )
-    _agent, _tool_names, tool_approval = build_agent(config=config)
-    assert tool_approval["web_search"] is True
-    assert tool_approval["web_fetch"] is False
+    result = build_agent(config=config)
+    assert result.tool_approvals["web_search"] is True
+    assert result.tool_approvals["web_fetch"] is False
 
 
 def test_web_fetch_ask_requires_approval():
@@ -126,7 +126,7 @@ def test_web_fetch_ask_requires_approval():
         CoConfig.from_settings(settings, cwd=Path.cwd()),
         web_policy=WebPolicy(search="allow", fetch="ask"),
     )
-    _agent, _tool_names, tool_approval = build_agent(config=config)
-    assert tool_approval["web_search"] is False
-    assert tool_approval["web_fetch"] is True
+    result = build_agent(config=config)
+    assert result.tool_approvals["web_search"] is False
+    assert result.tool_approvals["web_fetch"] is True
 

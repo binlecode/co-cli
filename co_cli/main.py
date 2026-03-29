@@ -5,7 +5,6 @@ import time
 import tomllib
 from contextlib import AsyncExitStack
 from pathlib import Path
-from dataclasses import dataclass
 from typing import Any
 import typer
 from prompt_toolkit import PromptSession
@@ -148,16 +147,11 @@ def _consume_bg_compaction(
         deps.runtime.precomputed_compaction = None
 
 
-@dataclass
-class _ChatTurnState:
-    message_history: list[Any]
-    session_data: Any
-    next_turn_compaction_task: asyncio.Task | None = None
-
-
 async def _run_foreground_turn(
-    state: "_ChatTurnState",
     *,
+    message_history: list,
+    session_data: Any,
+    next_turn_compaction_task: asyncio.Task | None,
     agent: Agent,
     user_input: str,
     saved_env: dict[str, str | None],
@@ -165,27 +159,26 @@ async def _run_foreground_turn(
     frontend: Frontend,
     primary_model: str,
     verbose: bool,
-) -> None:
+) -> tuple[list, Any, asyncio.Task | None]:
     """Execute one foreground turn: consume bg compaction, run turn, cleanup, finalize.
 
-    _cleanup_skill_run_state is guaranteed via finally. State fields
-    (message_history, session_data, next_turn_compaction_task) are updated
-    in-place through the shared state object.
+    _cleanup_skill_run_state is guaranteed via finally.
+    Returns (next_message_history, next_session_data, next_bg_compaction_task).
     """
-    _consume_bg_compaction(state.next_turn_compaction_task, deps)
+    _consume_bg_compaction(next_turn_compaction_task, deps)
     try:
         turn_result = await run_turn(
             agent=agent,
             user_input=user_input,
             deps=deps,
-            message_history=state.message_history,
+            message_history=message_history,
             verbose=verbose,
             frontend=frontend,
         )
     finally:
         _cleanup_skill_run_state(saved_env, deps)
-    state.message_history, state.session_data, state.next_turn_compaction_task = await _finalize_turn(
-        turn_result, state.message_history, state.session_data, deps, frontend, primary_model
+    return await _finalize_turn(
+        turn_result, message_history, session_data, deps, frontend, primary_model
     )
 
 
@@ -217,11 +210,13 @@ async def _chat_loop(verbose: bool = False):
 
     agent_result = build_agent(config=deps.config, resolved=resolved)
     agent = agent_result.agent
-    deps.tools.tool_names = agent_result.tool_names
-    deps.tools.tool_approvals = agent_result.tool_approvals
+    deps.capabilities.tool_names = agent_result.tool_names
+    deps.capabilities.tool_approvals = agent_result.tool_approvals
 
     stack = AsyncExitStack()
-    state = _ChatTurnState(message_history=[], session_data=None)
+    message_history: list = []
+    session_data: Any = None
+    next_turn_compaction_task: asyncio.Task | None = None
     last_interrupt_time = 0.0
     try:
         _mcp_init_ok = False
@@ -232,10 +227,10 @@ async def _chat_loop(verbose: bool = False):
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
         session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-        completer.words = _build_completer_words(deps.session.skill_commands)
+        completer.words = _build_completer_words(deps.capabilities.skill_commands)
 
         sync_knowledge(deps, frontend)
-        state.session_data = restore_session(deps, frontend)
+        session_data = restore_session(deps, frontend)
         frontend.on_status(f"  {session_cap.skill_count} skill(s) loaded")
 
         display_welcome_banner(deps, startup_statuses)
@@ -253,18 +248,18 @@ async def _chat_loop(verbose: bool = False):
                 # /command — slash commands, no LLM
                 if user_input.startswith("/"):
                     cmd_ctx = CommandContext(
-                        message_history=state.message_history,
+                        message_history=message_history,
                         deps=deps,
                         agent=agent,
-                        tool_names=deps.tools.tool_names,
+                        tool_names=deps.capabilities.tool_names,
                         completer=completer,
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)
                     if isinstance(outcome, ReplaceTranscript):
-                        state.message_history = outcome.history
+                        message_history = outcome.history
                         if outcome.compaction_applied:
-                            state.session_data = increment_compaction(state.session_data)
-                            save_session(deps.config.session_path, state.session_data)
+                            session_data = increment_compaction(session_data)
+                            save_session(deps.config.session_path, session_data)
                         continue
                     elif isinstance(outcome, DelegateToAgent):
                         # Skill dispatched — fall through to LLM turn with delegated input
@@ -275,8 +270,10 @@ async def _chat_loop(verbose: bool = False):
                     else:  # LocalOnly
                         continue
 
-                await _run_foreground_turn(
-                    state,
+                message_history, session_data, next_turn_compaction_task = await _run_foreground_turn(
+                    message_history=message_history,
+                    session_data=session_data,
+                    next_turn_compaction_task=next_turn_compaction_task,
                     agent=agent,
                     user_input=user_input,
                     saved_env=_saved_env,
@@ -297,8 +294,8 @@ async def _chat_loop(verbose: bool = False):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        if state.next_turn_compaction_task is not None:
-            state.next_turn_compaction_task.cancel()
+        if next_turn_compaction_task is not None:
+            next_turn_compaction_task.cancel()
         await deps.services.task_runner.shutdown()
         await stack.aclose()
         deps.services.shell.cleanup()

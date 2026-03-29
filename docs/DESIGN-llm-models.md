@@ -3,7 +3,7 @@
 ## 1. What & How
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and one model-selection contract:
-`role_models` — one `ModelEntry` per role. The `reasoning` model is resolved once in `_chat_loop()` at
+`role_models` — one `ModelConfig` per role. The `reasoning` model is resolved once in `_chat_loop()` at
 session start via `ModelRegistry`; `build_agent()` is called once with the resolved model. `run_turn()`
 executes turns against that pre-built agent.
 Sub-agent tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
@@ -29,11 +29,11 @@ There is no separate primary/fallback settings tier.
 
 ### Role Models
 
-`role_models` is `dict[str, ModelEntry]` — one model per role:
+`role_models` is `dict[str, ModelConfig]` — one model per role:
 
-- Mandatory role: `reasoning` (a single `ModelEntry` required — raises `ValueError` at startup if absent).
+- Mandatory role: `reasoning` (a single `ModelConfig` required — raises `ValueError` at startup if absent).
 - Optional roles: `summarization`, `coding`, `research`, `analysis` (absent/missing disables that role).
-- Each entry is a `ModelEntry(model, api_params, provider?)` — plain model name strings are coerced to `ModelEntry` by `_parse_role_models`. Dict entries are accepted directly; `ModelEntry` instances on re-validation are serialized via `model_dump()`.
+- Each entry is a `ModelConfig(model, api_params, provider?)` — plain model name strings are coerced to `ModelConfig` by `_parse_role_models`. Dict entries are accepted directly; `ModelConfig` instances on re-validation are serialized via `model_dump()`.
 
 Example:
 
@@ -136,7 +136,7 @@ Application flow:
 ```text
 Settings/config.py
   default summarization/analysis/research entry
-    -> ModelEntry(model="qwen3.5:35b-a3b-think", api_params={... reasoning_effort="none" ...})
+    -> ModelConfig(model="qwen3.5:35b-a3b-think", api_params={... reasoning_effort="none" ...})
 
 ModelRegistry.from_config(config)
   -> build_model(model_entry, provider="ollama-openai", llm_host)
@@ -220,7 +220,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/config.py` | `role_models` setting, `ModelEntry` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
+| `co_cli/config.py` | `role_models` setting, `ModelConfig` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
 | `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
 | `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |

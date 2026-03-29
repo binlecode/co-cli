@@ -18,7 +18,7 @@ _PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
 
 @dataclass
-class StatusInfo:
+class StatusResult:
     version: str
     git_branch: str | None
     cwd: str  # basename
@@ -36,7 +36,7 @@ class StatusInfo:
     obsidian_vault_path: str | None = None
 
 
-def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
+def get_status(config: CoConfig, tool_count: int = 0) -> StatusResult:
     """Gather system status into a plain dataclass (no display side-effects)."""
 
     # -- version --
@@ -123,7 +123,7 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
     # -- db size --
     db_size = f"{os.path.getsize(LOGS_DB) / 1024:.1f} KB" if LOGS_DB.exists() else "0 KB"
 
-    return StatusInfo(
+    return StatusResult(
         version=version,
         git_branch=git_branch,
         cwd=cwd,
@@ -143,7 +143,7 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusInfo:
 
 
 @dataclass
-class SecurityFinding:
+class SecurityCheckResult:
     """A single security posture check result."""
 
     severity: str  # "warn" | "error"
@@ -155,7 +155,7 @@ class SecurityFinding:
 def check_security(
     _user_config_path: Path | None = None,
     _project_config_path: Path | None = None,
-) -> list[SecurityFinding]:
+) -> list[SecurityCheckResult]:
     """Run security posture checks. Returns a list of findings (empty = all clear).
 
     Checks:
@@ -163,14 +163,14 @@ def check_security(
       2. Project settings.json file permissions (warn if not 0o600)
       3. Exec-approvals wildcard entries (pattern == "*" is a catch-all security risk)
     """
-    findings: list[SecurityFinding] = []
+    findings: list[SecurityCheckResult] = []
 
     # Check 1: user settings.json permissions
     user_cfg = _user_config_path or (CONFIG_DIR / "settings.json")
     if Path(user_cfg).exists():
         mode = Path(user_cfg).stat().st_mode & 0o777
         if mode != 0o600:
-            findings.append(SecurityFinding(
+            findings.append(SecurityCheckResult(
                 severity="warn",
                 check_id="user-config-permissions",
                 detail=f"~/.config/co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
@@ -182,7 +182,7 @@ def check_security(
     if project_cfg and Path(project_cfg).exists():
         mode = Path(project_cfg).stat().st_mode & 0o777
         if mode != 0o600:
-            findings.append(SecurityFinding(
+            findings.append(SecurityCheckResult(
                 severity="warn",
                 check_id="project-config-permissions",
                 detail=f".co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
@@ -192,7 +192,7 @@ def check_security(
     return findings
 
 
-def render_security_findings(findings: list[SecurityFinding]) -> None:
+def render_security_findings(findings: list[SecurityCheckResult]) -> None:
     """Print security findings to the console. No output when findings list is empty."""
     if not findings:
         return
@@ -202,8 +202,8 @@ def render_security_findings(findings: list[SecurityFinding]) -> None:
         console.print(f"  Remediation: {f.remediation}")
 
 
-def render_status_table(info: StatusInfo) -> Table:
-    """Build a Rich Table from StatusInfo using semantic styles."""
+def render_status_table(info: StatusResult) -> Table:
+    """Build a Rich Table from StatusResult using semantic styles."""
     table = Table(title=f"Co System Status (Provider: {info.llm_provider})")
     table.add_column("Component", style="accent")
     table.add_column("Status", style="info")

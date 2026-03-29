@@ -17,7 +17,7 @@ TERMINAL_STATUS_CODES = {400, 401, 403, 404, 422}
 
 
 @dataclass(frozen=True)
-class WebRetryDecision:
+class WebRetryResult:
     retryable: bool
     message: str
     delay_seconds: float = 0.0
@@ -110,7 +110,7 @@ def classify_web_http_error(
     target: str,
     error: httpx.HTTPError,
     max_retry_after_seconds: float = 60.0,
-) -> WebRetryDecision:
+) -> WebRetryResult:
     """Classify an HTTP error into retryable or terminal behavior."""
     if isinstance(error, httpx.HTTPStatusError):
         code = error.response.status_code
@@ -122,13 +122,13 @@ def classify_web_http_error(
 
         if code in RETRYABLE_STATUS_CODES:
             if code == 429:
-                return WebRetryDecision(
+                return WebRetryResult(
                     retryable=True,
                     message=f"{tool_name} rate limited (HTTP 429) for {target}.",
                     delay_seconds=delay or 1.0,
                     status_code=code,
                 )
-            return WebRetryDecision(
+            return WebRetryResult(
                 retryable=True,
                 message=f"{tool_name} transient HTTP {code} for {target}.",
                 delay_seconds=delay or 1.0,
@@ -146,11 +146,11 @@ def classify_web_http_error(
                 msg = f"{tool_name} rejected (HTTP 422) for {target}: request not processable."
             else:
                 msg = f"{tool_name} rejected (HTTP {code}) for {target}."
-            return WebRetryDecision(
+            return WebRetryResult(
                 retryable=False, message=msg, status_code=code,
             )
 
-        return WebRetryDecision(
+        return WebRetryResult(
             retryable=True,
             message=f"{tool_name} server error (HTTP {code}) for {target}.",
             delay_seconds=delay or 1.0,
@@ -158,20 +158,20 @@ def classify_web_http_error(
         )
 
     if isinstance(error, httpx.TimeoutException):
-        return WebRetryDecision(
+        return WebRetryResult(
             retryable=True,
             message=f"{tool_name} timed out while contacting {target}.",
             delay_seconds=1.0,
         )
 
     if isinstance(error, httpx.RequestError):
-        return WebRetryDecision(
+        return WebRetryResult(
             retryable=True,
             message=f"{tool_name} network error while contacting {target}: {error}.",
             delay_seconds=1.0,
         )
 
-    return WebRetryDecision(
+    return WebRetryResult(
         retryable=True,
         message=f"{tool_name} transport error for {target}: {error}.",
         delay_seconds=1.0,

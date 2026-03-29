@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _UNSAFE_CHARS = re.compile(r'[/\\*?]')
 
 
-class TaskStatus(str, Enum):
+class TaskStatusEnum(str, Enum):
     pending = "pending"
     running = "running"
     completed = "completed"
@@ -78,7 +78,7 @@ class TaskStorage:
         d.mkdir(parents=True, exist_ok=True)
         meta = {
             "task_id": task_id,
-            "status": TaskStatus.pending.value,
+            "status": TaskStatusEnum.pending.value,
             "command": command,
             "cwd": cwd,
             "description": approval_record.get("description", "") if approval_record else "",
@@ -138,7 +138,7 @@ class TaskStorage:
         """Delete completed/failed/cancelled tasks older than retention_days. Returns count deleted."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
         deleted = 0
-        terminal = {TaskStatus.completed.value, TaskStatus.failed.value, TaskStatus.cancelled.value}
+        terminal = {TaskStatusEnum.completed.value, TaskStatusEnum.failed.value, TaskStatusEnum.cancelled.value}
         for d in list(self.base_dir.iterdir()):
             if not d.is_dir():
                 continue
@@ -227,10 +227,10 @@ class TaskRunner:
                 logger.info(f"TaskRunner: cleaned up {deleted} old task(s)")
 
         # Orphan recovery — any status=running is a crash orphan
-        for meta in storage.list_tasks(status_filter=TaskStatus.running.value):
+        for meta in storage.list_tasks(status_filter=TaskStatusEnum.running.value):
             tid = meta["task_id"]
             logger.warning(f"TaskRunner: crash orphan recovered: {tid}")
-            storage.update(tid, status=TaskStatus.failed.value, exit_code=-1,
+            storage.update(tid, status=TaskStatusEnum.failed.value, exit_code=-1,
                            completed_at=datetime.now(timezone.utc).isoformat())
             storage.write_result(tid, -1, None, "[crash orphan recovered at startup]")
 
@@ -262,7 +262,7 @@ class TaskRunner:
             )
         except Exception as e:
             output_fd.close()
-            self._storage.update(task_id, status=TaskStatus.failed.value, exit_code=-1,
+            self._storage.update(task_id, status=TaskStatusEnum.failed.value, exit_code=-1,
                                  completed_at=datetime.now(timezone.utc).isoformat())
             self._storage.write_result(task_id, -1, None, f"[spawn failed: {e}]")
             logger.error(f"TaskRunner: spawn failed for {task_id}: {e}")
@@ -271,7 +271,7 @@ class TaskRunner:
         self._live[task_id] = proc
         self._storage.update(
             task_id,
-            status=TaskStatus.running.value,
+            status=TaskStatusEnum.running.value,
             pid=proc.pid,
             started_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -302,7 +302,7 @@ class TaskRunner:
 
         self._live.pop(task_id, None)
         exit_code = proc.returncode if proc.returncode is not None else -1
-        status = TaskStatus.completed.value if exit_code == 0 else TaskStatus.failed.value
+        status = TaskStatusEnum.completed.value if exit_code == 0 else TaskStatusEnum.failed.value
         completed_at = datetime.now(timezone.utc).isoformat()
         self._storage.update(task_id, status=status, exit_code=exit_code, completed_at=completed_at)
 
@@ -362,7 +362,7 @@ class TaskRunner:
         await kill_process_tree(proc)
         self._live.pop(task_id, None)
         completed_at = datetime.now(timezone.utc).isoformat()
-        self._storage.update(task_id, status=TaskStatus.cancelled.value,
+        self._storage.update(task_id, status=TaskStatusEnum.cancelled.value,
                              exit_code=-1, completed_at=completed_at)
         self._storage.write_result(task_id, -1, None, "[cancelled]")
 
@@ -375,7 +375,7 @@ class TaskRunner:
         async def _cancel_one(task_id: str, proc: asyncio.subprocess.Process):
             await kill_process_tree(proc)
             completed_at = datetime.now(timezone.utc).isoformat()
-            self._storage.update(task_id, status=TaskStatus.cancelled.value,
+            self._storage.update(task_id, status=TaskStatusEnum.cancelled.value,
                                  exit_code=-1, completed_at=completed_at)
             self._storage.write_result(task_id, -1, None, "[shutdown cancelled]")
 

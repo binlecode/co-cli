@@ -1,6 +1,6 @@
 """System-wide integration health checks.
 
-Data types: CheckResult, CheckItem, DoctorResult, RuntimeCheck.
+Data types: CheckResult, CheckItem, DoctorResult, RuntimeCheckResult.
 
 IO check functions (internal helpers called by the entry points below):
   check_agent_llm, check_reranker_llm, check_embedder,
@@ -30,7 +30,7 @@ from co_cli.config import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_
 
 
 @dataclass
-class RuntimeCheck:
+class RuntimeCheckResult:
     capabilities: dict[str, Any]
     status: dict[str, Any]
     findings: list[dict[str, str]] = field(default_factory=list)
@@ -355,7 +355,7 @@ def check_runtime(
     deps: "CoDeps",
     *,
     progress: Callable[[str], None] | None = None,
-) -> "RuntimeCheck":
+) -> "RuntimeCheckResult":
     """Assemble a full runtime diagnostic snapshot.
 
     Calls IO check functions and inlines trivial checks, combines capabilities from
@@ -378,7 +378,7 @@ def check_runtime(
     knowledge_result = _check_knowledge(deps.services.knowledge_index, deps.config.knowledge_search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
-    skills_result = _check_skills(deps.session.skill_registry)
+    skills_result = _check_skills(deps.capabilities.skill_registry)
 
     # Probe each configured MCP server; count live ones
     # Prefer discovery errors from session (reflects actual connectivity at session start)
@@ -387,7 +387,7 @@ def check_runtime(
     for name, cfg in (deps.config.mcp_servers or {}).items():
         _emit_progress(progress, f"Doctor: checking MCP server '{name}'...")
         prefix = cfg.prefix or name
-        discovery_error = deps.session.mcp_discovery_errors.get(prefix)
+        discovery_error = deps.capabilities.mcp_discovery_errors.get(prefix)
         if discovery_error is not None:
             result = CheckResult(
                 ok=False,
@@ -435,11 +435,11 @@ def check_runtime(
     # Build status dict from session state
     status: dict[str, Any] = {
         "session_id": deps.session.session_id,
-        "active_skill": deps.session.active_skill_name,
-        "tool_names": list(deps.session.tool_names),
-        "tool_approvals": dict(deps.session.tool_approvals),
-        "tool_count": len(deps.session.tool_names),
-        "skill_count": len(deps.session.skill_registry),
+        "active_skill": deps.runtime.active_skill_name,
+        "tool_names": list(deps.capabilities.tool_names),
+        "tool_approvals": dict(deps.capabilities.tool_approvals),
+        "tool_count": len(deps.capabilities.tool_names),
+        "skill_count": len(deps.capabilities.skill_registry),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge_search_backend,
     }
@@ -459,7 +459,7 @@ def check_runtime(
     if len(deps.config.mcp_servers) == 0:
         fallbacks.append("mcp: native-only (no MCP servers configured)")
 
-    return RuntimeCheck(
+    return RuntimeCheckResult(
         capabilities=capabilities,
         status=status,
         findings=findings,

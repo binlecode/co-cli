@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import dataclass
 
+from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
+
 import pytest
 from pydantic_ai import ModelRetry
 
@@ -87,7 +89,7 @@ async def test_web_search_no_key():
 async def test_web_search_functional():
     """web_search returns structured success or structured terminal error."""
     ctx = _make_ctx(brave_search_api_key=_brave_key_for_search_tests())
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "python programming language")
     assert isinstance(result, dict)
     assert "display" in result
@@ -108,7 +110,7 @@ async def test_web_search_functional():
 async def test_web_search_domains_parameter():
     """web_search with domains parameter does not crash and returns a valid shape."""
     ctx = _make_policy_ctx(brave_search_api_key=_brave_key_for_search_tests())
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "test", domains=["example.com"])
     assert isinstance(result, dict)
     assert "display" in result
@@ -123,7 +125,7 @@ async def test_web_search_domains_parameter():
 async def test_web_fetch_functional():
     """Test fetching a real page and converting to markdown."""
     ctx = _make_ctx()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/html")
     assert isinstance(result, dict)
     assert "display" in result
@@ -139,7 +141,7 @@ async def test_web_fetch_functional():
 async def test_web_fetch_allows_json():
     """web_fetch succeeds for JSON content."""
     ctx = _make_ctx()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/json")
     assert "json" in result["content_type"]
 
@@ -148,7 +150,7 @@ async def test_web_fetch_allows_json():
 async def test_web_fetch_blocks_binary_content():
     """web_fetch returns terminal error for binary content types."""
     ctx = _make_ctx()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/image/png")
     assert result["error"] is True
     assert "unsupported content type" in result["display"]
@@ -160,7 +162,7 @@ async def test_web_fetch_truncates_large_response():
     from co_cli.tools.web import _MAX_FETCH_CHARS
 
     ctx = _make_ctx()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://norvig.com/big.txt")
     assert result["truncated"] is True
     prefix_len = len(f"Content from {result['url']}:\n\n")
@@ -175,7 +177,7 @@ async def test_web_fetch_truncates_large_response():
 async def test_web_fetch_http_403_is_terminal():
     """HTTP 403 returns terminal error result (no ModelRetry)."""
     ctx = _make_ctx()
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/status/403")
     assert result["error"] is True
     assert "HTTP 403" in result["display"]
@@ -186,7 +188,7 @@ async def test_web_fetch_http_503_retries_then_terminal():
     """HTTP 503 retries within tool and returns terminal error on exhaustion."""
     ctx = _make_ctx()
     # 503 triggers 2 retries with backoff (base=1s, max=8s); 30s covers worst case
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/status/503")
     assert result["error"] is True
     assert "HTTP 503" in result["display"]
@@ -217,7 +219,7 @@ async def test_web_fetch_blocks_redirect_to_private():
     """web_fetch blocks when a public URL redirects to a private IP."""
     ctx = _make_ctx()
     try:
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
             result = await web_fetch(ctx, "https://httpbin.org/redirect-to?url=http://127.0.0.1/")
     except ModelRetry:
         return
@@ -263,6 +265,6 @@ async def test_web_fetch_not_in_allowlist():
 async def test_web_fetch_in_allowlist():
     """web_fetch succeeds when domain is in allowlist."""
     ctx = _make_policy_ctx(allowed_domains=["httpbin.org"])
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/html")
     assert "Herman Melville" in result["display"]

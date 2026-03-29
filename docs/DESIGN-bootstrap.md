@@ -60,8 +60,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      shell=ShellBackend(), knowledge_index=knowledge_index,
 │  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(resolved_config),
 │  │  )
-│  ├─ CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
-│  └─ (CoDeps(services, resolved_config, runtime), startup_statuses)   # tuple return
+│  ├─ CoRuntimeState()
+│  └─ (CoDeps(services, resolved_config, capabilities=CoCapabilityState(), runtime=runtime), startup_statuses)   # tuple return
 │
 ├─ deps, startup_statuses = create_deps()
 ├─ for status in startup_statuses: frontend.on_status(status)
@@ -95,16 +95,16 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ returns AgentCapabilityResult
 │
 ├─ agent = agent_result.agent
-├─ deps.tools.tool_names     = agent_result.tool_names
-├─ deps.tools.tool_approvals = agent_result.tool_approvals
+├─ deps.capabilities.tool_names     = agent_result.tool_names
+├─ deps.capabilities.tool_approvals = agent_result.tool_approvals
 │
 ├─ AsyncExitStack.enter_async_context(agent)  # MCP server subprocesses start here
 │      Exception → print warning, _mcp_init_ok stays False
 │
 ├─ session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-│      [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.tools updated
-│      _load_skills() + set_skill_commands() → deps.session.skill_commands + skill_registry
-├─ completer.words = _build_completer_words(deps.session.skill_commands)  # COMMANDS + skills
+│      [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.capabilities updated
+│      _load_skills() + set_skill_commands() → deps.capabilities.skill_commands + skill_registry
+├─ completer.words = _build_completer_words(deps.capabilities.skill_commands)  # COMMANDS + skills
 │
 ├─ sync_knowledge(deps, frontend)
 │      knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
@@ -120,8 +120,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ frontend.on_status(f"{session_cap.skill_count} skill(s) loaded")
 │
 └─ display_welcome_banner(deps, startup_statuses)
-   │    tool_count  = len(deps.tools.tool_names)
-   │    skill_count = len(deps.session.skill_registry)
+   │    tool_count  = len(deps.capabilities.tool_names)
+   │    skill_count = len(deps.capabilities.skill_registry)
    │    mcp_count   = len(deps.config.mcp_servers or {})
    ▼
    REPL loop begins
@@ -197,10 +197,7 @@ create_deps():
         task_runner=task_runner,
         model_registry=ModelRegistry.from_config(config),
     )
-    runtime = CoRuntimeState(
-        opening_ctx_state=OpeningContextState(),
-        safety_state=SafetyState(),
-    )
+    runtime = CoRuntimeState()
     return CoDeps(services=services, config=config, runtime=runtime), startup_statuses
 ```
 
@@ -215,11 +212,11 @@ Key transformation:
 |-------|------|----------|-----------------------|
 | `services` | `CoServices` | Session | Shared by reference |
 | `config` | `CoConfig` | Session | Shared by reference |
-| `tools` | `CoToolState` | Set during startup | Shared by reference |
-| `session` | `CoSessionState` | Session, partially inherited for sub-agents | Credentials, approval rules, skill commands, and skill registry inherited; per-session fields reset |
+| `capabilities` | `CoCapabilityState` | Set during startup | Shared by reference |
+| `session` | `CoSessionState` | Session, partially inherited for sub-agents | Credentials and approval rules inherited; per-session fields reset |
 | `runtime` | `CoRuntimeState` | Orchestration-layer transient state | Reset for sub-agents |
 
-The `tools` group holds bootstrap-set tool discovery metadata (tool names, approval map, MCP discovery errors) that is constant once startup completes. The session group holds tool-visible mutable state such as approvals, todos, and skill registry. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
+The `capabilities` group holds bootstrap-set capability metadata (tool names, approval map, MCP discovery errors, skill registry) that is constant once startup completes. The session group holds tool-visible mutable state such as approvals and todos. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
 `startup_statuses` is returned as the second element of `create_deps()`'s tuple; the chat loop prints these one-time bootstrap status lines (e.g. knowledge backend degradation notices) before the welcome banner.
 
 ## 2. Provider And Model Checks
@@ -239,9 +236,9 @@ The inline wakeup steps run once per `chat_loop()` startup after deps initializa
 
 - `create_deps()` returned without raising (provider/model probes passed)
 - `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after skills load (inside `async with agent`) using `_build_completer_words()`
-- `build_agent()` has returned an `AgentCapabilityResult`; `deps.tools.tool_names` and `deps.tools.tool_approvals` are set immediately after from `agent_result` attributes
+- `build_agent()` has returned an `AgentCapabilityResult`; `deps.capabilities.tool_names` and `deps.capabilities.tool_approvals` are set immediately after from `agent_result` attributes
 - `async with agent` has been entered; if MCP init fails, a warning is printed and startup continues with native tools only
-- `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.session.skill_commands`
+- `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.capabilities.skill_commands`
 
 The three inline wakeup steps run inside the `async with agent` block after `initialize_session_capabilities()` completes.
 
@@ -262,12 +259,13 @@ chat_loop():
 
     agent_result = build_agent(config=deps.config, resolved=resolved)
     agent = agent_result.agent
-    deps.tools.tool_names     = agent_result.tool_names     ← set immediately after build_agent
-    deps.tools.tool_approvals = agent_result.tool_approvals
+    deps.capabilities.tool_names     = agent_result.tool_names     ← set immediately after build_agent
+    deps.capabilities.tool_approvals = agent_result.tool_approvals
 
     # inside async with agent
     stack = AsyncExitStack()
-    state = _ChatTurnState(message_history=[], session_data=None)  # groups co-evolving REPL state
+    message_history: list = []
+    session_data: Any = None
     last_interrupt_time = 0.0
     try:
         _mcp_init_ok = False
@@ -279,9 +277,9 @@ chat_loop():
             # startup continues with native tools only
 
         session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-            # [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.tools updated
-            # _load_skills() + set_skill_commands() → session.skill_commands + skill_registry
-        completer.words = _build_completer_words(deps.session.skill_commands)   ← updated to COMMANDS + skills
+            # [if mcp_servers and _mcp_init_ok] discover_mcp_tools() → deps.capabilities updated
+            # _load_skills() + set_skill_commands() → capabilities.skill_commands + skill_registry
+        completer.words = _build_completer_words(deps.capabilities.skill_commands)   ← updated to COMMANDS + skills
 
         [inline wakeup steps 1–3]
         display_welcome_banner(deps, startup_statuses)
@@ -310,10 +308,10 @@ Three sequential steps run inline in `chat_loop()` after `initialize_session_cap
 inline wakeup (in chat_loop()):
     Step 1: sync_knowledge
     Step 2: restore_session  →  session_data local variable
-    Step 3: skills_loaded_report  (reads len(deps.session.skill_registry) directly)
+    Step 3: skills_loaded_report  (reads len(deps.capabilities.skill_registry) directly)
 ```
 
-`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps, startup_statuses)` reads tool counts from `deps.tools`, skill counts from `deps.session`, and MCP server count from `deps.config` — no separate health probe.
+`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps, startup_statuses)` reads tool counts and skill counts from `deps.capabilities`, and MCP server count from `deps.config` — no separate health probe.
 
 ### Step 1 - Knowledge Sync
 
@@ -372,7 +370,7 @@ The returned `session_data` stays in `chat_loop()` local state and is reused for
 ### Step 3 - Skills Loaded Report
 
 ```text
-frontend.on_status("{len(deps.session.skill_registry)} skill(s) loaded")
+frontend.on_status("{len(deps.capabilities.skill_registry)} skill(s) loaded")
 ```
 
 This is a visibility step only. Skill loading already happened inside `async with agent`, after MCP init. The count reflects wired-available skills (description present, not `disable_model_invocation`) — the same set visible to the model via `skill_registry`.
@@ -385,15 +383,15 @@ Skills load inside `initialize_session_capabilities()` (called inside `async wit
 
 ```text
 initialize_session_capabilities(agent, deps, frontend, mcp_init_ok):
-    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → deps.tools.mcp_discovery_errors, deps.tools.tool_names extended
+    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → deps.capabilities.mcp_discovery_errors, deps.capabilities.tool_names extended
     skill_commands = _load_skills(deps.config.skills_dir, settings)
         pass 1: scan co_cli/skills/*.md
         pass 2: scan deps.config.skills_dir/*.md
         parse frontmatter, check requires, scan for security issues
-    set_skill_commands(skill_commands, deps.session)   ← session.skill_commands + skill_registry
-    return SessionCapabilityResult(skill_count=len(deps.session.skill_registry))
+    set_skill_commands(skill_commands, deps.capabilities)   ← capabilities.skill_commands + skill_registry
+    return SessionCapabilityResult(skill_count=len(deps.capabilities.skill_registry))
 
-completer.words = _build_completer_words(deps.session.skill_commands)   ← extends COMMANDS-only list to COMMANDS + skills
+completer.words = _build_completer_words(deps.capabilities.skill_commands)   ← extends COMMANDS-only list to COMMANDS + skills
 ```
 
 `PromptSession` is built before `create_deps()` with a COMMANDS-only completer. After `initialize_session_capabilities()` returns, `_build_completer_words()` updates `completer.words` in-place to include skill names.
@@ -430,7 +428,7 @@ display_welcome_banner(deps, startup_statuses)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tools.tool_names)`), skill count (`len(deps.session.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` when `startup_statuses` is empty, or `✓ Ready  (degraded)` when one or more startup fallbacks are active (e.g., hybrid-to-fts5 degradation or reranker unavailability).
+The banner marks the boundary between startup and interactive use. All status messages from model check, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.capabilities.tool_names)`), skill count (`len(deps.capabilities.skill_registry)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` when `startup_statuses` is empty, or `✓ Ready  (degraded)` when one or more startup fallbacks are active (e.g., hybrid-to-fts5 degradation or reranker unavailability).
 
 ### State Mutations Summary
 
@@ -440,11 +438,11 @@ The banner marks the boundary between startup and interactive use. All status me
 | `deps.session.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
 | `deps.services.task_runner` | Constructed inside `create_deps()` | `TaskRunner` instance |
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
-| `deps.tools.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
-| `deps.tools.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
-| `deps.tools.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
-| `deps.session.skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | Non-hidden skill dicts |
-| `deps.session.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Session-owned dict of all loaded skills |
+| `deps.capabilities.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
+| `deps.capabilities.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
+| `deps.capabilities.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
+| `deps.capabilities.skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | Non-hidden skill dicts |
+| `deps.capabilities.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Full dict of all loaded skills |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
 
 ### Failure Paths

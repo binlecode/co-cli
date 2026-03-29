@@ -60,15 +60,15 @@ main.py:build_chat_app()
   │    ├─ [conditional] _register(delegate_*, False)        # only when role_models has matching role
   │    └─ [web policy]  _register(web_search/fetch, policy.search/fetch == "ask")
   │    └─ return AgentCapabilityResult(agent, tool_names, tool_approvals)
-  ├─ deps.tools.tool_names = agent_result.tool_names       # native names only
-  ├─ deps.tools.tool_approvals = agent_result.tool_approvals
+  ├─ deps.capabilities.tool_names = agent_result.tool_names       # native names only
+  ├─ deps.capabilities.tool_approvals = agent_result.tool_approvals
   ├─ await stack.enter_async_context(agent)                 # starts MCP server subprocesses
   └─ initialize_session_capabilities(agent, deps, frontend, mcp_init_ok)   # bootstrap/_bootstrap.py
        └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py:264
             └─ for toolset in agent.toolsets:
                  ├─ inner.list_tools()                      # MCPServer: enumerate via stdio/HTTP
                  └─ name = f"{prefix}_{t.name}" if prefix else t.name
-       ├─ deps.tools.tool_names += mcp_tool_names          # native + MCP names
+       ├─ deps.capabilities.tool_names += mcp_tool_names          # native + MCP names
        └─ for prefix, err in discovery_errors:             # surface failed servers to user
             └─ frontend.on_status("MCP server {prefix!r} failed...")  # empty on happy path
 ```
@@ -386,6 +386,10 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server map (JSON) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level default retry budget; write-once tools override to 1, network tools override to 3 at registration |
 | `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | Max chars of primary input captured as `scope` metadata in sub-agent tool results |
+| `subagent_max_requests_coder` | `CO_CLI_SUBAGENT_MAX_REQUESTS_CODER` | `10` | Max LLM requests per coder sub-agent run |
+| `subagent_max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | Max LLM requests per research sub-agent run (budget shared across retry attempts) |
+| `subagent_max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | Max LLM requests per analysis sub-agent run |
+| `subagent_max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | Max LLM requests per thinking sub-agent run |
 
 ## 4. Files
 
@@ -410,7 +414,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
 | `co_cli/tools/_display_hints.py` | Tool display metadata: `TOOL_START_DISPLAY_ARG`, `get_tool_start_args_display()`, `format_tool_result_for_display()` — maps tool names to display arg keys and formats tool results for the stream renderer |
 | `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
-| `co_cli/tools/_background.py` | `TaskStatus`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
+| `co_cli/tools/_background.py` | `TaskStatusEnum`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
 | `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |
 | `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` — shared error helpers |
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |

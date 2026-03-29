@@ -13,7 +13,8 @@ if TYPE_CHECKING:
     from co_cli.deps import CoServices, CoDeps
     from co_cli.display._core import Frontend
 
-from co_cli.config import ROLE_ANALYSIS
+from co_cli._model_factory import ResolvedModel
+from co_cli.config import ROLE_ANALYSIS, ROLE_SUMMARIZATION
 from co_cli.memory._lifecycle import persist_memory as _persist_memory
 
 from pydantic import BaseModel
@@ -106,7 +107,6 @@ async def analyze_for_signals(
     if not window.strip():
         return SignalResult(found=False)
 
-    from co_cli._model_factory import ResolvedModel
     fallback = ResolvedModel(model=model, settings=None)
 
     try:
@@ -135,7 +135,7 @@ async def handle_signal(
     signal: SignalResult,
     deps: "CoDeps",
     frontend: "Frontend",
-    model: Any,
+    _model: Any,
 ) -> None:
     """Apply admission policy then persist or prompt for a detected signal."""
     if not signal.found or not signal.candidate or not signal.tag:
@@ -146,11 +146,16 @@ async def handle_signal(
             signal.tag,
         )
         return
+    _fallback = ResolvedModel(model=None, settings=None)
+    _consolidation_resolved = (
+        deps.services.model_registry.get(ROLE_SUMMARIZATION, _fallback)
+        if deps.services.model_registry else _fallback
+    )
     tags = [signal.tag] + (["personality-context"] if signal.inject else [])
     if signal.confidence == "high":
         await _persist_memory(
             deps, signal.candidate, tags, None,
-            on_failure="skip", model=model,
+            on_failure="skip", resolved=_consolidation_resolved,
         )
         frontend.on_status(f"Learned: {signal.candidate[:80]}")
     else:
@@ -158,5 +163,5 @@ async def handle_signal(
         if choice in ("y", "a"):
             await _persist_memory(
                 deps, signal.candidate, tags, None,
-                on_failure="add", model=model,
+                on_failure="add", resolved=_consolidation_resolved,
             )

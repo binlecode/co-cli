@@ -25,7 +25,17 @@ DEFAULT_OLLAMA_NOREASON_MODEL: dict[str, Any] = {
 }
 
 
-DEFAULT_OLLAMA_REASONING_MODEL = "qwen3.5:35b-a3b-think"
+DEFAULT_OLLAMA_REASONING_MODEL: dict[str, Any] = {
+    "model": "qwen3.5:35b-a3b-think",
+    "provider": "ollama-openai",
+    "api_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_tokens": 32768,
+        "num_ctx": 131072,
+        "num_predict": 32768,
+    },
+}
 # Summarization reuses the think model over the OpenAI-compatible Ollama API.
 # Request-level reasoning_effort="none" suppresses reasoning output while keeping
 # the same weights resident, avoiding an instruct-model swap.
@@ -144,7 +154,7 @@ _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
 }
 
 
-class ModelEntry(BaseModel):
+class ModelConfig(BaseModel):
     """A single model entry in a role chain, with optional API parameters."""
 
     model: str
@@ -190,6 +200,10 @@ DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS = 20
 DEFAULT_MEMORY_INJECTION_MAX_CHARS = 2000
 DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["correction", "preference"]
 DEFAULT_SUBAGENT_SCOPE_CHARS = 120
+DEFAULT_SUBAGENT_MAX_REQUESTS_CODER = 10
+DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH = 10
+DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS = 8
+DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING = 3
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_SHELL_MAX_TIMEOUT = 600
@@ -237,7 +251,7 @@ class Settings(BaseModel):
     knowledge_embedding_model: str = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_MODEL)
     knowledge_embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
     knowledge_cross_encoder_reranker_url: str | None = Field(default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL)
-    knowledge_llm_reranker: ModelEntry | None = Field(default=None)
+    knowledge_llm_reranker: ModelConfig | None = Field(default=None)
     knowledge_embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
 
     # Memory lifecycle (notes with gravity)
@@ -256,6 +270,11 @@ class Settings(BaseModel):
     memory_injection_max_chars: int = Field(default=DEFAULT_MEMORY_INJECTION_MAX_CHARS, ge=100)
     # Max chars of the delegated task/query shown in delegation result scope line
     subagent_scope_chars: int = Field(default=DEFAULT_SUBAGENT_SCOPE_CHARS, ge=10)
+    # Per-role default request budgets for subagent calls
+    subagent_max_requests_coder: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_CODER, ge=1)
+    subagent_max_requests_research: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH, ge=1)
+    subagent_max_requests_analysis: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS, ge=1)
+    subagent_max_requests_thinking: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING, ge=1)
 
     # Knowledge chunking
     knowledge_chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)
@@ -321,7 +340,7 @@ class Settings(BaseModel):
             elif isinstance(model, dict):
                 parsed[str(role)] = model
             else:
-                # Already a ModelEntry instance (re-validation path)
+                # Already a ModelConfig instance (re-validation path)
                 parsed[str(role)] = model.model_dump() if hasattr(model, "model_dump") else {"model": str(model)}
         return parsed
 
@@ -364,7 +383,7 @@ class Settings(BaseModel):
     session_ttl_minutes: int = Field(default=DEFAULT_SESSION_TTL_MINUTES, ge=1)
 
     # Role model: one model per role. Mandatory role: reasoning (main agent).
-    role_models: dict[str, ModelEntry] = Field(default_factory=dict)
+    role_models: dict[str, ModelConfig] = Field(default_factory=dict)
 
     # LLM Settings (Gemini / Ollama)
     llm_api_key: Optional[str] = Field(default=None)
@@ -425,6 +444,10 @@ class Settings(BaseModel):
             "memory_auto_save_tags": "CO_CLI_MEMORY_AUTO_SAVE_TAGS",
             "memory_injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
             "subagent_scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",
+            "subagent_max_requests_coder": "CO_CLI_SUBAGENT_MAX_REQUESTS_CODER",
+            "subagent_max_requests_research": "CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH",
+            "subagent_max_requests_analysis": "CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS",
+            "subagent_max_requests_thinking": "CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING",
             "knowledge_chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
             "knowledge_chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
             "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",
@@ -446,7 +469,7 @@ class Settings(BaseModel):
                 data[field] = val
 
         # Per-role model overrides — merge per-key, not whole-dict replacement.
-        # Plain strings from env vars are coerced to ModelEntry by _parse_role_models.
+        # Plain strings from env vars are coerced to ModelConfig by _parse_role_models.
         role_models_env: dict[str, str] = {}
         for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
             env_var = f"CO_MODEL_ROLE_{role.upper()}"

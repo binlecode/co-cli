@@ -62,8 +62,8 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
     # This formula holds only while tool_names is seeded from tool_approvals.keys() in build_agent()
     # and extended exclusively by discover_mcp_tools(). Any future addition to tool_names outside
     # that path will silently corrupt this count.
-    native_tool_count = len(ctx.deps.session.tool_approvals)
-    mcp_tool_count = len(ctx.deps.session.tool_names) - native_tool_count
+    native_tool_count = len(ctx.deps.capabilities.tool_approvals)
+    mcp_tool_count = len(ctx.deps.capabilities.tool_names) - native_tool_count
 
     if mcp_configured == 0:
         lines.append("MCP: none configured")

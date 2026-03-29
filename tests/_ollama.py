@@ -5,22 +5,30 @@ from co_cli.config import DEFAULT_LLM_HOST
 
 
 async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) -> None:
-    """Load model into GPU VRAM before the test timeout window starts.
+    """Load model into GPU VRAM and flush stale KV cache before the test timeout window starts.
 
-    Checks /api/ps first; only loads if the model is not already resident.
+    Always issues a minimal /api/generate request regardless of load state:
+    - If model is absent: loads it into VRAM (may take several minutes for large models).
+    - If model is present: flushes the stale KV cache from previous inference so the
+      next real call starts from a clean slot and is not delayed by cache eviction.
+
     Uses keep_alive=-1 to pin the model for the duration of the test session.
-    Loading a 28GB+ model takes several minutes — call this before asyncio.timeout.
+    Call this before asyncio.timeout for any LLM-calling test.
     """
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"{llm_host}/api/ps", timeout=5)
         loaded = {m["name"] for m in resp.json().get("models", [])}
         if model_name not in loaded:
             print(f"\n[ollama] loading {model_name} into VRAM (this may take several minutes)...", flush=True)
-            await client.post(
-                f"{llm_host}/api/generate",
-                json={"model": model_name, "prompt": "", "stream": False, "keep_alive": -1},
-                timeout=300,
-            )
-            print(f"[ollama] {model_name} ready", flush=True)
         else:
-            print(f"\n[ollama] {model_name} already loaded", flush=True)
+            print(f"\n[ollama] {model_name} loaded — priming inference path...", flush=True)
+        # Generate exactly 1 token to fully prime GPU compute paths and flush stale KV cache.
+        # An empty-prompt call does not generate tokens and leaves compute paths cold;
+        # a 1-token generation runs the full forward pass, ensuring subsequent timed calls
+        # are not delayed by first-call GPU state initialization.
+        await client.post(
+            f"{llm_host}/api/generate",
+            json={"model": model_name, "prompt": "hi", "stream": False, "keep_alive": -1, "options": {"num_predict": 1}},
+            timeout=300,
+        )
+        print(f"[ollama] {model_name} ready", flush=True)

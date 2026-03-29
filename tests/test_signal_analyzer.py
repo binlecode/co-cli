@@ -17,6 +17,7 @@ from co_cli.config import settings, ROLE_REASONING
 from co_cli.deps import CoConfig, CoServices
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
+from tests._timeouts import LLM_REASONING_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -135,7 +136,7 @@ async def test_analyze_correction():
     """Clear correction classifies as correction with high confidence and inject=True."""
     messages = [_user("don't use trailing comments in the code")]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,
@@ -152,7 +153,7 @@ async def test_analyze_preference_detected():
     """Stated preference message is detected as a signal."""
     messages = [_user("I prefer shorter responses")]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,
@@ -167,7 +168,7 @@ async def test_analyze_no_signal():
     """Neutral question produces no signal."""
     messages = [_user("what time is it in Tokyo?")]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,
@@ -181,7 +182,7 @@ async def test_inject_false_for_ephemeral():
     """Session-scoped decision produces inject=False."""
     messages = [_user("let's use React for this project, just this one")]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,
@@ -201,7 +202,7 @@ async def test_analyze_model_registry_none_returns_signal_result():
     null_services = CoServices(shell=ShellBackend(), model_registry=None)
     messages = [_user("what time is it in Tokyo?")]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,
@@ -228,7 +229,7 @@ async def test_neutrality_guardrail_blocks_assistant_style():
         _user("ok thanks"),
     ]
     await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(60):
+    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
         result = await analyze_for_signals(
             messages,
             _RESOLVED_MODEL,

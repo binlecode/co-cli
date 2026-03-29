@@ -3,7 +3,7 @@ from typing import Any
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.tools._shell_policy import ShellDecision, evaluate_shell_command
+from co_cli.tools._shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools._errors import terminal_error
 
 
@@ -38,9 +38,9 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
-    if policy.decision == ShellDecision.DENY:
+    if policy.decision == ShellDecisionEnum.DENY:
         return terminal_error(policy.reason)
-    if policy.decision == ShellDecision.REQUIRE_APPROVAL:
+    if policy.decision == ShellDecisionEnum.REQUIRE_APPROVAL:
         if not ctx.tool_call_approved:
             raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW or tool_call_approved: fall through to execution

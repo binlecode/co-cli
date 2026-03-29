@@ -2,6 +2,8 @@
 
 import asyncio
 import dataclasses
+
+from tests._timeouts import SUBPROCESS_START_TIMEOUT_SECS, SUBPROCESS_TIMEOUT_SECS
 import os
 import yaml
 from datetime import datetime, timedelta, timezone
@@ -10,10 +12,10 @@ from pathlib import Path
 import pytest
 
 from co_cli.prompts._assembly import _build_system_prompt
-from co_cli.config import ModelEntry
+from co_cli.config import ModelConfig
 from co_cli.bootstrap._banner import display_welcome_banner
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reranker, restore_session, sync_knowledge
-from co_cli.context._types import OpeningContextState, SafetyState
+from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
 from co_cli.display._core import TerminalFrontend, console
@@ -38,7 +40,7 @@ def _make_deps(
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
     services = CoServices(shell=ShellBackend(), knowledge_index=knowledge_index)
-    runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+    runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
 
 
@@ -218,7 +220,7 @@ def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
     """LLM reranker with gemini provider but no API key → check_reranker_llm returns error → reranker nulled."""
     config = CoConfig(
         knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
         llm_provider="gemini",
         llm_api_key=None,
     )
@@ -231,7 +233,7 @@ def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
     """LLM reranker with Ollama provider but unreachable host → reranker nulled (warn != ok)."""
     config = CoConfig(
         knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
         llm_provider="ollama-openai",
         llm_host="http://localhost:1",
     )
@@ -244,7 +246,7 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
     """TEI dead + LLM reranker with no API key → both nulled, two separate status messages."""
     config = CoConfig(
         knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
-        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
         llm_provider="gemini",
         llm_api_key=None,
     )
@@ -275,14 +277,14 @@ def test_mcp_tool_names_unchanged_when_enter_async_context_fails(tmp_path: Path)
     }
     deps = _make_deps(tmp_path, mcp_servers=mcp_servers)
     agent_result = build_agent(config=deps.config)
-    deps.tools.tool_names = list(agent_result.tool_names)
-    initial_tool_count = len(deps.tools.tool_names)
+    deps.capabilities.tool_names = list(agent_result.tool_names)
+    initial_tool_count = len(deps.capabilities.tool_names)
 
     async def _run() -> None:
         stack = AsyncExitStack()
         _mcp_init_ok = False
         try:
-            async with asyncio.timeout(5):
+            async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
                 await stack.enter_async_context(agent_result.agent)
             _mcp_init_ok = True
         except Exception:
@@ -299,9 +301,9 @@ def test_mcp_tool_names_unchanged_when_enter_async_context_fails(tmp_path: Path)
         # We replicate the exact guard from _chat_loop here to confirm its effect.
         if deps.config.mcp_servers and _mcp_init_ok:
             mcp_tool_names, _errs = await discover_mcp_tools(agent_result.agent, exclude=set(agent_result.tool_names))
-            deps.tools.tool_names = deps.tools.tool_names + mcp_tool_names
+            deps.capabilities.tool_names = deps.capabilities.tool_names + mcp_tool_names
 
-        assert len(deps.tools.tool_names) == initial_tool_count, (
+        assert len(deps.capabilities.tool_names) == initial_tool_count, (
             "tool_names must not grow when MCP init fails — discover_mcp_tools must be skipped"
         )
 
@@ -314,16 +316,16 @@ def test_display_welcome_banner_reads_counts_from_deps(tmp_path: Path) -> None:
     when it is empty.
     """
     deps = _make_deps(tmp_path, mcp_servers={})
-    deps.tools.tool_names = ["tool_a", "tool_b", "tool_c"]
-    deps.session.skill_registry = [{"name": "skill_x"}, {"name": "skill_y"}]
-    deps.session.slash_command_count = 2
+    deps.capabilities.tool_names = ["tool_a", "tool_b", "tool_c"]
+    deps.capabilities.skill_registry = [{"name": "skill_x"}, {"name": "skill_y"}]
+    deps.capabilities.slash_command_count = 2
 
     with console.capture() as cap:
         display_welcome_banner(deps, [])
     output = cap.get()
 
-    assert "Tools: 3" in output, "Banner must show tool count from deps.tools.tool_names"
-    assert "Skills: 2" in output, "Banner must show skill count from deps.session.skill_registry"
+    assert "Tools: 3" in output, "Banner must show tool count from deps.capabilities.tool_names"
+    assert "Skills: 2" in output, "Banner must show skill count from deps.capabilities.skill_registry"
     assert "MCP: 0" in output, "Banner must show MCP count from deps.config.mcp_servers"
     assert "Commands:" in output, "Banner must show slash command count from BUILTIN_COMMANDS"
     assert "✓ Ready" in output, "Banner must show Ready status"
@@ -349,13 +351,13 @@ async def test_initialize_session_capabilities_no_mcp_tool_names_unchanged(tmp_p
     from co_cli.bootstrap._bootstrap import initialize_session_capabilities
 
     deps = _make_deps(tmp_path, mcp_servers={})
-    initial_tool_names = list(deps.tools.tool_names)
+    initial_tool_names = list(deps.capabilities.tool_names)
     agent = build_agent(config=deps.config).agent
 
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=True)
 
-    assert deps.tools.tool_names == initial_tool_names, (
+    assert deps.capabilities.tool_names == initial_tool_names, (
         "No MCP servers: tool_names must be unchanged after initialize_session_capabilities"
     )
     assert result.skill_count >= 1, (
@@ -378,16 +380,16 @@ async def test_initialize_session_capabilities_mcp_skipped_when_init_failed(tmp_
         "test-server": MCPServerConfig(url="http://127.0.0.1:19998/mcp", prefix="test", timeout=2)
     }
     deps = _make_deps(tmp_path, mcp_servers=mcp_servers)
-    initial_tool_names = list(deps.tools.tool_names)
+    initial_tool_names = list(deps.capabilities.tool_names)
     agent = build_agent(config=deps.config).agent
 
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
 
-    assert deps.tools.tool_names == initial_tool_names, (
+    assert deps.capabilities.tool_names == initial_tool_names, (
         "mcp_init_ok=False: tool_names must be unchanged — discovery must be skipped"
     )
-    assert deps.tools.mcp_discovery_errors == {}, (
+    assert deps.capabilities.mcp_discovery_errors == {}, (
         "mcp_init_ok=False: mcp_discovery_errors must be empty — no discovery attempt made"
     )
 
@@ -412,10 +414,10 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     deps = dataclasses.replace(deps, config=dataclasses.replace(deps.config, skills_dir=skills_dir))
     agent = build_agent(config=deps.config).agent
 
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
 
-    skill_names = [s["name"] for s in deps.session.skill_registry]
+    skill_names = [s["name"] for s in deps.capabilities.skill_registry]
     assert "test-bootstrap-skill" in skill_names, (
         "Project skill must appear in skill_registry after initialize_session_capabilities"
     )
@@ -439,7 +441,7 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
             mcp_servers={},
         )
         services = CoServices(shell=ShellBackend(), knowledge_index=None)
-        runtime = CoRuntimeState(opening_ctx_state=OpeningContextState(), safety_state=SafetyState())
+        runtime = CoRuntimeState(safety_state=SafetyState())
         deps = CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
         result = restore_session(deps, TerminalFrontend())
         assert isinstance(result, dict), "restore_session() must return a session dict even when save fails"

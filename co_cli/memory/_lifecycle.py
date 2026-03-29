@@ -14,6 +14,7 @@ from typing import Any, Literal
 import yaml
 from opentelemetry import trace as otel_trace
 
+from co_cli._model_factory import ResolvedModel
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
@@ -72,7 +73,7 @@ async def persist_memory(
     provenance: str | None = None,
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
-    model: Any = None,
+    resolved: ResolvedModel | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
 ) -> ToolResult:
@@ -90,7 +91,8 @@ async def persist_memory(
         title: Override filename stem. When provided, dedup is skipped.
         on_failure: Behavior when consolidation fails. "add" = safe fallback to ADD
                     (explicit save path). "skip" = drop write on failure (auto-signal path).
-        model: LLM model for consolidation. When None, consolidation is skipped.
+        resolved: Pre-built model + settings for consolidation. When None or model is None,
+                  consolidation is skipped.
 
     Returns:
         dict with display, path, memory_id, action keys.
@@ -98,7 +100,7 @@ async def persist_memory(
     """
     with _TRACER.start_as_current_span("co.memory.write") as span:
         span.set_attribute("memory.provenance", provenance or "auto")
-        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, model, artifact_type, always_on)
+        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, resolved, artifact_type, always_on)
 
 
 async def _persist_memory_inner(
@@ -109,7 +111,7 @@ async def _persist_memory_inner(
     provenance: str | None = None,
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
-    model: Any = None,
+    resolved: ResolvedModel | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
 ) -> dict[str, Any]:
@@ -183,18 +185,15 @@ async def _persist_memory_inner(
                     logger.warning(f"Failed to reindex consolidated memory {match.id}: {e}")
             return result
 
-    # Step 2b: LLM consolidation (when model is provided)
-    if model is not None:
+    # Step 2b: LLM consolidation (when resolved model is available)
+    if resolved is not None and resolved.model is not None:
         try:
-            from co_cli.memory._consolidator import extract_facts, resolve, build_alias_map
+            from co_cli.memory._consolidator import consolidate
 
             timeout = deps.config.memory_consolidation_timeout_seconds
-            facts = await extract_facts(content, model, timeout_seconds=timeout)
-            candidates = sorted(
-                memories, key=lambda m: m.created, reverse=True
-            )[:deps.config.memory_consolidation_top_k]
-            plan = await resolve(facts, candidates, model, timeout_seconds=timeout)
-            alias_map = build_alias_map(candidates)
+            candidates = sorted(memories, key=lambda m: m.created, reverse=True)[:deps.config.memory_consolidation_top_k]
+            alias_map = {f"M{i+1}": entry for i, entry in enumerate(candidates)}
+            plan = await consolidate(content, candidates, resolved, timeout_seconds=timeout)
             apply_plan_atomically(plan, alias_map, content)
 
             has_add = any(a.action == "ADD" for a in plan.actions)

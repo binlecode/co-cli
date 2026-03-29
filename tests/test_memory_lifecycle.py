@@ -6,16 +6,19 @@ and timeout-driven on_failure behavior (timeout=0 via CoDeps, no mocks).
 
 import asyncio
 from dataclasses import replace
+
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
-from co_cli.config import settings, ROLE_REASONING
+from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction, build_alias_map
+from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction
 from co_cli.memory._lifecycle import apply_plan_atomically, persist_memory
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.memory._signal_detector import SignalResult, handle_signal as _handle_signal
@@ -23,7 +26,7 @@ from co_cli.tools.memory import MemoryEntry, _load_memories
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-_RESOLVED_MODEL = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None)).model
+_RESOLVED = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +243,7 @@ def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path):
         persist_memory(
             deps, "Unique xylophone-fallback-test memory",
             ["preference"], None,
-            on_failure="add", model=_RESOLVED_MODEL,
+            on_failure="add", resolved=_RESOLVED,
         )
     )
 
@@ -268,7 +271,7 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
         persist_memory(
             deps, "Signal candidate xylophone-skip-test memory",
             None, None,
-            on_failure="skip", model=_RESOLVED_MODEL,
+            on_failure="skip", resolved=_RESOLVED,
         )
     )
 
@@ -314,3 +317,67 @@ def test_admission_policy(tmp_path: Path) -> None:
         deps, frontend, None,
     ))
     assert len(list(mem_dir.glob("*.md"))) == 1
+
+
+# ---------------------------------------------------------------------------
+# LLM timing — single-call consolidation must complete within budget
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consolidation_single_call_within_budget(tmp_path: Path):
+    """consolidate() returns a valid plan within 20s and obeys schema invariants.
+
+    Timing regression guard: old two-phase approach (extract_facts + resolve) took
+    12-30s on a thinking model. New single-call path must complete within 20s.
+
+    Schema invariants verified:
+    - ADD action must have target_alias=None
+    - UPDATE/DELETE actions must have target_alias set to a valid existing alias
+    - Candidate with no match in existing memories must produce at least one ADD
+    """
+    from co_cli.memory._consolidator import consolidate
+    from tests._ollama import ensure_ollama_warm
+
+    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    existing = [
+        _seed_memory(memory_dir, 1, "User prefers Python for scripting", tags=["preference"]),
+        _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
+        _seed_memory(memory_dir, 3, "User avoids global state in tools", tags=["preference"]),
+    ]
+    valid_aliases = {f"M{i}" for i in range(1, len(existing) + 1)}
+
+    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        plan = await consolidate(
+            "User prefers dark mode for all terminal applications",
+            existing,
+            resolved,
+            timeout_seconds=LLM_NON_REASONING_TIMEOUT_SECS,
+        )
+
+    assert len(plan.actions) > 0, "consolidate() must return at least one action"
+
+    # Schema invariants: target_alias rules per action type
+    for action in plan.actions:
+        if action.action in ("UPDATE", "DELETE"):
+            assert action.target_alias is not None, (
+                f"{action.action} action must set target_alias; got None"
+            )
+            assert action.target_alias in valid_aliases, (
+                f"{action.action} target_alias {action.target_alias!r} is not a valid alias "
+                f"(valid: {sorted(valid_aliases)})"
+            )
+        elif action.action == "ADD":
+            assert action.target_alias is None, (
+                f"ADD action must have target_alias=None; got {action.target_alias!r}"
+            )
+
+    # Dark mode is genuinely new — none of the existing memories mention it
+    actions_taken = {a.action for a in plan.actions}
+    assert "ADD" in actions_taken, (
+        f"Dark mode preference is new information; expected ADD in plan but got {actions_taken}"
+    )

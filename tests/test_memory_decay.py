@@ -16,7 +16,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
 def _seed_memory(

@@ -12,7 +12,7 @@ from co_cli.bootstrap._check import (
     check_embedder,
     check_cross_encoder,
 )
-from co_cli.config import ModelEntry, ROLE_REASONING
+from co_cli.config import ModelConfig, ROLE_REASONING
 from co_cli.deps import CoConfig
 
 
@@ -74,8 +74,8 @@ def test_check_agent_llm_optional_model_missing_does_not_stamp_unreachable() -> 
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
             role_models={
-                ROLE_REASONING: ModelEntry(model="my-reasoning-model"),
-                "coding": ModelEntry(model="missing-coder"),
+                ROLE_REASONING: ModelConfig(model="my-reasoning-model"),
+                "coding": ModelConfig(model="missing-coder"),
             },
         ))
         assert result.status == "warn"
@@ -90,7 +90,7 @@ def test_check_agent_llm_all_models_available_returns_ok() -> None:
         result = check_agent_llm(CoConfig(
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
-            role_models={ROLE_REASONING: ModelEntry(model="my-reasoning-model")},
+            role_models={ROLE_REASONING: ModelConfig(model="my-reasoning-model")},
         ))
         assert result.status == "ok"
         assert result.ok
@@ -104,7 +104,7 @@ def test_check_agent_llm_reasoning_model_missing_returns_error() -> None:
         result = check_agent_llm(CoConfig(
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
-            role_models={ROLE_REASONING: ModelEntry(model="missing-model")},
+            role_models={ROLE_REASONING: ModelConfig(model="missing-model")},
         ))
         assert result.status == "error"
         assert not result.ok
@@ -120,8 +120,8 @@ def test_check_agent_llm_optional_role_missing_returns_warn() -> None:
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
             role_models={
-                ROLE_REASONING: ModelEntry(model="my-reasoning-model"),
-                "coding": ModelEntry(model="missing-coder"),
+                ROLE_REASONING: ModelConfig(model="my-reasoning-model"),
+                "coding": ModelConfig(model="missing-coder"),
             },
         ))
         assert result.status == "warn"
@@ -170,7 +170,7 @@ def test_check_reranker_llm_not_configured_returns_skipped() -> None:
 
 def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
     config = CoConfig(
-        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
         llm_provider="gemini",
         llm_api_key=None,
     )
@@ -181,7 +181,7 @@ def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
 
 def test_check_reranker_llm_gemini_with_key_returns_ok() -> None:
     config = CoConfig(
-        knowledge_llm_reranker=ModelEntry(provider="gemini", model="gemini-2.0-flash"),
+        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
         llm_provider="gemini",
         llm_api_key="test-key",
     )
@@ -194,7 +194,7 @@ def test_check_reranker_llm_ollama_model_present_returns_ok() -> None:
     server, port = _make_ollama_server(["reranker-model"])
     try:
         config = CoConfig(
-            knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+            knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
         )
@@ -207,7 +207,7 @@ def test_check_reranker_llm_ollama_model_present_returns_ok() -> None:
 
 def test_check_reranker_llm_ollama_unreachable_returns_warn() -> None:
     config = CoConfig(
-        knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
         llm_provider="ollama-openai",
         llm_host="http://localhost:1",
     )
@@ -222,7 +222,7 @@ def test_check_reranker_llm_explicit_ollama_provider_overrides_gemini_session() 
     server, port = _make_ollama_server(["reranker-model"])
     try:
         config = CoConfig(
-            knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+            knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
             llm_provider="gemini",
             llm_api_key="some-key",
             llm_host=f"http://127.0.0.1:{port}",
@@ -239,7 +239,7 @@ def test_check_reranker_llm_ollama_model_absent_returns_error() -> None:
     server, port = _make_ollama_server(["other-model"])
     try:
         config = CoConfig(
-            knowledge_llm_reranker=ModelEntry(provider="ollama-openai", model="reranker-model"),
+            knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
             llm_provider="ollama-openai",
             llm_host=f"http://127.0.0.1:{port}",
         )
