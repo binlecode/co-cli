@@ -47,7 +47,7 @@ Read every file listed in `files:`. If a file does not exist: immediate blocking
 For every requirement in the task description and `done_when`:
 
 - **Find the exact file:line that confirms it is implemented.** Do not accept a description — read the code.
-- **Trace the call path** for any integration point: identify caller → callee chain. Confirm the chain exists in source, not just in comments or docs.
+- **Trace the call path** for every public function or method changed in this delivery: identify caller → callee chain. Confirm the chain exists in source, not just in comments or docs. Do not stop at functions that don't look like "integration points" — trace all of them.
 - **Check for existing implementations** that already solve the stated problem. If the code was already there before this task, the implementation may be redundant or conflicting.
 - **Run `done_when` literally** — same standard as orchestrate-dev Step 5. Do not assume it passes because the delivery run verified it. Re-execute now.
 

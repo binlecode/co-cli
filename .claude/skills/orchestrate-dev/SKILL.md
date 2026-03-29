@@ -49,14 +49,20 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` 
    - **Execution timing follows the dependency graph, not role:** TL and Dev subagents whose tasks are fully independent run in parallel. When a Dev task has a prerequisite owned by TL, TL completes that prerequisite first, then spawns the Dev subagent. Never spawn a Dev subagent for a task whose prerequisites are unfinished.
    - **When spawning each Dev subagent**, pass the task spec AND this explicit contract alongside it:
      ```
+     Before implementing: read CLAUDE.md's Engineering Rules section and apply every item.
+     The shortlist below is the minimum floor — the full Engineering Rules section
+     contains additional constraints (tool patterns, display conventions, security) that apply.
+
      Constraints (non-negotiable):
      - No unit tests under any circumstances (repo policy)
      - No over-engineering — implement the minimal change that satisfies the spec
      - No dead code — remove any unreachable code your change leaves behind
      - No stale imports — remove any import unused after your edit
      - No lazy imports outside patterns already present in the file
-     - Run pytest scoped to your affected test files before reporting back
-     - Report: files changed, what was done, test results, any ⚠ Extra file: paths
+     - Run pytest scoped to your affected test files. Fix any failures before reporting —
+       do not surface red tests to TL. If a failure cannot be fixed without a design
+       decision, stop and escalate rather than reporting a broken result.
+     - Report: files changed, what was done, test outcome (green or escalated), any ⚠ Extra file: paths
      ```
    - Announce assignments and sequencing before any work begins:
      ```
