@@ -16,6 +16,7 @@ from typing import Any, TypeAlias
 from pydantic_ai.messages import ModelRequest
 from pydantic_ai.settings import ModelSettings
 
+from co_cli.commands._skill_types import SkillConfig
 from co_cli.config import ROLE_SUMMARIZATION, ROLE_REASONING
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
@@ -73,35 +74,15 @@ class SlashCommand:
     handler: Callable[[CommandContext, str], Awaitable[list[Any] | None]]
 
 
-@dataclass(frozen=True)
-class SkillCommand:
-    """A dynamically-loaded skill command (from .co-cli/skills/*.md)."""
-
-    name: str
-    description: str = ""
-    body: str = ""
-    argument_hint: str = ""
-    user_invocable: bool = True
-    disable_model_invocation: bool = False
-    requires: dict = field(default_factory=dict)
-    skill_env: dict[str, str] = field(default_factory=dict)
-
-
-# Module-level skill registry — populated by chat_loop() via _load_skills().
-# dispatch() accesses this directly; no parameter passing needed.
-SKILL_COMMANDS: dict[str, SkillCommand] = {}
-
-
-def set_skill_commands(new_skills: dict[str, SkillCommand], session: CoSessionState) -> None:
-    """Replace SKILL_COMMANDS in-place and update session.skill_registry."""
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(new_skills)
+def set_skill_commands(new_skills: dict[str, SkillConfig], session: CoSessionState) -> None:
+    """Set session.skill_commands and update session.skill_registry."""
+    session.skill_commands = new_skills
     session.skill_registry = [
         {"name": s.name, "description": s.description}
-        for s in SKILL_COMMANDS.values()
+        for s in new_skills.values()
         if s.description and not s.disable_model_invocation
     ]
-    session.slash_command_count = len([s for s in SKILL_COMMANDS.values() if s.user_invocable])
+    session.slash_command_count = len([s for s in new_skills.values() if s.user_invocable])
 
 
 # Env vars that skill-env may never override — security boundary.
@@ -142,18 +123,18 @@ def _scan_skill_content(content: str) -> list[str]:
     return warnings
 
 
-def _build_completer_words() -> list[str]:
+def _build_completer_words(skill_commands: dict) -> list[str]:
     """Single source of truth for the REPL tab-completer word list."""
     return [f"/{name}" for name in BUILTIN_COMMANDS] + [
-        f"/{name}" for name, s in SKILL_COMMANDS.items() if s.user_invocable
+        f"/{name}" for name, s in skill_commands.items() if s.user_invocable
     ]
 
 
 def _refresh_completer(ctx: CommandContext) -> None:
-    """Refresh the REPL completer words after a SKILL_COMMANDS mutation."""
+    """Refresh the REPL completer words after a skill_commands mutation."""
     if ctx.completer is None:
         return
-    ctx.completer.words = _build_completer_words()
+    ctx.completer.words = _build_completer_words(ctx.deps.session.skill_commands)
 
 
 
@@ -195,8 +176,8 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table.add_column("Description")
     for cmd in BUILTIN_COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
-    if SKILL_COMMANDS:
-        for skill in SKILL_COMMANDS.values():
+    if ctx.deps.session.skill_commands:
+        for skill in ctx.deps.session.skill_commands.values():
             if skill.user_invocable:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
@@ -404,7 +385,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     subargs = sub[1] if len(sub) > 1 else ""
 
     if subcmd in ("", "list"):
-        if not SKILL_COMMANDS:
+        if not ctx.deps.session.skill_commands:
             console.print("[dim]No skills loaded.[/dim]")
             return None
         table = Table(title="Loaded Skills", border_style="accent", expand=False)
@@ -412,7 +393,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         table.add_column("Description")
         table.add_column("Requires")
         table.add_column("User-Invocable")
-        for skill in SKILL_COMMANDS.values():
+        for skill in ctx.deps.session.skill_commands.values():
             req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
             table.add_row(
                 skill.name,
@@ -445,7 +426,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
         for path in all_paths:
             name = path.stem
-            if name in SKILL_COMMANDS:
+            if name in ctx.deps.session.skill_commands:
                 table.add_row(path.name, "[success]✓ Loaded[/success]", "")
             else:
                 try:
@@ -479,7 +460,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                         console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
                 except Exception:
                     pass
-        old_names = set(SKILL_COMMANDS.keys())
+        old_names = set(ctx.deps.session.skill_commands.keys())
         set_skill_commands(new_skills, ctx.deps.session)
         _refresh_completer(ctx)
         added = set(new_skills.keys()) - old_names
@@ -496,7 +477,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                 console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
         if not added and not removed:
             console.print("[dim]No skill changes.[/dim]")
-        console.print(f"[success]✓ Reloaded {len(SKILL_COMMANDS)} skill(s)[/success]")
+        console.print(f"[success]✓ Reloaded {len(ctx.deps.session.skill_commands)} skill(s)[/success]")
 
     elif subcmd == "upgrade":
         await _upgrade_skill(ctx, subargs)
@@ -584,7 +565,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if not name:
         console.print("[bold red]Usage:[/bold red] /skills upgrade <name>")
         return
-    if name not in SKILL_COMMANDS:
+    if name not in ctx.deps.session.skill_commands:
         console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
         return
     skill_file = ctx.deps.config.skills_dir / f"{name}.md"
@@ -826,7 +807,7 @@ def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
 
 def _load_skill_file(
     path: Path,
-    result: dict[str, SkillCommand],
+    result: dict[str, SkillConfig],
     reserved: set[str],
     settings: Any = None,
 ) -> None:
@@ -857,7 +838,7 @@ def _load_skill_file(
                 if isinstance(k, str) and isinstance(v, str) and k not in _SKILL_ENV_BLOCKED:
                     skill_env[k] = v
 
-        result[name] = SkillCommand(
+        result[name] = SkillConfig(
             name=name,
             description=meta.get("description", ""),
             body=body.strip(),
@@ -871,8 +852,8 @@ def _load_skill_file(
         logger.warning(f"Failed to load skill {path}: {e}")
 
 
-def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillCommand]:
-    """Scan skills directories and return a dict of SkillCommand objects.
+def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillConfig]:
+    """Scan skills directories and return a dict of SkillConfig objects.
 
     Package-default skills (co_cli/skills/) are loaded first.
     Project-local skills (.co-cli/skills/) are loaded second and override
@@ -882,7 +863,7 @@ def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillComma
     added built-in commands are automatically protected without touching this
     function.
     """
-    result: dict[str, SkillCommand] = {}
+    result: dict[str, SkillConfig] = {}
     reserved = set(BUILTIN_COMMANDS.keys())
 
     # Package-default skills (shipped inside the package — available from any directory)
@@ -945,15 +926,8 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
         return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
-    skill = SKILL_COMMANDS.get(name)
+    skill = ctx.deps.session.skill_commands.get(name)
     if skill is not None:
-        # Warn if env from a previous skill dispatch wasn't cleared (double dispatch guard)
-        if ctx.deps.session.active_skill_env:
-            logger.warning(
-                "dispatch: active_skill_env non-empty at skill match — double dispatch in one turn?"
-            )
-        ctx.deps.session.active_skill_env = dict(skill.skill_env)
-        ctx.deps.session.active_skill_name = skill.name
         body = skill.body
         if args and "$ARGUMENTS" in body:
             args_list = args.split()

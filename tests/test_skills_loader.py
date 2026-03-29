@@ -1,6 +1,5 @@
 """Functional tests for the skills loader system (TASK-04 through TASK-07, TASK-13)."""
 
-import asyncio
 import os
 from dataclasses import replace
 import pytest
@@ -15,11 +14,10 @@ from co_cli.commands._commands import (
     _inject_source_url,
     _cmd_skills,
     _install_skill,
-    SkillCommand,
+    SkillConfig,
     BUILTIN_COMMANDS,
     dispatch,
     CommandContext,
-    SKILL_COMMANDS,
     LocalOnly,
     DelegateToAgent,
 )
@@ -29,15 +27,15 @@ from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 
 
-def _make_ctx(skill_commands: dict | None = None) -> CommandContext:
+def _make_ctx() -> CommandContext:
     """Build a minimal CommandContext with real agent."""
-    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=agent,
-        tool_names=tool_names,
+        agent=_r.agent,
+        tool_names=_r.tool_names,
     )
 
 
@@ -79,9 +77,9 @@ def test_load_skills_reserved_name_rejected(tmp_path):
 
 
 def test_skill_command_is_separate_type():
-    """SkillCommand is not a subclass of SlashCommand."""
+    """SkillConfig is not a subclass of SlashCommand."""
     from co_cli.commands._commands import SlashCommand
-    assert not issubclass(SkillCommand, SlashCommand)
+    assert not issubclass(SkillConfig, SlashCommand)
 
 
 @pytest.mark.asyncio
@@ -90,21 +88,16 @@ async def test_dispatch_skill_returns_delegate_to_agent(tmp_path):
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "greet", "Say hello!")
     skill_commands = _load_skills(skills_dir)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(skill_commands)
-    try:
-        ctx = _make_ctx()
-        result = await dispatch("/greet", ctx)
-        assert isinstance(result, DelegateToAgent)
-        assert result.delegated_input == "Say hello!"
-    finally:
-        SKILL_COMMANDS.clear()
+    ctx = _make_ctx()
+    ctx.deps.session.skill_commands.update(skill_commands)
+    result = await dispatch("/greet", ctx)
+    assert isinstance(result, DelegateToAgent)
+    assert result.delegated_input == "Say hello!"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_unknown_skill_returns_local_only(tmp_path):
     """dispatch() with unknown /command returns LocalOnly."""
-    SKILL_COMMANDS.clear()
     ctx = _make_ctx()
     result = await dispatch("/no-such-skill-xyz", ctx)
     assert isinstance(result, LocalOnly)
@@ -158,15 +151,11 @@ async def test_dispatch_skill_arguments_substitution(tmp_path):
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "search", "Search for: $ARGUMENTS")
     skill_commands = _load_skills(skills_dir)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(skill_commands)
-    try:
-        ctx = _make_ctx()
-        result = await dispatch("/search foo bar", ctx)
-        assert isinstance(result, DelegateToAgent)
-        assert result.delegated_input == "Search for: foo bar"
-    finally:
-        SKILL_COMMANDS.clear()
+    ctx = _make_ctx()
+    ctx.deps.session.skill_commands.update(skill_commands)
+    result = await dispatch("/search foo bar", ctx)
+    assert isinstance(result, DelegateToAgent)
+    assert result.delegated_input == "Search for: foo bar"
 
 
 
@@ -288,47 +277,6 @@ def test_skill_env_blocked(tmp_path):
     assert result["testblocked"].skill_env == {"MY_VAR": "ok"}
 
 
-@pytest.mark.asyncio
-async def test_skill_env_dispatch():
-    """dispatch() sets ctx.deps.session.active_skill_env from the matched skill's skill_env."""
-    SKILL_COMMANDS["x"] = SkillCommand(name="x", body="body", skill_env={"MY_VAR": "hello"})
-    try:
-        ctx = _make_ctx()
-        await dispatch("/x", ctx)
-        assert ctx.deps.session.active_skill_env == {"MY_VAR": "hello"}
-    finally:
-        SKILL_COMMANDS.pop("x", None)
-        ctx.deps.session.active_skill_env.clear()
-
-
-def test_skill_env_rollback():
-    """Env vars injected from active_skill_env are restored after simulated CancelledError."""
-    os.environ.pop("TEST_ENV_VAR_XYZ", None)
-
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-    deps.session.active_skill_env = {"TEST_ENV_VAR_XYZ": "injected"}
-
-    # Replicate the injection + try/finally pattern from chat_loop()
-    _saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in deps.session.active_skill_env}
-    os.environ.update(deps.session.active_skill_env)
-
-    assert os.environ.get("TEST_ENV_VAR_XYZ") == "injected"
-
-    try:
-        raise asyncio.CancelledError()
-    except asyncio.CancelledError:
-        pass
-    finally:
-        for k, v in _saved_env.items():
-            if v is not None:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
-        deps.session.active_skill_env.clear()
-
-    assert os.environ.get("TEST_ENV_VAR_XYZ") is None
-
-
 # -- TASK-4: Static skill scanner ------------------------------------------
 
 
@@ -348,19 +296,14 @@ def test_scan_destructive():
 
 @pytest.mark.asyncio
 async def test_skills_reload_picks_up_new_skill(tmp_path):
-    """dispatch('/skills reload') reloads SKILL_COMMANDS from disk."""
+    """dispatch('/skills reload') reloads skill_commands from disk."""
     skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(skills_dir, "reload-test-skill", "body")
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
-    _original = dict(SKILL_COMMANDS)
-    try:
-        result = await dispatch("/skills reload", ctx)
-        assert isinstance(result, LocalOnly)
-        assert "reload-test-skill" in SKILL_COMMANDS
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(_original)
+    result = await dispatch("/skills reload", ctx)
+    assert isinstance(result, LocalOnly)
+    assert "reload-test-skill" in ctx.deps.session.skill_commands
 
 
 # -- P2: Autocompleter live update (TASK-1) --------------------------------
@@ -384,13 +327,8 @@ async def test_completer_update_reload(tmp_path):
     ctx.completer = completer
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
-    _original = dict(SKILL_COMMANDS)
-    try:
-        await _cmd_skills(ctx, "reload")
-        assert "/reload-completer-skill" in ctx.completer.words
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(_original)
+    await _cmd_skills(ctx, "reload")
+    assert "/reload-completer-skill" in ctx.completer.words
 
 
 @pytest.mark.asyncio
@@ -419,13 +357,8 @@ async def test_completer_update_install(tmp_path):
     ctx.completer = completer
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
-    _original = dict(SKILL_COMMANDS)
-    try:
-        await _cmd_skills(ctx, f"install {skill_file}")
-        assert f"/{skill_name}" in ctx.completer.words
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(_original)
+    await _cmd_skills(ctx, f"install {skill_file}")
+    assert f"/{skill_name}" in ctx.completer.words
 
 
 # -- P2: Skill upgrade flow (TASK-3) ---------------------------------------
@@ -448,21 +381,14 @@ async def test_skill_upgrade_no_url(tmp_path):
     skill_file = _write_skill(skills_dir, "noupgrade", original_content)
 
     skill_commands = _load_skills(skills_dir)
-    _original = dict(SKILL_COMMANDS)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS.update(skill_commands)
-    try:
-        ctx = _make_ctx()
-        # ctx.deps.skills_dir must point to the test fixture dir
-        ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
+    ctx = _make_ctx()
+    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
+    ctx.deps.session.skill_commands.update(skill_commands)
 
-        await _cmd_skills(ctx, "upgrade noupgrade")
+    await _cmd_skills(ctx, "upgrade noupgrade")
 
-        # File must be unchanged — proves early exit (no re-fetch, no overwrite)
-        assert skill_file.read_text(encoding="utf-8") == original_content
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(_original)
+    # File must be unchanged — proves early exit (no re-fetch, no overwrite)
+    assert skill_file.read_text(encoding="utf-8") == original_content
 
 
 @pytest.mark.asyncio
@@ -516,27 +442,22 @@ async def test_skill_upgrade_happy_path(tmp_path):
         ctx = _make_ctx()
         ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
 
-        _original = dict(SKILL_COMMANDS)
-        try:
-            # Seed: install the skill via URL so source-url is embedded in frontmatter
-            await _install_skill(ctx, url)
+        # Seed: install the skill via URL so source-url is embedded in frontmatter
+        await _install_skill(ctx, url)
 
-            skill_file = skills_dir / f"{skill_name}.md"
-            assert skill_file.exists()
-            installed_text = skill_file.read_text()
-            assert "source-url:" in installed_text
-            assert "Original body." in installed_text
+        skill_file = skills_dir / f"{skill_name}.md"
+        assert skill_file.exists()
+        installed_text = skill_file.read_text()
+        assert "source-url:" in installed_text
+        assert "Original body." in installed_text
 
-            # Update what the server serves
-            served_file.write_text(updated_body, encoding="utf-8")
+        # Update what the server serves
+        served_file.write_text(updated_body, encoding="utf-8")
 
-            # Upgrade: re-fetch and reinstall from stored source-url
-            await _cmd_skills(ctx, f"upgrade {skill_name}")
+        # Upgrade: re-fetch and reinstall from stored source-url
+        await _cmd_skills(ctx, f"upgrade {skill_name}")
 
-            new_text = skill_file.read_text()
-            assert "Updated body." in new_text
-        finally:
-            SKILL_COMMANDS.clear()
-            SKILL_COMMANDS.update(_original)
+        new_text = skill_file.read_text()
+        assert "Updated body." in new_text
     finally:
         server.shutdown()

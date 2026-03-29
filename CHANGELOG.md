@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-03-29
+
+### Changed
+- **Skill state ownership**: replaced module-global `SKILL_COMMANDS` with `CoSessionState.skill_commands` (`dict[str, SkillConfig]`), extracted `SkillConfig` to `co_cli/commands/_skill_types.py` to break circular import cleanly. Removed hidden session mutations from `dispatch()`. `active_skill_env` field eliminated; `active_skill_name` moved to `CoRuntimeState` (transient per-turn state). All read paths in `_commands.py` and `main.py` now flow through `ctx.deps.session.skill_commands`.
+
 ## [0.5.14] - 2026-03-28
 
 ### Changed

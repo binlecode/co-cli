@@ -17,8 +17,8 @@ from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.commands._commands import (
-    dispatch, CommandContext, SKILL_COMMANDS,
-    SkillCommand, _cmd_help, _cmd_skills,
+    dispatch, CommandContext,
+    SkillConfig, _cmd_help, _cmd_skills,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
 from co_cli.display._core import console
@@ -37,7 +37,7 @@ def _make_ctx(
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
     from pathlib import Path
-    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     config = _CONFIG
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
@@ -49,8 +49,8 @@ def _make_ctx(
     return CommandContext(
         message_history=message_history or [],
         deps=deps,
-        agent=agent,
-        tool_names=tool_names,
+        agent=_r.agent,
+        tool_names=_r.tool_names,
     )
 
 
@@ -62,7 +62,7 @@ def _make_agent_and_deps():
     - resolved_resume: summarization model for post-approval turns
     """
     from co_cli._model_factory import ResolvedModel
-    agent, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     _fallback = ResolvedModel(model=None, settings=None)
     resolved_trigger = _REGISTRY.get(ROLE_REASONING, _fallback)
     resolved_resume = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
@@ -156,23 +156,15 @@ async def test_cmd_compact():
 @pytest.mark.asyncio
 async def test_skills_install_local(tmp_path):
     """/skills install <path> copies file to skills_dir and registers the skill."""
-    from co_cli.commands._commands import SKILL_COMMANDS
-
     src = tmp_path / "myinstallskill.md"
     src.write_text("---\ndescription: My installed skill\n---\nDo something.", encoding="utf-8")
 
     skills_dir = tmp_path / ".co-cli" / "skills"
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
-    orig_skills = dict(SKILL_COMMANDS)
-    SKILL_COMMANDS.clear()
-    try:
-        await _cmd_skills(ctx, f"install {src}")
-        assert (skills_dir / "myinstallskill.md").exists()
-        assert "myinstallskill" in SKILL_COMMANDS
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(orig_skills)
+    await _cmd_skills(ctx, f"install {src}")
+    assert (skills_dir / "myinstallskill.md").exists()
+    assert "myinstallskill" in ctx.deps.session.skill_commands
 
 
 @pytest.mark.asyncio
@@ -389,7 +381,7 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
-    agent, tool_names, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    _r = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
@@ -397,8 +389,8 @@ async def test_forget_command_evicts_fts_row(tmp_path):
             config=CoConfig(memory_dir=memory_dir),
             session=CoSessionState(session_id="test-forget-fts"),
         ),
-        agent=agent,
-        tool_names=tool_names,
+        agent=_r.agent,
+        tool_names=_r.tool_names,
     )
 
     result = await dispatch("/forget 1", ctx)
@@ -429,18 +421,12 @@ async def test_dispatch_system_op_returns_replace_transcript():
 @pytest.mark.asyncio
 async def test_dispatch_skill_returns_delegate_to_agent():
     """Skill dispatch must return DelegateToAgent."""
-    test_skill = SkillCommand(name="test-boundary-skill", body="Do the thing.", description="test")
-    orig = dict(SKILL_COMMANDS)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS["test-boundary-skill"] = test_skill
-    try:
-        ctx = _make_ctx()
-        result = await dispatch("/test-boundary-skill", ctx)
-        assert isinstance(result, DelegateToAgent)
-        assert result.delegated_input == "Do the thing."
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(orig)
+    test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
+    ctx = _make_ctx()
+    ctx.deps.session.skill_commands["test-boundary-skill"] = test_skill
+    result = await dispatch("/test-boundary-skill", ctx)
+    assert isinstance(result, DelegateToAgent)
+    assert result.delegated_input == "Do the thing."
 
 
 @pytest.mark.asyncio
@@ -455,41 +441,12 @@ async def test_dispatch_unknown_command_returns_local_only():
 async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     """Built-in command must win over a skill registered with the same name."""
     # 'clear' is a builtin — registering a skill with the same name must not shadow it
-    test_skill = SkillCommand(name="clear", body="skill body", description="test")
-    orig = dict(SKILL_COMMANDS)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS["clear"] = test_skill
-    try:
-        ctx = _make_ctx(message_history=["msg"])
-        result = await dispatch("/clear", ctx)
-        # Must route to builtin: ReplaceTranscript with cleared history
-        assert isinstance(result, ReplaceTranscript)
-        assert result.history == []
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(orig)
+    test_skill = SkillConfig(name="clear", body="skill body", description="test")
+    ctx = _make_ctx(message_history=["msg"])
+    ctx.deps.session.skill_commands["clear"] = test_skill
+    result = await dispatch("/clear", ctx)
+    # Must route to builtin: ReplaceTranscript with cleared history
+    assert isinstance(result, ReplaceTranscript)
+    assert result.history == []
 
 
-@pytest.mark.asyncio
-async def test_dispatch_sets_active_skill_env_and_name():
-    """dispatch() must populate active_skill_env and active_skill_name for skill turns."""
-    test_skill = SkillCommand(
-        name="test-env-skill",
-        body="Do work.",
-        description="test",
-        skill_env={"MY_TEST_VAR": "hello"},
-    )
-    orig = dict(SKILL_COMMANDS)
-    SKILL_COMMANDS.clear()
-    SKILL_COMMANDS["test-env-skill"] = test_skill
-    try:
-        ctx = _make_ctx()
-        result = await dispatch("/test-env-skill", ctx)
-        assert isinstance(result, DelegateToAgent)
-        assert result.skill_env == {"MY_TEST_VAR": "hello"}
-        assert result.skill_name == "test-env-skill"
-        assert ctx.deps.session.active_skill_name == "test-env-skill"
-        assert ctx.deps.session.active_skill_env == {"MY_TEST_VAR": "hello"}
-    finally:
-        SKILL_COMMANDS.clear()
-        SKILL_COMMANDS.update(orig)

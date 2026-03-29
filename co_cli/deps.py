@@ -59,10 +59,12 @@ DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
 DEFAULT_TASKS_DIR = Path(".co-cli/tasks")
 
+from co_cli.commands._skill_types import SkillConfig
+from co_cli.context._types import CompactionResult, OpeningContextState, SafetyState
+
 if TYPE_CHECKING:
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
-    from co_cli.context._history import OpeningContextState, SafetyState
 
 
 class SessionApprovalRule(NamedTuple):
@@ -267,26 +269,36 @@ class CoConfig:
 
 
 @dataclass
+class CoToolState:
+    """Bootstrap-set tool discovery metadata — shared by reference with sub-agents.
+
+    Populated during agent construction and MCP discovery in main.py; not mutated
+    afterward. Sub-agents receive the same instance via make_subagent_deps
+    (passed by reference), so they always see the correct tool registry.
+    """
+
+    tool_names: list[str] = field(default_factory=list)
+    tool_approvals: dict[str, bool] = field(default_factory=dict)
+    mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class CoSessionState:
     """Mutable tool-visible session state.
 
     State here is readable and writable by tools and slash commands during the
-    session. Sub-agents always receive a fresh instance — no inheritance.
+    session. Sub-agents receive a partially-inherited instance — see make_subagent_deps.
     """
 
     google_creds: Any | None = field(default=None, repr=False)
     google_creds_resolved: bool = False
     session_approval_rules: list[SessionApprovalRule] = field(default_factory=list)
-    active_skill_env: dict[str, str] = field(default_factory=dict)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
     session_id: str = ""
     skill_registry: list[dict] = field(default_factory=list)
-    tool_names: list[str] = field(default_factory=list)
-    tool_approvals: dict[str, bool] = field(default_factory=dict)
-    active_skill_name: str | None = None
+    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     slash_command_count: int = 0
-    mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -298,22 +310,20 @@ class CoRuntimeState:
     should be explicitly justified.
     """
 
-    precomputed_compaction: Any = field(default=None, repr=False)
+    precomputed_compaction: CompactionResult | None = field(default=None, repr=False)
     # turn_usage: authoritative per-turn usage accumulator.
     # Reset to None at the start of each foreground turn by run_turn().
     # The foreground orchestrator merges each segment's usage after _execute_stream_segment().
     # Sub-agent tools may also merge usage into it during the same turn.
     turn_usage: RunUsage | None = None
-    startup_statuses: list[str] = field(default_factory=list)
     # Installed by StreamRenderer.install_progress() on FunctionToolCallEvent,
     # cleared by StreamRenderer.clear_progress() on FunctionToolResultEvent.
     # run_turn() sets this to None in its finally block as a safety net.
     # Only one tool owns progress at a time (single-owner model).
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
-    # TYPE_CHECKING-only forward refs — get_type_hints() is unsafe on these fields.
-    # TODO: resolve by extracting a _types.py module to break the circular import properly.
-    opening_ctx_state: "OpeningContextState | None" = field(default=None, repr=False)
-    safety_state: "SafetyState | None" = field(default=None, repr=False)
+    opening_ctx_state: OpeningContextState | None = field(default=None, repr=False)
+    safety_state: SafetyState | None = field(default=None, repr=False)
+    active_skill_name: str | None = None
 
 
 
@@ -324,6 +334,7 @@ class CoDeps:
     Ownership rules:
       services  = injected capabilities (shell, knowledge index, task runner)
       config    = injected read-only settings (API keys, paths, limits, thresholds)
+      tools     = bootstrap-set tool discovery metadata; shared by reference with sub-agents
       session   = mutable tool-visible session state (creds, approvals, todos)
       runtime   = mutable orchestration/processor transient state
 
@@ -333,6 +344,7 @@ class CoDeps:
 
     services: CoServices
     config: CoConfig
+    tools: CoToolState = field(default_factory=CoToolState)
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
@@ -340,14 +352,28 @@ class CoDeps:
 def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     """Create an isolated CoDeps copy for a sub-agent.
 
-    Shares services and config by reference (safe — handles are stateless or
-    thread-safe; config is read-only). Resets session and runtime to clean
-    defaults so the sub-agent does not inherit the main agent's approval grants,
-    pagination tokens, todos, compaction cache, or turn usage.
+    Shares services, config, and tools by reference (safe — handles are stateless
+    or thread-safe; config and tools are read-only after bootstrap).
+
+    Session fields:
+      Inherited: google_creds, google_creds_resolved (resolved once, safe to share),
+                 session_approval_rules (copied — sub-agent grants must not leak to parent),
+                 skill_commands, skill_registry (loaded once at startup).
+      Fresh:     drive_page_tokens, session_todos, session_id, slash_command_count.
+
+    Runtime is reset to clean defaults (no compaction cache, no turn usage).
     """
+    inherited_session = CoSessionState(
+        google_creds=base.session.google_creds,
+        google_creds_resolved=base.session.google_creds_resolved,
+        session_approval_rules=list(base.session.session_approval_rules),
+        skill_commands=base.session.skill_commands,
+        skill_registry=list(base.session.skill_registry),
+    )
     return CoDeps(
         services=base.services,
         config=base.config,
-        session=CoSessionState(),
+        tools=base.tools,
+        session=inherited_session,
         runtime=CoRuntimeState(),
     )

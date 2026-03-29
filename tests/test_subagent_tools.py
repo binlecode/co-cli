@@ -11,12 +11,12 @@ from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
 from co_cli.tools._subagent_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
 from co_cli.config import ModelEntry, settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoToolState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT, _, _ = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
 def _make_ctx() -> RunContext:
@@ -57,36 +57,54 @@ def test_make_coder_agent_registers_file_tools() -> None:
 
 
 def test_make_subagent_deps_resets_session_state() -> None:
-    """make_subagent_deps() resets session/runtime groups; shares services/config."""
-    from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
-    from co_cli.tools._shell_backend import ShellBackend
+    """make_subagent_deps() shares tools by reference, inherits session fields, resets isolated fields."""
+    from co_cli.commands._skill_types import SkillConfig
+    from co_cli.deps import SessionApprovalRule
 
-    dirty = CoDeps(
+    tool_state = CoToolState(
+        tool_names=["shell", "memory"],
+        tool_approvals={"shell": True, "memory": False},
+    )
+    skill = SkillConfig(name="my-skill", body="do it")
+    base = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
             brave_search_api_key="test-key",
             memory_max_count=500,
         ),
+        tools=tool_state,
         session=CoSessionState(
             session_id="parent-session",
-            active_skill_env={"MY_VAR": "value"},
+            google_creds_resolved=True,
+            session_approval_rules=[SessionApprovalRule("shell", "git")],
+            skill_commands={"my-skill": skill},
+            skill_registry=[{"name": "my-skill"}],
             drive_page_tokens={"folder": ["tok1"]},
             session_todos=[{"task": "do something"}],
-            skill_registry=[{"name": "my-skill"}],
         ),
         runtime=CoRuntimeState(
-            precomputed_compaction="some-cached-summary",
+            precomputed_compaction=None,
         ),
     )
 
-    isolated = make_subagent_deps(dirty)
+    isolated = make_subagent_deps(base)
 
-    # Session resets to clean defaults
-    assert isolated.session.session_approval_rules == []
-    assert isolated.session.active_skill_env == {}
+    # tools shared by reference (same tool registry)
+    assert isolated.tools is base.tools
+
+    # Session: inherited fields carry over
+    assert isolated.session.google_creds_resolved is True
+    assert isolated.session.session_approval_rules == [SessionApprovalRule("shell", "git")]
+    assert isolated.session.skill_commands is base.session.skill_commands
+    assert isolated.session.skill_registry == [{"name": "my-skill"}]
+
+    # Approval rules are a copy, not the same list (sub-agent grants must not leak to parent)
+    assert isolated.session.session_approval_rules is not base.session.session_approval_rules
+
+    # Session: isolated fields reset to clean defaults
     assert isolated.session.drive_page_tokens == {}
     assert isolated.session.session_todos == []
-    assert isolated.session.skill_registry == []
+    assert isolated.session.session_id == ""
 
     # Runtime resets to clean defaults
     assert isolated.runtime.precomputed_compaction is None
@@ -95,11 +113,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # Config inherited from parent
     assert isolated.config.brave_search_api_key == "test-key"
     assert isolated.config.memory_max_count == 500
-    # sub-agents get fresh CoSessionState — session_id is not inherited (correct isolation behavior)
-    assert isolated.session.session_id == ""
 
     # Services shared (same object)
-    assert isolated.services is dirty.services
+    assert isolated.services is base.services
 
 
 def test_research_result_model() -> None:
