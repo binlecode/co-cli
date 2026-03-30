@@ -54,14 +54,19 @@ The skill name is always the filename stem. Built-in slash commands are reserved
 
 ### Load Order
 
-Skills are loaded by `_load_skills(skills_dir, settings)` in two passes:
+Skills are loaded in three passes, lowest-priority first:
 
-1. package defaults from `co_cli/skills/*.md`
-2. project-local overrides from `<cwd>/.co-cli/skills/*.md`
+1. **bundled** — package defaults from `co_cli/skills/*.md` (version-controlled; no runtime security scan)
+2. **user-global** — `~/.config/co-cli/skills/*.md` (XDG path from `CoConfig.user_skills_dir`; security scan applied)
+3. **project-local** — `<cwd>/.co-cli/skills/*.md` (highest priority; security scan applied)
 
-Project-local files win on name collision. Loading happens at startup inside `initialize_session_capabilities()` (in `bootstrap/_bootstrap.py`) after MCP initialization and before the welcome banner:
+Later passes win on name collision, so project-local overrides user-global, which overrides bundled.
 
-1. `_load_skills(deps.config.skills_dir, settings)`
+`_load_skill_file(path, root, scan)` is the per-file loader. The `root` parameter is the load root used for containment checking. `scan=False` is passed for the bundled pass (version-controlled, no runtime scan needed); `scan=True` is passed for user-global and project-local passes.
+
+Loading happens at startup inside `initialize_session_capabilities()` (in `bootstrap/_bootstrap.py`) after MCP initialization and before the welcome banner:
+
+1. load bundled, then user-global, then project-local skills
 2. `set_skill_commands(skill_commands, deps.capabilities)`
 3. `completer.words = _build_completer_words(deps.capabilities.skill_commands)` — called in `main.py` immediately after `initialize_session_capabilities()` returns
 
@@ -80,6 +85,10 @@ Current gates:
 | `settings` | named settings fields must be present and truthy |
 
 Skills that fail a gate are skipped, not loaded in a degraded state.
+
+### Containment Check
+
+`_is_safe_skill_path(path, root)` is called for every file before it is loaded during user-global and project-local passes. It resolves symlinks and verifies the resolved path is still inside `root`. If a symlink points outside the load root, the file is skipped and a `logger.warning` is emitted. Bundled skills are version-controlled and not subject to this check.
 
 ### Security Scan
 
@@ -163,20 +172,23 @@ The built-in `/skills` command family is implemented in `_cmd_skills()` and rela
 | Command | Purpose |
 | --- | --- |
 | `/skills list` | show loaded skills |
-| `/skills check` | compare available files vs actually loaded skills and report skip reasons |
+| `/skills check` | compare available files vs actually loaded skills across all three tiers and report skip reasons |
 | `/skills install <path|url>` | copy skill into project skills dir and reload |
-| `/skills reload` | reload package and project skill files into the live session |
+| `/skills reload` | rescan user-global and project-local skill directories and reload into the live session |
 | `/skills upgrade <name>` | reinstall from stored `source-url` |
+
+`/skills reload` rescans only the user-global and project-local directories; bundled skills are version-controlled and not rescanned at runtime. `/skills check` covers all three tiers (bundled, user-global, and project-local).
 
 Installed skills are written to `<cwd>/.co-cli/skills/`.
 
 ## 3. Config
 
-The skill system is lightly configured. The main runtime dependency is the resolved skills path in `CoConfig`.
+The skill system is lightly configured. The main runtime dependencies are the resolved skill paths in `CoConfig`.
 
 | Setting | Source | Purpose |
 | --- | --- | --- |
 | `skills_dir` | resolved in `CoConfig.from_settings()` as `<cwd>/.co-cli/skills` | project-local skill directory |
+| `user_skills_dir` | XDG path, defaults to `~/.config/co-cli/skills/` | user-global skill directory (middle tier) |
 | `settings` values referenced by `requires.settings` | `co_cli/config.py` | load gating only |
 
 There is no separate skills config object today.
@@ -186,10 +198,10 @@ There is no separate skills config object today.
 | File | Purpose |
 | --- | --- |
 | `co_cli/commands/_skill_types.py` | `SkillConfig` frozen dataclass |
-| `co_cli/commands/_commands.py` | skill loader, scanner, dispatch, and `/skills` commands |
+| `co_cli/commands/_commands.py` | skill loader (`_load_skill_file`, `_is_safe_skill_path`), scanner, dispatch, and `/skills` commands |
 | `co_cli/bootstrap/_bootstrap.py` | `initialize_session_capabilities()` — MCP discovery and skill loading at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
-| `co_cli/deps.py` | `skills_dir` (config); `skill_commands`, `skill_registry` (session); `active_skill_name` (runtime) |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (config); `skill_commands`, `skill_registry` (session); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `<cwd>/.co-cli/skills/` | project-local skill files and overrides |

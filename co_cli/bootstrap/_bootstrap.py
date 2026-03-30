@@ -254,7 +254,7 @@ async def initialize_session_capabilities(
         deps.capabilities.tool_names = deps.capabilities.tool_names + mcp_tool_names
 
     # 2. Skill loading
-    skill_commands = _load_skills(deps.config.skills_dir, settings=settings)
+    skill_commands = _load_skills(deps.config.skills_dir, settings=settings, user_skills_dir=deps.config.user_skills_dir)
     set_skill_commands(skill_commands, deps.capabilities)
 
     return SessionCapabilityResult(skill_count=len(deps.capabilities.skill_registry))

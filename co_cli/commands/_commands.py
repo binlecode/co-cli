@@ -408,11 +408,14 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         from co_cli.config import settings as _settings
 
         default_dir = Path(__file__).parent.parent / "skills"
+        user_dir = ctx.deps.config.user_skills_dir
         project_dir = ctx.deps.config.skills_dir
 
         all_paths: list[Path] = []
         if default_dir.exists():
             all_paths.extend(sorted(default_dir.glob("*.md")))
+        if user_dir.exists():
+            all_paths.extend(sorted(user_dir.glob("*.md")))
         if project_dir.exists():
             all_paths.extend(sorted(project_dir.glob("*.md")))
 
@@ -448,11 +451,11 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     elif subcmd == "reload":
         from co_cli.config import settings as _settings
         # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
-        new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
-        # Scan only files that successfully loaded — avoids warnings for requires-gated skills
-        default_dir = Path(__file__).parent.parent / "skills"
+        user_skills_dir = ctx.deps.config.user_skills_dir
+        new_skills = _load_skills(ctx.deps.config.skills_dir, _settings, user_skills_dir=user_skills_dir)
+        # Scan user-global and project-local files only — bundled skills are version-controlled
         project_dir = ctx.deps.config.skills_dir
-        all_paths = (sorted(default_dir.glob("*.md")) if default_dir.exists() else []) + \
+        all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + \
                     (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
         for p in all_paths:
             if p.stem in new_skills:
@@ -552,8 +555,8 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     ctx.deps.config.skills_dir.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
 
-    # Reload in-session: package-default + updated project dir
-    new_skills = _load_skills(ctx.deps.config.skills_dir, _settings)
+    # Reload in-session: package-default + user-global + updated project dir
+    new_skills = _load_skills(ctx.deps.config.skills_dir, _settings, user_skills_dir=ctx.deps.config.user_skills_dir)
     set_skill_commands(new_skills, ctx.deps.capabilities)
     _refresh_completer(ctx)
 
@@ -800,13 +803,29 @@ def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
     return True
 
 
+def _is_safe_skill_path(path: Path, root: Path) -> bool:
+    """Return True when path is safe to load (not a symlink pointing outside root)."""
+    if not path.is_symlink():
+        return True
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _load_skill_file(
     path: Path,
     result: dict[str, SkillConfig],
     reserved: set[str],
     settings: Any = None,
+    *,
+    root: Path,
+    scan: bool = True,
 ) -> None:
     """Parse a single skill .md file and add to result dict if valid."""
+    if not _is_safe_skill_path(path, root):
+        logger.warning(f"Skill path containment violation — skipping {path} (expected root: {root})")
+        return
     name = path.stem
     try:
         text = path.read_text(encoding="utf-8")
@@ -821,9 +840,9 @@ def _load_skill_file(
             return
 
         # Security scan — warning-only for existing/developer-owned assets
-        scan_warnings = _scan_skill_content(text)
-        for w in scan_warnings:
-            logger.warning(f"Security scan warning in {path}: {w}")
+        if scan:
+            for w in _scan_skill_content(text):
+                logger.warning(f"Security scan warning in {path}: {w}")
 
         # Extract skill-env with type guard; filter blocked and non-string values
         raw_env = meta.get("skill-env", {})
@@ -847,12 +866,18 @@ def _load_skill_file(
         logger.warning(f"Failed to load skill {path}: {e}")
 
 
-def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillConfig]:
+def _load_skills(
+    skills_dir: Path,
+    settings: Any = None,
+    *,
+    user_skills_dir: Path | None = None,
+) -> dict[str, SkillConfig]:
     """Scan skills directories and return a dict of SkillConfig objects.
 
-    Package-default skills (co_cli/skills/) are loaded first.
-    Project-local skills (.co-cli/skills/) are loaded second and override
-    package-default skills on name collision (project customization path).
+    Load order (lowest to highest precedence):
+      1. Package-default skills (co_cli/skills/) — bundled, not scanned at runtime
+      2. User-global skills (user_skills_dir, if provided and exists)
+      3. Project-local skills (skills_dir) — highest precedence
 
     Reserved names are derived from BUILTIN_COMMANDS.keys() at call time so newly
     added built-in commands are automatically protected without touching this
@@ -861,17 +886,21 @@ def _load_skills(skills_dir: Path, settings: Any = None) -> dict[str, SkillConfi
     result: dict[str, SkillConfig] = {}
     reserved = set(BUILTIN_COMMANDS.keys())
 
-    # Package-default skills (shipped inside the package — available from any directory)
-    # Path goes up two levels: commands/ → co_cli/ → skills/
+    # Pass 1: Package-default skills (bundled — version-controlled, skip runtime scan)
     default_dir = Path(__file__).parent.parent / "skills"
     if default_dir.exists():
         for path in sorted(default_dir.glob("*.md")):
-            _load_skill_file(path, result, reserved, settings)
+            _load_skill_file(path, result, reserved, settings, root=default_dir, scan=False)
 
-    # Project-local skills (override package-default on name collision)
+    # Pass 2: User-global skills (override bundled on name collision)
+    if user_skills_dir is not None and user_skills_dir.exists():
+        for path in sorted(user_skills_dir.glob("*.md")):
+            _load_skill_file(path, result, reserved, settings, root=user_skills_dir)
+
+    # Pass 3: Project-local skills (highest precedence — override everything)
     if skills_dir.exists():
         for path in sorted(skills_dir.glob("*.md")):
-            _load_skill_file(path, result, reserved, settings)
+            _load_skill_file(path, result, reserved, settings, root=skills_dir)
 
     return result
 

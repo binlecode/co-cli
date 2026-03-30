@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.27] - 2026-03-29
+
+### Added
+- **User-global skill directory**: skills placed in `~/.config/co-cli/skills/` are now loaded across all projects without copying — three-layer load order: bundled (lowest) → user-global → project-local (highest). `/skills reload`, `/skills check`, `/skills install`, and bootstrap all reflect the new tier.
+
+### Changed
+- **Bundled skill scan skipped at runtime**: package-default skills are version-controlled and scanned at CI; runtime re-scan removed (`scan=False` for bundled pass). User-global and project-local passes still scan. `/skills reload` display loop now covers only user-global and project-local.
+
+### Fixed
+- **Symlink path containment**: symlinks inside any skill directory pointing outside their load root are now silently rejected with a `logger.warning` instead of loading arbitrary files into the skill registry.
+
 ## [0.5.25] - 2026-03-29
 
 ### Changed

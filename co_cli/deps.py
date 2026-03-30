@@ -10,6 +10,7 @@ from co_cli.config import (
     MCPServerConfig,
     ModelConfig,
     WebPolicy,
+    CONFIG_DIR,
     DATA_DIR,
     SEARCH_DB,
     DEFAULT_DOOM_LOOP_THRESHOLD,
@@ -60,6 +61,7 @@ from co_cli.tools._shell_backend import ShellBackend
 
 # CoConfig-specific path defaults (relative to cwd; overridden at runtime in create_deps())
 DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
+DEFAULT_USER_SKILLS_DIR = CONFIG_DIR / "skills"
 DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
@@ -131,6 +133,7 @@ class CoConfig:
     shell_safe_commands: list[str] = field(default_factory=list)
     shell_max_timeout: int = DEFAULT_SHELL_MAX_TIMEOUT
     skills_dir: Path = field(default_factory=lambda: DEFAULT_SKILLS_DIR)
+    user_skills_dir: Path = field(default_factory=lambda: DEFAULT_USER_SKILLS_DIR)
     memory_dir: Path = field(default_factory=lambda: DEFAULT_MEMORY_DIR)
     library_dir: Path = field(default_factory=lambda: DEFAULT_LIBRARY_DIR)
     # knowledge_db_path: global SQLite FTS/vec index (DATA_DIR, not workspace-relative).
@@ -236,6 +239,7 @@ class CoConfig:
             shell_max_timeout=s.shell_max_timeout,
             memory_dir=cwd / ".co-cli" / "memory",
             skills_dir=cwd / ".co-cli" / "skills",
+            user_skills_dir=CONFIG_DIR / "skills",
             session_path=cwd / ".co-cli" / "session.json",
             tasks_dir=cwd / ".co-cli" / "tasks",
             llm_api_key=s.llm_api_key,
