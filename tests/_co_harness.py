@@ -21,7 +21,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from pydantic_ai import Agent
-from pydantic_ai.models.instrumented import InstrumentationSettings
+from pydantic_ai.agent import InstrumentationSettings
 
 from co_cli.config import LOGS_DB
 from co_cli.observability._telemetry import SQLiteSpanExporter

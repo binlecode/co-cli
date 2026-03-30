@@ -32,7 +32,6 @@ from pydantic_ai.messages import (  # noqa: E402
 )
 from pydantic_ai.usage import UsageLimits  # noqa: E402
 
-from co_cli.context._types import MemoryRecallState, SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -135,24 +134,22 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 )
 
             # Build agent and deps
-            # TODO: source model_settings from make_eval_settings()
-            agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
             deps = make_eval_deps(session_id=f"eval-recall-{case.id}")
-            deps.runtime.safety_state = SafetyState()
-            deps.session.memory_recall_state = MemoryRecallState()
 
             frontend = SilentFrontend()
 
-            result = await run_turn(
-                agent=agent,
-                user_input=case.prompt,
-                deps=deps,
-                message_history=[],
-                model_settings=make_eval_settings(),
-                max_request_limit=5,
-                verbose=False,
-                frontend=frontend,
-            )
+            async with asyncio.timeout(120):
+                result = await run_turn(
+                    agent=agent,
+                    user_input=case.prompt,
+                    deps=deps,
+                    message_history=[],
+                    model_settings=make_eval_settings(),
+                    max_request_limit=5,
+                    verbose=False,
+                    frontend=frontend,
+                )
 
             # Score: check for SystemPromptPart injection
             injection = _find_memory_injection(result.messages)

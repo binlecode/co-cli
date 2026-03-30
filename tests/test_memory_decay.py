@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from pydantic_ai._run_context import RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from tests._timeouts import FILE_DB_TIMEOUT_SECS

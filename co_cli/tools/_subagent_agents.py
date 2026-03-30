@@ -33,7 +33,7 @@ def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult
         resolved_model.model,
         deps_type=CoDeps,
         output_type=CoderResult,
-        system_prompt=(
+        instructions=(
             "You are a read-only code analysis agent. "
             "Investigate the codebase using the available file tools and return a structured analysis. "
             "You cannot write or modify files. Focus on understanding the code as-is."
@@ -65,7 +65,7 @@ def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Research
         resolved_model.model,
         deps_type=CoDeps,
         output_type=ResearchResult,
-        system_prompt=(
+        instructions=(
             "You are a read-only research agent. "
             "Search the web and fetch pages to answer the query. "
             "Synthesize what you find into a grounded summary with sources. "
@@ -100,7 +100,7 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
         resolved_model.model,
         deps_type=CoDeps,
         output_type=AnalysisResult,
-        system_prompt=(
+        instructions=(
             "You are a read-only analysis agent. "
             "Use the available search tools to gather evidence, then compare, evaluate, "
             "and synthesize the provided inputs. "
@@ -136,7 +136,7 @@ def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Thinking
         resolved_model.model,
         deps_type=CoDeps,
         output_type=ThinkingResult,
-        system_prompt=(
+        instructions=(
             "You are a reasoning agent. "
             "Decompose the problem, reason step-by-step, and return a structured result. "
             "Return a ThinkingResult with: "

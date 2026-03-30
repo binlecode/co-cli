@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from co_cli.context._history import SafetyState  # noqa: E402
+from co_cli.context._types import SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -166,7 +166,6 @@ async def main() -> int:
     print("  Eval: Multi-Step Tool Chains")
     print("=" * 60)
 
-    # TODO: source model_settings from make_eval_settings()
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
     deps = make_eval_deps(session_id="eval-tool-chains")
     deps.runtime.safety_state = SafetyState()

@@ -9,19 +9,26 @@ from pathlib import Path
 
 import pytest
 
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai import DeferredToolResults
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
 from co_cli.agent import build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoServices, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools._tool_approvals import (
+    is_auto_approved,
+    record_approval_choice,
+    remember_tool_approval,
+    resolve_approval_subject,
+)
 from co_cli.commands._commands import (
     dispatch, CommandContext,
     SkillConfig,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
-from co_cli.context._orchestrate import run_turn
+from co_cli.context._orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
 from co_cli.display._core import console
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
@@ -295,4 +302,165 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     # Must route to builtin: ReplaceTranscript with cleared history
     assert isinstance(result, ReplaceTranscript)
     assert result.history == []
+
+
+# --- Approval subject scoping ---
+
+
+def test_resolve_approval_subject_shell_scopes_to_utility():
+    """Shell subject resolves to the first token of the command."""
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status --short"})
+    assert subject.kind == ApprovalKindEnum.SHELL
+    assert subject.value == "git"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_path_scopes_to_parent_dir():
+    """File-write subject resolves to the parent directory of the target path."""
+    subject = resolve_approval_subject("write_file", {"path": "/home/user/project/file.txt"})
+    assert subject.kind == ApprovalKindEnum.PATH
+    assert subject.value == "/home/user/project"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_domain_scopes_to_hostname():
+    """Web-fetch subject resolves to the hostname of the target URL."""
+    subject = resolve_approval_subject("web_fetch", {"url": "https://docs.python.org/3/library/asyncio.html"})
+    assert subject.kind == ApprovalKindEnum.DOMAIN
+    assert subject.value == "docs.python.org"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_generic_tool_fallback():
+    """Unknown tools fall through to the generic-tool branch, keyed by tool name."""
+    subject = resolve_approval_subject("create_email_draft", {"to": "test@example.com", "subject": "hi"})
+    assert subject.kind == ApprovalKindEnum.TOOL
+    assert subject.value == "create_email_draft"
+    assert subject.can_remember is True
+
+
+def test_is_auto_approved_false_before_remember():
+    """Subject is not auto-approved when no session rule has been stored."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(session_id="test-autoapprove"),
+    )
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
+    assert is_auto_approved(subject, deps) is False
+
+
+def test_remember_tool_approval_stores_rule_and_auto_approves():
+    """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(session_id="test-remember"),
+    )
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
+    remember_tool_approval(subject, deps)
+    assert SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git") in deps.session.session_approval_rules
+    assert is_auto_approved(subject, deps) is True
+
+
+def test_remember_tool_approval_is_idempotent():
+    """Calling remember_tool_approval twice does not duplicate the session rule."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(session_id="test-idem"),
+    )
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
+    remember_tool_approval(subject, deps)
+    remember_tool_approval(subject, deps)
+    rule = SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
+    assert deps.session.session_approval_rules.count(rule) == 1
+
+
+def test_record_approval_choice_with_remember_stores_rule():
+    """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(session_id="test-record"),
+    )
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    approvals = DeferredToolResults()
+    record_approval_choice(
+        approvals,
+        tool_call_id="call-1",
+        approved=True,
+        subject=subject,
+        deps=deps,
+        remember=True,
+    )
+    assert approvals.approvals["call-1"] is True
+    assert is_auto_approved(subject, deps) is True
+
+
+def test_record_approval_choice_deny_does_not_store_rule():
+    """Denied approvals must not persist a session rule."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+        session=CoSessionState(session_id="test-deny-record"),
+    )
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
+    approvals = DeferredToolResults()
+    record_approval_choice(
+        approvals,
+        tool_call_id="call-2",
+        approved=False,
+        subject=subject,
+        deps=deps,
+        remember=False,
+    )
+    assert is_auto_approved(subject, deps) is False
+    assert deps.session.session_approval_rules == []
+
+
+# --- Orchestration: interrupted turn result ---
+
+
+def test_build_interrupted_turn_result_drops_dangling_tool_call():
+    """_build_interrupted_turn_result drops the last ModelResponse when it has unanswered ToolCallParts.
+
+    The dangling tool call response is removed so history ends at a clean point,
+    and an abort marker is appended for the next turn.
+    """
+    clean_request = ModelRequest(parts=[UserPromptPart(content="run ls")])
+    dangling_response = ModelResponse(
+        parts=[ToolCallPart(tool_name="run_shell_command", args='{"cmd": "ls"}', tool_call_id="call-x")]
+    )
+    turn_state = _TurnState(
+        current_input=None,
+        current_history=[clean_request, dangling_response],
+    )
+
+    result = _build_interrupted_turn_result(turn_state)
+
+    assert result.interrupted is True
+    assert result.outcome == "continue"
+    assert dangling_response not in result.messages
+    # Abort marker must be the last message
+    last = result.messages[-1]
+    assert isinstance(last, ModelRequest)
+    assert any("interrupted" in part.content.lower() for part in last.parts if isinstance(part, UserPromptPart))
+
+
+def test_build_interrupted_turn_result_keeps_clean_history():
+    """_build_interrupted_turn_result preserves messages that have no dangling ToolCallParts."""
+    clean_request = ModelRequest(parts=[UserPromptPart(content="hello")])
+    clean_response = ModelResponse(parts=[])
+    turn_state = _TurnState(
+        current_input=None,
+        current_history=[clean_request, clean_response],
+    )
+
+    result = _build_interrupted_turn_result(turn_state)
+
+    assert result.interrupted is True
+    # Both original messages are retained — neither is a dangling tool call response
+    assert clean_request in result.messages
+    assert clean_response in result.messages
 

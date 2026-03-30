@@ -26,9 +26,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
 
     Pass keyword overrides to customise any CoConfig field, e.g.
     ``make_eval_deps(brave_search_api_key=None)``.
-    Service fields (shell, knowledge_index, task_runner) and session fields
-    (skill_registry, session_id) can also be passed as overrides and are
-    extracted before building CoConfig. session_id is routed to CoSessionState.
+    Service fields (shell, knowledge_index, task_runner, model_registry) can
+    also be passed as overrides and are extracted before building CoConfig.
+    session_id is routed to CoSessionState.
     """
     s = get_settings()
 
@@ -37,7 +37,6 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     knowledge_index = overrides.pop("knowledge_index", None)
     task_runner = overrides.pop("task_runner", None)
     model_registry = overrides.pop("model_registry", None)
-    skill_registry = overrides.pop("skill_registry", [])
     session_id_override = overrides.pop("session_id", "eval")
 
     config_defaults: dict[str, Any] = {
@@ -75,7 +74,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
             model_registry=model_registry,
         ),
         config=CoConfig(**config_defaults),
-        session=CoSessionState(session_id=session_id_override, skill_registry=skill_registry),
+        session=CoSessionState(session_id=session_id_override),
     )
 
 

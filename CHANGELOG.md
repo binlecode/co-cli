@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-30
+
+### Changed
+- **pydantic-ai upgrade to 1.73.0**: bumped pin from 1.70.0 to 1.73.0. Zero private SDK imports in tests (`pydantic_ai._run_context` → public `pydantic_ai.RunContext`). All `Agent()` constructors in `co_cli/` standardized on `instructions=`. Single `InstrumentationSettings` import path (`pydantic_ai.agent`) across `co_cli/`, `evals/`, and `tests/`. No user-visible behavior change.
+
 ## [0.5.31] - 2026-03-29
 
 ### Added

@@ -38,8 +38,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from co_cli.context._history import SafetyState  # noqa: E402
-from co_cli.knowledge._index import KnowledgeIndex  # noqa: E402
+from co_cli.context._types import SafetyState  # noqa: E402
+from co_cli.knowledge._index_store import KnowledgeIndex  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -321,10 +321,9 @@ async def main() -> int:
     Path(_TRACE_DB).parent.mkdir(parents=True, exist_ok=True)
     provider = bootstrap_telemetry(_TRACE_DB)
 
-    # TODO: source model_settings from make_eval_settings()
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
-    knowledge_index = KnowledgeIndex(db_path=Path(".co-cli/search.db"))
+    knowledge_index = KnowledgeIndex(config=CoConfig(knowledge_db_path=Path(".co-cli/search.db")))
     deps = make_eval_deps(
         session_id="eval-jeff-learns-finch",
         knowledge_index=knowledge_index,

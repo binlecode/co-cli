@@ -13,8 +13,10 @@ from pathlib import Path
 from dataclasses import replace
 
 import pytest
+from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.usage import RunUsage
 
 
 from co_cli.agent import build_agent, build_task_agent
@@ -33,10 +35,13 @@ _TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
 
 # Tool selection tests use ROLE_TASK (reasoning_effort=none) with build_task_agent.
 # build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
-# build_agent — reducing context from ~27K to ~10K tokens so calls complete in <10s.
+# build_agent — reducing context from ~27K to ~10K tokens so calls complete faster.
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-# Agent built with task settings baked in.
+# Agents built once at module level to avoid per-test construction overhead.
 _AGENT_NOREASON = build_task_agent(config=_CONFIG, resolved=_TASK_RESOLVED)
+# web_search case needs search="ask" so the tool is deferred rather than auto-executed.
+_WEB_ASK_CFG = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
+_AGENT_WEB_ASK = build_task_agent(config=_WEB_ASK_CFG, resolved=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:
@@ -93,13 +98,12 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    # web_search: build agent with search="ask" so the tool is deferred — denial drives
-    # two segments (tool selection + denial-response); use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
-    # run_shell_command: safe-prefix "git status" executes directly, also two segments
-    # (tool selection + result response) — same budget.
+    # web_search: registered as deferred (search="ask") — denial drives two separate
+    # agent.run() calls: first returns DeferredToolRequests, second processes the denial.
+    # run_shell_command: "git status" executes inline within one agent.run() call
+    # (two LLM segments inside one run). Both cases use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
     if expected_tool == "web_search":
-        web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
-        agent = build_task_agent(config=web_cfg, resolved=_TASK_RESOLVED).agent
+        agent = _AGENT_WEB_ASK.agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
         call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
         # Deny deferred web_search — avoids executing the search while verifying tool selection.
@@ -241,8 +245,6 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     import asyncio
     from co_cli.tools._background import TaskRunner, TaskStorage
     from co_cli.tools.task_control import check_task_status
-    from pydantic_ai._run_context import RunContext
-    from pydantic_ai.usage import RunUsage
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
@@ -271,3 +273,38 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
 
     assert result.get("description") == task_description
     assert result.get("started_at") is not None
+
+
+@pytest.mark.asyncio
+async def test_list_background_tasks_surfaces_description(tmp_path):
+    """list_background_tasks includes task descriptions in both metadata and display output."""
+    from co_cli.tools._background import TaskRunner, TaskStorage
+    from co_cli.tools.task_control import list_background_tasks
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+
+    tasks_dir = tmp_path / "tasks"
+    storage = TaskStorage(tasks_dir)
+    runner = TaskRunner(storage)
+    config = CoConfig(tasks_dir=tasks_dir)
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), task_runner=runner),
+        config=config,
+    )
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+    ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
+
+    task_description = "background task list description"
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        await runner.start_task(
+            "echo hello",
+            str(tmp_path),
+            {"description": task_description},
+            None,
+        )
+        await asyncio.sleep(0.5)
+        result = await list_background_tasks(ctx)
+
+    assert result["count"] == 1
+    assert result["tasks"][0]["description"] == task_description
+    assert task_description in result["display"]

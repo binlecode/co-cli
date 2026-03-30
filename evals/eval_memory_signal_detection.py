@@ -33,7 +33,6 @@ from typing import Any
 
 from pydantic_ai.messages import ModelResponse, ToolCallPart  # noqa: E402
 
-from co_cli.context._types import MemoryRecallState, SafetyState  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -137,24 +136,22 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
                     )
 
             # Build agent and deps
-            # TODO: source model_settings from make_eval_settings()
-            agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
             deps = make_eval_deps(session_id=f"eval-signal-{case.id}")
-            deps.runtime.safety_state = SafetyState()
-            deps.session.memory_recall_state = MemoryRecallState()
 
             frontend = SilentFrontend()
 
-            result = await run_turn(
-                agent=agent,
-                user_input=case.prompt,
-                deps=deps,
-                message_history=[],
-                model_settings=make_eval_settings(),
-                max_request_limit=10,
-                verbose=False,
-                frontend=frontend,
-            )
+            async with asyncio.timeout(120):
+                result = await run_turn(
+                    agent=agent,
+                    user_input=case.prompt,
+                    deps=deps,
+                    message_history=[],
+                    model_settings=make_eval_settings(),
+                    max_request_limit=10,
+                    verbose=False,
+                    frontend=frontend,
+                )
 
             # Extract all tool calls from the message history
             tool_calls = extract_tool_calls(result.messages)

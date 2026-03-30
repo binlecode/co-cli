@@ -29,7 +29,7 @@ from co_cli._model_factory import ModelRegistry
 from co_cli.agent import build_agent
 from co_cli.config import settings, ROLE_REASONING
 from pydantic_ai.messages import ToolReturnPart
-from co_cli.context._history import SafetyState
+from co_cli.context._types import SafetyState
 from co_cli.context._orchestrate import run_turn
 from co_cli.deps import CoConfig
 

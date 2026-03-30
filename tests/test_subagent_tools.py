@@ -4,7 +4,7 @@ import pytest
 from pathlib import Path
 
 from pydantic import ValidationError
-from pydantic_ai._run_context import RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent

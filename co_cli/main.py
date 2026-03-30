@@ -16,7 +16,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from pydantic_ai import Agent
-from pydantic_ai.models.instrumented import InstrumentationSettings
+from pydantic_ai.agent import InstrumentationSettings
 
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn

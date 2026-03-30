@@ -37,7 +37,7 @@ class ConsolidationPlan(BaseModel):
 
 _consolidation_agent: Agent[None, ConsolidationPlan] = Agent(
     output_type=ConsolidationPlan,
-    system_prompt=_PROMPT_PATH.read_text(encoding="utf-8"),
+    instructions=_PROMPT_PATH.read_text(encoding="utf-8"),
     retries=0,
     output_retries=0,
 )

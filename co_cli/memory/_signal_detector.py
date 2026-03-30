@@ -120,7 +120,7 @@ async def analyze_for_signals(
         signal_agent: Agent[None, SignalResult] = Agent(
             model=rm.model,
             output_type=SignalResult,
-            system_prompt=system_prompt,
+            instructions=system_prompt,
         )
 
         result = await signal_agent.run(window, model_settings=rm.settings)

@@ -27,7 +27,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from co_cli.knowledge._index import KnowledgeIndex, SearchResult
+from co_cli.knowledge._index_store import KnowledgeIndex, SearchResult
 
 
 # ---------------------------------------------------------------------------
@@ -478,9 +478,32 @@ def recall_at_k(results: list[SearchResult], relevant_paths: set[str], k: int) -
 # ---------------------------------------------------------------------------
 
 
-def build_index(db_path: Path, **kwargs) -> KnowledgeIndex:
+def build_index(
+    db_path: Path,
+    *,
+    backend: str = "fts5",
+    reranker_model: str | None = None,
+    ollama_host: str = "http://localhost:11434",
+) -> KnowledgeIndex:
     """Create a fresh KnowledgeIndex with the full synthetic corpus loaded."""
-    idx = KnowledgeIndex(db_path, **kwargs)
+    from co_cli.deps import CoConfig
+    from co_cli.config import ModelConfig
+    llm_reranker = (
+        ModelConfig(provider="ollama-openai", model=reranker_model)
+        if reranker_model else None
+    )
+    config = CoConfig(
+        knowledge_db_path=db_path,
+        knowledge_search_backend=backend,
+        # Explicitly disable TEI cross-encoder so the correct reranker branch is
+        # reached: None → LLM listwise (if set) or none. Without this, the
+        # default "http://127.0.0.1:8282" always activates TEI regardless of
+        # whether llm_reranker is set.
+        knowledge_cross_encoder_reranker_url=None,
+        knowledge_llm_reranker=llm_reranker,
+        llm_host=ollama_host,
+    )
+    idx = KnowledgeIndex(config=config)
     for doc in CORPUS:
         idx.index(
             source="memory",
@@ -626,7 +649,6 @@ def main() -> None:
             idx = build_index(
                 tmp / "ollama" / "search.db",
                 backend="fts5",
-                reranker_provider="ollama",
                 reranker_model=args.ollama_model,
                 ollama_host=args.ollama_host,
             )

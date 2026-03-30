@@ -4,88 +4,82 @@
 
 ## 1. Foreground Turn Flow
 
-This section is the single detailed reference for one foreground turn.
-
-- `main.py` owns the REPL boundary: prompt input, slash-command dispatch, skill env injection and rollback, pre-turn compaction harvest/cancel, and post-turn finalization.
-- `_orchestrate.py` owns `run_turn()`: per-turn runtime reset, the `co.turn` span, stream-segment execution, deferred-approval resumes, provider retries, context/output warnings, and `TurnResult`.
-- `_orchestrate.py` mutates `_TurnState` plus turn-scoped `deps.runtime` fields such as `turn_usage` and `active_tool_filter`; it returns the next history snapshot to `main.py` rather than mutating REPL-owned history in place.
-- `agent.py` provides two execution surfaces over the same filtered tool registry and MCP toolsets: the main agent (system prompt, dynamic instruction layers, history processors) and the task agent used for approval-resume hops (short prompt, no history processors).
-- `CoDeps` is the shared boundary across the turn: session state stores approval rules and other session-scoped data, while runtime state carries transient fields such as usage, safety state, precomputed compaction, active skill name, and the approval-resume tool filter.
-- The diagram below combines ownership, control flow, and turn handoff points for the normal foreground path.
+This section describes one complete foreground turn, from REPL input to post-turn finalization.
 
 ```mermaid
 flowchart TD
-    A["read REPL input"] --> B{"exit or blank?"}
+    A["PromptSession.prompt_async()"] --> B{"exit/quit or blank?"}
     B -->|exit or quit| Z["exit loop"]
     B -->|blank| A
-    B -->|normal input| C{"starts with slash?"}
+    B -->|non-empty input| C{"starts with slash?"}
 
     C -->|no| D["keep raw user_input"]
-    C -->|yes| E["dispatch slash command"]
+    C -->|yes| E["dispatch_command()"]
 
-    E -->|ReplaceTranscript| F["apply transcript replacement and return to prompt"]
+    E -->|ReplaceTranscript| F["adopt outcome.history; if compaction_applied, increment and save session"]
     F --> A
 
-    E -->|DelegateToAgent| J["replace user_input with outcome.delegated_input and inject skill env"]
+    E -->|DelegateToAgent| J["replace user_input with delegated_input; set active_skill_name; snapshot and apply skill env"]
     E -->|LocalOnly| A
 
-    D -->|pass user_input| M["run foreground turn wrapper for compaction setup cleanup and finalization"]
-    J -->|pass delegated_input + skill env| M
-    M -->|call with agent user_input message_history deps and frontend| N["run turn and initialize turn state"]
-    N -->|start segment with current_input + current_history| O["execute stream segment"]
-    O --> P{"segment result"}
-    P -->|success| Q{"deferred approvals needed?"}
-    Q -->|yes pause for approvals| R["collect approval decisions"]
-    R -->|set input none and pass approval decisions plus latest messages| S["resume stream segment"]
-    S --> Q
-    Q -->|no approvals remain| T["render final text if needed and run output limit warnings"]
+    D --> M["_run_foreground_turn(): compactor.on_turn_start()"]
+    J --> M
+    M --> N["run_turn(): reset_for_turn(); status; init _TurnState; start co.turn span"]
+    N --> O["_execute_stream_segment(): initial pass uses main agent"]
+    O --> P{"run_turn() loop outcome"}
+    P -->|DeferredToolRequests| Q["_run_approval_loop(): active_tool_filter = deferred tools + always-on; collect approvals; current_input=None; current_history=latest_result.all_messages()"]
+    Q --> R["_execute_stream_segment(): resume via task_agent or main-agent fallback"]
+    R --> P
+    P -->|final output| T["set current_history=latest_result.all_messages(); render final text only if nothing streamed; run output-limit checks"]
     T --> U["return success turn result"]
 
-    P -->|retryable http 400| X["append reflection prompt set input none decrement retry budget and sleep briefly"]
-    X -->|retry with updated history and no direct input| O
-    P -->|retryable http 429 or server error| Y["decrement retry budget sleep with backoff and increase backoff base"]
-    Y -->|retry with same history and input state| O
-    P -->|retryable model api error| ZA["decrement retry budget sleep with backoff and increase backoff base"]
-    ZA -->|retry with same history and input state| O
-    P -->|non retryable provider error| ZB["set error outcome and build error turn result"]
-    P -->|interrupt or cancel| ZC["set interrupted flag and build interrupted turn result"]
+    P -->|ModelHTTPError 400 with retries left| X["append reflection request to current_history; current_input=None; decrement retry budget; sleep 0.5s"]
+    X --> O
+    P -->|HTTP 429 or 5xx with retries left| Y["decrement retry budget; sleep with backoff; increase backoff_base"]
+    Y --> O
+    P -->|ModelAPIError with retries left| ZA["decrement retry budget; sleep with backoff; increase backoff_base"]
+    ZA --> O
+    P -->|non-retryable or exhausted provider error| ZB["set outcome='error' and build error TurnResult"]
+    P -->|KeyboardInterrupt or CancelledError| ZC["set interrupted=True and build interrupted TurnResult"]
 
-    U -->|return success turn result| ZD["cleanup skill run state in finally"]
-    ZB -->|return error turn result| ZD
-    ZC -->|return interrupted turn result| ZD
-    ZD -->|pass turn result session data deps primary model and compactor| ZE["finalize turn"]
-    ZE -->|write next history and session spawn next compaction precompute and reprompt| A
+    U --> ZD["_cleanup_skill_run_state() in finally"]
+    ZB --> ZD
+    ZC --> ZD
+    ZD --> ZE["_finalize_turn(): adopt returned history; run signal detection on clean turns; touch/save session; compactor.on_turn_end(); print generic error banner when needed"]
+    ZE --> A
 ```
 
-Turn-flow map:
-- Foreground control flow: `_chat_loop()` reads input, handles slash-command routing, then enters `_run_foreground_turn()` for any real agent turn.
-- Approval-resume flow: this is an in-turn subflow, not a parallel worker. When a segment returns `DeferredToolRequests`, `run_turn()` pauses, collects approval decisions, and resumes the same turn with `current_input=None`.
-- Background compaction flow: this is the only real sidecar flow in the turn path. `compactor.on_turn_end()` spawns the next precompute task after a turn, and `compactor.on_turn_start()` harvests or cancels it before the next turn.
-- Retry flow: retryable provider and network failures stay inside `run_turn()` and loop back into segment execution without returning to the REPL.
-- Stream and render flow: `_execute_stream_segment()` consumes model events incrementally and routes them through `StreamRenderer` and `Frontend`.
-- Post-turn flow: every returned `TurnResult` goes through `_cleanup_skill_run_state()` and then `_finalize_turn()` before the next prompt.
-- Interrupt recovery flow: interrupts return an interrupted `TurnResult` with history truncated to the last clean point plus an abort marker for the next turn.
+Execution owners:
+- `_chat_loop()` owns REPL control flow: prompt input, `exit`/blank handling, slash-command dispatch, transcript replacement, and deciding whether a slash command stays local or becomes agent input.
+- `_run_foreground_turn()` owns the wrapper around one agent turn: `compactor.on_turn_start()`, `run_turn()`, guaranteed `_cleanup_skill_run_state()` in `finally`, then `_finalize_turn()`.
+- `run_turn()` owns one orchestrated turn: `deps.runtime.reset_for_turn()`, the `"Co is thinking..."` status, `_TurnState`, stream-segment execution, deferred-approval resumes, provider retries, interrupt handling, output-limit warnings, and `TurnResult`.
+- `_execute_stream_segment()` owns stream execution and frontend event delivery only. It does not own retries, approval prompts, or REPL history adoption.
+- `_finalize_turn()` owns post-turn adoption of `turn_result.messages`, signal detection on clean turns, session touch/save, next-turn compaction scheduling, and the generic error banner.
+- `agent.py` supplies two compatible execution surfaces over the same tool registry: the main agent for the initial pass and the task agent for approval resumes when configured.
 
-Diagram keys:
-- `LocalOnly` means the slash command is handled in `_chat_loop()` and no agent turn runs.
-- `ReplaceTranscript` means local transcript/state replacement, then return to prompt.
-- `DelegateToAgent` means convert the slash command into agent input and enter `run_turn()`.
-- `_run_foreground_turn()` exists because `run_turn()` deliberately stops at `TurnResult`; the wrapper adds `compactor.on_turn_start()` harvest/cancel behavior, guarantees `_cleanup_skill_run_state()` in `finally`, and then runs `_finalize_turn()`.
+State ownership:
+- REPL transcript state is `message_history` in `_chat_loop()`.
+- Turn-scoped orchestration state is `_TurnState` plus per-turn `deps.runtime` fields such as `turn_usage` and `active_tool_filter`.
+- Cross-turn transient state is `deps.runtime.precomputed_compaction` and `deps.runtime.active_skill_name`.
+- Session-scoped approval memory is `deps.session.session_approval_rules`.
 
-Transcript and compaction state:
-- `_run_foreground_turn()` also handles pre-turn compaction harvest/cancel and post-turn state writeback.
-- `/compact` updates transcript state locally; detailed history and compaction behavior is in [Section 2.2](#22-history-processors-and-background-compaction).
+Turn semantics:
+- Slash-command handling stays in `_chat_loop()`. Only `DelegateToAgent` enters the agent-turn path; `LocalOnly` and `ReplaceTranscript` return directly to the prompt.
+- Approval resume is an in-turn loop, not a new REPL iteration and not a separate worker flow.
+- Background compaction is the only real sidecar path here: `on_turn_start()` harvests or cancels the previous precompute task, and `on_turn_end()` spawns the next one.
+- `run_turn()` returns the next transcript snapshot; `_chat_loop()` adopts it only after `_finalize_turn()`. `_orchestrate.py` does not mutate REPL-owned `message_history` in place.
+- Skill environment override is limited to one delegated turn: `_chat_loop()` snapshots and applies `skill_env`, `_cleanup_skill_run_state()` restores it in `finally`, and `_finalize_turn()` runs after that restoration.
+- Task-agent routing is limited to approval-resume executions inside `_run_approval_loop()`. If a provider retry path fires, the next outer-loop attempt starts again from `_execute_stream_segment()` on the normal `run_turn()` path.
 
-Segment execution inside `run_turn()`:
-- `_execute_stream_segment()` reads `_TurnState.current_input`, `current_history`, `tool_approval_decisions`, and `latest_usage`.
-- It calls `agent.run_stream_events(...)` and delegates text/thinking buffering to `StreamRenderer`.
-- Tool-call events flush buffered output, conditionally call `frontend.on_tool_start()` (suppressed in `summary` mode — the tool result panel is sufficient feedback), and install progress callbacks.
-- Tool-result events flush buffered output, clear progress callbacks, and call `frontend.on_tool_complete()`.
-- `AgentRunResultEvent` provides the final result object for the segment.
-- On exit, `StreamRenderer.finish()` flushes remaining buffers and `frontend.cleanup()` always runs.
-- The function writes `latest_result`, `latest_streamed_text`, and `latest_usage` back into `_TurnState`, clears `tool_approval_decisions`, and merges `latest_usage` into `deps.runtime.turn_usage` via `_merge_turn_usage()`.
+Stream-segment contract:
+- `_execute_stream_segment()` reads `_TurnState.current_input`, `_TurnState.current_history`, `_TurnState.tool_approval_decisions`, and `_TurnState.latest_usage`.
+- It calls `agent.run_stream_events(...)`; the initial pass uses the main agent, and approval resumes use `deps.services.task_agent` when available.
+- `StreamRenderer` buffers text and thinking deltas. Tool-call and tool-result events flush buffered output before updating the frontend.
+- `FunctionToolCallEvent` optionally calls `frontend.on_tool_start()` and installs the progress callback. `FunctionToolResultEvent` clears progress and calls `frontend.on_tool_complete()`.
+- `AgentRunResultEvent` is the only valid source of the segment result object. If the stream ends without one, `_execute_stream_segment()` raises `RuntimeError`.
+- On normal exit, `_execute_stream_segment()` stores `latest_result`, `latest_streamed_text`, and `latest_usage`, clears `tool_approval_decisions`, merges usage into `deps.runtime.turn_usage`, and always runs `frontend.cleanup()` in `finally`.
 
-Processing outline for each segment:
+Per-segment processing outline:
 
 ```text
 run_stream_events(...)
@@ -101,7 +95,7 @@ run_stream_events(...)
 What `_execute_stream_segment()` does not do:
 - no retry logic
 - no approval decisions
-- no conversation-history mutation beyond updating `turn_state`
+- no REPL history adoption beyond updating `_TurnState`
 
 ## 2. Core Logic
 

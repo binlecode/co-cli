@@ -1,161 +1,124 @@
-"""Functional tests for shell tool.
+"""Functional tests for the shell tool."""
 
-All tests hit real services — no mocks, no stubs.
-Tests run on any system (no Docker required).
-"""
-
+import asyncio
 import os
+from pathlib import Path
+
 import pytest
+from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
+from pydantic_ai.usage import RunUsage
 
-from pydantic_ai import ApprovalRequired, ModelRetry
-
-from co_cli.tools.shell import run_shell_command
+from co_cli.agent import build_agent
+from co_cli.config import settings
+from co_cli.deps import CoConfig, CoDeps, CoServices
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.tools.shell import run_shell_command
+from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
+
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
-from dataclasses import dataclass
-
-
-@dataclass
-class Context:
-    """Minimal context for tool testing."""
-    deps: CoDeps
-    tool_call_approved: bool = True
-
-
-def _make_ctx(**config_overrides) -> Context:
+def _make_ctx(*, tool_call_approved: bool = True, **config_overrides) -> RunContext:
     shell = config_overrides.pop("shell", ShellBackend())
-    return Context(deps=CoDeps(
+    deps = CoDeps(
         services=CoServices(shell=shell),
         config=CoConfig(**config_overrides),
-    ))
-
-
-# --- Basic execution ---
+    )
+    return RunContext(
+        deps=deps,
+        model=_AGENT.model,
+        usage=RunUsage(),
+        tool_call_approved=tool_call_approved,
+    )
 
 
 @pytest.mark.asyncio
 async def test_shell_basic_exec():
-    """ShellBackend runs a command and returns output."""
+    """run_shell_command executes a basic shell command and returns stdout."""
     ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "echo hello")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "echo hello")
     assert "hello" in result
 
 
 @pytest.mark.asyncio
 async def test_shell_safe_command_runs_without_deferred_approval():
     """Safe-prefix commands execute even when orchestration approval is absent."""
-    ctx = Context(
-        deps=CoDeps(
-            services=CoServices(shell=ShellBackend()),
-            config=CoConfig(shell_safe_commands=["pwd"]),
-        ),
-        tool_call_approved=False,
-    )
-
-    result = await run_shell_command(ctx, "pwd")
+    ctx = _make_ctx(tool_call_approved=False, shell_safe_commands=["pwd"])
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "pwd")
     assert result.strip()
 
 
 @pytest.mark.asyncio
 async def test_shell_nonzero_exit():
-    """Non-zero exit code raises ModelRetry."""
+    """Non-zero exits surface as ModelRetry for the model loop."""
     ctx = _make_ctx()
-
     with pytest.raises(ModelRetry, match="Shell: command failed"):
-        await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
-
-
-# --- Timeout ---
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await run_shell_command(ctx, "ls /nonexistent_path_xyz_subprocess")
 
 
 @pytest.mark.asyncio
 async def test_shell_timeout():
-    """Command exceeding timeout raises ModelRetry with timeout message."""
+    """Commands exceeding timeout surface a timeout-specific ModelRetry."""
     ctx = _make_ctx()
-
     with pytest.raises(ModelRetry, match="Shell: command timed out"):
-        await run_shell_command(ctx, "sleep 30", timeout=2)
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await run_shell_command(ctx, "sleep 30", timeout=2)
 
 
 @pytest.mark.asyncio
 async def test_shell_timeout_clamped():
-    """Tool clamps timeout to shell_max_timeout ceiling."""
+    """Requested timeout is clamped to shell_max_timeout."""
     ctx = _make_ctx(shell_max_timeout=2)
-
     with pytest.raises(ModelRetry, match="Shell: command timed out"):
-        await run_shell_command(ctx, "sleep 30", timeout=300)
-
-
-# --- Shell features ---
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await run_shell_command(ctx, "sleep 30", timeout=300)
 
 
 @pytest.mark.asyncio
 async def test_shell_pipe():
-    """Pipes work in shell backend."""
+    """Pipes execute through the real shell backend."""
     ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "echo hello world | wc -w")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "echo hello world | wc -w")
     assert result.strip() == "2"
 
 
 @pytest.mark.asyncio
 async def test_shell_requires_deferred_approval_for_unknown_command():
-    """Commands outside the safe allowlist raise ApprovalRequired before execution."""
-    ctx = Context(
-        deps=CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig()),
-        tool_call_approved=False,
-    )
-
+    """Commands outside the safe allowlist must defer before execution."""
+    ctx = _make_ctx(tool_call_approved=False)
     with pytest.raises(ApprovalRequired):
-        await run_shell_command(ctx, "echo hello world | wc -w")
-
-
-@pytest.mark.asyncio
-async def test_shell_requires_approval_without_tool_call_approved():
-    """Shell commands that need approval raise ApprovalRequired when tool_call_approved=False."""
-    ctx = Context(
-        deps=CoDeps(
-            services=CoServices(shell=ShellBackend()),
-            config=CoConfig(),
-        ),
-        tool_call_approved=False,
-    )
-
-    with pytest.raises(ApprovalRequired):
-        await run_shell_command(ctx, "echo hello world | wc -w")
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await run_shell_command(ctx, "echo hello world | wc -w")
 
 
 @pytest.mark.asyncio
 async def test_shell_env_sanitized():
-    """Shell backend sanitizes environment — dangerous vars are stripped."""
+    """Dangerous pager-related env vars are normalized for subprocesses."""
     ctx = _make_ctx()
-
-    # PAGER should be forced to 'cat', not whatever the host has
-    result = await run_shell_command(ctx, "echo $PAGER")
-    assert result.strip() == "cat"
-
-    # GIT_PAGER should also be forced to 'cat'
-    result = await run_shell_command(ctx, "echo $GIT_PAGER")
-    assert result.strip() == "cat"
-
-    # PYTHONUNBUFFERED should be set
-    result = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
-    assert result.strip() == "1"
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        pager = await run_shell_command(ctx, "echo $PAGER")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        git_pager = await run_shell_command(ctx, "echo $GIT_PAGER")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        unbuffered = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
+    assert pager.strip() == "cat"
+    assert git_pager.strip() == "cat"
+    assert unbuffered.strip() == "1"
 
 
 @pytest.mark.asyncio
 async def test_shell_dangerous_env_blocked():
-    """Dangerous env vars from host do NOT propagate to subprocess."""
-    # Temporarily set a dangerous var in our process
+    """Dangerous host env vars do not propagate into the shell subprocess."""
     old = os.environ.get("LD_PRELOAD")
     os.environ["LD_PRELOAD"] = "/tmp/evil.so"
     try:
         ctx = _make_ctx()
-
-        result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
         assert result.strip() == "unset"
     finally:
         if old is None:
@@ -166,51 +129,77 @@ async def test_shell_dangerous_env_blocked():
 
 @pytest.mark.asyncio
 async def test_shell_stderr_merged():
-    """stderr is merged into stdout in shell backend."""
+    """stderr is merged into stdout for downstream model visibility."""
     ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
     assert "err msg" in result
     assert "ok" in result
 
 
 @pytest.mark.asyncio
 async def test_shell_cwd_is_host_cwd():
-    """ShellBackend runs in the host working directory."""
+    """Default shell working directory is the current repository root."""
     ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
     assert "exists" in result
 
 
 @pytest.mark.asyncio
 async def test_shell_variable_expansion():
-    """Shell variable expansion works in shell backend."""
+    """The shell backend preserves normal shell expansion semantics."""
     ctx = _make_ctx()
-
-    result = await run_shell_command(ctx, "X=42 && echo val=$X")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "X=42 && echo val=$X")
     assert "val=42" in result
 
 
 @pytest.mark.asyncio
 async def test_shell_deny_pattern_returns_terminal_error():
-    """DENY-pattern commands return terminal_error dict without deferral or execution."""
+    """Denied commands return a terminal error payload without execution."""
     ctx = _make_ctx()
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "rm -rf /")
+    assert isinstance(result, dict)
+    assert result.get("error") is True
 
-    result = await run_shell_command(ctx, "rm -rf /")
+
+@pytest.mark.asyncio
+async def test_shell_deny_control_character():
+    """Commands containing non-printable control characters are rejected before execution."""
+    ctx = _make_ctx()
+    # U+0001 (SOH) is a control character below 0x20 and not \t or \n
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "echo \x01hello")
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+
+
+@pytest.mark.asyncio
+async def test_shell_deny_heredoc():
+    """Commands containing the heredoc operator << are rejected before execution."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "cat <<EOF\nhello\nEOF")
+    assert isinstance(result, dict)
+    assert result.get("error") is True
+
+
+@pytest.mark.asyncio
+async def test_shell_deny_env_injection():
+    """Commands using VAR=$(...) env-injection pattern are rejected before execution."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "EVIL=$(whoami) && echo $EVIL")
     assert isinstance(result, dict)
     assert result.get("error") is True
 
 
 @pytest.mark.asyncio
 async def test_shell_workspace_dir_param():
-    """ShellBackend respects custom workspace_dir."""
-    backend = ShellBackend(workspace_dir="/tmp")
-    ctx = Context(deps=CoDeps(
-        services=CoServices(shell=backend),
-        config=CoConfig(),
-    ))
-
-    result = await run_shell_command(ctx, "pwd")
-    # /tmp may resolve to /private/tmp on macOS
+    """ShellBackend honors an explicit workspace_dir."""
+    ctx = _make_ctx(shell=ShellBackend(workspace_dir="/tmp"))
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await run_shell_command(ctx, "pwd")
     assert "tmp" in result

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.usage import RunUsage
-from pydantic_ai._run_context import RunContext
+from pydantic_ai import RunContext
 
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 

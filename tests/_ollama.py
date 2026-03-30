@@ -1,4 +1,6 @@
 """Shared Ollama test utilities — not a pytest file."""
+import time
+
 import httpx
 
 from co_cli.config import DEFAULT_LLM_HOST
@@ -13,8 +15,11 @@ async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) 
       next real call starts from a clean slot and is not delayed by cache eviction.
 
     Uses keep_alive=-1 to pin the model for the duration of the test session.
-    Call this before asyncio.timeout for any LLM-calling test.
+    Call this before asyncio.timeout for any LLM-calling test. The warmup itself is
+    intentionally outside the timeout window — it is infrastructure prep, not the
+    behavior under test.
     """
+    t0 = time.monotonic()
     async with httpx.AsyncClient() as client:
         resp = await client.get(f"{llm_host}/api/ps", timeout=5)
         loaded = {m["name"] for m in resp.json().get("models", [])}
@@ -31,4 +36,5 @@ async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) 
             json={"model": model_name, "prompt": "hi", "stream": False, "keep_alive": -1, "options": {"num_predict": 1}},
             timeout=300,
         )
-        print(f"[ollama] {model_name} ready", flush=True)
+    elapsed = time.monotonic() - t0
+    print(f"[ollama] {model_name} ready ({elapsed:.1f}s)", flush=True)

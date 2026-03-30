@@ -359,9 +359,9 @@ def case_banner_produces_output() -> CaseResult:
         tmp = Path(tmp_str)
         try:
             deps = _make_deps(tmp)
-            deps.session.tool_names = ["tool_a", "tool_b"]
-            deps.session.skill_registry = [{"name": "skill_x"}]
-            deps.session.slash_command_count = 1
+            deps.capabilities.tool_names = ["tool_a", "tool_b"]
+            deps.capabilities.skill_registry = [{"name": "skill_x"}]
+            deps.capabilities.slash_command_count = 1
 
             with console.capture() as cap:
                 display_welcome_banner(deps)

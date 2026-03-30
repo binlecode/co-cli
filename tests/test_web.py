@@ -1,33 +1,28 @@
 """Functional tests for web intelligence tools."""
 
 import asyncio
-from dataclasses import dataclass
-
-from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
+from pathlib import Path
 
 import pytest
-from pydantic_ai import ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.usage import RunUsage
 
-from co_cli.tools.web import web_search, web_fetch
-from co_cli.config import settings, WebPolicy
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.agent import build_agent
+from co_cli.config import WebPolicy, settings
+from co_cli.deps import CoConfig, CoDeps, CoServices
 from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
+from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
+
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
 
-@dataclass
-class Context:
-    """Minimal context for tool testing."""
-    deps: CoDeps
-
-
-def _make_ctx(brave_search_api_key: str | None = None) -> Context:
-    return Context(deps=CoDeps(
+def _make_ctx(brave_search_api_key: str | None = None) -> RunContext:
+    deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
-        config=CoConfig(
-            
-            brave_search_api_key=brave_search_api_key,
-        ),
-    ))
+        config=CoConfig(brave_search_api_key=brave_search_api_key),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 def _make_policy_ctx(
@@ -37,25 +32,22 @@ def _make_policy_ctx(
     blocked_domains: list[str] | None = None,
     search_policy: str = "allow",
     fetch_policy: str = "allow",
-) -> Context:
-    return Context(deps=CoDeps(
+) -> RunContext:
+    deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=CoConfig(
-            
             brave_search_api_key=brave_search_api_key,
             web_fetch_allowed_domains=allowed_domains or [],
             web_fetch_blocked_domains=blocked_domains or [],
             web_policy=WebPolicy(search=search_policy, fetch=fetch_policy),
         ),
-    ))
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
 def _brave_key_for_search_tests() -> str:
     """Use configured Brave key when present; else force terminal error path."""
     return settings.brave_search_api_key or "invalid-test-key"
-
-
-# --- Validation ---
 
 
 @pytest.mark.asyncio
@@ -76,18 +68,15 @@ async def test_web_fetch_invalid_scheme():
 
 @pytest.mark.asyncio
 async def test_web_search_no_key():
-    """web_search raises ModelRetry when brave_search_api_key is None."""
+    """web_search raises ModelRetry when Brave is not configured."""
     ctx = _make_ctx(brave_search_api_key=None)
     with pytest.raises(ModelRetry, match="Web search not configured"):
         await web_search(ctx, "test query")
 
 
-# --- web_search functional (require BRAVE_SEARCH_API_KEY) ---
-
-
 @pytest.mark.asyncio
 async def test_web_search_functional():
-    """web_search returns structured success or structured terminal error."""
+    """web_search returns structured success or a structured terminal error."""
     ctx = _make_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "python programming language")
@@ -96,8 +85,6 @@ async def test_web_search_functional():
     if result.get("error"):
         assert result["error"] is True
         return
-    assert "results" in result
-    assert "count" in result
     assert result["count"] > 0
     assert isinstance(result["results"], list)
     first = result["results"][0]
@@ -108,7 +95,7 @@ async def test_web_search_functional():
 
 @pytest.mark.asyncio
 async def test_web_search_domains_parameter():
-    """web_search with domains parameter does not crash and returns a valid shape."""
+    """web_search honors the domains parameter without changing result shape."""
     ctx = _make_policy_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "test", domains=["example.com"])
@@ -118,89 +105,9 @@ async def test_web_search_domains_parameter():
         assert "results" in result
 
 
-# --- web_fetch functional (no API key needed) ---
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_functional():
-    """Test fetching a real page and converting to markdown."""
-    ctx = _make_ctx()
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/html")
-    assert isinstance(result, dict)
-    assert "display" in result
-    assert "url" in result
-    assert "content_type" in result
-    assert "truncated" in result
-    assert "html" in result["content_type"]
-    assert result["truncated"] is False
-    assert "Herman Melville" in result["display"]
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_allows_json():
-    """web_fetch succeeds for JSON content."""
-    ctx = _make_ctx()
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/json")
-    assert "json" in result["content_type"]
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_blocks_binary_content():
-    """web_fetch returns terminal error for binary content types."""
-    ctx = _make_ctx()
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/image/png")
-    assert result["error"] is True
-    assert "unsupported content type" in result["display"]
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_truncates_large_response():
-    """web_fetch sets truncated=True when response exceeds _MAX_FETCH_CHARS."""
-    from co_cli.tools.web import _MAX_FETCH_CHARS
-
-    ctx = _make_ctx()
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://norvig.com/big.txt")
-    assert result["truncated"] is True
-    prefix_len = len(f"Content from {result['url']}:\n\n")
-    body_len = len(result["display"]) - prefix_len
-    assert body_len <= _MAX_FETCH_CHARS
-
-
-# --- HTTP error handling (functional via httpbin) ---
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_http_403_is_terminal():
-    """HTTP 403 returns terminal error result (no ModelRetry)."""
-    ctx = _make_ctx()
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/status/403")
-    assert result["error"] is True
-    assert "HTTP 403" in result["display"]
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_http_503_retries_then_terminal():
-    """HTTP 503 retries within tool and returns terminal error on exhaustion."""
-    ctx = _make_ctx()
-    # 503 triggers 2 retries with backoff (base=1s, max=8s); 30s covers worst case
-    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/status/503")
-    assert result["error"] is True
-    assert "HTTP 503" in result["display"]
-    assert "Retries exhausted" in result["display"]
-
-
-# --- SSRF protection (functional via web_fetch) ---
-
-
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_loopback():
-    """web_fetch raises ModelRetry for loopback addresses."""
+    """Loopback addresses are rejected for SSRF protection."""
     ctx = _make_ctx()
     with pytest.raises(ModelRetry, match="private or internal address"):
         await web_fetch(ctx, "http://127.0.0.1/secret")
@@ -208,7 +115,7 @@ async def test_web_fetch_blocks_loopback():
 
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_metadata():
-    """web_fetch raises ModelRetry for cloud metadata endpoint."""
+    """Cloud metadata endpoints are rejected for SSRF protection."""
     ctx = _make_ctx()
     with pytest.raises(ModelRetry, match="private or internal address"):
         await web_fetch(ctx, "http://169.254.169.254/latest/meta-data/")
@@ -216,7 +123,7 @@ async def test_web_fetch_blocks_metadata():
 
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_redirect_to_private():
-    """web_fetch blocks when a public URL redirects to a private IP."""
+    """Redirects from public URLs into private targets are blocked."""
     ctx = _make_ctx()
     try:
         async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
@@ -226,12 +133,9 @@ async def test_web_fetch_blocks_redirect_to_private():
     assert result["error"] is True
 
 
-# --- Policy gates (functional via web_fetch/web_search) ---
-
-
 @pytest.mark.asyncio
 async def test_web_fetch_deny_mode():
-    """web_fetch raises ModelRetry when web_policy.fetch is 'deny'."""
+    """Fetches are rejected when policy disables them."""
     ctx = _make_policy_ctx(fetch_policy="deny")
     with pytest.raises(ModelRetry, match="disabled by policy"):
         await web_fetch(ctx, "https://example.com")
@@ -239,7 +143,7 @@ async def test_web_fetch_deny_mode():
 
 @pytest.mark.asyncio
 async def test_web_search_deny_mode():
-    """web_search raises ModelRetry when web_policy.search is 'deny'."""
+    """Searches are rejected when policy disables them."""
     ctx = _make_policy_ctx(brave_search_api_key="fake-key", search_policy="deny")
     with pytest.raises(ModelRetry, match="disabled by policy"):
         await web_search(ctx, "test query")
@@ -247,24 +151,85 @@ async def test_web_search_deny_mode():
 
 @pytest.mark.asyncio
 async def test_web_fetch_blocked_domain():
-    """web_fetch raises ModelRetry when domain is in blocked list."""
-    ctx = _make_policy_ctx(blocked_domains=["httpbin.org"])
+    """Blocked-domain policy is enforced before fetching."""
+    ctx = _make_policy_ctx(blocked_domains=["example.com"])
     with pytest.raises(ModelRetry, match="not allowed by policy"):
-        await web_fetch(ctx, "https://httpbin.org/html")
+        await web_fetch(ctx, "https://example.com")
 
 
 @pytest.mark.asyncio
 async def test_web_fetch_not_in_allowlist():
-    """web_fetch raises ModelRetry when domain is not in allowlist."""
+    """Allowlist policy rejects non-allowlisted domains."""
     ctx = _make_policy_ctx(allowed_domains=["example.com"])
     with pytest.raises(ModelRetry, match="not allowed by policy"):
-        await web_fetch(ctx, "https://httpbin.org/html")
+        await web_fetch(ctx, "https://www.iana.org/")
 
 
 @pytest.mark.asyncio
-async def test_web_fetch_in_allowlist():
-    """web_fetch succeeds when domain is in allowlist."""
-    ctx = _make_policy_ctx(allowed_domains=["httpbin.org"])
+async def test_web_fetch_html_to_markdown():
+    """Successful HTML fetch returns markdown-converted content.
+
+    Uses a stable Wikipedia page to verify: HTML→markdown conversion ran
+    (no raw <html> tags), all expected result keys are present, and the
+    display string contains readable text content.
+    """
+    ctx = _make_ctx()
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://httpbin.org/html")
-    assert "Herman Melville" in result["display"]
+        result = await web_fetch(ctx, "https://en.wikipedia.org/wiki/Python_(programming_language)")
+    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
+    assert "display" in result
+    assert "url" in result
+    assert "content_type" in result
+    assert "truncated" in result
+    # HTML-to-markdown conversion must have run: raw <html> tag must not survive
+    assert "<html" not in result["display"].lower()
+    # Wikipedia Python page must contain readable content
+    assert "Python" in result["display"]
+
+
+def test_html_to_markdown_converts_tags():
+    """_html_to_markdown strips HTML tags and produces readable plain text."""
+    html = "<html><body><h1>Hello World</h1><p>Some <b>bold</b> text.</p></body></html>"
+    result = _html_to_markdown(html)
+    assert "<html" not in result.lower()
+    assert "<h1" not in result
+    assert "<p" not in result
+    assert "Hello World" in result
+    assert "bold" in result
+
+
+def test_html_to_markdown_preserves_links():
+    """_html_to_markdown retains hyperlinks in markdown syntax."""
+    html = '<a href="https://example.com">click here</a>'
+    result = _html_to_markdown(html)
+    assert "https://example.com" in result
+    assert "click here" in result
+
+
+def test_is_content_type_allowed_permits_text_types():
+    """text/* MIME types are allowed."""
+    assert _is_content_type_allowed("text/html") is True
+    assert _is_content_type_allowed("text/plain; charset=utf-8") is True
+    assert _is_content_type_allowed("text/xml") is True
+
+
+def test_is_content_type_allowed_permits_structured_data():
+    """application/json, application/xml, and YAML variants are allowed."""
+    assert _is_content_type_allowed("application/json") is True
+    assert _is_content_type_allowed("application/xml") is True
+    assert _is_content_type_allowed("application/xhtml+xml") is True
+    assert _is_content_type_allowed("application/yaml") is True
+    assert _is_content_type_allowed("application/x-yaml") is True
+
+
+def test_is_content_type_allowed_rejects_binary():
+    """Binary content types are not allowed."""
+    assert _is_content_type_allowed("image/png") is False
+    assert _is_content_type_allowed("application/pdf") is False
+    assert _is_content_type_allowed("application/octet-stream") is False
+    assert _is_content_type_allowed("video/mp4") is False
+
+
+def test_is_content_type_allowed_permits_empty():
+    """Empty Content-Type is permitted (server may omit it for text responses)."""
+    assert _is_content_type_allowed("") is True

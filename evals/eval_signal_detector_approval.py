@@ -142,8 +142,7 @@ async def main() -> int:
     print("=" * 60)
     print()
 
-    # TODO: source model_settings from make_eval_settings()
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     model = agent.model
 
     t0 = time.monotonic()

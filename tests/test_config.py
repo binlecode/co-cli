@@ -6,11 +6,11 @@ Tests exercise real load_config() — no mocks.
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import pytest
-from pydantic import ValidationError
 
-import co_cli.config as config_module
-from co_cli.config import find_project_config, load_config, Settings, ROLE_REASONING
+from co_cli.config import load_config, ROLE_REASONING
 
 
 def test_project_config_overrides_user(tmp_path):
@@ -167,20 +167,35 @@ def test_env_overrides_web_policy(tmp_path):
     assert settings.web_policy.fetch == "deny"
 
 
-def test_web_http_retry_bounds_validation():
-    """Backoff base must not exceed backoff max."""
-    with pytest.raises(ValidationError, match="web_http_backoff_base_seconds"):
-        Settings(
-            web_http_backoff_base_seconds=10.0,
-            web_http_backoff_max_seconds=1.0,
+def test_invalid_web_retry_bounds_in_project_config_raise_value_error(tmp_path):
+    """Invalid retry bounds must fail through the real config loader with file attribution."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    project_config_path = project_dir / ".co-cli" / "settings.json"
+    project_config_path.write_text(json.dumps({
+        "web_http_backoff_base_seconds": 10.0,
+        "web_http_backoff_max_seconds": 1.0,
+    }))
+
+    with pytest.raises(ValueError, match=str(project_config_path)):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
         )
 
 
-def test_personality_validation():
-    """Valid personality passes; invalid raises ValidationError."""
-    assert Settings(personality="finch").personality == "finch"
-    with pytest.raises(ValidationError, match="personality must be one of"):
-        Settings(personality="invalid")
+def test_invalid_personality_in_project_config_raises_value_error(tmp_path):
+    """Invalid personality values fail through load_config instead of direct model construction."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    project_config_path = project_dir / ".co-cli" / "settings.json"
+    project_config_path.write_text(json.dumps({"personality": "invalid"}))
+
+    with pytest.raises(ValueError, match=str(project_config_path)):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
+        )
 
 
 def test_default_provider_is_ollama_openai(tmp_path):
@@ -233,27 +248,39 @@ def test_invalid_project_config_schema_names_file(tmp_path):
             _project_dir=project_dir,
         )
 
-def test_gemini_api_key_not_written_to_env():
-    """build_agent() must not mutate os.environ['GEMINI_API_KEY'] — key is injected via GoogleProvider."""
-    import os
-    from co_cli.agent import build_agent
-    from co_cli.config import settings
-    from co_cli.deps import CoConfig
+def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
+    """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
+        "llm_provider": "gemini",
+        "llm_api_key": "settings-key-wins",
+    }))
 
-    original_env = os.environ.get("GEMINI_API_KEY")
-    original_key = settings.llm_api_key
-    original_provider = settings.llm_provider
-    try:
-        os.environ["GEMINI_API_KEY"] = "stale-key-from-env"
-        settings.llm_api_key = "settings-key-wins"
-        settings.llm_provider = "gemini"
-        build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
-        # Key is passed directly to GoogleProvider — env var must be untouched
-        assert os.environ["GEMINI_API_KEY"] == "stale-key-from-env"
-    finally:
-        settings.llm_api_key = original_key
-        settings.llm_provider = original_provider
-        if original_env is None:
-            os.environ.pop("GEMINI_API_KEY", None)
-        else:
-            os.environ["GEMINI_API_KEY"] = original_env
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path.cwd())
+    env["GEMINI_API_KEY"] = "stale-key-from-env"
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "from co_cli.agent import build_agent; "
+                "from co_cli.config import load_config; "
+                "from co_cli.deps import CoConfig; "
+                "import os; "
+                "loaded = load_config(_user_config_path=Path('missing.json'), _project_dir=Path.cwd()); "
+                "build_agent(config=CoConfig.from_settings(loaded, cwd=Path.cwd())); "
+                "print(os.environ['GEMINI_API_KEY'])"
+            ),
+        ],
+        cwd=project_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert proc.stdout.strip() == "stale-key-from-env"
