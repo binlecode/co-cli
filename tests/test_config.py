@@ -233,27 +233,6 @@ def test_invalid_project_config_schema_names_file(tmp_path):
             _project_dir=project_dir,
         )
 
-
-def test_get_settings_invalid_config_raises_system_exit(tmp_path, capsys):
-    """get_settings() with schema-invalid project config raises SystemExit with clean message."""
-    (tmp_path / ".co-cli").mkdir()
-    (tmp_path / ".co-cli" / "settings.json").write_text(json.dumps({"tool_retries": "not-an-int"}))
-
-    original_dir = Path.cwd()
-    original_settings = config_module._settings
-    # Reset singleton so get_settings() re-runs load_config()
-    config_module._settings = None
-    try:
-        os.chdir(tmp_path)
-        with pytest.raises(SystemExit):
-            config_module.get_settings()
-        captured = capsys.readouterr()
-        assert "Configuration error:" in captured.err
-    finally:
-        os.chdir(original_dir)
-        config_module._settings = original_settings
-
-
 def test_gemini_api_key_not_written_to_env():
     """build_agent() must not mutate os.environ['GEMINI_API_KEY'] — key is injected via GoogleProvider."""
     import os

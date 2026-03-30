@@ -66,7 +66,7 @@ These modules are the top-level owners of runtime behavior:
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash-command dispatch, startup sequencing, session persistence, background-compaction handoff |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()`, resolved config, startup degradation, service construction |
-| `co_cli/agent.py` | `build_agent()`, dynamic instructions, native tool registration, MCP toolset attachment |
+| `co_cli/agent.py` | `build_agent()` (main agent: dynamic instructions, native tool registration, MCP toolset attachment), `build_task_agent()` (lightweight task agent for approval resume turns), `_build_filtered_toolset()` (conditional domain-tool registration + per-request schema filtering via `active_tool_filter`), `_build_mcp_toolsets()` |
 | `co_cli/deps.py` | the runtime contract shared by tools, loop code, and sub-agents |
 | `co_cli/context/_orchestrate.py` | `run_turn()`, streaming segments, deferred approvals, retry behavior, turn result assembly |
 
@@ -78,20 +78,20 @@ Its shape is grouped by ownership, not by feature:
 
 ```text
 CoDeps
-├── services  shared runtime handles
-├── config    resolved read-only session config
-├── tools     bootstrap-set tool discovery metadata
-├── session   mutable session state visible to tools
-└── runtime   mutable orchestration state for the current run
+├── services      shared runtime handles
+├── config        resolved read-only session config
+├── capabilities  bootstrap-set tool discovery metadata
+├── session       mutable session state visible to tools
+└── runtime       mutable orchestration state for the current run
 ```
 
 The practical rule is:
 
 | Group | Holds |
 | --- | --- |
-| `services` | long-lived handles such as shell backend, knowledge index, model registry, task runner |
+| `services` | long-lived handles such as shell backend, knowledge index, model registry, task runner, task agent |
 | `config` | resolved read-only settings for this session |
-| `tools` | tool names, approval map, and MCP discovery errors — set during startup and shared by reference with sub-agents |
+| `capabilities` | tool names, approval map, and MCP discovery errors — set during startup and shared by reference with sub-agents |
 | `session` | mutable state that lasts across turns in the current REPL session |
 | `runtime` | mutable state used by turn execution and orchestration internals |
 
@@ -145,7 +145,7 @@ The table below answers: when is each field set, who resets it, and what happens
 3. choose degraded-but-usable startup modes when reranking or knowledge backends are unavailable
 4. build shared services and initial runtime state
 
-`build_agent()` takes that resolved state and constructs the main agent: base prompt, dynamic instruction layers, native tools, and optional MCP toolset definitions.
+`build_agent()` takes that resolved state and constructs the main agent: base prompt, dynamic instruction layers, native tools, and optional MCP toolset definitions. `build_task_agent()` is called immediately after with the `ROLE_TASK` resolved model to build the lightweight task agent stored in `deps.services.task_agent` for approval resume turns.
 
 The key boundary is:
 

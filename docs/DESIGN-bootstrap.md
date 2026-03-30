@@ -145,7 +145,7 @@ Layer 3: env vars via fill_from_env model_validator
 
 `role_models` defaults:
 - `gemini`: reasoning only → `gemini-3-flash-preview`; all other roles empty
-- `ollama-openai`: all five roles populated with hardcoded defaults in `config.py`
+- `ollama-openai`: all six roles populated with hardcoded defaults in `config.py`
 
 Merge order is provider defaults for missing roles, then explicit config values, then env var overrides.
 

@@ -167,7 +167,7 @@ def test_storage_cleanup_skips_running(storage: TaskStorage):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_runner_start_and_complete(runner: TaskRunner):
+async def test_runner_start_and_complete(runner: TaskRunner, storage: TaskStorage):
     """Start a real echo command, wait for completion."""
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         task_id = await runner.start_task("echo hello_world", str(Path.cwd()))
@@ -186,8 +186,8 @@ async def test_runner_start_and_complete(runner: TaskRunner):
     assert meta["exit_code"] == 0
 
     # Output log should contain "hello_world"
-    output = runner._storage.output_path(task_id).read_text()
-    assert "hello_world" in output
+    output_lines = storage.tail_output(task_id, n=20)
+    assert any("hello_world" in line for line in output_lines)
 
 
 @pytest.mark.asyncio

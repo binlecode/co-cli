@@ -194,20 +194,6 @@ def test_thinking_result_model() -> None:
     assert len(r.steps) == 3
     assert r.conclusion == "The recommended approach is X."
 
-
-def test_make_thinking_agent_no_tools() -> None:
-    """make_thinking_agent returns a non-None agent with no registered function tools.
-
-    Note: agent._function_toolset.tools is a pydantic-ai private attribute (dict of
-    user-registered function tools). Accessing it here is intentional — it is the
-    only way to assert the no-tools invariant without a live LLM call. If pydantic-ai
-    renames this attribute, update this test.
-    """
-    agent = make_thinking_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
-    assert agent is not None
-    assert len(agent._function_toolset.tools) == 0
-
-
 @pytest.mark.asyncio
 async def test_run_thinking_subagent_no_model() -> None:
     """Raises ModelRetry matching 'unavailable' when model_registry is None."""

@@ -32,7 +32,7 @@ There is no separate primary/fallback settings tier.
 `role_models` is `dict[str, ModelConfig]` — one model per role:
 
 - Mandatory role: `reasoning` (a single `ModelConfig` required — raises `ValueError` at startup if absent).
-- Optional roles: `summarization`, `coding`, `research`, `analysis` (absent/missing disables that role).
+- Optional roles: `summarization`, `coding`, `research`, `analysis`, `task` (absent/missing disables that role).
 - Each entry is a `ModelConfig(model, api_params, provider?)` — plain model name strings are coerced to `ModelConfig` by `_parse_role_models`. Dict entries are accepted directly; `ModelConfig` instances on re-validation are serialized via `model_dump()`.
 
 Example:
@@ -51,7 +51,7 @@ Example:
 
 When `role_models` is not configured, provider defaults are injected for all roles:
 - `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama-openai`: all five roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization/analysis/research → `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`; coding → `qwen3.5:35b-a3b-code`
+- `ollama-openai`: all six roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization/analysis/research/task → `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`; coding → `qwen3.5:35b-a3b-code`
 
 ### ModelRegistry and ResolvedModel
 
@@ -96,6 +96,7 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 | `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model chain |
 | `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model chain |
 | `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model chain |
+| `role_models["task"]` | `CO_MODEL_ROLE_TASK` | provider default when absent | Optional task agent model for approval resume turns (no personality, `reasoning_effort: none`) |
 
 ## 4. Provider Quirks
 

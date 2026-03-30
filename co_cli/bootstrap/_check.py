@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps, CoConfig
 
-from co_cli.config import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
+from co_cli.config import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK
 
 
 @dataclass
@@ -158,7 +158,7 @@ def check_agent_llm(config: "CoConfig") -> CheckResult:
         )
 
     missing_optional: list[str] = []
-    for role in (ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
+    for role in (ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK):
         entry = config.role_models.get(role)
         if entry and entry.model not in installed:
             missing_optional.append(f"{role}: {entry.model}")

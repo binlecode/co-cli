@@ -180,6 +180,10 @@ class Frontend(Protocol):
         """Status messages (e.g. 'Co is thinking...')."""
         ...
 
+    def on_reasoning_progress(self, text: str) -> None:
+        """Reasoning progress update (e.g. intermediate reasoning steps)."""
+        ...
+
     def on_final_output(self, text: str) -> None:
         """Fallback Markdown render when streaming didn't emit text."""
         ...
@@ -214,11 +218,34 @@ class TerminalFrontend:
         self._active_tools: dict[str, str] = {}
         # tool_call_id → stable original label (set once in on_tool_start, never overwritten)
         self._tool_labels: dict[str, str] = {}
+        # last text set via on_status or on_reasoning_progress; None when status surface is cleared
+        self._status_text: str | None = None
+
+    def active_surface(self) -> str:
+        """Return the currently active public display surface name."""
+        if self._live is not None:
+            return "text"
+        if self._thinking_live is not None:
+            return "thinking"
+        if self._tool_live is not None:
+            return "tool"
+        if self._status_live is not None:
+            return "status"
+        return "none"
+
+    def active_tool_messages(self) -> tuple[str, ...]:
+        """Return the currently rendered tool labels/messages."""
+        return tuple(self._active_tools.values())
+
+    def active_status_text(self) -> str | None:
+        """Return the text currently shown in the status surface, or None if inactive."""
+        return self._status_text
 
     def _clear_status_live(self) -> None:
         if self._status_live is not None:
             self._status_live.stop()
             self._status_live = None
+            self._status_text = None
             console.print("")
 
     def on_text_delta(self, accumulated: str) -> None:
@@ -313,6 +340,7 @@ class TerminalFrontend:
 
     def on_tool_progress(self, tool_id: str, message: str) -> None:
         """Tool lifecycle: in-progress update from a running tool."""
+        self._clear_status_live()
         self._active_tools[tool_id] = message
         self._refresh_tool_live()
 
@@ -322,7 +350,22 @@ class TerminalFrontend:
         self._render_tool_panel(label, result)
 
     def on_status(self, message: str) -> None:
+        self._status_text = message
         renderable = Text(message, style="dim")
+        if self._status_live is None:
+            self._status_live = Live(
+                renderable, console=console, auto_refresh=False, transient=False,
+            )
+            self._status_live.start()
+        else:
+            self._status_live.update(renderable)
+        self._status_live.refresh()
+
+    def on_reasoning_progress(self, text: str) -> None:
+        if not text or not text.strip():
+            return
+        self._status_text = text
+        renderable = Text(text, style="status")
         if self._status_live is None:
             self._status_live = Live(
                 renderable, console=console, auto_refresh=False, transient=False,
@@ -365,5 +408,6 @@ class TerminalFrontend:
         self._status_live = None
         self._thinking_live = None
         self._live = None
+        self._status_text = None
         self._active_tools.clear()
         self._tool_labels.clear()

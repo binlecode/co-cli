@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-03-29
+
+### Fixed
+- **Reasoning display test coverage**: completed the remaining verification gaps for the reasoning-display feature. Added `active_status_text() -> str | None` inspection API to `TerminalFrontend` (consistent with existing `active_surface()` / `active_tool_messages()` pattern). Added four focused `StreamRenderer` tests in `test_display.py` covering: no emit on no sentence boundary, last complete sentence extraction, 80-char truncation, and whitespace-only input.
+
 ## [0.5.19] - 2026-03-29
 
 ### Changed

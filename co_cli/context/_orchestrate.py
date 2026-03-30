@@ -43,7 +43,10 @@ from co_cli.tools._tool_approvals import (
     record_approval_choice,
     resolve_approval_subject,
 )
+from co_cli.config import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY, ROLE_TASK
 from co_cli.deps import CoDeps
+from co_cli._model_factory import ResolvedModel
+from co_cli.agent import _ALWAYS_ON_TOOL_NAMES
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +183,7 @@ async def _execute_stream_segment(
     agent: Agent,
     deps: CoDeps,
     model_settings: dict | None,
-    verbose: bool,
+    reasoning_display: str,
     frontend: Frontend,
 ) -> None:
     """Run one stream segment and update turn state in-place.
@@ -196,7 +199,7 @@ async def _execute_stream_segment(
     StreamRenderer. Tool display metadata is owned by _display_hints.
     """
     result = None
-    renderer = StreamRenderer(frontend)
+    renderer = StreamRenderer(frontend, reasoning_display=reasoning_display)
 
     try:
         async for event in agent.run_stream_events(
@@ -209,7 +212,7 @@ async def _execute_stream_segment(
         ):
             if isinstance(event, PartStartEvent):
                 if isinstance(event.part, ThinkingPart):
-                    renderer.append_thinking(event.part.content, verbose=verbose)
+                    renderer.append_thinking(event.part.content)
                     continue
                 if isinstance(event.part, TextPart):
                     renderer.append_text(event.part.content)
@@ -217,7 +220,7 @@ async def _execute_stream_segment(
 
             if isinstance(event, PartDeltaEvent):
                 if isinstance(event.delta, ThinkingPartDelta):
-                    renderer.append_thinking(event.delta.content_delta or "", verbose=verbose)
+                    renderer.append_thinking(event.delta.content_delta or "")
                     continue
                 if isinstance(event.delta, TextPartDelta):
                     renderer.append_text(event.delta.content_delta)
@@ -232,7 +235,9 @@ async def _execute_stream_segment(
                 renderer.flush_for_tool_output()
                 tool_id = event.tool_call_id
                 name = event.part.tool_name
-                frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+                # In summary mode annotations are suppressed — tool result panel is sufficient feedback
+                if reasoning_display != REASONING_DISPLAY_SUMMARY:
+                    frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
                 renderer.install_progress(deps, tool_id)
                 continue
 
@@ -270,29 +275,46 @@ async def _execute_stream_segment(
     _merge_turn_usage(deps, turn_state.latest_usage)
 
 
+def _resolve_task_model_settings(deps: CoDeps) -> dict | None:
+    """Return ROLE_TASK model_settings from the registry, or None if not configured."""
+    if not deps.services.model_registry:
+        return None
+    resolved = deps.services.model_registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+    return resolved.settings
+
+
 async def _run_approval_loop(
     turn_state: _TurnState,
     agent: Agent,
     deps: CoDeps,
     model_settings: dict | None,
-    verbose: bool,
+    reasoning_display: str,
     frontend: Frontend,
 ) -> None:
     """Run approval-resume segments until no deferred tool requests remain.
 
     Each iteration: collect approvals → prepare resume → execute segment.
+    Resume segments run on the task agent (short system prompt, no personality,
+    reasoning_effort=none) when available, falling back to the main agent.
     Exits when latest_result.output is no longer DeferredToolRequests.
     """
     while isinstance(turn_state.latest_result.output, DeferredToolRequests):
+        deps.runtime.active_tool_filter = (
+            {call.tool_name for call in turn_state.latest_result.output.approvals}
+            | _ALWAYS_ON_TOOL_NAMES
+        )
         approvals = await _collect_deferred_tool_approvals(
             turn_state.latest_result, deps, frontend
         )
         turn_state.current_input = None
         turn_state.current_history = turn_state.latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
+        resume_agent = deps.services.task_agent or agent
+        resume_settings = _resolve_task_model_settings(deps) or model_settings
         await _execute_stream_segment(
-            turn_state, agent, deps, model_settings, verbose, frontend
+            turn_state, resume_agent, deps, resume_settings, reasoning_display, frontend
         )
+    deps.runtime.active_tool_filter = None
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
@@ -397,7 +419,7 @@ async def run_turn(
     deps: CoDeps,
     message_history: list,
     model_settings: dict | None = None,
-    verbose: bool = False,
+    reasoning_display: str = DEFAULT_REASONING_DISPLAY,
     frontend: Frontend,
 ) -> TurnResult:
     """Execute one LLM turn: streaming, approval chaining, error handling.
@@ -427,11 +449,11 @@ async def run_turn(
             while True:
                 try:
                     await _execute_stream_segment(
-                        turn_state, agent, deps, model_settings, verbose, frontend
+                        turn_state, agent, deps, model_settings, reasoning_display, frontend
                     )
 
                     await _run_approval_loop(
-                        turn_state, agent, deps, model_settings, verbose, frontend
+                        turn_state, agent, deps, model_settings, reasoning_display, frontend
                     )
                     turn_state.current_history = turn_state.latest_result.all_messages()
                     if not turn_state.latest_streamed_text and isinstance(turn_state.latest_result.output, str):

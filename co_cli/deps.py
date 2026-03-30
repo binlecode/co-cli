@@ -54,6 +54,7 @@ from co_cli.config import (
     DEFAULT_BACKGROUND_TASK_RETENTION_DAYS,
     DEFAULT_BACKGROUND_AUTO_CLEANUP,
     DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT,
+    DEFAULT_REASONING_DISPLAY,
 )
 from co_cli.tools._shell_backend import ShellBackend
 
@@ -68,6 +69,7 @@ from co_cli.commands._skill_types import SkillConfig
 from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
+    from pydantic_ai import Agent, DeferredToolRequests
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
 
@@ -112,6 +114,7 @@ class CoServices:
     knowledge_index: Any | None = field(default=None, repr=False)
     task_runner: Any | None = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
+    task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,7 @@ class CoConfig:
     knowledge_embedding_model: str = DEFAULT_KNOWLEDGE_EMBEDDING_MODEL
     knowledge_embedding_dims: int = DEFAULT_KNOWLEDGE_EMBEDDING_DIMS
     theme: str = "light"
+    reasoning_display: str = DEFAULT_REASONING_DISPLAY
     mcp_servers: dict[str, "MCPServerConfig"] = field(default_factory=dict)
     role_models: dict[str, ModelConfig] = field(default_factory=dict)
     llm_host: str = DEFAULT_LLM_HOST
@@ -275,6 +279,7 @@ class CoConfig:
             # fall back to the XDG data dir when unset.
             library_dir=Path(s.library_path) if s.library_path else DATA_DIR / "library",
             theme=s.theme,
+            reasoning_display=s.reasoning_display,
             role_models=dict(s.role_models),
             mcp_servers=resolved_servers,
             llm_host=s.llm_host,
@@ -339,7 +344,7 @@ class CoRuntimeState:
     should be explicitly justified.
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
-      turn_usage, safety_state, tool_progress_callback
+      turn_usage, safety_state, tool_progress_callback, active_tool_filter
     Cross-turn (managed by orchestration layer):
       precomputed_compaction, active_skill_name
     """
@@ -357,6 +362,11 @@ class CoRuntimeState:
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
+    # active_tool_filter: per-resume-segment schema filter.
+    # None = no filter; all registered tools visible (main agent turns).
+    # set  = only these names visible; always includes _ALWAYS_ON_TOOL_NAMES.
+    # Lifecycle: set in _run_approval_loop per resume hop; cleared after loop + reset_for_turn().
+    active_tool_filter: set[str] | None = None
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call.
@@ -368,6 +378,7 @@ class CoRuntimeState:
         self.turn_usage = None
         self.safety_state = SafetyState()
         self.tool_progress_callback = None
+        self.active_tool_filter = None
 
 
 @dataclass

@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
+from pydantic_ai.tools import ToolDefinition
 
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
 from co_cli.deps import CoDeps, CoConfig
@@ -37,6 +39,15 @@ from co_cli.tools.task_control import (
 
 logger = logging.getLogger(__name__)
 
+# Tools that must remain visible on every segment, including approval-resume turns.
+# The model needs these to report status, manage session todos, and check capabilities
+# even when the filter is narrowed to only the deferred tool names.
+_ALWAYS_ON_TOOL_NAMES: frozenset[str] = frozenset({
+    "check_capabilities",
+    "todo_read",
+    "todo_write",
+})
+
 
 @dataclass(frozen=True)
 class AgentCapabilityResult:
@@ -44,6 +55,143 @@ class AgentCapabilityResult:
     agent: Agent[CoDeps, str | DeferredToolRequests]
     tool_names: list[str]
     tool_approvals: dict[str, bool]
+
+
+def _build_mcp_toolsets(config: CoConfig) -> list:
+    """Build pydantic-ai MCP toolset objects from config.mcp_servers."""
+    if not config.mcp_servers:
+        return []
+    from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
+
+    mcp_toolsets = []
+    for name, cfg in config.mcp_servers.items():
+        if cfg.url:
+            # HTTP transport — SSE when URL ends with /sse, else StreamableHTTP
+            if cfg.url.rstrip("/").endswith("/sse"):
+                server = MCPServerSSE(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+            else:
+                server = MCPServerStreamableHTTP(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+        else:
+            env = dict(cfg.env) if cfg.env else {}
+            server = MCPServerStdio(
+                cfg.command,
+                args=cfg.args,
+                timeout=cfg.timeout,
+                env=env or None,
+                tool_prefix=cfg.prefix or name,
+            )
+        if cfg.approval == "ask":
+            server = server.approval_required()
+        mcp_toolsets.append(server)
+    return mcp_toolsets
+
+
+def _build_filtered_toolset(
+    config: CoConfig,
+) -> "tuple[AbstractToolset[CoDeps], dict[str, bool]]":
+    """Build a FilteredToolset containing all tools for this config.
+
+    Tools are registered into a FunctionToolset and wrapped with a FilteredToolset
+    that reads deps.runtime.active_tool_filter per request. When the filter is None
+    (main agent turns), all tools are visible. When set (approval-resume turns), only
+    the named tools plus _ALWAYS_ON_TOOL_NAMES are sent to the model.
+
+    Domain tools (obsidian, google) are conditionally excluded when the relevant
+    config paths are absent — they would fail at runtime regardless, so there is no
+    point sending their schemas.
+
+    Returns (filtered_toolset, tool_approvals) where tool_approvals maps each
+    registered tool name to its requires_approval flag.
+    """
+    inner: FunctionToolset[CoDeps] = FunctionToolset()
+    tool_approvals: dict[str, bool] = {}
+
+    def _reg(fn, requires_approval: bool, retries: int | None = None) -> None:
+        kwargs: dict[str, Any] = {"requires_approval": requires_approval}
+        if retries is not None:
+            kwargs["retries"] = retries
+        inner.add_function(fn, **kwargs)
+        tool_approvals[fn.__name__] = requires_approval
+
+    # Background task management
+    _reg(start_background_task, True)
+    _reg(check_task_status, False)
+    _reg(cancel_background_task, False)
+    _reg(list_background_tasks, False)
+
+    # Capability introspection — no approval (read-only, no side effects)
+    _reg(check_capabilities, False)
+
+    # Sub-agent tools — registered only when the role model is configured
+    if config.role_models.get(ROLE_CODING):
+        _reg(run_coder_subagent, False)
+    if config.role_models.get(ROLE_RESEARCH):
+        _reg(run_research_subagent, False)
+    if config.role_models.get(ROLE_ANALYSIS):
+        _reg(run_analysis_subagent, False)
+    if config.role_models.get(ROLE_REASONING):
+        _reg(run_thinking_subagent, False)
+
+    # Native file tools — write-once tier: retries=1 (a second attempt on failure is safe)
+    _reg(list_directory, False)
+    _reg(read_file, False)
+    _reg(find_in_files, False)
+    _reg(write_file, True, retries=1)
+    _reg(edit_file, True, retries=1)
+
+    # Shell: fine-grained policy lives inside the tool (DENY/safe-prefix/ask).
+    # Agent-layer approval is False; the tool raises ApprovalRequired for commands
+    # that need user confirmation.
+    _reg(run_shell_command, False)
+    # Write-once tier: single retry for transient failures
+    _reg(save_memory, True, retries=1)
+    _reg(save_article, True, retries=1)
+    _reg(update_memory, True, retries=1)
+    _reg(append_memory, True, retries=1)
+
+    # Session task tracking — no approval (in-memory only, no external side effects)
+    _reg(todo_write, False)
+    _reg(todo_read, False)
+
+    # Read-only tools — no approval needed
+    _reg(list_memories, False)
+    _reg(search_memories, False)
+    _reg(read_article_detail, False)
+    _reg(search_knowledge, False)
+    _reg(recall_article, False)
+
+    # Domain tools — conditional on config presence; excluded when integration absent
+    if config.obsidian_vault_path:
+        _reg(list_notes, False)
+        _reg(search_notes, False)
+        _reg(read_note, False)
+
+    if config.google_credentials_path:
+        # Network tier: retries=3 for transient connectivity failures
+        _reg(search_drive_files, False, retries=3)
+        _reg(read_drive_file, False, retries=3)
+        _reg(list_emails, False, retries=3)
+        _reg(search_emails, False, retries=3)
+        _reg(list_calendar_events, False, retries=3)
+        _reg(search_calendar_events, False, retries=3)
+        _reg(create_email_draft, True, retries=1)
+
+    policy = config.web_policy
+    # Network tier: retries=3 for transient connectivity failures
+    _reg(web_search, policy.search == "ask", retries=3)
+    _reg(web_fetch, policy.fetch == "ask", retries=3)
+
+    def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
+        f = ctx.deps.runtime.active_tool_filter
+        return f is None or tool_def.name in f
+
+    return inner.filtered(_filter), tool_approvals
+
+
+_TASK_AGENT_SYSTEM_PROMPT: str = (
+    "You have received results for tool calls that the user approved. "
+    "Process these results and respond to the user concisely and directly."
+)
 
 
 def build_agent(
@@ -65,30 +213,8 @@ def build_agent(
         resolved = ModelRegistry.from_config(config).get(
             ROLE_REASONING, ResolvedModel(model=None, settings=None)
         )
-    # Build MCP toolsets from config
-    mcp_toolsets = []
-    if config.mcp_servers:
-        from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
-
-        for name, cfg in config.mcp_servers.items():
-            if cfg.url:
-                # HTTP transport — SSE when URL ends with /sse, else StreamableHTTP
-                if cfg.url.rstrip("/").endswith("/sse"):
-                    server = MCPServerSSE(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
-                else:
-                    server = MCPServerStreamableHTTP(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
-            else:
-                env = dict(cfg.env) if cfg.env else {}
-                server = MCPServerStdio(
-                    cfg.command,
-                    args=cfg.args,
-                    timeout=cfg.timeout,
-                    env=env or None,
-                    tool_prefix=cfg.prefix or name,
-                )
-            if cfg.approval == "ask":
-                server = server.approval_required()
-            mcp_toolsets.append(server)
+    mcp_toolsets = _build_mcp_toolsets(config)
+    filtered_toolset, tool_approvals = _build_filtered_toolset(config)
 
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         resolved.model,
@@ -103,7 +229,7 @@ def build_agent(
             inject_opening_context,
             truncate_history_window,
         ],
-        toolsets=mcp_toolsets if mcp_toolsets else None,
+        toolsets=[filtered_toolset] + mcp_toolsets,
     )
 
     # Conditional prompt layers — runtime-gated via @agent.instructions (fresh per turn, never accumulated)
@@ -148,79 +274,35 @@ def build_agent(
         from co_cli.prompts.personalities._injector import _load_personality_memories
         return _load_personality_memories()
 
-    tool_approvals: dict[str, bool] = {}
+    return AgentCapabilityResult(
+        agent=agent,
+        tool_names=list(tool_approvals.keys()),
+        tool_approvals=tool_approvals,
+    )
 
-    def _register(fn, requires_approval: bool, retries: int | None = None) -> None:
-        kwargs: dict[str, Any] = {"requires_approval": requires_approval}
-        if retries is not None:
-            kwargs["retries"] = retries
-        agent.tool(fn, **kwargs)
-        tool_approvals[fn.__name__] = requires_approval
 
-    # Background task management
-    _register(start_background_task, True)
-    _register(check_task_status, False)
-    _register(cancel_background_task, False)
-    _register(list_background_tasks, False)
+def build_task_agent(
+    *,
+    config: CoConfig,
+    resolved: "ResolvedModel",
+) -> AgentCapabilityResult:
+    """Build the lightweight task agent for approval resume turns.
 
-    # Capability introspection — no approval (read-only, no side effects)
-    _register(check_capabilities, False)
-
-    # Sub-agent tools — registered only when the role model is configured
-    if config.role_models.get(ROLE_CODING):
-        _register(run_coder_subagent, False)
-    if config.role_models.get(ROLE_RESEARCH):
-        _register(run_research_subagent, False)
-    if config.role_models.get(ROLE_ANALYSIS):
-        _register(run_analysis_subagent, False)
-    if config.role_models.get(ROLE_REASONING):
-        _register(run_thinking_subagent, False)
-
-    # Native file tools — write-once tier: retries=1 (a second attempt on failure is safe)
-    _register(list_directory, False)
-    _register(read_file, False)
-    _register(find_in_files, False)
-    _register(write_file, True, retries=1)
-    _register(edit_file, True, retries=1)
-
-    # Shell: fine-grained policy lives inside the tool (DENY/safe-prefix/ask).
-    # Agent-layer approval is False; the tool raises ApprovalRequired for commands
-    # that need user confirmation.
-    _register(run_shell_command, False)
-    # Write-once tier: single retry for transient failures
-    _register(create_email_draft, True, retries=1)
-    _register(save_memory, True, retries=1)
-    _register(save_article, True, retries=1)
-    _register(update_memory, True, retries=1)
-    _register(append_memory, True, retries=1)
-
-    # Session task tracking — no approval (in-memory only, no external side effects)
-    _register(todo_write, False)
-    _register(todo_read, False)
-
-    # Read-only tools — no approval needed
-    _register(list_memories, False)
-    _register(search_memories, False)
-    _register(read_article_detail, False)
-    _register(search_knowledge, False)
-    _register(list_notes, False)
-    _register(search_notes, False)
-    _register(read_note, False)
-    _register(recall_article, False)
-    # Network tier: retries=3 for transient connectivity failures
-    _register(search_drive_files, False, retries=3)
-    _register(read_drive_file, False, retries=3)
-    _register(list_emails, False, retries=3)
-    _register(search_emails, False, retries=3)
-    _register(list_calendar_events, False, retries=3)
-    _register(search_calendar_events, False, retries=3)
-    policy = config.web_policy
-    search_approval = policy.search == "ask"
-    fetch_approval = policy.fetch == "ask"
-    # Network tier: retries=3 for transient connectivity failures
-    _register(web_search, search_approval, retries=3)
-    _register(web_fetch, fetch_approval, retries=3)
-
+    No personality, no date injection, no project instructions, no history processors.
+    Same tools and approval flags as the main agent. Used by _run_approval_loop to
+    resume approved deferred tool calls without the full main agent context overhead.
+    """
+    mcp_toolsets = _build_mcp_toolsets(config)
+    filtered_toolset, tool_approvals = _build_filtered_toolset(config)
+    agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
+        resolved.model,
+        deps_type=CoDeps,
+        instructions=_TASK_AGENT_SYSTEM_PROMPT,
+        model_settings=resolved.settings,
+        retries=config.tool_retries,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[filtered_toolset] + mcp_toolsets,
+    )
     return AgentCapabilityResult(
         agent=agent,
         tool_names=list(tool_approvals.keys()),

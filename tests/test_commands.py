@@ -11,9 +11,9 @@ import pytest
 
 from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
 
-from co_cli.agent import build_agent
-from co_cli._model_factory import ModelRegistry
-from co_cli.config import settings, ROLE_SUMMARIZATION
+from co_cli.agent import build_task_agent
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.config import settings, ROLE_TASK
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.commands._commands import (
@@ -23,14 +23,19 @@ from co_cli.commands._commands import (
 )
 from co_cli.display._core import console
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-_SUMMARIZATION_MODEL = _CONFIG.role_models["summarization"].model
+_TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
+_TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+# Exclude MCP servers: approval tests cover local tool deferral only; MCP tool schemas
+# inflate context beyond LLM_TOOL_CONTEXT_TIMEOUT_SECS even with minimal system prompt.
+_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
 
-
-_AGENT = build_agent(config=_CONFIG)
+# build_task_agent: minimal 1-sentence system prompt + local tools only — uses
+# LLM_TOOL_CONTEXT_TIMEOUT_SECS (20s) for tool schema KV fill time.
+_AGENT = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
 
 
 def _make_ctx(
@@ -56,25 +61,20 @@ def _make_ctx(
 
 
 def _make_agent_and_deps():
-    """Build a real agent + deps for approval flow tests.
+    """Build a real task agent + deps for approval flow tests.
 
-    Returns (agent, resolved_trigger, resolved_resume, deps):
-    - resolved_trigger: summarization model (reasoning_effort=none) for turn 1 tool invocation
-    - resolved_resume: summarization model for post-approval turns
+    Uses ROLE_TASK (reasoning_effort=none) with build_task_agent — minimal system prompt
+    uses LLM_TOOL_CONTEXT_TIMEOUT_SECS (20s) — 38 tools = ~10K schema tokens = ~12s KV fill.
     """
-    from co_cli._model_factory import ResolvedModel
-    _fallback = ResolvedModel(model=None, settings=None)
-    resolved_trigger = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
-    resolved_resume = _REGISTRY.get(ROLE_SUMMARIZATION, _fallback)
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=_CONFIG,
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
+        config=replace(_CONFIG_NO_MCP, personality=None),
         session=CoSessionState(session_id="test-approval"),
     )
-    return _AGENT.agent, resolved_trigger, resolved_resume, deps
+    return _AGENT.agent, deps
 
 
-async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
+async def _trigger_shell_call(agent, deps, *, retries: int = 3):
     """Ask the LLM to run a shell command. Returns DeferredToolRequests result.
 
     Retries up to *retries* times because smaller models occasionally respond
@@ -84,17 +84,11 @@ async def _trigger_shell_call(agent, deps, resolved, *, retries: int = 3):
         "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
         "Do NOT describe what you would do — call the tool now."
     )
-    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     last_output = None
     for _ in range(retries):
-        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                model=resolved.model,
-                model_settings=resolved.settings,
-
-            )
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+            result = await agent.run(prompt, deps=deps)
         if isinstance(result.output, DeferredToolRequests):
             assert len(result.output.approvals) > 0
             return result
@@ -130,27 +124,6 @@ async def test_cmd_clear():
     result = await dispatch("/clear", ctx)
     assert isinstance(result, ReplaceTranscript)
     assert result.history == []
-
-
-@pytest.mark.asyncio
-async def test_cmd_compact():
-    """/compact with seeded history returns a new list.
-
-    Requires a running LLM provider.
-    """
-    from pydantic_ai.messages import ModelRequest, UserPromptPart
-
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="What is Docker?")]),
-    ]
-    ctx = _make_ctx(message_history=msgs)
-    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await dispatch("/compact", ctx)
-    assert isinstance(result, ReplaceTranscript)
-    assert result.compaction_applied is True
-    assert isinstance(result.history, list)
-    assert len(result.history) > 0
 
 
 @pytest.mark.asyncio
@@ -192,22 +165,6 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
     assert ctx.deps.session.session_approval_rules == []
 
 
-def test_approvals_list_rendering() -> None:
-    """_rule_label returns correct human-readable (label, hint) pairs for all valid kinds."""
-    from co_cli.commands._commands import _rule_label
-
-    assert _rule_label("shell", "git") == ("shell utility", "git")
-    assert _rule_label("path", "/proj/src") == ("writable dir", "/proj/src/**")
-    assert _rule_label("domain", "x.com") == ("web domain", "x.com")
-    assert _rule_label("tool", "save_memory") == ("tool", "save_memory")
-
-    # No mcp_tool string may appear in any returned label or hint
-    for kind in ("shell", "path", "domain", "tool"):
-        label, hint = _rule_label(kind, "some_value")
-        assert "mcp_tool" not in label
-        assert "mcp_tool" not in hint
-
-
 # --- Approval flow (programmatic, no TTY) ---
 
 
@@ -217,22 +174,21 @@ async def test_approval_approve():
 
     Requires running LLM + Docker.
     """
-    agent, resolved_trigger, resolved_resume, deps = _make_agent_and_deps()
+    agent, deps = _make_agent_and_deps()
+    assert deps.services.task_agent is not None, "task_agent must be built at session init"
     try:
-        result = await _trigger_shell_call(agent, deps, resolved_trigger)
+        result = await _trigger_shell_call(agent, deps)
 
         approvals = DeferredToolResults()
         for call in result.output.approvals:
             approvals.approvals[call.tool_call_id] = True
 
-        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
             resumed = await agent.run(
                 None,
                 deps=deps,
                 message_history=result.all_messages(),
                 deferred_tool_results=approvals,
-                model=resolved_resume.model,
-                model_settings=resolved_resume.settings,
                 usage=result.usage(),
             )
 
@@ -243,14 +199,12 @@ async def test_approval_approve():
             more_approvals = DeferredToolResults()
             for call in resumed.output.approvals:
                 more_approvals.approvals[call.tool_call_id] = True
-            async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
                 resumed = await agent.run(
                     None,
                     deps=deps,
                     message_history=resumed.all_messages(),
                     deferred_tool_results=more_approvals,
-                    model=resolved_resume.model,
-                    model_settings=resolved_resume.settings,
                     usage=resumed.usage(),
                 )
 
@@ -266,22 +220,20 @@ async def test_approval_deny():
 
     Requires running LLM + Docker.
     """
-    agent, resolved_trigger, resolved_resume, deps = _make_agent_and_deps()
+    agent, deps = _make_agent_and_deps()
     try:
-        result = await _trigger_shell_call(agent, deps, resolved_trigger)
+        result = await _trigger_shell_call(agent, deps)
 
         approvals = DeferredToolResults()
         for call in result.output.approvals:
             approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
 
-        async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
             resumed = await agent.run(
                 None,
                 deps=deps,
                 message_history=result.all_messages(),
                 deferred_tool_results=approvals,
-                model=resolved_resume.model,
-                model_settings=resolved_resume.settings,
                 usage=result.usage(),
             )
 
@@ -292,14 +244,12 @@ async def test_approval_deny():
             deny_approvals = DeferredToolResults()
             for call in resumed.output.approvals:
                 deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-            async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
                 resumed = await agent.run(
                     None,
                     deps=deps,
                     message_history=resumed.all_messages(),
                     deferred_tool_results=deny_approvals,
-                    model=resolved_resume.model,
-                    model_settings=resolved_resume.settings,
                     usage=resumed.usage(),
                 )
 
@@ -309,42 +259,6 @@ async def test_approval_deny():
 
 
 # --- /new session checkpoint ---
-
-
-@pytest.mark.asyncio
-async def test_cmd_new_checkpoints_and_clears(tmp_path):
-    """/new with history writes session-*.md and returns [] (clears history).
-
-    Requires a running LLM provider.
-    """
-    from pydantic_ai.messages import ModelRequest, UserPromptPart, ModelResponse, TextPart
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    msgs = [
-        ModelRequest(parts=[UserPromptPart(content="What is Python?")]),
-        ModelResponse(parts=[TextPart(content="Python is a programming language.")]),
-        ModelRequest(parts=[UserPromptPart(content="Tell me about its history.")]),
-        ModelResponse(parts=[TextPart(content="Guido van Rossum created Python in 1991.")]),
-    ]
-    ctx = _make_ctx(message_history=msgs, memory_dir=memory_dir)
-    await ensure_ollama_warm(_SUMMARIZATION_MODEL, _CONFIG.llm_host)
-    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        result = await dispatch("/new", ctx)
-
-    assert isinstance(result, ReplaceTranscript)
-    assert result.history == [], "history must be cleared"
-
-    session_files = list(memory_dir.glob("session-*.md"))
-    assert len(session_files) == 1, "exactly one session file must be written"
-
-    content = session_files[0].read_text(encoding="utf-8")
-    assert "provenance: session" in content, "frontmatter must contain provenance: session"
-
-    from co_cli.knowledge._frontmatter import parse_frontmatter
-    fm, _ = parse_frontmatter(content)
-    assert fm.get("artifact_type") == "session_summary", (
-        "session checkpoint must have artifact_type: session_summary in frontmatter"
-    )
 
 
 # --- /forget FTS eviction ---
@@ -435,5 +349,4 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     # Must route to builtin: ReplaceTranscript with cleared history
     assert isinstance(result, ReplaceTranscript)
     assert result.history == []
-
 

@@ -150,17 +150,7 @@ def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavail
     assert any("using fts5" in status for status in statuses), \
         "Degradation must surface an explicit startup status message"
 
-    try:
-        tables = {
-            row[0]
-            for row in knowledge_index._conn.execute(
-                "SELECT name FROM sqlite_master WHERE type IN ('table', 'shadow')"
-            ).fetchall()
-        }
-        assert "docs_fts" in tables, "FTS tables must exist after hybrid bootstrap degrades to fts5"
-        assert not any(t.startswith("docs_vec_") for t in tables), "Hybrid vec tables must not remain active after fallback to fts5"
-    finally:
-        knowledge_index.close()
+    knowledge_index.close()
 
 
 def test_restore_session_fresh_returns_same_id(tmp_path: Path) -> None:

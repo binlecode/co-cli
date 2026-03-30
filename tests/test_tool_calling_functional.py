@@ -17,44 +17,52 @@ from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 
-from co_cli.agent import build_agent
+from co_cli.agent import build_agent, build_task_agent
 from co_cli.prompts._assembly import _build_system_prompt
-from co_cli._model_factory import ModelRegistry
-from co_cli.config import settings, ROLE_REASONING, WebPolicy
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.config import settings, ROLE_REASONING, ROLE_TASK, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.prompts.model_quirks._loader import normalize_model_name
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_REASONING_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _reasoning_entry = _CONFIG.role_models.get(ROLE_REASONING)
 _normalized_model = normalize_model_name(_reasoning_entry.model) if _reasoning_entry else ""
 _CONFIG = replace(_CONFIG, system_prompt=_build_system_prompt(_CONFIG.llm_provider, _normalized_model, _CONFIG))
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-_REASONING_MODEL = _CONFIG.role_models[ROLE_REASONING].model
+_TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
+
+# Tool selection tests use ROLE_TASK (reasoning_effort=none) with build_task_agent.
+# build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
+# build_agent — reducing context from ~27K to ~10K tokens so calls complete in <10s.
+_TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+# Build without MCP servers: these tests cover local tool selection only and MCP tool
+# schemas add 5K+ tokens of context that inflate TTFT past LLM_TOOL_CONTEXT_TIMEOUT_SECS.
+_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
+# Agent built with task settings baked in; do not pass model= override to agent.run().
+_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:
-    # personality=None: disable per-request personality memory injection and
-    # memory-saving behavior so tool selection calls complete within the 60s budget.
+    # personality=None + mcp_servers={}: keep context small so calls complete in <10s.
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG, personality=None),
+        config=replace(_CONFIG_NO_MCP, personality=None),
         session=CoSessionState(session_id=session_id),
     )
 
 
 def _make_deps_web_deferred(session_id: str) -> CoDeps:
-    """Deps with web_search deferred (ask) so tool selection test stays within 60s.
+    """Deps with web_search deferred (ask) so the test verifies tool name + query from turn 1.
 
-    The test verifies tool name + query arg from turn 1 only — no need to execute
-    the actual search or wait for a second LLM turn.
+    No need to execute the actual search or wait for a second LLM turn.
     """
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
-            _CONFIG,
+            _CONFIG_NO_MCP,
             personality=None,
             web_policy=WebPolicy(search="ask"),
         ),
@@ -93,32 +101,35 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    from co_cli._model_factory import ResolvedModel
-    # web_search: build agent with search="ask" so the tool is deferred — the test
-    # verifies tool selection from the DeferredToolRequests in one LLM turn (60s budget).
-    # Other tools use the default agent and policy.
+    # web_search: build agent with search="ask" so the tool is deferred — verifies
+    # tool selection from DeferredToolRequests in one turn without executing the search.
+    # run_shell_command: not deferred (requires_approval=False), so agent.run() drives
+    # two LLM segments (tool selection + result response) — use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
     if expected_tool == "web_search":
-        web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
-        agent = build_agent(config=web_cfg).agent
+        web_cfg = replace(_CONFIG_NO_MCP, web_policy=WebPolicy(search="ask"))
+        agent = build_task_agent(config=web_cfg, resolved=_TASK_RESOLVED).agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
-    else:
-        agent = build_agent(config=_CONFIG).agent
+        call_timeout = LLM_TOOL_CONTEXT_TIMEOUT_SECS
+    elif expected_tool == "run_shell_command":
+        agent = _AGENT_NOREASON.agent
         deps = _make_deps(f"test-tool-{expected_tool}")
-    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
+        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
+    else:
+        agent = _AGENT_NOREASON.agent
+        deps = _make_deps(f"test-tool-{expected_tool}")
+        call_timeout = LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-    await ensure_ollama_warm(_REASONING_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     last_details = "no run executed"
     max_attempts = 3
     for attempt in range(max_attempts):
         tool_name = None
         args = None
         try:
-            async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
+            async with asyncio.timeout(call_timeout):
                 result = await agent.run(
                     prompt,
                     deps=deps,
-                    model=resolved.model,
-                    model_settings=resolved.settings,
                 )
             # Extract first tool call from message history (works for both
             # deferred/unapproved tools and normal tool executions).
@@ -186,17 +197,12 @@ async def test_tool_selection_and_arg_extraction(
 
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
-    from co_cli._model_factory import ResolvedModel
-    agent = build_agent(config=_CONFIG).agent
-    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-refusal")
-    await ensure_ollama_warm(_REASONING_MODEL)
-    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
-        result = await agent.run(
+    await ensure_ollama_warm(_TASK_MODEL)
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+        result = await _AGENT_NOREASON.agent.run(
             "What is 17 times 23?",
             deps=deps,
-            model=resolved.model,
-            model_settings=resolved.settings,
         )
     for msg in result.all_messages():
         if isinstance(msg, ModelResponse):
@@ -209,18 +215,13 @@ async def test_refusal_no_tool_for_simple_math():
 @pytest.mark.asyncio
 async def test_intent_routing_observation_no_tool():
     """Observation-only statement must not trigger a tool call."""
-    from co_cli._model_factory import ResolvedModel
-    agent = build_agent(config=_CONFIG).agent
-    resolved = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
     deps = _make_deps("test-intent-routing")
 
-    await ensure_ollama_warm(_REASONING_MODEL)
-    async with asyncio.timeout(LLM_REASONING_TIMEOUT_SECS):
-        result = await agent.run(
+    await ensure_ollama_warm(_TASK_MODEL)
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+        result = await _AGENT_NOREASON.agent.run(
             "This function has a bug",
             deps=deps,
-            model=resolved.model,
-            model_settings=resolved.settings,
         )
     for msg in result.all_messages():
         if isinstance(msg, ModelResponse):

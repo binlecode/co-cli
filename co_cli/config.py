@@ -43,6 +43,7 @@ DEFAULT_OLLAMA_SUMMARIZATION_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_ANALYSIS_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_CODING_MODEL = "qwen3.5:35b-a3b-code"
 DEFAULT_OLLAMA_RESEARCH_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
+DEFAULT_OLLAMA_TASK_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
 
 # Conservative default safe commands for auto-approval.
@@ -170,9 +171,10 @@ ROLE_SUMMARIZATION = "summarization"
 ROLE_CODING = "coding"
 ROLE_RESEARCH = "research"
 ROLE_ANALYSIS = "analysis"
+ROLE_TASK = "task"
 
 VALID_ROLE_NAMES: frozenset[str] = frozenset({
-    ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS,
+    ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK,
 })
 
 # Named defaults for Settings fields — used by Settings field definitions and
@@ -221,6 +223,11 @@ DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_OLLAMA_NUM_CTX = 262144
 DEFAULT_CTX_WARN_THRESHOLD = 0.85
 DEFAULT_CTX_OVERFLOW_THRESHOLD = 1.0
+REASONING_DISPLAY_OFF = "off"
+REASONING_DISPLAY_SUMMARY = "summary"
+REASONING_DISPLAY_FULL = "full"
+DEFAULT_REASONING_DISPLAY = REASONING_DISPLAY_SUMMARY
+VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset({REASONING_DISPLAY_OFF, REASONING_DISPLAY_SUMMARY, REASONING_DISPLAY_FULL})
 
 
 class Settings(BaseModel):
@@ -233,6 +240,7 @@ class Settings(BaseModel):
     
     # Behavior
     theme: str = Field(default=DEFAULT_THEME)
+    reasoning_display: Literal["off", "summary", "full"] = Field(default=DEFAULT_REASONING_DISPLAY)
     personality: str = Field(default=DEFAULT_PERSONALITY)
     tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
     model_http_retries: int = Field(default=DEFAULT_MODEL_HTTP_RETRIES)
@@ -413,6 +421,7 @@ class Settings(BaseModel):
             "google_credentials_path": "GOOGLE_CREDENTIALS_PATH",
             "library_path": "CO_LIBRARY_PATH",
             "theme": "CO_CLI_THEME",
+            "reasoning_display": "CO_CLI_REASONING_DISPLAY",
             "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
             "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
@@ -471,7 +480,7 @@ class Settings(BaseModel):
         # Per-role model overrides — merge per-key, not whole-dict replacement.
         # Plain strings from env vars are coerced to ModelConfig by _parse_role_models.
         role_models_env: dict[str, str] = {}
-        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
+        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK):
             env_var = f"CO_MODEL_ROLE_{role.upper()}"
             val = env_source.get(env_var)
             if val:
@@ -486,6 +495,7 @@ class Settings(BaseModel):
                 ROLE_ANALYSIS: DEFAULT_OLLAMA_ANALYSIS_MODEL,
                 ROLE_CODING: DEFAULT_OLLAMA_CODING_MODEL,
                 ROLE_RESEARCH: DEFAULT_OLLAMA_RESEARCH_MODEL,
+                ROLE_TASK: DEFAULT_OLLAMA_TASK_MODEL,
             }
         else:
             raise ValueError(f"Unsupported llm_provider: {provider!r}")

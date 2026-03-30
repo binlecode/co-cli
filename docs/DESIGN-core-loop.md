@@ -99,7 +99,7 @@ Transcript and compaction state:
 Segment execution inside `run_turn()`:
 - `_execute_stream_segment()` reads `_TurnState.current_input`, `current_history`, `tool_approval_decisions`, and `latest_usage`.
 - It calls `agent.run_stream_events(...)` and delegates text/thinking buffering to `StreamRenderer`.
-- Tool-call events flush buffered output, call `frontend.on_tool_start()`, and install progress callbacks.
+- Tool-call events flush buffered output, conditionally call `frontend.on_tool_start()` (suppressed in `summary` mode — the tool result panel is sufficient feedback), and install progress callbacks.
 - Tool-result events flush buffered output, clear progress callbacks, and call `frontend.on_tool_complete()`.
 - `AgentRunResultEvent` provides the final result object for the segment.
 - On exit, `StreamRenderer.finish()` flushes remaining buffers and `frontend.cleanup()` always runs.
@@ -110,7 +110,7 @@ Processing outline for each segment:
 ```text
 run_stream_events(...)
   -> text/thinking events delegated to StreamRenderer (throttled buffer + flush)
-  -> tool-call event: StreamRenderer.flush_for_tool_output(), frontend.on_tool_start(), renderer.install_progress()
+  -> tool-call event: StreamRenderer.flush_for_tool_output(), frontend.on_tool_start() (skipped in summary mode), renderer.install_progress()
   -> tool-result event: StreamRenderer.flush_for_tool_output(), renderer.clear_progress(), frontend.on_tool_complete()
   -> AgentRunResultEvent stores the final result object
   -> function exit: StreamRenderer.finish() flushes remaining buffers, then frontend.cleanup()
@@ -129,7 +129,7 @@ What `_execute_stream_segment()` does not do:
 - `DeferredToolResults` means Co’s approval decisions for those calls: allow=`True`, deny=`ToolDenied`.
 - `DeferredToolResults` is not tool output. It is the decision payload passed into the next resumed `_execute_stream_segment()`.
 - `_collect_deferred_tool_approvals()` handles one paused segment: decode args, resolve an `ApprovalSubject`, check session-scoped auto-approval, otherwise prompt the user, then record one approval result per tool call.
-- `_run_approval_loop()` owns the resume cycle: while the latest segment still returns `DeferredToolRequests`, it collects approvals, sets `current_input = None`, promotes `latest_result.all_messages()` into `current_history`, stores `tool_approval_decisions`, and runs the next segment.
+- `_run_approval_loop()` owns the resume cycle: while the latest segment still returns `DeferredToolRequests`, it sets `deps.runtime.active_tool_filter` to the deferred tool names ∪ `_ALWAYS_ON_TOOL_NAMES` (narrowing schema context to only the tools needed for this hop), collects approvals, sets `current_input = None`, promotes `latest_result.all_messages()` into `current_history`, stores `tool_approval_decisions`, and runs the next segment. After the loop exits (output is no longer `DeferredToolRequests`), it clears `deps.runtime.active_tool_filter` back to `None`. Resume segments use `deps.services.task_agent` when available (short system prompt, `reasoning_effort: none`, same tools), falling back to the main agent when the task agent is not built.
 
 ```mermaid
 flowchart TD
@@ -314,19 +314,21 @@ Interrupt recovery invariant:
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio threshold for warning that the provider likely truncated or overflowed input context |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session restore freshness window |
 | `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars injected into context from memory recall per turn |
+| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Reasoning display mode: `off` (hidden), `summary` (progress line), `full` (raw thinking) |
 
 ## 4. Files
 
 | File | Purpose |
 |---|---|
 | `co_cli/main.py` | REPL loop, slash dispatch, skill env injection, post-turn hooks, background compaction scheduling |
-| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle), `_collect_deferred_tool_approvals()`, `_check_output_limits()` (finish-reason and context-overflow diagnostics after a completed turn), `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
-| `co_cli/agent.py` | Main agent construction: instructions, history processors, native tools, MCP toolsets |
+| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle — routes via `task_agent` when available), `_collect_deferred_tool_approvals()`, `_resolve_task_model_settings()` (looks up `ROLE_TASK` settings for resume routing), `_check_output_limits()` (finish-reason and context-overflow diagnostics after a completed turn), `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
+| `co_cli/agent.py` | `build_agent()` (main agent: instructions, history processors, native tools, MCP toolsets), `build_task_agent()` (lightweight task agent for approval resume turns: same tools, no personality/date/project instructions/history processors), `_build_filtered_toolset()` (builds a `FilteredToolset` with conditional domain-tool registration and per-request `active_tool_filter` gating; returns toolset + approval map), `_ALWAYS_ON_TOOL_NAMES` (tools always visible even on narrowed resume turns), `_build_mcp_toolsets()` |
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
 | `co_cli/context/_types.py` | `CompactionResult`, `MemoryRecallState`, `SafetyState` — shared type definitions extracted from `_history.py` to break the circular import with `deps.py` |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |
 | `co_cli/tools/_tool_approvals.py` | Approval subject resolution, session rule matching, and approval recording |
-| `co_cli/display/_stream_renderer.py` | `StreamRenderer`: text/thinking buffering, flush/throttle policy, progress callback wiring |
+| `co_cli/display/_core.py` | `Frontend` protocol, `TerminalFrontend` implementation: manages `Live` instances for streaming text, thinking, tool progress, and status surfaces; `active_surface()` returns the current surface name (`text`/`thinking`/`tool`/`status`/`none`), `active_tool_messages()` returns currently rendered tool labels, `active_status_text()` returns the text last set via `on_status` or `on_reasoning_progress` (or `None` when the status surface is cleared); `cleanup()` stops all live instances and clears `_status_text` |
+| `co_cli/display/_stream_renderer.py` | `StreamRenderer`: text/thinking buffering, flush/throttle policy, progress callback wiring; supports `off`/`summary`/`full` reasoning display modes |
 | `co_cli/tools/_display_hints.py` | Tool display metadata: args display key per tool, tool result format helper |
 | `co_cli/commands/_commands.py` | Built-in slash commands, skill dispatch, and `/approvals` management |
 | `co_cli/context/_session.py` | Session persistence helpers |

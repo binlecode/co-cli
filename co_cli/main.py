@@ -21,9 +21,9 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn
 from co_cli.context._history import precompute_compaction
-from co_cli.agent import build_agent
+from co_cli.agent import build_agent, build_task_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR, LOGS_DB
+from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES, ROLE_TASK
 from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
@@ -158,7 +158,7 @@ async def _run_foreground_turn(
     deps: CoDeps,
     frontend: Frontend,
     primary_model: str,
-    verbose: bool,
+    reasoning_display: str,
 ) -> tuple[list, Any, asyncio.Task | None]:
     """Execute one foreground turn: consume bg compaction, run turn, cleanup, finalize.
 
@@ -172,7 +172,7 @@ async def _run_foreground_turn(
             user_input=user_input,
             deps=deps,
             message_history=message_history,
-            verbose=verbose,
+            reasoning_display=reasoning_display,
             frontend=frontend,
         )
     finally:
@@ -182,7 +182,7 @@ async def _run_foreground_turn(
     )
 
 
-async def _chat_loop(verbose: bool = False):
+async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     frontend = TerminalFrontend()
 
     completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)
@@ -212,6 +212,11 @@ async def _chat_loop(verbose: bool = False):
     agent = agent_result.agent
     deps.capabilities.tool_names = agent_result.tool_names
     deps.capabilities.tool_approvals = agent_result.tool_approvals
+
+    if deps.services.model_registry:
+        task_resolved = deps.services.model_registry.get(ROLE_TASK, _none_resolved)
+        if task_resolved.model:
+            deps.services.task_agent = build_task_agent(config=deps.config, resolved=task_resolved).agent
 
     stack = AsyncExitStack()
     message_history: list = []
@@ -280,7 +285,7 @@ async def _chat_loop(verbose: bool = False):
                     deps=deps,
                     frontend=frontend,
                     primary_model=primary_model,
-                    verbose=verbose,
+                    reasoning_display=reasoning_display,
                 )
 
             except EOFError:
@@ -304,14 +309,25 @@ async def _chat_loop(verbose: bool = False):
 @app.command()
 def chat(
     theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Stream LLM thinking/reasoning tokens"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Alias for --reasoning-display full"),
+    reasoning_display: str = typer.Option(None, "--reasoning-display", help="Reasoning display mode: off, summary, full"),
 ):
     """Start an interactive chat session with Co."""
     if theme:
         settings.theme = theme
         set_theme(theme)
+    # Resolve effective mode: explicit flag > --verbose alias > persistent config default
+    if reasoning_display is not None:
+        if reasoning_display not in VALID_REASONING_DISPLAY_MODES:
+            console.print(f"[bold red]Error:[/bold red] --reasoning-display must be one of: {', '.join(sorted(VALID_REASONING_DISPLAY_MODES))}")
+            raise SystemExit(1)
+        effective_mode = reasoning_display
+    elif verbose:
+        effective_mode = REASONING_DISPLAY_FULL
+    else:
+        effective_mode = settings.reasoning_display
     try:
-        asyncio.run(_chat_loop(verbose=verbose))
+        asyncio.run(_chat_loop(reasoning_display=effective_mode))
     except KeyboardInterrupt:
         pass  # Safety net: asyncio.run() may re-raise after task cancellation
 

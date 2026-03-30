@@ -13,14 +13,32 @@ Usage::
 """
 
 # LLM inference
-LLM_NON_REASONING_TIMEOUT_SECS: int = 60
+LLM_NON_REASONING_TIMEOUT_SECS: int = 10
 """Non-thinking model calls (reasoning_effort=none, ROLE_SUMMARIZATION).
 
-60s accommodates thinking models (e.g. qwen3.5-think variants) that can still emit
-reasoning tokens on complex prompts (tool-calling, multi-step tasks) despite
-reasoning_effort=none. Fast models resolve in 1–5s; individual calls on thinking
-models have been observed at 25–30s under sequential load — 60s catches truly hung
-calls without false-positive timeouts from thinking-model variance.
+>10s means the model is reasoning when it should not be — a bug in model
+config or api_params (e.g. missing reasoning_effort=none).
+Use only for bare-context calls (summarizer, signal detector, compaction) — no
+registered tools in the agent.
+"""
+
+LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 20
+"""Non-reasoning calls with full tool context (ROLE_TASK, 38 tools, ~10K schema tokens).
+
+Tool schemas are sent in every request: 38 tools × avg schema = ~41K bytes ≈ 10K tokens.
+Processing 10K schema tokens without reasoning takes ~12s on this hardware (confirmed:
+reasoning_effort=none verified in request, no thinking output, pure KV-fill cost).
+Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests
+(test_commands) that require the production tool set.
+"""
+
+LLM_MULTI_SEGMENT_TIMEOUT_SECS: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2
+"""Non-reasoning agent.run() calls that execute at least one tool (two LLM segments).
+
+agent.run() drives the full agent loop: first segment selects and executes the tool,
+second segment processes the result. Each segment incurs full tool-context KV-fill cost.
+Never wrap two sequential awaits under LLM_TOOL_CONTEXT_TIMEOUT_SECS — that budget
+covers one call. Use this constant when agent.run() will trigger tool execution.
 """
 
 LLM_REASONING_TIMEOUT_SECS: int = 60
