@@ -41,6 +41,22 @@ Never wrap two sequential awaits under LLM_TOOL_CONTEXT_TIMEOUT_SECS — that bu
 covers one call. Use this constant when agent.run() will trigger tool execution.
 """
 
+LLM_DEFERRED_TURN_TIMEOUT_SECS: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS * 3
+"""Deferred-approval turns where BOTH segments pay full tool-context KV-fill cost.
+
+When a tool is registered as deferred (requires approval via DeferredToolRequests)
+and the user denies it, run_turn() drives two sequential agent.run() calls with no
+tool execution between them:
+  - Segment 1: model selects the tool → DeferredToolRequests returned
+  - Approval prompt shown → user denies
+  - Segment 2: model processes ToolDenied → generates verbose response
+
+Both segments load the full 38-tool schema (~10K tokens). No tool actually executes,
+so there is no token savings between segments. Total observed: ~35s on this hardware.
+Use this constant for any test that denies a deferred tool via run_turn().
+Do NOT use LLM_MULTI_SEGMENT_TIMEOUT_SECS for deferred-deny flows — it is too tight.
+"""
+
 LLM_REASONING_TIMEOUT_SECS: int = 60
 """Full chain-of-thought calls (ROLE_REASONING with thinking enabled).
 

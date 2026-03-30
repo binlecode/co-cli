@@ -27,7 +27,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, LLM_DEFERRED_TURN_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -99,13 +99,14 @@ async def test_tool_selection_and_arg_extraction(
     arg_contains: str,
 ):
     # web_search: registered as deferred (search="ask") — denial drives two separate
-    # agent.run() calls: first returns DeferredToolRequests, second processes the denial.
+    # agent.run() calls with no tool execution between them. Both segments pay the full
+    # tool-context KV-fill cost (~20s each). Uses LLM_DEFERRED_TURN_TIMEOUT_SECS (3×).
     # run_shell_command: "git status" executes inline within one agent.run() call
-    # (two LLM segments inside one run). Both cases use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
+    # (two LLM segments inside one run, tool execution between). Uses LLM_MULTI_SEGMENT_TIMEOUT_SECS (2×).
     if expected_tool == "web_search":
         agent = _AGENT_WEB_ASK.agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
-        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
+        call_timeout = LLM_DEFERRED_TURN_TIMEOUT_SECS
         # Deny deferred web_search — avoids executing the search while verifying tool selection.
         frontend = SilentFrontend(approval_response="n")
     elif expected_tool == "run_shell_command":

@@ -113,9 +113,15 @@ def _extract_model(row: _SpanRow) -> str | None:
 
 def _extract_tool(row: _SpanRow) -> str | None:
     tool = row.attributes.get("gen_ai.tool.name")
-    if isinstance(tool, str) and tool:
-        return tool
-    return None
+    if not isinstance(tool, str) or not tool:
+        return None
+    # Exclude deferred-approval resolution spans: pydantic-ai fires execute_tool
+    # spans for both deferred approval bookkeeping (~1–4ms) and actual tool
+    # execution (always >10ms for real I/O). Only count real execution in the
+    # tools= summary so denied tools are not reported as having run.
+    if row.duration_ms is not None and row.duration_ms < 5:
+        return None
+    return tool
 
 
 def _extract_api(row: _SpanRow) -> str | None:

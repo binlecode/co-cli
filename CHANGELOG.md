@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-03-30
+
+### Added
+- **Pytest suite audit — coverage gaps closed**: 3 new shell-policy denial tests (control characters, heredoc, `VAR=$(...)` env-injection); 7 new web tests (`web_fetch` HTML→Markdown, `_html_to_markdown` tag/link conversion, `_is_content_type_allowed` MIME matrix); 6 new approval-scoping unit tests (shell/path/domain/tool subject resolution, remember idempotency, auto-approve after remember, deny-no-persist); 2 new `_build_interrupted_turn_result` unit tests (dangling tool call drop, clean history retention).
+- **`LLM_DEFERRED_TURN_TIMEOUT_SECS`** in `tests/_timeouts.py`: 60s constant for deferred-approval denial flows where both agent.run() segments pay full tool-context KV-fill cost (~20s each) with no tool execution between them. Fixes web_search_fastapi test that was budgeted at `LLM_MULTI_SEGMENT_TIMEOUT_SECS` (40s) and structurally needed 3×.
+- **Pytest harness deferred-approval filter**: `_extract_tool` in `tests/_co_harness.py` now skips spans with `duration_ms < 5ms` so deferred-approval bookkeeping spans (pydantic-ai internal resolution, ~1–4ms) are not counted as real tool executions in the harness `tools=` summary line.
+- **`ensure_ollama_warm` elapsed-time reporting**: prints `[ollama] <model> ready (N.Ns)` after warmup completes for visibility into infrastructure prep time separate from test timeout windows.
+
 ## [0.6.0] - 2026-03-30
 
 ### Changed
