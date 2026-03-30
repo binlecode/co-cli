@@ -13,8 +13,8 @@ uv run co traces                 # Nested HTML trace viewer
 
 uv run pytest 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log       # Run all tests; ALWAYS pipe to timestamped log
 uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log   # Verbose; same log rule
-uv run pytest tests/test_tools.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_tools.log
-uv run pytest tests/test_tools.py::test_name 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_name.log
+uv run pytest tests/test_tools_files.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_tools_files.log
+uv run pytest tests/test_tools_files.py::test_name 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-test_name.log
 uv run pytest --cov=co_cli 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-cov.log
 
 # MANDATORY: ALL pytest runs must be piped to a timestamped log file under .pytest-logs/.
@@ -83,7 +83,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   - `runtime`: per-run transient state such as compaction, usage, processor state
 - Access grouped deps as `ctx.deps.config.memory_max_count`, `ctx.deps.services.shell`, etc. Tools never import or reference `Settings` directly.
 - **Sub-agent isolation**: use `make_subagent_deps(base)` to create isolated child-agent deps sharing services and config. Do not pass `Settings` objects into `CoDeps`; flatten scalar fields into `CoConfig`, and do not manually field-copy for sub-agent isolation.
-- **Pydantic-ai idiomatic**: agents, deps, tools, and agentic flows must follow pydantic-ai conventions such as `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, and history processors for memory. Do not wrap, abstract over, or deviate from the SDK’s conventions.
+- **Pydantic-ai idiomatic**: agents, deps, tools, and agentic flows must follow pydantic-ai conventions such as `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, and history processors for memory. Do not wrap, abstract over, or deviate from the SDK's conventions.
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults.
 - **XDG paths**: config in `~/.config/co-cli/`; data in `~/.local/share/co-cli/`.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch digit odd = bugfix, even = feature. Bump only in `pyproject.toml`; version is read via `tomllib` from `pyproject.toml` at runtime.
@@ -105,24 +105,25 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 #### Tests (`tests/`)
 
 - **Only pytest files in `tests/`**: all files must be `test_*.py` or `*_test.py`. Framework: `pytest` + `pytest-asyncio`. Non-test scripts go in `scripts/`, evaluations in `evals/`.
-- **Functional tests only — no unit tests, ever**: all tests exercise real code paths with real services (real SQLite, real filesystem, real FTS5). Tests exist to find bugs in critical functionality, not to achieve coverage percentages. Every test must target a real failure mode a user or the agent would hit. Never test string constants, internal helpers in isolation, or assert on implementation details.
+- **No isolation tests — real code paths and real dependencies always**: tests at any layer are valid when they execute real production code with real services (real SQLite, real filesystem, real FTS5) and protect critical behavior contracts that would catch meaningful regressions. Tests exist to find bugs, not to achieve coverage percentages. Every test must target a real failure mode a user or the agent would hit. Never test string constants, isolated helpers with no production path, or assert on internal implementation details.
 - **No mocks, fakes, or patching**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or any other substitution for real services. Use real `CoDeps(services=CoServices(shell=ShellBackend(), knowledge_index=idx), config=CoConfig(...))` with real `RunContext`. If a behavior cannot be tested without fakes, the production API is wrong — fix the API.
-- **IO-bound timeouts are mandatory and absolute**: wrap each individual `await` to external services (LLMs, network, subprocess) with `asyncio.timeout(N)`. Never wrap multiple sequential awaits or a retry loop in one block. Local SQLite/filesystem calls do not need timeouts. Let `TimeoutError` propagate — no try/catch. When a test times out, stop all testing immediately; check `uv run co logs` for the root cause before running again. **Never hardcode timeout seconds inline** — always import from `tests/_timeouts.py` (`LLM_NON_REASONING_TIMEOUT_SECS`, `LLM_REASONING_TIMEOUT_SECS`, `HTTP_EXTERNAL_TIMEOUT_SECS`, etc.). **NEVER increase a timeout constant to make a test pass** — timeouts are specifications, not arbitrary limits. A timeout violation means the test is using the wrong role, wrong agent context, or the model config is wrong. Diagnose the root cause: (1) is `reasoning_effort=none` missing from the model settings? (2) is the test calling a full-tool agent (30K+ tokens) with a non-reasoning role that should only ever run on a bare summarizer agent? (3) is the model actually thinking when it should not? Fix the test or the config, never the timeout.
+- **IO-bound timeouts are mandatory and absolute**: wrap each individual `await` to external services (LLMs, network, subprocess) with `asyncio.timeout(N)`. This includes warmup, health-check, and preflight awaits — any await to an external service counts regardless of whether it is in test setup or the test body. Never wrap multiple sequential awaits or a retry loop in one block. Local SQLite/filesystem calls do not need timeouts. Let `TimeoutError` propagate — no try/catch. When a test times out, stop all testing immediately; check `uv run co logs` for the root cause before running again. **Never hardcode timeout seconds inline** — always import from `tests/_timeouts.py` (`LLM_NON_REASONING_TIMEOUT_SECS`, `LLM_REASONING_TIMEOUT_SECS`, `HTTP_EXTERNAL_TIMEOUT_SECS`, etc.). **NEVER increase a timeout constant to make a test pass** — timeouts are specifications, not arbitrary limits. A timeout violation means the test is using the wrong role, wrong agent context, or the model config is wrong. Diagnose the root cause: (1) is `reasoning_effort=none` missing from the model settings? (2) is the test calling a full-tool agent (30K+ tokens) with a non-reasoning role that should only ever run on a bare summarizer agent? (3) is the model actually thinking when it should not? Fix the test or the config, never the timeout.
 - **Keep the test suite clean — violations block regression**: before any full test run after a code change, remove or update tests that are stale, redundant, or policy-violating. A test exercising a removed API, asserting on a deleted constant, or using fakes must be deleted, not skipped. When changing a public API (signature, return shape, class name), scan `tests/` and update or remove callers in the same commit. Any active policy violation — timeout, mock usage, fake dep, or skip — blocks the full run.
-- **Critical functionality focus**: each test validates behavior that matters — correct tool results, expected pipeline output, safety invariants. Ask: “if this test were deleted, would a real regression go undetected?” If no, do not write it.
-- **No skips**: tests must pass or fail. Exception: API-dependent tests requiring paid external credentials (Brave Search) may use `pytest.mark.skipif` when the key is absent — without a valid key those tests hang on network timeouts rather than failing with a useful error.
-- **No `conftest.py`**: tests run against the real `config.py` singleton. If a test fails because of a wrong default in `config.py`, fix `config.py`. Tests are the first consumer of production config; if the default is broken for tests, it is broken for users too.
+- **Critical functionality focus**: each test validates behavior that matters — correct tool results, expected pipeline output, safety invariants. Ask: "if this test were deleted, would a real regression go undetected?" If no, do not write it.
+- **No skips**: tests must pass or fail. Exception: credential-gated external integration tests may use `pytest.mark.skipif` when the required credential is absent — without a valid credential these tests produce non-actionable network timeouts rather than meaningful failures. Brave Search is one example; any paid external API integration falls under the same exception.
+- **`conftest.py` must not override production config or inject fake deps**: tests run against the real `config.py` singleton. If a test fails because of a wrong default in `config.py`, fix `config.py`. Do not use `conftest.py` to shadow config, inject substitutes, or centralize hidden behavior. If a `conftest.py` is ever introduced, it must be limited to neutral pytest plumbing only (e.g. session-scoped markers, asyncio mode setting).
 - **Test timing always on**: `pyproject.toml` enforces `-x --durations=0` — fail-fast with per-test wall times. Unexpectedly slow tests indicate over-broad scope or missing `asyncio.timeout`.
 - **Google credentials**: never configure or inject in tests. They resolve automatically through `google_credentials_path` in settings, `~/.config/co-cli/google_token.json`, or ADC at `~/.config/gcloud/application_default_credentials.json`.
-- **Test data isolation and cleanup**: tests must not leave data in shared stores (knowledge index, memory dir, library dir, SQLite DBs). Use `tmp_path` for all filesystem writes. For shared stores, delete test-introduced records in `try/finally` — cleanup failure must fail the test. Records in any shared store must use a `test-` prefix in identifiers (`session_id=”test-...”`, slug `test-...`, tag `test`) to be identifiable for bulk-delete.
+- **Test data isolation and cleanup**: tests must not leave data in shared stores (knowledge index, memory dir, library dir, SQLite DBs). Use `tmp_path` for all filesystem writes. For shared stores, delete test-introduced records in `try/finally` — cleanup failure must fail the test. Records in any shared store must use a `test-` prefix in identifiers (`session_id="test-..."`, slug `test-...`, tag `test`) to be identifiable for bulk-delete.
 - **Scope pytest during implementation; full suite before shipping**: during implementation, scope pytest to test files that import from or directly test changed modules (`uv run pytest tests/test_foo.py tests/test_bar.py`). Run the full suite only before shipping. The full suite contains real LLM calls that take minutes — running it on every code change wastes time and buries signal. Do not consider a change done until the full suite is green.
 - **Never dismiss a test failure as flaky**: always do proper root cause analysis. If a test fails, stop all testing immediately and diagnose before re-running.
-- **Never construct structs directly in tests**: always use real code paths, not manually assembled data structures.
+- **Do not construct fake business-domain data directly in tests**: do not hand-assemble domain objects (signal results, memory records, tool outputs) to bypass the production code path that generates them — if the real entrypoint exists, use it. Constructing real runtime containers (`CoDeps`, `CoServices`, `CoConfig`, `RunContext`) is explicitly allowed and required: these are the production API boundary for the behavior under test.
 - **Never copy inline logic into tests**: do not replicate display formatting, string construction, or other implementation logic inside test assertions.
-- **LLM-calling tests must suppress thinking and strip personality**: personality is a role property set at agent construction — never strip it with `replace(config, personality=None)`. Tests of the chat agent use the real config (personality included); task callers (subagents, summarizer, signal detector) never had personality to begin with. For tests verifying tool selection or pipeline logic (not reasoning depth), use `ROLE_SUMMARIZATION` (`reasoning_effort: none`) over `ROLE_REASONING`. Never use a think-model role without reasoning suppression in tests — full thinking chains add 15–30s per call. Cache module-level agents built from the real config rather than rebuilding from settings per call.
+- **Use the lowest-cost production role that exercises the intended behavior**: use `ROLE_SUMMARIZATION` (`reasoning_effort: none`) for bare summarization and signal-detection tests; use `ROLE_TASK` for tool-calling, approval-loop, and orchestration-turn tests. Never use a think-model role without reasoning suppression in tests — full thinking chains add 15–30s per call. Cache module-level agents built from the real config rather than rebuilding per call.
+- **Do not strip or mutate personality in tests**: personality is set at agent construction and belongs to the production config — never strip it with `replace(config, personality=None)` or equivalent mutations. Tests of the chat agent use the real config (personality included); task agents (subagents, summarizer, signal detector) never had personality to begin with.
 - **Tests must not create their own model or calling configuration**: do not pass `model=` or `model_settings=` to `agent.run()` directly — this bypasses production config and means setting changes never apply to tests. Use `run_turn()` (the production orchestration path) for any test that needs an LLM turn. If `run_turn()` cannot be used, invoke the agent with no model override — the model is already baked in at `build_agent()` construction time. A test that hard-codes a model or settings is testing its own configuration, not the production system.
 
-## Review Discipline
+### Review Discipline
 
 - When doing code reviews or plan reviews, do a **deep pass on the first round** — do not do shallow scans and declare things ready.
 - Read every function body, trace actual call paths, and check for stale imports and dead code. Do not skim signatures or assume correctness from names.
@@ -131,7 +132,16 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - Do not declare something "ready" unless you can cite specific `file:line` references confirming each claim.
 - If the scope is unclear, ask a clarifying question rather than rubber-stamping and iterating.
 
-## Workflow Rules
+### Code Change Principles
+
+- Prefer fail-fast over redundant fallbacks.
+- Do not over-design or over-engineer — when in doubt, simplify.
+- After renames or file moves: (1) grep for ALL remaining references to the old name across the whole repo, (2) check test imports specifically — they are the most common miss, (3) run the full test suite. Done only when grep finds zero stale references AND tests pass.
+- Clean up dead code (unused functions, stale lazy imports) during implementation, not as a separate pass.
+
+## Workflow
+
+### Working with Claude Code
 
 - When asked to analyze or review, do **not** start searching, fetching, or writing until you've confirmed the approach.
 - When asked to append to an existing doc, never create a new file instead.
@@ -140,51 +150,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - Each subagent must clean up any dead code it introduces before returning. Do not defer dead code removal to a later pass.
 - After all subagents finish, do an integration review checking for stale imports and orphaned references before running tests.
 
-## Code Change Principles
-
-- Prefer fail-fast over redundant fallbacks.
-- Do not over-design or over-engineer — when in doubt, simplify.
-- After renames or file moves: (1) grep for ALL remaining references to the old name across the whole repo, (2) check test imports specifically — they are the most common miss, (3) run the full test suite. Done only when grep finds zero stale references AND tests pass.
-- Clean up dead code (unused functions, stale lazy imports) during implementation, not as a separate pass.
-
-## Docs
-
-### DESIGN Doc Conventions
-
-DESIGN docs are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in a TODO file: DESIGN doc updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any TODO task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed.
-
-Every component DESIGN doc follows this four-section template:
-
-1. **What & How** — one paragraph + architecture diagram
-2. **Core Logic** — processing flows, key functions, design decisions, error handling, security
-3. **Config** — settings table (`Setting | Env Var | Default | Description`); skip if no configuration
-4. **Files** — file table (`File | Purpose`)
-
-Never paste source code into DESIGN docs. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
-
-Start at `docs/DESIGN-index.md` for navigation, config reference, and module index. `docs/DESIGN-system.md` covers top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/DESIGN-core-loop.md` covers the agent loop, orchestration, and approval flow. All 20+ component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
-
-`docs/reference/` is for research and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from DESIGN docs.
-
-Workflow artifact placement:
-
-- `REPORT-*.md` and `TODO-*.md` live directly in `docs/`, not in subdirectories.
-
-Workflow artifact lifecycle:
-
-- `REPORT-<scope>.md` is permanent. It is an eval, pipeline run, or benchmarking report. Only eval/benchmark/script runs produce REPORT- files.
-- **Reporting Structure Guidelines:** 
-  - **Qualitative Behavior Evals** (`evals/*-result.md`): Must include "Per-Case Results" tables, "Drift/Error Tracing" (failed turns with prompt/response context), and Pass/Fail Gates.
-  - **Quantitative Benchmarks** (`evals/benchmark-*-result.md` or `scripts/*-result.md`): Must include a "Results Summary" table showing Deltas between models (e.g., Throughput, TTFT, Total Time), "Detailed Findings" narratives explaining hardware/context anomalies, and explicitly list "API Parameters Forced" in the header.
-- `TODO-<slug>.md` is the single source of work tracking for a delivery. It holds: the plan, `✓ DONE` task marks, delivery summary + independent review (appended by `orchestrate-dev`), and implementation verdict (appended by `/review-impl`). Tasks are never deleted mid-delivery. The file is deleted after Gate 2 acceptance (PASS verdict → ship → delete).
-
-TODO lifecycle:
-
-- When a task ships, mark it `✓ DONE` in `docs/TODO-<slug>.md` — do not delete it. The record is preserved for debugging, troubleshooting, and revert until Gate 2 PASS.
-- Design details merged into a DESIGN doc (via sync-doc) are noted in the task entry, not stripped from the TODO.
-- The full TODO (done + pending tasks) is deleted after Gate 2 PASS (review-impl verdict → ship → delete).
-
-### Skills and Workflow
+### Dev Workflow
 
 The workflow skills map onto the dev workflow. Human gates are at decisions, not artifacts.
 
@@ -214,6 +180,44 @@ ship
 - `/orchestrate-dev <slug>`: execute from `docs/TODO-<slug>.md`, mark shipped tasks `✓ DONE` (never delete mid-delivery), append delivery summary to TODO, auto-invoke sync-doc.
 - `/review-impl <slug>`: deep self-correcting review — evidence-first spec check (file:line for every claim), adversarial self-check, auto-fix of blocking findings, full test suite with mandatory RCA, behavioral verification against running system. Appends pass/fail verdict to TODO. **PASS means ship — no further gate needed.**
 - `/sync-doc [doc...]`: fix DESIGN doc inaccuracies in-place. No args means all docs. Auto-invoked by `orchestrate-dev`.
+
+## Docs
+
+### DESIGN Doc Conventions
+
+DESIGN docs are **post-implementation documentation** — they always stay in sync with the latest code and are the authoritative reference during planning. They must never appear as tasks in a TODO file: DESIGN doc updates are outputs of delivery, not inputs to it. All updates happen automatically through `/sync-doc` (auto-invoked by `orchestrate-dev` after delivery). Any TODO task whose `files:` list includes a `docs/DESIGN-*.md` path is invalid and must be removed.
+
+Every component DESIGN doc follows this four-section template:
+
+1. **What & How** — one paragraph + architecture diagram
+2. **Core Logic** — processing flows, key functions, design decisions, error handling, security
+3. **Config** — settings table (`Setting | Env Var | Default | Description`); skip if no configuration
+4. **Files** — file table (`File | Purpose`)
+
+Never paste source code into DESIGN docs. Use pseudocode to explain processing logic and describe detailed implementation. Pseudocode keeps docs readable, avoids staleness when code changes, and forces focus on intent over syntax.
+
+Start at `docs/DESIGN-index.md` for navigation, config reference, and module index. `docs/DESIGN-system.md` covers top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/DESIGN-core-loop.md` covers the agent loop, orchestration, and approval flow. All 20+ component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
+
+`docs/reference/` is for research and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from DESIGN docs.
+
+### Artifact Lifecycle
+
+Workflow artifact placement:
+
+- `REPORT-*.md` and `TODO-*.md` live directly in `docs/`, not in subdirectories.
+
+`REPORT-<scope>.md` is permanent — an eval, pipeline run, or benchmarking report. Only eval/benchmark/script runs produce REPORT- files.
+
+- **Qualitative Behavior Evals** (`evals/*-result.md`): Must include "Per-Case Results" tables, "Drift/Error Tracing" (failed turns with prompt/response context), and Pass/Fail Gates.
+- **Quantitative Benchmarks** (`evals/benchmark-*-result.md` or `scripts/*-result.md`): Must include a "Results Summary" table showing Deltas between models (e.g., Throughput, TTFT, Total Time), "Detailed Findings" narratives explaining hardware/context anomalies, and explicitly list "API Parameters Forced" in the header.
+
+`TODO-<slug>.md` is the single source of work tracking for a delivery. It holds: the plan, `✓ DONE` task marks, delivery summary + independent review (appended by `orchestrate-dev`), and implementation verdict (appended by `/review-impl`). Tasks are never deleted mid-delivery. The file is deleted after Gate 2 acceptance (PASS verdict → ship → delete).
+
+TODO lifecycle:
+
+- When a task ships, mark it `✓ DONE` in `docs/TODO-<slug>.md` — do not delete it. The record is preserved for debugging, troubleshooting, and revert until Gate 2 PASS.
+- Design details merged into a DESIGN doc (via sync-doc) are noted in the task entry, not stripped from the TODO.
+- The full TODO (done + pending tasks) is deleted after Gate 2 PASS (review-impl verdict → ship → delete).
 
 ## Reference Repos
 
