@@ -18,12 +18,12 @@ from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.commands._commands import (
     dispatch, CommandContext,
-    SkillConfig, _cmd_help, _cmd_skills,
+    SkillConfig,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
 from co_cli.display._core import console
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -68,7 +68,7 @@ def _make_agent_and_deps():
     """
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=replace(_CONFIG_NO_MCP, personality=None),
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
     return _AGENT.agent, deps
@@ -107,7 +107,7 @@ async def test_cmd_help_includes_status_usage():
     """/help should carry enough /status usage detail to defer per-command help."""
     ctx = _make_ctx()
     with console.capture() as cap:
-        await _cmd_help(ctx, "")
+        await dispatch("/help", ctx)
     output = cap.get()
 
     assert "/status" in output
@@ -135,7 +135,7 @@ async def test_skills_install_local(tmp_path):
     skills_dir = tmp_path / ".co-cli" / "skills"
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
-    await _cmd_skills(ctx, f"install {src}")
+    await dispatch(f"/skills install {src}", ctx)
     assert (skills_dir / "myinstallskill.md").exists()
     assert "myinstallskill" in ctx.deps.capabilities.skill_commands
 
@@ -145,8 +145,8 @@ async def test_skills_install_url_error(tmp_path):
     """/skills install with unreachable URL returns None (graceful failure)."""
     ctx = _make_ctx()
     ctx.deps.config = replace(ctx.deps.config, skills_dir=tmp_path / ".co-cli" / "skills")
-    result = await _cmd_skills(ctx, "install http://127.0.0.1:1/skill.md")
-    assert result is None
+    result = await dispatch("/skills install http://127.0.0.1:1/skill.md", ctx)
+    assert isinstance(result, LocalOnly)
 
 
 @pytest.mark.asyncio
@@ -307,6 +307,14 @@ async def test_forget_command_evicts_fts_row(tmp_path):
 
 
 # --- Two-mode dispatch boundary ---
+
+
+@pytest.mark.asyncio
+async def test_compact_noop_empty_history():
+    """/compact on empty history returns LocalOnly — nothing to compact."""
+    ctx = _make_ctx(message_history=[])
+    result = await dispatch("/compact", ctx)
+    assert isinstance(result, LocalOnly)
 
 
 @pytest.mark.asyncio

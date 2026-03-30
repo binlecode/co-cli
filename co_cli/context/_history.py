@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
+from co_cli.context._types import _CompactionBoundaries, CompactionResult, MemoryRecallState, SafetyState
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +117,43 @@ def _content_length(content: Any) -> tuple[str, int]:
     # dict → JSON-serialise for measurement
     text = json.dumps(content, ensure_ascii=False)
     return text, len(text)
+
+
+# ---------------------------------------------------------------------------
+# Shared boundary helper
+# ---------------------------------------------------------------------------
+
+
+def _compute_compaction_boundaries(
+    messages: list[ModelMessage],
+    max_msgs: int,
+) -> _CompactionBoundaries:
+    """Compute head/tail boundary positions for a compaction pass.
+
+    Runs the full boundary calculation sequence and returns a
+    ``_CompactionBoundaries`` with ``valid=False`` if no clean boundary
+    exists or there is nothing to drop.  Both ``truncate_history_window``
+    and ``precompute_compaction`` call this; neither replicates the logic
+    inline.
+    """
+    first_run_end = _find_first_run_end(messages)
+    head_end = first_run_end + 1
+    tail_count = max(4, max_msgs // 2)
+    tail_start = max(head_end, len(messages) - tail_count)
+    tail_start = _align_tail_start(messages, tail_start)
+    if tail_start >= len(messages) or tail_start <= head_end:
+        return _CompactionBoundaries(
+            head_end=head_end,
+            tail_start=tail_start,
+            dropped_count=0,
+            valid=False,
+        )
+    return _CompactionBoundaries(
+        head_end=head_end,
+        tail_start=tail_start,
+        dropped_count=tail_start - head_end,
+        valid=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -382,23 +419,14 @@ async def truncate_history_window(
     if not should_compact:
         return messages
 
-    # Determine head boundary (first run's messages)
-    first_run_end = _find_first_run_end(messages)
-    head_end = first_run_end + 1  # inclusive → exclusive
-
-    # Tail: keep roughly half of max_msgs (minimum 4 for usable context)
-    tail_count = max(4, max_msgs // 2)
-    tail_start = max(head_end, len(messages) - tail_count)
-    tail_start = _align_tail_start(messages, tail_start)
-    if tail_start >= len(messages):
-        return messages  # no clean boundary — keep everything
-
-    # Nothing to drop?
-    if tail_start <= head_end:
+    bounds = _compute_compaction_boundaries(messages, max_msgs)
+    if not bounds.valid:
         return messages
 
+    head_end = bounds.head_end
+    tail_start = bounds.tail_start
     dropped = messages[head_end:tail_start]
-    dropped_count = len(dropped)
+    dropped_count = bounds.dropped_count
 
     # Check for pre-computed compaction result (background compaction)
     precomputed: CompactionResult | None = ctx.deps.runtime.precomputed_compaction
@@ -483,19 +511,11 @@ async def precompute_compaction(
     if not approaching_by_count and not approaching_by_tokens:
         return None
 
-    # Compute the same head/tail boundaries that truncate_history_window uses
-    first_run_end = _find_first_run_end(messages)
-    head_end = first_run_end + 1
-    tail_count = max(4, max_msgs // 2)
-    tail_start = max(head_end, len(messages) - tail_count)
-    tail_start = _align_tail_start(messages, tail_start)
-    if tail_start >= len(messages):
-        return None  # no clean boundary — skip pre-computation
-
-    if tail_start <= head_end:
+    bounds = _compute_compaction_boundaries(messages, max_msgs)
+    if not bounds.valid:
         return None
 
-    dropped = messages[head_end:tail_start]
+    dropped = messages[bounds.head_end:bounds.tail_start]
 
     fallback = ResolvedModel(model=model, settings=None)
     resolved = (
@@ -516,8 +536,8 @@ async def precompute_compaction(
     )
     return CompactionResult(
         summary_text=summary_text,
-        head_end=head_end,
-        tail_start=tail_start,
+        head_end=bounds.head_end,
+        tail_start=bounds.tail_start,
         message_count=len(messages),
     )
 

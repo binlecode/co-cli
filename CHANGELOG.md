@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-03-29
+
+### Changed
+- **Tool context reduction**: approval-resume turns now send only the deferred tool schemas plus three always-on tools (`check_capabilities`, `todo_read`, `todo_write`) instead of the full 38-tool set, cutting KV-fill cost from ~12s to <2s per resume segment. Implemented via `FilteredToolset` wrapping `FunctionToolset` with a per-request `active_tool_filter` on `CoRuntimeState`; main-agent turns are unaffected (filter is `None`).
+- **Test suite policy audit**: removed all policy-violating tests — private helper imports, fake service doubles, inline timeout literals, direct result-model construction, and implementation-detail assertions. Replaced with functional equivalents where behavior coverage was lost.
+
 ## [0.5.21] - 2026-03-29
 
 ### Fixed

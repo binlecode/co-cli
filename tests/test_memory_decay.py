@@ -9,8 +9,10 @@ import yaml
 from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
+from tests._timeouts import FILE_DB_TIMEOUT_SECS
+
 from co_cli.agent import build_agent
-from co_cli.config import Settings, settings
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
@@ -68,19 +70,15 @@ def test_decay_cut_triggers(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(asyncio.wait_for(save_memory(ctx, "Brand new important memory", tags=["test"]), timeout=60))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await save_memory(ctx, "Brand new important memory", tags=["test"])
+    asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
     assert len(after) <= max_count, f"Total {len(after)} > max {max_count}"
     has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
     assert not has_consolidated, "Consolidated file found (summarize path should be gone)"
-
-
-def test_settings_ignores_removed_decay_fields():
-    """Settings silently drops removed decay fields from settings.json on load."""
-    s = Settings.model_validate({"memory_decay_strategy": "summarize", "memory_max_count": 100})
-    assert s.memory_max_count == 100
-    assert not hasattr(s, "memory_decay_strategy")
 
 
 def test_decay_protected_survives(tmp_path: Path):
@@ -99,7 +97,10 @@ def test_decay_protected_survives(tmp_path: Path):
         )
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(asyncio.wait_for(save_memory(ctx, "New memory triggering decay", tags=["test"]), timeout=60))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await save_memory(ctx, "New memory triggering decay", tags=["test"])
+    asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
     remaining_ids: set[int] = set()
@@ -125,7 +126,10 @@ def test_decay_below_limit_no_trigger(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Memory number {i}", days_ago=10 - i)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
-    asyncio.run(asyncio.wait_for(save_memory(ctx, "New memory within budget", tags=["test"]), timeout=60))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await save_memory(ctx, "New memory within budget", tags=["test"])
+    asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
     assert len(after) == seed_count + 1, (
@@ -142,7 +146,10 @@ def test_save_memory_writes_low_certainty(tmp_path: Path):
 
     ctx = _make_ctx(memory_dir, max_count=50)
 
-    asyncio.run(asyncio.wait_for(save_memory(ctx, "I think I prefer dark mode", tags=["preference"]), timeout=60))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await save_memory(ctx, "I think I prefer dark mode", tags=["preference"])
+    asyncio.run(_run())
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1
     fm = yaml.safe_load(files[0].read_text().split("---")[1])
@@ -156,7 +163,10 @@ def test_save_memory_writes_high_certainty(tmp_path: Path):
 
     ctx = _make_ctx(memory_dir, max_count=50)
 
-    asyncio.run(asyncio.wait_for(save_memory(ctx, "I always use dark mode", tags=["preference"]), timeout=60))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            await save_memory(ctx, "I always use dark mode", tags=["preference"])
+    asyncio.run(_run())
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1
     fm = yaml.safe_load(files[0].read_text().split("---")[1])

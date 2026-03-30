@@ -9,7 +9,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli._model_factory import ResolvedModel
-from co_cli.tools._subagent_agents import AnalysisResult, make_analysis_agent, CoderResult, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
+from co_cli.tools._subagent_agents import CoderResult, make_analysis_agent, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
 from co_cli.config import ModelConfig, settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
@@ -36,18 +36,6 @@ async def test_run_coder_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_coder_subagent(ctx, "analyze foo")
-
-
-def test_coder_result_model() -> None:
-    """CoderResult is a valid Pydantic model with expected fields."""
-    r = CoderResult(
-        summary="test summary",
-        diff_preview="",
-        files_touched=["foo.py"],
-        confidence=0.8,
-    )
-    assert r.summary == "test summary"
-    assert r.confidence == 0.8
 
 
 def test_make_coder_agent_registers_file_tools() -> None:
@@ -119,18 +107,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
     assert isolated.services is base.services
 
 
-def test_research_result_model() -> None:
-    """ResearchResult is a valid Pydantic model with expected fields."""
-    r = ResearchResult(
-        summary="Python 3.12 ships with the new GIL opt-out feature.",
-        sources=["https://docs.python.org/3.12/"],
-        confidence=0.9,
-    )
-    assert r.summary
-    assert len(r.sources) == 1
-    assert r.confidence == 0.9
-
-
 def test_make_research_agent_registers_web_tools() -> None:
     """make_research_agent registers web_search and web_fetch without raising."""
     agent = make_research_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
@@ -145,18 +121,6 @@ async def test_run_research_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_research_subagent(ctx, "latest Python news")
-
-
-def test_analysis_result_model() -> None:
-    """AnalysisResult is a valid Pydantic model with expected fields."""
-    r = AnalysisResult(
-        conclusion="Python 3.12 is more performant than 3.11.",
-        evidence=["Benchmark shows 15% speedup.", "PEP 703 reduces GIL contention."],
-        reasoning="Two independent benchmarks converge on the same improvement range.",
-    )
-    assert r.conclusion
-    assert len(r.evidence) == 2
-    assert r.reasoning
 
 
 def test_make_analysis_agent_returns_agent() -> None:

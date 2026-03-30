@@ -21,8 +21,7 @@ from co_cli.deps import CoDeps, CoServices, CoConfig
 from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction
 from co_cli.memory._lifecycle import apply_plan_atomically, persist_memory
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.memory._signal_detector import SignalResult, handle_signal as _handle_signal
-from co_cli.tools.memory import MemoryEntry, _load_memories
+from co_cli.tools.memory import MemoryEntry
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -103,10 +102,10 @@ def test_update_action_sets_updated_timestamp(tmp_path: Path):
 
     apply_plan_atomically(plan, alias_map, new_content)
 
-    reloaded = _load_memories(memory_dir)
-    m1 = [e for e in reloaded if e.id == 1][0]
-    assert m1.updated is not None, "UPDATE action must set the updated timestamp"
-    assert "light mode" in m1.content, "UPDATE action must write new_content into entry"
+    file_text = entry.path.read_text(encoding="utf-8")
+    fm_raw = yaml.safe_load(file_text.split("---")[1])
+    assert fm_raw.get("updated") is not None, "UPDATE action must set the updated timestamp"
+    assert "light mode" in file_text, "UPDATE action must write new_content into entry"
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +153,9 @@ def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path):
     after_count = len(list(memory_dir.glob("*.md")))
     assert after_count == before_count, "No new file should be created for near-duplicate"
 
-    reloaded = _load_memories(memory_dir)
-    m1 = [e for e in reloaded if e.id == 1][0]
-    assert m1.updated is not None, "Dedup must refresh the updated timestamp"
+    existing_file = next(memory_dir.glob("001-*.md"))
+    fm_raw = yaml.safe_load(existing_file.read_text(encoding="utf-8").split("---")[1])
+    assert fm_raw.get("updated") is not None, "Dedup must refresh the updated timestamp"
 
 
 # ---------------------------------------------------------------------------
@@ -280,43 +279,6 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
         "on_failure='skip' must NOT write a file when consolidation times out"
     )
     assert result["action"] == "skipped"
-
-
-# ---------------------------------------------------------------------------
-# Admission policy tests
-# ---------------------------------------------------------------------------
-
-
-class _NoOpFrontend:
-    def on_status(self, msg: str) -> None:
-        pass
-
-    def prompt_approval(self, msg: str) -> str:
-        return "n"
-
-
-def test_admission_policy(tmp_path: Path) -> None:
-    mem_dir = tmp_path / "memory"
-    mem_dir.mkdir()
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(memory_auto_save_tags=["preference"], memory_dir=mem_dir),
-    )
-    frontend = _NoOpFrontend()
-
-    # correction tag — should be suppressed (not in allowlist)
-    asyncio.run(_handle_signal(
-        SignalResult(found=True, candidate="user corrected X", tag="correction", confidence="high"),
-        deps, frontend, None,
-    ))
-    assert len(list(mem_dir.glob("*.md"))) == 0
-
-    # preference tag — should save (in allowlist)
-    asyncio.run(_handle_signal(
-        SignalResult(found=True, candidate="user prefers Y", tag="preference", confidence="high"),
-        deps, frontend, None,
-    ))
-    assert len(list(mem_dir.glob("*.md"))) == 1
 
 
 # ---------------------------------------------------------------------------

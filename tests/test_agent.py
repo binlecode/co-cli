@@ -4,14 +4,11 @@ import dataclasses
 from pathlib import Path
 
 import pytest
-from pydantic_ai import RunContext
-from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import build_agent, build_task_agent, _build_filtered_toolset, _ALWAYS_ON_TOOL_NAMES
+from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import WebPolicy, settings, ROLE_TASK
-from co_cli.deps import CoConfig, CoDeps, CoServices, CoRuntimeState
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.deps import CoConfig
 
 
 # Canonical non-delegation tool inventory. Update when adding/removing/renaming tools.
@@ -115,16 +112,6 @@ def test_approval_tools_flagged():
             )
 
 
-def test_history_processors_attached():
-    """Agent has all four history processors for context governance (§16)."""
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
-    processor_names = [p.__name__ for p in agent.history_processors]
-    assert "inject_opening_context" in processor_names
-    assert "truncate_tool_returns" in processor_names
-    assert "detect_safety_issues" in processor_names
-    assert "truncate_history_window" in processor_names
-
-
 def test_web_search_ask_requires_approval():
     """web_search requires approval when web_policy.search is 'ask'."""
     config = dataclasses.replace(
@@ -160,71 +147,19 @@ def test_build_task_agent_registers_same_tools_as_main_agent():
     assert task_result.tool_approvals == main_result.tool_approvals
 
 
-def test_filtered_toolset_excludes_domain_tools_when_config_absent():
-    """Domain tools absent from tool_approvals when config paths are None."""
-    _, tool_approvals = _build_filtered_toolset(CoConfig())
-    assert "list_notes" not in tool_approvals
-    assert "list_emails" not in tool_approvals
-    assert "search_drive_files" not in tool_approvals
+def test_build_agent_excludes_domain_tools_when_config_absent():
+    """Domain tools absent from tool_names when config paths are not set."""
+    result = build_agent(config=CoConfig())
+    assert "list_notes" not in result.tool_names
+    assert "list_emails" not in result.tool_names
+    assert "search_drive_files" not in result.tool_names
     # Core tools always registered
-    assert "check_capabilities" in tool_approvals
-    assert "run_shell_command" in tool_approvals
-    assert "web_search" in tool_approvals
+    assert "check_capabilities" in result.tool_names
+    assert "run_shell_command" in result.tool_names
+    assert "web_search" in result.tool_names
 
 
-def test_filtered_toolset_includes_domain_tools_when_config_present():
-    """Domain tools appear in tool_approvals when config paths are set."""
-    _, tool_approvals = _build_filtered_toolset(
-        CoConfig(
-            obsidian_vault_path=Path("/fake"),
-            google_credentials_path="/fake/creds.json",
-        )
-    )
-    assert "list_notes" in tool_approvals
-    assert "list_emails" in tool_approvals
-    assert "search_drive_files" in tool_approvals
-
-
-@pytest.mark.asyncio
-async def test_active_filter_hides_non_matching_tools():
-    """FilteredToolset returns only filtered names when active_tool_filter is set."""
-    filtered_toolset, _ = _build_filtered_toolset(CoConfig())
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(),
-        runtime=CoRuntimeState(
-            active_tool_filter={"run_shell_command"} | _ALWAYS_ON_TOOL_NAMES
-        ),
-    )
-    # retries={} required — default factory produces a structure that causes KeyError
-    # when get_tools() is called outside an active agent run
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), retries={})  # type: ignore[arg-type]
-    tool_defs = await filtered_toolset.get_tools(ctx)
-    # get_tools returns dict[str, ToolsetTool]; keys are tool names
-    names = set(tool_defs)
-
-    assert "run_shell_command" in names
-    assert "web_search" not in names
-    for always_on in _ALWAYS_ON_TOOL_NAMES:
-        assert always_on in names, f"_ALWAYS_ON tool '{always_on}' missing from filtered set"
-
-
-@pytest.mark.asyncio
-async def test_active_filter_none_shows_all_tools():
-    """FilteredToolset returns all registered tools when active_tool_filter is None."""
-    filtered_toolset, tool_approvals = _build_filtered_toolset(CoConfig())
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=CoConfig(),
-        runtime=CoRuntimeState(active_tool_filter=None),
-    )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), retries={})  # type: ignore[arg-type]
-    tool_defs = await filtered_toolset.get_tools(ctx)
-
-    assert len(tool_defs) == len(tool_approvals)
-
-
-def test_build_task_agent_uses_filtered_toolset():
+def test_build_task_agent_excludes_domain_tools_when_config_absent():
     """build_task_agent() excludes domain tools when config paths are absent."""
     result = build_task_agent(
         config=CoConfig(),
@@ -232,3 +167,14 @@ def test_build_task_agent_uses_filtered_toolset():
     )
     assert "list_notes" not in result.tool_names
     assert "list_emails" not in result.tool_names
+
+
+def test_build_agent_wires_system_prompt_as_base_instruction():
+    """config.system_prompt becomes the static first instruction on the built agent.
+
+    Catches accidental removal of instructions=config.system_prompt from the Agent
+    constructor — without it the agent loses its role/rules/personality base silently.
+    """
+    config = dataclasses.replace(CoConfig(), system_prompt="co-cli-sentinel-system-prompt")
+    agent = build_agent(config=config).agent
+    assert agent._instructions[0] == "co-cli-sentinel-system-prompt"

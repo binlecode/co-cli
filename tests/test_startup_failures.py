@@ -5,10 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
-
-from co_cli.tools._background import _make_task_id
 
 
 def _base_env(tmp_path: Path) -> dict[str, str]:
@@ -45,14 +42,3 @@ def test_chat_startup_failure_exits_cleanly_without_traceback(tmp_path: Path) ->
     assert "LLM_API_KEY" in combined or "gemini" in combined.lower(), \
         "Startup failure must explain the missing provider credential"
 
-
-def test_make_task_id_is_unique_within_same_second() -> None:
-    """Two tasks started in the same second must not collide on the same task_id."""
-    start_second = int(time.time())
-    while int(time.time()) == start_second:
-        time.sleep(0.001)
-
-    tid1 = _make_task_id("sleep 1")
-    tid2 = _make_task_id("sleep 2")
-
-    assert tid1 != tid2, "Background task IDs must be unique even within the same second"

@@ -18,19 +18,14 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 
 from co_cli.agent import build_agent, build_task_agent
-from co_cli.prompts._assembly import _build_system_prompt
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_REASONING, ROLE_TASK, WebPolicy
+from co_cli.config import settings, ROLE_TASK, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
-from co_cli.prompts.model_quirks._loader import normalize_model_name
 from co_cli.tools._shell_backend import ShellBackend
 from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_reasoning_entry = _CONFIG.role_models.get(ROLE_REASONING)
-_normalized_model = normalize_model_name(_reasoning_entry.model) if _reasoning_entry else ""
-_CONFIG = replace(_CONFIG, system_prompt=_build_system_prompt(_CONFIG.llm_provider, _normalized_model, _CONFIG))
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
 
@@ -46,10 +41,9 @@ _AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVE
 
 
 def _make_deps(session_id: str) -> CoDeps:
-    # personality=None + mcp_servers={}: keep context small so calls complete in <10s.
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(_CONFIG_NO_MCP, personality=None),
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
     )
 
@@ -63,7 +57,6 @@ def _make_deps_web_deferred(session_id: str) -> CoDeps:
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
             _CONFIG_NO_MCP,
-            personality=None,
             web_policy=WebPolicy(search="ask"),
         ),
         session=CoSessionState(session_id=session_id),

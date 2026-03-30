@@ -12,10 +12,8 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig
-from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import (
-    _load_memories,
     recall_memory,
     list_memories,
     update_memory,
@@ -49,9 +47,6 @@ def _make_ctx(
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
-
-def _ctx() -> RunContext:
-    return _make_ctx()
 
 
 def _write_memory(memory_dir: Path, memory_id: int, content: str,
@@ -170,29 +165,6 @@ def test_fts_freshness_after_consolidation(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# inject routing — personality-context tag saved via _save_memory_impl
-# ---------------------------------------------------------------------------
-
-
-def test_auto_save_inject_true_adds_personality_context_tag(tmp_path: Path):
-    """When tags include personality-context, the saved file retains that tag."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    from dataclasses import replace
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
-        config=replace(CoConfig(), memory_dir=memory_dir),
-    )
-    asyncio.run(
-        _save_memory_impl(deps, "User does not want trailing comments", ["correction", "personality-context"], None)
-    )
-
-    entries = _load_memories(memory_dir)
-    assert len(entries) == 1
-    assert "personality-context" in entries[0].tags
-    assert "correction" in entries[0].tags
-
-
-# ---------------------------------------------------------------------------
 # update_memory — surgical text replacement
 # ---------------------------------------------------------------------------
 
@@ -200,17 +172,15 @@ def test_auto_save_inject_true_adds_personality_context_tag(tmp_path: Path):
 def test_update_memory_replaces_exact_match(tmp_path: Path):
     """update_memory replaces old_content with new_content in the body."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest over unittest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     asyncio.run(update_memory(ctx, slug, "pytest over unittest", "pytest over all others"))
 
-    reloaded = _load_memories(memory_dir)[0]
-    assert "pytest over all others" in reloaded.content
-    assert "pytest over unittest" not in reloaded.content
+    updated_text = path.read_text(encoding="utf-8")
+    assert "pytest over all others" in updated_text
+    assert "pytest over unittest" not in updated_text
 
 
 def test_update_memory_raises_not_found(tmp_path: Path):
@@ -227,12 +197,10 @@ def test_update_memory_raises_not_found(tmp_path: Path):
 def test_update_memory_raises_zero_occurrences(tmp_path: Path):
     """update_memory raises ValueError when old_content is not in the body."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     import pytest
     with pytest.raises(ValueError, match="not found"):
         asyncio.run(update_memory(ctx, slug, "unittest", "mocha"))
@@ -241,12 +209,10 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
 def test_update_memory_raises_ambiguous(tmp_path: Path):
     """update_memory raises ValueError when old_content appears more than once."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User uses pytest. Also uses pytest.", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     import pytest
     with pytest.raises(ValueError, match="2 times"):
         asyncio.run(update_memory(ctx, slug, "pytest", "mocha"))
@@ -255,12 +221,10 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
 def test_update_memory_rejects_line_prefix(tmp_path: Path):
     """update_memory raises ValueError when old_content contains Read-tool line prefixes."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     import pytest
     # Simulate Read tool artifact: "1→ User prefers pytest"
     with pytest.raises(ValueError, match="line-number prefixes"):
@@ -277,17 +241,14 @@ def test_update_memory_tab_normalization(tmp_path: Path):
     """
     memory_dir = tmp_path / ".co-cli" / "memory"
     # 5 spaces at column 3: what expandtabs() produces for "foo\tbar"
-    _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "foo     bar", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     # old_content uses a tab; after expandtabs() it matches the body
     asyncio.run(update_memory(ctx, slug, "foo\tbar", "replaced"))
 
-    reloaded = _load_memories(memory_dir)[0]
-    assert "replaced" in reloaded.content
+    assert "replaced" in path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -298,17 +259,15 @@ def test_update_memory_tab_normalization(tmp_path: Path):
 def test_append_memory_adds_to_end(tmp_path: Path):
     """append_memory appends content as a new line at the end of the body."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
+    path = _write_memory(memory_dir, 1, "User prefers pytest", tags=["preference"])
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    entry = _load_memories(memory_dir)[0]
-    slug = entry.path.stem
-
+    slug = path.stem
     asyncio.run(append_memory(ctx, slug, "Also uses coverage reports."))
 
-    reloaded = _load_memories(memory_dir)[0]
-    assert reloaded.content.endswith("Also uses coverage reports.")
-    assert "User prefers pytest" in reloaded.content
+    updated_text = path.read_text(encoding="utf-8")
+    assert updated_text.rstrip("\n").endswith("Also uses coverage reports.")
+    assert "User prefers pytest" in updated_text
 
 
 def test_append_memory_missing_slug_raises(tmp_path: Path):
@@ -524,16 +483,6 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
     assert "session_summary" in result["display"]
 
 
-def test_load_memories_without_artifact_type_defaults_none(tmp_path: Path):
-    """MemoryEntry.artifact_type is None when the frontmatter field is absent."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "No artifact type field", tags=[])
-
-    entries = _load_memories(memory_dir)
-    assert len(entries) == 1
-    assert entries[0].artifact_type is None
-
-
 # ---------------------------------------------------------------------------
 # TASK-3: always_on standing-context field
 # ---------------------------------------------------------------------------
@@ -588,33 +537,6 @@ def test_always_on_helper_empty_when_dir_missing(tmp_path: Path):
     """load_always_on_memories returns [] when memory_dir does not exist."""
     missing_dir = tmp_path / "nonexistent" / "memory"
     assert _load_always_on_memories(missing_dir) == []
-
-
-def test_always_on_default_false_no_field_in_file(tmp_path: Path):
-    """MemoryEntry.always_on is False when frontmatter has no always_on field."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    _write_memory(memory_dir, 1, "No always_on field present", tags=[])
-
-    entries = _load_memories(memory_dir)
-    assert entries[0].always_on is False
-
-
-def test_persist_memory_writes_always_on_to_frontmatter(tmp_path: Path):
-    """persist_memory with always_on=True writes always_on: true to frontmatter."""
-    from co_cli.knowledge._frontmatter import parse_frontmatter
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    config = CoConfig()
-    from dataclasses import replace
-    config = replace(config, memory_dir=memory_dir)
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=config)
-
-    asyncio.run(_save_memory_impl(deps, "Always-on standing context test", tags=["test"], related=[], always_on=True))
-
-    files = list(memory_dir.glob("*.md"))
-    assert len(files) == 1
-    fm, _ = parse_frontmatter(files[0].read_text(encoding="utf-8"))
-    assert fm.get("always_on") is True
 
 
 # ---------------------------------------------------------------------------

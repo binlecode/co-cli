@@ -9,6 +9,23 @@ from dataclasses import dataclass
 
 
 @dataclass
+class _CompactionBoundaries:
+    """Pre-computed head/tail boundary positions for a compaction pass.
+
+    Produced by ``_compute_compaction_boundaries()`` and consumed by both
+    ``truncate_history_window()`` and ``precompute_compaction()``.
+
+    When ``valid`` is ``False``, no clean boundary could be found and the
+    caller must skip compaction.
+    """
+
+    head_end: int
+    tail_start: int
+    dropped_count: int
+    valid: bool
+
+
+@dataclass
 class CompactionResult:
     """Pre-computed compaction summary for background processing.
 

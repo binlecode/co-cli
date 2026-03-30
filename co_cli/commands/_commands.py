@@ -72,7 +72,7 @@ class SlashCommand:
 
     name: str
     description: str
-    handler: Callable[[CommandContext, str], Awaitable[list[Any] | None]]
+    handler: Callable[[CommandContext, str], Awaitable[list[Any] | ReplaceTranscript | None]]
 
 
 def set_skill_commands(new_skills: dict[str, SkillConfig], capabilities: CoCapabilityState) -> None:
@@ -249,7 +249,7 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
     return None
 
 
-async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
+async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Summarize conversation via LLM to reduce context."""
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
@@ -292,7 +292,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> list[Any] | None:
     console.print(
         f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
     )
-    return new_history
+    return ReplaceTranscript(history=new_history, compaction_applied=True)
 
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
@@ -915,9 +915,11 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
 
     cmd = BUILTIN_COMMANDS.get(name)
     if cmd is not None:
-        history = await cmd.handler(ctx, args)
-        if history is not None:
-            return ReplaceTranscript(history=history, compaction_applied=name == "compact")
+        result = await cmd.handler(ctx, args)
+        if isinstance(result, ReplaceTranscript):
+            return result
+        if result is not None:
+            return ReplaceTranscript(history=result)
         return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)

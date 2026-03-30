@@ -17,7 +17,6 @@ from co_cli.context._history import (
     detect_safety_issues,
     truncate_history_window,
 )
-from co_cli.prompts._assembly import assemble_prompt
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.google_drive import search_drive_files, read_drive_file

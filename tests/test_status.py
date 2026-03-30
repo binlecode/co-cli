@@ -1,9 +1,6 @@
 """Functional tests for status rendering and security posture checks."""
 
-import stat
 from pathlib import Path
-
-import pytest
 
 from co_cli.bootstrap._render_status import (
     check_security,
@@ -61,20 +58,3 @@ def test_check_security_project_config_wrong_mode(tmp_path):
     assert proj_findings[0].severity == "warn"
 
 
-
-
-def test_get_status_mcp_approval_posture(tmp_path: Path):
-    """mcp_servers tuple has approval_required as third element."""
-    from co_cli.config import MCPServerConfig
-    config = CoConfig(
-        mcp_servers={
-            "ask-server": MCPServerConfig(command="npx", approval="ask"),
-            "auto-server": MCPServerConfig(command="npx", approval="auto"),
-        }
-    )
-    info = get_status(config)
-    # The status check reads from doctor.checks (real doctor run with no-op servers)
-    # so we test the tuple structure and CoConfig lookup logic directly on the result.
-    # Verify the tuple shape: all entries are 3-tuples
-    for entry in info.mcp_servers:
-        assert len(entry) == 3, f"Expected 3-tuple, got {len(entry)}-tuple: {entry}"
