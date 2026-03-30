@@ -484,62 +484,6 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# TASK-3: always_on standing-context field
-# ---------------------------------------------------------------------------
-
-
-from co_cli.tools.memory import _load_always_on_memories
-
-
-def _write_always_on_memory(memory_dir: Path, memory_id: int, content: str, always_on: bool) -> Path:
-    """Write a memory file with always_on frontmatter field."""
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    slug = content[:30].lower().replace(" ", "-")
-    filename = f"{memory_id:03d}-{slug}.md"
-    fm: dict[str, Any] = {
-        "id": memory_id,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "tags": [],
-    }
-    if always_on:
-        fm["always_on"] = True
-    md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
-    path = memory_dir / filename
-    path.write_text(md, encoding="utf-8")
-    return path
-
-
-def test_always_on_helper_returns_only_always_on_entries(tmp_path: Path):
-    """load_always_on_memories returns only entries with always_on=True."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    _write_always_on_memory(memory_dir, 1, "always on entry one", always_on=True)
-    _write_always_on_memory(memory_dir, 2, "regular memory entry", always_on=False)
-    _write_always_on_memory(memory_dir, 3, "always on entry two", always_on=True)
-
-    entries = _load_always_on_memories(memory_dir)
-    assert len(entries) == 2
-    assert all(e.always_on for e in entries)
-
-
-def test_always_on_helper_caps_at_five(tmp_path: Path):
-    """load_always_on_memories returns at most 5 entries."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    for i in range(1, 8):
-        _write_always_on_memory(memory_dir, i, f"always on entry number {i}", always_on=True)
-
-    entries = _load_always_on_memories(memory_dir)
-    assert len(entries) == 5
-
-
-def test_always_on_helper_empty_when_dir_missing(tmp_path: Path):
-    """load_always_on_memories returns [] when memory_dir does not exist."""
-    missing_dir = tmp_path / "nonexistent" / "memory"
-    assert _load_always_on_memories(missing_dir) == []
-
-
-# ---------------------------------------------------------------------------
 # rag.backend OTel annotation
 # ---------------------------------------------------------------------------
 

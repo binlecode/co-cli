@@ -238,60 +238,6 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
 
 
 @pytest.mark.asyncio
-async def test_initialize_session_capabilities_no_mcp_tool_names_unchanged(tmp_path: Path) -> None:
-    """No MCP servers configured: tool_names must be unchanged after helper call.
-
-    Validates the guard path: when deps.config.mcp_servers is empty,
-    discover_mcp_tools must not be called and tool_names must stay empty.
-    """
-    from co_cli.agent import build_agent
-    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
-
-    deps = _make_deps(tmp_path, mcp_servers={})
-    initial_tool_names = list(deps.capabilities.tool_names)
-    agent = build_agent(config=deps.config).agent
-
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=True)
-
-    assert deps.capabilities.tool_names == initial_tool_names, (
-        "No MCP servers: tool_names must be unchanged after initialize_session_capabilities"
-    )
-    assert result.skill_count >= 1, (
-        "skill_count must include at least one package-default skill (doctor)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_initialize_session_capabilities_mcp_skipped_when_init_failed(tmp_path: Path) -> None:
-    """MCP servers configured but mcp_init_ok=False: discovery skipped; errors dict remains empty.
-
-    Validates the _mcp_init_ok guard: when context entry failed, discover_mcp_tools
-    must not be called and mcp_discovery_errors must be empty.
-    """
-    from co_cli.agent import build_agent
-    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
-    from co_cli.config import MCPServerConfig
-
-    mcp_servers = {
-        "test-server": MCPServerConfig(url="http://127.0.0.1:19998/mcp", prefix="test", timeout=2)
-    }
-    deps = _make_deps(tmp_path, mcp_servers=mcp_servers)
-    initial_tool_names = list(deps.capabilities.tool_names)
-    agent = build_agent(config=deps.config).agent
-
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
-
-    assert deps.capabilities.tool_names == initial_tool_names, (
-        "mcp_init_ok=False: tool_names must be unchanged — discovery must be skipped"
-    )
-    assert deps.capabilities.mcp_discovery_errors == {}, (
-        "mcp_init_ok=False: mcp_discovery_errors must be empty — no discovery attempt made"
-    )
-
-
-@pytest.mark.asyncio
 async def test_initialize_session_capabilities_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in skill_registry and skill_count."""
     from co_cli.agent import build_agent

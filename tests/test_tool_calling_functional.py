@@ -22,6 +22,8 @@ from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
+from co_cli.context._orchestrate import run_turn
+from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
@@ -33,17 +35,14 @@ _TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
 # build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
 # build_agent — reducing context from ~27K to ~10K tokens so calls complete in <10s.
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-# Build without MCP servers: these tests cover local tool selection only and MCP tool
-# schemas add 5K+ tokens of context that inflate TTFT past LLM_TOOL_CONTEXT_TIMEOUT_SECS.
-_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
-# Agent built with task settings baked in; do not pass model= override to agent.run().
-_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
+# Agent built with task settings baked in.
+_AGENT_NOREASON = build_task_agent(config=_CONFIG, resolved=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=_CONFIG_NO_MCP,
+        config=_CONFIG,
         session=CoSessionState(session_id=session_id),
     )
 
@@ -56,7 +55,7 @@ def _make_deps_web_deferred(session_id: str) -> CoDeps:
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
-            _CONFIG_NO_MCP,
+            _CONFIG,
             web_policy=WebPolicy(search="ask"),
         ),
         session=CoSessionState(session_id=session_id),
@@ -94,23 +93,27 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    # web_search: build agent with search="ask" so the tool is deferred — verifies
-    # tool selection from DeferredToolRequests in one turn without executing the search.
-    # run_shell_command: not deferred (requires_approval=False), so agent.run() drives
-    # two LLM segments (tool selection + result response) — use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
+    # web_search: build agent with search="ask" so the tool is deferred — denial drives
+    # two segments (tool selection + denial-response); use LLM_MULTI_SEGMENT_TIMEOUT_SECS.
+    # run_shell_command: safe-prefix "git status" executes directly, also two segments
+    # (tool selection + result response) — same budget.
     if expected_tool == "web_search":
-        web_cfg = replace(_CONFIG_NO_MCP, web_policy=WebPolicy(search="ask"))
+        web_cfg = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
         agent = build_task_agent(config=web_cfg, resolved=_TASK_RESOLVED).agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
-        call_timeout = LLM_TOOL_CONTEXT_TIMEOUT_SECS
+        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
+        # Deny deferred web_search — avoids executing the search while verifying tool selection.
+        frontend = SilentFrontend(approval_response="n")
     elif expected_tool == "run_shell_command":
         agent = _AGENT_NOREASON.agent
         deps = _make_deps(f"test-tool-{expected_tool}")
         call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
+        frontend = SilentFrontend(approval_response="y")
     else:
         agent = _AGENT_NOREASON.agent
         deps = _make_deps(f"test-tool-{expected_tool}")
-        call_timeout = LLM_TOOL_CONTEXT_TIMEOUT_SECS
+        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
+        frontend = SilentFrontend(approval_response="y")
 
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     last_details = "no run executed"
@@ -120,13 +123,15 @@ async def test_tool_selection_and_arg_extraction(
         args = None
         try:
             async with asyncio.timeout(call_timeout):
-                result = await agent.run(
-                    prompt,
+                turn = await run_turn(
+                    agent=agent,
+                    user_input=prompt,
                     deps=deps,
+                    message_history=[],
+                    frontend=frontend,
                 )
-            # Extract first tool call from message history (works for both
-            # deferred/unapproved tools and normal tool executions).
-            for msg in result.all_messages():
+            # Extract first tool call from message history.
+            for msg in turn.messages:
                 if isinstance(msg, ModelResponse):
                     for part in msg.parts:
                         if isinstance(part, ToolCallPart):
@@ -136,7 +141,7 @@ async def test_tool_selection_and_arg_extraction(
                 if tool_name:
                     break
         except (ModelHTTPError, ModelAPIError) as e:
-            last_details = f"agent.run error: {type(e).__name__}: {e}"
+            last_details = f"run_turn error: {type(e).__name__}: {e}"
             continue
 
         if tool_name is None:
@@ -193,11 +198,14 @@ async def test_refusal_no_tool_for_simple_math():
     deps = _make_deps("test-refusal")
     await ensure_ollama_warm(_TASK_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-        result = await _AGENT_NOREASON.agent.run(
-            "What is 17 times 23?",
+        turn = await run_turn(
+            agent=_AGENT_NOREASON.agent,
+            user_input="What is 17 times 23?",
             deps=deps,
+            message_history=[],
+            frontend=SilentFrontend(),
         )
-    for msg in result.all_messages():
+    for msg in turn.messages:
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 assert not isinstance(part, ToolCallPart), (
@@ -212,11 +220,14 @@ async def test_intent_routing_observation_no_tool():
 
     await ensure_ollama_warm(_TASK_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-        result = await _AGENT_NOREASON.agent.run(
-            "This function has a bug",
+        turn = await run_turn(
+            agent=_AGENT_NOREASON.agent,
+            user_input="This function has a bug",
             deps=deps,
+            message_history=[],
+            frontend=SilentFrontend(),
         )
-    for msg in result.all_messages():
+    for msg in turn.messages:
         if isinstance(msg, ModelResponse):
             for part in msg.parts:
                 assert not isinstance(part, ToolCallPart), (

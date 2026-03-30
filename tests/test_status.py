@@ -1,5 +1,6 @@
 """Functional tests for status rendering and security posture checks."""
 
+import json
 from pathlib import Path
 
 from co_cli.bootstrap._render_status import (
@@ -56,5 +57,35 @@ def test_check_security_project_config_wrong_mode(tmp_path):
     proj_findings = [f for f in findings if f.check_id == "project-config-permissions"]
     assert len(proj_findings) == 1
     assert proj_findings[0].severity == "warn"
+
+
+def test_check_security_user_config_shell_wildcard(tmp_path):
+    """User settings.json with shell_safe_commands containing '*' → WARN wildcard finding."""
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"shell_safe_commands": ["ls", "*", "cat"]}), encoding="utf-8")
+    findings = check_security(_user_config_path=p, _project_config_path=None)
+    wildcard_findings = [f for f in findings if f.check_id == "user-config-shell-wildcard"]
+    assert len(wildcard_findings) == 1
+    assert wildcard_findings[0].severity == "warn"
+    assert "*" in wildcard_findings[0].detail
+
+
+def test_check_security_project_config_shell_wildcard(tmp_path):
+    """Project settings.json with shell_safe_commands containing '*' → WARN wildcard finding."""
+    p = tmp_path / "project-settings.json"
+    p.write_text(json.dumps({"shell_safe_commands": ["*"]}), encoding="utf-8")
+    findings = check_security(_user_config_path=None, _project_config_path=p)
+    wildcard_findings = [f for f in findings if f.check_id == "project-config-shell-wildcard"]
+    assert len(wildcard_findings) == 1
+    assert wildcard_findings[0].severity == "warn"
+
+
+def test_check_security_no_wildcard_when_safe_commands_normal(tmp_path):
+    """shell_safe_commands without '*' → no wildcard finding."""
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps({"shell_safe_commands": ["ls", "cat", "git status"]}), encoding="utf-8")
+    findings = check_security(_user_config_path=p, _project_config_path=None)
+    wildcard_findings = [f for f in findings if "wildcard" in f.check_id]
+    assert wildcard_findings == []
 
 

@@ -247,7 +247,7 @@ Detailed semantics are owned by component docs:
 | `co_cli/context/_orchestrate.py` | turn execution engine |
 | `co_cli/context/_history.py` | compaction, opening context, and safety processors |
 | `co_cli/bootstrap/_check.py` | startup and health-check primitives |
-| `co_cli/bootstrap/_render_status.py` | status rendering |
+| `co_cli/bootstrap/_render_status.py` | `get_status()` / `StatusResult` / `render_status_table()` — system status assembly and display; `check_security()` / `SecurityCheckResult` / `render_security_findings()` — security posture checks (config file permissions, `shell_safe_commands` wildcard detection) |
 | `co_cli/tools/` | native tool implementations |
 | `co_cli/knowledge/` | indexing, chunking, frontmatter parsing, and reranking |
 | `co_cli/memory/` | signal detection, consolidation, retention, and persistence |

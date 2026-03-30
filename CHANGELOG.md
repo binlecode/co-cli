@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.29] - 2026-03-29
+
+### Changed
+- **Test suite policy audit**: removed 12 policy-violating tests (private-attribute access, internal builder probing, guard-branch assertions, direct `agent.run()` orchestration); migrated all LLM-calling tests to `run_turn()` via a new `tests/_frontend.py` `SilentFrontend`; closed `check_security()` wildcard gap with real `shell_safe_commands` `"*"` detection and 4 new tests.
+
 ## [0.5.27] - 2026-03-29
 
 ### Added

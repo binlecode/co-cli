@@ -8,9 +8,8 @@ from pydantic_ai._run_context import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli._model_factory import ResolvedModel
-from co_cli.tools._subagent_agents import CoderResult, make_analysis_agent, make_coder_agent, ResearchResult, make_research_agent, ThinkingResult, make_thinking_agent
-from co_cli.config import ModelConfig, settings
+from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent
@@ -36,12 +35,6 @@ async def test_run_coder_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_coder_subagent(ctx, "analyze foo")
-
-
-def test_make_coder_agent_registers_file_tools() -> None:
-    """make_coder_agent should register 3 read-only file tools without raising."""
-    agent = make_coder_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
-    assert agent is not None
 
 
 def test_make_subagent_deps_resets_session_state() -> None:
@@ -107,12 +100,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
     assert isolated.services is base.services
 
 
-def test_make_research_agent_registers_web_tools() -> None:
-    """make_research_agent registers web_search and web_fetch without raising."""
-    agent = make_research_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
-    assert agent is not None
-
-
 @pytest.mark.asyncio
 async def test_run_research_subagent_no_model() -> None:
     """Raises ModelRetry when model_registry is None (no registry configured)."""
@@ -121,12 +108,6 @@ async def test_run_research_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_research_subagent(ctx, "latest Python news")
-
-
-def test_make_analysis_agent_returns_agent() -> None:
-    """make_analysis_agent returns a non-None agent without raising."""
-    agent = make_analysis_agent(ResolvedModel(model="gemini-2.0-flash", settings=None))
-    assert agent is not None
 
 
 @pytest.mark.asyncio
@@ -167,24 +148,3 @@ async def test_run_thinking_subagent_no_model() -> None:
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_thinking_subagent(ctx, "solve this problem")
 
-
-def test_run_coder_subagent_make_result_scope_kwarg():
-    """make_result for run_coder_subagent must include scope from task input."""
-    from co_cli.tools._result import make_result
-    task = "a" * 200
-    scope = task[:120]
-    result = make_result(
-        f"Scope: {scope}\nCoder analysis complete.\ntest summary\n[coding · model · 1/10 req]",
-        summary="test summary",
-        diff_preview="",
-        files_touched=[],
-        confidence=0.8,
-        role="coding",
-        model_name="model",
-        requests_used=1,
-        request_limit=10,
-        scope=scope,
-    )
-    assert result.get("scope") == scope
-    assert len(result["scope"]) <= 120
-    assert result["display"].startswith("Scope: ")

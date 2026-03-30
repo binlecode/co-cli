@@ -432,7 +432,7 @@ wheels = [
 
 [[package]]
 name = "co-cli"
-version = "0.5.23"
+version = "0.5.27"
 source = { editable = "." }
 dependencies = [
     { name = "datasette" },

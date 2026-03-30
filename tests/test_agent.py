@@ -3,8 +3,6 @@
 import dataclasses
 from pathlib import Path
 
-import pytest
-
 from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import WebPolicy, settings, ROLE_TASK
@@ -168,13 +166,3 @@ def test_build_task_agent_excludes_domain_tools_when_config_absent():
     assert "list_notes" not in result.tool_names
     assert "list_emails" not in result.tool_names
 
-
-def test_build_agent_wires_system_prompt_as_base_instruction():
-    """config.system_prompt becomes the static first instruction on the built agent.
-
-    Catches accidental removal of instructions=config.system_prompt from the Agent
-    constructor — without it the agent loses its role/rules/personality base silently.
-    """
-    config = dataclasses.replace(CoConfig(), system_prompt="co-cli-sentinel-system-prompt")
-    agent = build_agent(config=config).agent
-    assert agent._instructions[0] == "co-cli-sentinel-system-prompt"

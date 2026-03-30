@@ -1,5 +1,6 @@
 """Environment / health checks and status table rendering."""
 
+import json
 import os
 import subprocess
 import tomllib
@@ -187,6 +188,26 @@ def check_security(
                 check_id="project-config-permissions",
                 detail=f".co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
                 remediation=f"chmod 600 {project_cfg}",
+            ))
+
+    # Check 3: wildcard shell_safe_commands entries
+    for label, cfg_path in [("user", user_cfg), ("project", project_cfg)]:
+        if not cfg_path or not Path(cfg_path).exists():
+            continue
+        try:
+            data = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        safe_cmds = data.get("shell_safe_commands", [])
+        if isinstance(safe_cmds, list) and "*" in safe_cmds:
+            findings.append(SecurityCheckResult(
+                severity="warn",
+                check_id=f"{label}-config-shell-wildcard",
+                detail=(
+                    f"shell_safe_commands contains '*' in {cfg_path} — "
+                    "all shell commands are auto-approved without prompting"
+                ),
+                remediation=f"Remove '*' from shell_safe_commands in {cfg_path}",
             ))
 
     return findings

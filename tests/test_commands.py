@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pydantic_ai import DeferredToolRequests, DeferredToolResults, ToolDenied
+from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 from co_cli.agent import build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
@@ -21,21 +21,20 @@ from co_cli.commands._commands import (
     SkillConfig,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
+from co_cli.context._orchestrate import run_turn
 from co_cli.display._core import console
+from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from tests._timeouts import LLM_MULTI_SEGMENT_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-# Exclude MCP servers: approval tests cover local tool deferral only; MCP tool schemas
-# inflate context beyond LLM_TOOL_CONTEXT_TIMEOUT_SECS even with minimal system prompt.
-_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
 
-# build_task_agent: minimal 1-sentence system prompt + local tools only — uses
-# LLM_TOOL_CONTEXT_TIMEOUT_SECS (20s) for tool schema KV fill time.
-_AGENT = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
+# build_task_agent: minimal 1-sentence system prompt + local tools — bakes in
+# ROLE_TASK model settings (reasoning_effort=none) at construction time.
+_AGENT = build_task_agent(config=_CONFIG, resolved=_TASK_RESOLVED)
 
 
 def _make_ctx(
@@ -57,45 +56,6 @@ def _make_ctx(
         deps=deps,
         agent=_AGENT.agent,
         tool_names=_AGENT.tool_names,
-    )
-
-
-def _make_agent_and_deps():
-    """Build a real task agent + deps for approval flow tests.
-
-    Uses ROLE_TASK (reasoning_effort=none) with build_task_agent — minimal system prompt
-    uses LLM_TOOL_CONTEXT_TIMEOUT_SECS (20s) — 38 tools = ~10K schema tokens = ~12s KV fill.
-    """
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-approval"),
-    )
-    return _AGENT.agent, deps
-
-
-async def _trigger_shell_call(agent, deps, *, retries: int = 3):
-    """Ask the LLM to run a shell command. Returns DeferredToolRequests result.
-
-    Retries up to *retries* times because smaller models occasionally respond
-    with text instead of calling the tool.
-    """
-    prompt = (
-        "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
-        "Do NOT describe what you would do — call the tool now."
-    )
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
-    last_output = None
-    for _ in range(retries):
-        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-            result = await agent.run(prompt, deps=deps)
-        if isinstance(result.output, DeferredToolRequests):
-            assert len(result.output.approvals) > 0
-            return result
-        last_output = result.output
-    pytest.fail(
-        f"Expected DeferredToolRequests after {retries} attempts, "
-        f"got {type(last_output).__name__}: {last_output!r}"
     )
 
 
@@ -167,93 +127,71 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
 
 # --- Approval flow (programmatic, no TTY) ---
 
+_PROMPT_SHELL = (
+    "Use the run_shell_command tool to execute: git rev-parse --is-inside-work-tree\n"
+    "Do NOT describe what you would do — call the tool now."
+)
+
 
 @pytest.mark.asyncio
 async def test_approval_approve():
-    """Approving a deferred tool call executes it and returns LLM response.
+    """Approving a deferred tool call through production orchestration executes it and returns a response.
 
-    Requires running LLM + Docker.
+    run_turn() with SilentFrontend(approval_response="y") exercises the full approval loop:
+    deferred tool → auto-approve → execution → LLM response.
     """
-    agent, deps = _make_agent_and_deps()
-    assert deps.services.task_agent is not None, "task_agent must be built at session init"
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
+        config=_CONFIG,
+        session=CoSessionState(session_id="test-approval"),
+    )
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     try:
-        result = await _trigger_shell_call(agent, deps)
-
-        approvals = DeferredToolResults()
-        for call in result.output.approvals:
-            approvals.approvals[call.tool_call_id] = True
-
-        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-            resumed = await agent.run(
-                None,
+        async with asyncio.timeout(LLM_MULTI_SEGMENT_TIMEOUT_SECS):
+            turn = await run_turn(
+                agent=_AGENT.agent,
+                user_input=_PROMPT_SHELL,
                 deps=deps,
-                message_history=result.all_messages(),
-                deferred_tool_results=approvals,
-                usage=result.usage(),
+                message_history=[],
+                frontend=SilentFrontend(approval_response="y"),
             )
-
-        max_hops = 5
-        hops = 0
-        while isinstance(resumed.output, DeferredToolRequests) and hops < max_hops:
-            hops += 1
-            more_approvals = DeferredToolResults()
-            for call in resumed.output.approvals:
-                more_approvals.approvals[call.tool_call_id] = True
-            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-                resumed = await agent.run(
-                    None,
-                    deps=deps,
-                    message_history=resumed.all_messages(),
-                    deferred_tool_results=more_approvals,
-                    usage=resumed.usage(),
-                )
-
-        assert isinstance(resumed.output, str)
-        assert len(resumed.all_messages()) > 0
+        # Verify a tool call was attempted (shell command was deferred and processed)
+        tool_called = any(
+            isinstance(part, ToolCallPart)
+            for msg in turn.messages
+            if isinstance(msg, ModelResponse)
+            for part in msg.parts
+        )
+        assert tool_called, "Expected run_shell_command to be called and approved"
+        assert isinstance(turn.output, str)
+        assert len(turn.messages) > 0
     finally:
         deps.services.shell.cleanup()
 
 
 @pytest.mark.asyncio
 async def test_approval_deny():
-    """Denying a deferred tool call sends ToolDenied; LLM still responds.
+    """Denying a deferred tool call through production orchestration; LLM still responds.
 
-    Requires running LLM + Docker.
+    run_turn() with SilentFrontend(approval_response="n") exercises the deny path:
+    deferred tool → deny → LLM acknowledgement response.
     """
-    agent, deps = _make_agent_and_deps()
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
+        config=_CONFIG,
+        session=CoSessionState(session_id="test-denial"),
+    )
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     try:
-        result = await _trigger_shell_call(agent, deps)
-
-        approvals = DeferredToolResults()
-        for call in result.output.approvals:
-            approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-
-        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-            resumed = await agent.run(
-                None,
+        async with asyncio.timeout(LLM_MULTI_SEGMENT_TIMEOUT_SECS):
+            turn = await run_turn(
+                agent=_AGENT.agent,
+                user_input=_PROMPT_SHELL,
                 deps=deps,
-                message_history=result.all_messages(),
-                deferred_tool_results=approvals,
-                usage=result.usage(),
+                message_history=[],
+                frontend=SilentFrontend(approval_response="n"),
             )
-
-        max_hops = 5
-        hops = 0
-        while isinstance(resumed.output, DeferredToolRequests) and hops < max_hops:
-            hops += 1
-            deny_approvals = DeferredToolResults()
-            for call in resumed.output.approvals:
-                deny_approvals.approvals[call.tool_call_id] = ToolDenied("User denied this action")
-            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-                resumed = await agent.run(
-                    None,
-                    deps=deps,
-                    message_history=resumed.all_messages(),
-                    deferred_tool_results=deny_approvals,
-                    usage=resumed.usage(),
-                )
-
-        assert isinstance(resumed.output, str)
+        assert isinstance(turn.output, str)
     finally:
         deps.services.shell.cleanup()
 
