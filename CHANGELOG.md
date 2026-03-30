@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.31] - 2026-03-29
+
+### Added
+- **Task agent for approval resume turns**: approval resume turns now route through a lightweight task agent (`ROLE_TASK`, `reasoning_effort: none`, short 2-sentence system prompt) instead of the full main agent (~30K tokens). Eliminates thinking overhead on resume turns. Main agent first-turn behavior is unchanged.
+- **Tool-schema context filtering**: `FilteredToolset` + `active_tool_filter` on `CoDeps.runtime` gates which tool schemas are sent to the model per hop. On approval resume, only the deferred tools plus always-on tools are included in the schema payload — reduces token overhead for multi-tool agents.
+- `ROLE_TASK` config role with `DEFAULT_OLLAMA_TASK_MODEL` (`reasoning_effort: none`) and `CO_MODEL_ROLE_TASK` env var override.
+
 ## [0.5.29] - 2026-03-29
 
 ### Changed
