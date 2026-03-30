@@ -381,9 +381,6 @@ def _estimate_message_tokens(messages: list[ModelMessage]) -> int:
 _DEFAULT_TOKEN_BUDGET = 100_000
 
 
-# truncate_history_window is the sole consumer of the compaction cache.
-# It reads deps.runtime.precomputed_compaction and uses it when valid (message count matches).
-# It never writes back to precomputed_compaction — that is main.py's job after each turn.
 async def truncate_history_window(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -469,9 +466,6 @@ _PRECOMPACT_TOKEN_RATIO = 0.70
 _PRECOMPACT_MSG_RATIO = 0.80
 
 
-# precompute_compaction is the write-only producer of the compaction cache.
-# It runs as a background asyncio.Task (spawned by main.py after each turn).
-# It writes only via its return value — the caller stores that in deps.runtime.precomputed_compaction.
 async def precompute_compaction(
     messages: list[ModelMessage],
     deps: CoDeps,
@@ -540,6 +534,76 @@ async def precompute_compaction(
         tail_start=bounds.tail_start,
         message_count=len(messages),
     )
+
+
+# ---------------------------------------------------------------------------
+# 3c. Background compaction lifecycle — HistoryCompactionState
+# ---------------------------------------------------------------------------
+
+
+class HistoryCompactionState:
+    """Owns the background pre-compaction task lifecycle for the chat loop.
+
+    Orchestration-layer state: created once in ``_chat_loop``, not stored in
+    ``CoDeps``.  Sole writer of ``deps.runtime.precomputed_compaction``.
+    The chat loop calls ``on_turn_start`` and ``on_turn_end``; the orchestration
+    layer holds zero direct references to compaction tasks or to
+    ``deps.runtime.precomputed_compaction``.
+
+    Methods:
+      on_turn_start(deps) — harvest a completed background task or cancel a
+        stale one; writes deps.runtime.precomputed_compaction.  Must be called
+        before run_turn() so truncate_history_window() sees a valid or None
+        precomputed result when history processors fire.
+      on_turn_end(history, deps, model) — invalidates the now-consumed cache
+        entry and spawns the next background pre-compute task.
+      shutdown() — cancels any pending task on session end.
+    """
+
+    def __init__(self) -> None:
+        self._task: asyncio.Task | None = None
+
+    def on_turn_start(self, deps: CoDeps) -> None:
+        """Harvest a completed background task or cancel a stale one.
+
+        Writes deps.runtime.precomputed_compaction.
+        asyncio.CancelledError is BaseException — caught explicitly.
+        """
+        if self._task is None:
+            deps.runtime.precomputed_compaction = None
+            return
+        if self._task.done():
+            try:
+                deps.runtime.precomputed_compaction = self._task.result()
+            except asyncio.CancelledError:
+                deps.runtime.precomputed_compaction = None
+            except Exception:
+                log.debug("Background compaction task failed; falling back to inline", exc_info=True)
+                deps.runtime.precomputed_compaction = None
+        else:
+            self._task.cancel()
+            deps.runtime.precomputed_compaction = None
+        self._task = None
+
+    def on_turn_end(
+        self,
+        history: list[ModelMessage],
+        deps: CoDeps,
+        model: str,
+    ) -> None:
+        """Invalidate the consumed cache entry and spawn the next background task."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        deps.runtime.precomputed_compaction = None
+        self._task = asyncio.create_task(
+            precompute_compaction(history, deps, model)
+        )
+
+    def shutdown(self) -> None:
+        """Cancel any pending background task on session end."""
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
 
 
 # ---------------------------------------------------------------------------

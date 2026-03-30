@@ -6,7 +6,7 @@
 
 This section is a system-boundary view of one turn.
 
-- `main.py` owns REPL input, slash-command dispatch, skill env injection and rollback, background-compaction harvest/spawn, session persistence, and post-turn hooks.
+- `main.py` owns REPL input, slash-command dispatch, skill env injection and rollback, session persistence, and post-turn hooks. `HistoryCompactionState` owns the background compaction task lifecycle.
 - `_orchestrate.py` owns one turn through `run_turn()`: reset turn-scoped state, open the `co.turn` span, stream segments, handle deferred approvals, apply provider retry policy, and return `TurnResult`.
 - `_orchestrate.py` works on `_TurnState` and returns the next history snapshot; it does not mutate REPL-owned history directly.
 - `agent.py` owns the agent runtime surface: instructions, history processors, native tools, and optional MCP toolsets.
@@ -19,7 +19,7 @@ flowchart TD
     B -->|yes, skill command| D["dispatch_command() returns delegated_input and skill env"]
     B -->|no| E["raw user input"]
 
-    D --> F["_consume_bg_compaction()"]
+    D --> F["compactor.on_turn_start()"]
     E --> F
     F --> G["run_turn() in _orchestrate.py"]
     G --> H["agent.run_stream_events() with instructions, history processors, native tools, and MCP tools"]
@@ -193,24 +193,24 @@ Compaction keeps the first run in the head, keeps a recent tail, and replaces th
 - a cached precomputed summary from `ctx.deps.runtime.precomputed_compaction` when the cached `message_count`, `head_end`, and `tail_start` still match
 - a static trim marker when no usable precomputed summary exists
 
-No inline LLM summarization happens inside `truncate_history_window()`. `main.py` is responsible for harvesting the background task result before the next turn and for clearing `precomputed_compaction` after the turn completes.
+No inline LLM summarization happens inside `truncate_history_window()`. `HistoryCompactionState` is responsible for harvesting the background task result before the next turn and for clearing `precomputed_compaction` after the turn completes.
 
 Background compaction contract:
 
 ```text
 after turn N:
-  main.py spawns precompute_compaction(message_history, deps, primary_model)
+  compactor.on_turn_end() clears precomputed_compaction and spawns precompute_compaction(...)
   task may return None when history is not near the trigger, already past the trigger, or summarization fails
 
 before turn N+1:
-  main.py harvests completed task into deps.runtime.precomputed_compaction
+  compactor.on_turn_start() harvests completed task into deps.runtime.precomputed_compaction
   or cancels unfinished task
 
 during turn N+1:
   truncate_history_window() may consume that cached result
 
-after turn N+1:
-  main.py clears deps.runtime.precomputed_compaction
+after turn N+1 (via on_turn_end):
+  precomputed_compaction cleared and next background task spawned
 ```
 
 ### 2.4 Safety, Errors, And Interrupts
@@ -239,10 +239,9 @@ Interrupt recovery invariant:
 
 1. replace `message_history` with `turn_result.messages`
 2. if the turn was not interrupted and not an error, run `analyze_for_signals()` and `handle_signal()`
-3. clear `deps.runtime.precomputed_compaction`
-4. `touch_session()` and `save_session()`
-5. spawn the next `precompute_compaction(...)` task via `asyncio.create_task()`
-6. if `outcome == "error"`, print a generic error banner
+3. `touch_session()` and `save_session()`
+4. `compactor.on_turn_end()` — clears `precomputed_compaction` and spawns the next background precompute task
+5. if `outcome == "error"`, print a generic error banner
 
 ### 2.6 Comparison Against Common Peer Patterns
 
@@ -278,7 +277,7 @@ Interrupt recovery invariant:
 
 | Area | Why it is heavier than the common pattern | Risk |
 |---|---|---|
-| `main.py` split ownership across REPL input, slash dispatch, skill env injection, background-compaction harvest/spawn, session persistence, and post-turn signal detection | Post-turn hooks extracted into `_finalize_turn()` and `_cleanup_skill_run_state()` helpers; full foreground lifecycle delegated to `_run_foreground_turn()`. `_chat_loop()` is now a clean input loop with control-plane routing. | Remaining split is closer to the minimum needed for a single-turn loop |
+| `main.py` split ownership across REPL input, slash dispatch, skill env injection, background-compaction harvest/spawn, session persistence, and post-turn signal detection | Post-turn hooks extracted into `_finalize_turn()` and `_cleanup_skill_run_state()` helpers; full foreground lifecycle delegated to `_run_foreground_turn()`. Background compaction lifecycle moved to `HistoryCompactionState`. `_chat_loop()` is now a clean input loop with control-plane routing. | Remaining split is closer to the minimum needed for a single-turn loop |
 | Turn state spread across `message_history`, `current_history`, `deps.runtime.precomputed_compaction`, background task state, and `_TurnState.latest_*` fields | The behavior is correct, but the number of moving pieces is above the minimum needed for a single-turn loop | Harder to reason about retries, resume points, and stale cached state |
 | Approval subject taxonomy (`shell`, `path`, `domain`, `tool`) plus exact-match remembered rules | More nuanced than the simpler allow-once / allow-session patterns seen in Aider and many CLI peers | Trust UX can become harder to explain than the underlying safety gain justifies |
 | Post-turn hook chain in `_chat_loop()` | Signal detection, compaction cache clearing, session save, and next-turn precompute all happen after the core turn returns | The true loop boundary is less obvious in code and docs |
@@ -324,7 +323,7 @@ Interrupt recovery invariant:
 | `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle — routes via `task_agent` when available), `_collect_deferred_tool_approvals()`, `_resolve_task_model_settings()` (looks up `ROLE_TASK` settings for resume routing), `_check_output_limits()` (finish-reason and context-overflow diagnostics after a completed turn), `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
 | `co_cli/agent.py` | `build_agent()` (main agent: instructions, history processors, native tools, MCP toolsets), `build_task_agent()` (lightweight task agent for approval resume turns: same tools, no personality/date/project instructions/history processors), `_build_filtered_toolset()` (builds a `FilteredToolset` with conditional domain-tool registration and per-request `active_tool_filter` gating; returns toolset + approval map), `_ALWAYS_ON_TOOL_NAMES` (tools always visible even on narrowed resume turns), `_build_mcp_toolsets()` |
 | `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
-| `co_cli/context/_types.py` | `CompactionResult`, `MemoryRecallState`, `SafetyState` — shared type definitions extracted from `_history.py` to break the circular import with `deps.py` |
+| `co_cli/context/_types.py` | `_CompactionBoundaries`, `CompactionResult`, `MemoryRecallState`, `SafetyState` — shared type definitions extracted from `_history.py` to break the circular import with `deps.py` |
 | `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |
 | `co_cli/tools/_tool_approvals.py` | Approval subject resolution, session rule matching, and approval recording |
 | `co_cli/display/_core.py` | `Frontend` protocol, `TerminalFrontend` implementation: manages `Live` instances for streaming text, thinking, tool progress, and status surfaces; `active_surface()` returns the current surface name (`text`/`thinking`/`tool`/`status`/`none`), `active_tool_messages()` returns currently rendered tool labels, `active_status_text()` returns the text last set via `on_status` or `on_reasoning_progress` (or `None` when the status surface is cleared); `cleanup()` stops all live instances and clears `_status_text` |

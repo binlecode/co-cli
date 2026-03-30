@@ -20,7 +20,7 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn
-from co_cli.context._history import precompute_compaction
+from co_cli.context._history import HistoryCompactionState
 from co_cli.agent import build_agent, build_task_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES, ROLE_TASK
@@ -86,10 +86,11 @@ async def _finalize_turn(
     deps: CoDeps,
     frontend: Any,
     primary_model: str,
-) -> tuple[list, Any, "asyncio.Task | None"]:
+    compactor: "HistoryCompactionState",
+) -> tuple[list, Any]:
     """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
 
-    Returns (next_message_history, next_session_data, next_bg_compaction_task).
+    Returns (next_message_history, next_session_data).
     Does NOT handle skill-run cleanup — that is done by _cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
@@ -102,56 +103,25 @@ async def _finalize_turn(
         signal = await analyze_for_signals(next_history, primary_model, services=deps.services)
         await handle_signal(signal, deps, frontend, primary_model)
 
-    # Clear precomputed result (consumed or stale after this turn)
-    deps.runtime.precomputed_compaction = None
-
     # Touch session and persist
     next_session = touch_session(session_data)
     save_session(deps.config.session_path, next_session)
 
     # Spawn background compaction for the next turn
-    next_task = asyncio.create_task(
-        precompute_compaction(next_history, deps, primary_model)
-    )
+    compactor.on_turn_end(next_history, deps, primary_model)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
         console.print("[error]An error occurred during this turn.[/error]")
 
-    return next_history, next_session, next_task
-
-
-def _consume_bg_compaction(
-    task: asyncio.Task | None,
-    deps: CoDeps,
-) -> None:
-    """Harvest a completed background compaction task or cancel an unfinished one.
-
-    Contract:
-    - Only reads completed tasks (never awaits or blocks).
-    - Cancels tasks still running — compaction falls back to inline on the next turn.
-    - Writes only deps.runtime.precomputed_compaction (no other state touched).
-    """
-    if task is None:
-        return
-    if task.done():
-        try:
-            deps.runtime.precomputed_compaction = task.result()
-        except asyncio.CancelledError:
-            # CancelledError is BaseException, not Exception — catch explicitly.
-            deps.runtime.precomputed_compaction = None
-        except Exception:
-            deps.runtime.precomputed_compaction = None
-    else:
-        task.cancel()
-        deps.runtime.precomputed_compaction = None
+    return next_history, next_session
 
 
 async def _run_foreground_turn(
     *,
     message_history: list,
     session_data: Any,
-    next_turn_compaction_task: asyncio.Task | None,
+    compactor: "HistoryCompactionState",
     agent: Agent,
     user_input: str,
     saved_env: dict[str, str | None],
@@ -159,13 +129,13 @@ async def _run_foreground_turn(
     frontend: Frontend,
     primary_model: str,
     reasoning_display: str,
-) -> tuple[list, Any, asyncio.Task | None]:
-    """Execute one foreground turn: consume bg compaction, run turn, cleanup, finalize.
+) -> tuple[list, Any]:
+    """Execute one foreground turn: harvest bg compaction, run turn, cleanup, finalize.
 
     _cleanup_skill_run_state is guaranteed via finally.
-    Returns (next_message_history, next_session_data, next_bg_compaction_task).
+    Returns (next_message_history, next_session_data).
     """
-    _consume_bg_compaction(next_turn_compaction_task, deps)
+    compactor.on_turn_start(deps)
     try:
         turn_result = await run_turn(
             agent=agent,
@@ -178,7 +148,7 @@ async def _run_foreground_turn(
     finally:
         _cleanup_skill_run_state(saved_env, deps)
     return await _finalize_turn(
-        turn_result, message_history, session_data, deps, frontend, primary_model
+        turn_result, message_history, session_data, deps, frontend, primary_model, compactor
     )
 
 
@@ -221,7 +191,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     stack = AsyncExitStack()
     message_history: list = []
     session_data: Any = None
-    next_turn_compaction_task: asyncio.Task | None = None
+    compactor = HistoryCompactionState()
     last_interrupt_time = 0.0
     try:
         _mcp_init_ok = False
@@ -275,10 +245,10 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     else:  # LocalOnly
                         continue
 
-                message_history, session_data, next_turn_compaction_task = await _run_foreground_turn(
+                message_history, session_data = await _run_foreground_turn(
                     message_history=message_history,
                     session_data=session_data,
-                    next_turn_compaction_task=next_turn_compaction_task,
+                    compactor=compactor,
                     agent=agent,
                     user_input=user_input,
                     saved_env=_saved_env,
@@ -299,8 +269,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        if next_turn_compaction_task is not None:
-            next_turn_compaction_task.cancel()
+        compactor.shutdown()
         await deps.services.task_runner.shutdown()
         await stack.aclose()
         deps.services.shell.cleanup()

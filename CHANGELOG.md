@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-03-29
+
+### Changed
+- **History compaction ownership**: clean aspect cut moving all background compaction lifecycle out of `main.py` and into `HistoryCompactionState` (`_history.py`). `main.py` now holds zero references to `precomputed_compaction`, background task handles, or boundary calculations. Extracted `_CompactionBoundaries` type and `_compute_compaction_boundaries()` helper to eliminate duplicated boundary logic between `truncate_history_window()` and `precompute_compaction()`. `_cmd_compact()` now returns `ReplaceTranscript` directly, removing the `name == "compact"` string inference from `dispatch()`.
+
 ## [0.5.23] - 2026-03-29
 
 ### Changed

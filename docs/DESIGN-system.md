@@ -130,7 +130,7 @@ The table below answers: when is each field set, who resets it, and what happens
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `precomputed_compaction` | `_finalize_turn()` background task harvest | `_finalize_turn()` after turn N+1 | fresh (None) |
+| `precomputed_compaction` | `HistoryCompactionState.on_turn_start()` harvest | `HistoryCompactionState.on_turn_end()` | fresh (None) |
 | `turn_usage` | `run_turn()` init + `_merge_turn_usage()` per segment | `run_turn()` at turn start | fresh (None) |
 | `tool_progress_callback` | `StreamRenderer.install_progress()` on tool start | `StreamRenderer.clear_progress()` on tool result; `run_turn()` finally | fresh (None) |
 | `safety_state` | `run_turn()` at turn start | `run_turn()` at turn start | fresh (None) |
