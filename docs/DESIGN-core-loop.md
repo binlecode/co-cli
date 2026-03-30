@@ -2,44 +2,16 @@
 
 > For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-bootstrap.md](DESIGN-bootstrap.md).
 
-## 1. One-Turn Runtime Path
+## 1. Foreground Turn Flow
 
-This section is a system-boundary view of one turn.
+This section is the single detailed reference for one foreground turn.
 
-- `main.py` owns REPL input, slash-command dispatch, skill env injection and rollback, session persistence, and post-turn hooks. `HistoryCompactionState` owns the background compaction task lifecycle.
-- `_orchestrate.py` owns one turn through `run_turn()`: reset turn-scoped state, open the `co.turn` span, stream segments, handle deferred approvals, apply provider retry policy, and return `TurnResult`.
-- `_orchestrate.py` works on `_TurnState` and returns the next history snapshot; it does not mutate REPL-owned history directly.
-- `agent.py` owns the agent runtime surface: instructions, history processors, native tools, and optional MCP toolsets.
-- The diagram below shows module ownership and handoff points, not the detailed branch-by-branch `_chat_loop()` flow.
-
-```mermaid
-flowchart TD
-    A["REPL input in main.py"] --> B{"slash command?"}
-    B -->|yes, built-in only| C["dispatch_command() updates local state and returns to prompt"]
-    B -->|yes, skill command| D["dispatch_command() returns delegated_input and skill env"]
-    B -->|no| E["raw user input"]
-
-    D --> F["compactor.on_turn_start()"]
-    E --> F
-    F --> G["run_turn() in _orchestrate.py"]
-    G --> H["agent.run_stream_events() with instructions, history processors, native tools, and MCP tools"]
-    H --> I{"DeferredToolRequests?"}
-    I -->|yes| J["collect approvals and resume the same turn"]
-    J --> H
-    I -->|no| K["TurnResult"]
-
-    K --> L["_cleanup_skill_run_state()"]
-    L --> M["_finalize_turn() updates history, runs signals, saves session, clears cached compaction, and spawns next precompute task"]
-    M --> N["next prompt"]
-```
-
-## 2. Core Logic
-
-### 2.1 Main Turn Path
-
-This section separates foreground turn execution from transcript and compaction management.
-
-Foreground turn execution:
+- `main.py` owns the REPL boundary: prompt input, slash-command dispatch, skill env injection and rollback, pre-turn compaction harvest/cancel, and post-turn finalization.
+- `_orchestrate.py` owns `run_turn()`: per-turn runtime reset, the `co.turn` span, stream-segment execution, deferred-approval resumes, provider retries, context/output warnings, and `TurnResult`.
+- `_orchestrate.py` mutates `_TurnState` plus turn-scoped `deps.runtime` fields such as `turn_usage` and `active_tool_filter`; it returns the next history snapshot to `main.py` rather than mutating REPL-owned history in place.
+- `agent.py` provides two execution surfaces over the same filtered tool registry and MCP toolsets: the main agent (system prompt, dynamic instruction layers, history processors) and the task agent used for approval-resume hops (short prompt, no history processors).
+- `CoDeps` is the shared boundary across the turn: session state stores approval rules and other session-scoped data, while runtime state carries transient fields such as usage, safety state, precomputed compaction, active skill name, and the approval-resume tool filter.
+- The diagram below combines ownership, control flow, and turn handoff points for the normal foreground path.
 
 ```mermaid
 flowchart TD
@@ -49,7 +21,7 @@ flowchart TD
     B -->|normal input| C{"starts with slash?"}
 
     C -->|no| D["keep raw user_input"]
-    C -->|yes| E["dispatch_command()"]
+    C -->|yes| E["dispatch slash command"]
 
     E -->|ReplaceTranscript| F["apply transcript replacement and return to prompt"]
     F --> A
@@ -57,44 +29,52 @@ flowchart TD
     E -->|DelegateToAgent| J["replace user_input with outcome.delegated_input and inject skill env"]
     E -->|LocalOnly| A
 
-    D --> M["run foreground turn"]
-    J --> M
-    M --> N["run_turn(): reset safety_state and turn_usage; init _TurnState"]
-    N --> O["execute stream segment"]
+    D -->|pass user_input| M["run foreground turn wrapper for compaction setup cleanup and finalization"]
+    J -->|pass delegated_input + skill env| M
+    M -->|call with agent user_input message_history deps and frontend| N["run turn and initialize turn state"]
+    N -->|start segment with current_input + current_history| O["execute stream segment"]
     O --> P{"segment result"}
-    P -->|success| Q{"DeferredToolRequests?"}
-    Q -->|yes| R["collect approvals"]
-    R --> S["resume stream segment"]
+    P -->|success| Q{"deferred approvals needed?"}
+    Q -->|yes pause for approvals| R["collect approval decisions"]
+    R -->|set input none and pass approval decisions plus latest messages| S["resume stream segment"]
     S --> Q
-    Q -->|no| T["render optional final text; run finish_reason and context warnings"]
-    T --> U["return success TurnResult"]
+    Q -->|no approvals remain| T["render final text if needed and run output limit warnings"]
+    T --> U["return success turn result"]
 
-    P -->|HTTP 400 retryable| X["append reflection request; set current_input=None; decrement retry budget; sleep 0.5s"]
-    X --> O
-    P -->|HTTP 429 or >=500 retryable| Y["decrement retry budget; sleep backoff; increase backoff_base"]
-    Y --> O
-    P -->|ModelAPIError retryable| ZA["decrement retry budget; sleep backoff; increase backoff_base"]
-    ZA --> O
-    P -->|non-retryable provider error| ZB["set turn_state.outcome=error; return _build_error_turn_result()"]
-    P -->|interrupt or cancel| ZC["set turn_state.interrupted=True; return _build_interrupted_turn_result()"]
+    P -->|retryable http 400| X["append reflection prompt set input none decrement retry budget and sleep briefly"]
+    X -->|retry with updated history and no direct input| O
+    P -->|retryable http 429 or server error| Y["decrement retry budget sleep with backoff and increase backoff base"]
+    Y -->|retry with same history and input state| O
+    P -->|retryable model api error| ZA["decrement retry budget sleep with backoff and increase backoff base"]
+    ZA -->|retry with same history and input state| O
+    P -->|non retryable provider error| ZB["set error outcome and build error turn result"]
+    P -->|interrupt or cancel| ZC["set interrupted flag and build interrupted turn result"]
 
-    U --> ZD["finally: _cleanup_skill_run_state()"]
-    ZB --> ZD
-    ZC --> ZD
-    ZD --> ZE["_finalize_turn()"]
-    ZE --> A
+    U -->|return success turn result| ZD["cleanup skill run state in finally"]
+    ZB -->|return error turn result| ZD
+    ZC -->|return interrupted turn result| ZD
+    ZD -->|pass turn result session data deps primary model and compactor| ZE["finalize turn"]
+    ZE -->|write next history and session spawn next compaction precompute and reprompt| A
 ```
+
+Turn-flow map:
+- Foreground control flow: `_chat_loop()` reads input, handles slash-command routing, then enters `_run_foreground_turn()` for any real agent turn.
+- Approval-resume flow: this is an in-turn subflow, not a parallel worker. When a segment returns `DeferredToolRequests`, `run_turn()` pauses, collects approval decisions, and resumes the same turn with `current_input=None`.
+- Background compaction flow: this is the only real sidecar flow in the turn path. `compactor.on_turn_end()` spawns the next precompute task after a turn, and `compactor.on_turn_start()` harvests or cancels it before the next turn.
+- Retry flow: retryable provider and network failures stay inside `run_turn()` and loop back into segment execution without returning to the REPL.
+- Stream and render flow: `_execute_stream_segment()` consumes model events incrementally and routes them through `StreamRenderer` and `Frontend`.
+- Post-turn flow: every returned `TurnResult` goes through `_cleanup_skill_run_state()` and then `_finalize_turn()` before the next prompt.
+- Interrupt recovery flow: interrupts return an interrupted `TurnResult` with history truncated to the last clean point plus an abort marker for the next turn.
 
 Diagram keys:
 - `LocalOnly` means the slash command is handled in `_chat_loop()` and no agent turn runs.
 - `ReplaceTranscript` means local transcript/state replacement, then return to prompt.
 - `DelegateToAgent` means convert the slash command into agent input and enter `run_turn()`.
-- Retry branches stay inside `run_turn()`.
-- All `TurnResult` paths go through `_cleanup_skill_run_state()` and `_finalize_turn()`.
+- `_run_foreground_turn()` exists because `run_turn()` deliberately stops at `TurnResult`; the wrapper adds `compactor.on_turn_start()` harvest/cancel behavior, guarantees `_cleanup_skill_run_state()` in `finally`, and then runs `_finalize_turn()`.
 
 Transcript and compaction state:
 - `_run_foreground_turn()` also handles pre-turn compaction harvest/cancel and post-turn state writeback.
-- `/compact` updates transcript state locally; detailed history and compaction behavior is in [Section 2.3](#23-history-processors-and-background-compaction).
+- `/compact` updates transcript state locally; detailed history and compaction behavior is in [Section 2.2](#22-history-processors-and-background-compaction).
 
 Segment execution inside `run_turn()`:
 - `_execute_stream_segment()` reads `_TurnState.current_input`, `current_history`, `tool_approval_decisions`, and `latest_usage`.
@@ -123,7 +103,9 @@ What `_execute_stream_segment()` does not do:
 - no approval decisions
 - no conversation-history mutation beyond updating `turn_state`
 
-### 2.2 Approval Flow
+## 2. Core Logic
+
+### 2.1 Approval Flow
 
 - `DeferredToolRequests` means the last segment paused on approval-gated tool calls.
 - `DeferredToolResults` means Co’s approval decisions for those calls: allow=`True`, deny=`ToolDenied`.
@@ -175,7 +157,7 @@ evaluate_shell_command(cmd)
 
 This keeps shell `DENY` and `ALLOW` inside the tool. `_collect_deferred_tool_approvals()` only handles shell calls that already raised `ApprovalRequired`.
 
-### 2.3 History Processors And Background Compaction
+### 2.2 History Processors And Background Compaction
 
 The agent is built with four history processors in this order:
 1. `truncate_tool_returns`
@@ -213,7 +195,7 @@ after turn N+1 (via on_turn_end):
   precomputed_compaction cleared and next background task spawned
 ```
 
-### 2.4 Safety, Errors, And Interrupts
+### 2.3 Safety, Errors, And Interrupts
 
 Safety and error handling are split across the loop:
 
@@ -230,7 +212,7 @@ Safety and error handling are split across the loop:
 Interrupt recovery invariant:
 - the next turn must see history ending at a clean point, so the last `ModelResponse` is dropped if it contains any unanswered `ToolCallPart` entries before the abort marker is appended.
 
-### 2.5 Post-Turn Hooks In `main.py`
+### 2.4 Post-Turn Hooks In `main.py`
 
 `_chat_loop()` delegates the full foreground turn lifecycle to `_run_foreground_turn()`. That helper sequences two post-turn helpers:
 
@@ -243,7 +225,7 @@ Interrupt recovery invariant:
 4. `compactor.on_turn_end()` — clears `precomputed_compaction` and spawns the next background precompute task
 5. if `outcome == "error"`, print a generic error banner
 
-### 2.6 Comparison Against Common Peer Patterns
+### 2.5 Comparison Against Common Peer Patterns
 
 - Evaluate the current core loop against the shared patterns that recur across the reference systems, not against the largest feature set in any one peer.
 - Across Codex, Claude Code, Gemini CLI, Aider, OpenClaw, pi-mono, Letta, Mem0, OpenCode, and nanobot, the common loop shape is still structurally simple:
@@ -271,7 +253,7 @@ Interrupt recovery invariant:
 | Tighter typed memory models (`Letta`, `Mem0`) | core loop only injects recalled context and does not depend on typed memory blocks | Intentionally simpler than frontier memory systems |
 | Event-driven multi-step task graphs (`Gemini CLI`, `OpenClaw`, `nanobot`) | foreground loop is still single-turn; long-running autonomy is mostly outside this path today | Deliberate non-adoption for MVP |
 
-### 2.7 Over-Design Check
+### 2.6 Over-Design Check
 
 - Relative to the common baseline above, the current core loop has a few places where the design is heavier than the shared peer pattern requires.
 
