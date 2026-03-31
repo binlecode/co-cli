@@ -347,6 +347,8 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/bootstrap/_check.py` | provider, model, embedder, reranker, and MCP health checks |
 | `docs/DESIGN-bootstrap.md` | bootstrap-specific details |
 | `docs/DESIGN-core-loop.md` | foreground turn execution details |
+| `docs/DESIGN-context.md` | context layers, history processors, memory, and knowledge index |
+| `docs/DESIGN-observability.md` | tracing, span schema, and trace viewer |
 | `docs/DESIGN-tools.md` | native tool and approval behavior |
 | `docs/DESIGN-skills.md` | skill loading and dispatch |
 | `docs/DESIGN-llm-models.md` | provider and role-model rules |

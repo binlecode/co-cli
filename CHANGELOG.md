@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-03-31
+
+### Changed
+- **Real provider token counts in compaction**: `truncate_history_window()` and `precompute_compaction()` now use `ModelResponse.usage.input_tokens` (provider-reported) as the primary token count source, falling back to the `chars/4` estimate only when no usage data is available. Budget is `llm_num_ctx` for Ollama OpenAI-compat; `100,000` tokens otherwise. Compaction threshold remains 85% of budget.
+- **ThinkingPart in boundary logic**: `_find_first_run_end()` now accepts a `ThinkingPart`-only `ModelResponse` as a valid first-run anchor, preventing extended-thinking turns from being silently dropped from the head during compaction.
+- **UnexpectedModelBehavior handling**: `run_turn()` catches `pydantic_ai.exceptions.UnexpectedModelBehavior` (e.g., `IncompleteToolCall` mid-stream), surfaces a user-facing status message, sets `outcome="error"`, and returns cleanly — no Python traceback in the chat REPL.
+- **Processor side-effect documentation**: `detect_safety_issues()` and `inject_opening_context()` now carry explanatory comment blocks documenting the intentional deviation from pydantic-ai's pure-transformer contract and the invariants that make cross-segment state safe.
+
 ## [0.7.0] - 2026-03-31
 
 ### Changed

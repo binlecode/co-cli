@@ -17,7 +17,7 @@ from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredTool
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
 ToolApprovalDecisions = DeferredToolResults
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UnexpectedModelBehavior
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
     ModelMessage, ModelRequest, ModelResponse,
@@ -539,6 +539,11 @@ async def run_turn(
 
                 except TimeoutError:
                     frontend.on_status("LLM segment timed out — model did not respond in time.")
+                    turn_state.outcome = "error"
+                    return _build_error_turn_result(turn_state)
+
+                except UnexpectedModelBehavior as e:
+                    frontend.on_status(f"Model returned malformed output: {e}")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
 

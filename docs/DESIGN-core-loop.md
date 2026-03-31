@@ -222,7 +222,9 @@ Processor roles:
 Compaction behavior after the refactor:
 
 - `truncate_history_window()` does not call an LLM inline
-- it compacts only when message count or estimated token count crosses its threshold
+- it compacts when message count exceeds `max_history_messages` OR when token count exceeds 85% of the budget
+- token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
+- the budget is `llm_num_ctx` when Ollama OpenAI-compat is active and `llm_num_ctx > 0`; otherwise it is `100,000` tokens
 - it uses `deps.runtime.precomputed_compaction` only when the cached boundaries still match the current history
 - if no valid cached result exists, it falls back to a static marker rather than doing synchronous summarization inside the request path
 
@@ -253,6 +255,7 @@ Retry matrix:
 | HTTP 429 or 5xx with retries left | sleep with backoff, honoring `Retry-After` when available, then retry |
 | `ModelAPIError` with retries left | sleep with backoff, then retry |
 | `TimeoutError` (segment hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
+| `UnexpectedModelBehavior` | no retry; surface as a user-facing status message, set `outcome='error'` and return `_build_error_turn_result()` |
 | unknown 4xx, auth/not-found, or exhausted budget | set `outcome='error'` and return `_build_error_turn_result()` |
 
 Output-limit diagnostics happen only after a successful final segment:

@@ -31,6 +31,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     SystemPromptPart,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -75,21 +76,24 @@ def _align_tail_start(messages: list[ModelMessage], tail_start: int) -> int:
 
 
 def _find_first_run_end(messages: list[ModelMessage]) -> int:
-    """Return the index (inclusive) of the first ModelResponse containing a TextPart.
+    """Return the index (inclusive) of the first ModelResponse with a TextPart or ThinkingPart.
 
     This anchors the "first run" boundary — everything up to and including
     this message belongs to the initial exchange that establishes session
     context.  If no such message exists, returns 0 (keep nothing pinned).
 
-    Design note: if the first ModelResponse is tool-only (no TextPart), this
-    returns 0, so head_end=1 — only the initial ModelRequest is pinned. The
-    first run's tool call/return cycle falls into the dropped middle section.
-    When a cached summary exists that context is preserved there; otherwise the
-    static trim marker omits the detailed tool trace.
+    ThinkingPart-only responses (extended thinking with no text) are accepted
+    as valid anchors — they represent the first substantive model output and
+    must not be dropped from the head.
+
+    Design note: if the first ModelResponse is tool-only (no TextPart or
+    ThinkingPart), this returns 0, so head_end=1 — only the initial
+    ModelRequest is pinned. The first run's tool call/return cycle falls into
+    the dropped middle section.
     """
     for i, msg in enumerate(messages):
         if isinstance(msg, ModelResponse):
-            if any(isinstance(p, TextPart) for p in msg.parts):
+            if any(isinstance(p, (TextPart, ThinkingPart)) for p in msg.parts):
                 return i
     return 0
 
@@ -389,6 +393,18 @@ def _estimate_message_tokens(messages: list[ModelMessage]) -> int:
     return total_chars // 4
 
 
+def _latest_response_input_tokens(messages: list[ModelMessage]) -> int:
+    """Return the most recent provider-reported input token count from message history.
+
+    Scans in reverse for the first ModelResponse with usage.input_tokens > 0.
+    Returns 0 when no such response exists (local/custom models with no usage reporting).
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse) and msg.usage.input_tokens > 0:
+            return msg.usage.input_tokens
+    return 0
+
+
 # Token budget: 85% of usable input tokens triggers compaction.
 # Gemini Flash: ~1M tokens, Pro: ~2M, Ollama: varies (32k-128k).
 # Conservative default: 100k tokens (~400k chars).
@@ -419,12 +435,19 @@ async def truncate_history_window(
     Registered as the last history processor.
     """
     max_msgs = ctx.deps.config.max_history_messages
-    token_estimate = _estimate_message_tokens(messages)
-    token_threshold = int(_DEFAULT_TOKEN_BUDGET * 0.85)
+    token_count = _latest_response_input_tokens(messages)
+    if token_count == 0:
+        token_count = _estimate_message_tokens(messages)
+    budget = (
+        ctx.deps.config.llm_num_ctx
+        if ctx.deps.config.uses_ollama_openai() and ctx.deps.config.llm_num_ctx > 0
+        else _DEFAULT_TOKEN_BUDGET
+    )
+    token_threshold = int(budget * 0.85)
 
     should_compact = (
         (max_msgs > 0 and len(messages) > max_msgs)
-        or token_estimate > token_threshold
+        or token_count > token_threshold
     )
     if not should_compact:
         return messages
@@ -494,14 +517,21 @@ async def precompute_compaction(
     if summarization fails.
     """
     max_msgs = deps.config.max_history_messages
-    token_estimate = _estimate_message_tokens(messages)
-    token_threshold = int(_DEFAULT_TOKEN_BUDGET * 0.85)
+    token_count = _latest_response_input_tokens(messages)
+    if token_count == 0:
+        token_count = _estimate_message_tokens(messages)
+    budget = (
+        deps.config.llm_num_ctx
+        if deps.config.uses_ollama_openai() and deps.config.llm_num_ctx > 0
+        else _DEFAULT_TOKEN_BUDGET
+    )
+    token_threshold = int(budget * 0.85)
 
     # Already past the compaction trigger — truncate_history_window will
     # handle it inline on the next turn
     past_trigger = (
         (max_msgs > 0 and len(messages) > max_msgs)
-        or token_estimate > token_threshold
+        or token_count > token_threshold
     )
     if past_trigger:
         return None
@@ -512,7 +542,7 @@ async def precompute_compaction(
         and len(messages) > int(max_msgs * _PRECOMPACT_MSG_RATIO)
     )
     approaching_by_tokens = (
-        token_estimate > int(_DEFAULT_TOKEN_BUDGET * _PRECOMPACT_TOKEN_RATIO)
+        token_count > int(budget * _PRECOMPACT_TOKEN_RATIO)
     )
     if not approaching_by_count and not approaching_by_tokens:
         return None
@@ -655,6 +685,15 @@ async def inject_opening_context(
 
     State is stored on ctx.deps.session.memory_recall_state.
     """
+    # INTENTIONAL DEVIATION from pydantic-ai's pure-transformer contract:
+    # This processor writes to ctx.deps.session.memory_recall_state
+    # (last_recall_user_turn, recall_count). Pure transformers should not mutate deps.
+    #
+    # Why state cannot be local: same reasoning as detect_safety_issues() — fresh
+    # call per request, state would not survive across segments.
+    #
+    # Safety invariant: memory_recall_state is initialised fresh per session in
+    # CoSessionState.__post_init__; it does not leak across sessions.
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
     state.model_request_count += 1  # keep for observability
 
@@ -709,6 +748,16 @@ def detect_safety_issues(
     State is stored on ctx.deps.runtime.safety_state (turn-scoped, reset per turn).
     Thresholds from ctx.deps.config.doom_loop_threshold and ctx.deps.config.max_reflections.
     """
+    # INTENTIONAL DEVIATION from pydantic-ai's pure-transformer contract:
+    # This processor writes to ctx.deps.runtime.safety_state (doom_loop_injected,
+    # reflection_injected). Pure transformers should not mutate deps.
+    #
+    # Why state cannot be local: pydantic-ai constructs a fresh processor call per
+    # model request. Local variables would not survive across segments within a
+    # single turn (e.g. initial segment + approval-resume segments).
+    #
+    # Safety invariant: safety_state is reset by reset_for_turn() at each foreground
+    # turn entry, so cross-turn state leakage cannot occur.
     state: SafetyState | None = ctx.deps.runtime.safety_state
     if state is None:
         return messages
