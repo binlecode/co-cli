@@ -4,10 +4,24 @@ This module provides functions for parsing and validating YAML frontmatter
 in markdown files used by the internal knowledge system.
 """
 
+import logging
 import re
+from enum import StrEnum
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
+
+
+class ArtifactTypeEnum(StrEnum):
+    SESSION_SUMMARY = "session_summary"
+
+
+class MemoryKindEnum(StrEnum):
+    MEMORY = "memory"
+    ARTICLE = "article"
+
 
 _VALID_PROVENANCE: frozenset[str] = frozenset({
     "detected", "user-told", "planted", "auto_decay", "web-fetch", "session",
@@ -118,7 +132,7 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
 
     # Validate optional fields if present
     if "kind" in fm:
-        if fm["kind"] not in ("memory", "article"):
+        if fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
             raise ValueError(
                 "memory frontmatter field 'kind' must be 'memory' or 'article'"
             )
@@ -172,8 +186,15 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
                 raise ValueError("memory frontmatter field 'related' must contain only strings")
 
     if "artifact_type" in fm:
-        if fm["artifact_type"] is not None and not isinstance(fm["artifact_type"], str):
-            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
+        if fm["artifact_type"] is not None:
+            if not isinstance(fm["artifact_type"], str):
+                raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
+            valid_artifact_types = {e.value for e in ArtifactTypeEnum}
+            if fm["artifact_type"] not in valid_artifact_types:
+                logger.warning(
+                    "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
+                    fm["artifact_type"],
+                )
 
     if "always_on" in fm:
         if not isinstance(fm["always_on"], bool):

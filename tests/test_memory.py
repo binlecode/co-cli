@@ -1,10 +1,12 @@
 """Tests for memory gravity — touch and dedup on recall."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
@@ -481,6 +483,55 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
     result = asyncio.run(list_memories(ctx))
 
     assert "session_summary" in result["display"]
+
+
+# ---------------------------------------------------------------------------
+# ArtifactTypeEnum — write-strict / read-tolerant policy
+# ---------------------------------------------------------------------------
+
+
+def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
+    tmp_path: Path, caplog: Any
+):
+    """persist_memory rejects unknown artifact_type on write; _load_memories tolerates it on read."""
+    from dataclasses import replace as dc_replace
+    from co_cli.memory._lifecycle import persist_memory
+    from co_cli.tools.memory import _load_memories
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    config = dc_replace(CoConfig(), memory_dir=memory_dir)
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend(), knowledge_index=None),
+        config=config,
+    )
+
+    # Write-strict: persist_memory must reject an unknown artifact_type
+    with pytest.raises(ValueError, match="unknown artifact_type"):
+        asyncio.run(
+            persist_memory(
+                deps,
+                content="Test memory for artifact type validation",
+                tags=[],
+                related=[],
+                artifact_type="future_unknown_type",
+            )
+        )
+
+    # Read-tolerant: _load_memories must load the entry without raising, and emit a warning
+    _write_memory_with_artifact_type(
+        memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
+    )
+    with caplog.at_level(logging.WARNING, logger="co_cli.knowledge._frontmatter"):
+        entries = _load_memories(memory_dir)
+
+    assert any(e.artifact_type == "future_unknown_type" for e in entries), (
+        "_load_memories must load entries with unknown artifact_type, not skip them"
+    )
+    assert any("future_unknown_type" in r.message for r in caplog.records), (
+        "_load_memories must log a warning for unknown artifact_type values"
+    )
 
 
 # ---------------------------------------------------------------------------

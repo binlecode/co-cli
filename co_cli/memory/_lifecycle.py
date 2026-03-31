@@ -15,7 +15,7 @@ import yaml
 from opentelemetry import trace as otel_trace
 
 from co_cli._model_factory import ResolvedModel
-from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge._frontmatter import ArtifactTypeEnum, parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
 from co_cli.tools._result import ToolResult, make_result
@@ -215,6 +215,15 @@ async def _persist_memory_inner(
                     action="skipped",
                 )
             logger.info("persist_memory: consolidation timeout, falling back to ADD")
+
+    # Write-strict: reject unknown artifact_type values before writing
+    if artifact_type is not None:
+        valid_artifact_types = {e.value for e in ArtifactTypeEnum}
+        if artifact_type not in valid_artifact_types:
+            raise ValueError(
+                f"persist_memory: unknown artifact_type {artifact_type!r}. "
+                f"Valid values: {sorted(valid_artifact_types)}"
+            )
 
     # Step 3: No duplicate — create new memory
     max_id = max((m.id for m in all_items_for_id), default=0)

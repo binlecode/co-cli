@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-03-30
+
+### Changed
+- **History and memory typing**: replaced all six `"session_summary"` inline magic string comparisons across `memory.py` and `_commands.py` with `ArtifactTypeEnum.SESSION_SUMMARY`. Introduced `ArtifactTypeEnum` and `MemoryKindEnum` (`StrEnum`) inlined in `co_cli/knowledge/_frontmatter.py`. Write path (`persist_memory`) now rejects unknown `artifact_type` values with a `ValueError`; load path (`_load_memories` via `validate_memory_frontmatter`) tolerates unknown values with a `logger.warning` — backward-safe for stored files. Removed dead code: `_touch_memory()` function and its `# Gravity` block comment. `MemoryEntry.artifact_type` field type remains `str | None` (read-tolerant); enum constants are used only at comparison and write callsites.
+
 ## [0.6.4] - 2026-03-30
 
 ### Changed

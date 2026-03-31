@@ -25,7 +25,11 @@ from opentelemetry import trace as otel_trace
 from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
-from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._frontmatter import (
+    ArtifactTypeEnum,
+    parse_frontmatter,
+    validate_memory_frontmatter,
+)
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
@@ -254,36 +258,6 @@ def _grep_recall(
     ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
     return matches[:max_results]
-
-
-# ---------------------------------------------------------------------------
-# Gravity — touched memories rise in recency
-# ---------------------------------------------------------------------------
-
-
-def _touch_memory(entry: MemoryEntry) -> None:
-    """Refresh the updated timestamp of a pulled memory (gravity).
-
-    Moves the memory to the top of the recency sequence so frequently-used
-    memories naturally stay accessible.
-
-    Args:
-        entry: MemoryEntry to touch
-    """
-    try:
-        content = entry.path.read_text(encoding="utf-8")
-        fm, body = parse_frontmatter(content)
-        fm["updated"] = datetime.now(timezone.utc).isoformat()
-
-        md_content = (
-            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-            f"{body.strip()}\n"
-        )
-        entry.path.write_text(md_content, encoding="utf-8")
-        entry.updated = fm["updated"]
-    except Exception as e:
-        logger.warning(f"Failed to touch memory {entry.id}: {e}")
-
 
 
 # ---------------------------------------------------------------------------
@@ -578,7 +552,7 @@ async def recall_memory(
                 except Exception as e:
                     logger.warning(f"Failed to load FTS match {r.path}: {e}")
             # Exclude session-summary artifacts from default recall
-            raw_matches = [m for m in raw_matches if m.artifact_type != "session_summary"]
+            raw_matches = [m for m in raw_matches if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
             # Composite relevance + decay scoring — preserves lexical signal alongside recency.
             # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
             # so higher relevance = better match before combining with decay.
@@ -607,7 +581,7 @@ async def recall_memory(
                 memories = [m for m in memories if m.created and m.created >= created_after]
             if created_before:
                 memories = [m for m in memories if m.created and m.created <= created_before]
-            memories = [m for m in memories if m.artifact_type != "session_summary"]
+            memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
             matches = _grep_recall(memories, query, max_results)
     else:
         memories = _load_memories(memory_dir)
@@ -620,7 +594,7 @@ async def recall_memory(
             memories = [m for m in memories if m.created and m.created >= created_after]
         if created_before:
             memories = [m for m in memories if m.created and m.created <= created_before]
-        memories = [m for m in memories if m.artifact_type != "session_summary"]
+        memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
         matches = _grep_recall(memories, query, max_results)
 
     if not matches:
@@ -762,7 +736,7 @@ async def search_memories(
                 if r.path:
                     try:
                         fm, _ = parse_frontmatter(Path(r.path).read_text(encoding="utf-8"))
-                        if fm.get("artifact_type") == "session_summary":
+                        if fm.get("artifact_type") == ArtifactTypeEnum.SESSION_SUMMARY:
                             continue
                     except Exception:
                         pass
@@ -808,7 +782,7 @@ async def search_memories(
         memories = [m for m in memories if m.created and m.created >= created_after]
     if created_before:
         memories = [m for m in memories if m.created and m.created <= created_before]
-    memories = [m for m in memories if m.artifact_type != "session_summary"]
+    memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
 
     matches = _grep_recall(memories, query, limit)
     if not matches:

@@ -330,6 +330,7 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
     from co_cli.context._history import _index_session_summary
+    from co_cli.knowledge._frontmatter import ArtifactTypeEnum
     from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
     from co_cli._model_factory import ResolvedModel
 
@@ -361,7 +362,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         related=[],
         provenance="session",
         title=f"session-{timestamp}",
-        artifact_type="session_summary",
+        artifact_type=ArtifactTypeEnum.SESSION_SUMMARY,
     )
 
     console.print(f"[dim]Session checkpointed as session-{timestamp}.md. Starting fresh.[/dim]")
