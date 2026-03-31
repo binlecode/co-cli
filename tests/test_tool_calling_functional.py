@@ -30,24 +30,26 @@ from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
-_TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
+# Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
+_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
+_REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
+_TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 
 # Tool selection tests use ROLE_TASK (reasoning_effort=none) with build_task_agent.
 # build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
 # build_agent — reducing context from ~27K to ~10K tokens so calls complete faster.
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 # Agents built once at module level to avoid per-test construction overhead.
-_AGENT_NOREASON = build_task_agent(config=_CONFIG, resolved=_TASK_RESOLVED)
+_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
 # web_search case needs search="ask" so the tool is deferred rather than auto-executed.
-_WEB_ASK_CFG = replace(_CONFIG, web_policy=WebPolicy(search="ask"))
+_WEB_ASK_CFG = replace(_CONFIG_NO_MCP, web_policy=WebPolicy(search="ask"))
 _AGENT_WEB_ASK = build_task_agent(config=_WEB_ASK_CFG, resolved=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=_CONFIG,
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
     )
 
@@ -60,7 +62,7 @@ def _make_deps_web_deferred(session_id: str) -> CoDeps:
     return CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=replace(
-            _CONFIG,
+            _CONFIG_NO_MCP,
             web_policy=WebPolicy(search="ask"),
         ),
         session=CoSessionState(session_id=session_id),
@@ -108,20 +110,21 @@ async def test_tool_selection_and_arg_extraction(
         deps = _make_deps(f"test-tool-{expected_tool}")
         frontend = SilentFrontend(approval_response="y")
 
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     last_details = "no run executed"
     max_attempts = 3
     for attempt in range(max_attempts):
         tool_name = None
         args = None
         try:
-            turn = await run_turn(
-                agent=agent,
-                user_input=prompt,
-                deps=deps,
-                message_history=[],
-                frontend=frontend,
-            )
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+                turn = await run_turn(
+                    agent=agent,
+                    user_input=prompt,
+                    deps=deps,
+                    message_history=[],
+                    frontend=frontend,
+                )
             # Extract first tool call from message history.
             for msg in turn.messages:
                 if isinstance(msg, ModelResponse):

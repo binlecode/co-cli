@@ -57,6 +57,8 @@ def test_task_state_defaults():
     assert state.process is None
     assert state.completed_at is None
     assert state.exit_code is None
+    assert state.cleanup_incomplete is False
+    assert state.cleanup_error is None
 
 
 def test_make_task_id_unique():
@@ -186,6 +188,11 @@ async def test_kill_running_task():
     assert state.status == "cancelled"
     assert state.exit_code == -1
     assert state.completed_at is not None
+    assert state.cleanup_incomplete is False
+    assert state.cleanup_error is None
+    assert state.process is None
+    assert state._monitor_task is not None
+    assert state._monitor_task.done() is True
 
 
 @pytest.mark.asyncio
@@ -209,6 +216,8 @@ async def test_kill_already_completed_task():
         await kill_task(state)
 
     assert state.status == "cancelled"
+    assert state.cleanup_incomplete is False
+    assert state.cleanup_error is None
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +251,9 @@ async def test_tool_start_background_task_signature():
             await asyncio.sleep(0.1)
             if state.status != "running":
                 break
+    if state._monitor_task is not None:
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await state._monitor_task
 
 
 @pytest.mark.asyncio
@@ -269,6 +281,14 @@ async def test_tool_check_task_status_signature():
     assert "exit_code" in result
     assert "is_binary" in result
     assert result["is_binary"] is False
+
+    state = deps.session.background_tasks[task_id]
+    if state.process is not None:
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await kill_task(state)
+    elif state._monitor_task is not None:
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await state._monitor_task
 
 
 @pytest.mark.asyncio
@@ -317,6 +337,11 @@ async def test_tool_cancel_background_task_signature():
     assert result["_kind"] == "tool_result"
     assert result["task_id"] == task_id
     assert result["status"] == "cancelled"
+    assert state.cleanup_incomplete is False
+    assert state.cleanup_error is None
+    assert state.process is None
+    assert state._monitor_task is not None
+    assert state._monitor_task.done() is True
 
 
 @pytest.mark.asyncio
@@ -376,6 +401,10 @@ async def test_no_file_io(tmp_path):
             if state.status == "completed":
                 break
 
+    if state._monitor_task is not None and not state._monitor_task.done():
+        async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+            await state._monitor_task
+
     # tmp_path must remain empty — no task files written anywhere
     assert list(tmp_path.iterdir()) == []
 
@@ -404,8 +433,11 @@ async def test_slash_background_command():
         # Cleanup
         from co_cli.tools._background import kill_task
         for s in deps.session.background_tasks.values():
-            if s.status == "running":
+            if s.process is not None:
                 await kill_task(s)
+            if s._monitor_task is not None:
+                async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+                    await s._monitor_task
 
 
 @pytest.mark.asyncio
@@ -460,3 +492,8 @@ async def test_slash_cancel_command():
 
         await BUILTIN_COMMANDS["cancel"].handler(ctx, task_id)
         assert state.status == "cancelled"
+        assert state.cleanup_incomplete is False
+        assert state.cleanup_error is None
+        assert state.process is None
+        assert state._monitor_task is not None
+        assert state._monitor_task.done() is True

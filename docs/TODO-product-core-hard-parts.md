@@ -1,218 +1,186 @@
-# TODO — Product-Core Hard Parts And Simplification Plan
+# TODO — Product-Core Hard Parts Alignment
 
-**Task type: architecture cleanup + product-primitive hardening**
+**Task type: doc-restructure**
 
-## Goal
+## Context
 
-Keep the product goal unchanged:
+This TODO was written as a forward roadmap, but parts of it no longer match the codebase after the `pydantic-ai==1.73.0` upgrade and the follow-on product work that already landed.
 
-- make `co`'s hardest product-specific surfaces explicit
-- keep the foreground turn trustworthy and inspectable
-- improve memory, delegation, async continuity, and trust UX
+### Code accuracy verification
 
-But align the plan with the current code after the `pydantic-ai==1.73.0` upgrade.
+- The foreground runtime is already using the right public Pydantic-AI surfaces: one main `Agent`, one lightweight resume agent, `RunContext[CoDeps]`, `history_processors`, filtered native toolsets, additive MCP toolsets, and `DeferredToolRequests` / `DeferredToolResults`.
+- Old Phase 1 overstates how much foreground-turn work is still open. `run_turn()`, `_TurnState`, `TurnResult`, `_run_approval_loop()`, and `_finalize_turn()` already make the foreground contract explicit.
+- Old Phase 2 is still real, but narrower than described. The remaining issue is local boilerplate around main/task agent construction and specialist factories, not a missing runtime abstraction.
+- Old Phase 3 is no longer greenfield. `session_summary` artifact typing, default recall exclusion for session checkpoints, and `always_on` standing context are already implemented.
+- Old Phase 4 is partially shipped, not complete. Inline subagent lineage now carries `run_id`, session background tasks exist in `session.background_tasks`, and `/history` plus `/tasks` expose a useful live operator surface, but that surface is still session-local, transcript-derived, and lost on shutdown or history reset.
+- Old Phase 5 is still real, but it needs to be reframed around explicit async work states and bounded orchestration, not a generic workflow engine.
+- Old Phase 6 remains valid and should stay downstream of the async-work-state cleanup.
 
-This is a forward plan for simplifying the existing system. It is not a proposal to replace the runtime.
+### Workflow artifact hygiene
 
-## Current Position
+- The current repo no longer contains a dedicated Phase 4 delivery TODO file, so Phase 4 status must be judged from code only. This roadmap should not depend on a missing artifact for validation.
 
-The codebase already has the right high-level runtime split:
+### Workstream review
 
-- `_chat_loop()` is the control plane
-- `run_turn()` is the foreground turn executor
-- `_finalize_turn()` owns post-turn lifecycle
-- main and task agents already use public `pydantic_ai` APIs
+1. **Phase 1 — Foreground Turn Contract:** keep, but narrow. The control-plane split is already right; remaining work is mainly local type tightening and reducing residual `Any`/loose contracts where they still obscure ownership.
+2. **Phase 2 — Agent Runtime Boilerplate:** keep, but move behind W1. This is still a worthwhile simplification slice, but it should follow the user-visible async-work-state gap rather than lead it.
+3. **Phase 3 — Typed History And Memory:** mostly shipped; retire as a standalone roadmap phase. What remains belongs to incremental memory UX and compaction hardening, not a broad semantic rewrite.
+4. **Phase 4 — Work Record Foundation:** partially shipped; fold into the next roadmap slice instead of retiring it. The missing piece is durable, inspectable work-state semantics above the current session-local operator surface.
+5. **Phase 5 — Narrow Workflow Layer:** keep, but redefine. The target is explicit waiting, queue, timeout, and delivery states over current delegation/background primitives, starting from the still-incomplete Phase 4 foundation.
+6. **Phase 6 — Trust UX And Action Previews:** keep, but make it dependent on the revised async-work-state workstream.
 
-The remaining hard parts are mostly product-shape problems, not runtime-shape problems:
+## Problem & Outcome
 
-- memory and history semantics are still flatter than the product needs
-- delegation is bounded and useful, but too ephemeral as a product object
-- background continuity exists, but only as subprocess continuity
-- risky actions still look too much like raw arguments instead of structured actions
+**Problem:** the current roadmap mixes shipped work, real remaining gaps, and speculative redesigns. It risks sending implementation into areas that are already done while understating the actual missing product layer.
 
-## Design Direction
+**Failure cost:** Ankor or future dev work can duplicate shipped lineage/memory changes, introduce non-idiomatic Pydantic-AI abstractions, and miss the true hard part: inspectable, bounded async work states above the existing runtime.
 
-`co` does not need a new runtime. It needs a clearer product structure around the runtime it already has.
+**Outcome:** this TODO becomes an evidence-backed alignment artifact. It should tell Ankor, in one pass, which old phases are retired, which are still valid, which “shipped” claims are only partial, what Pydantic-AI guidance should be treated as the current default, and what agentic-flow patterns are worth borrowing from Codex, OpenCode, and OpenClaw.
 
-The foreground turn should stay small and authoritative. `_chat_loop()` remains the control plane. `run_turn()` remains the only foreground executor. Approval resume stays in-turn. Post-turn work stays post-turn. This keeps the trust boundary simple and inspectable.
+## Scope
 
-The next simplification layer is agent assembly. The code already uses the right SDK surfaces, but it still pays too much local boilerplate around role fallback and specialist-agent construction. That should be reduced, not abstracted into a new framework.
+- Rewrite this roadmap against the current `co-cli` codebase only.
+- Limit the alignment to the product-core hard parts roadmap; do not redefine the broader product roadmap.
+- Fold in Pydantic-AI 1.73.0 best practice as it applies to `co`, not generic SDK feature inventory.
+- Fold in convergent peer-system best practices from the local `codex`, `opencode`, and `openclaw` repos.
+- Reorder the remaining product roadmap so it reflects current reality.
+- Do not implement runtime changes in this TODO.
 
-The larger issue is product state. Memory, checkpoints, delegation, background tasks, and approvals all exist today, but too much of their meaning still lives in conventions, strings, or storage details. The system needs explicit product objects for those behaviors.
+## Behavioral Constraints
 
-That is also the correct reading of `pydantic_ai` 1.73. The SDK should be used where it deletes code or improves clarity:
+- `_chat_loop()` remains the REPL/control plane and `run_turn()` remains the single foreground-turn executor.
+- The main runtime stays on public Pydantic-AI primitives: `Agent`, `RunContext[CoDeps]`, `history_processors`, filtered toolsets, and deferred approval payloads.
+- Do not propose `Agent.from_spec()`, YAML agents, or a generic capability-hook rewrite for the main runtime.
+- Do not reopen shipped memory typing or work-record lineage as if they were still net-new phases.
+- Any future async workflow work must stay bounded, inspectable, and auditable from transcript state, session state, or an explicit durable work log if one is later introduced.
+- Any delegated-work design must make spawn depth, visibility, waiting state, and delivery/timeout state explicit before adding higher-order orchestration machinery.
 
-- keep public toolset and history-processor APIs
-- use wrapper toolsets or richer deferred-tool payloads only when they simplify local code
-- do not move product ownership into generic capability hooks just because they exist
-- do not migrate the product runtime to `Agent.from_spec()` or YAML agents
+## High-Level Design
 
-The intended end state is:
+The revised roadmap should collapse the old six-phase story into three active workstreams plus one maintenance note:
 
-- one short diagram still explains the foreground turn
-- agent and specialist construction follow a small number of explicit patterns
-- memory classes are typed and inspectable
-- delegation and background work share a visible lineage model
-- long-lived work has explicit waiting states
-- risky actions have structured previews and a better rollback story
+### W1 — Async Work States And Bounded Orchestration
 
-## Workstreams
+Purpose: solve the real remaining hard part: long-lived work that is more inspectable than raw subprocesses and more bounded than an open-ended multi-agent workflow engine.
 
-### Phase 1 — Foreground Turn Contract
+- Treat current subagent lineage and current background task state as two incomplete foundations that still need one first-class product model.
+- Add visible waiting, timeout, queued, and delivery states as net-new work, not as residual polish.
+- Make lineage inspectable without requiring the user to reconstruct it from raw tool arguments or transient transcript state.
+- Keep orchestration product-specific and bounded; no generic workflow engine.
+- Make this the first roadmap emphasis because it is the highest user-value gap.
 
-Keep the current foreground split and tighten its boundaries in code.
+### W2 — Agent Surface Cleanup
 
-- replace loose turn and finalization typing with explicit local contracts
-- keep `_chat_loop()` control-plane-only
-- keep `run_turn()` as the single foreground executor
-- keep renderer behavior attached to the stream path
+Purpose: reduce local assembly boilerplate while preserving the current runtime shape.
 
-Primary files:
+- Keep one main agent and one lightweight resume agent.
+- Keep specialist agents as narrow, typed helpers.
+- Remove duplicated assembly code only where it clearly deletes code or reduces churn.
+- Treat this as an opportunistic maintenance lane or a dependency-free cleanup slice, not the first product-facing milestone.
 
-- `co_cli/main.py`
-- `co_cli/context/_orchestrate.py`
-- `co_cli/display/_stream_renderer.py`
+### W3 — Trust UX And Structured Action Previews
 
-Delivery:
+Purpose: make risky actions easier to understand, approve, and roll back.
 
-- `docs/TODO-2-foreground-turn-contract-tightening.md`
+- Improve structured previews for at least one high-risk action class.
+- Tighten approval scope wording and remembered-approval visibility.
+- Add grouped-edit checkpoints and explicit revert affordances only where the UX becomes materially clearer.
 
-### Phase 2 — Agent Runtime Boilerplate
+### Maintenance Note — Memory And Compaction
 
-Reduce repeated agent and model assembly code without adding a new framework layer.
+Typed memory semantics are no longer the main open phase. Follow-on work here should be limited to:
 
-- centralize role fallback
-- shrink repeated specialist-agent constructor glue
-- normalize to public SDK imports where it reduces churn
-- adopt wrapper toolsets only if they remove code
-
-Primary files:
-
-- `co_cli/agent.py`
-- `co_cli/_model_factory.py`
-- `co_cli/context/_history.py`
-- `co_cli/memory/_signal_detector.py`
-- `co_cli/memory/_consolidator.py`
-- `co_cli/tools/_subagent_agents.py`
-- `co_cli/commands/_commands.py`
-
-Delivery:
-
-- `docs/TODO-1-agent-runtime-boilerplate-reduction.md`
-
-### Phase 3 — Typed History And Memory
-
-Promote memory and history semantics from conventions into typed product objects.
-
-- distinguish learned memory, standing context, session checkpoints, and task-local context
-- make history assembly respect those distinctions
-- remove dead memory paths during the migration
-- add one typed inspect or edit surface
-
-Primary files:
-
-- `co_cli/knowledge/_frontmatter.py`
-- `co_cli/tools/memory.py`
-- `co_cli/memory/_lifecycle.py`
-- `co_cli/context/_history.py`
-- `co_cli/commands/_commands.py`
-
-Delivery:
-
-- `docs/TODO-3-history-memory-typing.md`
-
-### Phase 4 — Work Record Foundation
-
-Add one first-class record for work done on the user's behalf.
-
-- unify inline delegation and background tasks under one lineage model
-- preserve scope, model, budget, and approval linkage
-- expose one user-visible read path
-
-Primary files:
-
-- `co_cli/tools/subagent.py`
-- `co_cli/tools/_subagent_agents.py`
-- `co_cli/tools/task_control.py`
-- `co_cli/tools/_background.py`
-- `co_cli/deps.py`
-
-Delivery:
-
-- `docs/TODO-4-work-record-foundation.md`
-
-### Phase 5 — Narrow Workflow Layer
-
-Build a small product workflow layer above the task runner, not a generic engine.
-
-- add explicit waiting states
-- ship one or two concrete workflow templates
-- keep workflow state inspectable and tied to work records
-
-Primary files:
-
-- `co_cli/tools/task_control.py`
-- `co_cli/tools/_background.py`
-- new workflow modules
-
-Delivery:
-
-- `docs/TODO-5-narrow-workflow-layer.md`
-
-### Phase 6 — Trust UX And Action Previews
-
-Improve risky-action previews, scope clarity, and rollback.
-
-- render at least one risky action class as a structured preview
-- improve remembered-approval wording and scope clarity
-- adopt richer deferred-tool payloads only if they simplify the path
-- add grouped-edit checkpoint and revert
-
-Primary files:
-
-- `co_cli/context/_orchestrate.py`
-- `co_cli/tools/_tool_approvals.py`
-- `co_cli/tools/files.py`
-- `co_cli/tools/shell.py`
-
-Delivery:
-
-- `docs/TODO-6-trust-ux-action-previews.md`
-
-## Strategic Principles
-
-- Keep the foreground turn explicit and small.
-- Use SDK primitives only when they delete code.
-- Prefer explicit product records over runtime-only conventions.
-- Type memory before making memory smarter.
-- Keep delegation bounded by default.
-- Improve trust through previews, provenance, and reversibility.
-
-## Recommended Order
-
-1. `docs/TODO-1-agent-runtime-boilerplate-reduction.md`
-2. `docs/TODO-2-foreground-turn-contract-tightening.md`
-3. `docs/TODO-3-history-memory-typing.md`
-4. `docs/TODO-4-work-record-foundation.md`
-5. `docs/TODO-5-narrow-workflow-layer.md`
-6. `docs/TODO-6-trust-ux-action-previews.md`
+- memory inspectability polish
+- compaction-summary quality/identifier preservation if real failures show up
+- avoiding any regression that collapses durable memory, checkpoints, and standing context back together
 
 ## Non-Goals
 
-- rewrite `co` around a different runtime framework
-- move the core loop into generic SDK capability hooks for its own sake
-- adopt `Agent.from_spec()` or YAML agents for the main runtime
-- build recursive multi-agent autonomy
-- add broad new behavior before state and trust contracts are cleaner
+- Replacing the current runtime with a second orchestration framework.
+- Replanning shipped memory typing or shipped work-record lineage as if those phases were still net new.
+- Building a generic workflow engine, planner runtime, or agent DAG layer before bounded async work states exist.
+- Migrating the main runtime to `Agent.from_spec()`, YAML agents, or SDK-native config DSLs.
+- Expanding delegation depth or autonomy before visibility, status, and approval scope are explicit.
 
-## Acceptance Criteria
+## Pydantic-AI Guidance
 
-This roadmap is succeeding when:
+### Adopt
 
-- the foreground turn still fits in one ownership diagram
-- agent and specialist setup is materially smaller and more uniform
-- history, checkpoints, standing context, and recalled memory are distinct in code
-- memory recall remains read-only by default
-- synchronous delegation and background tasks share one visible lineage model
-- long-lived work has explicit state
-- risky actions are previewable and more reversible than today
+- Keep `CoDeps` as the single injected dependency object and keep tool/runtime state ownership outside tool bodies.
+- Keep `history_processors` as the right place for context governance, safety checks, and compaction/truncation policy.
+- Keep dynamic prompt layers as `@agent.instructions` rather than rebuilding one mutable mega-prompt every turn.
+- Keep the approval loop on `DeferredToolRequests` / `DeferredToolResults`; that is the idiomatic same-turn approval-resume path and already matches the runtime.
+- Keep filtered native toolsets plus additive MCP toolsets. MCP stays an extension surface, not a second runtime architecture.
+- Keep specialist agents typed and isolated through `make_subagent_deps()` rather than sharing mutable session/runtime state.
+
+### Defer Or Reject
+
+- Reject `Agent.from_spec()` / YAML-agent migration for the main runtime.
+- Reject moving product state ownership into generic SDK abstractions just because the SDK can express them.
+- Defer `pydantic_graph` or other durable-workflow machinery unless `co` actually commits to resumable, multi-step agent workflows that exceed the current CLI turn model.
+- Reject introducing a second orchestration framework to hide `run_turn()`; explicit turn ownership is a feature here, not a defect.
+
+## Peer-System Guidance
+
+### Codex
+
+- Preserve explicit turn ownership and history ownership. Codex keeps prompt assembly and history mutation as first-class runtime responsibilities, not hidden side effects.
+- Treat compaction as a real system action with one canonical replacement summary, not as silent accumulation of multiple summaries.
+- Preserve the mental model that recent live context stays explicit while older context is summarized deliberately.
+
+### OpenCode
+
+- Keep a clear permission-scoped split between planning/analysis surfaces and full-build surfaces.
+- Treat subagents as distinct session-like work units with explicit user navigation and bounded tool access.
+- Prefer simple agent-mode boundaries and per-agent permission overrides over inventing new orchestration layers.
+
+### OpenClaw
+
+- Keep the session-tool surface small and hard to misuse.
+- Make delegated work a first-class inspectable object with explicit status, lineage, and delivery semantics.
+- Bound delegation with spawn-depth or equivalent visibility/control rules before expanding async workflows.
+- Keep compaction and delegated-session behavior product-visible rather than burying them under generic “automation” language.
+
+### Common best practice to adopt in `co`
+
+- One explicit foreground executor.
+- Delegation as bounded child work, not ambient autonomy.
+- Inspectable lineage and status before richer orchestration.
+- Permission and sandbox/approval scope expressed per agent or per tool family.
+- Compaction as deliberate summary + recent context preservation.
+
+## Implementation Plan
+
+1. Rebaseline the roadmap around current-state evidence.
+   Mark old Phase 3 as mostly shipped and old Phase 4 as partially shipped so future work starts from actual code reality.
+2. Make async work states the first product-facing slice.
+   Focus the next implementation TODO on explicit waiting, queue, timeout, delivery, and lineage semantics above the current split between subagent results and background tasks.
+3. Keep agent-surface cleanup behind the product gap.
+   Simplify main/task agent assembly and specialist boilerplate only after the user-visible async-work-state slice is clearly defined.
+4. Follow with trust UX.
+   Improve structured risky-action previews, approval scope wording, and grouped revert/checkpoint affordances after the async work-state model is in place.
+5. Treat memory and compaction as maintenance follow-up.
+   Limit future work there to inspectability and regression prevention rather than reopening the broader memory semantics phase.
+
+## Testing
+
+- `rg "^## Context|^## Workstream review|^## High-Level Design|^## Pydantic-AI Guidance|^## Peer-System Guidance|^## Implementation Plan|^# Audit Log" docs/TODO-product-core-hard-parts.md`
+- Spot-check the rewritten claims against:
+  - `co_cli/agent.py`
+  - `co_cli/context/_orchestrate.py`
+  - `co_cli/context/_history.py`
+  - `co_cli/tools/memory.py`
+  - `co_cli/tools/subagent.py`
+  - `co_cli/tools/task_control.py`
+  - `co_cli/commands/_commands.py`
+- Peer-system verification sources:
+  - `codex/REVIEW-system-architecture-by-codex.md`
+  - `opencode/packages/web/src/content/docs/agents.mdx`
+  - `opencode/packages/web/src/content/docs/permissions.mdx`
+  - `openclaw/docs/concepts/session-tool.md`
+  - `openclaw/docs/concepts/compaction.md`
+
+## Open Questions
+
+- Should the first W1 slice stop at session-scoped explicit work states, or should it also add durable cross-session work history immediately?
+- Recommendation: make the first slice user-visible and bounded. Add explicit work-state vocabulary and inspectable lineage first; add durability only when restart/resume or `/new` semantics would otherwise erase meaningfully incomplete work.

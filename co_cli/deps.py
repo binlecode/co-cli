@@ -165,7 +165,7 @@ class CoConfig:
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
-    system_prompt: str = ""
+    static_instructions: str = ""
     max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD

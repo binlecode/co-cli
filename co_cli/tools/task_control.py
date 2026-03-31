@@ -13,7 +13,13 @@ from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task, kill_task
+from co_cli.tools._background import (
+    BackgroundCleanupError,
+    BackgroundTaskState,
+    _make_task_id,
+    spawn_task,
+    kill_task,
+)
 from co_cli.tools._result import ToolResult, make_result
 
 
@@ -140,7 +146,16 @@ async def cancel_background_task(
             status=state.status,
         )
 
-    await kill_task(state)
+    try:
+        await kill_task(state)
+    except BackgroundCleanupError as e:
+        return make_result(
+            f"Task {task_id} cancellation failed during cleanup: {e}",
+            task_id=task_id,
+            status="cancel_cleanup_failed",
+            cleanup_incomplete=state.cleanup_incomplete,
+            cleanup_error=state.cleanup_error,
+        )
     return make_result(f"Task {task_id} cancelled.", task_id=task_id, status="cancelled")
 
 

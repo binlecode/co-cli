@@ -7,15 +7,15 @@ Personality is assembled from five sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
 - ``.co-cli/memory/``                        — character base memories (decay_protected, provenance=planted)
 - ``mindsets/{role}/{task_type}.md``          — task-specific behavioral guidance (static, loaded at agent creation)
-- ``rules/01..05_*.md``                       — behavioral rules (assembled by assemble_prompt)
+- ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
 
 The folder structure IS the schema. Adding a role requires only files, no Python changes.
 
 Callers:
-  agent.py              — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
-                          load_character_memories, load_soul_critique at agent construction time
-                          (all called from _build_system_prompt(), invoked by create_deps())
+  _assembly.py          — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
+                          load_character_memories, load_soul_critique inside
+                          build_static_instructions(), invoked by create_deps()
 """
 
 from pathlib import Path

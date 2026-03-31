@@ -132,13 +132,13 @@ def create_deps() -> tuple[CoDeps, list[str]]:
     if result.status == "error":
         raise ValueError(result.detail)
 
-    from co_cli.prompts._assembly import _build_system_prompt
+    from co_cli.prompts._assembly import build_static_instructions
     from co_cli.prompts.model_quirks._loader import normalize_model_name
     reasoning_entry = config.role_models.get(ROLE_REASONING)
     normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
     config = dataclasses.replace(
         config,
-        system_prompt=_build_system_prompt(config.llm_provider, normalized_model, config),
+        static_instructions=build_static_instructions(config.llm_provider, normalized_model, config),
     )
 
     # Step 3: construct services

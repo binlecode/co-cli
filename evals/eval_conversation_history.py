@@ -356,10 +356,9 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
 
 
 def _switch_model(agent, model_name: str):
-    """Switch the agent to a different Ollama model, rebuilding prompt and settings."""
+    """Switch the agent to a different Ollama model and return updated model settings."""
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
-    from co_cli.prompts import assemble_prompt
     from co_cli.prompts.model_quirks._loader import normalize_model_name, get_model_inference
 
     ollama_host = settings.ollama_host
@@ -367,12 +366,6 @@ def _switch_model(agent, model_name: str):
     agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
 
     normalized = normalize_model_name(model_name)
-    new_prompt, _manifest = assemble_prompt(
-        "ollama",
-        model_name=normalized,
-    )
-    agent.system_prompt = new_prompt
-
     inf = get_model_inference("ollama", normalized)
     num_ctx = inf.get("num_ctx", settings.llm_num_ctx)
     extra: dict = {"num_ctx": num_ctx}

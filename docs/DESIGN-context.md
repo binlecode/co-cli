@@ -14,8 +14,7 @@ The agent has no persistent state in model weights. Carry-forward context is spl
 
 ```text
 Agent construction (once per session)
-  _build_system_prompt()        — soul seed + character memories + mindsets + rules + examples + counter-steering, then critique appended as Review lens
-  assemble_prompt()             — strict numbered rule order (rules/NN_*.md); fails on missing rules, invalid filenames, gaps, or duplicates
+  build_static_instructions()   — assembles all 7 sections in explicit order: soul seed, character memories, mindsets, rules (strict numbered order), examples, counter-steering, critique; fails on missing rules, invalid filenames, gaps, or duplicates
   Agent(instructions=...)       — static prompt stored on agent at construction; runtime @agent.instructions layers are registered afterward
 
 Per-request dynamic layers (@agent.instructions — evaluated fresh, never accumulated)
@@ -71,27 +70,28 @@ flowchart TB
     subgraph PromptBuild[Static Prompt Build]
         direction TB
         CreateDeps[create_deps]
-        BuildPrompt[_build_system_prompt]
-        Soul[load_soul_seed + load_character_memories + load_soul_mindsets]
-        Assemble[assemble_prompt]
-        Rules[collect numbered prompt rules]
+        BuildPrompt[build_static_instructions]
+        Soul[load soul seed + character memories + mindsets]
+        Rules[collect numbered rules]
         Examples[load_soul_examples]
         Quirks[get_counter_steering]
-        Critique[load_soul_critique then append review lens]
-        SystemPrompt[config.system_prompt]
+        Critique[load_soul_critique]
+        StaticInstructions[config.static_instructions]
         MainAgent[build_agent -> Agent]
         TaskAgent[build_task_agent -> lightweight approval-resume Agent]
 
         CreateDeps --> BuildPrompt
         BuildPrompt --> Soul
-        Soul --> Assemble
-        Rules --> Assemble
-        Examples --> Assemble
-        Quirks --> Assemble
+        BuildPrompt --> Rules
+        BuildPrompt --> Examples
+        BuildPrompt --> Quirks
         BuildPrompt --> Critique
-        Assemble --> SystemPrompt
-        Critique --> SystemPrompt
-        SystemPrompt --> MainAgent
+        Soul --> StaticInstructions
+        Rules --> StaticInstructions
+        Examples --> StaticInstructions
+        Quirks --> StaticInstructions
+        Critique --> StaticInstructions
+        StaticInstructions --> MainAgent
         CreateDeps --> TaskAgent
     end
 
@@ -212,11 +212,11 @@ flowchart TB
 
 ## 2. Core Logic
 
-### System Prompt
+### Static Instructions
 
 **Static scaffold**
 
-`create_deps()` builds `config.system_prompt` once via `_build_system_prompt()` in `prompts/_assembly.py`. Assembly order is strict:
+`create_deps()` builds `config.static_instructions` once via `build_static_instructions()` in `prompts/_assembly.py`. Assembly order is strict:
 
 1. Soul seed from `souls/<personality>/seed.md`
 2. Character base memories from `souls/<personality>/character_memories.md`
@@ -407,7 +407,7 @@ The operator surface reads those live structures directly: `/history` scans `Too
 
 | File | Purpose |
 |------|---------|
-| `co_cli/prompts/_assembly.py` | `assemble_prompt()` and `_build_system_prompt()` for static prompt scaffold assembly |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — single function assembling all 7 static instruction sections in explicit order |
 | `co_cli/prompts/rules/` | Numbered behavioral rule files loaded in strict order |
 | `co_cli/prompts/personalities/_loader.py` | Soul seed, character memories, mindsets, examples, and critique loaders |
 | `co_cli/prompts/personalities/_injector.py` | Personality-continuity memory injection for the runtime instruction layer |

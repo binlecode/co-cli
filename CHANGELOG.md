@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-03-31
+
+### Changed
+- **Prompt assembly simplification**: static instruction assembly is now a single linear function (`build_static_instructions()`) with explicit 7-section ordering (soul seed → character memories → mindsets → rules → soul examples → counter-steering → critique). Previously split across `_build_system_prompt()` and `assemble_prompt()` with an out-of-band critique append step. Names updated throughout to match pydantic-ai SDK usage: `CoConfig.system_prompt` → `CoConfig.static_instructions`, `_build_system_prompt()` → `build_static_instructions()`. Dead code (`_manifest.py`) removed. Static-vs-dynamic instruction boundary now explicitly labeled in `agent.py`.
+
 ## [0.7.2] - 2026-03-31
 
 ### Changed

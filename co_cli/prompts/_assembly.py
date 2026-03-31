@@ -1,6 +1,6 @@
 """Prompt assembly for the Co CLI agent.
 
-Static prompt scaffold assembly lives here: soul scaffold, rules, examples,
+Static instruction scaffold assembly lives here: soul scaffold, rules, examples,
 and model counter-steering. Runtime-only layers such as date, project
 instructions, always-on memories, and personality continuity memories are
 added later via ``@agent.instructions`` in ``agent.py``.
@@ -8,8 +8,6 @@ added later via ``@agent.instructions`` in ``agent.py``.
 
 import re
 from pathlib import Path
-
-from co_cli.prompts._manifest import PromptManifest
 
 
 _PROMPTS_DIR = Path(__file__).parent
@@ -66,92 +64,32 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     return parsed
 
 
-def assemble_prompt(
-    provider: str,
-    model_name: str | None = None,
-    soul_seed: str | None = None,
-    soul_examples: str | None = None,
-) -> tuple[str, PromptManifest]:
-    """Assemble the static system prompt scaffold.
-
-    Personality is split across layers. The static scaffold assembled here
-    includes the soul seed plus any pre-combined character memories, mindsets,
-    and examples. Runtime-only context layers are injected per request via
-    ``@agent.instructions``.
-
-    Assembly order:
-    1. Soul seed + character base memories (identity anchor)
-    2. All behavioral rules (rules/*.md)
-    3. Soul examples — concrete trigger→response patterns (trailing rules)
-    4. Model-specific counter-steering (if quirks exist)
-
-    Args:
-        provider: LLM provider name ("gemini", "ollama-openai").
-        model_name: Normalized model identifier for quirk lookup.
-        soul_seed: Seed + character base memories pre-combined by ``build_agent()``.
-            Placed first so the model's opening context is the soul identity.
-        soul_examples: Trigger→response pattern examples from ``souls/{role}/examples.md``.
-            Placed after rules so examples are the last identity-level content
-            the model reads — closest to the task, maximising pattern-match influence.
-
-    Returns:
-        Tuple of (assembled_prompt, manifest).
-
-    Raises:
-        FileNotFoundError: If rule files are missing.
-        ValueError: If assembled prompt is empty.
-    """
-    manifest = PromptManifest()
-    parts: list[str] = []
-
-    # 1. Soul seed — identity declaration, always first
-    if soul_seed:
-        parts.append(soul_seed)
-        manifest.parts_loaded.append("soul_seed")
-
-    # 2. All behavioral rules (strict numbered order)
-    for _order, name, rule_path in _collect_rule_files():
-        content = rule_path.read_text(encoding="utf-8").strip()
-        if content:
-            parts.append(content)
-            manifest.parts_loaded.append(name)
-
-    # 3. Soul examples — concrete trigger→response patterns, trailing rules
-    if soul_examples:
-        parts.append(soul_examples)
-        manifest.parts_loaded.append("soul_examples")
-
-    # 4. Counter-steering (model-specific quirks)
-    if model_name:
-        from co_cli.prompts.model_quirks._loader import get_counter_steering
-
-        counter_steering = get_counter_steering(provider, model_name)
-        if counter_steering:
-            parts.append(f"## Model-Specific Guidance\n\n{counter_steering}")
-            manifest.parts_loaded.append("counter_steering")
-
-    prompt = "\n\n".join(parts)
-
-    if not prompt.strip():
-        raise ValueError("Assembled prompt is empty after processing")
-
-    manifest.total_chars = len(prompt)
-    return prompt, manifest
-
-def _build_system_prompt(
+def build_static_instructions(
     provider: str,
     model_name: str,
     config: "CoConfig",
 ) -> str:
-    """Build the agent system prompt for the given model and personality.
+    """Build the static instructions string for the given model and personality.
 
-    Loads soul seed, character base memories, mindsets, examples, and critique
-    from config.personality and config.memory_dir, then calls assemble_prompt().
-    Returns the assembled system prompt string including the critique block.
+    Assembles all seven sections in explicit order:
+    1. Soul seed (identity anchor)
+    2. Character memories
+    3. Mindsets
+    4. Behavioral rules (numbered, strict order)
+    5. Soul examples
+    6. Counter-steering (model-specific quirks)
+    7. Critique (self-assessment lens)
+
+    Returns the fully assembled static instructions string.
     """
-    soul_seed: str | None = None
-    soul_examples: str | None = None
-    soul_critique = ""
+    parts: list[str] = []
+
+    seed: str | None = None
+    character_memories: str | None = None
+    mindsets: str | None = None
+    examples: str | None = None
+    critique: str | None = None
+
     if config.personality:
         from co_cli.prompts.personalities._loader import (
             load_soul_seed,
@@ -160,23 +98,48 @@ def _build_system_prompt(
             load_character_memories,
             load_soul_critique,
         )
-        soul_seed = load_soul_seed(config.personality)
-        base_memories = load_character_memories(config.personality, config.memory_dir)
-        if base_memories:
-            soul_seed = soul_seed + "\n\n" + base_memories
-        soul_mindsets = load_soul_mindsets(config.personality)
-        if soul_mindsets:
-            soul_seed = soul_seed + "\n\n" + soul_mindsets
-        examples = load_soul_examples(config.personality)
-        if examples:
-            soul_examples = examples
-        soul_critique = load_soul_critique(config.personality)
-    system_prompt, _manifest = assemble_prompt(
-        provider,
-        model_name=model_name,
-        soul_seed=soul_seed,
-        soul_examples=soul_examples,
-    )
-    if soul_critique:
-        system_prompt = system_prompt + f"\n\n## Review lens\n\n{soul_critique}"
-    return system_prompt
+        seed = load_soul_seed(config.personality)
+        character_memories = load_character_memories(config.personality, config.memory_dir) or None
+        mindsets = load_soul_mindsets(config.personality) or None
+        examples = load_soul_examples(config.personality) or None
+        critique = load_soul_critique(config.personality) or None
+
+    # 1. Soul seed — identity declaration, always first
+    if seed:
+        parts.append(seed)
+
+    # 2. Character memories
+    if character_memories:
+        parts.append(character_memories)
+
+    # 3. Mindsets
+    if mindsets:
+        parts.append(mindsets)
+
+    # 4. Behavioral rules (strict numbered order)
+    for _order, _name, rule_path in _collect_rule_files():
+        content = rule_path.read_text(encoding="utf-8").strip()
+        if content:
+            parts.append(content)
+
+    # 5. Soul examples — concrete trigger→response patterns, trailing rules
+    if examples:
+        parts.append(examples)
+
+    # 6. Counter-steering (model-specific quirks)
+    if model_name:
+        from co_cli.prompts.model_quirks._loader import get_counter_steering
+        counter_steering = get_counter_steering(provider, model_name)
+        if counter_steering:
+            parts.append(f"## Model-Specific Guidance\n\n{counter_steering}")
+
+    # 7. Critique — self-assessment lens, always last
+    if critique:
+        parts.append(f"## Review lens\n\n{critique}")
+
+    prompt = "\n\n".join(parts)
+
+    if not prompt.strip():
+        raise ValueError("Assembled prompt is empty after processing")
+
+    return prompt

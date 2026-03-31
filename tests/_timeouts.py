@@ -23,9 +23,10 @@ registered tools in the agent.
 """
 
 LLM_TOOL_CONTEXT_TIMEOUT_SECS: int = 20
-"""Non-reasoning calls with full tool context (ROLE_TASK, 38 tools, ~10K schema tokens).
+"""Non-reasoning calls with full tool context (ROLE_TASK, 28 built-in tools, ~10K schema tokens).
 
-Tool schemas are sent in every request: 38 tools × avg schema = ~41K bytes ≈ 10K tokens.
+MCP servers are stripped from test configs (mcp_servers={}) to keep the tool count at 28.
+Tool schemas are sent in every request: 28 tools × avg schema = ~41K bytes ≈ 10K tokens.
 Processing 10K schema tokens without reasoning takes ~12s on this hardware (confirmed:
 reasoning_effort=none verified in request, no thinking output, pure KV-fill cost).
 Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests

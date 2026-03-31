@@ -12,7 +12,7 @@ bootstrap
     -> create_deps()
        -> CoConfig.from_settings()
        -> check_agent_llm()
-       -> _build_system_prompt()
+       -> build_static_instructions()
        -> resolve_reranker()
        -> resolve_knowledge_backend()
        -> build CoServices / CoRuntimeState / CoDeps
@@ -104,7 +104,7 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - Gemini without an API key is a startup error.
    - Ollama reasoning-model absence is a startup error.
    - Ollama host unreachability or missing optional-role models is only a warning/degraded startup.
-3. `_build_system_prompt()` assembles the static prompt from rules, personality seed/examples/critique, and model-specific counter-steering.
+3. `build_static_instructions()` assembles the static instructions from soul seed, character memories, mindsets, rules, soul examples, counter-steering, and critique — all seven sections in explicit order.
 4. `resolve_reranker()` and `resolve_knowledge_backend()` degrade capabilities in place:
    - rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
@@ -142,7 +142,7 @@ The foreground runtime now has two distinct agent surfaces:
 `build_agent()` bakes these pieces into the main agent:
 
 1. resolved model object plus `ModelSettings`
-2. static `instructions=config.system_prompt`
+2. static `instructions=config.static_instructions`
 3. four history processors:
    - `truncate_tool_returns`
    - `detect_safety_issues`

@@ -3,6 +3,7 @@
 All tests use real agent/deps — no mocks, no stubs.
 """
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 
@@ -32,15 +33,18 @@ from co_cli.context._skill_env import _cleanup_skill_run_state
 from co_cli.display._core import console
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
-_TASK_MODEL = _CONFIG.role_models[ROLE_TASK].model
+# Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
+_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
+_REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
+_TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 
 # build_task_agent: minimal 1-sentence system prompt + local tools — bakes in
 # ROLE_TASK model settings (reasoning_effort=none) at construction time.
-_AGENT = build_task_agent(config=_CONFIG, resolved=_TASK_RESOLVED)
+_AGENT = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
 
 
 def _make_ctx(
@@ -49,7 +53,7 @@ def _make_ctx(
     memory_dir: "Path | None" = None,
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
-    config = _CONFIG
+    config = _CONFIG_NO_MCP
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
@@ -148,18 +152,19 @@ async def test_approval_approve():
     """
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=_CONFIG,
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
-        turn = await run_turn(
-            agent=_AGENT.agent,
-            user_input=_PROMPT_SHELL,
-            deps=deps,
-            message_history=[],
-            frontend=SilentFrontend(approval_response="y"),
-        )
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+            turn = await run_turn(
+                agent=_AGENT.agent,
+                user_input=_PROMPT_SHELL,
+                deps=deps,
+                message_history=[],
+                frontend=SilentFrontend(approval_response="y"),
+            )
         # Verify a tool call was attempted (shell command was deferred and processed)
         tool_called = any(
             isinstance(part, ToolCallPart)
@@ -183,18 +188,19 @@ async def test_approval_deny():
     """
     deps = CoDeps(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=_CONFIG,
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
     )
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
-        turn = await run_turn(
-            agent=_AGENT.agent,
-            user_input=_PROMPT_SHELL,
-            deps=deps,
-            message_history=[],
-            frontend=SilentFrontend(approval_response="n"),
-        )
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+            turn = await run_turn(
+                agent=_AGENT.agent,
+                user_input=_PROMPT_SHELL,
+                deps=deps,
+                message_history=[],
+                frontend=SilentFrontend(approval_response="n"),
+            )
         assert isinstance(turn.output, str)
     finally:
         deps.services.shell.cleanup()

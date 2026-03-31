@@ -202,7 +202,7 @@ def build_agent(
     """Build the main session Agent with model and settings baked in at construction.
 
     Args:
-        config: Session config — system prompt, tool policy, MCP servers.
+        config: Session config — static instructions, tool policy, MCP servers.
         resolved: Pre-built reasoning model + inference settings. When omitted,
             resolved from ModelRegistry.from_config(config). Callers that already
             hold a resolved model (main.py) pass it explicitly to avoid building
@@ -216,10 +216,11 @@ def build_agent(
     mcp_toolsets = _build_mcp_toolsets(config)
     filtered_toolset, tool_approvals = _build_filtered_toolset(config)
 
+    # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         resolved.model,
         deps_type=CoDeps,
-        instructions=config.system_prompt,
+        instructions=config.static_instructions,
         model_settings=resolved.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],

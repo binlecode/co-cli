@@ -40,9 +40,9 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │
 │  │  Step 2 — fail-fast gate (provider credentials + model availability)
 │  ├─ check_agent_llm(config)  → "error": raise ValueError  # session never starts
-│  ├─ _build_system_prompt(provider, model_name, config)  # file I/O; safe after gate
-│  │      loads soul seed, memories, mindsets, examples, critique
-│  │      └─ assemble_prompt(...)  →  config = dataclasses.replace(config, system_prompt=assembled_prompt)
+│  ├─ build_static_instructions(provider, model_name, config)  # file I/O; safe after gate
+│  │      assembles soul seed, character memories, mindsets, rules, examples, counter-steering, critique
+│  │      └─ config = dataclasses.replace(config, static_instructions=assembled_prompt)
 │  │
 │  │  Step 3 — construct services
 │  ├─ resolve_reranker(config)
@@ -71,7 +71,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ [if mcp_servers] build MCPServerStdio/HTTP toolset objects → mcp_toolsets
 │  ├─ Agent(
 │  │      resolved.model,                    # baked in — same pattern as sub-agent factories
-│  │      instructions=config.system_prompt,  # pre-assembled by create_deps() Step 2
+│  │      instructions=config.static_instructions,  # pre-assembled by create_deps() Step 2
 │  │      model_settings=resolved.settings,
 │  │      deps_type=CoDeps,
 │  │      retries=config.tool_retries,
@@ -172,9 +172,10 @@ create_deps():
 
     config = dataclasses.replace(
         config,
-        system_prompt=_build_system_prompt(provider, normalized_model, config),
+        static_instructions=build_static_instructions(provider, normalized_model, config),
     )
-    # _build_system_prompt: loads soul seed, memories, mindsets, examples, critique; calls assemble_prompt()
+    # build_static_instructions: loads soul seed, character memories, mindsets, rules, examples,
+    # counter-steering, critique; assembles them in explicit order
 
     # Step 3: resolve reranker and knowledge backend, construct services (lazy imports inside function body)
     config, reranker_statuses = resolve_reranker(config)
@@ -192,7 +193,7 @@ create_deps():
 Key transformation:
 - `settings.knowledge_search_backend` is the configured backend
 - `deps.config.knowledge_search_backend` is the resolved backend after degradation
-- `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call; `system_prompt` is the one field set afterward via `dataclasses.replace()` — after the fail-fast gate passes so credential validity is established before file I/O
+- `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call; `static_instructions` is the one field set afterward via `dataclasses.replace()` — after the fail-fast gate passes so credential validity is established before file I/O
 
 ### `CoDeps` Group Semantics
 
@@ -209,7 +210,7 @@ The `capabilities` group holds bootstrap-set capability metadata (tool names, ap
 
 ## 2. Provider And Model Checks
 
-`check_agent_llm` (from `bootstrap/_check.py`) runs inside `create_deps()` as the single fail-fast gate. Error status raises `ValueError` immediately — session never starts. Any other status continues. After the gate passes, `_build_system_prompt()` assembles the static system prompt (file I/O; safe here because credentials are known-valid). `ModelRegistry` is built in Step 3 immediately after.
+`check_agent_llm` (from `bootstrap/_check.py`) runs inside `create_deps()` as the single fail-fast gate. Error status raises `ValueError` immediately — session never starts. Any other status continues. After the gate passes, `build_static_instructions()` assembles the static instructions (file I/O; safe here because credentials are known-valid). `ModelRegistry` is built in Step 3 immediately after.
 
 | Condition | Behavior |
 |-----------|----------|

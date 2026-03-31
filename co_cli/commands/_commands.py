@@ -735,7 +735,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     """Cancel a running background task. Usage: /cancel <task_id>"""
-    from co_cli.tools._background import kill_task
+    from co_cli.tools._background import BackgroundCleanupError, kill_task
 
     task_id = args.strip()
     if not task_id:
@@ -751,7 +751,11 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
         console.print(f"[dim]Task {task_id} is not running (status={state.status}).[/dim]")
         return None
 
-    await kill_task(state)
+    try:
+        await kill_task(state)
+    except BackgroundCleanupError as e:
+        console.print(f"[bold red]Cancel cleanup failed:[/bold red] {e}")
+        return None
     console.print(f"[success]✓ Cancelled task {task_id}[/success]")
     return None
 
