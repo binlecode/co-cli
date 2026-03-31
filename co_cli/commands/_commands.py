@@ -245,8 +245,8 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
     from pydantic_ai.messages import ToolReturnPart
 
     _DELEGATION_TOOLS = frozenset({
-        "run_coder_subagent", "run_research_subagent",
-        "run_analysis_subagent", "run_thinking_subagent",
+        "run_coding_subagent", "run_research_subagent",
+        "run_analysis_subagent", "run_reasoning_subagent",
         "start_background_task",
     })
 

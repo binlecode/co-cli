@@ -1,4 +1,5 @@
 import pathlib
+
 #!/usr/bin/env python3
 """Eval: tool-chains — verify the agent completes multi-step tool sequences.
 
@@ -70,17 +71,14 @@ CASES: list[ChainCase] = [
     ChainCase(
         id="chain-web-search-fetch",
         prompt=(
-            "Search the web for 'Python 3.13 new features' and fetch the "
-            "top result"
+            "Search the web for 'Python 3.13 new features' and fetch the top result"
         ),
         expected_chain=["web_search", "web_fetch"],
         requires="brave_search_api_key",
     ),
     ChainCase(
         id="chain-memory-list-recall",
-        prompt=(
-            "List all my memories, then recall any about database preferences"
-        ),
+        prompt=("List all my memories, then recall any about database preferences"),
         expected_chain=["list_memories", "recall_memory"],
     ),
     ChainCase(
@@ -133,8 +131,6 @@ async def run_chain_case(
         deps=deps,
         message_history=[],
         model_settings=model_settings,
-        max_request_limit=15,
-        verbose=False,
         frontend=frontend,
     )
     elapsed = time.monotonic() - t0
@@ -166,7 +162,9 @@ async def main() -> int:
     print("  Eval: Multi-Step Tool Chains")
     print("=" * 60)
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+    agent = build_agent(
+        config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())
+    ).agent
     deps = make_eval_deps(session_id="eval-tool-chains")
     deps.runtime.safety_state = SafetyState()
 
@@ -175,7 +173,7 @@ async def main() -> int:
     skipped: list[ChainCase] = []
     for case in CASES:
         if case.requires:
-            val = getattr(deps, case.requires, None)
+            val = getattr(deps.config, case.requires, None)
             if not val:
                 skipped.append(case)
                 continue
@@ -200,12 +198,14 @@ async def main() -> int:
                 print(f"    {dim}: {'ok' if ok else 'FAIL'}")
         except Exception as exc:
             print(f"ERROR: {exc}")
-            results.append({
-                "id": case.id,
-                "passed": False,
-                "error": str(exc),
-                "scores": {"chain_match": False, "chain_complete": False},
-            })
+            results.append(
+                {
+                    "id": case.id,
+                    "passed": False,
+                    "error": str(exc),
+                    "scores": {"chain_match": False, "chain_complete": False},
+                }
+            )
 
     # Summary
     print(f"\n{'=' * 60}")

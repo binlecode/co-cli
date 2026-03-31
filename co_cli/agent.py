@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -9,7 +9,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.deps import CoDeps, CoConfig, ToolConfig
 from co_cli._model_factory import ResolvedModel
 from co_cli.context._history import (
     inject_opening_context,
@@ -20,15 +20,15 @@ from co_cli.context._history import (
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.google_drive import search_drive_files, read_drive_file
-from co_cli.tools.google_gmail import list_emails, search_emails, create_email_draft
+from co_cli.tools.google_gmail import list_gmail_emails, search_gmail_emails, create_gmail_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
 from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, _load_always_on_memories
-from co_cli.tools.articles import save_article, recall_article, read_article_detail, search_knowledge
-from co_cli.tools.todo import todo_write, todo_read
+from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
+from co_cli.tools.todo import write_todos, read_todos
 from co_cli.tools.capabilities import check_capabilities
 from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
-from co_cli.tools.subagent import run_coder_subagent, run_research_subagent, run_analysis_subagent, run_thinking_subagent
+from co_cli.tools.subagent import run_coding_subagent, run_research_subagent, run_analysis_subagent, run_reasoning_subagent
 from co_cli.tools.task_control import (
     start_background_task,
     check_task_status,
@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 # even when the filter is narrowed to only the deferred tool names.
 _ALWAYS_ON_TOOL_NAMES: frozenset[str] = frozenset({
     "check_capabilities",
-    "todo_read",
-    "todo_write",
+    "read_todos",
+    "write_todos",
 })
 
 
@@ -54,6 +54,7 @@ class AgentCapabilityResult:
     agent: Agent[CoDeps, str | DeferredToolRequests]
     tool_names: list[str]
     tool_approvals: dict[str, bool]
+    tool_catalog: dict[str, ToolConfig] = field(default_factory=dict)
 
 
 def _build_mcp_toolsets(config: CoConfig) -> list:
@@ -87,7 +88,7 @@ def _build_mcp_toolsets(config: CoConfig) -> list:
 
 def _build_filtered_toolset(
     config: CoConfig,
-) -> "tuple[AbstractToolset[CoDeps], dict[str, bool]]":
+) -> "tuple[AbstractToolset[CoDeps], dict[str, bool], dict[str, ToolConfig]]":
     """Build a FilteredToolset containing all tools for this config.
 
     Tools are registered into a FunctionToolset and wrapped with a FilteredToolset
@@ -99,93 +100,110 @@ def _build_filtered_toolset(
     config paths are absent — they would fail at runtime regardless, so there is no
     point sending their schemas.
 
-    Returns (filtered_toolset, tool_approvals) where tool_approvals maps each
-    registered tool name to its requires_approval flag.
+    Returns (filtered_toolset, tool_approvals, native_catalog) where tool_approvals maps
+    each registered tool name to its requires_approval flag, and native_catalog maps
+    each tool name to its ToolConfig metadata.
     """
     inner: FunctionToolset[CoDeps] = FunctionToolset()
     tool_approvals: dict[str, bool] = {}
+    native_catalog: dict[str, ToolConfig] = {}
 
-    def _reg(fn, requires_approval: bool, retries: int | None = None) -> None:
-        kwargs: dict[str, Any] = {"requires_approval": requires_approval}
+    def _reg(
+        fn: Any,
+        *,
+        approval: bool = False,
+        family: str,
+        integration: str | None = None,
+        retries: int | None = None,
+    ) -> None:
+        name = fn.__name__
+        kwargs: dict[str, Any] = {"requires_approval": approval}
         if retries is not None:
             kwargs["retries"] = retries
         inner.add_function(fn, **kwargs)
-        tool_approvals[fn.__name__] = requires_approval
+        tool_approvals[name] = approval
+        native_catalog[name] = ToolConfig(
+            name=name,
+            source="native",
+            family=family,
+            approval=approval,
+            integration=integration,
+        )
 
     # Background task management
-    _reg(start_background_task, True)
-    _reg(check_task_status, False)
-    _reg(cancel_background_task, False)
-    _reg(list_background_tasks, False)
+    _reg(start_background_task, approval=True, family="workflow")
+    _reg(check_task_status, approval=False, family="workflow")
+    _reg(cancel_background_task, approval=False, family="workflow")
+    _reg(list_background_tasks, approval=False, family="workflow")
 
     # Capability introspection — no approval (read-only, no side effects)
-    _reg(check_capabilities, False)
+    _reg(check_capabilities, approval=False, family="system")
 
     # Sub-agent tools — registered only when the role model is configured
     if config.role_models.get(ROLE_CODING):
-        _reg(run_coder_subagent, False)
+        _reg(run_coding_subagent, approval=False, family="delegation")
     if config.role_models.get(ROLE_RESEARCH):
-        _reg(run_research_subagent, False)
+        _reg(run_research_subagent, approval=False, family="delegation")
     if config.role_models.get(ROLE_ANALYSIS):
-        _reg(run_analysis_subagent, False)
+        _reg(run_analysis_subagent, approval=False, family="delegation")
     if config.role_models.get(ROLE_REASONING):
-        _reg(run_thinking_subagent, False)
+        _reg(run_reasoning_subagent, approval=False, family="delegation")
 
     # Native file tools — write-once tier: retries=1 (a second attempt on failure is safe)
-    _reg(list_directory, False)
-    _reg(read_file, False)
-    _reg(find_in_files, False)
-    _reg(write_file, True, retries=1)
-    _reg(edit_file, True, retries=1)
+    _reg(list_directory, approval=False, family="workspace")
+    _reg(read_file, approval=False, family="workspace")
+    _reg(find_in_files, approval=False, family="workspace")
+    _reg(write_file, approval=True, family="workspace", retries=1)
+    _reg(edit_file, approval=True, family="workspace", retries=1)
 
     # Shell: fine-grained policy lives inside the tool (DENY/safe-prefix/ask).
     # Agent-layer approval is False; the tool raises ApprovalRequired for commands
     # that need user confirmation.
-    _reg(run_shell_command, False)
+    _reg(run_shell_command, approval=False, family="execution")
     # Write-once tier: single retry for transient failures
-    _reg(save_memory, True, retries=1)
-    _reg(save_article, True, retries=1)
-    _reg(update_memory, True, retries=1)
-    _reg(append_memory, True, retries=1)
+    _reg(save_memory, approval=True, family="knowledge", retries=1)
+    _reg(save_article, approval=True, family="knowledge", retries=1)
+    _reg(update_memory, approval=True, family="knowledge", retries=1)
+    _reg(append_memory, approval=True, family="knowledge", retries=1)
 
     # Session task tracking — no approval (in-memory only, no external side effects)
-    _reg(todo_write, False)
-    _reg(todo_read, False)
+    _reg(write_todos, approval=False, family="workflow")
+    _reg(read_todos, approval=False, family="workflow")
 
     # Read-only tools — no approval needed
-    _reg(list_memories, False)
-    _reg(search_memories, False)
-    _reg(read_article_detail, False)
-    _reg(search_knowledge, False)
-    _reg(recall_article, False)
+    _reg(list_memories, approval=False, family="knowledge")
+    _reg(search_memories, approval=False, family="knowledge")
+    _reg(read_article, approval=False, family="knowledge")
+    _reg(search_knowledge, approval=False, family="knowledge")
+    _reg(search_articles, approval=False, family="knowledge")
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
-        _reg(list_notes, False)
-        _reg(search_notes, False)
-        _reg(read_note, False)
+        _reg(list_notes, approval=False, family="connectors", integration="obsidian")
+        _reg(search_notes, approval=False, family="connectors", integration="obsidian")
+        _reg(read_note, approval=False, family="connectors", integration="obsidian")
 
     if config.google_credentials_path:
         # Network tier: retries=3 for transient connectivity failures
-        _reg(search_drive_files, False, retries=3)
-        _reg(read_drive_file, False, retries=3)
-        _reg(list_emails, False, retries=3)
-        _reg(search_emails, False, retries=3)
-        _reg(list_calendar_events, False, retries=3)
-        _reg(search_calendar_events, False, retries=3)
-        _reg(create_email_draft, True, retries=1)
+        _reg(search_drive_files, approval=False, family="connectors", integration="google_drive", retries=3)
+        _reg(read_drive_file, approval=False, family="connectors", integration="google_drive", retries=3)
+        _reg(list_gmail_emails, approval=False, family="connectors", integration="google_gmail", retries=3)
+        _reg(search_gmail_emails, approval=False, family="connectors", integration="google_gmail", retries=3)
+        _reg(list_calendar_events, approval=False, family="connectors", integration="google_calendar", retries=3)
+        _reg(search_calendar_events, approval=False, family="connectors", integration="google_calendar", retries=3)
+        _reg(create_gmail_draft, approval=True, family="connectors", integration="google_gmail", retries=1)
 
     policy = config.web_policy
     # Network tier: retries=3 for transient connectivity failures
-    _reg(web_search, policy.search == "ask", retries=3)
-    _reg(web_fetch, policy.fetch == "ask", retries=3)
+    _reg(web_search, approval=policy.search == "ask", family="web", retries=3)
+    _reg(web_fetch, approval=policy.fetch == "ask", family="web", retries=3)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
         f = ctx.deps.runtime.active_tool_filter
         return f is None or tool_def.name in f
 
     # .filtered() is the correct pydantic-ai 1.73 API for per-request tool filtering — no `PreparedToolset` or equivalent exists.
-    return inner.filtered(_filter), tool_approvals
+    return inner.filtered(_filter), tool_approvals, native_catalog
 
 
 _TASK_AGENT_SYSTEM_PROMPT: str = (
@@ -214,7 +232,7 @@ def build_agent(
             ROLE_REASONING, ResolvedModel(model=None, settings=None)
         )
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, tool_approvals = _build_filtered_toolset(config)
+    filtered_toolset, tool_approvals, native_catalog = _build_filtered_toolset(config)
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
@@ -279,6 +297,7 @@ def build_agent(
         agent=agent,
         tool_names=list(tool_approvals.keys()),
         tool_approvals=tool_approvals,
+        tool_catalog=native_catalog,
     )
 
 
@@ -294,7 +313,7 @@ def build_task_agent(
     resume approved deferred tool calls without the full main agent context overhead.
     """
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, tool_approvals = _build_filtered_toolset(config)
+    filtered_toolset, tool_approvals, native_catalog = _build_filtered_toolset(config)
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         resolved.model,
         deps_type=CoDeps,
@@ -308,22 +327,24 @@ def build_task_agent(
         agent=agent,
         tool_names=list(tool_approvals.keys()),
         tool_approvals=tool_approvals,
+        tool_catalog=native_catalog,
     )
 
 
 async def discover_mcp_tools(
     agent: Agent, exclude: set[str]
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str], dict[str, ToolConfig]]:
     """Discover MCP tool names from connected servers (after async with agent).
 
-    Returns a tuple of (tool_names, errors) where errors maps server prefix to
-    the error string for each server where list_tools() failed. Tool names
-    exclude any names already in ``exclude``.
+    Returns a tuple of (tool_names, errors, mcp_catalog) where errors maps server prefix to
+    the error string for each server where list_tools() failed, and mcp_catalog maps tool
+    name to ToolConfig metadata. Tool names exclude any names already in ``exclude``.
     """
     from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
+    mcp_catalog: dict[str, ToolConfig] = {}
 
     for toolset in agent.toolsets:
         # Unwrap approval wrappers to reach the MCPServer base instance
@@ -337,11 +358,17 @@ async def discover_mcp_tools(
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in exclude:
                     mcp_tool_names.append(name)
+                    approval = inner is not toolset
+                    mcp_catalog[name] = ToolConfig(
+                        name=name,
+                        source="mcp",
+                        family="connectors",
+                        approval=approval,
+                    )
         except Exception as e:
             logger.warning(
                 "MCP tool list failed for %r: %s", prefix or "(no prefix)", e
             )
             errors[prefix] = str(e)
 
-    return sorted(mcp_tool_names), errors
-
+    return sorted(mcp_tool_names), errors, mcp_catalog

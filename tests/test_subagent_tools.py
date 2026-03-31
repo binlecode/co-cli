@@ -1,4 +1,4 @@
-"""Functional tests for the run_coder_subagent, run_research_subagent, and run_analysis_subagent tool wiring."""
+"""Functional tests for the run_coding_subagent, run_research_subagent, and run_analysis_subagent tool wiring."""
 
 import pytest
 from copy import copy
@@ -13,7 +13,7 @@ from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingR
 from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent, _merge_turn_usage
+from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
@@ -29,13 +29,13 @@ def _make_ctx() -> RunContext:
 
 
 @pytest.mark.asyncio
-async def test_run_coder_subagent_no_model() -> None:
+async def test_run_coding_subagent_no_model() -> None:
     """Raises ModelRetry when model_registry is None (no registry configured)."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_coder_subagent(ctx, "analyze foo")
+        await run_coding_subagent(ctx, "analyze foo")
 
 
 def test_make_subagent_deps_resets_session_state() -> None:
@@ -141,13 +141,13 @@ def test_thinking_result_model() -> None:
     assert r.conclusion == "The recommended approach is X."
 
 @pytest.mark.asyncio
-async def test_run_thinking_subagent_no_model() -> None:
+async def test_run_reasoning_subagent_no_model() -> None:
     """Raises ModelRetry matching 'unavailable' when model_registry is None."""
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_thinking_subagent(ctx, "solve this problem")
+        await run_reasoning_subagent(ctx, "solve this problem")
 
 
 @pytest.mark.asyncio

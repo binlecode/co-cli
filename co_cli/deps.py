@@ -284,6 +284,19 @@ class CoConfig:
         )
 
 
+@dataclass(frozen=True)
+class ToolConfig:
+    """Canonical metadata for one registered tool."""
+
+    name: str
+    source: str
+    # 'native' | 'mcp'
+    family: str
+    # 'workspace' | 'execution' | 'knowledge' | 'workflow' | 'delegation' | 'web' | 'connectors' | 'system'
+    approval: bool
+    integration: str | None = None
+
+
 @dataclass
 class CoCapabilityState:
     """Bootstrap-set capability registry — shared by reference with sub-agents.
@@ -299,6 +312,7 @@ class CoCapabilityState:
 
     tool_names: list[str] = field(default_factory=list)
     tool_approvals: dict[str, bool] = field(default_factory=dict)
+    tool_catalog: dict[str, "ToolConfig"] = field(default_factory=dict)
     mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     skill_registry: list[dict] = field(default_factory=list)

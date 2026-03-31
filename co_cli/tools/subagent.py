@@ -1,4 +1,4 @@
-"""Tools for running focused tasks via purpose-built sub-agents."""
+"""Tools for running focused tasks via purpose-built sub-agents (family: delegation)."""
 
 from copy import copy
 from typing import Any, NamedTuple
@@ -63,7 +63,7 @@ async def _run_subagent_attempt(
     return SubagentAttemptResult(output=result.output, usage=copy(usage), run_id=run_id)
 
 
-async def run_coder_subagent(
+async def run_coding_subagent(
     ctx: RunContext[CoDeps],
     task: str,
     max_requests: int = 0,
@@ -290,7 +290,7 @@ async def run_analysis_subagent(
     )
 
 
-async def run_thinking_subagent(
+async def run_reasoning_subagent(
     ctx: RunContext[CoDeps],
     problem: str,
     max_requests: int = 0,

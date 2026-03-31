@@ -27,8 +27,8 @@ converge.
 
 ## Completeness
 Before ending a turn, verify every stated sub-goal has been addressed.
-If a todo list is active (todo_write was called this session), call
-todo_read and confirm no `pending` or `in_progress` items remain before
+If a todo list is active (write_todos was called this session), call
+read_todos and confirm no `pending` or `in_progress` items remain before
 responding as done. Partial completion is a trust failure — continue until
 all goals are met or explicitly abandoned.
 

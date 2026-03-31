@@ -5,7 +5,7 @@ session. State lives in CoDeps.session.session_todos — it is not persisted to 
 is cleared when the session ends.
 
 Pattern follows OpenCode (session/todo.ts) and Claude Code (TodoWrite tool):
-todo_write replaces the entire list (model rewrites to update), todo_read
+write_todos replaces the entire list (model rewrites to update), read_todos
 surfaces current state for completeness verification.
 """
 
@@ -21,7 +21,7 @@ _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
 _VALID_PRIORITY = {"high", "medium", "low"}
 
 
-def todo_write(
+def write_todos(
     ctx: RunContext[CoDeps],
     todos: list[dict[str, Any]],
 ) -> ToolResult:
@@ -32,7 +32,7 @@ def todo_write(
     idempotent and safe to call multiple times as work progresses.
 
     Use before starting a multi-step task, then update status fields as each
-    sub-goal completes. Before ending a turn, call todo_read to verify no
+    sub-goal completes. Before ending a turn, call read_todos to verify no
     pending or in_progress items remain.
 
     Each item must have:
@@ -128,7 +128,7 @@ def todo_write(
     )
 
 
-def todo_read(
+def read_todos(
     ctx: RunContext[CoDeps],
 ) -> ToolResult:
     """Read the current session todo list.

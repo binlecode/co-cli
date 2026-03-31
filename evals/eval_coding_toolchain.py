@@ -126,13 +126,13 @@ async def run_path_traversal(case_dir: Path) -> bool:
 
 
 async def run_delegate_summary() -> bool:
-    """run_coder_subagent with no model configured should return a dict with 'display'.
+    """run_coding_subagent with no model configured should return a dict with 'display'.
 
     The tool returns an error dict (error=True) when unconfigured. We treat
     any well-formed dict with a 'display' key as a passing result — the tool
     ran and communicated its state correctly.
     """
-    from co_cli.tools.subagent import run_coder_subagent
+    from co_cli.tools.subagent import run_coding_subagent
 
     @dataclass
     class _MinimalDeps:
@@ -143,7 +143,7 @@ async def run_delegate_summary() -> bool:
     class _MinimalCtx:
         deps = _MinimalDeps()
 
-    result = await run_coder_subagent(_MinimalCtx(), "analyze the codebase")
+    result = await run_coding_subagent(_MinimalCtx(), "analyze the codebase")
     # Unconfigured → error dict with 'display' key — tool ran and returned a dict
     return isinstance(result, dict) and "display" in result
 

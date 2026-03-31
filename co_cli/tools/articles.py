@@ -12,7 +12,7 @@ Use save_article vs save_memory:
 - save_article: externally-fetched web content, reference material, documentation
 - save_memory: conversation-derived facts, user preferences, decisions, corrections
 
-Use recall_article for summary-level lookup; use read_article_detail for full body.
+Use search_articles for summary-level lookup; use read_article for full body.
 """
 
 import logging
@@ -25,7 +25,7 @@ import yaml
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 
-from co_cli.knowledge._frontmatter import parse_frontmatter, validate_memory_frontmatter
+from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.knowledge._index_store import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
@@ -90,10 +90,8 @@ def _read_content_for_contradiction(r: SearchResult) -> str:
     if not r.path:
         return ""
     try:
-        from pathlib import Path as _Path
-        from co_cli.knowledge._frontmatter import parse_frontmatter as _parse_frontmatter
-        raw = _Path(r.path).read_text(encoding="utf-8")
-        _, body = _parse_frontmatter(raw)
+        raw = Path(r.path).read_text(encoding="utf-8")
+        _, body = parse_frontmatter(raw)
         return body.strip().lower()
     except Exception:
         return ""
@@ -443,7 +441,7 @@ async def save_article(
     )
 
 
-async def recall_article(
+async def search_articles(
     ctx: RunContext[CoDeps],
     query: str,
     max_results: int = 5,
@@ -453,10 +451,10 @@ async def recall_article(
     created_before: str | None = None,
 ) -> ToolResult:
     """Search saved articles by keyword and return summary index only
-    (title, origin_url, tags, first paragraph). Use read_article_detail
+    (title, origin_url, tags, first paragraph). Use read_article
     to load the full body after identifying an article here.
 
-    Use recall_article for externally-fetched reference material.
+    Use search_articles for externally-fetched reference material.
     Use recall_memory for conversation-derived facts.
 
     Results are ranked by recency (most recently updated first).
@@ -599,18 +597,18 @@ async def recall_article(
     )
 
 
-async def read_article_detail(
+async def read_article(
     ctx: RunContext[CoDeps],
     slug: str,
 ) -> ToolResult:
     """Load the full markdown body of a saved article on demand.
 
-    Always call recall_article first to find the slug, then call
-    read_article_detail to get the full body. This two-step approach
+    Always call search_articles first to find the slug, then call
+    read_article to get the full body. This two-step approach
     keeps recall responses compact.
 
     Does NOT summarize — returns full content as stored.
-    The slug comes from the recall_article result (e.g. "042-python-asyncio-guide").
+    The slug comes from the search_articles result (e.g. "042-python-asyncio-guide").
 
     Returns a dict with:
     - display: full article content — show directly to the user
@@ -620,7 +618,7 @@ async def read_article_detail(
     - content: full markdown body
 
     Args:
-        slug: File stem from recall_article result (e.g. "042-python-asyncio-guide").
+        slug: File stem from search_articles result (e.g. "042-python-asyncio-guide").
     """
     library_dir = ctx.deps.config.library_dir
 

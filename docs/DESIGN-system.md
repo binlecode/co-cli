@@ -217,6 +217,7 @@ Shared by reference with sub-agents.
 | --- | --- | --- | --- |
 | `tool_names` | `build_agent()` seeds native tool names; `initialize_session_capabilities()` appends discovered MCP names | never | shared ref |
 | `tool_approvals` | `build_agent()` | never | shared ref |
+| `tool_catalog` | `build_agent()` seeds native `ToolConfig` map; `initialize_session_capabilities()` merges MCP `ToolConfig` entries after discovery | never | shared ref |
 | `mcp_discovery_errors` | `initialize_session_capabilities()` | never | shared ref |
 | `skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
 | `skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |

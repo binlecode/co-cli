@@ -58,12 +58,17 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
 
     mcp_configured = len(ctx.deps.config.mcp_servers or {})
     mcp_live = caps["mcp_count"]
-    # Invariant: tool_approvals keys == native tool names; tool_names = native + MCP (see build_agent)
-    # This formula holds only while tool_names is seeded from tool_approvals.keys() in build_agent()
-    # and extended exclusively by discover_mcp_tools(). Any future addition to tool_names outside
-    # that path will silently corrupt this count.
-    native_tool_count = len(ctx.deps.capabilities.tool_approvals)
-    mcp_tool_count = len(ctx.deps.capabilities.tool_names) - native_tool_count
+    catalog = ctx.deps.capabilities.tool_catalog
+    native_tool_count = sum(1 for tc in catalog.values() if tc.source == "native")
+    mcp_tool_count = sum(1 for tc in catalog.values() if tc.source == "mcp")
+
+    # Family breakdown
+    family_counts = st.get("family_counts", {})
+    if family_counts:
+        family_parts = ", ".join(
+            f"{family}: {count}" for family, count in sorted(family_counts.items())
+        )
+        lines.append(f"Tools by family: {family_parts}")
 
     if mcp_configured == 0:
         lines.append("MCP: none configured")
@@ -87,6 +92,8 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
         mcp_count=caps["mcp_count"],
         mcp_configured_server_count=mcp_configured,
         mcp_tool_count=mcp_tool_count,
+        native_tool_count=native_tool_count,
+        family_counts=family_counts,
         mcp_server_health=[
             {"name": n, "ok": r.ok, "detail": r.detail} for n, r in result.mcp_probes
         ],

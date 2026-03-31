@@ -173,6 +173,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     agent = agent_result.agent
     deps.capabilities.tool_names = agent_result.tool_names
     deps.capabilities.tool_approvals = agent_result.tool_approvals
+    deps.capabilities.tool_catalog = agent_result.tool_catalog
 
     if deps.services.model_registry:
         task_resolved = deps.services.model_registry.get(ROLE_TASK, _none_resolved)

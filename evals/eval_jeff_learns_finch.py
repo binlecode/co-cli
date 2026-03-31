@@ -15,7 +15,7 @@ that reflects self-awareness of his own role.
 Dimensions:
   learn_chain        — Turn 1 executes web_search → web_fetch → save_article in order
   knowledge_saved    — knowledge index contains an article about "finch" after Turn 1
-  recall_ok          — Turn 2 calls search_knowledge or recall_article
+  recall_ok          — Turn 2 calls search_knowledge or search_articles
   self_reference_ok  — Turn 2 answer mentions "finch" and "jeff" (robot name)
 
 OTel tracing:
@@ -76,7 +76,7 @@ TURN2_PROMPT = (
 )
 
 TURN1_EXPECTED_CHAIN = ["web_search", "web_fetch", "save_article"]
-TURN2_EXPECTED_TOOLS = {"search_knowledge", "recall_article"}
+TURN2_EXPECTED_TOOLS = {"search_knowledge", "search_articles"}
 
 SELF_REFERENCE_KEYWORDS = {"finch", "jeff"}
 

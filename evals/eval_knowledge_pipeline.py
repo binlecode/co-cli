@@ -54,8 +54,7 @@ TURN1_PROMPT = (
 )
 
 TURN2_PROMPT = (
-    f"Search my knowledge base for {TOPIC_KEYWORD} and summarise "
-    "what you find there."
+    f"Search my knowledge base for {TOPIC_KEYWORD} and summarise what you find there."
 )
 
 TURN1_EXPECTED_CHAIN = ["web_search", "web_fetch", "save_article"]
@@ -84,8 +83,6 @@ async def run_pipeline(
         deps=deps,
         message_history=[],
         model_settings=model_settings,
-        max_request_limit=20,
-        verbose=False,
         frontend=frontend,
     )
     elapsed1 = time.monotonic() - t0
@@ -102,15 +99,13 @@ async def run_pipeline(
         deps=deps,
         message_history=result1.messages,
         model_settings=model_settings,
-        max_request_limit=10,
-        verbose=False,
         frontend=frontend,
     )
     elapsed2 = time.monotonic() - t1
 
     # Extract only the new tool calls introduced in turn 2
     all_names2 = tool_names(result2.messages)
-    names2 = all_names2[len(names1):]
+    names2 = all_names2[len(names1) :]
     recall_chain_ok = bool(TURN2_EXPECTED_TOOLS & set(names2))
 
     # Answer quality: non-trivial response that references the topic
@@ -152,7 +147,9 @@ async def main() -> int:
 
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
 
-    knowledge_index = KnowledgeIndex(config=CoConfig(knowledge_db_path=Path(".co-cli/search.db")))
+    knowledge_index = KnowledgeIndex(
+        config=CoConfig(knowledge_db_path=Path(".co-cli/search.db"))
+    )
     deps = make_eval_deps(
         session_id="eval-knowledge-pipeline",
         knowledge_index=knowledge_index,
@@ -169,7 +166,7 @@ async def main() -> int:
 
     result: dict[str, Any] = {}
     try:
-        print("[1/1] knowledge-pipeline ...", end=" ", flush=True)
+        print("[1/2] knowledge-pipeline ...", end=" ", flush=True)
         t_total = time.monotonic()
         result = await run_pipeline(agent, deps, make_eval_settings())
         elapsed_total = time.monotonic() - t_total
@@ -190,16 +187,72 @@ async def main() -> int:
         print(f"    actual:       {t2['tool_names']}")
         print(f"    recall_chain: {'ok' if t2['recall_chain_ok'] else 'FAIL'}")
         print(f"    answer_ok:    {'ok' if t2['answer_ok'] else 'FAIL'}")
+            print(f"
+  Turn 2 — retrieve + answer ({t2['elapsed']:.1f}s)")
+        print(f"    expected any: {t2['expected_any']}")
+        print(f"    actual:       {t2['tool_names']}")
+        print(f"    recall_chain: {'ok' if t2['recall_chain_ok'] else 'FAIL'}")
+        print(f"    answer_ok:    {'ok' if t2['answer_ok'] else 'FAIL'}")
         print(f"    answer:       {t2['answer_preview']!r}")
+
+    # --- TASK-2: Persistence-failure case ---
+    import tempfile
+    import dataclasses
+
+    with tempfile.TemporaryDirectory() as td:
+        db_dir = Path(td) / "ro_db"
+        db_dir.mkdir()
+        db_path = db_dir / "search.db"
+        db_path.touch()
+        db_path.chmod(0o444)
+        db_dir.chmod(0o555)
+
+        try:
+            print("
+[2/2] persistence-failure ...", end=" ", flush=True)
+            ro_ki = KnowledgeIndex(config=CoConfig(knowledge_db_path=db_path))
+            ro_deps = make_eval_deps(
+                session_id="eval-knowledge-pipeline-ro",
+                knowledge_index=ro_ki,
+            )
+            # Copy brave key from the original deps if present
+            if deps.config.brave_search_api_key:
+                ro_deps.config = dataclasses.replace(ro_deps.config, brave_search_api_key=deps.config.brave_search_api_key)
+
+            t0 = time.monotonic()
+            ro_result = await run_turn(
+                agent=agent,
+                user_input=TURN1_PROMPT,
+                deps=ro_deps,
+                message_history=[],
+                model_settings=make_eval_settings(),
+                frontend=SilentFrontend(approval_response="y"),
+            )
+            elapsed_ro = time.monotonic() - t0
+
+            ro_calls = tool_names(ro_result.messages)
+            if "save_article" in ro_calls and ro_result.output:
+                print(f"PASS ({elapsed_ro:.1f}s)")
+                result["ro_passed"] = True
+            else:
+                print(f"FAIL ({elapsed_ro:.1f}s)")
+                print(f"  tool calls: {ro_calls}")
+                print(f"  output: {ro_result.output}")
+                result["ro_passed"] = False
+        finally:
+            db_dir.chmod(0o755)
+            db_path.chmod(0o644)
+
 
     except Exception as exc:
         import traceback
+
         print(f"ERROR: {exc}")
         traceback.print_exc()
         result = {"passed": False}
 
     print(f"\n{'=' * 60}")
-    passed = result.get("passed", False)
+    passed = result.get("passed", False) and result.get("ro_passed", False)
     print(f"  Verdict: {'PASS' if passed else 'FAIL'}")
     print(f"{'=' * 60}")
     return 0 if passed else 1

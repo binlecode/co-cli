@@ -10,7 +10,7 @@ This doc owns callable tool capabilities only. Skills are a separate layer built
 
 Tool progress reporting is opt-in. Tools do not write to the terminal directly. When a tool has meaningful multi-phase latency, it may emit progress through turn-scoped runtime state (`ctx.deps.runtime.tool_progress_callback`) and let the frontend render those messages through the `on_tool_progress` lifecycle callback.
 
-Most user-facing native tools return a `ToolResult` via `make_result(display, **metadata)`, but the renderer-level contract is broader: `ToolResultPayload = str | ToolResult | None`. A few legacy native tools still return raw `str` on success (`run_shell_command`, `read_note`, `read_drive_file`, `create_email_draft`).
+Most user-facing native tools return a `ToolResult` via `make_result(display, **metadata)`, but the renderer-level contract is broader: `ToolResultPayload = str | ToolResult | None`. A few legacy native tools still return raw `str` on success (`run_shell_command`, `read_note`, `read_drive_file`, `create_gmail_draft`).
 
 Tools are grouped into these families:
 
@@ -36,13 +36,13 @@ tools/
 
 ### Registration
 
-Main-agent native tools are registered via the local `_reg(fn, requires_approval, retries=None)` helper in `co_cli/agent.py:_build_filtered_toolset()`. `_reg()` calls `FunctionToolset.add_function(...)` and records the `(tool_name, requires_approval)` mapping in `tool_approvals`. The resulting toolset is then wrapped with `inner.filtered(_filter)` so approval-resume segments can narrow the visible native tools per request. This is the current pydantic-ai idiom for tool filtering; the main agent does not register native tools with repeated `agent.tool(...)` calls.
+Main-agent native tools are registered via the local `_reg(fn, *, approval, family, integration, retries)` helper in `co_cli/agent.py:_build_filtered_toolset()`. `_reg()` calls `FunctionToolset.add_function(...)`, records the `(tool_name, approval)` mapping in `tool_approvals`, and creates a `ToolConfig` entry in `native_catalog`. `_build_filtered_toolset()` returns a 3-tuple: `(filtered_toolset, tool_approvals, native_catalog)`. The resulting toolset is then wrapped with `inner.filtered(_filter)` so approval-resume segments can narrow the visible native tools per request. This is the current pydantic-ai idiom for tool filtering; the main agent does not register native tools with repeated `agent.tool(...)` calls.
 
-`run_shell_command` is the native exception only in approval semantics, not registration style: it is still added to the `FunctionToolset` with `requires_approval=False`, then performs command-level DENY / ALLOW / REQUIRE_APPROVAL classification inside the tool body via `ApprovalRequired`. Sub-agent tools remain directly registered with `agent.tool()` inside each sub-agent factory because those agents do not use the shared filtered toolset.
+`run_shell_command` is the native exception only in approval semantics, not registration style: it is still added to the `FunctionToolset` with `approval=False`, then performs command-level DENY / ALLOW / REQUIRE_APPROVAL classification inside the tool body via `ApprovalRequired`. Sub-agent tools remain directly registered with `agent.tool()` inside each sub-agent factory because those agents do not use the shared filtered toolset.
 
-Per-tool retry budget: tools are annotated at registration by tier. Write-once tools (`write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_email_draft`) use `retries=1` — a second mutation attempt on transient failure is safe but more than one is not. Network read tools (`web_search`, `web_fetch`, `list_emails`, `search_emails`, `search_drive_files`, `read_drive_file`, `list_calendar_events`, `search_calendar_events`) use `retries=3`. All other tools inherit the agent-level default (`config.tool_retries`).
+Per-tool retry budget: tools are annotated at registration by tier. Write-once tools (`write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_gmail_draft`) use `retries=1` — a second mutation attempt on transient failure is safe but more than one is not. Network read tools (`web_search`, `web_fetch`, `list_gmail_emails`, `search_gmail_emails`, `search_drive_files`, `read_drive_file`, `list_calendar_events`, `search_calendar_events`) use `retries=3`. All other tools inherit the agent-level default (`config.tool_retries`).
 
-Conditional registration: each `run_*_subagent` tool is registered only when its matching role model is configured. If only `ROLE_REASONING` is configured, `run_thinking_subagent` is available and the coding, research, and analysis sub-agent tools are omitted.
+Conditional registration: each `run_*_subagent` tool is registered only when its matching role model is configured. If only `ROLE_REASONING` is configured, `run_reasoning_subagent` is available and the coding, research, and analysis sub-agent tools are omitted.
 
 ### Tool Lifecycle — Call Stack
 
@@ -58,22 +58,27 @@ main.py:build_chat_app()
   │    │    └─ .approval_required()                             # wraps server when cfg.approval=="ask"
   │    ├─ _build_filtered_toolset(config)
   │    │    ├─ inner = FunctionToolset()
-  │    │    ├─ _reg(fn, requires_approval, retries?)           # inner.add_function(...)
-  │    │    ├─ tool_approvals[fn.__name__] = requires_approval
+  │    │    ├─ _reg(fn, approval=?, family=?, integration=?, retries=?)  # inner.add_function(...); builds ToolConfig
+  │    │    ├─ tool_approvals[fn.__name__] = approval
+  │    │    ├─ native_catalog[fn.__name__] = ToolConfig(name, source, family, approval, integration)
   │    │    └─ filtered_toolset = inner.filtered(_filter)      # per-request native-tool visibility
+  │    │    └─ return (filtered_toolset, tool_approvals, native_catalog)  # 3-tuple
   │    ├─ Agent(resolved.model, deps_type=CoDeps,
   │    │        output_type=[str, DeferredToolRequests],
   │    │        toolsets=[filtered_toolset] + mcp_toolsets)
-  │    └─ return AgentCapabilityResult(agent, tool_names, tool_approvals)
-  ├─ deps.capabilities.tool_names = agent_result.tool_names       # native names only
+  │    └─ return AgentCapabilityResult(agent, tool_names, tool_approvals, tool_catalog)
+  ├─ deps.capabilities.tool_names = agent_result.tool_names         # native names only
   ├─ deps.capabilities.tool_approvals = agent_result.tool_approvals
+  ├─ deps.capabilities.tool_catalog.update(agent_result.tool_catalog)  # native ToolConfig map
   ├─ await stack.enter_async_context(agent)                 # starts MCP server subprocesses
   └─ initialize_session_capabilities(agent, deps, frontend, mcp_init_ok)   # bootstrap/_bootstrap.py
-       └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py
+       └─ discover_mcp_tools(agent, exclude=set(tool_names))     # agent.py; returns 3-tuple
             └─ for toolset in agent.toolsets:
                  ├─ inner.list_tools()                      # MCPServer: enumerate via stdio/HTTP
                  └─ name = f"{prefix}_{t.name}" if prefix else t.name
+                 └─ mcp_catalog[name] = ToolConfig(source="mcp", family="connectors", ...)
        ├─ deps.capabilities.tool_names += mcp_tool_names          # native + MCP names
+       ├─ deps.capabilities.tool_catalog.update(mcp_catalog)       # MCP ToolConfig entries added
        └─ for prefix, err in discovery_errors:             # surface failed servers to user
             └─ frontend.on_status("MCP server {prefix!r} failed...")  # empty on happy path
 ```
@@ -133,9 +138,9 @@ _execute_stream_segment(_TurnState, agent, deferred_tool_results=approvals, ...)
 
 | Class | Condition | Examples |
 |-------|-----------|---------|
-| Always deferred | `requires_approval=True`, unconditional | `write_file`, `edit_file`, `save_memory`, `save_article`, `create_email_draft`, `start_background_task`, `update_memory`, `append_memory` |
+| Always deferred | `requires_approval=True`, unconditional | `write_file`, `edit_file`, `save_memory`, `save_article`, `create_gmail_draft`, `start_background_task`, `update_memory`, `append_memory` |
 | Shell inline policy | Tool registered auto; command payload classified inside tool as DENY / ALLOW / REQUIRE_APPROVAL | `run_shell_command` |
-| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent`, task status/list/cancel, `todo_write`, `todo_read`, all read-only personal-data tools |
+| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `check_capabilities`, `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent`, task status/list/cancel, `write_todos`, `read_todos`, all read-only personal-data tools |
 | Web policy | Depends on `web_policy.search` / `web_policy.fetch` setting | `web_search`, `web_fetch` |
 
 ### Approval Tier Ordering
@@ -166,7 +171,7 @@ Preferred native-tool shape:
 
 Current implementation status:
 - most native tools return `make_result(...)`
-- `run_shell_command`, `read_note`, `read_drive_file`, and `create_email_draft` still return raw `str` on success
+- `run_shell_command`, `read_note`, `read_drive_file`, and `create_gmail_draft` still return raw `str` on success
 - MCP tools may return raw JSON dicts, which `format_tool_result_for_display()` summarizes for the frontend when `_kind` is absent
 
 Repository policy is still to use `make_result()` for new or updated user-facing native tools.
@@ -233,9 +238,9 @@ Articles are decay-protected markdown files in the user-global library (`library
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
 | `save_article` | deferred | `content`, `title`, `origin_url`, `tags?`, `related?` | Saves article to library; deduplicates by `origin_url` exact match (consolidates on repeat) |
-| `recall_article` | auto | `query`, `max_results=5`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Article-scoped keyword search returning summary index only (title, URL, tags, first paragraph); sorted by recency; use `read_article_detail` to load full body |
+| `search_articles` | auto | `query`, `max_results=5`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Article-scoped keyword search returning summary index only (title, URL, tags, first paragraph); sorted by recency; use `read_article` to load full body |
 | `search_knowledge` | auto | `query`, `kind?`, `source?`, `limit=10`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | Unified cross-source search (library + obsidian + drive by default); excludes memories unless `source="memory"`; post-retrieval confidence scoring and contradiction detection |
-| `read_article_detail` | auto | `slug` | Loads full article body by file stem (from `search_knowledge` or `recall_article` result); two-step pattern: search → detail |
+| `read_article` | auto | `slug` | Loads full article body by file stem (from `search_knowledge` or `search_articles` result); two-step pattern: search → detail |
 
 **`search_knowledge` source routing:**
 
@@ -272,9 +277,9 @@ Current registration gate: Google tools are added only when `config.google_crede
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `list_emails` | auto | `max_results=5` | Lists recent Gmail messages with sender, subject, date, preview, and Gmail links |
-| `search_emails` | auto | `query`, `max_results=5` | Gmail search-query syntax; returns sender, subject, date, preview, and Gmail links |
-| `create_email_draft` | deferred | `to`, `subject`, `body` | Creates a plain-text Gmail draft and returns a raw confirmation string; does not send |
+| `list_gmail_emails` | auto | `max_results=5` | Lists recent Gmail messages with sender, subject, date, preview, and Gmail links |
+| `search_gmail_emails` | auto | `query`, `max_results=5` | Gmail search-query syntax; returns sender, subject, date, preview, and Gmail links |
+| `create_gmail_draft` | deferred | `to`, `subject`, `body` | Creates a plain-text Gmail draft and returns a raw confirmation string; does not send |
 
 **Calendar (`tools/google_calendar.py`):**
 
@@ -311,8 +316,8 @@ Task lifecycle: `start` → `running` → `completed` / `failed` / `cancelled`. 
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `todo_write` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
-| `todo_read` | auto | — | Returns current todo list; model should call before ending multi-step turns |
+| `write_todos` | auto | `todos: list[dict]` | Replaces full session todo list; validates `status` (pending/in_progress/completed/cancelled) and `priority` (high/medium/low); state lives in `CoDeps.session.session_todos` — not persisted to disk |
+| `read_todos` | auto | — | Returns current todo list; model should call before ending multi-step turns |
 | `check_capabilities` | auto | — | Runs `check_runtime(deps, progress=ctx.deps.runtime.tool_progress_callback)`; returns probe results, active integrations, reasoning chain, tool count, and MCP server health (`mcp_configured_server_count`, `mcp_tool_count`, `mcp_server_health`). When a turn-scoped progress callback is present, it emits staged `/doctor` progress messages such as provider, integration, knowledge, skills, and per-MCP-server checks through `on_tool_progress` |
 
 `check_capabilities` is the runtime introspection tool used by the packaged `/doctor` skill. It is still a normal read-only tool call inside the agent loop, not a special skill execution path. Progressive doctor output is produced by an optional callback path:
@@ -336,12 +341,12 @@ Sub-agent tools spawn isolated sub-agents using `make_subagent_deps(base)`. Sub-
 
 | Tool | Approval | Sub-agent tool surface | Behavior |
 |------|----------|----------------------|---------|
-| `run_coder_subagent` | auto | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence`, and usage metadata |
+| `run_coding_subagent` | auto | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence`, and usage metadata |
 | `run_research_subagent` | auto | `web_search`, `web_fetch` | Web-only research; retries once with a rephrased query when budget remains and the first result is empty; requires both web policies to be `"allow"` |
 | `run_analysis_subagent` | auto | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; returns `conclusion`, `evidence`, `reasoning`, and usage metadata |
-| `run_thinking_subagent` | auto | none | Structured problem decomposition via the reasoning-role model; no tools, pure model reasoning, returns `plan`, `steps`, `conclusion`, and usage metadata |
+| `run_reasoning_subagent` | auto | none | Structured problem decomposition via the reasoning-role model; no tools, pure model reasoning, returns `plan`, `steps`, `conclusion`, and usage metadata |
 
-Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`. `run_thinking_subagent` is gated on `ROLE_REASONING` (same as the primary model).
+Conditional registration: each tool is registered only when its matching role model chain exists in `config.role_models`. `run_reasoning_subagent` is gated on `ROLE_REASONING` (same as the primary model).
 
 ---
 
@@ -398,7 +403,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `subagent_max_requests_coder` | `CO_CLI_SUBAGENT_MAX_REQUESTS_CODER` | `10` | Max LLM requests per coder sub-agent run |
 | `subagent_max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | Max LLM requests per research sub-agent run (budget shared across retry attempts) |
 | `subagent_max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | Max LLM requests per analysis sub-agent run |
-| `subagent_max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | Max LLM requests per thinking sub-agent run |
+| `subagent_max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | Max LLM requests per reasoning sub-agent run |
 
 ## 4. Files
 
@@ -407,16 +412,16 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/files.py` | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` — workspace filesystem tools |
 | `co_cli/tools/shell.py` | `run_shell_command` — conditionally approved subprocess execution |
 | `co_cli/tools/memory.py` | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories` |
-| `co_cli/tools/articles.py` | `save_article`, `recall_article`, `search_knowledge`, `read_article_detail` — knowledge article tools |
+| `co_cli/tools/articles.py` | `save_article`, `search_articles`, `read_article`, `search_knowledge` — knowledge article tools |
 | `co_cli/tools/obsidian.py` | `list_notes`, `search_notes`, `read_note` — Obsidian vault tools |
 | `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |
-| `co_cli/tools/google_gmail.py` | `list_emails`, `search_emails`, `create_email_draft` |
+| `co_cli/tools/google_gmail.py` | `list_gmail_emails`, `search_gmail_emails`, `create_gmail_draft` |
 | `co_cli/tools/google_calendar.py` | `list_calendar_events`, `search_calendar_events` |
 | `co_cli/tools/web.py` | `web_search`, `web_fetch` — Brave Search + HTTP fetch |
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
-| `co_cli/tools/todo.py` | `todo_write`, `todo_read` — session-scoped task list |
+| `co_cli/tools/todo.py` | `write_todos`, `read_todos` — session-scoped task list |
 | `co_cli/tools/capabilities.py` | `check_capabilities` — integration health introspection |
-| `co_cli/tools/subagent.py` | `run_coder_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_thinking_subagent` — sub-agent tools |
+| `co_cli/tools/subagent.py` | `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` — sub-agent tools |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` — env sanitizer and process-group kill |
@@ -429,4 +434,4 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |
 | `co_cli/tools/_subagent_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` — sub-agent helpers |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` — provider-aware model factory |
-| `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()` — main/task agent assembly and tool registration |
+| `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()` (returns 3-tuple), `_build_mcp_toolsets()`, `discover_mcp_tools()` (returns 3-tuple) — main/task agent assembly and tool registration; `ToolConfig` dataclass for per-tool metadata; `AgentCapabilityResult` return type (includes `tool_catalog`) |

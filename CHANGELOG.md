@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-03-31
+
+### Added
+- **Tool taxonomy — two-axis catalog**: `ToolConfig` frozen dataclass (name, source, family, approval, integration) added to `deps.py`; `CoCapabilityState` and `AgentCapabilityResult` now carry a `tool_catalog: dict[str, ToolConfig]` field giving every registered tool explicit source (`native`/`mcp`) and family metadata.
+
+### Changed
+- **Explicit family registration**: `_reg()` in `agent.py` now accepts `family=` and `integration=` parameters; every native tool call declares its family at registration time. `_build_filtered_toolset()` returns a 3-tuple `(toolset, approvals, catalog)`.
+- **Connectors normalization**: Obsidian and Google native tools are classified as `family="connectors"` with per-integration identifiers (`obsidian`, `google_gmail`, `google_drive`, `google_calendar`). `discover_mcp_tools()` returns a 3-tuple and populates MCP catalog entries with `source="mcp", family="connectors"`.
+- **Family-aware diagnostics**: `check_runtime()` now returns `family_counts` and `source_counts` derived from the catalog. `check_capabilities()` computes MCP tool count from the catalog instead of the fragile `len(tool_names) - len(tool_approvals)` formula.
+- **Canonical tool renames**: `recall_article`→`search_articles`, `read_article_detail`→`read_article`, `todo_write`→`write_todos`, `todo_read`→`read_todos`, `run_coder_subagent`→`run_coding_subagent`, `run_thinking_subagent`→`run_reasoning_subagent`, `list_emails`→`list_gmail_emails`, `search_emails`→`search_gmail_emails`, `create_email_draft`→`create_gmail_draft`. All callers, tests, evals, prompts, and DESIGN docs updated.
+
 ## [0.7.4] - 2026-03-31
 
 ### Changed

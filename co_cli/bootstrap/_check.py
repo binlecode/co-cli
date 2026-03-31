@@ -432,6 +432,14 @@ def check_runtime(
         "checks": checks,
     }
 
+    # Build family/source breakdown from tool catalog
+    catalog = deps.capabilities.tool_catalog
+    family_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    for tc in catalog.values():
+        family_counts[tc.family] = family_counts.get(tc.family, 0) + 1
+        source_counts[tc.source] = source_counts.get(tc.source, 0) + 1
+
     # Build status dict from session state
     status: dict[str, Any] = {
         "session_id": deps.session.session_id,
@@ -442,6 +450,8 @@ def check_runtime(
         "skill_count": len(deps.capabilities.skill_registry),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge_search_backend,
+        "family_counts": family_counts,
+        "source_counts": source_counts,
     }
 
     # Findings: checks that returned a non-ok status (error or warn)

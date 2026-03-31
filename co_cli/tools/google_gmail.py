@@ -2,7 +2,6 @@
 
 import base64
 from email.mime.text import MIMEText
-from typing import Any
 
 from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
@@ -60,11 +59,11 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     return build("gmail", "v1", credentials=creds), None
 
 
-def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResult:
+def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResult:
     """List the most recent emails from the user's Gmail inbox.
 
     Use this for a quick inbox overview. For targeted queries (by sender,
-    date range, subject, read status), use search_emails instead.
+    date range, subject, read status), use search_gmail_emails instead.
 
     Returns a dict with:
     - display: pre-formatted email list with sender, subject, date, preview,
@@ -96,7 +95,7 @@ def list_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResult:
         return handle_google_api_error("Gmail", e)
 
 
-def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolResult:
+def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolResult:
     """Search emails in Gmail using Gmail search syntax.
 
     Supports the full Gmail query language. Common operators:
@@ -139,7 +138,7 @@ def search_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> 
         return handle_google_api_error("Gmail", e)
 
 
-def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> str | dict[str, Any]:
+def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolResult:
     """Create a draft email in Gmail. Does NOT send — the user reviews and
     sends manually from Gmail.
 
@@ -164,7 +163,8 @@ def create_email_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
         draft_body = {"message": {"raw": raw}}
         draft = service.users().drafts().create(userId="me", body=draft_body).execute()
-        return f"Draft created for {to} with subject '{subject}'. Draft ID: {draft['id']}"
+        display = f"Draft created for {to} with subject '{subject}'. Draft ID: {draft['id']}"
+        return make_result(display, draft_id=draft["id"], to=to, subject=subject)
     except ModelRetry:
         raise
     except Exception as e:

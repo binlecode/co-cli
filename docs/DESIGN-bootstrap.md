@@ -85,14 +85,15 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ @agent.instructions add_project_instructions  # .co-cli/instructions.md if present
 │  ├─ @agent.instructions add_always_on_memories    # always_on standing-context memories
 │  ├─ @agent.instructions add_personality_memories  # personality-context memories
-│  ├─ agent.tool(run_shell_command, requires_approval=False)  # shell approval is command-scoped inside the tool
-│  ├─ agent.tool(save_memory), agent.tool(recall_article), ...
-│  ├─ agent.tool(run_coder_subagent), agent.tool(run_thinking_subagent), ...  # only if role model is configured
-│  └─ returns AgentCapabilityResult
+│  ├─ _build_filtered_toolset(config) → (toolset, tool_approvals, native_catalog)  # 3-tuple
+│  │    # registers all native tools: save_memory, search_articles, write_todos, read_todos,
+│  │    # run_coding_subagent, run_reasoning_subagent, etc. (domain tools conditional on config)
+│  └─ returns AgentCapabilityResult(agent, tool_names, tool_approvals, tool_catalog)
 │
 ├─ agent = agent_result.agent
 ├─ deps.capabilities.tool_names     = agent_result.tool_names
 ├─ deps.capabilities.tool_approvals = agent_result.tool_approvals
+├─ deps.capabilities.tool_catalog.update(agent_result.tool_catalog)
 │
 ├─ AsyncExitStack.enter_async_context(agent)  # MCP server subprocesses start here
 │      Exception → print warning, _mcp_init_ok stays False
@@ -225,7 +226,7 @@ The inline wakeup steps run once per `chat_loop()` startup after deps initializa
 
 - `create_deps()` returned without raising (provider/model probes passed)
 - `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after skills load (inside `async with agent`) using `_build_completer_words()`
-- `build_agent()` has returned an `AgentCapabilityResult`; `deps.capabilities.tool_names` and `deps.capabilities.tool_approvals` are set immediately after from `agent_result` attributes
+- `build_agent()` has returned an `AgentCapabilityResult`; `deps.capabilities.tool_names`, `deps.capabilities.tool_approvals`, and `deps.capabilities.tool_catalog` are set immediately after from `agent_result` attributes
 - `async with agent` has been entered; if MCP init fails, a warning is printed and startup continues with native tools only
 - `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.capabilities.skill_commands`
 
@@ -250,6 +251,7 @@ chat_loop():
     agent = agent_result.agent
     deps.capabilities.tool_names     = agent_result.tool_names     ← set immediately after build_agent
     deps.capabilities.tool_approvals = agent_result.tool_approvals
+    deps.capabilities.tool_catalog.update(agent_result.tool_catalog)  ← native ToolConfig entries
 
     # inside async with agent
     stack = AsyncExitStack()
@@ -372,7 +374,8 @@ Skills load inside `initialize_session_capabilities()` (called inside `async wit
 
 ```text
 initialize_session_capabilities(agent, deps, frontend, mcp_init_ok):
-    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → deps.capabilities.mcp_discovery_errors, deps.capabilities.tool_names extended
+    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → returns 3-tuple (mcp_tool_names, errors, mcp_catalog)
+        deps.capabilities.tool_names extended; deps.capabilities.tool_catalog updated with MCP ToolConfig entries
     skill_commands = _load_skills(deps.config.skills_dir, settings)
         pass 1: scan co_cli/skills/*.md
         pass 2: scan deps.config.skills_dir/*.md
@@ -428,6 +431,7 @@ The banner marks the boundary between startup and interactive use. All status me
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
 | `deps.capabilities.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
 | `deps.capabilities.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |
+| `deps.capabilities.tool_catalog` | Native entries set from `agent_result.tool_catalog` after `build_agent()`; MCP entries merged after `discover_mcp_tools()` | Full `dict[str, ToolConfig]` map of all registered tools |
 | `deps.capabilities.mcp_discovery_errors` | Set after MCP discovery (`discover_mcp_tools()`); empty dict when no MCP servers | Maps server prefix to error string for servers where `list_tools()` failed; read by `check_runtime()` to report real connectivity |
 | `deps.capabilities.skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | Non-hidden skill dicts |
 | `deps.capabilities.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Full dict of all loaded skills |

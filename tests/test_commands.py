@@ -336,9 +336,9 @@ def test_resolve_approval_subject_domain_scopes_to_hostname():
 
 def test_resolve_approval_subject_generic_tool_fallback():
     """Unknown tools fall through to the generic-tool branch, keyed by tool name."""
-    subject = resolve_approval_subject("create_email_draft", {"to": "test@example.com", "subject": "hi"})
+    subject = resolve_approval_subject("create_gmail_draft", {"to": "test@example.com", "subject": "hi"})
     assert subject.kind == ApprovalKindEnum.TOOL
-    assert subject.value == "create_email_draft"
+    assert subject.value == "create_gmail_draft"
     assert subject.can_remember is True
 
 
