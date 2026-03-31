@@ -146,20 +146,10 @@ def create_deps() -> tuple[CoDeps, list[str]]:
     config, knowledge_index, knowledge_statuses = resolve_knowledge_backend(config)
     startup_statuses = reranker_statuses + knowledge_statuses
 
-    from co_cli.tools._background import TaskStorage, TaskRunner
-    task_runner = TaskRunner(
-        storage=TaskStorage(config.tasks_dir),
-        max_concurrent=config.background_max_concurrent,
-        inactivity_timeout=config.background_task_inactivity_timeout,
-        auto_cleanup=config.background_auto_cleanup,
-        retention_days=config.background_task_retention_days,
-    )
-
     from co_cli._model_factory import ModelRegistry
     services = CoServices(
         shell=ShellBackend(),
         knowledge_index=knowledge_index,
-        task_runner=task_runner,
         model_registry=ModelRegistry.from_config(config),
     )
     runtime = CoRuntimeState(

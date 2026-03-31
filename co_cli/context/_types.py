@@ -30,8 +30,8 @@ class CompactionResult:
     """Pre-computed compaction summary for background processing.
 
     Produced by ``precompute_compaction()`` during user idle time and
-    consumed by ``truncate_history_window()`` on the next turn to skip
-    the inline LLM summarization call.
+    consumed by ``truncate_history_window()`` on the next turn when the
+    message boundaries still match.
 
     The ``message_count`` field is a stale-check: if the message list
     length has changed since computation, the result is discarded.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-31
+
+### Changed
+- **Session-scoped background tasks**: replaced the file-backed `TaskStorage`/`TaskRunner` persistence layer with an in-memory model (`BackgroundTaskState` in `CoSessionState`). Tasks live for the duration of a `co chat` session and are cancelled on exit. No files written for task state or output. Removed five background persistence config fields (`tasks_dir`, `background_max_concurrent`, `background_task_retention_days`, `background_auto_cleanup`, `background_task_inactivity_timeout`) and the `CoServices.task_runner` field. `_background.py` reduced from 406 lines to 78.
+- **Delegation identity in history**: pydantic-ai's native `run_id` is now threaded through every subagent call (`_run_subagent_attempt`) and surfaced in all four subagent `ToolResult` payloads. `truncate_tool_returns` preserves all identity keys (`run_id`, `role`, `model_name`, `requests_used`, `request_limit`, `scope`) when truncating — only `display` is shortened.
+- **`/history` and `/tasks` slash commands**: `/history` scans ToolReturnParts for delegation tool names and renders a Rich table of `run_id`, role, requests, and scope. `/tasks` lists `CoSessionState.background_tasks` with status and start time. Both read in-memory state only.
+
 ## [0.6.8] - 2026-03-30
 
 ### Changed

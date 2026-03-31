@@ -231,33 +231,31 @@ async def test_intent_routing_observation_no_tool():
 async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     """check_task_status result includes description and started_at from task metadata."""
     import asyncio
-    from co_cli.tools._background import TaskRunner, TaskStorage
+    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import check_task_status
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
+    from datetime import datetime, timezone
 
-    tasks_dir = tmp_path / "tasks"
-    storage = TaskStorage(tasks_dir)
-    runner = TaskRunner(storage)
-    config = CoConfig(tasks_dir=tasks_dir)
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), task_runner=runner),
-        config=config,
-    )
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "test-background-task-description"
+    state = BackgroundTaskState(
+        task_id=_make_task_id(),
+        command="echo hello",
+        cwd=str(tmp_path),
+        description=task_description,
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    deps.session.background_tasks[state.task_id] = state
+
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        task_id = await runner.start_task(
-            "echo hello",
-            str(tmp_path),
-            {"description": task_description},
-            None,
-        )
-        # Give it a moment to start
-        await asyncio.sleep(0.5)
-        result = await check_task_status(ctx, task_id)
+        await spawn_task(state, deps.session)
+        await asyncio.sleep(0.3)
+        result = await check_task_status(ctx, state.task_id)
 
     assert result.get("description") == task_description
     assert result.get("started_at") is not None
@@ -266,31 +264,30 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
 @pytest.mark.asyncio
 async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
-    from co_cli.tools._background import TaskRunner, TaskStorage
+    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import list_background_tasks
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
+    from datetime import datetime, timezone
 
-    tasks_dir = tmp_path / "tasks"
-    storage = TaskStorage(tasks_dir)
-    runner = TaskRunner(storage)
-    config = CoConfig(tasks_dir=tasks_dir)
-    deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), task_runner=runner),
-        config=config,
-    )
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "background task list description"
+    state = BackgroundTaskState(
+        task_id=_make_task_id(),
+        command="echo hello",
+        cwd=str(tmp_path),
+        description=task_description,
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    deps.session.background_tasks[state.task_id] = state
+
     async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        await runner.start_task(
-            "echo hello",
-            str(tmp_path),
-            {"description": task_description},
-            None,
-        )
-        await asyncio.sleep(0.5)
+        await spawn_task(state, deps.session)
+        await asyncio.sleep(0.3)
         result = await list_background_tasks(ctx)
 
     assert result["count"] == 1

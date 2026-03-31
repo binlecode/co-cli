@@ -44,7 +44,7 @@ See `docs/DESIGN-system.md` for system overview (architecture diagrams), `CoDeps
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/knowledge/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs via `KnowledgeIndex` in `search.db`. See `docs/DESIGN-knowledge.md` for the full schema, tool API, and lifecycle.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs via `KnowledgeIndex` in `search.db`. See `docs/DESIGN-context.md` for the full schema, tool API, lifecycle, and work record provenance model.
 
 ## Engineering Rules
 

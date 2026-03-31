@@ -1,6 +1,6 @@
 # Co CLI Core Loop Design
 
-For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-bootstrap.md](DESIGN-bootstrap.md).
+For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-bootstrap.md](DESIGN-bootstrap.md). This doc owns foreground-turn execution, approval resumes, retries, interrupts, and history-processor behavior. Persistent context layers and storage live in [DESIGN-context.md](DESIGN-context.md).
 
 ## 1. Foreground Turn Flow
 
@@ -239,6 +239,7 @@ Memory recall is also per-turn, not sticky:
 - `inject_opening_context()` stores counters in `deps.session.memory_recall_state`
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
+- the recall scoring policy itself lives in `tools/memory.py::recall_memory()`
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
@@ -314,7 +315,7 @@ The intentional simplification remains:
 
 ## 3. Config
 
-These settings most directly shape one-turn orchestration behavior.
+These settings most directly shape one-turn orchestration behavior. Context-storage and knowledge-index settings are documented in [DESIGN-context.md](DESIGN-context.md).
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
@@ -324,11 +325,9 @@ These settings most directly shape one-turn orchestration behavior.
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Trim threshold for older tool returns |
 | `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count compaction trigger |
-| `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Maximum chars injected from recalled memories |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
-| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session freshness window for restore |
 
 ## 4. Files
 

@@ -109,7 +109,7 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
 5. `create_deps()` constructs:
-   - `CoServices(shell, knowledge_index, task_runner, model_registry)`
+   - `CoServices(shell, knowledge_index, model_registry)`
    - `CoRuntimeState(safety_state=SafetyState())`
    - the final `CoDeps`
 6. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
@@ -127,9 +127,8 @@ Startup is intentionally split between synchronous bootstrap and async activatio
 Teardown is owned by `main.py`:
 
 1. `HistoryCompactionState.shutdown()`
-2. `deps.services.task_runner.shutdown()`
-3. `AsyncExitStack.aclose()` for the main agent context
-4. `deps.services.shell.cleanup()`
+2. `AsyncExitStack.aclose()` for the main agent context
+3. `deps.services.shell.cleanup()`
 
 ### 2.3 Agent Construction After The SDK Upgrade
 
@@ -195,7 +194,7 @@ Practical ownership rules:
 
 | Group | Holds | Mutation model |
 | --- | --- | --- |
-| `services` | shell backend, knowledge index, task runner, model registry, optional task agent | built once; shared by reference |
+| `services` | shell backend, knowledge index, model registry, optional task agent | built once; shared by reference |
 | `config` | resolved scalar settings and paths | read-only after bootstrap |
 | `capabilities` | tool names, approval map, MCP discovery errors, loaded skill metadata | populated during startup, then treated as stable shared state |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
@@ -236,6 +235,7 @@ Visible to tools and slash commands.
 | `session_todos` | todo tools | never | fresh empty |
 | `session_id` | `restore_session()` | session restart | fresh empty |
 | `memory_recall_state` | `inject_opening_context()` | new REPL session | fresh default |
+| `background_tasks` | `start_background_task` tool | never (in-memory only) | fresh empty dict |
 
 #### `CoRuntimeState` — `deps.runtime`
 
@@ -282,7 +282,6 @@ The runtime writes to a small, explicit set of stores:
 | `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeIndex` |
 | `<cwd>/.co-cli/memory/` | project-local memory markdown | memory lifecycle and memory tools |
 | configured library dir, default `~/.local/share/co-cli/library/` | article markdown store | article tools |
-| `<cwd>/.co-cli/tasks/` | background task metadata and output | `TaskRunner` / `TaskStorage` |
 | `<cwd>/.co-cli/session.json` | session id, timestamps, compaction count | session helpers in `context/_session.py` |
 | `~/.config/co-cli/google_token.json` | cached Google authorized-user credentials | Google auth helper |
 
@@ -325,10 +324,6 @@ These are the system-level settings that most directly shape runtime assembly.
 | `memory_dir` | n/a | `<cwd>/.co-cli/memory` | Project-local memory root after cwd resolution |
 | `library_path` | `CO_LIBRARY_PATH` | `~/.local/share/co-cli/library` | Global article store root |
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session freshness window for restore |
-| `background_max_concurrent` | `CO_BACKGROUND_MAX_CONCURRENT` | `5` | Max concurrently running background tasks |
-| `background_task_retention_days` | `CO_BACKGROUND_TASK_RETENTION_DAYS` | `7` | Retention window for background task metadata |
-| `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Whether finished task cleanup runs automatically |
-| `background_task_inactivity_timeout` | `CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT` | `0` | Task inactivity timeout in seconds; `0` disables the timeout |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode (`off`, `summary`, `full`) |
 
 ## 4. Files

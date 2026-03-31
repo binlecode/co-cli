@@ -52,13 +52,9 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      otherwise        → try hybrid first (if embedder available), then fts5, then grep
 │  │      returns (resolved_config, knowledge_index, knowledge_statuses)
 │  │      startup_statuses = reranker_statuses + knowledge_statuses
-│  ├─ TaskRunner(
-│  │      storage=TaskStorage(resolved_config.tasks_dir),
-│  │      max_concurrent, inactivity_timeout, auto_cleanup, retention_days,
-│  │  )
 │  ├─ CoServices(
 │  │      shell=ShellBackend(), knowledge_index=knowledge_index,
-│  │      task_runner=task_runner, model_registry=ModelRegistry.from_config(resolved_config),
+│  │      model_registry=ModelRegistry.from_config(resolved_config),
 │  │  )
 │  ├─ CoRuntimeState()
 │  └─ (CoDeps(services, resolved_config, capabilities=CoCapabilityState(), runtime=runtime), startup_statuses)   # tuple return
@@ -184,17 +180,9 @@ create_deps():
     config, reranker_statuses = resolve_reranker(config)
     config, knowledge_index, knowledge_statuses = resolve_knowledge_backend(config)
     startup_statuses = reranker_statuses + knowledge_statuses
-    task_runner = TaskRunner(
-        storage=TaskStorage(config.tasks_dir),
-        max_concurrent=config.background_max_concurrent,
-        inactivity_timeout=config.background_task_inactivity_timeout,
-        auto_cleanup=config.background_auto_cleanup,
-        retention_days=config.background_task_retention_days,
-    )
     services = CoServices(
         shell=ShellBackend(),
         knowledge_index=knowledge_index,
-        task_runner=task_runner,
         model_registry=ModelRegistry.from_config(config),
     )
     runtime = CoRuntimeState()
@@ -251,7 +239,7 @@ chat_loop():
     completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)  ← BUILTIN_COMMANDS-only
     session = PromptSession(history=..., completer=completer, ...)
 
-    deps = create_deps()   ← fail-fast on provider/model error; TaskRunner/TaskStorage constructed inside
+    deps = create_deps()   ← fail-fast on provider/model error; CoServices constructed inside
 
     resolved = model_registry.get(ROLE_REASONING, fallback)  # ResolvedModel(model, settings)
     #          if model_registry else ResolvedModel(model=None, settings=None)
@@ -436,7 +424,6 @@ The banner marks the boundary between startup and interactive use. All status me
 |-------|--------|-------|
 | `deps.services.knowledge_index` | Step 1 on error | `None` to disable FTS for the session |
 | `deps.session.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
-| `deps.services.task_runner` | Constructed inside `create_deps()` | `TaskRunner` instance |
 | `deps.services.model_registry` | `create_deps()` | `ModelRegistry` built from resolved `CoConfig` |
 | `deps.capabilities.tool_names` | Set immediately after `build_agent(config=deps.config, resolved=resolved)`; extended after MCP discovery | Native tool list, then MCP-extended |
 | `deps.capabilities.tool_approvals` | Set immediately after `build_agent(config=deps.config, resolved=resolved)` | Tool approval map |

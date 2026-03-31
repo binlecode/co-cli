@@ -209,10 +209,6 @@ DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING = 3
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
 DEFAULT_SHELL_MAX_TIMEOUT = 600
-DEFAULT_BACKGROUND_MAX_CONCURRENT = 5
-DEFAULT_BACKGROUND_TASK_RETENTION_DAYS = 7
-DEFAULT_BACKGROUND_AUTO_CLEANUP = True
-DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT = 0
 DEFAULT_WEB_HTTP_MAX_RETRIES = 2
 DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS = 8.0
@@ -293,13 +289,6 @@ class Settings(BaseModel):
 
     # Shell safe commands (auto-approved without prompting)
     shell_safe_commands: list[str] = Field(default=DEFAULT_SHELL_SAFE_COMMANDS)
-
-    # Background task execution
-    background_max_concurrent: int = Field(default=DEFAULT_BACKGROUND_MAX_CONCURRENT, ge=1)
-    background_task_retention_days: int = Field(default=DEFAULT_BACKGROUND_TASK_RETENTION_DAYS, ge=1)
-    background_auto_cleanup: bool = Field(default=DEFAULT_BACKGROUND_AUTO_CLEANUP)
-    # Auto-cancel task if no output for N seconds; 0 = disabled
-    background_task_inactivity_timeout: int = Field(default=DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT, ge=0)
 
     # Web domain policy
     web_fetch_allowed_domains: list[str] = Field(default=[])
@@ -466,10 +455,6 @@ class Settings(BaseModel):
             "llm_num_ctx": "LLM_NUM_CTX",
             "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
             "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
-            "background_max_concurrent": "CO_BACKGROUND_MAX_CONCURRENT",
-            "background_task_retention_days": "CO_BACKGROUND_TASK_RETENTION_DAYS",
-            "background_auto_cleanup": "CO_BACKGROUND_AUTO_CLEANUP",
-            "background_task_inactivity_timeout": "CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT",
         }
         
         for field, env_var in env_map.items():

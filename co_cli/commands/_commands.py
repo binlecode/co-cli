@@ -196,24 +196,26 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
     """Show system health, or task status when <id> is given."""
     task_id = args.strip()
     if task_id:
-        # Route to task lookup
-        runner = ctx.deps.services.task_runner
-        if runner is None:
-            console.print("[bold red]Task runner not available.[/bold red]")
-            return None
-        meta = runner.get_task(task_id)
-        if meta is None:
+        state = ctx.deps.session.background_tasks.get(task_id)
+        if state is None:
             console.print(f"[bold red]Task not found:[/bold red] {task_id}")
             return None
         from rich.table import Table
         table = Table(title=f"Task: {task_id}", border_style="accent", expand=False)
         table.add_column("Field", style="accent")
         table.add_column("Value")
-        for k, v in meta.items():
-            table.add_row(str(k), str(v) if v is not None else "")
+        for k, v in [
+            ("task_id", state.task_id),
+            ("status", state.status),
+            ("command", state.command),
+            ("description", state.description),
+            ("started_at", state.started_at),
+            ("completed_at", state.completed_at or ""),
+            ("exit_code", str(state.exit_code) if state.exit_code is not None else ""),
+        ]:
+            table.add_row(k, v)
         console.print(table)
-        # Show last 20 lines of output
-        lines = runner._storage.tail_output(task_id, n=20)
+        lines = list(state.output_lines)[-20:]
         if lines:
             console.print("[dim]--- Output (last 20 lines) ---[/dim]")
             for line in lines:
@@ -239,12 +241,50 @@ async def _cmd_tools(ctx: CommandContext, args: str) -> None:
 
 
 async def _cmd_history(ctx: CommandContext, args: str) -> None:
-    """Show conversation turn count."""
-    turns = sum(
-        1 for msg in ctx.message_history
-        if isinstance(msg, ModelRequest)
-    )
-    console.print(f"[info]Conversation: {turns} user turn(s), {len(ctx.message_history)} total message(s).[/info]")
+    """Show conversation delegation history (run_id, role, requests, scope)."""
+    from pydantic_ai.messages import ToolReturnPart
+
+    _DELEGATION_TOOLS = frozenset({
+        "run_coder_subagent", "run_research_subagent",
+        "run_analysis_subagent", "run_thinking_subagent",
+        "start_background_task",
+    })
+
+    rows = []
+    for msg in ctx.message_history:
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in msg.parts:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            if part.tool_name not in _DELEGATION_TOOLS:
+                continue
+            content = part.content
+            if not isinstance(content, dict):
+                continue
+            run_id = content.get("run_id") or content.get("task_id") or ""
+            rows.append({
+                "tool": part.tool_name,
+                "run_id": str(run_id)[:20],
+                "role": str(content.get("role", "")),
+                "requests": f"{content.get('requests_used', '')} / {content.get('request_limit', '')}",
+                "scope": str(content.get("scope", ""))[:50],
+            })
+
+    if not rows:
+        console.print("[dim]No delegations this session.[/dim]")
+        return None
+
+    from rich.table import Table
+    table = Table(title="Delegation History", border_style="accent", expand=False)
+    table.add_column("Tool", style="accent")
+    table.add_column("Run ID")
+    table.add_column("Role")
+    table.add_column("Requests")
+    table.add_column("Scope")
+    for r in rows:
+        table.add_row(r["tool"], r["run_id"], r["role"], r["requests"], r["scope"])
+    console.print(table)
     return None
 
 
@@ -637,19 +677,27 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_background(ctx: CommandContext, args: str) -> None:
     """Run a command in the background. Usage: /background <cmd>"""
+    from datetime import datetime, timezone
+    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
+
     cmd = args.strip()
     if not cmd:
         console.print("[bold red]Usage:[/bold red] /background <command>")
         console.print("[dim]Example: /background uv run pytest[/dim]")
         return None
 
-    runner = ctx.deps.services.task_runner
-    if runner is None:
-        console.print("[bold red]Task runner not available.[/bold red]")
-        return None
-
+    task_id = _make_task_id()
+    state = BackgroundTaskState(
+        task_id=task_id,
+        command=cmd,
+        cwd=str(Path.cwd()),
+        description=cmd,
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    ctx.deps.session.background_tasks[task_id] = state
     try:
-        task_id = await runner.start_task(cmd, str(Path.cwd()))
+        await spawn_task(state, ctx.deps.session)
         console.print(f"[success][{task_id}] started[/success]")
         console.print(f"[dim]Use /status {task_id} to check progress.[/dim]")
     except Exception as e:
@@ -659,13 +707,12 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
     """List background tasks. Usage: /tasks [status]"""
-    runner = ctx.deps.services.task_runner
-    if runner is None:
-        console.print("[bold red]Task runner not available.[/bold red]")
-        return None
-
     status_filter = args.strip() or None
-    tasks = runner.list_tasks(status_filter)
+    tasks_dict = ctx.deps.session.background_tasks
+    if status_filter:
+        tasks = [s for s in tasks_dict.values() if s.status == status_filter]
+    else:
+        tasks = list(tasks_dict.values())
 
     if not tasks:
         filter_note = f" with status={status_filter}" if status_filter else ""
@@ -679,40 +726,33 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
     table.add_column("Status")
     table.add_column("Command")
     table.add_column("Started")
-    for t in tasks:
-        started = (t.get("started_at") or "queued")[:19]
-        table.add_row(t.get("task_id", ""), t.get("status", ""), t.get("command", ""), started)
+    for s in tasks:
+        started = (s.started_at or "")[:19]
+        table.add_row(s.task_id, s.status, s.command, started)
     console.print(table)
     return None
 
 
 async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     """Cancel a running background task. Usage: /cancel <task_id>"""
+    from co_cli.tools._background import kill_task
+
     task_id = args.strip()
     if not task_id:
         console.print("[bold red]Usage:[/bold red] /cancel <task_id>")
         return None
 
-    runner = ctx.deps.services.task_runner
-    if runner is None:
-        console.print("[bold red]Task runner not available.[/bold red]")
-        return None
-
-    meta = runner.get_task(task_id)
-    if meta is None:
+    state = ctx.deps.session.background_tasks.get(task_id)
+    if state is None:
         console.print(f"[bold red]Task not found:[/bold red] {task_id}")
         return None
 
-    from co_cli.tools._background import TaskStatusEnum
-    if meta.get("status") != TaskStatusEnum.running.value:
-        console.print(f"[dim]Task {task_id} is not running (status={meta.get('status')}).[/dim]")
+    if state.status != "running":
+        console.print(f"[dim]Task {task_id} is not running (status={state.status}).[/dim]")
         return None
 
-    cancelled = await runner.cancel_task(task_id)
-    if cancelled:
-        console.print(f"[success]✓ Cancelled task {task_id}[/success]")
-    else:
-        console.print(f"[dim]Task {task_id} was not running.[/dim]")
+    await kill_task(state)
+    console.print(f"[success]✓ Cancelled task {task_id}[/success]")
     return None
 
 
@@ -905,7 +945,7 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
     "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
-    "history": SlashCommand("history", "Show conversation turn count", _cmd_history),
+    "history": SlashCommand("history", "Show delegation history (subagents + background tasks)", _cmd_history),
     "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
     "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),

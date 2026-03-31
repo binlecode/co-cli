@@ -1,16 +1,16 @@
 """History processors for automatic context governance.
 
-Processors are chained via ``Agent(history_processors=[...])``.  They run
+Processors are chained via ``Agent(history_processors=[...])``. They run
 before every model request and transform the message list in-place.
 
 Public API (registered on the agent):
-    inject_opening_context  — async, injects recalled memories at start + on topic shift
+    inject_opening_context  — async, injects recalled memories on each new user turn
     truncate_tool_returns   — sync, truncates large ToolReturnPart.content
     detect_safety_issues    — sync, doom-loop detection + shell reflection cap
-    truncate_history_window — async, drops middle messages + LLM summary
+    truncate_history_window — async, drops middle messages + cached summary or static marker
 
-Shared utility (used by truncate_history_window and /compact):
-    summarize_messages     — async, bare Agent summariser
+Shared utility:
+    summarize_messages      — async, bare Agent summariser used by background compaction and /compact
 """
 
 from __future__ import annotations
@@ -83,10 +83,9 @@ def _find_first_run_end(messages: list[ModelMessage]) -> int:
 
     Design note: if the first ModelResponse is tool-only (no TextPart), this
     returns 0, so head_end=1 — only the initial ModelRequest is pinned. The
-    first run's tool call/return cycle falls into the dropped middle section
-    and gets captured in the LLM summary. This is acceptable for MVP: the
-    summary preserves the tool interaction semantics without pinning
-    potentially large tool output in the head.
+    first run's tool call/return cycle falls into the dropped middle section.
+    When a cached summary exists that context is preserved there; otherwise the
+    static trim marker omits the detailed tool trace.
     """
     for i, msg in enumerate(messages):
         if isinstance(msg, ModelResponse):
@@ -192,16 +191,29 @@ def truncate_tool_returns(
         modified = False
         for part in msg.parts:
             if isinstance(part, ToolReturnPart):
-                text, length = _content_length(part.content)
-                if length > threshold:
-                    truncated = text[:threshold] + f"\n[…truncated, {length} chars total]"
-                    new_parts.append(ToolReturnPart(
-                        tool_name=part.tool_name,
-                        content=truncated,
-                        tool_call_id=part.tool_call_id,
-                    ))
-                    modified = True
-                    continue
+                if isinstance(part.content, dict):
+                    d = dict(part.content)
+                    disp = d.get("display", "")
+                    if isinstance(disp, str) and len(disp) > threshold:
+                        d["display"] = disp[:threshold] + f"\n[…truncated, {len(disp)} chars total]"
+                        new_parts.append(ToolReturnPart(
+                            tool_name=part.tool_name,
+                            content=d,
+                            tool_call_id=part.tool_call_id,
+                        ))
+                        modified = True
+                        continue
+                else:
+                    text, length = _content_length(part.content)
+                    if length > threshold:
+                        truncated = text[:threshold] + f"\n[…truncated, {length} chars total]"
+                        new_parts.append(ToolReturnPart(
+                            tool_name=part.tool_name,
+                            content=truncated,
+                            tool_call_id=part.tool_call_id,
+                        ))
+                        modified = True
+                        continue
             new_parts.append(part)
         if modified:
             out.append(ModelRequest(parts=new_parts))
@@ -397,13 +409,12 @@ async def truncate_history_window(
       - **head** — first run's messages (up to first TextPart response)
       - **tail** — last N messages (most relevant recent context)
     Drops:
-      - everything in between, replaced by an LLM summary (or static
-        marker on failure)
+      - everything in between, replaced by a cached summary when available,
+        else a static marker
 
     If a pre-computed ``CompactionResult`` is available on
     ``ctx.deps.runtime.precomputed_compaction`` and the message count matches
-    (not stale), the pre-computed summary is used directly — skipping
-    the inline LLM call.
+    (not stale), that cached summary is used directly.
 
     Registered as the last history processor.
     """
@@ -477,8 +488,7 @@ async def precompute_compaction(
 
     Called after each turn completes. Checks if history is approaching
     the compaction threshold (but not yet past it). If so, computes the
-    summary eagerly so ``truncate_history_window()`` can skip the inline
-    LLM call on the next turn.
+    summary eagerly so the next turn can reuse it without recomputing.
 
     Returns ``None`` if history is not close enough to the threshold or
     if summarization fails.

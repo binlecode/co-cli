@@ -110,7 +110,7 @@ _execute_stream_segment(_TurnState, agent, deferred_tool_results=approvals, ...)
   └─ agent.run_stream_events(user_input=None,
                               deferred_tool_results=approvals, ...)
        ├─ [approved] fn(ctx: RunContext[CoDeps], **args)
-       │    ├─ ctx.deps.services.*   (TaskRunner, KnowledgeIndex, ShellBackend, ...)
+       │    ├─ ctx.deps.services.*   (KnowledgeIndex, ShellBackend, ...)
        │    ├─ ctx.deps.config.*     (read-only settings scalars)
        │    ├─ ctx.deps.session.*    (session_approval_rules, todos, skill_commands)
        │    └─ ctx.deps.runtime.*    (tool_progress_callback, safety_state)
@@ -283,16 +283,14 @@ Requires Google credentials (OAuth token or ADC). Resolved automatically via `to
 
 #### Background Tasks (`tools/task_control.py`)
 
-Task lifecycle: `start` → `running` → `completed` / `failed` / `cancelled`. Output is streamed to disk; `check_task_status` tails the file.
+Task lifecycle: `start` → `running` → `completed` / `failed` / `cancelled`. Task state is held in `ctx.deps.session.background_tasks` (in-memory only; not persisted to disk). Output is captured in memory; `check_task_status` returns the last N lines from the in-memory buffer.
 
 | Tool | Approval | Key Parameters | Behavior |
 |------|----------|---------------|---------|
-| `start_background_task` | deferred | `command`, `description`, `working_directory?` | Spawns subprocess via `TaskRunner`; returns `task_id` immediately |
+| `start_background_task` | deferred | `command`, `description`, `working_directory?` | Spawns subprocess via `spawn_task()`; returns `task_id` immediately |
 | `check_task_status` | auto | `task_id`, `tail_lines=20` | Returns status + exit code + last N output lines |
 | `cancel_background_task` | auto | `task_id` | Kills process group; marks task cancelled |
 | `list_background_tasks` | auto | `status_filter?` | Lists all tasks in session; optionally filtered by status |
-
-Config: `background_max_concurrent` caps concurrent running tasks. `background_task_inactivity_timeout` auto-cancels tasks with no output for N seconds (0 = disabled).
 
 #### Session Utilities (`tools/todo.py`, `tools/capabilities.py`)
 
@@ -379,10 +377,6 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `null` | Required for Obsidian tools |
 | `google_credentials_path` | `GOOGLE_CREDENTIALS_PATH` | `null` | Explicit OAuth token path for Google tools |
 | `library_path` | `CO_LIBRARY_PATH` | `null` | Article library directory override |
-| `background_max_concurrent` | `CO_BACKGROUND_MAX_CONCURRENT` | `5` | Max concurrent background tasks |
-| `background_task_retention_days` | `CO_BACKGROUND_TASK_RETENTION_DAYS` | `7` | Days to retain completed/failed/cancelled task data |
-| `background_auto_cleanup` | `CO_BACKGROUND_AUTO_CLEANUP` | `true` | Auto-cleanup old tasks on startup |
-| `background_task_inactivity_timeout` | `CO_BACKGROUND_TASK_INACTIVITY_TIMEOUT` | `0` | Auto-cancel task after N seconds of no output (0 = disabled) |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | 2 defaults | MCP server map (JSON) |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Agent-level default retry budget; write-once tools override to 1, network tools override to 3 at registration |
 | `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | Max chars of primary input captured as `scope` metadata in sub-agent tool results |
@@ -414,7 +408,7 @@ MCP servers extend the native tool surface at session start. Each server is conf
 | `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
 | `co_cli/tools/_display_hints.py` | Tool display metadata: `TOOL_START_DISPLAY_ARG`, `get_tool_start_args_display()`, `format_tool_result_for_display()` — maps tool names to display arg keys and formats tool results for the stream renderer |
 | `co_cli/tools/_tool_approvals.py` | Deferred approval helpers: `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
-| `co_cli/tools/_background.py` | `TaskStatusEnum`, `TaskStorage` (filesystem), `TaskRunner` (asyncio process manager) |
+| `co_cli/tools/_background.py` | `BackgroundTaskState` dataclass, `spawn_task()`, `_monitor()`, `kill_task()` — in-memory asyncio process manager |
 | `co_cli/tools/_result.py` | `ToolResult` TypedDict, `make_result()` factory, `ToolResultPayload` type alias — shared tool return contract |
 | `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` — shared error helpers |
 | `co_cli/tools/_google_auth.py` | Google credential resolution (ensure/get/cached) |

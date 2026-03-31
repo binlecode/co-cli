@@ -1,7 +1,9 @@
 """Prompt assembly for the Co CLI agent.
 
-Static system prompt: soul seed + rules + counter-steering.
-Personality is injected per turn via @agent.instructions, not here.
+Static prompt scaffold assembly lives here: soul scaffold, rules, examples,
+and model counter-steering. Runtime-only layers such as date, project
+instructions, always-on memories, and personality continuity memories are
+added later via ``@agent.instructions`` in ``agent.py``.
 """
 
 import re
@@ -70,11 +72,12 @@ def assemble_prompt(
     soul_seed: str | None = None,
     soul_examples: str | None = None,
 ) -> tuple[str, PromptManifest]:
-    """Assemble static system prompt: soul seed + rules + counter-steering.
+    """Assemble the static system prompt scaffold.
 
-    Personality is NOT fully part of the static prompt — only the soul seed
-    (identity declaration) is placed here as the opening anchor. The full
-    soul body + behaviors are injected per turn via ``@agent.instructions``.
+    Personality is split across layers. The static scaffold assembled here
+    includes the soul seed plus any pre-combined character memories, mindsets,
+    and examples. Runtime-only context layers are injected per request via
+    ``@agent.instructions``.
 
     Assembly order:
     1. Soul seed + character base memories (identity anchor)

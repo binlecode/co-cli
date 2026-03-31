@@ -261,7 +261,13 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
         compactor.shutdown()
-        await deps.services.task_runner.shutdown()
+        from co_cli.tools._background import kill_task
+        for task_state in deps.session.background_tasks.values():
+            if task_state.status == "running":
+                try:
+                    await kill_task(task_state)
+                except Exception:
+                    pass
         await stack.aclose()
         deps.services.shell.cleanup()
 

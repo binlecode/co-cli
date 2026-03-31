@@ -1,284 +1,383 @@
-"""Functional tests for background task execution.
+"""Functional tests for session-scoped background task execution.
 
-Tests exercise real code paths: storage I/O, process spawning, cancellation,
-orphan recovery, retention cleanup, and slash command dispatch.
-All tests spawn real subprocesses (no mocks).
+Tests exercise real code paths: process spawning, output capture, cancellation,
+and the four tool function signatures. All tests spawn real subprocesses (no mocks).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-
-from tests._timeouts import SUBPROCESS_TIMEOUT_SECS, SUBPROCESS_START_TIMEOUT_SECS
-import time
-from pathlib import Path
+from collections import deque
+from datetime import datetime, timezone
 
 import pytest
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
 
-from co_cli.tools._background import TaskRunner, TaskStorage, TaskStatusEnum
+from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task, kill_task
+from co_cli.deps import CoSessionState
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def tmp_tasks_dir(tmp_path: Path) -> Path:
-    return tmp_path / "tasks"
+from tests._timeouts import SUBPROCESS_TIMEOUT_SECS, SUBPROCESS_START_TIMEOUT_SECS
 
 
-@pytest.fixture
-def storage(tmp_tasks_dir: Path) -> TaskStorage:
-    return TaskStorage(tmp_tasks_dir)
+def _fresh_session() -> CoSessionState:
+    return CoSessionState()
 
 
-@pytest.fixture
-def runner(tmp_tasks_dir: Path) -> TaskRunner:
-    return TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=5,
-        inactivity_timeout=0,
-        auto_cleanup=False,
+def _make_state(command: str, cwd: str = "/tmp", description: str = "") -> BackgroundTaskState:
+    return BackgroundTaskState(
+        task_id=_make_task_id(),
+        command=command,
+        cwd=cwd,
+        description=description,
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
 # ---------------------------------------------------------------------------
-# TaskStorage
+# BackgroundTaskState defaults
 # ---------------------------------------------------------------------------
 
-def test_storage_create_and_read(storage: TaskStorage):
-    meta = storage.create("task_test_1", "echo hello", "/tmp")
-    assert meta["task_id"] == "task_test_1"
-    assert meta["status"] == TaskStatusEnum.pending.value
-    assert meta["command"] == "echo hello"
-
-    read_back = storage.read("task_test_1")
-    assert read_back["task_id"] == "task_test_1"
-
-
-def test_storage_update(storage: TaskStorage):
-    storage.create("task_update", "sleep 1", "/tmp")
-    storage.update("task_update", status=TaskStatusEnum.running.value, pid=12345)
-    meta = storage.read("task_update")
-    assert meta["status"] == TaskStatusEnum.running.value
-    assert meta["pid"] == 12345
+def test_task_state_defaults():
+    state = BackgroundTaskState(
+        task_id="abc123",
+        command="echo hi",
+        cwd="/tmp",
+        description="test",
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    assert state.output_lines.maxlen == 500
+    assert state.process is None
+    assert state.completed_at is None
+    assert state.exit_code is None
 
 
-def test_storage_list_tasks(storage: TaskStorage):
-    storage.create("task_a", "echo a", "/tmp")
-    storage.create("task_b", "echo b", "/tmp")
-    storage.update("task_b", status=TaskStatusEnum.completed.value)
-
-    all_tasks = storage.list_tasks()
-    assert len(all_tasks) == 2
-
-    completed = storage.list_tasks(status_filter=TaskStatusEnum.completed.value)
-    assert len(completed) == 1
-    assert completed[0]["task_id"] == "task_b"
-
-
-def test_storage_write_and_read_result(storage: TaskStorage):
-    storage.create("task_result", "echo done", "/tmp")
-    storage.write_result("task_result", 0, 1.5, "done")
-    result = json.loads(storage.result_path("task_result").read_text())
-    assert result["exit_code"] == 0
-    assert result["duration"] == 1.5
-    assert result["summary"] == "done"
-
-
-def test_storage_tail_output(storage: TaskStorage, tmp_tasks_dir: Path):
-    storage.create("task_tail", "echo x", "/tmp")
-    out = storage.output_path("task_tail")
-    out.write_text("line1\nline2\nline3\nline4\nline5\n")
-    lines = storage.tail_output("task_tail", n=3)
-    assert lines == ["line3", "line4", "line5"]
-
-
-def test_storage_sniff_binary_text(storage: TaskStorage):
-    storage.create("task_text", "echo x", "/tmp")
-    storage.output_path("task_text").write_bytes(b"hello world\nmore text\n")
-    assert storage.sniff_binary("task_text") is False
-
-
-def test_storage_sniff_binary_null_byte(storage: TaskStorage):
-    storage.create("task_bin", "echo x", "/tmp")
-    storage.output_path("task_bin").write_bytes(b"binary\x00data")
-    assert storage.sniff_binary("task_bin") is True
-
-
-def test_storage_cleanup_old(storage: TaskStorage):
-    from datetime import datetime, timezone, timedelta
-
-    storage.create("task_old", "echo x", "/tmp")
-    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-    storage.update("task_old", status=TaskStatusEnum.completed.value, completed_at=old_time)
-
-    storage.create("task_recent", "echo y", "/tmp")
-    storage.update("task_recent", status=TaskStatusEnum.completed.value)
-
-    deleted = storage.cleanup_old(retention_days=7)
-    assert deleted == 1
-    assert not storage.task_dir("task_old").exists()
-    assert storage.task_dir("task_recent").exists()
-
-
-def test_storage_cleanup_skips_running(storage: TaskStorage):
-    """Running tasks are never deleted by cleanup."""
-    from datetime import datetime, timezone, timedelta
-
-    storage.create("task_run", "sleep 999", "/tmp")
-    old_time = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-    storage.update("task_run", status=TaskStatusEnum.running.value, started_at=old_time)
-
-    deleted = storage.cleanup_old(retention_days=1)
-    assert deleted == 0
-    assert storage.task_dir("task_run").exists()
+def test_make_task_id_unique():
+    ids = {_make_task_id() for _ in range(20)}
+    assert len(ids) == 20
+    for tid in ids:
+        assert len(tid) == 12
 
 
 # ---------------------------------------------------------------------------
-# TaskRunner — process spawning and lifecycle
+# spawn_task — process spawning and output capture
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_runner_start_and_complete(runner: TaskRunner, storage: TaskStorage):
-    """Start a real echo command, wait for completion."""
+async def test_spawn_and_complete():
+    """Spawn a real echo command, wait for completion via monitor."""
+    session = _fresh_session()
+    state = _make_state("echo hello_bg_test")
+    session.background_tasks[state.task_id] = state
+
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        task_id = await runner.start_task("echo hello_world", str(Path.cwd()))
-    assert task_id.startswith("task_")
+        await spawn_task(state, session)
+
+    assert state.process is not None
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         for _ in range(50):
             await asyncio.sleep(0.1)
-            meta = runner.get_task(task_id)
-            if meta and meta["status"] in (TaskStatusEnum.completed.value, TaskStatusEnum.failed.value):
+            if state.status in ("completed", "failed"):
                 break
 
-    meta = runner.get_task(task_id)
-    assert meta is not None
-    assert meta["status"] == TaskStatusEnum.completed.value
-    assert meta["exit_code"] == 0
-
-    # Output log should contain "hello_world"
-    output_lines = storage.tail_output(task_id, n=20)
-    assert any("hello_world" in line for line in output_lines)
+    assert state.status == "completed"
+    assert state.exit_code == 0
+    assert state.completed_at is not None
+    assert any("hello_bg_test" in line for line in state.output_lines)
 
 
 @pytest.mark.asyncio
-async def test_runner_failed_command(runner: TaskRunner):
+async def test_spawn_failed_command():
     """Non-zero exit sets status=failed."""
+    session = _fresh_session()
+    state = _make_state("false")
+    session.background_tasks[state.task_id] = state
+
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        task_id = await runner.start_task("false", str(Path.cwd()))
+        await spawn_task(state, session)
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         for _ in range(30):
             await asyncio.sleep(0.1)
-            meta = runner.get_task(task_id)
-            if meta and meta["status"] == TaskStatusEnum.failed.value:
+            if state.status == "failed":
                 break
 
-    meta = runner.get_task(task_id)
-    assert meta["status"] == TaskStatusEnum.failed.value
-    assert meta["exit_code"] != 0
+    assert state.status == "failed"
+    assert state.exit_code != 0
 
 
 @pytest.mark.asyncio
-async def test_runner_cancel_running_task(runner: TaskRunner):
-    """Cancel a running sleep — status becomes cancelled."""
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        task_id = await runner.start_task("sleep 60", str(Path.cwd()))
-
-    # Give process time to start
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        for _ in range(20):
-            await asyncio.sleep(0.1)
-            meta = runner.get_task(task_id)
-            if meta and meta["status"] == TaskStatusEnum.running.value:
-                break
-
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        cancelled = await runner.cancel_task(task_id)
-    assert cancelled is True
-
-    meta = runner.get_task(task_id)
-    assert meta["status"] == TaskStatusEnum.cancelled.value
-
-
-@pytest.mark.asyncio
-async def test_runner_cancel_nonexistent(runner: TaskRunner):
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        cancelled = await runner.cancel_task("task_nonexistent_12345")
-    assert cancelled is False
-
-
-@pytest.mark.asyncio
-async def test_runner_shutdown_kills_running(tmp_tasks_dir: Path):
-    """Shutdown kills live tasks and marks them cancelled."""
-    r = TaskRunner(
-        storage=TaskStorage(tmp_tasks_dir),
-        max_concurrent=5,
-        auto_cleanup=False,
+async def test_spawn_invalid_command():
+    """spawn_task with an invalid command sets status=failed immediately."""
+    session = _fresh_session()
+    # Invalid cwd causes spawn failure
+    state = BackgroundTaskState(
+        task_id=_make_task_id(),
+        command="echo test",
+        cwd="/nonexistent_dir_xyz",
+        description="",
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        task_id = await r.start_task("sleep 60", str(Path.cwd()))
-
-    # Give process time to start
-    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        for _ in range(20):
-            await asyncio.sleep(0.1)
-            meta = r.get_task(task_id)
-            if meta and meta["status"] == TaskStatusEnum.running.value:
-                break
+    session.background_tasks[state.task_id] = state
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
-        await r.shutdown()
+        await spawn_task(state, session)
 
-    meta = r.get_task(task_id)
-    assert meta["status"] == TaskStatusEnum.cancelled.value
+    assert state.status == "failed"
+    assert state.exit_code == -1
+    assert any("spawn failed" in line for line in state.output_lines)
 
 
 @pytest.mark.asyncio
-async def test_runner_concurrency_limit(tmp_tasks_dir: Path):
-    """When max_concurrent=1, second task is queued as pending."""
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        r = TaskRunner(
-            storage=TaskStorage(tmp_tasks_dir),
-            max_concurrent=1,
-            auto_cleanup=False,
-        )
-        tid1 = await r.start_task("sleep 10", str(Path.cwd()))
-        tid2 = await r.start_task("echo queued", str(Path.cwd()))
+async def test_output_captured_in_deque():
+    """Output lines accumulate in the bounded deque."""
+    session = _fresh_session()
+    state = _make_state('printf "line1\\nline2\\nline3\\n"')
+    session.background_tasks[state.task_id] = state
 
-        # tid1 should be running, tid2 should be pending
-        for _ in range(20):
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await spawn_task(state, session)
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        for _ in range(50):
             await asyncio.sleep(0.1)
-            meta1 = r.get_task(tid1)
-            if meta1 and meta1["status"] == TaskStatusEnum.running.value:
+            if state.status == "completed":
                 break
 
-        meta2 = r.get_task(tid2)
-        assert meta2["status"] == TaskStatusEnum.pending.value
-
-        await r.shutdown()
+    output = list(state.output_lines)
+    assert "line1" in output
+    assert "line2" in output
+    assert "line3" in output
 
 
 # ---------------------------------------------------------------------------
-# Orphan recovery
+# kill_task — cancellation
 # ---------------------------------------------------------------------------
 
-def test_orphan_recovery(tmp_tasks_dir: Path):
-    """Orphaned running tasks are marked failed on TaskRunner init."""
-    s = TaskStorage(tmp_tasks_dir)
-    s.create("task_orphan_xyz", "sleep 999", "/tmp")
-    s.update("task_orphan_xyz", status=TaskStatusEnum.running.value, pid=99999999)
+@pytest.mark.asyncio
+async def test_kill_running_task():
+    """kill_task cancels a running sleep — status becomes cancelled."""
+    session = _fresh_session()
+    state = _make_state("sleep 60")
+    session.background_tasks[state.task_id] = state
 
-    # New runner discovers orphan and marks it failed
-    TaskRunner(storage=s, auto_cleanup=False)
-    meta = s.read("task_orphan_xyz")
-    assert meta["status"] == TaskStatusEnum.failed.value
-    assert meta["exit_code"] == -1
-    result = json.loads(s.result_path("task_orphan_xyz").read_text())
-    assert "crash orphan" in result["summary"]
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await spawn_task(state, session)
+
+    # Wait for process to actually start
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if state.process is not None and state.process.returncode is None:
+                break
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await kill_task(state)
+
+    assert state.status == "cancelled"
+    assert state.exit_code == -1
+    assert state.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_kill_already_completed_task():
+    """kill_task on a completed task still sets cancelled/exit_code=-1."""
+    session = _fresh_session()
+    state = _make_state("echo done")
+    session.background_tasks[state.task_id] = state
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await spawn_task(state, session)
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if state.status == "completed":
+                break
+
+    # kill_task on already-done process — must not raise
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await kill_task(state)
+
+    assert state.status == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Tool function signatures (contract preservation)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_tool_start_background_task_signature():
+    """start_background_task returns ToolResult with task_id and status keys."""
+    from pydantic_ai import RunContext
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.task_control import start_background_task
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await start_background_task(ctx, "echo tool_test", "test task")
+
+    assert result["_kind"] == "tool_result"
+    assert "task_id" in result
+    assert result["status"] == "running"
+    task_id = result["task_id"]
+    assert task_id in deps.session.background_tasks
+
+    # Cleanup
+    state = deps.session.background_tasks[task_id]
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if state.status != "running":
+                break
+
+
+@pytest.mark.asyncio
+async def test_tool_check_task_status_signature():
+    """check_task_status returns ToolResult with expected keys."""
+    from pydantic_ai import RunContext
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.task_control import start_background_task, check_task_status
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        start_result = await start_background_task(ctx, "echo check_test", "check test")
+    task_id = start_result["task_id"]
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await check_task_status(ctx, task_id, tail_lines=5)
+
+    assert result["_kind"] == "tool_result"
+    assert result["task_id"] == task_id
+    assert "status" in result
+    assert "output_lines" in result
+    assert "exit_code" in result
+    assert "is_binary" in result
+    assert result["is_binary"] is False
+
+
+@pytest.mark.asyncio
+async def test_tool_check_task_status_not_found():
+    """check_task_status returns not_found for unknown task_id."""
+    from pydantic_ai import RunContext
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.task_control import check_task_status
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await check_task_status(ctx, "nonexistent_id_xyz")
+
+    assert result["status"] == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_tool_cancel_background_task_signature():
+    """cancel_background_task returns ToolResult with cancelled status."""
+    from pydantic_ai import RunContext
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.task_control import start_background_task, cancel_background_task
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        start_result = await start_background_task(ctx, "sleep 60", "sleep task")
+    task_id = start_result["task_id"]
+
+    # Wait for running
+    state = deps.session.background_tasks[task_id]
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if state.process is not None and state.process.returncode is None:
+                break
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        result = await cancel_background_task(ctx, task_id)
+
+    assert result["_kind"] == "tool_result"
+    assert result["task_id"] == task_id
+    assert result["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_tool_list_background_tasks_signature():
+    """list_background_tasks returns ToolResult with tasks and count keys."""
+    from pydantic_ai import RunContext
+    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.task_control import start_background_task, list_background_tasks
+
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result_empty = await list_background_tasks(ctx)
+    assert result_empty["count"] == 0
+    assert result_empty["tasks"] == []
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await start_background_task(ctx, "sleep 10", "list test")
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        result = await list_background_tasks(ctx)
+
+    assert result["_kind"] == "tool_result"
+    assert result["count"] == 1
+    rows = result["tasks"]
+    assert len(rows) == 1
+    assert "task_id" in rows[0]
+    assert "status" in rows[0]
+    assert "command" in rows[0]
+
+    # Cleanup
+    from co_cli.tools._background import kill_task
+    for s in deps.session.background_tasks.values():
+        if s.status == "running":
+            await kill_task(s)
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped: no files written
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_file_io(tmp_path):
+    """Background task lifecycle produces no files in any directory."""
+    session = _fresh_session()
+    state = _make_state("echo no_files_test")
+    session.background_tasks[state.task_id] = state
+
+    async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
+        await spawn_task(state, session)
+
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        for _ in range(50):
+            await asyncio.sleep(0.1)
+            if state.status == "completed":
+                break
+
+    # tmp_path must remain empty — no task files written anywhere
+    assert list(tmp_path.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
@@ -286,96 +385,78 @@ def test_orphan_recovery(tmp_tasks_dir: Path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_slash_background_command(tmp_tasks_dir: Path):
-    """Slash /background spawns a task and prints task_id."""
+async def test_slash_background_command():
+    """Slash /background spawns a task and stores it in session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        runner = TaskRunner(
-            storage=TaskStorage(tmp_tasks_dir),
-            max_concurrent=5,
-            auto_cleanup=False,
-        )
-        deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
+        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
         ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
-        # Run /background echo test
         await BUILTIN_COMMANDS["background"].handler(ctx, "echo slash_test")
 
-        # At least one task should now exist
-        tasks = runner.list_tasks()
-        assert len(tasks) == 1
-        assert tasks[0]["command"] == "echo slash_test"
-        await runner.shutdown()
+        assert len(deps.session.background_tasks) == 1
+        state = next(iter(deps.session.background_tasks.values()))
+        assert state.command == "echo slash_test"
+
+        # Cleanup
+        from co_cli.tools._background import kill_task
+        for s in deps.session.background_tasks.values():
+            if s.status == "running":
+                await kill_task(s)
 
 
 @pytest.mark.asyncio
-async def test_slash_tasks_command(tmp_tasks_dir: Path):
-    """Slash /tasks lists tasks; filtering by status works."""
+async def test_slash_tasks_command():
+    """Slash /tasks lists tasks from session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
+    from datetime import datetime, timezone
+    from co_cli.tools._background import BackgroundTaskState, _make_task_id
 
-    s = TaskStorage(tmp_tasks_dir)
-    runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)
-    s.create("task_done_x", "echo done", "/tmp")
-    s.update("task_done_x", status=TaskStatusEnum.completed.value)
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    state = BackgroundTaskState(
+        task_id=_make_task_id(),
+        command="echo done",
+        cwd="/tmp",
+        description="",
+        status="completed",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+    deps.session.background_tasks[state.task_id] = state
 
-    deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
     ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
-    # Should not raise
-    await BUILTIN_COMMANDS["tasks"].handler(ctx, "")
-    await BUILTIN_COMMANDS["tasks"].handler(ctx, "completed")
+    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
+        await BUILTIN_COMMANDS["tasks"].handler(ctx, "")
+        await BUILTIN_COMMANDS["tasks"].handler(ctx, "completed")
 
 
 @pytest.mark.asyncio
-async def test_slash_cancel_command(tmp_tasks_dir: Path):
-    """Slash /cancel cancels a running task."""
+async def test_slash_cancel_command():
+    """Slash /cancel cancels a running task in session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoServices, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        runner = TaskRunner(
-            storage=TaskStorage(tmp_tasks_dir),
-            max_concurrent=5,
-            auto_cleanup=False,
-        )
-        task_id = await runner.start_task("sleep 60", str(Path.cwd()))
-
-        for _ in range(20):
-            await asyncio.sleep(0.1)
-            meta = runner.get_task(task_id)
-            if meta and meta["status"] == TaskStatusEnum.running.value:
-                break
-
-        deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
+        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
         ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
 
+        await BUILTIN_COMMANDS["background"].handler(ctx, "sleep 60")
+        assert len(deps.session.background_tasks) == 1
+
+        state = next(iter(deps.session.background_tasks.values()))
+        task_id = state.task_id
+
+        # Wait for process to start
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if state.process is not None and state.process.returncode is None:
+                break
+
         await BUILTIN_COMMANDS["cancel"].handler(ctx, task_id)
-
-        meta = runner.get_task(task_id)
-        assert meta["status"] == TaskStatusEnum.cancelled.value
-        await runner.shutdown()
-
-
-@pytest.mark.asyncio
-async def test_slash_status_with_task_id(tmp_tasks_dir: Path):
-    """Slash /status <task_id> displays task metadata without error."""
-    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
-    from co_cli.deps import CoDeps, CoServices, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
-
-    s = TaskStorage(tmp_tasks_dir)
-    runner = TaskRunner(storage=s, max_concurrent=5, auto_cleanup=False)
-    s.create("task_status_test", "echo x", "/tmp")
-    s.update("task_status_test", status=TaskStatusEnum.completed.value)
-
-    deps = CoDeps(services=CoServices(shell=ShellBackend(), task_runner=runner), config=CoConfig())
-    ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
-
-    # Should not raise
-    await BUILTIN_COMMANDS["status"].handler(ctx, "task_status_test")
+        assert state.status == "cancelled"

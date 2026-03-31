@@ -51,10 +51,6 @@ from co_cli.config import (
     DEFAULT_MODEL_HTTP_RETRIES,
     DEFAULT_TOOL_RETRIES,
     DEFAULT_SESSION_TTL_MINUTES,
-    DEFAULT_BACKGROUND_MAX_CONCURRENT,
-    DEFAULT_BACKGROUND_TASK_RETENTION_DAYS,
-    DEFAULT_BACKGROUND_AUTO_CLEANUP,
-    DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT,
     DEFAULT_REASONING_DISPLAY,
 )
 from co_cli.tools._shell_backend import ShellBackend
@@ -65,10 +61,10 @@ DEFAULT_USER_SKILLS_DIR = CONFIG_DIR / "skills"
 DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
-DEFAULT_TASKS_DIR = Path(".co-cli/tasks")
 
 from co_cli.commands._skill_types import SkillConfig
 from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
+from co_cli.tools._background import BackgroundTaskState
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent, DeferredToolRequests
@@ -108,13 +104,12 @@ class CoServices:
     """Injected service handles — shared across the session.
 
     Services are created once in main.py and shared by reference. Sub-agents
-    receive the same handles since they are safe to share (shell, index, runner
-    are all stateless or internally thread-safe).
+    receive the same handles since they are safe to share (shell, index are
+    all stateless or internally thread-safe).
     """
 
     shell: ShellBackend
     knowledge_index: Any | None = field(default=None, repr=False)
-    task_runner: Any | None = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
     task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
 
@@ -144,14 +139,7 @@ class CoConfig:
     # its own session — switching projects starts fresh context automatically.
     # Not tool-accessible; used only by the orchestration layer (_bootstrap, main).
     session_path: Path = field(default_factory=lambda: DEFAULT_SESSION_PATH)
-    # tasks_dir: filesystem store for background task state (pending/running/done).
-    # Workspace-relative so background tasks are scoped to the current project.
-    tasks_dir: Path = field(default_factory=lambda: DEFAULT_TASKS_DIR)
     session_ttl_minutes: int = DEFAULT_SESSION_TTL_MINUTES
-    background_max_concurrent: int = DEFAULT_BACKGROUND_MAX_CONCURRENT
-    background_task_retention_days: int = DEFAULT_BACKGROUND_TASK_RETENTION_DAYS
-    background_auto_cleanup: bool = DEFAULT_BACKGROUND_AUTO_CLEANUP
-    background_task_inactivity_timeout: int = DEFAULT_BACKGROUND_TASK_INACTIVITY_TIMEOUT
     llm_api_key: str | None = None
     brave_search_api_key: str | None = None
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
@@ -241,7 +229,6 @@ class CoConfig:
             skills_dir=cwd / ".co-cli" / "skills",
             user_skills_dir=CONFIG_DIR / "skills",
             session_path=cwd / ".co-cli" / "session.json",
-            tasks_dir=cwd / ".co-cli" / "tasks",
             llm_api_key=s.llm_api_key,
             brave_search_api_key=s.brave_search_api_key,
             web_fetch_allowed_domains=list(s.web_fetch_allowed_domains),
@@ -294,10 +281,6 @@ class CoConfig:
             model_http_retries=s.model_http_retries,
             tool_retries=s.tool_retries,
             session_ttl_minutes=s.session_ttl_minutes,
-            background_max_concurrent=s.background_max_concurrent,
-            background_task_retention_days=s.background_task_retention_days,
-            background_auto_cleanup=s.background_auto_cleanup,
-            background_task_inactivity_timeout=s.background_task_inactivity_timeout,
         )
 
 
@@ -337,6 +320,7 @@ class CoSessionState:
     session_todos: list[dict] = field(default_factory=list)
     session_id: str = ""
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
+    background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
 
 
 @dataclass

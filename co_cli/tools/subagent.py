@@ -18,6 +18,7 @@ _TRACER = otel_trace.get_tracer("co-cli.subagent")
 class SubagentAttemptResult(NamedTuple):
     output: Any
     usage: RunUsage  # child-only snapshot — safe to read after turn_usage merge
+    run_id: str
 
 
 def _merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
@@ -47,17 +48,19 @@ async def _run_subagent_attempt(
             deps=make_subagent_deps(ctx.deps),
             usage_limits=UsageLimits(request_limit=budget),
             model_settings=model_settings,
+            metadata={"session_id": ctx.deps.session.session_id},
             # no usage= argument — SDK creates a fresh RunUsage()
         )
     except Exception as exc:
         raise ModelRetry(error_msg) from exc
     usage = result.usage()
+    run_id = result.run_id
     _merge_turn_usage(ctx, usage)
     # Snapshot usage AFTER merge. _merge_turn_usage may alias turn_usage = usage
     # (no copy when turn_usage is None). A later incr() on turn_usage mutates the
     # original RunUsage object in-place. The snapshot decouples SubagentAttemptResult.usage
     # from turn_usage so attempt_1.usage.requests stays stable during attempt_2.
-    return SubagentAttemptResult(output=result.output, usage=copy(usage))
+    return SubagentAttemptResult(output=result.output, usage=copy(usage), run_id=run_id)
 
 
 async def run_coder_subagent(
@@ -116,6 +119,7 @@ async def run_coder_subagent(
         requests_used=requests_used,
         request_limit=request_limit,
         scope=scope,
+        run_id=attempt.run_id,
     )
 
 
@@ -207,6 +211,7 @@ async def run_research_subagent(
         requests_used=requests_used,
         request_limit=request_limit,
         scope=scope,
+        run_id=attempt_1.run_id,
     )
 
 
@@ -281,6 +286,7 @@ async def run_analysis_subagent(
         requests_used=requests_used,
         request_limit=request_limit,
         scope=scope,
+        run_id=attempt.run_id,
     )
 
 
@@ -345,4 +351,5 @@ async def run_thinking_subagent(
         requests_used=requests_used,
         request_limit=request_limit,
         scope=scope,
+        run_id=attempt.run_id,
     )

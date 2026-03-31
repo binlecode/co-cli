@@ -119,7 +119,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 | `running tools` | INTERNAL | list of tool names |
 | `execute_tool {name}` | INTERNAL | `gen_ai.tool.name`, `tool_arguments`, `tool_response`; `rag.backend` (`fts5`, `hybrid`, or `grep`) stamped by `search_memories` and `search_knowledge` to identify the active retrieval path |
 | `delegate_{role}` | INTERNAL | `delegation.role`, `delegation.model`, `delegation.request_limit`, `delegation.requests_used` — emitted by `co-cli.delegation` tracer; covers full sub-agent run including retry loop |
-| `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `TaskRunner.start_task()` for cross-session task linkage |
+| `background_task_execute` | INTERNAL | `task.command`, `task.description`, `task.cwd` — span ID passed to `spawn_task()` for cross-session task linkage |
 
 ### Trace HTML Viewer (`co traces`)
 
