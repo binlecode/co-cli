@@ -8,17 +8,16 @@ import re
 import shutil
 import sys
 from collections.abc import Callable, Awaitable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeAlias
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest
-from pydantic_ai.settings import ModelSettings
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.config import ROLE_SUMMARIZATION, ROLE_REASONING
+from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoCapabilityState
@@ -262,13 +261,9 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
     console.print("[dim]Compacting conversation...[/dim]")
     _none = ResolvedModel(model=None, settings=None)
-    _reasoning = (
-        ctx.deps.services.model_registry.get(ROLE_REASONING, _none)
-        if ctx.deps.services.model_registry else _none
-    )
     resolved = (
-        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _reasoning)
-        if ctx.deps.services.model_registry else _reasoning
+        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _none)
+        if ctx.deps.services.model_registry else _none
     )
     summary = await _run_summarization_with_policy(
         ctx.message_history, resolved,
@@ -343,13 +338,9 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         return None
 
     _none = ResolvedModel(model=None, settings=None)
-    _reasoning = (
-        ctx.deps.services.model_registry.get(ROLE_REASONING, _none)
-        if ctx.deps.services.model_registry else _none
-    )
     resolved = (
-        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _reasoning)
-        if ctx.deps.services.model_registry else _reasoning
+        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _none)
+        if ctx.deps.services.model_registry else _none
     )
     summary = await _index_session_summary(
         ctx.message_history,

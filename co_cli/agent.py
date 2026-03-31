@@ -184,6 +184,7 @@ def _build_filtered_toolset(
         f = ctx.deps.runtime.active_tool_filter
         return f is None or tool_def.name in f
 
+    # .filtered() is the correct pydantic-ai 1.73 API for per-request tool filtering — no `PreparedToolset` or equivalent exists.
     return inner.filtered(_filter), tool_approvals
 
 

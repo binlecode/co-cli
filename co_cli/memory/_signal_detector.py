@@ -78,6 +78,14 @@ def _build_window(messages: list) -> str:
     return "\n".join(lines[-10:])
 
 
+_SIGNAL_PROMPT_PATH = Path(__file__).parent / "prompts" / "signal_analyzer.md"
+
+_signal_agent: Agent[None, SignalResult] = Agent(
+    output_type=SignalResult,
+    instructions=_SIGNAL_PROMPT_PATH.read_text(encoding="utf-8").strip(),
+)
+
+
 # ---------------------------------------------------------------------------
 # Mini-agent — structured signal analysis
 # ---------------------------------------------------------------------------
@@ -91,9 +99,9 @@ async def analyze_for_signals(
 ) -> SignalResult:
     """Run the signal analyzer on the conversation window.
 
-    Loads the signal_analyzer.md system prompt, builds a conversation window
-    from recent messages, and runs a lightweight Agent with structured output.
-    Never crashes the main chat loop — exceptions return SignalResult(found=False).
+    Builds a conversation window from recent messages and runs a lightweight
+    Agent with structured output. Never crashes the main chat loop — exceptions
+    return SignalResult(found=False).
 
     Args:
         messages: Full message history after run_turn() completes.
@@ -114,16 +122,8 @@ async def analyze_for_signals(
             services.model_registry.get(ROLE_ANALYSIS, fallback)
             if services.model_registry else fallback
         )
-        prompt_path = Path(__file__).parent / "prompts" / "signal_analyzer.md"
-        system_prompt = prompt_path.read_text(encoding="utf-8").strip()
 
-        signal_agent: Agent[None, SignalResult] = Agent(
-            model=rm.model,
-            output_type=SignalResult,
-            instructions=system_prompt,
-        )
-
-        result = await signal_agent.run(window, model_settings=rm.settings)
+        result = await _signal_agent.run(window, model=rm.model, model_settings=rm.settings)
         return result.output
     except Exception:
         logger.debug("Signal analyzer failed", exc_info=True)

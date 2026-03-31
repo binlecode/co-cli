@@ -65,7 +65,7 @@ Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_m
 - `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
 - Any other provider → `ValueError` raised.
 
-Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Summarization and compaction pass the main agent's model as the `fallback` argument so absent roles degrade gracefully.
+Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Background compaction passes the main agent's model as the `fallback` argument so it degrades gracefully. The `/compact` and `/new` commands use `None` as fallback — if ROLE_SUMMARIZATION is unconfigured they fail explicitly rather than silently inheriting the reasoning model.
 
 ### Model Dependency Checks
 

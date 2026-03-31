@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from pathlib import Path
+
 from typing import Any
 
 import asyncio
@@ -248,29 +248,31 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
+_summarizer_agent: Agent[None, str] = Agent(
+    output_type=str,
+    # Use instructions (not system_prompt) so the guardrail is applied
+    # even when summarizing with non-empty message_history.
+    instructions=_SUMMARIZER_SYSTEM_PROMPT,
+)
+
+
 async def summarize_messages(
     messages: list[ModelMessage],
     resolved_model: ResolvedModel,
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
 ) -> str:
-    """Summarise *messages* via a disposable Agent (no tools).
+    """Summarise *messages* via the module-level summariser Agent (no tools).
 
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
     if personality_active:
         prompt = prompt + _PERSONALITY_COMPACTION_ADDENDUM
-    summariser: Agent[None, str] = Agent(
-        resolved_model.model,
-        output_type=str,
-        # Use instructions (not system_prompt) so the guardrail is applied
-        # even when summarizing with non-empty message_history.
-        instructions=_SUMMARIZER_SYSTEM_PROMPT,
-    )
-    result = await summariser.run(
+    result = await _summarizer_agent.run(
         prompt,
         message_history=messages,
+        model=resolved_model.model,
         model_settings=resolved_model.settings,
     )
     return result.output

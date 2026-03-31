@@ -11,6 +11,10 @@ from co_cli.tools.google_drive import search_drive_files
 from co_cli.tools.web import web_fetch, web_search
 
 
+def _make_base_agent(resolved_model: ResolvedModel, output_type: type, instructions: str) -> Agent:
+    return Agent(resolved_model.model, deps_type=CoDeps, output_type=output_type, instructions=instructions)
+
+
 class CoderResult(BaseModel):
     """Structured output from the coder sub-agent."""
 
@@ -29,11 +33,10 @@ def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, CoderResult] = Agent(
-        resolved_model.model,
-        deps_type=CoDeps,
-        output_type=CoderResult,
-        instructions=(
+    agent: Agent[CoDeps, CoderResult] = _make_base_agent(
+        resolved_model,
+        CoderResult,
+        (
             "You are a read-only code analysis agent. "
             "Investigate the codebase using the available file tools and return a structured analysis. "
             "You cannot write or modify files. Focus on understanding the code as-is."
@@ -61,11 +64,10 @@ def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Research
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, ResearchResult] = Agent(
-        resolved_model.model,
-        deps_type=CoDeps,
-        output_type=ResearchResult,
-        instructions=(
+    agent: Agent[CoDeps, ResearchResult] = _make_base_agent(
+        resolved_model,
+        ResearchResult,
+        (
             "You are a read-only research agent. "
             "Search the web and fetch pages to answer the query. "
             "Synthesize what you find into a grounded summary with sources. "
@@ -96,11 +98,10 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, AnalysisResult] = Agent(
-        resolved_model.model,
-        deps_type=CoDeps,
-        output_type=AnalysisResult,
-        instructions=(
+    agent: Agent[CoDeps, AnalysisResult] = _make_base_agent(
+        resolved_model,
+        AnalysisResult,
+        (
             "You are a read-only analysis agent. "
             "Use the available search tools to gather evidence, then compare, evaluate, "
             "and synthesize the provided inputs. "
@@ -132,11 +133,11 @@ def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Thinking
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, ThinkingResult] = Agent(
-        resolved_model.model,
-        deps_type=CoDeps,
-        output_type=ThinkingResult,
-        instructions=(
+    # No tools registered — pure native reasoning, no external calls.
+    return _make_base_agent(
+        resolved_model,
+        ThinkingResult,
+        (
             "You are a reasoning agent. "
             "Decompose the problem, reason step-by-step, and return a structured result. "
             "Return a ThinkingResult with: "
@@ -145,5 +146,3 @@ def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Thinking
             "and conclusion (synthesized answer or recommendation)."
         ),
     )
-    # No tools registered — pure native reasoning, no external calls.
-    return agent

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-03-30
+
+### Changed
+- **Agent runtime boilerplate reduction**: removed the ROLE_REASONING two-step fallback chain from `/compact` and `/new` — if ROLE_SUMMARIZATION is unconfigured, both commands now use `None` directly rather than silently inheriting the reasoning model. Converted `_signal_detector.py` and `_history.py` per-call `Agent` construction to module-level singletons with model deferred to `.run(model=...)`, matching the existing `_consolidator.py` pattern. Deduplicated the 4 subagent factory constructors in `_subagent_agents.py` via a private `_make_base_agent` helper. Added a one-line comment at the `inner.filtered()` callsite in `agent.py` documenting the pydantic-ai 1.73 API. No behavioral changes.
+
 ## [0.6.2] - 2026-03-30
 
 ### Added
