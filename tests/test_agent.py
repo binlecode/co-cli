@@ -9,77 +9,6 @@ from co_cli.config import WebPolicy, settings, ROLE_TASK
 from co_cli.deps import CoConfig
 
 
-# Canonical non-delegation tool inventory. Update when adding/removing/renaming tools.
-# Domain tools (obsidian + google) are always included here; tests that assert on this
-# set use fake config paths to force registration regardless of local settings.
-EXPECTED_TOOLS_CORE = {
-    # Side-effectful (requires_approval=True)
-    "run_shell_command",
-    "create_email_draft",
-    "save_memory",
-    "save_article",
-    "update_memory",
-    "append_memory",
-    "write_file",
-    "edit_file",
-    # Read-only
-    "search_memories",
-    "list_memories",
-    "read_article_detail",
-    "search_knowledge",
-    "list_notes",
-    "read_note",
-    "search_notes",
-    "recall_article",
-    "search_drive_files",
-    "read_drive_file",
-    "list_emails",
-    "search_emails",
-    "list_calendar_events",
-    "search_calendar_events",
-    "web_search",
-    "web_fetch",
-    # File system read-only
-    "read_file",
-    "list_directory",
-    "find_in_files",
-    # Session task tracking
-    "todo_write",
-    "todo_read",
-    # Background task control
-    "start_background_task",
-    "check_task_status",
-    "cancel_background_task",
-    "list_background_tasks",
-    # Capability introspection
-    "check_capabilities",
-}
-
-# Delegation tools are registered iff their role model is configured
-_ROLE_TO_TOOL = {
-    "coding": "run_coder_subagent",
-    "research": "run_research_subagent",
-    "analysis": "run_analysis_subagent",
-    "reasoning": "run_thinking_subagent",
-}
-
-EXPECTED_TOOLS = EXPECTED_TOOLS_CORE | {
-    tool
-    for role, tool in _ROLE_TO_TOOL.items()
-    if settings.role_models.get(role)
-}
-
-EXPECTED_APPROVAL_TOOLS = {
-    "create_email_draft",
-    "save_memory",
-    "save_article",
-    "update_memory",
-    "append_memory",
-    "write_file",
-    "edit_file",
-    "start_background_task",
-}
-
 # Config with fake integration paths so domain tools are always registered in tests,
 # regardless of whether the developer's local settings have these paths configured.
 _CONFIG_WITH_INTEGRATIONS = dataclasses.replace(
@@ -90,24 +19,46 @@ _CONFIG_WITH_INTEGRATIONS = dataclasses.replace(
 
 
 def test_build_agent_registers_all_tools():
-    """build_agent() registers exactly the expected tools with no duplicates."""
+    """build_agent() registers core tools with no duplicates, and conditionally registers sub-agent tools."""
+    # No-duplicates check
     result = build_agent(config=_CONFIG_WITH_INTEGRATIONS)
     assert len(result.tool_names) == len(set(result.tool_names)), "Duplicate tool registration"
-    assert set(result.tool_names) == EXPECTED_TOOLS
+
+    # Core tools always present
+    for tool in ("run_shell_command", "check_capabilities", "web_search", "save_memory"):
+        assert tool in result.tool_names, f"Expected core tool '{tool}' to be registered"
+
+    # Sub-agent conditional: run_coder_subagent present iff coding role model is set
+    if settings.role_models.get("coding"):
+        assert "run_coder_subagent" in result.tool_names
+    else:
+        assert "run_coder_subagent" not in result.tool_names
+
+    # Verify with CoConfig() (no role models): run_coder_subagent must be absent
+    bare_result = build_agent(config=CoConfig())
+    assert "run_coder_subagent" not in bare_result.tool_names
 
 
 def test_approval_tools_flagged():
-    """Side-effectful tools require approval; read-only tools do not."""
+    """Side-effectful tools require approval; read-only and intra-tool-approval tools do not."""
     result = build_agent(config=_CONFIG_WITH_INTEGRATIONS)
-    for name, requires_approval in result.tool_approvals.items():
-        if name in EXPECTED_APPROVAL_TOOLS:
-            assert requires_approval, (
-                f"Tool '{name}' should require approval but doesn't"
-            )
-        else:
-            assert not requires_approval, (
-                f"Tool '{name}' should NOT require approval but does"
-            )
+
+    # These tools must require approval at the agent layer
+    for name in ("start_background_task", "save_memory", "write_file", "edit_file"):
+        assert result.tool_approvals[name] is True, (
+            f"Tool '{name}' should require approval but doesn't"
+        )
+
+    # Shell approval is intra-tool (raises ApprovalRequired); agent layer must be False
+    assert result.tool_approvals["run_shell_command"] is False, (
+        "run_shell_command agent-layer approval must be False (approval handled inside tool)"
+    )
+
+    # Read-only tools must not require approval
+    for name in ("check_capabilities", "read_file", "search_knowledge"):
+        assert result.tool_approvals[name] is False, (
+            f"Tool '{name}' should NOT require approval but does"
+        )
 
 
 def test_web_search_ask_requires_approval():

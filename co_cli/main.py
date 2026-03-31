@@ -5,7 +5,6 @@ import time
 import tomllib
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any
 import typer
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -17,9 +16,10 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from pydantic_ai import Agent
 from pydantic_ai.agent import InstrumentationSettings
+from pydantic_ai.messages import ModelMessage
 
 from co_cli.deps import CoDeps
-from co_cli.context._orchestrate import run_turn
+from co_cli.context._orchestrate import run_turn, TurnResult
 from co_cli.context._history import HistoryCompactionState
 from co_cli.agent import build_agent, build_task_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
@@ -33,6 +33,7 @@ from co_cli.commands._commands import (
     _build_completer_words,
 )
 from co_cli.context._session import touch_session, increment_compaction, save_session
+from co_cli.context._skill_env import _cleanup_skill_run_state
 from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session, initialize_session_capabilities
 
 exporter = SQLiteSpanExporter()
@@ -69,25 +70,15 @@ def _default(ctx: typer.Context):
         chat()
 
 
-def _cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:
-    """Restore saved skill-run env vars and clear active skill session state."""
-    for k, v in saved_env.items():
-        if v is not None:
-            os.environ[k] = v
-        else:
-            os.environ.pop(k, None)
-    deps.runtime.active_skill_name = None
-
-
 async def _finalize_turn(
-    turn_result: Any,
-    message_history: list,
-    session_data: Any,
+    turn_result: TurnResult,
+    message_history: list[ModelMessage],
+    session_data: dict,
     deps: CoDeps,
-    frontend: Any,
+    frontend: Frontend,
     primary_model: str,
     compactor: "HistoryCompactionState",
-) -> tuple[list, Any]:
+) -> tuple[list[ModelMessage], dict]:
     """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
 
     Returns (next_message_history, next_session_data).
@@ -119,8 +110,8 @@ async def _finalize_turn(
 
 async def _run_foreground_turn(
     *,
-    message_history: list,
-    session_data: Any,
+    message_history: list[ModelMessage],
+    session_data: dict,
     compactor: "HistoryCompactionState",
     agent: Agent,
     user_input: str,
@@ -129,7 +120,7 @@ async def _run_foreground_turn(
     frontend: Frontend,
     primary_model: str,
     reasoning_display: str,
-) -> tuple[list, Any]:
+) -> tuple[list[ModelMessage], dict]:
     """Execute one foreground turn: harvest bg compaction, run turn, cleanup, finalize.
 
     _cleanup_skill_run_state is guaranteed via finally.
@@ -189,8 +180,8 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             deps.services.task_agent = build_task_agent(config=deps.config, resolved=task_resolved).agent
 
     stack = AsyncExitStack()
-    message_history: list = []
-    session_data: Any = None
+    message_history: list[ModelMessage] = []
+    session_data: dict | None = None
     compactor = HistoryCompactionState()
     last_interrupt_time = 0.0
     try:

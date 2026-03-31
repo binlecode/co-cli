@@ -3,7 +3,6 @@
 All tests use real agent/deps — no mocks, no stubs.
 """
 
-import asyncio
 from dataclasses import replace
 from pathlib import Path
 
@@ -29,10 +28,10 @@ from co_cli.commands._commands import (
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
 from co_cli.context._orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
+from co_cli.context._skill_env import _cleanup_skill_run_state
 from co_cli.display._core import console
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_MULTI_SEGMENT_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -154,14 +153,13 @@ async def test_approval_approve():
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     try:
-        async with asyncio.timeout(LLM_MULTI_SEGMENT_TIMEOUT_SECS):
-            turn = await run_turn(
-                agent=_AGENT.agent,
-                user_input=_PROMPT_SHELL,
-                deps=deps,
-                message_history=[],
-                frontend=SilentFrontend(approval_response="y"),
-            )
+        turn = await run_turn(
+            agent=_AGENT.agent,
+            user_input=_PROMPT_SHELL,
+            deps=deps,
+            message_history=[],
+            frontend=SilentFrontend(approval_response="y"),
+        )
         # Verify a tool call was attempted (shell command was deferred and processed)
         tool_called = any(
             isinstance(part, ToolCallPart)
@@ -190,14 +188,13 @@ async def test_approval_deny():
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
     try:
-        async with asyncio.timeout(LLM_MULTI_SEGMENT_TIMEOUT_SECS):
-            turn = await run_turn(
-                agent=_AGENT.agent,
-                user_input=_PROMPT_SHELL,
-                deps=deps,
-                message_history=[],
-                frontend=SilentFrontend(approval_response="n"),
-            )
+        turn = await run_turn(
+            agent=_AGENT.agent,
+            user_input=_PROMPT_SHELL,
+            deps=deps,
+            message_history=[],
+            frontend=SilentFrontend(approval_response="n"),
+        )
         assert isinstance(turn.output, str)
     finally:
         deps.services.shell.cleanup()
@@ -464,3 +461,45 @@ def test_build_interrupted_turn_result_keeps_clean_history():
     assert clean_request in result.messages
     assert clean_response in result.messages
 
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_skill_run_state — env var restore and skill name clear
+# ---------------------------------------------------------------------------
+
+
+def test_cleanup_skill_restores_set_env_var():
+    """Key that was set before skill run is restored to its original value."""
+    import os
+    key = "TEST_CO_SKILL_RESTORE_KEY"
+    original = "original-value"
+    os.environ[key] = original
+    try:
+        os.environ[key] = "skill-injected-value"
+        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+        _cleanup_skill_run_state({key: original}, deps)
+        assert os.environ[key] == original
+    finally:
+        os.environ.pop(key, None)
+
+
+def test_cleanup_skill_removes_absent_env_var():
+    """Key that was absent before skill run is removed after cleanup."""
+    import os
+    key = "TEST_CO_SKILL_ABSENT_KEY"
+    os.environ.pop(key, None)
+    os.environ[key] = "skill-injected-value"
+    try:
+        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+        _cleanup_skill_run_state({key: None}, deps)
+        assert key not in os.environ
+    finally:
+        os.environ.pop(key, None)
+
+
+def test_cleanup_skill_clears_active_skill_name():
+    """active_skill_name is cleared to None after cleanup."""
+    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    deps.runtime.active_skill_name = "my-skill"
+    _cleanup_skill_run_state({}, deps)
+    assert deps.runtime.active_skill_name is None

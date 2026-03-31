@@ -1,6 +1,7 @@
 """Functional tests for the run_coder_subagent, run_research_subagent, and run_analysis_subagent tool wiring."""
 
 import pytest
+from copy import copy
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -9,10 +10,10 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
-from co_cli.config import settings
+from co_cli.config import settings, WebPolicy
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent
+from co_cli.tools.subagent import run_analysis_subagent, run_coder_subagent, run_research_subagent, run_thinking_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
@@ -147,4 +148,53 @@ async def test_run_thinking_subagent_no_model() -> None:
     ctx = _make_ctx()
     with pytest.raises(_ModelRetry, match="unavailable"):
         await run_thinking_subagent(ctx, "solve this problem")
+
+
+@pytest.mark.asyncio
+async def test_research_web_policy_gate_raises_model_retry() -> None:
+    """web_policy gate fires before model_registry check — ModelRetry raised for non-allow policies."""
+    from pydantic_ai import ModelRetry as _ModelRetry
+
+    # search="ask" fires the gate even with fetch="allow"
+    deps_search_ask = CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=None),
+        config=CoConfig(web_policy=WebPolicy(search="ask", fetch="allow")),
+    )
+    ctx_search_ask = RunContext(deps=deps_search_ask, model=_AGENT.model, usage=RunUsage())
+    with pytest.raises(_ModelRetry, match="web_policy"):
+        await run_research_subagent(ctx_search_ask, "latest Python news")
+
+    # fetch="ask" fires the gate even with search="allow"
+    deps_fetch_ask = CoDeps(
+        services=CoServices(shell=ShellBackend(), model_registry=None),
+        config=CoConfig(web_policy=WebPolicy(search="allow", fetch="ask")),
+    )
+    ctx_fetch_ask = RunContext(deps=deps_fetch_ask, model=_AGENT.model, usage=RunUsage())
+    with pytest.raises(_ModelRetry, match="web_policy"):
+        await run_research_subagent(ctx_fetch_ask, "latest Python news")
+
+
+def test_merge_turn_usage_alias_then_accumulate() -> None:
+    """_merge_turn_usage aliases on first call (None) and accumulates on second call."""
+    deps = CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(),
+    )
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+    # Phase 1: turn_usage is None — aliased directly, not copied
+    u1 = RunUsage(input_tokens=10, output_tokens=20)
+    _merge_turn_usage(ctx, u1)
+    assert ctx.deps.runtime.turn_usage is u1
+
+    # Snapshot before second merge to verify copy() decoupling
+    snapshot = copy(u1)
+
+    # Phase 2: second call accumulates into turn_usage
+    u2 = RunUsage(input_tokens=5, output_tokens=5)
+    _merge_turn_usage(ctx, u2)
+    assert ctx.deps.runtime.turn_usage.input_tokens == 15
+
+    # Snapshot is not mutated — confirms copy() in _run_subagent_attempt decouples usage
+    assert snapshot.input_tokens == 10
 

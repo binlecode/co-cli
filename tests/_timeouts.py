@@ -6,7 +6,7 @@ across every test that uses it.
 
 Usage::
 
-    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_REASONING_TIMEOUT_SECS
+    from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await summarize_messages(...)
@@ -30,31 +30,6 @@ Processing 10K schema tokens without reasoning takes ~12s on this hardware (conf
 reasoning_effort=none verified in request, no thinking output, pure KV-fill cost).
 Use for tool-selection tests (test_tool_calling_functional) and approval-flow tests
 (test_commands) that require the production tool set.
-"""
-
-LLM_MULTI_SEGMENT_TIMEOUT_SECS: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2
-"""Non-reasoning agent.run() calls that execute at least one tool (two LLM segments).
-
-agent.run() drives the full agent loop: first segment selects and executes the tool,
-second segment processes the result. Each segment incurs full tool-context KV-fill cost.
-Never wrap two sequential awaits under LLM_TOOL_CONTEXT_TIMEOUT_SECS — that budget
-covers one call. Use this constant when agent.run() will trigger tool execution.
-"""
-
-LLM_DEFERRED_TURN_TIMEOUT_SECS: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS * 3
-"""Deferred-approval turns where BOTH segments pay full tool-context KV-fill cost.
-
-When a tool is registered as deferred (requires approval via DeferredToolRequests)
-and the user denies it, run_turn() drives two sequential agent.run() calls with no
-tool execution between them:
-  - Segment 1: model selects the tool → DeferredToolRequests returned
-  - Approval prompt shown → user denies
-  - Segment 2: model processes ToolDenied → generates verbose response
-
-Both segments load the full 38-tool schema (~10K tokens). No tool actually executes,
-so there is no token savings between segments. Total observed: ~35s on this hardware.
-Use this constant for any test that denies a deferred tool via run_turn().
-Do NOT use LLM_MULTI_SEGMENT_TIMEOUT_SECS for deferred-deny flows — it is too tight.
 """
 
 LLM_REASONING_TIMEOUT_SECS: int = 60

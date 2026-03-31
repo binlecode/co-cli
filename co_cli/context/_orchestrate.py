@@ -20,7 +20,8 @@ ToolApprovalDecisions = DeferredToolResults
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
 from pydantic_ai.messages import (
     FunctionToolCallEvent, FunctionToolResultEvent,
-    ModelRequest, ModelResponse, PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
+    ModelMessage, ModelRequest, ModelResponse,
+    PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
     PartEndEvent, FinalResultEvent,
     ThinkingPart, ThinkingPartDelta,
     ToolCallPart, ToolReturnPart, UserPromptPart,
@@ -32,6 +33,11 @@ TurnOutcome = Literal["continue", "error"]
 
 _TRACER = otel_trace.get_tracer("co-cli.orchestrate")
 logger = logging.getLogger(__name__)
+
+# Per-segment hang-prevention timeout. Applied to each individual agent.run_stream_events()
+# call inside _execute_stream_segment(). Not a behavioral spec — a safety net that prevents
+# an unresponsive LLM from hanging a turn indefinitely.
+_LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 
 from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
@@ -58,8 +64,12 @@ from co_cli.agent import _ALWAYS_ON_TOOL_NAMES
 class TurnResult:
     outcome: TurnOutcome
     interrupted: bool
-    messages: list = field(default_factory=list)
+    messages: list[ModelMessage] = field(default_factory=list)
+    # output: pydantic-ai AgentRunResult.output — str | DeferredToolRequests in practice.
+    # Kept Any: callers pattern-match on interrupted/outcome, not on output type directly.
     output: Any = None
+    # usage: pydantic-ai RunUsage object. Kept Any: callers never inspect fields directly;
+    # usage is forwarded opaquely to _merge_turn_usage and span attributes.
     usage: Any = None
     streamed_text: bool = False
 
@@ -92,13 +102,15 @@ class _TurnState:
     """
     # pre-turn
     current_input: str | None
-    current_history: list
+    current_history: list[ModelMessage]
     # HTTP retry budget — set from config at turn start
     retry_budget_remaining: int = 0
     backoff_base: float = 1.0
     # in-turn (updated after each segment)
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
+    # latest_usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely to
+    # _merge_turn_usage and span attributes; callers never inspect fields directly.
     latest_usage: Any = None
     tool_approval_decisions: ToolApprovalDecisions | None = None
     # cross-turn outcome flags
@@ -111,7 +123,11 @@ class _TurnState:
 # ---------------------------------------------------------------------------
 
 
-def _merge_turn_usage(deps: CoDeps, usage: Any | None) -> None:
+def _merge_turn_usage(
+    deps: CoDeps,
+    # usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely; never inspected here.
+    usage: Any | None,
+) -> None:
     """Merge one segment's usage into deps.runtime.turn_usage (the authoritative accumulator).
 
     Called after every _execute_stream_segment() completes. Sub-agent tools call
@@ -202,65 +218,66 @@ async def _execute_stream_segment(
     renderer = StreamRenderer(frontend, reasoning_display=reasoning_display)
 
     try:
-        async for event in agent.run_stream_events(
-            turn_state.current_input,
-            deps=deps,
-            message_history=turn_state.current_history,
-            model_settings=model_settings,
-            usage=turn_state.latest_usage,
-            deferred_tool_results=turn_state.tool_approval_decisions,
-        ):
-            if isinstance(event, PartStartEvent):
-                if isinstance(event.part, ThinkingPart):
-                    renderer.append_thinking(event.part.content)
+        async with asyncio.timeout(_LLM_SEGMENT_HANG_TIMEOUT_SECS):
+            async for event in agent.run_stream_events(
+                turn_state.current_input,
+                deps=deps,
+                message_history=turn_state.current_history,
+                model_settings=model_settings,
+                usage=turn_state.latest_usage,
+                deferred_tool_results=turn_state.tool_approval_decisions,
+            ):
+                if isinstance(event, PartStartEvent):
+                    if isinstance(event.part, ThinkingPart):
+                        renderer.append_thinking(event.part.content)
+                        continue
+                    if isinstance(event.part, TextPart):
+                        renderer.append_text(event.part.content)
+                        continue
+
+                if isinstance(event, PartDeltaEvent):
+                    if isinstance(event.delta, ThinkingPartDelta):
+                        renderer.append_thinking(event.delta.content_delta or "")
+                        continue
+                    if isinstance(event.delta, TextPartDelta):
+                        renderer.append_text(event.delta.content_delta)
+                        continue
+
+                # Readiness/meta events are intentionally side-effect free for
+                # rendering; text may continue after FinalResultEvent.
+                if isinstance(event, (FinalResultEvent, PartEndEvent)):
                     continue
-                if isinstance(event.part, TextPart):
-                    renderer.append_text(event.part.content)
+
+                if isinstance(event, FunctionToolCallEvent):
+                    renderer.flush_for_tool_output()
+                    tool_id = event.tool_call_id
+                    name = event.part.tool_name
+                    # In summary mode annotations are suppressed — tool result panel is sufficient feedback
+                    if reasoning_display != REASONING_DISPLAY_SUMMARY:
+                        frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+                    renderer.install_progress(deps, tool_id)
                     continue
 
-            if isinstance(event, PartDeltaEvent):
-                if isinstance(event.delta, ThinkingPartDelta):
-                    renderer.append_thinking(event.delta.content_delta or "")
+                if isinstance(event, FunctionToolResultEvent):
+                    renderer.flush_for_tool_output()
+                    renderer.clear_progress(deps)
+                    tool_id = event.tool_call_id
+                    if not isinstance(event.result, ToolReturnPart):
+                        # RetryPromptPart: tool raised ModelRetry or validation failed.
+                        # Close the tool surface cleanly — no result to display.
+                        frontend.on_tool_complete(tool_id, None)
+                        continue
+                    frontend.on_tool_complete(
+                        tool_id, format_tool_result_for_display(event.result.content)
+                    )
                     continue
-                if isinstance(event.delta, TextPartDelta):
-                    renderer.append_text(event.delta.content_delta)
+
+                if isinstance(event, AgentRunResultEvent):
+                    result = event.result
                     continue
 
-            # Readiness/meta events are intentionally side-effect free for
-            # rendering; text may continue after FinalResultEvent.
-            if isinstance(event, (FinalResultEvent, PartEndEvent)):
-                continue
-
-            if isinstance(event, FunctionToolCallEvent):
-                renderer.flush_for_tool_output()
-                tool_id = event.tool_call_id
-                name = event.part.tool_name
-                # In summary mode annotations are suppressed — tool result panel is sufficient feedback
-                if reasoning_display != REASONING_DISPLAY_SUMMARY:
-                    frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
-                renderer.install_progress(deps, tool_id)
-                continue
-
-            if isinstance(event, FunctionToolResultEvent):
-                renderer.flush_for_tool_output()
-                renderer.clear_progress(deps)
-                tool_id = event.tool_call_id
-                if not isinstance(event.result, ToolReturnPart):
-                    # RetryPromptPart: tool raised ModelRetry or validation failed.
-                    # Close the tool surface cleanly — no result to display.
-                    frontend.on_tool_complete(tool_id, None)
-                    continue
-                frontend.on_tool_complete(
-                    tool_id, format_tool_result_for_display(event.result.content)
-                )
-                continue
-
-            if isinstance(event, AgentRunResultEvent):
-                result = event.result
-                continue
-
-        # Normal completion — commit remaining buffers
-        renderer.finish()
+            # Normal completion — commit remaining buffers
+            renderer.finish()
     finally:
         frontend.cleanup()
 
@@ -417,7 +434,7 @@ async def run_turn(
     agent: Agent,
     user_input: str,
     deps: CoDeps,
-    message_history: list,
+    message_history: list[ModelMessage],
     model_settings: dict | None = None,
     reasoning_display: str = DEFAULT_REASONING_DISPLAY,
     frontend: Frontend,
@@ -516,6 +533,11 @@ async def run_turn(
                         turn_state.backoff_base *= 1.5
                         continue
                     frontend.on_status(f"Network error: {e}")
+                    turn_state.outcome = "error"
+                    return _build_error_turn_result(turn_state)
+
+                except TimeoutError:
+                    frontend.on_status("LLM segment timed out — model did not respond in time.")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
 

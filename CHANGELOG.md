@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-03-30
+
+### Changed
+- **Foreground turn contract tightening**: replaced all loose `Any` in `_finalize_turn()`, `_run_foreground_turn()`, and `_chat_loop()` with concrete types (`TurnResult`, `Frontend`, `list[ModelMessage]`, `dict`/`dict | None`). Remaining `Any` fields in `_orchestrate.py` (`TurnResult.output/usage`, `_TurnState.latest_usage`, `_merge_turn_usage` param) annotated with inline comments documenting the pydantic-ai SDK constraint. Ownership boundaries confirmed explicit: `_chat_loop()` is control-plane only, `_run_foreground_turn()` owns turn wrapper sequencing, `run_turn()` owns turn execution state. `StreamRenderer` audit confirmed clean — instantiated only inside `_execute_stream_segment()`, not passed through any helper. No behavioral changes.
+
 ## [0.6.3] - 2026-03-30
 
 ### Changed

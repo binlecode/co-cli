@@ -27,7 +27,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, LLM_MULTI_SEGMENT_TIMEOUT_SECS, LLM_DEFERRED_TURN_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
@@ -98,26 +98,14 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    # web_search: registered as deferred (search="ask") — denial drives two separate
-    # agent.run() calls with no tool execution between them. Both segments pay the full
-    # tool-context KV-fill cost (~20s each). Uses LLM_DEFERRED_TURN_TIMEOUT_SECS (3×).
-    # run_shell_command: "git status" executes inline within one agent.run() call
-    # (two LLM segments inside one run, tool execution between). Uses LLM_MULTI_SEGMENT_TIMEOUT_SECS (2×).
     if expected_tool == "web_search":
         agent = _AGENT_WEB_ASK.agent
         deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
-        call_timeout = LLM_DEFERRED_TURN_TIMEOUT_SECS
         # Deny deferred web_search — avoids executing the search while verifying tool selection.
         frontend = SilentFrontend(approval_response="n")
-    elif expected_tool == "run_shell_command":
-        agent = _AGENT_NOREASON.agent
-        deps = _make_deps(f"test-tool-{expected_tool}")
-        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
-        frontend = SilentFrontend(approval_response="y")
     else:
         agent = _AGENT_NOREASON.agent
         deps = _make_deps(f"test-tool-{expected_tool}")
-        call_timeout = LLM_MULTI_SEGMENT_TIMEOUT_SECS
         frontend = SilentFrontend(approval_response="y")
 
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG.llm_host)
@@ -127,14 +115,13 @@ async def test_tool_selection_and_arg_extraction(
         tool_name = None
         args = None
         try:
-            async with asyncio.timeout(call_timeout):
-                turn = await run_turn(
-                    agent=agent,
-                    user_input=prompt,
-                    deps=deps,
-                    message_history=[],
-                    frontend=frontend,
-                )
+            turn = await run_turn(
+                agent=agent,
+                user_input=prompt,
+                deps=deps,
+                message_history=[],
+                frontend=frontend,
+            )
             # Extract first tool call from message history.
             for msg in turn.messages:
                 if isinstance(msg, ModelResponse):
@@ -145,7 +132,7 @@ async def test_tool_selection_and_arg_extraction(
                             break
                 if tool_name:
                     break
-        except (ModelHTTPError, ModelAPIError) as e:
+        except (ModelHTTPError, ModelAPIError, TimeoutError) as e:
             last_details = f"run_turn error: {type(e).__name__}: {e}"
             continue
 

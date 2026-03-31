@@ -1,309 +1,347 @@
-# Co CLI — Core Loop Design
+# Co CLI Core Loop Design
 
-> For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-bootstrap.md](DESIGN-bootstrap.md).
+For top-level architecture and startup sequencing, see [DESIGN-system.md](DESIGN-system.md) and [DESIGN-bootstrap.md](DESIGN-bootstrap.md).
 
 ## 1. Foreground Turn Flow
 
-This section describes one complete foreground turn, from REPL input to post-turn finalization.
+This doc describes one complete foreground turn, from prompt input to post-turn finalization.
 
 ```mermaid
 flowchart TD
-    A["PromptSession.prompt_async()"] --> B{"exit/quit or blank?"}
-    B -->|exit or quit| Z["exit loop"]
+    A["PromptSession.prompt_async()"] --> B{"blank or exit?"}
+    B -->|exit/quit| Z["exit REPL"]
     B -->|blank| A
-    B -->|non-empty input| C{"starts with slash?"}
+    B -->|non-empty| C{"starts with '/'?"}
 
-    C -->|no| D["keep raw user_input"]
-    C -->|yes| E["dispatch_command()"]
+    C -->|yes| D["dispatch()"]
+    C -->|no| G["raw user_input"]
 
-    E -->|ReplaceTranscript| F["adopt outcome.history; if compaction_applied, increment and save session"]
-    F --> A
+    D -->|LocalOnly| A
+    D -->|ReplaceTranscript| E["adopt new history; persist compaction count when needed"]
+    E --> A
+    D -->|DelegateToAgent| F["set active_skill_name; apply skill_env; delegated_input becomes user_input"]
 
-    E -->|DelegateToAgent| J["replace user_input with delegated_input; set active_skill_name; snapshot and apply skill env"]
-    E -->|LocalOnly| A
+    G --> H["_run_foreground_turn()"]
+    F --> H
+    H --> I["compactor.on_turn_start()"]
+    I --> J["run_turn(): deps.runtime.reset_for_turn(); init _TurnState; start co.turn span"]
+    J --> K["_execute_stream_segment() using main agent"]
+    K --> L{"segment output"}
 
-    D --> M["_run_foreground_turn(): compactor.on_turn_start()"]
-    J --> M
-    M --> N["run_turn(): reset_for_turn(); status; init _TurnState; start co.turn span"]
-    N --> O["_execute_stream_segment(): initial pass uses main agent"]
-    O --> P{"run_turn() loop outcome"}
-    P -->|DeferredToolRequests| Q["_run_approval_loop(): active_tool_filter = deferred tools + always-on; collect approvals; current_input=None; current_history=latest_result.all_messages()"]
-    Q --> R["_execute_stream_segment(): resume via task_agent or main-agent fallback"]
-    R --> P
-    P -->|final output| T["set current_history=latest_result.all_messages(); render final text only if nothing streamed; run output-limit checks"]
-    T --> U["return success turn result"]
+    L -->|DeferredToolRequests| M["_run_approval_loop()"]
+    M --> N["set active_tool_filter for native tools; collect approvals"]
+    N --> O["_execute_stream_segment() using task agent when available"]
+    O --> L
 
-    P -->|ModelHTTPError 400 with retries left| X["append reflection request to current_history; current_input=None; decrement retry budget; sleep 0.5s"]
-    X --> O
-    P -->|HTTP 429 or 5xx with retries left| Y["decrement retry budget; sleep with backoff; increase backoff_base"]
-    Y --> O
-    P -->|ModelAPIError with retries left| ZA["decrement retry budget; sleep with backoff; increase backoff_base"]
-    ZA --> O
-    P -->|non-retryable or exhausted provider error| ZB["set outcome='error' and build error TurnResult"]
-    P -->|KeyboardInterrupt or CancelledError| ZC["set interrupted=True and build interrupted TurnResult"]
+    L -->|final output| P["adopt latest_result.all_messages(); fallback render if no text streamed; run output-limit checks"]
+    P --> Q["return TurnResult(outcome='continue')"]
 
-    U --> ZD["_cleanup_skill_run_state() in finally"]
-    ZB --> ZD
-    ZC --> ZD
-    ZD --> ZE["_finalize_turn(): adopt returned history; run signal detection on clean turns; touch/save session; compactor.on_turn_end(); print generic error banner when needed"]
-    ZE --> A
+    L -->|HTTP 400 with retries left| R["append reflection request; current_input=None; sleep 0.5s"]
+    R --> K
+    L -->|HTTP 429/5xx or ModelAPIError with retries left| S["sleep with backoff; decrement retry budget"]
+    S --> K
+    L -->|non-retryable or exhausted error| T["return TurnResult(outcome='error')"]
+    L -->|TimeoutError| T
+    L -->|KeyboardInterrupt/CancelledError| U["truncate to last clean point; append abort marker"]
+
+    Q --> V["_cleanup_skill_run_state() in finally"]
+    T --> V
+    U --> V
+    V --> W["_finalize_turn(): signal detection; touch/save session; spawn next compaction precompute; optional error banner"]
+    W --> A
 ```
 
 Execution owners:
-- `_chat_loop()` owns REPL control flow: prompt input, `exit`/blank handling, slash-command dispatch, transcript replacement, and deciding whether a slash command stays local or becomes agent input.
-- `_run_foreground_turn()` owns the wrapper around one agent turn: `compactor.on_turn_start()`, `run_turn()`, guaranteed `_cleanup_skill_run_state()` in `finally`, then `_finalize_turn()`.
-- `run_turn()` owns one orchestrated turn: `deps.runtime.reset_for_turn()`, the `"Co is thinking..."` status, `_TurnState`, stream-segment execution, deferred-approval resumes, provider retries, interrupt handling, output-limit warnings, and `TurnResult`.
-- `_execute_stream_segment()` owns stream execution and frontend event delivery only. It does not own retries, approval prompts, or REPL history adoption.
-- `_finalize_turn()` owns post-turn adoption of `turn_result.messages`, signal detection on clean turns, session touch/save, next-turn compaction scheduling, and the generic error banner.
-- `agent.py` supplies two compatible execution surfaces over the same tool registry: the main agent for the initial pass and the task agent for approval resumes when configured.
 
-State ownership:
-- REPL transcript state is `message_history` in `_chat_loop()`.
-- Turn-scoped orchestration state is `_TurnState` plus per-turn `deps.runtime` fields such as `turn_usage` and `active_tool_filter`.
-- Cross-turn transient state is `deps.runtime.precomputed_compaction` and `deps.runtime.active_skill_name`.
-- Session-scoped approval memory is `deps.session.session_approval_rules`.
+| Owner | Responsibility |
+| --- | --- |
+| `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
+| `_run_foreground_turn()` | compaction harvest, `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
+| `run_turn()` | one orchestrated LLM turn, including retries, approval resumes, output checks, and interrupt handling |
+| `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery |
+| `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
+| `_finalize_turn()` | history adoption, signal detection, session persistence, next-turn compaction spawn, and generic error banner |
 
-Turn semantics:
-- Slash-command handling stays in `_chat_loop()`. Only `DelegateToAgent` enters the agent-turn path; `LocalOnly` and `ReplaceTranscript` return directly to the prompt.
-- Approval resume is an in-turn loop, not a new REPL iteration and not a separate worker flow.
-- Background compaction is the only real sidecar path here: `on_turn_start()` harvests or cancels the previous precompute task, and `on_turn_end()` spawns the next one.
-- `run_turn()` returns the next transcript snapshot; `_chat_loop()` adopts it only after `_finalize_turn()`. `_orchestrate.py` does not mutate REPL-owned `message_history` in place.
-- Skill environment override is limited to one delegated turn: `_chat_loop()` snapshots and applies `skill_env`, `_cleanup_skill_run_state()` restores it in `finally`, and `_finalize_turn()` runs after that restoration.
-- Task-agent routing is limited to approval-resume executions inside `_run_approval_loop()`. If a provider retry path fires, the next outer-loop attempt starts again from `_execute_stream_segment()` on the normal `run_turn()` path.
+Two boundary rules keep the loop legible:
 
-Stream-segment contract:
-- `_execute_stream_segment()` reads `_TurnState.current_input`, `_TurnState.current_history`, `_TurnState.tool_approval_decisions`, and `_TurnState.latest_usage`.
-- It calls `agent.run_stream_events(...)`; the initial pass uses the main agent, and approval resumes use `deps.services.task_agent` when available.
-- `StreamRenderer` buffers text and thinking deltas. Tool-call and tool-result events flush buffered output before updating the frontend.
-- `FunctionToolCallEvent` optionally calls `frontend.on_tool_start()` and installs the progress callback. `FunctionToolResultEvent` clears progress and calls `frontend.on_tool_complete()`.
-- `AgentRunResultEvent` is the only valid source of the segment result object. If the stream ends without one, `_execute_stream_segment()` raises `RuntimeError`.
-- On normal exit, `_execute_stream_segment()` stores `latest_result`, `latest_streamed_text`, and `latest_usage`, clears `tool_approval_decisions`, merges usage into `deps.runtime.turn_usage`, and always runs `frontend.cleanup()` in `finally`.
-
-Per-segment processing outline:
-
-```text
-run_stream_events(...)
-  -> text/thinking events delegated to StreamRenderer (throttled buffer + flush)
-  -> tool-call event: StreamRenderer.flush_for_tool_output(), frontend.on_tool_start() (skipped in summary mode), renderer.install_progress()
-  -> tool-result event: StreamRenderer.flush_for_tool_output(), renderer.clear_progress(), frontend.on_tool_complete()
-  -> AgentRunResultEvent stores the final result object
-  -> function exit: StreamRenderer.finish() flushes remaining buffers, then frontend.cleanup()
-  -> if no AgentRunResultEvent was observed, raise RuntimeError
-  -> turn_state.latest_result, latest_streamed_text, latest_usage updated in-place; _merge_turn_usage() accumulates segment usage into deps.runtime.turn_usage
-```
-
-What `_execute_stream_segment()` does not do:
-- no retry logic
-- no approval decisions
-- no REPL history adoption beyond updating `_TurnState`
+- REPL-owned transcript state lives in `message_history` inside `main.py`
+- orchestration never mutates REPL history in place; it returns a `TurnResult` with the next transcript snapshot
 
 ## 2. Core Logic
 
-### 2.1 Approval Flow
+### 2.1 Turn Contract And State Ownership
 
-- `DeferredToolRequests` means the last segment paused on approval-gated tool calls.
-- `DeferredToolResults` means Co’s approval decisions for those calls: allow=`True`, deny=`ToolDenied`.
-- `DeferredToolResults` is not tool output. It is the decision payload passed into the next resumed `_execute_stream_segment()`.
-- `_collect_deferred_tool_approvals()` handles one paused segment: decode args, resolve an `ApprovalSubject`, check session-scoped auto-approval, otherwise prompt the user, then record one approval result per tool call.
-- `_run_approval_loop()` owns the resume cycle: while the latest segment still returns `DeferredToolRequests`, it sets `deps.runtime.active_tool_filter` to the deferred tool names ∪ `_ALWAYS_ON_TOOL_NAMES` (narrowing schema context to only the tools needed for this hop), collects approvals, sets `current_input = None`, promotes `latest_result.all_messages()` into `current_history`, stores `tool_approval_decisions`, and runs the next segment. After the loop exits (output is no longer `DeferredToolRequests`), it clears `deps.runtime.active_tool_filter` back to `None`. Resume segments use `deps.services.task_agent` when available (short system prompt, `reasoning_effort: none`, same tools), falling back to the main agent when the task agent is not built.
+`run_turn()` is the only public one-turn orchestration entrypoint. It returns:
 
-```mermaid
-flowchart TD
-    A["latest_result.output.approvals"] --> B["for each deferred call"]
-    B --> C["decode args and resolve ApprovalSubject"]
-    C --> D{"already auto-approved?"}
-    D -->|yes| E["record True in DeferredToolResults"]
-    D -->|no| F["prompt user: y, n, or a"]
-    F -->|y or a| G["record approved=True"]
-    G --> H{"remember session rule?"}
-    H -->|yes| P["store SessionApprovalRule"]
-    H -->|no| E
-    P --> E
-    F -->|n| J["record ToolDenied in DeferredToolResults"]
-    E --> I{"more calls?"}
-    J --> I
-    I -->|yes| B
-    I -->|no| K["_run_approval_loop(): set current_input=None; current_history=latest_result.all_messages(); tool_approval_decisions=approvals"]
-    K --> L["next _execute_stream_segment() consumes deferred_tool_results"]
-```
+| Field | Meaning |
+| --- | --- |
+| `outcome` | `"continue"` or `"error"` |
+| `interrupted` | whether the turn ended due to interrupt/cancellation |
+| `messages` | next transcript snapshot for the REPL |
+| `output` | final model output object |
+| `usage` | latest segment usage payload |
+| `streamed_text` | whether visible assistant text was streamed live |
 
-Current approval subject scopes:
+Turn-scoped mutable state is explicit in `_TurnState`:
 
-| Tool shape | Subject kind | Stored value | Rememberable |
-|---|---|---|---|
-| `run_shell_command` | `shell` | first token of `cmd` | yes when non-empty |
-| `write_file`, `edit_file` | `path` | bare `parent_dir` (shared across both tools) | yes when path has a parent |
-| `web_fetch` | `domain` | parsed hostname | yes when hostname exists |
-| anything else (including MCP tools) | `tool` | tool name | yes when tool name is non-empty |
+| `_TurnState` field | Owner |
+| --- | --- |
+| `current_input` | current prompt text, or `None` for resume/retry hops |
+| `current_history` | message list for the next segment call |
+| `retry_budget_remaining` / `backoff_base` | provider retry policy |
+| `latest_result` | most recent `AgentRunResult` from a completed segment |
+| `latest_streamed_text` | last-segment streaming signal |
+| `latest_usage` | last-segment usage payload |
+| `tool_approval_decisions` | `DeferredToolResults` consumed by the next resume hop |
+| `outcome` / `interrupted` | final turn outcome flags |
 
-Rules:
-- `"a"` is session-scoped only. Rules live in `deps.session.session_approval_rules`.
-- Auto-approval matching is exact on `kind + value`.
-- `record_approval_choice()` decides whether an `"a"` answer also stores a session rule; rememberability is not a separate branch in `_collect_deferred_tool_approvals()`.
-- Shell approval is command-dependent, so `run_shell_command()` classifies the command before deferred approval handling:
+Cross-cutting turn state that lives on `deps.runtime` instead:
+
+| `deps.runtime` field | Why it is not in `_TurnState` |
+| --- | --- |
+| `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
+| `safety_state` | owned by history processors, not by the orchestrator |
+| `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
+| `active_tool_filter` | read by the native filtered toolset during approval resumes |
+| `precomputed_compaction` | cross-turn compaction cache managed by `HistoryCompactionState` |
+| `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
+
+### 2.2 Stream Segment Contract
+
+`_execute_stream_segment()` owns exactly one `agent.run_stream_events(...)` call.
+
+Inputs:
+
+- `turn_state.current_input`
+- `turn_state.current_history`
+- `turn_state.tool_approval_decisions`
+- `turn_state.latest_usage`
+- selected agent surface: main agent for the initial pass, task agent for resume hops when configured
+
+Per-event handling:
+
+| Event type | Behavior |
+| --- | --- |
+| `PartStartEvent` with `TextPart` / `ThinkingPart` | append buffered content into `StreamRenderer` |
+| `PartDeltaEvent` with `TextPartDelta` / `ThinkingPartDelta` | append streamed deltas |
+| `FinalResultEvent` / `PartEndEvent` | ignored for rendering; completion is defined by `AgentRunResultEvent` |
+| `FunctionToolCallEvent` | flush buffered text/thinking, optionally show tool-start annotation, install progress callback |
+| `FunctionToolResultEvent` | flush buffers, clear progress callback, render tool result panel when a `ToolReturnPart` exists |
+| `AgentRunResultEvent` | store the final `AgentRunResult` object |
+
+The event loop is wrapped in `asyncio.timeout(_LLM_SEGMENT_HANG_TIMEOUT_SECS)`. A `TimeoutError` from the guard propagates to `run_turn()`, which returns `TurnResult(outcome='error')` — no retry is attempted.
+
+Normal-exit contract:
+
+1. `renderer.finish()` flushes remaining thinking/text buffers.
+2. `frontend.cleanup()` always runs in `finally`.
+3. `turn_state.latest_result` must be non-`None`, otherwise `_execute_stream_segment()` raises `RuntimeError`.
+4. `turn_state.latest_usage = result.usage()`
+5. `turn_state.tool_approval_decisions = None`
+6. `_merge_turn_usage()` adds the segment usage into `deps.runtime.turn_usage`
+
+Reasoning display is purely a frontend concern:
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | thinking is discarded |
+| `summary` | thinking is reduced to short status lines via `on_reasoning_progress()` |
+| `full` | raw thinking is streamed and committed through the thinking surface |
+
+### 2.3 Approval Flow
+
+Approval deferral uses the native Pydantic-AI objects directly:
+
+- `DeferredToolRequests` pauses a segment on approval-gated tool calls
+- `_collect_deferred_tool_approvals()` turns those pending calls into `DeferredToolResults`
+- `_run_approval_loop()` feeds that decision payload into the next segment
+
+Approval collection sequence:
+
+1. decode tool arguments with `decode_tool_args()`
+2. resolve one `ApprovalSubject`
+3. check `deps.session.session_approval_rules` for an exact `kind + value` match
+4. otherwise prompt the user for `y`, `n`, or `a`
+5. encode the decision into `DeferredToolResults`
+6. optionally remember the scope when the user chose `a`
+
+Approval subject scopes:
+
+| Tool shape | Subject kind | Remembered value |
+| --- | --- | --- |
+| `run_shell_command` | `shell` | first token of `cmd` |
+| `write_file`, `edit_file` | `path` | parent directory |
+| `web_fetch` | `domain` | parsed hostname |
+| everything else, including MCP tools | `tool` | tool name |
+
+Resume-loop behavior:
 
 ```text
-evaluate_shell_command(cmd)
-  DENY              -> return terminal_error immediately
-  ALLOW             -> execute immediately
-  REQUIRE_APPROVAL  -> if ctx.tool_call_approved then execute else raise ApprovalRequired
+while latest_result.output is DeferredToolRequests:
+  deps.runtime.active_tool_filter =
+    deferred native tool names + _ALWAYS_ON_TOOL_NAMES
+  approvals = _collect_deferred_tool_approvals(...)
+  current_input = None
+  current_history = latest_result.all_messages()
+  tool_approval_decisions = approvals
+  resume_agent = deps.services.task_agent or main agent
+  run next segment
+clear deps.runtime.active_tool_filter
 ```
 
-This keeps shell `DENY` and `ALLOW` inside the tool. `_collect_deferred_tool_approvals()` only handles shell calls that already raised `ApprovalRequired`.
+Important precision:
 
-### 2.2 History Processors And Background Compaction
+- `active_tool_filter` narrows only the native `FilteredToolset`
+- attached MCP toolsets are separate toolsets and are not filtered by this field
+- approval resumes happen inside the same user turn; they are not a new REPL iteration
 
-The agent is built with four history processors in this order:
+Shell approval remains split correctly:
+
+- `run_shell_command()` decides `DENY`, `ALLOW`, or `REQUIRE_APPROVAL` from command shape
+- only the `REQUIRE_APPROVAL` path reaches deferred approval handling
+- denied shell commands never enter `_collect_deferred_tool_approvals()`
+
+### 2.4 History Processors And Background Compaction
+
+The main agent is built with four history processors in this exact order:
+
 1. `truncate_tool_returns`
 2. `detect_safety_issues`
 3. `inject_opening_context`
 4. `truncate_history_window`
 
-`truncate_history_window()` compacts when either condition is true:
+Processor roles:
 
-- `len(messages) > max_history_messages`
-- estimated tokens exceed 85% of the internal default budget
+| Processor | Role |
+| --- | --- |
+| `truncate_tool_returns` | trims large older `ToolReturnPart` payloads but preserves the latest exchange |
+| `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
+| `inject_opening_context` | recalls memories and injects them as a trailing `SystemPromptPart` |
+| `truncate_history_window` | replaces the middle of long histories with a precomputed summary marker or static trim marker |
 
-Compaction keeps the first run in the head, keeps a recent tail, and replaces the middle with either:
+Compaction behavior after the refactor:
 
-- a cached precomputed summary from `ctx.deps.runtime.precomputed_compaction` when the cached `message_count`, `head_end`, and `tail_start` still match
-- a static trim marker when no usable precomputed summary exists
+- `truncate_history_window()` does not call an LLM inline
+- it compacts only when message count or estimated token count crosses its threshold
+- it uses `deps.runtime.precomputed_compaction` only when the cached boundaries still match the current history
+- if no valid cached result exists, it falls back to a static marker rather than doing synchronous summarization inside the request path
 
-No inline LLM summarization happens inside `truncate_history_window()`. `HistoryCompactionState` is responsible for harvesting the background task result before the next turn and for clearing `precomputed_compaction` after the turn completes.
+Background precompute path:
 
-Background compaction contract:
+1. after turn `N`, `HistoryCompactionState.on_turn_end()` clears the old cache and spawns `precompute_compaction(history, deps, model)`
+2. the background job runs only when the transcript is approaching the compaction threshold
+3. `precompute_compaction()` uses the summarization role from `deps.services.model_registry`, falling back to the current primary model if needed
+4. before turn `N+1`, `HistoryCompactionState.on_turn_start()` harvests the completed result or cancels a stale task
+5. `truncate_history_window()` may consume that cached result during turn `N+1`
 
-```text
-after turn N:
-  compactor.on_turn_end() clears precomputed_compaction and spawns precompute_compaction(...)
-  task may return None when history is not near the trigger, already past the trigger, or summarization fails
+Memory recall is also per-turn, not sticky:
 
-before turn N+1:
-  compactor.on_turn_start() harvests completed task into deps.runtime.precomputed_compaction
-  or cancels unfinished task
+- `inject_opening_context()` stores counters in `deps.session.memory_recall_state`
+- it recalls only once per new user turn
+- failure to recall silently leaves history unchanged
 
-during turn N+1:
-  truncate_history_window() may consume that cached result
+### 2.5 Retries, Output Limits, Errors, And Interrupts
 
-after turn N+1 (via on_turn_end):
-  precomputed_compaction cleared and next background task spawned
-```
+`run_turn()` owns provider-facing retries and final-turn diagnostics.
 
-### 2.3 Safety, Errors, And Interrupts
+Retry matrix:
 
-Safety and error handling are split across the loop:
+| Condition | Behavior |
+| --- | --- |
+| HTTP 400 with retries left | append a reflection request describing the rejected tool call, set `current_input=None`, retry |
+| HTTP 429 or 5xx with retries left | sleep with backoff, honoring `Retry-After` when available, then retry |
+| `ModelAPIError` with retries left | sleep with backoff, then retry |
+| `TimeoutError` (segment hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
+| unknown 4xx, auth/not-found, or exhausted budget | set `outcome='error'` and return `_build_error_turn_result()` |
 
-| Concern | Owner | Behavior |
-|---|---|---|
-| doom-loop detection | `detect_safety_issues()` | injects a system prompt after repeated identical tool calls |
-| shell reflection cap | `detect_safety_issues()` | injects a system prompt after repeated shell failures |
-| HTTP 400 tool-call rejection with retries left | `run_turn()` | appends a reflection request to `current_history`, sets `current_input=None`, and retries |
-| HTTP 429 or 5xx with retries left | `run_turn()` | sleeps with backoff, using `Retry-After` when available, then retries |
-| `ModelAPIError` with retries left | `run_turn()` | sleeps with backoff and retries |
-| unknown 4xx, auth/not-found errors, or exhausted retry budget | `run_turn()` | emits status and returns `TurnResult(outcome="error")` |
-| `KeyboardInterrupt` / `CancelledError` during turn | `run_turn()` | truncates to last clean `ModelResponse`, appends an abort marker, returns `interrupted=True` |
+Output-limit diagnostics happen only after a successful final segment:
 
-Interrupt recovery invariant:
-- the next turn must see history ending at a clean point, so the last `ModelResponse` is dropped if it contains any unanswered `ToolCallPart` entries before the abort marker is appended.
+1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
+2. if the provider supports context-ratio tracking, compare `deps.runtime.turn_usage.input_tokens / deps.config.llm_num_ctx`
+3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
 
-### 2.4 Post-Turn Hooks In `main.py`
+Interrupt handling is conservative:
 
-`_chat_loop()` delegates the full foreground turn lifecycle to `_run_foreground_turn()`. That helper sequences two post-turn helpers:
+- `KeyboardInterrupt` or `asyncio.CancelledError` returns `_build_interrupted_turn_result()`
+- if the transcript ends with a `ModelResponse` containing unanswered `ToolCallPart`s, that response is dropped
+- an abort marker `ModelRequest` is appended so the next turn knows the previous turn was interrupted and must verify state
 
-- `_cleanup_skill_run_state(saved_env, deps)` — called in `finally` to restore saved env vars and clear `active_skill_name`
-- `_finalize_turn(turn_result, ...)` — called after env restore; performs the remaining steps:
+### 2.6 Post-Turn Finalization In `main.py`
 
-1. replace `message_history` with `turn_result.messages`
-2. if the turn was not interrupted and not an error, run `analyze_for_signals()` and `handle_signal()`
+`_run_foreground_turn()` sequences the full wrapper around `run_turn()`:
+
+1. `compactor.on_turn_start(deps)`
+2. `run_turn(...)`
+3. `_cleanup_skill_run_state(saved_env, deps)` in `finally`
+4. `_finalize_turn(...)`
+
+`_finalize_turn()` then performs the remaining non-orchestration work:
+
+1. adopt `turn_result.messages` as the next transcript
+2. run memory signal detection only when the turn was clean:
+   - not interrupted
+   - not `outcome == "error"`
 3. `touch_session()` and `save_session()`
-4. `compactor.on_turn_end()` — clears `precomputed_compaction` and spawns the next background precompute task
-5. if `outcome == "error"`, print a generic error banner
+4. `compactor.on_turn_end(next_history, deps, primary_model)`
+5. print a generic error banner when `turn_result.outcome == "error"`
 
-### 2.5 Comparison Against Common Peer Patterns
+Skill dispatch is intentionally scoped to one delegated turn:
 
-- Evaluate the current core loop against the shared patterns that recur across the reference systems, not against the largest feature set in any one peer.
-- Across Codex, Claude Code, Gemini CLI, Aider, OpenClaw, pi-mono, Letta, Mem0, OpenCode, and nanobot, the common loop shape is still structurally simple:
-1. one foreground user input enters one owned turn executor
-2. the executor streams model output and tool activity incrementally
-3. approvals are resolved at explicit boundaries outside most tool bodies
-4. history is compacted or trimmed between turns, not by spawning an in-turn planner graph
-5. retries and interrupts are handled by the loop owner, not scattered across tools
-6. specialist or background work is bounded and isolated from the main foreground turn
-- `co` matches that common shape more than it differs from it.
-- The main loop remains REPL-owned.
-- `run_turn()` stays a single-turn executor.
-- Approvals resume inside the same turn.
-- Compaction remains a background optimization rather than a second agent.
+- `_chat_loop()` applies `skill_env` only for the delegated skill run
+- `_cleanup_skill_run_state()` restores prior environment values and clears `deps.runtime.active_skill_name`
+- finalization happens only after that restoration
 
-| Common pattern from reference systems | How `co` compares | Design read |
-|---|---|---|
-| Single foreground turn owner (`Codex`, `Claude Code`, `Aider`, `OpenCode`, `pi-mono`) | `main.py` owns REPL/session state and `_orchestrate.py` owns one turn | Aligned |
-| Streaming-first execution (`Codex`, `Claude Code`, `Gemini CLI`, `OpenCode`) | `_execute_stream_segment()` is event-driven and frontend-facing | Aligned |
-| Orchestration-owned approvals (`Codex`, `Claude Code`, `Aider`, `pi-mono`) | deferred approvals live in `_collect_deferred_tool_approvals()`; shell keeps only command classification inside the tool | Aligned |
-| Command-specific shell trust boundary (`Codex`, `Claude Code`) | `run_shell_command()` classifies `DENY` / `ALLOW` / `REQUIRE_APPROVAL` before execution | Aligned and strong |
-| Bounded retry and interrupt recovery in the loop (`Codex`, `Claude Code`, `OpenClaw`, `OpenCode`) | `run_turn()` owns provider retries, reflection retry, usage-limit handling, and clean interrupt truncation | Aligned |
-| Compaction as a sidecar maintenance concern (`Claude Code`, `OpenClaw`, `pi-mono`, `nanobot`) | background precompute plus turn-time consumption keeps compaction out of the live turn | Aligned |
-| Isolated specialist contexts rather than shared mutable subagents (`Claude Code`, `OpenClaw`, `pi-mono`) | sub-agents are isolated through `make_subagent_deps()` and are not part of the foreground loop | Aligned |
-| Tighter typed memory models (`Letta`, `Mem0`) | core loop only injects recalled context and does not depend on typed memory blocks | Intentionally simpler than frontier memory systems |
-| Event-driven multi-step task graphs (`Gemini CLI`, `OpenClaw`, `nanobot`) | foreground loop is still single-turn; long-running autonomy is mostly outside this path today | Deliberate non-adoption for MVP |
+### 2.7 Comparison Against Common Peer Patterns
 
-### 2.6 Over-Design Check
+The foreground loop still matches the common 2026 CLI-agent shape more than it diverges from it.
 
-- Relative to the common baseline above, the current core loop has a few places where the design is heavier than the shared peer pattern requires.
+| Common pattern | `co` today | Design read |
+| --- | --- | --- |
+| one owned foreground turn executor | `run_turn()` | aligned |
+| event-stream-driven rendering | `_execute_stream_segment()` + `StreamRenderer` | aligned |
+| approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
+| command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
+| retries and interrupts owned by the loop | `run_turn()` | aligned |
+| compaction as a sidecar maintenance concern | `HistoryCompactionState` | aligned |
+| isolated specialist contexts | sub-agents use `make_subagent_deps()` and stay outside the foreground loop | aligned |
 
-| Area | Why it is heavier than the common pattern | Risk |
-|---|---|---|
-| `main.py` split ownership across REPL input, slash dispatch, skill env injection, background-compaction harvest/spawn, session persistence, and post-turn signal detection | Post-turn hooks extracted into `_finalize_turn()` and `_cleanup_skill_run_state()` helpers; full foreground lifecycle delegated to `_run_foreground_turn()`. Background compaction lifecycle moved to `HistoryCompactionState`. `_chat_loop()` is now a clean input loop with control-plane routing. | Remaining split is closer to the minimum needed for a single-turn loop |
-| Turn state spread across `message_history`, `current_history`, `deps.runtime.precomputed_compaction`, background task state, and `_TurnState.latest_*` fields | The behavior is correct, but the number of moving pieces is above the minimum needed for a single-turn loop | Harder to reason about retries, resume points, and stale cached state |
-| Approval subject taxonomy (`shell`, `path`, `domain`, `tool`) plus exact-match remembered rules | More nuanced than the simpler allow-once / allow-session patterns seen in Aider and many CLI peers | Trust UX can become harder to explain than the underlying safety gain justifies |
-| Post-turn hook chain in `_chat_loop()` | Signal detection, compaction cache clearing, session save, and next-turn precompute all happen after the core turn returns | The true loop boundary is less obvious in code and docs |
-| `_execute_stream_segment()` stream-state adaptation and frontend rendering policy | Buffer throttling and flush policy extracted to `StreamRenderer` (`co_cli/display/_stream_renderer.py`). Tool display metadata extracted to `_display_hints.py`. `_execute_stream_segment()` now delegates both concerns, keeping only event routing. | Addressed — display changes and orchestration changes are now decoupled |
+The intentional simplification remains:
 
-- Main loop-specific over-design signals today:
-- `main.py`'s `_chat_loop()` is now an input loop with control-plane routing. The foreground turn lifecycle (compaction harvest, `run_turn()`, skill env cleanup, finalization) lives in `_run_foreground_turn()`. REPL input, slash dispatch, and skill env injection remain inline.
-- The loop carries multiple state carriers for history and compaction, which increases semantic overhead even though each piece is individually reasonable.
-- Approval remembering has grown more granular than the common peer baseline; the next improvement should be legibility, not more approval states.
-
-- Areas that do **not** appear over-designed:
-- Approval resume staying inside the same turn is consistent with the strongest peer patterns and avoids fake user-message hops.
-- Background compaction precompute is lighter than the explicit compaction-agent designs discussed in earlier research and remains a pragmatic optimization.
-- Shell approval classification inside the shell tool is justified because the trust decision depends on command shape, not just tool identity.
-
-- Practical conclusion:
-- keep the single-turn `run_turn()` contract
-- keep orchestration-owned approvals
-- keep compaction as a background sidecar
-- reduce semantic surface in `main.py` and turn-state ownership before adding new loop abstractions such as task graphs, ACP orchestration, or richer approval classes
+- no planner graph in the foreground turn
+- no multi-turn queue inside the loop
+- no inline summarization during history processing
+- no approval memory persisted across sessions
 
 ## 3. Config
 
-| Setting | Env Var | Default | Description |
-|---|---|---|---|
+These settings most directly shape one-turn orchestration behavior.
 
-| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Retry budget for provider and network errors |
-| `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak before doom-loop intervention |
-| `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak before reflection-cap intervention |
-| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max chars retained for older tool returns |
-| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count threshold for sliding-window compaction |
-| `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio threshold for warning the user that prompt budget is getting tight |
-| `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio threshold for warning that the provider likely truncated or overflowed input context |
-| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session restore freshness window |
-| `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Max chars injected into context from memory recall per turn |
-| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Reasoning display mode: `off` (hidden), `summary` (progress line), `full` (raw thinking) |
+| Setting | Env Var | Default | Description |
+| --- | --- | --- | --- |
+| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Retry budget for provider HTTP and network failures |
+| `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
+| `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
+| `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
+| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Trim threshold for older tool returns |
+| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count compaction trigger |
+| `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | Maximum chars injected from recalled memories |
+| `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
+| `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
+| `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
+| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session freshness window for restore |
 
 ## 4. Files
 
 | File | Purpose |
-|---|---|
-| `co_cli/main.py` | REPL loop, slash dispatch, skill env injection, post-turn hooks, background compaction scheduling |
-| `co_cli/context/_orchestrate.py` | `run_turn()` (single turn entrypoint, emits `co.turn` OTel span), `_execute_stream_segment()` (segment event loop, updates `_TurnState`), `_run_approval_loop()` (approval-resume cycle — routes via `task_agent` when available), `_collect_deferred_tool_approvals()`, `_resolve_task_model_settings()` (looks up `ROLE_TASK` settings for resume routing), `_check_output_limits()` (finish-reason and context-overflow diagnostics after a completed turn), `_build_interrupted_turn_result()` (truncate and abort-mark on interrupt), `_build_error_turn_result()` |
-| `co_cli/agent.py` | `build_agent()` (main agent: instructions, history processors, native tools, MCP toolsets), `build_task_agent()` (lightweight task agent for approval resume turns: same tools, no personality/date/project instructions/history processors), `_build_filtered_toolset()` (builds a `FilteredToolset` with conditional domain-tool registration and per-request `active_tool_filter` gating; returns toolset + approval map), `_ALWAYS_ON_TOOL_NAMES` (tools always visible even on narrowed resume turns), `_build_mcp_toolsets()` |
-| `co_cli/context/_history.py` | Opening-context injection, tool-output trimming, safety checks, sliding-window compaction, background precompute |
-| `co_cli/context/_types.py` | `_CompactionBoundaries`, `CompactionResult`, `MemoryRecallState`, `SafetyState` — shared type definitions extracted from `_history.py` to break the circular import with `deps.py` |
-| `co_cli/tools/shell.py` | Command-dependent shell approval and execution path |
-| `co_cli/tools/_tool_approvals.py` | Approval subject resolution, session rule matching, and approval recording |
-| `co_cli/display/_core.py` | `Frontend` protocol, `TerminalFrontend` implementation: manages `Live` instances for streaming text, thinking, tool progress, and status surfaces; `active_surface()` returns the current surface name (`text`/`thinking`/`tool`/`status`/`none`), `active_tool_messages()` returns currently rendered tool labels, `active_status_text()` returns the text last set via `on_status` or `on_reasoning_progress` (or `None` when the status surface is cleared); `cleanup()` stops all live instances and clears `_status_text` |
-| `co_cli/display/_stream_renderer.py` | `StreamRenderer`: text/thinking buffering, flush/throttle policy, progress callback wiring; supports `off`/`summary`/`full` reasoning display modes |
-| `co_cli/tools/_display_hints.py` | Tool display metadata: args display key per tool, tool result format helper |
-| `co_cli/commands/_commands.py` | Built-in slash commands, skill dispatch, and `/approvals` management |
-| `co_cli/context/_session.py` | Session persistence helpers |
+| --- | --- |
+| `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
+| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, retries, output checks, and interrupt/error builders |
+| `co_cli/context/_history.py` | history processors, background compaction precompute, and `HistoryCompactionState` |
+| `co_cli/context/_types.py` | shared `CompactionResult`, `MemoryRecallState`, and `SafetyState` dataclasses |
+| `co_cli/agent.py` | main/task agent factories, `_ALWAYS_ON_TOOL_NAMES`, and native filtered toolset construction |
+| `co_cli/tools/_tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
+| `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
+| `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
+| `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |
+| `co_cli/context/_session.py` | session touch/save/increment helpers used after each turn |
+| `co_cli/context/_skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |
