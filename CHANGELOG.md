@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-03-30
+
+### Changed
+- **Approval display enrichment**: file-write approval prompts now show path + byte count (`write_file`) and path + search/replacement snippets + replace\_all flag (`edit_file`), derived from deferred args already available at approval time — no changes to tool bodies.
+- **Approval scope wording**: replaced developer-legible bracket hints (`[always → session: git *]`) with user-legible noun phrases (`(allow all git commands this session?)`) across all four scope types (shell, path, domain, tool).
+
 ## [0.6.6] - 2026-03-30
 
 ### Changed

@@ -54,7 +54,7 @@ def resolve_approval_subject(
         cmd = args.get("cmd", "")
         tokens = cmd.split()
         utility = tokens[0] if tokens else cmd
-        hint = f"[always → session: {utility} *]" if utility else ""
+        hint = f"(allow all {utility} commands this session?)" if utility else ""
         return ApprovalSubject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.SHELL,
@@ -69,12 +69,32 @@ def resolve_approval_subject(
     if tool_name in ("write_file", "edit_file"):
         path = args.get("path", "")
         parent = str(Path(path).parent) if path else ""
-        hint = f"[always → session: {parent}/**]" if parent else ""
+        hint = f"(allow all writes to {parent}/ this session?)" if parent else ""
+
+        if tool_name == "write_file":
+            content = args.get("content", "")
+            byte_count = len(content.encode()) if isinstance(content, str) else 0
+            lines = [f"write_file(path={path!r}, {byte_count} bytes)"]
+        else:
+            search = args.get("search", "")
+            replacement = args.get("replacement", "")
+            replace_all = args.get("replace_all", False)
+            search_snip = (search[:60] + "…") if len(search) > 60 else search
+            repl_snip = (replacement[:60] + "…") if len(replacement) > 60 else replacement
+            lines = [
+                f"edit_file(path={path!r})",
+                f"  search:      {search_snip!r}",
+                f"  replacement: {repl_snip!r}",
+                f"  replace_all: {replace_all}",
+            ]
+
+        if hint:
+            lines.append(f"  {hint}")
         return ApprovalSubject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.PATH,
             value=parent,
-            display=f"{tool_name}(path={path!r})\n  {hint}" if hint else f"{tool_name}(path={path!r})",
+            display="\n".join(lines),
             can_remember=bool(parent),
         )
 
@@ -83,7 +103,7 @@ def resolve_approval_subject(
     if tool_name == "web_fetch":
         url = args.get("url", "")
         domain = urlparse(url).hostname or ""
-        hint = f"[always → session: {domain}]" if domain else ""
+        hint = f"(allow all fetches to {domain} this session?)" if domain else ""
         return ApprovalSubject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.DOMAIN,
@@ -95,7 +115,7 @@ def resolve_approval_subject(
     # Generic-tool fallback: scope to the tool name so "always" approval covers
     # all future invocations of the same tool, including MCP tools.
     args_str = ", ".join(f"{k}={v!r}" for k, v in args.items())
-    hint = f"[always → session: {tool_name}]" if tool_name else ""
+    hint = f"(always allow {tool_name} this session?)" if tool_name else ""
     return ApprovalSubject(
         tool_name=tool_name,
         kind=ApprovalKindEnum.TOOL,
@@ -120,9 +140,9 @@ def is_auto_approved(subject: ApprovalSubject, deps: CoDeps) -> bool:
     """Return True when this subject matches a remembered session approval rule.
 
     Approval matching is exact: kind + value must both match the stored rule.
-    There is no wildcard expansion at match time — wildcards are a display
-    hint only.  The stored value is always the resolved scope key produced
-    by resolve_approval_subject() (e.g. the utility name, parent dir, domain).
+    The stored value is always the resolved scope key produced by
+    resolve_approval_subject() (e.g. the utility name, parent dir, domain) —
+    never the full command string or path.
     """
     if not subject.can_remember:
         return False
