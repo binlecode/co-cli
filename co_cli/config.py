@@ -41,10 +41,14 @@ DEFAULT_OLLAMA_REASONING_MODEL: dict[str, Any] = {
 # the same weights resident, avoiding an instruct-model swap.
 DEFAULT_OLLAMA_SUMMARIZATION_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_ANALYSIS_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
-DEFAULT_OLLAMA_CODING_MODEL = "qwen3.5:35b-a3b-code"
+DEFAULT_OLLAMA_CODING_MODEL: dict[str, Any] = {
+    "model": "qwen3.5:35b-a3b-code",
+}
 DEFAULT_OLLAMA_RESEARCH_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_TASK_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
-DEFAULT_GEMINI_REASONING_MODEL = "gemini-3-flash-preview"
+DEFAULT_GEMINI_REASONING_MODEL: dict[str, Any] = {
+    "model": "gemini-3-flash-preview",
+}
 
 # Conservative default safe commands for auto-approval.
 # UX convenience — approval is the security boundary.
@@ -107,14 +111,6 @@ def _validate_personality(personality: str) -> list[str]:
     return validate_personality_files(personality)
 
 
-WebDecision = Literal["allow", "ask", "deny"]
-
-
-class WebPolicy(BaseModel):
-    search: WebDecision = Field(default="allow")
-    fetch: WebDecision = Field(default="allow")
-
-
 class MCPServerConfig(BaseModel):
     """Configuration for a single MCP server (stdio or HTTP transport).
 
@@ -160,8 +156,7 @@ class ModelConfig(BaseModel):
 
     model: str
     api_params: dict[str, Any] = Field(default_factory=dict)
-    # Per-entry provider override; if None, inherits the session-level provider.
-    provider: Literal["ollama-openai", "gemini"] | None = Field(default=None)
+    provider: Literal["ollama-openai", "gemini"]
 
 
 # Canonical role name constants. Used as keys in role_models and ModelRegistry lookups.
@@ -293,7 +288,6 @@ class Settings(BaseModel):
     # Web domain policy
     web_fetch_allowed_domains: list[str] = Field(default=[])
     web_fetch_blocked_domains: list[str] = Field(default=[])
-    web_policy: WebPolicy = Field(default_factory=WebPolicy)
     web_http_max_retries: int = Field(default=DEFAULT_WEB_HTTP_MAX_RETRIES, ge=0, le=10)
     web_http_backoff_base_seconds: float = Field(default=DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS, ge=0.0, le=30.0)
     web_http_backoff_max_seconds: float = Field(default=DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS, ge=0.5, le=120.0)
@@ -333,7 +327,9 @@ class Settings(BaseModel):
         parsed: dict[str, dict] = {}
         for role, model in v.items():
             if isinstance(model, str):
-                parsed[str(role)] = {"model": model.strip()}
+                raise ValueError(
+                    f"role_models.{role} must be an object with explicit 'model' and 'provider' keys"
+                )
             elif isinstance(model, dict):
                 parsed[str(role)] = model
             else:
@@ -462,14 +458,6 @@ class Settings(BaseModel):
             if val:
                 data[field] = val
 
-        # Per-role model overrides — merge per-key, not whole-dict replacement.
-        # Plain strings from env vars are coerced to ModelConfig by _parse_role_models.
-        role_models_env: dict[str, str] = {}
-        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK):
-            env_var = f"CO_MODEL_ROLE_{role.upper()}"
-            val = env_source.get(env_var)
-            if val:
-                role_models_env[role] = val.strip()
         provider = str(data.get("llm_provider", "ollama-openai")).lower()
         if provider == "gemini":
             role_defaults: dict = {ROLE_REASONING: DEFAULT_GEMINI_REASONING_MODEL}
@@ -484,6 +472,14 @@ class Settings(BaseModel):
             }
         else:
             raise ValueError(f"Unsupported llm_provider: {provider!r}")
+        # Per-role model overrides — merge per-key, not whole-dict replacement.
+        # Env vars use plain model-name strings, so inject the session provider explicitly.
+        role_models_env: dict[str, dict[str, Any]] = {}
+        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK):
+            env_var = f"CO_MODEL_ROLE_{role.upper()}"
+            val = env_source.get(env_var)
+            if val:
+                role_models_env[role] = {"model": val.strip(), "provider": provider}
         # Merge: defaults supply missing roles; explicit config and env vars override.
         existing_roles = data.get("role_models", {})
         data["role_models"] = {**role_defaults, **existing_roles, **role_models_env}
@@ -492,17 +488,6 @@ class Settings(BaseModel):
         if mcp_env:
             data["mcp_servers"] = json.loads(mcp_env)
 
-        web_policy_search = env_source.get("CO_CLI_WEB_POLICY_SEARCH")
-        web_policy_fetch = env_source.get("CO_CLI_WEB_POLICY_FETCH")
-        if web_policy_search or web_policy_fetch:
-            policy_data = data.get("web_policy", {})
-            if not isinstance(policy_data, dict):
-                policy_data = {}
-            if web_policy_search:
-                policy_data["search"] = web_policy_search
-            if web_policy_fetch:
-                policy_data["fetch"] = web_policy_fetch
-            data["web_policy"] = policy_data
         return data
 
     def save(self):

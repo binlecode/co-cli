@@ -25,11 +25,12 @@ flowchart TD
     F --> H
     H --> I["compactor.on_turn_start()"]
     I --> J["run_turn(): deps.runtime.reset_for_turn(); init _TurnState; start co.turn span"]
-    J --> K["_execute_stream_segment() using main agent"]
+    J --> J2["compute_segment_filter(deps) → active_tool_filter = full native set"]
+    J2 --> K["_execute_stream_segment() using main agent"]
     K --> L{"segment output"}
 
     L -->|DeferredToolRequests| M["_run_approval_loop()"]
-    M --> N["set active_tool_filter for native tools; collect approvals"]
+    M --> N["compute_segment_filter(deps, deferred_tool_names=...) → active_tool_filter; collect approvals"]
     N --> O["_execute_stream_segment() using task agent when available"]
     O --> L
 
@@ -102,7 +103,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
 | `safety_state` | owned by history processors, not by the orchestrator |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
-| `active_tool_filter` | read by the native filtered toolset during approval resumes |
+| `active_tool_filter` | read by the native filtered toolset during all segments; set by `compute_segment_filter()` before each segment |
 | `precomputed_compaction` | cross-turn compaction cache managed by `HistoryCompactionState` |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
 
@@ -177,9 +178,15 @@ Approval subject scopes:
 Resume-loop behavior:
 
 ```text
+# run_turn() — before first segment
+deps.runtime.active_tool_filter = compute_segment_filter(deps)
+  → (CORE_TOOL_NAMES | deps.session.granted_tools) & native_names
+
+# _run_approval_loop() — each resume hop
 while latest_result.output is DeferredToolRequests:
-  deps.runtime.active_tool_filter =
-    deferred native tool names + _ALWAYS_ON_TOOL_NAMES
+  deps.runtime.active_tool_filter = compute_segment_filter(
+      deps, deferred_tool_names={call.tool_name for call in approvals}
+  )  → deferred names | ALWAYS_ON_TOOL_NAMES
   approvals = _collect_deferred_tool_approvals(...)
   current_input = None
   current_history = latest_result.all_messages()
@@ -337,10 +344,10 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
-| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, retries, output checks, and interrupt/error builders |
+| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, `compute_segment_filter()`, stream execution, approval loop, retries, output checks, and interrupt/error builders |
 | `co_cli/context/_history.py` | history processors, background compaction precompute, and `HistoryCompactionState` |
 | `co_cli/context/_types.py` | shared `CompactionResult`, `MemoryRecallState`, and `SafetyState` dataclasses |
-| `co_cli/agent.py` | main/task agent factories, `_ALWAYS_ON_TOOL_NAMES`, and native filtered toolset construction |
+| `co_cli/agent.py` | main/task agent factories, `ALWAYS_ON_TOOL_NAMES`, `CORE_TOOL_NAMES`, and native filtered toolset construction |
 | `co_cli/tools/_tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |

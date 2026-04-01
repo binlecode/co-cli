@@ -66,41 +66,6 @@ def test_malformed_project_config_skipped(tmp_path, capsys):
     assert "Error loading project config" in capsys.readouterr().out
 
 
-def test_web_policy_from_config(tmp_path):
-    """web_policy object in project config is parsed correctly."""
-    project_dir = tmp_path
-    (project_dir / ".co-cli").mkdir()
-    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "web_policy": {"search": "deny", "fetch": "ask"},
-    }))
-
-    settings = load_config(
-        _user_config_path=tmp_path / "nonexistent.json",
-        _project_dir=project_dir,
-    )
-    assert settings.web_policy.search == "deny"
-    assert settings.web_policy.fetch == "ask"
-
-
-def test_project_config_partially_overrides_nested_web_policy(tmp_path):
-    """Project config can override one nested web_policy field without redefining all fields."""
-    user_settings = tmp_path / "user" / "settings.json"
-    user_settings.parent.mkdir(parents=True)
-    user_settings.write_text(json.dumps({
-        "web_policy": {"search": "deny", "fetch": "allow"},
-    }))
-
-    project_dir = tmp_path / "project"
-    (project_dir / ".co-cli").mkdir(parents=True)
-    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "web_policy": {"fetch": "ask"},
-    }))
-
-    settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
-    assert settings.web_policy.search == "deny"
-    assert settings.web_policy.fetch == "ask"
-
-
 def test_project_config_partially_overrides_mcp_server(tmp_path):
     """Project config can override one MCP server field without redefining the whole server."""
     user_settings = tmp_path / "user" / "settings.json"
@@ -138,8 +103,14 @@ def test_project_config_partially_overrides_role_models(tmp_path):
     user_settings.parent.mkdir(parents=True)
     user_settings.write_text(json.dumps({
         "role_models": {
-            ROLE_REASONING: "base-reasoning",
-            "coding": "base-coding",
+            ROLE_REASONING: {
+                "model": "base-reasoning",
+                "provider": "ollama-openai",
+            },
+            "coding": {
+                "model": "base-coding",
+                "provider": "ollama-openai",
+            },
         }
     }))
 
@@ -147,24 +118,56 @@ def test_project_config_partially_overrides_role_models(tmp_path):
     (project_dir / ".co-cli").mkdir(parents=True)
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
         "role_models": {
-            "coding": "project-coding",
+            "coding": {
+                "model": "project-coding",
+                "provider": "ollama-openai",
+            },
         }
     }))
 
     settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
     assert settings.role_models[ROLE_REASONING].model == "base-reasoning"
+    assert settings.role_models[ROLE_REASONING].provider == "ollama-openai"
     assert settings.role_models["coding"].model == "project-coding"
+    assert settings.role_models["coding"].provider == "ollama-openai"
 
 
-def test_env_overrides_web_policy(tmp_path):
-    """CO_CLI_WEB_POLICY_SEARCH/FETCH override file values."""
-    settings = load_config(
-        _user_config_path=tmp_path / "nonexistent.json",
-        _project_dir=tmp_path / "empty",
-        _env={"CO_CLI_WEB_POLICY_SEARCH": "ask", "CO_CLI_WEB_POLICY_FETCH": "deny"},
-    )
-    assert settings.web_policy.search == "ask"
-    assert settings.web_policy.fetch == "deny"
+def test_role_models_missing_provider_rejected(tmp_path):
+    """role_models entries must specify provider explicitly in config files."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    project_config_path = project_dir / ".co-cli" / "settings.json"
+    project_config_path.write_text(json.dumps({
+        "role_models": {
+            ROLE_REASONING: {
+                "model": "base-reasoning",
+            }
+        }
+    }))
+
+    with pytest.raises(ValueError, match="provider"):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
+        )
+
+
+def test_knowledge_llm_reranker_missing_provider_rejected(tmp_path):
+    """knowledge_llm_reranker must specify provider explicitly in config files."""
+    project_dir = tmp_path
+    (project_dir / ".co-cli").mkdir()
+    project_config_path = project_dir / ".co-cli" / "settings.json"
+    project_config_path.write_text(json.dumps({
+        "knowledge_llm_reranker": {
+            "model": "gemini-2.0-flash",
+        }
+    }))
+
+    with pytest.raises(ValueError, match="provider"):
+        load_config(
+            _user_config_path=tmp_path / "nonexistent.json",
+            _project_dir=project_dir,
+        )
 
 
 def test_invalid_web_retry_bounds_in_project_config_raise_value_error(tmp_path):

@@ -112,7 +112,7 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         - origin_url: str or null (source URL for articles)
         - provenance: str (detected | user-told | planted | auto_decay | web-fetch | session)
         - tags: list[str]
-        - auto_category: str (preference | correction | decision | context | pattern)
+        - auto_category: str (preference | correction | decision | context | pattern | character)
         - certainty: str (high | medium | low)
         - updated: ISO8601 timestamp string (added when consolidated)
         - decay_protected: bool (prevent decay if true)
@@ -183,6 +183,7 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
                 "decision",
                 "context",
                 "pattern",
+                "character",
             }
             if fm["auto_category"] not in valid_categories:
                 logger.warning(

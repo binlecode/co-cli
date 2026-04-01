@@ -4,7 +4,7 @@ All eval infrastructure has moved to focused sub-modules:
   _deps      — make_eval_deps, make_eval_settings, detect_model_tag
   _frontend  — SilentFrontend, CapturingFrontend
   _tools     — extract_tool_calls, extract_first_tool_call, is_ordered_subsequence, tool_names
-  _checks    — EvalCase, load_cases, score_response, score_turn, JudgeResult, check_*
+  _checks    — EvalCase, load_cases, score_response, check_*
   _trace     — SpanRow, TurnTrace, bootstrap_telemetry, collect_spans_for_run,
                analyze_turn_spans, build_timeline, print_timeline, print_rca
   _fixtures  — seed_memory, single_user_turn, build_message_history, patch_dangling_tool_calls
@@ -25,7 +25,6 @@ from evals._tools import (
 )
 from evals._checks import (
     EvalCase,
-    JudgeResult,
     count_sentences,
     check_forbidden,
     check_has_question,
@@ -35,7 +34,6 @@ from evals._checks import (
     check_required_any,
     load_cases,
     score_response,
-    score_turn,
 )
 from evals._trace import (
     ModelRequestData,

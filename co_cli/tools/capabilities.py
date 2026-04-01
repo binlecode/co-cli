@@ -33,7 +33,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
     if _ce_url:
         reranker = f"tei ({_ce_url})"
     elif _llm_r:
-        reranker = f"{_llm_r.provider or 'llm'}:{_llm_r.model}"
+        reranker = f"{_llm_r.provider}:{_llm_r.model}"
     else:
         reranker = "none"
 

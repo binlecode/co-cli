@@ -207,9 +207,6 @@ async def web_search(
         max_results: Number of results to return (default 5, max 8).
         domains: Restrict to these domains (e.g. ["github.com", "stackoverflow.com"]).
     """
-    if ctx.deps.config.web_policy.search == "deny":
-        raise ModelRetry("web_search: web access disabled by policy.")
-
     if not query or not query.strip():
         raise ModelRetry("Query is required for web_search.")
 
@@ -295,9 +292,6 @@ async def web_fetch(
     Args:
         url: Full URL to fetch (must start with http:// or https://).
     """
-    if ctx.deps.config.web_policy.fetch == "deny":
-        raise ModelRetry("web_fetch: web access disabled by policy.")
-
     if not url or not re.match(r"https?://", url.strip()):
         raise ModelRetry("web_fetch requires an http:// or https:// URL.")
 

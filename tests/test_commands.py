@@ -15,7 +15,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 from co_cli.agent import build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoServices, CoConfig, CoSessionState, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoCapabilityState, CoServices, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools._tool_approvals import (
     is_auto_approved,
@@ -60,6 +60,11 @@ def _make_ctx(
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=config,
         session=CoSessionState(session_id="test-commands"),
+        capabilities=CoCapabilityState(
+            tool_names=_AGENT.tool_names,
+            tool_approvals=_AGENT.tool_approvals,
+            tool_catalog=_AGENT.tool_catalog,
+        ),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -154,6 +159,11 @@ async def test_approval_approve():
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
+        capabilities=CoCapabilityState(
+            tool_names=_AGENT.tool_names,
+            tool_approvals=_AGENT.tool_approvals,
+            tool_catalog=_AGENT.tool_catalog,
+        ),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
@@ -190,6 +200,11 @@ async def test_approval_deny():
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
+        capabilities=CoCapabilityState(
+            tool_names=_AGENT.tool_names,
+            tool_approvals=_AGENT.tool_approvals,
+            tool_catalog=_AGENT.tool_catalog,
+        ),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:

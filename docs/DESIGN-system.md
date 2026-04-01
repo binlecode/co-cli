@@ -156,12 +156,13 @@ The foreground runtime now has two distinct agent surfaces:
    - project instructions from `.co-cli/instructions.md`
    - always-on memories
    - personality memories
+   - tool surface hint (describes progressive tool surface; instructs model to call `search_tools`)
 
 The filtered native toolset matters for approval resumes:
 
 - native tools are always registered once at startup
 - some domain tools are omitted entirely when the integration is absent
-- `ctx.deps.runtime.active_tool_filter` narrows the visible native tool schemas during approval-resume hops
+- `ctx.deps.runtime.active_tool_filter` narrows the visible native tool schemas during all segments; set by `compute_segment_filter()` in `_orchestrate.py` before each segment
 - MCP toolsets are attached separately and are not filtered by `active_tool_filter`
 
 `build_task_agent()` intentionally removes the heavy prompt/context layers:
@@ -237,6 +238,7 @@ Visible to tools and slash commands.
 | `session_id` | `restore_session()` | session restart | fresh empty |
 | `memory_recall_state` | `inject_opening_context()` | new REPL session | fresh default |
 | `background_tasks` | `start_background_task` tool | never (in-memory only) | fresh empty dict |
+| `granted_tools` | `search_tools()` grants | `/new` (session reset) | fresh empty set |
 
 #### `CoRuntimeState` — `deps.runtime`
 
@@ -249,7 +251,7 @@ Owned by orchestration and history processors.
 | `tool_progress_callback` | `StreamRenderer.install_progress()` | `StreamRenderer.clear_progress()` and `run_turn()` finally | fresh `None` |
 | `safety_state` | `create_deps()` init and `reset_for_turn()` | `reset_for_turn()` | fresh default |
 | `active_skill_name` | `_chat_loop()` when a skill delegates to the agent | `_cleanup_skill_run_state()` | fresh `None` |
-| `active_tool_filter` | `_run_approval_loop()` on each resume hop | `_run_approval_loop()` exit and `reset_for_turn()` | fresh `None` |
+| `active_tool_filter` | `compute_segment_filter()` in `run_turn()` before first segment; `compute_segment_filter()` in `_run_approval_loop()` before each resume hop | `_run_approval_loop()` exit and `reset_for_turn()` | fresh `None` |
 
 One important split is intentional:
 
@@ -264,7 +266,7 @@ There are three related capability surfaces:
 | --- | --- | --- |
 | static tool definitions | `build_agent()` / `build_task_agent()` | native filtered toolset plus MCP toolset definitions |
 | connected session capabilities | `initialize_session_capabilities()` | discovered MCP tool names plus loaded skills |
-| runtime-visible native schema subset | `_run_approval_loop()` | deferred native tool names plus `_ALWAYS_ON_TOOL_NAMES` |
+| runtime-visible native schema subset | `compute_segment_filter()` in `run_turn()` (main turns: `(CORE_TOOL_NAMES \| granted_tools) & native_names`) and `_run_approval_loop()` (resume turns: deferred names plus `ALWAYS_ON_TOOL_NAMES`) | owned by `_orchestrate.py` |
 
 Key distinctions:
 

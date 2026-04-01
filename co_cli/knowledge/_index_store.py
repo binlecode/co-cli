@@ -246,7 +246,7 @@ class KnowledgeIndex:
         if self._cross_encoder_url is not None:
             self._reranker_provider = "tei"
         elif self._llm_reranker is not None:
-            _p = self._llm_reranker.provider or config.llm_provider
+            _p = self._llm_reranker.provider
             self._reranker_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
         else:
             self._reranker_provider = "none"
@@ -261,7 +261,7 @@ class KnowledgeIndex:
             self._llm_api_key,
         )
         if self._llm_reranker is not None:
-            _p = self._llm_reranker.provider or config.llm_provider
+            _p = self._llm_reranker.provider
             _llm_rerank_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
             _llm_rerank_model = self._llm_reranker.model
         else:

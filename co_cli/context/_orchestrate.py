@@ -52,7 +52,45 @@ from co_cli.tools._tool_approvals import (
 from co_cli.config import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY, ROLE_TASK
 from co_cli.deps import CoDeps
 from co_cli._model_factory import ResolvedModel
-from co_cli.agent import _ALWAYS_ON_TOOL_NAMES
+from co_cli.agent import ALWAYS_ON_TOOL_NAMES, CORE_TOOL_NAMES
+
+
+# ---------------------------------------------------------------------------
+# compute_segment_filter — single policy function for per-segment tool exposure
+# ---------------------------------------------------------------------------
+
+
+def compute_segment_filter(
+    deps: CoDeps,
+    *,
+    deferred_tool_names: set[str] | None = None,
+) -> set[str]:
+    """Return the active_tool_filter set for one segment.
+
+    Main turns (deferred_tool_names=None):
+        CORE_TOOL_NAMES union session-granted tools, intersected with registered
+        native tools. The intersection guards against CORE_TOOL_NAMES entries
+        absent in the current config (conditional registrations: obsidian, google,
+        delegation roles). Starts at ~14 tools; expands as the model calls
+        search_tools() to unlock additional tools for the session.
+
+    Approval-resume turns:
+        deferred_tool_names union ALWAYS_ON_TOOL_NAMES. The explicit union IS
+        semantically required here — deferred_tool_names may not contain them.
+        search_tools is included via ALWAYS_ON_TOOL_NAMES.
+
+    Returns set[str] — never None. Caller assigns this to
+    deps.runtime.active_tool_filter before calling _execute_stream_segment().
+    """
+    if deferred_tool_names is not None:
+        return deferred_tool_names | ALWAYS_ON_TOOL_NAMES
+    native_names = {
+        name
+        for name, tc in deps.capabilities.tool_catalog.items()
+        if tc.source == "native"
+    }
+    # Main turn: core surface + session-granted tools, intersected with registered tools.
+    return (CORE_TOOL_NAMES | deps.session.granted_tools) & native_names
 
 
 # ---------------------------------------------------------------------------
@@ -317,9 +355,9 @@ async def _run_approval_loop(
     Exits when latest_result.output is no longer DeferredToolRequests.
     """
     while isinstance(turn_state.latest_result.output, DeferredToolRequests):
-        deps.runtime.active_tool_filter = (
-            {call.tool_name for call in turn_state.latest_result.output.approvals}
-            | _ALWAYS_ON_TOOL_NAMES
+        deps.runtime.active_tool_filter = compute_segment_filter(
+            deps,
+            deferred_tool_names={call.tool_name for call in turn_state.latest_result.output.approvals},
         )
         approvals = await _collect_deferred_tool_approvals(
             turn_state.latest_result, deps, frontend
@@ -455,6 +493,7 @@ async def run_turn(
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
+    deps.runtime.active_tool_filter = compute_segment_filter(deps)
     http_retries = deps.config.model_http_retries
     turn_state = _TurnState(
         current_input=user_input,

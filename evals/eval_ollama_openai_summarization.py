@@ -11,6 +11,8 @@ Runs against the real configured system and skips gracefully when Ollama is not 
 from __future__ import annotations
 
 import asyncio
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
+
 from evals._timeouts import EVAL_SUMMARIZATION_TIMEOUT_SECS
 
 import json
@@ -40,7 +42,7 @@ _CANDIDATES = [
 
 
 def _installed_ollama_models() -> set[str]:
-    with urlopen(f"{_OLLAMA_HOST.rstrip('/')}/api/tags", timeout=5) as resp:
+    with urlopen(f"{_OLLAMA_HOST.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS) as resp:
         data = json.load(resp)
     return {
         m["name"]

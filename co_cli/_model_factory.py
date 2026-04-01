@@ -74,7 +74,7 @@ def build_model(
 ) -> tuple[OpenAIChatModel | GoogleModel, ModelSettings | None]:
     """Construct a pydantic-ai model object and merged ModelSettings for the given provider.
 
-    Per-entry `model_entry.provider` overrides the session-level `provider`.
+    `model_entry.provider` is required and determines which backend to build.
 
     Merge precedence (low → high): quirks defaults → quirks extra_body → model_entry.api_params.
 
@@ -85,12 +85,10 @@ def build_model(
     """
     # Coerce plain string to ModelConfig (supports direct settings mutation in tests)
     if isinstance(model_entry, str):
-        model_entry = ModelConfig(model=model_entry)
+        model_entry = ModelConfig(model=model_entry, provider=provider)
     model_name = model_entry.model
     normalized = normalize_model_name(model_name)
-
-    # Per-entry provider overrides the session-level provider
-    effective_provider = model_entry.provider or provider
+    effective_provider = model_entry.provider
 
     if effective_provider == "ollama-openai":
         inf = get_model_inference("ollama-openai", normalized)

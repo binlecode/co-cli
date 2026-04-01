@@ -9,7 +9,6 @@ from pydantic_ai.usage import RunUsage
 from co_cli.config import (
     MCPServerConfig,
     ModelConfig,
-    WebPolicy,
     CONFIG_DIR,
     DATA_DIR,
     SEARCH_DB,
@@ -144,7 +143,6 @@ class CoConfig:
     brave_search_api_key: str | None = None
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
     web_fetch_blocked_domains: list[str] = field(default_factory=list)
-    web_policy: WebPolicy = field(default_factory=WebPolicy)
     web_http_max_retries: int = DEFAULT_WEB_HTTP_MAX_RETRIES
     web_http_backoff_base_seconds: float = DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS
     web_http_backoff_max_seconds: float = DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS
@@ -233,7 +231,6 @@ class CoConfig:
             brave_search_api_key=s.brave_search_api_key,
             web_fetch_allowed_domains=list(s.web_fetch_allowed_domains),
             web_fetch_blocked_domains=list(s.web_fetch_blocked_domains),
-            web_policy=s.web_policy,
             web_http_max_retries=s.web_http_max_retries,
             web_http_backoff_base_seconds=s.web_http_backoff_base_seconds,
             web_http_backoff_max_seconds=s.web_http_backoff_max_seconds,
@@ -295,6 +292,7 @@ class ToolConfig:
     # 'workspace' | 'execution' | 'knowledge' | 'workflow' | 'delegation' | 'web' | 'connectors' | 'system'
     approval: bool
     integration: str | None = None
+    description: str = ""
 
 
 @dataclass
@@ -335,6 +333,10 @@ class CoSessionState:
     session_id: str = ""
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
+    # granted_tools: session-scoped tool grants accumulated by search_tools().
+    # Persists across turns; cleared by /new (full session reset via CoSessionState reset).
+    # Sub-agents receive a fresh CoSessionState — they do not inherit parent grants.
+    granted_tools: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -364,10 +366,9 @@ class CoRuntimeState:
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
-    # active_tool_filter: per-resume-segment schema filter.
-    # None = no filter; all registered tools visible (main agent turns).
-    # set  = only these names visible; always includes _ALWAYS_ON_TOOL_NAMES.
-    # Lifecycle: set in _run_approval_loop per resume hop; cleared after loop + reset_for_turn().
+    # active_tool_filter: per-segment schema filter set by compute_segment_filter().
+    # set  = only these tool names are sent to the model for this segment.
+    # None = transient init state; compute_segment_filter() replaces it before any segment runs.
     active_tool_filter: set[str] | None = None
 
     def reset_for_turn(self) -> None:

@@ -28,10 +28,16 @@ class SilentFrontend:
     def on_thinking_commit(self, final: str) -> None:
         pass
 
-    def on_tool_call(self, name: str, args_display: str) -> None:
+    def on_reasoning_progress(self, message: str) -> None:
         pass
 
-    def on_tool_result(self, title: str, content: Any) -> None:
+    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+        pass
+
+    def on_tool_progress(self, tool_id: str, message: str) -> None:
+        pass
+
+    def on_tool_complete(self, tool_id: str, result: Any) -> None:
         pass
 
     def on_status(self, message: str) -> None:

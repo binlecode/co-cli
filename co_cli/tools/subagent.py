@@ -152,13 +152,6 @@ async def run_research_subagent(
     if max_requests < 1:
         max_requests = ctx.deps.config.subagent_max_requests_research
 
-    policy = ctx.deps.config.web_policy
-    if policy.search != "allow" or policy.fetch != "allow":
-        raise ModelRetry(
-            "Research sub-agent requires unrestricted web access; "
-            "web_policy is not 'allow'. Handle this task directly."
-        )
-
     from co_cli.tools._subagent_agents import make_research_agent
 
     registry = ctx.deps.services.model_registry
@@ -244,9 +237,8 @@ async def run_analysis_subagent(
     if max_requests < 1:
         max_requests = ctx.deps.config.subagent_max_requests_analysis
 
-    # No web_policy gate here: analysis sub-agent uses search_knowledge and
-    # search_drive_files only — no web tools. If Drive ever gets a policy
-    # setting, the gate belongs here, mirroring run_research_subagent above.
+    # Analysis sub-agent uses search_knowledge and search_drive_files only.
+    # It does not depend on direct web tools.
 
     from co_cli.tools._subagent_agents import make_analysis_agent
 

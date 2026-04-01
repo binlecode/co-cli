@@ -10,7 +10,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
-from co_cli.config import settings, WebPolicy
+from co_cli.config import settings
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
@@ -150,30 +150,6 @@ async def test_run_reasoning_subagent_no_model() -> None:
         await run_reasoning_subagent(ctx, "solve this problem")
 
 
-@pytest.mark.asyncio
-async def test_research_web_policy_gate_raises_model_retry() -> None:
-    """web_policy gate fires before model_registry check — ModelRetry raised for non-allow policies."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    # search="ask" fires the gate even with fetch="allow"
-    deps_search_ask = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=None),
-        config=CoConfig(web_policy=WebPolicy(search="ask", fetch="allow")),
-    )
-    ctx_search_ask = RunContext(deps=deps_search_ask, model=_AGENT.model, usage=RunUsage())
-    with pytest.raises(_ModelRetry, match="web_policy"):
-        await run_research_subagent(ctx_search_ask, "latest Python news")
-
-    # fetch="ask" fires the gate even with search="allow"
-    deps_fetch_ask = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=None),
-        config=CoConfig(web_policy=WebPolicy(search="allow", fetch="ask")),
-    )
-    ctx_fetch_ask = RunContext(deps=deps_fetch_ask, model=_AGENT.model, usage=RunUsage())
-    with pytest.raises(_ModelRetry, match="web_policy"):
-        await run_research_subagent(ctx_fetch_ask, "latest Python news")
-
-
 def test_merge_turn_usage_alias_then_accumulate() -> None:
     """_merge_turn_usage aliases on first call (None) and accumulates on second call."""
     deps = CoDeps(
@@ -197,4 +173,3 @@ def test_merge_turn_usage_alias_then_accumulate() -> None:
 
     # Snapshot is not mutated — confirms copy() in _run_subagent_attempt decouples usage
     assert snapshot.input_tokens == 10
-

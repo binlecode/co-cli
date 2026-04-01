@@ -8,7 +8,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import WebPolicy, settings
+from co_cli.config import settings
 from co_cli.deps import CoConfig, CoDeps, CoServices
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
@@ -30,8 +30,6 @@ def _make_policy_ctx(
     brave_search_api_key: str | None = None,
     allowed_domains: list[str] | None = None,
     blocked_domains: list[str] | None = None,
-    search_policy: str = "allow",
-    fetch_policy: str = "allow",
 ) -> RunContext:
     deps = CoDeps(
         services=CoServices(shell=ShellBackend()),
@@ -39,7 +37,6 @@ def _make_policy_ctx(
             brave_search_api_key=brave_search_api_key,
             web_fetch_allowed_domains=allowed_domains or [],
             web_fetch_blocked_domains=blocked_domains or [],
-            web_policy=WebPolicy(search=search_policy, fetch=fetch_policy),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -131,22 +128,6 @@ async def test_web_fetch_blocks_redirect_to_private():
     except ModelRetry:
         return
     assert result["error"] is True
-
-
-@pytest.mark.asyncio
-async def test_web_fetch_deny_mode():
-    """Fetches are rejected when policy disables them."""
-    ctx = _make_policy_ctx(fetch_policy="deny")
-    with pytest.raises(ModelRetry, match="disabled by policy"):
-        await web_fetch(ctx, "https://example.com")
-
-
-@pytest.mark.asyncio
-async def test_web_search_deny_mode():
-    """Searches are rejected when policy disables them."""
-    ctx = _make_policy_ctx(brave_search_api_key="fake-key", search_policy="deny")
-    with pytest.raises(ModelRetry, match="disabled by policy"):
-        await web_search(ctx, "test query")
 
 
 @pytest.mark.asyncio

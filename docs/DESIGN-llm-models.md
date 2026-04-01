@@ -3,10 +3,11 @@
 ## 1. What & How
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and one model-selection contract:
-`role_models` — one `ModelConfig` per role. The `reasoning` model is resolved once in `_chat_loop()` at
-session start via `ModelRegistry`; `build_agent()` is called once with the resolved model. `run_turn()`
-executes turns against that pre-built agent.
-Sub-agent tools use a pre-built `ResolvedModel` looked up from `ModelRegistry` by role.
+`role_models` — one `ModelConfig` per role. `create_deps()` builds a session-scoped
+`ModelRegistry` from `CoConfig`, then `build_agent()` resolves the main `reasoning`
+model from that registry once at startup. `run_turn()` executes turns against that
+pre-built agent. Sub-agent tools use pre-built `ResolvedModel` objects looked up from
+`ModelRegistry` by role.
 
 ```
 ModelRegistry.from_config(config) → session-scoped registry
@@ -33,15 +34,16 @@ There is no separate primary/fallback settings tier.
 
 - Mandatory role: `reasoning` (a single `ModelConfig` required — raises `ValueError` at startup if absent).
 - Optional roles: `summarization`, `coding`, `research`, `analysis`, `task` (absent/missing disables that role).
-- Each entry is a `ModelConfig(model, api_params, provider?)` — plain model name strings are coerced to `ModelConfig` by `_parse_role_models`. Dict entries are accepted directly; `ModelConfig` instances on re-validation are serialized via `model_dump()`.
+- Internal normalized shape is always dict-based before validation: provider defaults are injected as dicts and `CO_MODEL_ROLE_*` env overrides are wrapped as `{"model": ...}` entries before merging.
+- `provider` is required on every runtime `ModelConfig`. Project/user config `role_models` entries must therefore be dict-shaped objects with explicit `model` and `provider` keys. The one exception is `CO_MODEL_ROLE_*` env overrides: the env var provides only the model name, so `fill_from_env()` wraps it with the session `llm_provider` before validation. `ModelConfig` instances on re-validation are serialized via `model_dump()`.
 
 Example:
 
 ```json
 {
   "role_models": {
-    "reasoning": "qwen3.5:35b-a3b-agentic",
-    "coding": "qwen3-coder-next:code",
+    "reasoning": {"model": "qwen3.5:35b-a3b-agentic"},
+    "coding": {"model": "qwen3-coder-next:code"},
     "research": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}},
     "summarization": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}},
     "analysis": {"model": "qwen3.5:35b-a3b-think", "provider": "ollama-openai", "api_params": {"reasoning_effort": "none"}}
@@ -50,8 +52,8 @@ Example:
 ```
 
 When `role_models` is not configured, provider defaults are injected for all roles:
-- `gemini`: reasoning → `gemini-3-flash-preview`; all other roles empty (disabled)
-- `ollama-openai`: all six roles populated — reasoning → `qwen3.5:35b-a3b-think`; summarization/analysis/research/task → `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`; coding → `qwen3.5:35b-a3b-code`
+- `gemini`: only `reasoning` is populated, as `{"model": "gemini-3-flash-preview"}`; all other roles remain absent (disabled)
+- `ollama-openai`: all six roles are populated with dict-shaped entries — reasoning → `qwen3.5:35b-a3b-think`; summarization/analysis/research/task → `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`; coding → `qwen3.5:35b-a3b-code`
 
 ### ModelRegistry and ResolvedModel
 
@@ -86,17 +88,17 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai` or `gemini` |
-| `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL (Ollama or compatible) |
+| `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL for Ollama OpenAI-compatible requests |
 | `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
 | `llm_api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm_provider=gemini`) |
-| `role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model chain (comma-separated) |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model chain for `/compact` and history compaction |
-| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model chain |
-| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model chain |
-| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model chain |
-| `role_models["task"]` | `CO_MODEL_ROLE_TASK` | provider default when absent | Optional task agent model for approval resume turns (no personality, `reasoning_effort: none`) |
+| `role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model entry; config files must specify both `model` and `provider`, while the env var model name is wrapped with the session provider before validation |
+| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model entry for `/compact` and history compaction |
+| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model entry |
+| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model entry |
+| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model entry |
+| `role_models["task"]` | `CO_MODEL_ROLE_TASK` | provider default when absent | Optional task agent model entry for approval resume turns (no personality, `reasoning_effort: none`) |
 
 ## 4. Provider Quirks
 

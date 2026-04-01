@@ -85,6 +85,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ @agent.instructions add_project_instructions  # .co-cli/instructions.md if present
 │  ├─ @agent.instructions add_always_on_memories    # always_on standing-context memories
 │  ├─ @agent.instructions add_personality_memories  # personality-context memories
+│  ├─ @agent.instructions add_tool_surface_hint     # progressive tool surface hint; instructs model to call search_tools
 │  ├─ _build_filtered_toolset(config) → (toolset, tool_approvals, native_catalog)  # 3-tuple
 │  │    # registers all native tools: save_memory, search_articles, write_todos, read_todos,
 │  │    # run_coding_subagent, run_reasoning_subagent, etc. (domain tools conditional on config)

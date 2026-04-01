@@ -36,16 +36,15 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 
 | System | What stands out | co today | Implication for co |
 |---|---|---|---|
-| `Codex` | Strongest shell-safety and sandboxing discipline; explicit execution boundaries; coding-first product shape | co already has approval-first execution and shell policy, but is less formal on execution hardening and more personal-operator oriented | Borrow command-policy rigor and execution safety patterns. Do not drift into a sandbox-first product identity. |
-| `Claude Code` | Memory hierarchy via `CLAUDE.md`; first-class subagents; mature permission surfaces | co is already aligned on scoped delegation, markdown-defined behavior, and approvals, but has a flatter memory model | Borrow scoped memory visibility and specialist-context patterns. Do not recenter the product around coding. |
-| `Gemini CLI` | Event-driven subagent task execution (`a2a-server`, `agent/executor`), deep browser agent integration (`browserAgentInvocation`), policy engine enhancements, and web fetching (`webfetch-stage-1`) | co has a stronger local-memory and approval story, but weaker cross-surface continuity and event-driven delegation | Borrow permission ergonomics, event-driven task models, and browser execution ideas selectively. Do not copy broad product-surface ambition. |
-| `Aider` | Very simple approval model; git-centric reversibility; trust through explicitness | co has richer workflows and tools, but also more complexity and more trust UX burden | Borrow simplicity and reversibility discipline. Do not assume co should collapse into a purely git-centric workflow. |
-| `OpenClaw` | Agentic Control Protocol (ACP) support, subagent scoping/spawn limits, embedded runner compaction/failover, talk mode, and `cluster` concepts | co is closer on knowledge-work orientation and local operator feel, but narrower in scope and lacks explicit inter-agent protocols like ACP | Borrow ACP standard integration and subagent boundary (spawn limits) ideas. Do not absorb the full surface-area sprawl. |
-| `pi-mono` | Highly extensible, minimalist TypeScript agent framework powering tools like OpenClaw. Relies entirely on explicit "Skills" (Agent Skills standard) and "Extensions" rather than baked-in features (no built-in subagents, MCP, or plans). | co shares the philosophy of markdown-based skills and workspace control, but has a more opinionated built-in toolset and Python/Pydantic-AI foundation | Borrow the aggressive "core vs extension" minimalism and explicit session branching/tree UI concepts. Do not abandon Python/Pydantic-AI for TypeScript. |
-| `Letta` | Memory is product-central; typed in-context vs archival memory; async memory maintenance | co has a strong local memory substrate, but it is still flatter and less visibly typed | Borrow typed memory tiers and async maintenance ideas. Do not adopt a framework dependency wholesale. |
-| `Mem0` | Maturation into SQLite vector stores, official OpenClaw integration, explicit mutation semantics, graph/multimodal memory | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and SQLite/vector maturity | Borrow explicit memory mutation semantics, robust SQLite vector handling, and cross-assistant integrations. Do not default to graph-heavy infrastructure. |
-| `OpenCode` | Refined TUI with new dialogs, workspace routing middleware, and state-model cleanup | co is directionally aligned but can improve workflow polish, TUI dialogues, and clean state routing | Borrow lightweight workflow routing, state management discipline, and TUI polish. Do not add orchestration machinery for its own sake. |
-| `nanobot` | Broad chat-app integration (added WeCom), native heartbeat/cron tasks, new memory consolidation token logic, config migration tests | co has background tasks and CLI focus, but narrower external channel integration and consolidation logic | Borrow memory consolidation logic and broad channel connectivity ideas. Do not abandon CLI-first origins for a purely chat-bot focus. |
+| `Codex` | TUI app server `/feedback` routing, `code-mode` tools, and log DB maintenance; strongest shell-safety and sandboxing discipline. | co already has approval-first execution and shell policy, but is less formal on execution hardening and more personal-operator oriented | Borrow command-policy rigor, TUI server routing, and logging discipline. Do not drift into a sandbox-first product identity. |
+| `Claude Code` | Memory hierarchy via `CLAUDE.md`; first-class subagents; mature permission surfaces; robust workflow helper scripts. | co is already aligned on scoped delegation, markdown-defined behavior, and approvals, but has a flatter memory model | Borrow scoped memory visibility, workflow automation scripts, and specialist-context patterns. Do not recenter the product around coding. |
+| `fork-claude-code` | Real-world CLI built on React/Ink and Bun. Uses strict ESM, `Tool` interfaces, and rigid UI performance boundaries to avoid CLI repaints. | co uses Python/Pydantic-AI with prompt-toolkit/rich, lacking a React-based component model but avoiding bundle-size/repaint issues. | Borrow the strict component separation and performance discipline for terminal repaints. Do not adopt Bun/React for the CLI. |
+| `Gemini CLI` | Stable subagents (graduated from experimental), new "Plan mode" stability, dynamic permission expansion, and `__read`/`__write` sandbox operations. | co has a stronger local-memory and approval story, but weaker cross-surface continuity and plan-mode workflows. | Borrow permission ergonomics, Plan mode workflows, and sandbox read/write patterns selectively. Do not copy broad product-surface ambition. |
+| `Aider` | Immediate adoption of frontier models (GPT-5.3/5.4/Codex); very simple approval model; git-centric reversibility; trust through explicitness. | co has richer workflows and tools, but also more complexity and more trust UX burden | Borrow simplicity, rapid frontier model support, and reversibility discipline. Do not assume co should collapse into a purely git-centric workflow. |
+| `OpenClaw` | Enhanced plugin `before_install` policy context shaping, Agentic Control Protocol (ACP) support, subagent scoping/spawn limits. | co is closer on knowledge-work orientation and local operator feel, but narrower in scope and lacks explicit inter-agent protocols like ACP | Borrow ACP standard integration, subagent boundary limits, and plugin policy shaping. Do not absorb the full surface-area sprawl. |
+| `Letta` | Advancing `sleeptime_multi_agent_v4`, summarizer awareness of GitHub PRs/plans, SGLang native adapters, and internal REST API search. | co has a strong local memory substrate, but it is still flatter and less visibly typed | Borrow typed memory tiers, background/sleeptime maintenance, and advanced summarization contexts. Do not adopt a framework dependency wholesale. |
+| `Mem0` | New Node/Python CLI SDKs, DeepSeek response formatting optimizations, MongoDB collections, explicit mutation semantics. | co already has useful local memory lifecycle primitives, but weaker typed mutation semantics and SQLite/vector maturity | Borrow explicit memory mutation semantics, CLI SDK patterns, and robust SQLite vector handling. Do not default to graph-heavy infrastructure. |
+| `OpenCode` | Prompt caching and token tracking for Google Vertex/Anthropic models, refined TUI dialogs, workspace routing middleware. | co is directionally aligned but can improve workflow polish, prompt caching efficiency, and state routing | Borrow lightweight workflow routing, prompt caching, and TUI polish. Do not add orchestration machinery for its own sake. |
 
 ---
 
@@ -62,7 +61,6 @@ So the relevant comparison set is no longer "basic CLI copilots." It is "persist
 | Google | Multimodal, cross-device assistance | https://deepmind.google/technologies/project-astra/<br>https://deepmind.google/en/models/project-astra/ | The assistant frontier is becoming multimodal, proactive, and persistent across devices. |
 | Letta | Typed memory blocks and async memory upkeep | https://docs.letta.com/letta-code/memory | Typed, inspectable memory blocks are stronger than opaque flat recall, and asynchronous memory maintenance is becoming standard. |
 | Mem0 | Structured memory operations | https://docs.mem0.ai/overview<br>https://docs.mem0.ai/core-concepts/memory-operations/add<br>https://docs.mem0.ai/platform/features/graph-memory<br>https://docs.mem0.ai/open-source/features/multimodal-support<br>https://docs.mem0.ai/open-source/features/custom-update-memory-prompt | Frontier memory systems increasingly treat memory as a structured evolving knowledge layer, not a bag of notes. |
-| nanobot | Transparent async scheduling and broad channel continuity | https://github.com/HKUDS/nanobot | Simple, LLM-driven background tasks (heartbeat via markdown) and multi-channel messaging are achievable with very little code overhead. |
 
 # 4. Convergences that matter
 
@@ -88,7 +86,6 @@ Strong evidence:
 
 - OpenAI agent supports tasks that run 5-30 minutes and recurring schedules
 - Letta sleeptime agents
-- nanobot native heartbeat loop (wakes up via reading a `HEARTBEAT.md` file) and robust cron capabilities
 
 Design implication for co:
 
@@ -128,7 +125,6 @@ Strong evidence:
 - Google Project Astra
 - OpenAI Atlas and agent/browser integration
 - Mem0 multimodal memory
-- nanobot multi-channel chat-app messaging bus (Telegram, Discord, Feishu, QQ, etc.)
 
 Design implication for co:
 
@@ -230,7 +226,7 @@ That is a better design center than maximizing recall count or extraction aggres
 
 ## 6.2 Asynchronous autonomy
 
-co has background subprocesses, but not yet recurring plans, deferred follow-up, or task graphs that combine tools, memory updates, and approvals over time. The explicit, file-backed `HEARTBEAT.md` loop pattern seen in `nanobot` illustrates a highly transparent, local-first way to implement recurring tasks without rigid framework scheduling.
+co has background subprocesses, but not yet recurring plans, deferred follow-up, or task graphs that combine tools, memory updates, and approvals over time.
 
 ## 6.3 Memory legibility
 
@@ -263,11 +259,13 @@ That means:
 
 Examples:
 
-- from Codex: adopt command-safety rigor, not sandbox-first identity
-- from Claude Code: adopt scoped specialist contexts, not coding-first product scope
-- from Letta: adopt typed memory visibility, not a framework dependency
+- from Codex: adopt command-safety rigor and log Db maintenance, not sandbox-first identity
+- from Claude Code: adopt scoped specialist contexts and workflow automation scripts, not coding-first product scope
+- from Gemini CLI: adopt Plan mode stability and sandbox permissions, not broad cross-surface ambition
+- from Aider: adopt frontier model adoption speed and trust through explicitness, not pure git-centric workflow
+- from Letta: adopt background/sleeptime maintenance flows and typed memory, not a framework dependency
 - from Mem0: adopt explicit memory update semantics, not graph-heavy architecture by default
-- from nanobot: adopt transparent heartbeat tasks and channel event bus, not a pure chatbot architecture
+- from OpenCode: adopt workflow routing and prompt caching efficiency, not orchestration machinery for its own sake
 - from OpenAI/Google frontier products: adopt direction-of-travel signals, not cloud-scale breadth
 ---
 

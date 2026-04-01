@@ -9,9 +9,8 @@ Covers:
 """
 
 import asyncio
-from pathlib import Path
 from dataclasses import replace
-
+from pathlib import Path
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
@@ -21,8 +20,8 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_TASK, WebPolicy
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.config import settings, ROLE_TASK
+from co_cli.deps import CoDeps, CoCapabilityState, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
 from tests._frontend import SilentFrontend
@@ -41,9 +40,6 @@ _TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 # Agents built once at module level to avoid per-test construction overhead.
 _AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
-# web_search case needs search="ask" so the tool is deferred rather than auto-executed.
-_WEB_ASK_CFG = replace(_CONFIG_NO_MCP, web_policy=WebPolicy(search="ask"))
-_AGENT_WEB_ASK = build_task_agent(config=_WEB_ASK_CFG, resolved=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:
@@ -51,21 +47,11 @@ def _make_deps(session_id: str) -> CoDeps:
         services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
-    )
-
-
-def _make_deps_web_deferred(session_id: str) -> CoDeps:
-    """Deps with web_search deferred (ask) so the test verifies tool name + query from turn 1.
-
-    No need to execute the actual search or wait for a second LLM turn.
-    """
-    return CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=replace(
-            _CONFIG_NO_MCP,
-            web_policy=WebPolicy(search="ask"),
+        capabilities=CoCapabilityState(
+            tool_names=_AGENT_NOREASON.tool_names,
+            tool_approvals=_AGENT_NOREASON.tool_approvals,
+            tool_catalog=_AGENT_NOREASON.tool_catalog,
         ),
-        session=CoSessionState(session_id=session_id),
     )
 
 
@@ -100,15 +86,9 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    if expected_tool == "web_search":
-        agent = _AGENT_WEB_ASK.agent
-        deps = _make_deps_web_deferred(f"test-tool-{expected_tool}")
-        # Deny deferred web_search — avoids executing the search while verifying tool selection.
-        frontend = SilentFrontend(approval_response="n")
-    else:
-        agent = _AGENT_NOREASON.agent
-        deps = _make_deps(f"test-tool-{expected_tool}")
-        frontend = SilentFrontend(approval_response="y")
+    agent = _AGENT_NOREASON.agent
+    deps = _make_deps(f"test-tool-{expected_tool}")
+    frontend = SilentFrontend(approval_response="y")
 
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     last_details = "no run executed"

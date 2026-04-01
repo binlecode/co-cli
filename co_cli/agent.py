@@ -27,6 +27,7 @@ from co_cli.tools.memory import save_memory, list_memories, update_memory, appen
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 from co_cli.tools.todo import write_todos, read_todos
 from co_cli.tools.capabilities import check_capabilities
+from co_cli.tools.tool_search import search_tools
 from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
 from co_cli.tools.subagent import run_coding_subagent, run_research_subagent, run_analysis_subagent, run_reasoning_subagent
 from co_cli.tools.task_control import (
@@ -38,14 +39,44 @@ from co_cli.tools.task_control import (
 
 logger = logging.getLogger(__name__)
 
-# Tools that must remain visible on every segment, including approval-resume turns.
-# The model needs these to report status, manage session todos, and check capabilities
-# even when the filter is narrowed to only the deferred tool names.
-_ALWAYS_ON_TOOL_NAMES: frozenset[str] = frozenset({
+# Tools visible on every segment — including approval-resume turns.
+# The model needs these to report status, manage session todos, check capabilities,
+# and discover additional tools even when the filter is narrowed.
+ALWAYS_ON_TOOL_NAMES: frozenset[str] = frozenset({
     "check_capabilities",
     "read_todos",
     "write_todos",
+    "search_tools",
 })
+
+# Core tool surface — always visible on main turns without calling search_tools.
+# Covers the read-heavy 90%: knowledge reads, workspace reads, web, and execution.
+# Write/connector/delegation tools are discoverable via search_tools().
+CORE_TOOL_NAMES: frozenset[str] = frozenset({
+    # always-on subset
+    "check_capabilities",
+    "read_todos",
+    "write_todos",
+    "search_tools",
+    # knowledge reads
+    "search_memories",
+    "search_knowledge",
+    "search_articles",
+    "read_article",
+    # workspace reads
+    "read_file",
+    "list_directory",
+    "find_in_files",
+    # web
+    "web_search",
+    "web_fetch",
+    # execution
+    "run_shell_command",
+})
+
+assert ALWAYS_ON_TOOL_NAMES <= CORE_TOOL_NAMES, (
+    "ALWAYS_ON_TOOL_NAMES must be a subset of CORE_TOOL_NAMES"
+)
 
 
 @dataclass(frozen=True)
@@ -91,10 +122,10 @@ def _build_filtered_toolset(
 ) -> "tuple[AbstractToolset[CoDeps], dict[str, bool], dict[str, ToolConfig]]":
     """Build a FilteredToolset containing all tools for this config.
 
-    Tools are registered into a FunctionToolset and wrapped with a FilteredToolset
-    that reads deps.runtime.active_tool_filter per request. When the filter is None
-    (main agent turns), all tools are visible. When set (approval-resume turns), only
-    the named tools plus _ALWAYS_ON_TOOL_NAMES are sent to the model.
+    Tools are registered into a FunctionToolset wrapped with a per-request filter.
+    The filter reads deps.runtime.active_tool_filter on every API call; only tools
+    whose names are in that set are sent to the model. compute_segment_filter() in
+    _orchestrate.py is the sole owner — it sets active_tool_filter before every segment.
 
     Domain tools (obsidian, google) are conditionally excluded when the relevant
     config paths are absent — they would fail at runtime regardless, so there is no
@@ -117,6 +148,7 @@ def _build_filtered_toolset(
         retries: int | None = None,
     ) -> None:
         name = fn.__name__
+        description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
         kwargs: dict[str, Any] = {"requires_approval": approval}
         if retries is not None:
             kwargs["retries"] = retries
@@ -128,6 +160,7 @@ def _build_filtered_toolset(
             family=family,
             approval=approval,
             integration=integration,
+            description=description,
         )
 
     # Background task management
@@ -136,8 +169,9 @@ def _build_filtered_toolset(
     _reg(cancel_background_task, approval=False, family="workflow")
     _reg(list_background_tasks, approval=False, family="workflow")
 
-    # Capability introspection — no approval (read-only, no side effects)
+    # Capability introspection and tool discovery — no approval (read-only, session-local side effects only)
     _reg(check_capabilities, approval=False, family="system")
+    _reg(search_tools, approval=False, family="system")
 
     # Sub-agent tools — registered only when the role model is configured
     if config.role_models.get(ROLE_CODING):
@@ -193,10 +227,9 @@ def _build_filtered_toolset(
         _reg(search_calendar_events, approval=False, family="connectors", integration="google_calendar", retries=3)
         _reg(create_gmail_draft, approval=True, family="connectors", integration="google_gmail", retries=1)
 
-    policy = config.web_policy
     # Network tier: retries=3 for transient connectivity failures
-    _reg(web_search, approval=policy.search == "ask", family="web", retries=3)
-    _reg(web_fetch, approval=policy.fetch == "ask", family="web", retries=3)
+    _reg(web_search, approval=False, family="web", retries=3)
+    _reg(web_fetch, approval=False, family="web", retries=3)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
         f = ctx.deps.runtime.active_tool_filter
@@ -293,6 +326,17 @@ def build_agent(
         from co_cli.prompts.personalities._injector import _load_personality_memories
         return _load_personality_memories()
 
+    @agent.instructions
+    def add_tool_surface_hint(ctx: RunContext[CoDeps]) -> str:
+        """Describe the progressive tool surface so the model knows to call search_tools."""
+        return (
+            "Tool surface: core tools are always available. "
+            "Call search_tools(query) to discover and unlock additional tools — "
+            "for writing files, saving memories, background tasks, sub-agents, "
+            "or connectors (Obsidian, Google Drive, Gmail, Calendar). "
+            "Unlocked tools persist for this session; use /new to reset."
+        )
+
     return AgentCapabilityResult(
         agent=agent,
         tool_names=list(tool_approvals.keys()),
@@ -364,6 +408,7 @@ async def discover_mcp_tools(
                         source="mcp",
                         family="connectors",
                         approval=approval,
+                        description=t.description or "",
                     )
         except Exception as e:
             logger.warning(

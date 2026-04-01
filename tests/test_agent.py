@@ -5,7 +5,7 @@ from pathlib import Path
 
 from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import WebPolicy, settings, ROLE_TASK
+from co_cli.config import settings, ROLE_TASK
 from co_cli.deps import CoConfig
 
 
@@ -61,26 +61,11 @@ def test_approval_tools_flagged():
         )
 
 
-def test_web_search_ask_requires_approval():
-    """web_search requires approval when web_policy.search is 'ask'."""
-    config = dataclasses.replace(
-        CoConfig.from_settings(settings, cwd=Path.cwd()),
-        web_policy=WebPolicy(search="ask", fetch="allow"),
-    )
-    result = build_agent(config=config)
-    assert result.tool_approvals["web_search"] is True
-    assert result.tool_approvals["web_fetch"] is False
-
-
-def test_web_fetch_ask_requires_approval():
-    """web_fetch requires approval when web_policy.fetch is 'ask'."""
-    config = dataclasses.replace(
-        CoConfig.from_settings(settings, cwd=Path.cwd()),
-        web_policy=WebPolicy(search="allow", fetch="ask"),
-    )
-    result = build_agent(config=config)
+def test_web_tools_do_not_require_approval():
+    """web_search and web_fetch follow the common read-only approval path."""
+    result = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     assert result.tool_approvals["web_search"] is False
-    assert result.tool_approvals["web_fetch"] is True
+    assert result.tool_approvals["web_fetch"] is False
 
 
 def test_build_task_agent_registers_same_tools_as_main_agent():
@@ -165,4 +150,3 @@ def test_tool_catalog_source_axis_native_only():
     result = build_agent(config=CoConfig())
     for name, tc in result.tool_catalog.items():
         assert tc.source == "native", f"{name}: expected native source before MCP discovery"
-

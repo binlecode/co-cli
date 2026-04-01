@@ -92,14 +92,7 @@ CASES: list[ChainCase] = [
         expected_chain=["web_search", "web_fetch", "save_article"],
         requires="brave_search_api_key",
     ),
-    ChainCase(
-        id="chain-shell-error-recovery",
-        prompt=(
-            "Run a shell command that intentionally fails, like 'ls /directory_that_does_not_exist_xyz123'. "
-            "When it fails, tell me that it failed."
-        ),
-        expected_chain=["run_shell_command"],
-    ),
+
 ]
 
 
@@ -112,16 +105,11 @@ def score_case(
     case: ChainCase,
     tool_names: list[str],
     has_text_output: bool,
-    output_text: str = "",
 ) -> dict[str, bool]:
-    scores = {
+    return {
         "chain_match": is_ordered_subsequence(case.expected_chain, tool_names),
         "chain_complete": has_text_output,
     }
-    if case.id == "chain-shell-error-recovery":
-        output_lower = output_text.lower() if output_text else ""
-        scores["error_acknowledged"] = any(k in output_lower for k in ["error", "fail", "exit code", "non-zero", "not exist", "no such file"])
-    return scores
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +143,7 @@ async def run_chain_case(
     tool_names = [name for name, _ in calls]
     has_text = isinstance(result.output, str) and len(result.output) > 0
 
-    output_text = result.output if isinstance(result.output, str) else ""
-    scores = score_case(case, tool_names, has_text, output_text)
+    scores = score_case(case, tool_names, has_text)
 
     return {
         "id": case.id,

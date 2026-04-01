@@ -7,14 +7,14 @@ This doc covers the persistent and injected context layers that shape what the a
 The agent has no persistent state in model weights. Carry-forward context is split by lifecycle and consumer:
 
 - **System prompt**: the highest-priority behavioral contract. A static scaffold is assembled once at startup, then runtime instruction layers are evaluated fresh on each request. Neither is subject to history compaction.
-- **Conversation history**: the in-session message list passed to the model on each foreground turn. History processors trim old tool output, inject recalled memory, add safety nudges, and compact long transcripts. The message list itself is process memory only.
-- **Memory**: conversation-derived facts, corrections, preferences, and session-summary artifacts stored as YAML-frontmatter markdown under `.co-cli/memory/`. Writes flow through one lifecycle pipeline: dedup, optional consolidation, write, index, retention.
-- **Knowledge index**: a derived SQLite search index over memories, library articles, Obsidian notes, and Drive documents. It is rebuildable and searched through `search_knowledge` or `search_memories`, depending on the source.
+- **Conversation history**: the in-session message list passed to the model on each foreground turn. History processors run in a fixed order: trim old tool output, detect safety issues, recall relevant memory, then compact long transcripts. The message list itself is process memory only.
+- **Memory**: conversation-derived facts, corrections, preferences, and session-summary artifacts stored as YAML-frontmatter markdown under `ctx.deps.config.memory_dir` (`.co-cli/memory/` in normal startup). Writes enter one lifecycle entrypoint: recent-window dedup may update and reindex an existing file, non-duplicate writes may optionally consolidate against recent memories, and only surviving ADD paths create a new file that is then indexed and subject to retention.
+- **Knowledge index**: a derived SQLite search index over memories, library articles, Obsidian notes, and Drive documents cached after `read_drive_file()`. It is rebuildable and searched through `search_memories` for memory-only recall or `search_knowledge` for cross-source retrieval; `search_knowledge` defaults to non-memory sources unless `source="memory"` is requested explicitly.
 - **Delegation metadata**: inline subagent provenance is carried in `ToolReturnPart.content`; background task state lives in `ctx.deps.session.background_tasks`. These support operator inspection but are not a separate recalled context layer.
 
 ```text
 Agent construction (once per session)
-  build_static_instructions()   — assembles all 7 sections in explicit order: soul seed, character memories, mindsets, rules (strict numbered order), examples, counter-steering, critique; fails on missing rules, invalid filenames, gaps, or duplicates
+  build_static_instructions()   — assembles all 7 sections in explicit order: soul seed, character memories, mindsets, rules (strict numbered order), examples, counter-steering, critique; fails on no rule files, invalid filenames, gaps, or duplicates
   Agent(instructions=...)       — static prompt stored on agent at construction; runtime @agent.instructions layers are registered afterward
 
 Per-request dynamic layers (@agent.instructions — evaluated fresh, never accumulated)
@@ -23,6 +23,7 @@ Per-request dynamic layers (@agent.instructions — evaluated fresh, never accum
   add_project_instructions()    — .co-cli/instructions.md content (if present)
   add_always_on_memories()      — always_on=True memories as standing context
   add_personality_memories()    — personality-continuity memories
+  add_tool_surface_hint()       — progressive tool surface description; instructs model to call search_tools
 
 Conversation-history governance (main agent only)
   truncate_tool_returns()       — trim old ToolReturnPart.content > tool_output_trim_chars
@@ -30,184 +31,167 @@ Conversation-history governance (main agent only)
   inject_opening_context()      — recall_memory() against current user message; inject as SystemPromptPart
   truncate_history_window()     — compact to head + summary marker + tail when over threshold
 
-After each turn
-  precompute_compaction()       — if history is near the threshold, summarize the future middle eagerly
-  HistoryCompactionState        — owns the background asyncio.Task; harvested on next on_turn_start()
-  analyze_for_signals()         — LLM scan for correction/preference signals
+Turn-start compaction handoff
+  HistoryCompactionState.on_turn_start()
+    -> harvest completed precompute task into runtime.precomputed_compaction
+    -> cancel stale unfinished task before run_turn()
+
+After each foreground turn
+  _finalize_turn()
+    -> analyze_for_signals() then handle_signal() on clean turns only
+    -> touch_session() then save_session()
+    -> HistoryCompactionState.on_turn_end()
+       -> precompute_compaction() in background for the next turn
 
 Session persistence
+  restore_session()
+    -> load_session()
+    -> is_fresh(ttl_minutes) restores session_id within TTL; else new_session() and attempt save_session()
   .co-cli/session.json          — session_id, created_at, last_used_at, compaction_count
-  is_fresh(ttl_minutes)         — restores session_id within TTL; new session on expiry
   message_history               — not persisted to disk
 
 Memory write path
   persist_memory()
     -> dedup check (recent-window fuzzy match)
-    -> optional LLM consolidation
-    -> write markdown file to memory_dir
+       -> duplicate: update existing memory file + KnowledgeIndex.index()
+       -> non-duplicate: optional LLM consolidation plan
+          -> may UPDATE existing memory file
+          -> may DELETE unprotected memory file
+          -> may return without creating a new entry
+    -> write markdown file to memory_dir when a new entry is needed
     -> KnowledgeIndex.index()
     -> enforce_retention() when memory_max_count is exceeded
+       -> KnowledgeIndex.remove_stale() for retention-deleted memory files
 
 Knowledge search path
-  search_knowledge() / search_memories()
-    -> KnowledgeIndex.search()
-       -> FTS5 BM25 (docs_fts / chunks_fts)
-       -> optional sqlite-vec similarity (docs_vec / chunks_vec)
+  search_memories()
+    -> KnowledgeIndex.search(source="memory", kind="memory")
+       -> memory docs leg (docs_fts; docs_vec + RRF in hybrid mode)
        -> optional TEI or LLM reranking
+  search_knowledge()
+    -> KnowledgeIndex.search(source=["library","obsidian","drive"] by default)
+       -> non-memory chunks leg (chunks_fts; chunks_vec in hybrid mode)
+       -> explicit source="memory" routes to the memory docs leg
        -> RRF merge when hybrid
+       -> optional TEI or LLM reranking
 
 Delegation metadata
   run_*_subagent
     -> ToolResult includes run_id, role, model_name, requests_used, request_limit, scope
   start_background_task
-    -> session.background_tasks[task_id] stores command, cwd, status, timestamps, exit code, output ring buffer
+    -> session.background_tasks[task_id] stores command, cwd, description, status, timestamps, exit code, output ring buffer, process handle
 ```
 
 ```mermaid
-flowchart TB
-    Start[Startup]
+flowchart TD
+    Start[startup]
 
-    subgraph PromptBuild[Static Prompt Build]
+    subgraph StartupFlow[startup]
         direction TB
         CreateDeps[create_deps]
         BuildPrompt[build_static_instructions]
-        Soul[load soul seed + character memories + mindsets]
-        Rules[collect numbered rules]
-        Examples[load_soul_examples]
-        Quirks[get_counter_steering]
-        Critique[load_soul_critique]
         StaticInstructions[config.static_instructions]
-        MainAgent[build_agent -> Agent]
-        TaskAgent[build_task_agent -> lightweight approval-resume Agent]
+        MainAgent[build_agent]
+        ChatLoop[_chat_loop]
+        TaskGate{ROLE_TASK}
+        TaskAgent[build_task_agent]
+        Sync[sync_knowledge]
+        Restore[restore_session]
+        SessionJson[deps.config.session_path]
 
-        CreateDeps --> BuildPrompt
-        BuildPrompt --> Soul
-        BuildPrompt --> Rules
-        BuildPrompt --> Examples
-        BuildPrompt --> Quirks
-        BuildPrompt --> Critique
-        Soul --> StaticInstructions
-        Rules --> StaticInstructions
-        Examples --> StaticInstructions
-        Quirks --> StaticInstructions
-        Critique --> StaticInstructions
-        StaticInstructions --> MainAgent
-        CreateDeps --> TaskAgent
+        CreateDeps --> BuildPrompt --> StaticInstructions --> MainAgent --> ChatLoop
+        ChatLoop --> TaskGate
+        TaskGate -->|yes| TaskAgent
+        ChatLoop --> Sync --> Restore --> SessionJson
     end
 
-    subgraph RequestLayers[Per-Request Layers On Main Agent]
+    subgraph TurnFlow[foreground turn]
         direction TB
-        Turn[Foreground model request]
-        Dynamic[agent instructions evaluated fresh]
+        TurnStart[_run_foreground_turn]
+        Harvest[HistoryCompactionState.on_turn_start]
+        Precomputed[deps.runtime.precomputed_compaction]
+        RunTurn[run_turn]
         Date[add_current_date]
         Shell[add_shell_guidance]
         Project[add_project_instructions]
-        AlwaysOn[add_always_on_memories from memory files]
+        AlwaysOn[add_always_on_memories]
         Personality[add_personality_memories]
-        Processors[history_processors in order]
+        ToolHint[add_tool_surface_hint]
         Trim[truncate_tool_returns]
         Safety[detect_safety_issues]
         Recall[inject_opening_context]
-        RecallState[session memory_recall_state]
-        RecallTool[recall_memory max_results 3]
+        RecallTool[recall_memory]
+        RecallState[deps.session.memory_recall_state]
         Compact[truncate_history_window]
-        Precomputed[runtime precomputed_compaction]
-
-        Turn --> Dynamic
-        Dynamic --> Date
-        Dynamic --> Shell
-        Dynamic --> Project
-        Dynamic --> AlwaysOn
-        Dynamic --> Personality
-        Turn --> Processors
-        Processors --> Trim
-        Processors --> Safety
-        Processors --> Recall
-        Recall --> RecallState
-        Recall --> RecallTool
-        Processors --> Compact
-        Compact --> Precomputed
-    end
-
-    subgraph TurnEnd[After Foreground Turn]
-        direction TB
         Finalize[_finalize_turn]
-        Signal[analyze_for_signals then handle_signal on clean turns]
-        Session[touch_session then save_session]
-        Compactor[HistoryCompactionState on_turn_end]
+        Interrupted{turn_result.interrupted}
+        Outcome{turn_result.outcome}
+        Signal[analyze_for_signals]
+        HandleSignal[handle_signal]
+        Touch[touch_session]
+        SaveSession[save_session]
+        Compactor[HistoryCompactionState.on_turn_end]
         BgCompact[precompute_compaction]
-        SessionFile[session json metadata only]
 
-        Finalize --> Signal
-        Finalize --> Session
-        Session --> SessionFile
-        Finalize --> Compactor
-        Compactor --> BgCompact
+        TurnStart --> Harvest --> Precomputed
+        TurnStart --> RunTurn
+        RunTurn --> Date --> Shell --> Project --> AlwaysOn --> Personality --> ToolHint
+        ToolHint --> Trim --> Safety --> Recall --> Compact --> Finalize
+        Recall --> RecallTool
+        Recall --> RecallState
+        Precomputed --> Compact
+        Finalize --> Interrupted
+        Interrupted -->|false| Outcome
+        Outcome -->|!= error| Signal --> HandleSignal
+        Finalize --> Touch --> SaveSession --> SessionJson
+        Finalize --> Compactor --> BgCompact
     end
 
-    subgraph Persistence[Persistent Context Stores]
+    subgraph PersistenceFlow[persistence]
         direction TB
         SaveMemory[persist_memory]
-        MemoryFiles[memory markdown files]
-        Dedup[dedup or duplicate update]
-        Consolidate[optional LLM consolidate]
-        MemoryIndex[KnowledgeIndex index memory docs]
-        Retention[enforce_retention plus remove_stale]
-
+        Dedup[_check_duplicate]
+        MemoryUpdate[_update_existing_memory]
+        Consolidate[consolidate]
+        ApplyPlan[apply_plan_atomically]
+        MemoryDir[deps.config.memory_dir]
+        MemoryIndex[KnowledgeIndex.index]
+        Retention[enforce_retention]
+        RemoveStale[KnowledgeIndex.remove_stale]
         SaveArticle[save_article]
-        LibraryFiles[library article markdown files]
-        ArticleIndex[KnowledgeIndex index library docs]
-        ArticleChunks[KnowledgeIndex index_chunks library]
-
-        Sync[sync_knowledge]
-        SyncMemory[sync_dir memory]
-        SyncLibrary[sync_dir library]
+        ArticleDedup[_find_article_by_url]
+        ArticleDir[ctx.deps.config.library_dir]
+        ArticleIndex[KnowledgeIndex.index]
+        ArticleChunks[KnowledgeIndex.index_chunks]
 
         SaveMemory --> Dedup
-        Dedup --> Consolidate
-        Consolidate --> MemoryFiles
-        MemoryFiles --> MemoryIndex
-        MemoryFiles --> Retention
-        SaveArticle --> LibraryFiles
-        LibraryFiles --> ArticleIndex
-        LibraryFiles --> ArticleChunks
-        Sync --> SyncMemory
-        Sync --> SyncLibrary
+        Dedup -->|duplicate| MemoryUpdate --> MemoryIndex
+        Dedup -->|non-duplicate| Consolidate --> ApplyPlan --> MemoryDir
+        MemoryDir --> MemoryIndex --> Retention --> RemoveStale
+        SaveArticle --> ArticleDedup --> ArticleDir --> ArticleIndex --> ArticleChunks
     end
 
-    subgraph SearchAndMetadata[Search And Operator Metadata]
+    subgraph RetrievalFlow[retrieval and metadata]
         direction TB
         SearchMem[search_memories]
+        SearchMemRoute[KnowledgeIndex.search]
         SearchKnow[search_knowledge]
-        SearchIdx[KnowledgeIndex search]
-        DocsLeg[memory docs FTS leg]
-        ChunksLeg[non memory chunks FTS leg]
-        Hybrid[optional vector search plus RRF]
-        Rerank[optional TEI or LLM rerank]
-        DB[search db]
-        Delegate[run subagent tools]
+        SearchKnowRoute[KnowledgeIndex.search]
+        SearchDB[deps.config.knowledge_db_path]
+        Delegate[run_*_subagent]
+        ToolMeta[ToolResult content]
         BgTasks[start_background_task]
-        ToolMeta[ToolResult metadata in tool return content]
-        TaskMeta[session background_tasks]
+        TaskMeta[deps.session.background_tasks]
 
-        SearchMem --> SearchIdx
-        SearchKnow --> SearchIdx
-        SearchIdx --> DocsLeg
-        SearchIdx --> ChunksLeg
-        SearchIdx --> Hybrid
-        SearchIdx --> Rerank
-        DocsLeg --> DB
-        ChunksLeg --> DB
-        Hybrid --> DB
+        SearchMem --> SearchMemRoute --> SearchDB
+        SearchKnow --> SearchKnowRoute --> SearchDB
         Delegate --> ToolMeta
         BgTasks --> TaskMeta
     end
 
-    Start --> PromptBuild
-    MainAgent --> RequestLayers
-    RequestLayers --> TurnEnd
-    TurnEnd --> Persistence
-    Persistence --> SearchAndMetadata
+    Start --> StartupFlow --> TurnFlow
+    HandleSignal --> PersistenceFlow
+    PersistenceFlow --> RetrievalFlow
 ```
 
 ## 2. Core Logic
@@ -218,19 +202,19 @@ flowchart TB
 
 `create_deps()` builds `config.static_instructions` once via `build_static_instructions()` in `prompts/_assembly.py`. Assembly order is strict:
 
-1. Soul seed from `souls/<personality>/seed.md`
-2. Character base memories from `souls/<personality>/character_memories.md`
-3. Mindsets from `mindsets/<personality>/`
-4. Behavioral rules from `prompts/rules/NN_rule_id.md`, loaded in contiguous numeric order
-5. Soul examples from `souls/<personality>/examples.md`
-6. Model-specific counter-steering from `prompts/model_quirks/`
-7. Soul critique appended as a trailing `## Review lens` block
+1. Soul seed from `co_cli/prompts/personalities/souls/<role>/seed.md`
+2. Character memories from files in `config.memory_dir` tagged with both `<role>` and `"character"`
+3. Mindsets from `co_cli/prompts/personalities/mindsets/<role>/<task_type>.md`
+4. Behavioral rules from `co_cli/prompts/rules/NN_rule_id.md`, loaded in contiguous numeric order
+5. Soul examples from `co_cli/prompts/personalities/souls/<role>/examples.md`
+6. Model-specific counter-steering from `co_cli/prompts/model_quirks/`
+7. Soul critique appended as a trailing `## Review lens` block from `co_cli/prompts/personalities/souls/<role>/critique.md`
 
-When no personality is configured, only rules and model counter-steering are guaranteed to participate. The shipped settings default is still `finch`; this no-personality path only applies when personality is explicitly unset or a `CoConfig` is constructed with `personality=None`.
+When no personality is configured, only numbered rules are guaranteed to participate. Model-specific counter-steering is added only when `model_name` is non-empty.
 
 **Runtime instruction layers**
 
-`build_agent()` registers five `@agent.instructions` callbacks. pydantic-ai evaluates them fresh on every model request and concatenates them ahead of message history:
+`build_agent()` registers six `@agent.instructions` callbacks. pydantic-ai evaluates them fresh on every model request:
 
 | Layer | Condition | Content |
 |-------|-----------|---------|
@@ -239,12 +223,13 @@ When no personality is configured, only rules and model counter-steering are gua
 | `add_project_instructions` | `.co-cli/instructions.md` exists | Full file contents |
 | `add_always_on_memories` | `always_on=True` memories exist | Standing context block, capped by `memory_injection_max_chars` |
 | `add_personality_memories` | personality configured | Relationship-continuity memories from the personality injector |
+| `add_tool_surface_hint` | always | Description of progressive tool surface; instructs model to call `search_tools` to unlock additional tools |
 
-The system prompt and instruction layers are provider-level context, not transcript entries, so `truncate_history_window()` never evicts them.
+The static instructions and these runtime instruction layers are not written into `message_history`, so `truncate_history_window()` does not operate on them.
 
 **Task agent**
 
-`build_task_agent()` uses a fixed `_TASK_AGENT_SYSTEM_PROMPT` string and omits history processors and per-request instruction layers. It exists to resume already-approved deferred tool calls without paying the full main-agent context cost.
+`build_task_agent()` uses a fixed `_TASK_AGENT_SYSTEM_PROMPT` string, omits history processors and per-request instruction layers, and keeps the same toolsets as the main agent. It exists to resume already-approved deferred tool calls without paying the full main-agent context cost.
 
 ### Conversation History
 
@@ -259,8 +244,8 @@ This doc treats them as the context-governance layer. Their exact execution cont
 
 Two persistence rules matter here:
 
-1. `.co-cli/session.json` stores only session metadata: `session_id`, `created_at`, `last_used_at`, and `compaction_count`.
-2. `message_history` itself is not written to disk. Restart continuity comes from the restored session ID, persisted memories, and any session-summary memory artifacts, not from replaying prior messages.
+1. `deps.config.session_path` stores only session metadata: `session_id`, `created_at`, `last_used_at`, and `compaction_count`.
+2. `message_history` itself is not written to disk. Restarts do not replay prior messages; only session metadata is restored, while memories and session-summary artifacts remain in the memory store.
 
 Compaction is intentionally split across turns. `precompute_compaction()` may summarize the future middle of the transcript in the background after turn `N`; on turn `N+1`, `truncate_history_window()` either uses that cached summary when the boundaries still match or falls back to a static trim marker. It does not perform an inline summarization call in the foreground request path.
 
@@ -272,19 +257,21 @@ Token counting uses real provider-reported `input_tokens` from the most recent `
 
 All memory saves route through `persist_memory()` in `memory/_lifecycle.py`, whether they come from the explicit `save_memory` tool or the post-turn signal detector:
 
-1. Load recent memory candidates from `memory_dir`
-2. Check for a duplicate within `memory_dedup_window_days` using fuzzy similarity
-3. If a duplicate is found, update the existing file and re-index it
-4. Otherwise, optionally run LLM consolidation against the top `memory_consolidation_top_k` recent memories
-5. Write the new markdown file with validated frontmatter
-6. Index it immediately into `KnowledgeIndex`
-7. If `memory_max_count` is exceeded, run `enforce_retention()` and remove stale index entries
+1. Create `memory_dir` if needed, load all items for ID allocation, and load memory-only entries for dedup and consolidation candidates
+2. When `title is None`, check recent memories within `memory_dedup_window_days` using `_check_duplicate()`
+3. If a duplicate is found, call `_update_existing_memory()` and re-index it when `knowledge_index` is available
+4. Otherwise, when a resolved model is available, run `consolidate()` against the top `memory_consolidation_top_k` recent memories and apply the resulting plan with `apply_plan_atomically()`
+5. If the consolidation plan contains no `ADD` action and is non-empty, return without writing a new entry
+6. Validate `artifact_type` when one was provided
+7. Write the new markdown file
+8. Index it immediately when `KnowledgeIndex` is available
+9. If `memory_max_count` is exceeded, run `enforce_retention()` and then `remove_stale()` when `KnowledgeIndex` is available
 
 Consolidation timeouts are policy-dependent: explicit saves fall back to ADD, while auto-signal saves can skip the write.
 
 **Auto-signal path**
 
-After a clean foreground turn, `analyze_for_signals()` scans the recent transcript for `correction` or `preference` candidates. `handle_signal()` then:
+After a clean foreground turn, `analyze_for_signals()` builds a plain-text window from recent `User:` / `Co:` lines and extracts structured `correction` or `preference` candidates. `handle_signal()` then:
 
 - rejects tags outside `memory_auto_save_tags`
 - auto-saves high-confidence signals with `on_failure="skip"`
@@ -309,7 +296,7 @@ Recall is split in two:
 | `updated` | ISO8601 \| None | Set on updates |
 | `tags` | list[str] | Lowercase tags for filtering/search |
 | `provenance` | str | `detected` \| `user-told` \| `planted` \| `auto_decay` \| `web-fetch` \| `session` |
-| `auto_category` | str \| None | `preference` \| `correction` \| `decision` \| `context` \| `pattern`; loader warns on unknown literals rather than rejecting them |
+| `auto_category` | str \| None | `preference` \| `correction` \| `decision` \| `context` \| `pattern` \| `character`; loader warns on unknown literals rather than rejecting them |
 | `certainty` | str | `high` / `medium` / `low` heuristic; loader warns on unknown literals rather than rejecting them |
 | `decay_protected` | bool | Exempt from retention eviction |
 | `always_on` | bool | Injected every turn by `add_always_on_memories()` |
@@ -317,14 +304,14 @@ Recall is split in two:
 | `artifact_type` | `"session_summary"` \| None | Structural artifact marker |
 | `origin_url` | str \| None | Used by article records |
 
-`validate_memory_frontmatter()` enforces required fields and types, but it is intentionally lenient for some optional enum-like fields today: unknown `auto_category`, `certainty`, and `artifact_type` values are logged and tolerated instead of raising.
+`validate_memory_frontmatter()` enforces required fields and types. It is strict for `provenance`, but intentionally lenient for some optional enum-like fields today: unknown `auto_category`, `certainty`, and `artifact_type` values are logged and tolerated instead of raising.
 
 ### Knowledge Index
 
-`KnowledgeIndex` in `knowledge/_index_store.py` is one SQLite database (`search.db`) with two storage legs:
+`KnowledgeIndex` in `knowledge/_index_store.py` is one SQLite database at `knowledge_db_path` (default `co-cli-search.db`) with two retrieval legs:
 
-- `docs` + `docs_fts`: full-document indexing for memory-source records
-- `chunks` + `chunks_fts`: chunked indexing for non-memory sources such as library articles, Obsidian notes, and Drive docs
+- `docs` + `docs_fts`: document rows for all indexed sources; the memory retrieval path uses this leg directly
+- `chunks` + `chunks_fts`: chunk rows for non-memory sources such as library articles, Obsidian notes, and Drive docs
 
 Hybrid mode adds `docs_vec_*` and `chunks_vec_*` sqlite-vec tables and merges BM25 plus vector retrieval with Reciprocal Rank Fusion. If hybrid cannot initialize, bootstrap degrades to `fts5`, then to `grep`.
 
@@ -345,7 +332,7 @@ Optional reranking happens after retrieval:
 | `"obsidian"` | Obsidian notes |
 | `"drive"` | indexed Drive docs |
 
-In grep fallback mode, only library and explicit memory searches are supported.
+In grep fallback mode, only library and memory searches are supported.
 
 ### Delegation Metadata
 
@@ -355,7 +342,7 @@ Delegation provenance is captured in live session structures, not in a separate 
 - `truncate_tool_returns()` only trims the `display` field for dict-shaped tool results, so those identity keys survive transcript trimming.
 - Background tasks are tracked in `ctx.deps.session.background_tasks` as `BackgroundTaskState` objects with command, cwd, status, timestamps, exit code, and an in-memory ring buffer of recent output.
 
-The operator surface reads those live structures directly: `/history` scans `ToolReturnPart`s in the transcript, and `/tasks` reads `session.background_tasks`.
+The operator surface reads those live structures directly: `/history` scans transcript `ToolReturnPart`s for `run_*_subagent` and `start_background_task`, and `/tasks` reads `session.background_tasks`.
 
 ## 3. Config
 
@@ -370,6 +357,12 @@ The operator surface reads those live structures directly: `/history` scans `Too
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Minutes since last use within which a session ID is restored |
+| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for `truncate_history_window()` |
+| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max retained chars for older tool-return content before trimming |
+| `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Contiguous same-call streak threshold for doom-loop safety injection |
+| `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Shell-error reflection cap enforced by `detect_safety_issues()` |
+| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds when enabled |
+| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Retry budget for background compaction summarization |
 
 ### Memory
 
@@ -389,17 +382,24 @@ The operator surface reads those live structures directly: `/history` scans `Too
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | Max task/query prefix stored in subagent result `scope` metadata |
+| `subagent_max_requests_coder` | `CO_CLI_SUBAGENT_MAX_REQUESTS_CODER` | `10` | Default request budget when `run_coding_subagent(max_requests=0)` |
+| `subagent_max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | Default request budget when `run_research_subagent(max_requests=0)` |
+| `subagent_max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | Default request budget when `run_analysis_subagent(max_requests=0)` |
+| `subagent_max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | Default request budget when `run_reasoning_subagent(max_requests=0)` |
 
 ### Knowledge
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
+| `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | Vault path synced lazily by `search_knowledge()` for Obsidian results |
+| `library_path` | `CO_LIBRARY_PATH` | `None` | Optional override for `library_dir`; when unset, `CoConfig.from_settings()` falls back to `DATA_DIR / "library"` |
 | `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Requested search mode: `hybrid` \| `fts5` \| `grep` |
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Embedding provider: `tei` \| `ollama` \| `gemini` \| `none` |
 | `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | Embedding model name |
 | `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | Embedding vector dimension |
 | `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | Embedder service URL |
 | `knowledge_cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
+| `knowledge_llm_reranker` | `—` | `None` | Optional `ModelConfig` used for LLM reranking when no TEI reranker is active |
 | `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | Chunk token size for non-memory sources |
 | `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | Overlap tokens between adjacent chunks |
 

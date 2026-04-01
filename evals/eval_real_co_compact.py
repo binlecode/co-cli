@@ -150,10 +150,10 @@ def main() -> int:
         print("[4/4] Inspecting summarizer spans...")
         _send(master_fd, "exit\n")
         try:
-            proc.wait(timeout=10)
+            proc.wait(timeout=EVAL_API_TIMEOUT_SECS)
         except subprocess.TimeoutExpired:
             proc.terminate()
-            proc.wait(timeout=5)
+            proc.wait(timeout=EVAL_PROBE_TIMEOUT_SECS)
 
         spans = _query_new_summarizer_spans(before_rowid)
         if not spans:
@@ -195,7 +195,7 @@ def main() -> int:
         if proc.poll() is None:
             proc.terminate()
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=EVAL_PROBE_TIMEOUT_SECS)
             except subprocess.TimeoutExpired:
                 proc.kill()
 

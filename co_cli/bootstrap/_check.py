@@ -184,8 +184,7 @@ def check_reranker_llm(config: "CoConfig") -> CheckResult:
         return CheckResult(ok=True, status="skipped", detail="LLM reranker not configured")
 
     reranker = config.knowledge_llm_reranker
-    # provider=None means inherit from session provider; explicit provider overrides session
-    if reranker.provider == "gemini" or (reranker.provider is None and config.uses_gemini()):
+    if reranker.provider == "gemini":
         return _check_gemini_key(config.llm_api_key)
 
     return check_ollama_model(config.llm_host, reranker.model)
