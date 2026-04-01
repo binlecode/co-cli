@@ -11,6 +11,15 @@
 - All `done_when:` criteria are machine-verifiable. Acceptable: `grep/test/file/doc-match`.
   Not acceptable: subjective phrases like "code is clean", "developer is satisfied",
   "feature works as expected" with no concrete check command.
+- **User-facing tasks (non-N/A `success_signal`):** `done_when` must include a behavioral
+  assertion that exercises the feature at its integration boundary — a test run
+  (`uv run pytest tests/test_<feature>.py`), a CLI command (`uv run co <cmd>`), or a
+  Python `-c` snippet that invokes the runtime path. Grep-only or file-exists-only criteria
+  on user-facing tasks are **minor** issues — they prove structure but not function.
+- **Integration boundary, not module boundary:** `done_when` should verify that the feature
+  is wired into its consumer (e.g. tool appears in the agent's toolset, config field is
+  read by the loader), not just that the module imports cleanly. A passing import does not
+  confirm the feature is reachable at runtime.
 - **Behavioral Constraints section:** present and non-empty; each constraint is specific
   enough to test or enforce without interpretation (not "should not fail" — must be
   "must never do X in condition Y"). Absence or vague constraints are blocking.

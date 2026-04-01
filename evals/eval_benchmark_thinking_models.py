@@ -2,6 +2,8 @@
 """Benchmark to compare Qwen 30b think vs Qwen 3.5 35b think models."""
 
 import argparse
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS, EVAL_BENCHMARK_TIMEOUT_SECS
+
 import json
 import sys
 import time
@@ -45,7 +47,7 @@ def run_benchmark(host: str, model: str, task_name: str, prompt: str) -> dict | 
     ttft = None
 
     try:
-        with httpx.stream("POST", url, json=payload, timeout=300.0) as response:
+        with httpx.stream("POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS) as response:
             response.raise_for_status()
 
             chunk_count = 0
@@ -96,7 +98,7 @@ def get_vram_usage(host: str, model: str) -> float:
     """Returns the VRAM usage in GB for the specified model."""
     try:
         url = f"{host.rstrip('/')}/api/ps"
-        resp = httpx.get(url, timeout=10.0)
+        resp = httpx.get(url, timeout=EVAL_PROBE_TIMEOUT_SECS)
         resp.raise_for_status()
         data = resp.json()
         for m in data.get("models", []):
@@ -130,6 +132,12 @@ def main():
         datefmt="%H:%M:%S",
     )
 
+    try:
+        httpx.get(f"{args.host.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS).raise_for_status()
+    except Exception as e:
+        print(f"SKIP: Ollama unavailable at {args.host} - {e}")
+        sys.exit(0)
+
     models = [args.model1, args.model2]
     results = []
 
@@ -146,7 +154,7 @@ def main():
                     "keep_alive": "10m",
                     "options": {"num_ctx": 131072},
                 },
-                timeout=300.0,
+                timeout=EVAL_BENCHMARK_TIMEOUT_SECS,
             )
             resp.raise_for_status()
             logger.info("Warmup successful. Memory fully loaded.")

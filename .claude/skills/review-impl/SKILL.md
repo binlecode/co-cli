@@ -181,6 +181,8 @@ For each run:
 - Exercise the specific changed behavior from the task spec
 - Confirm output matches the spec — not just "no crash"
 
+**Verify `success_signal`:** For each task with a non-N/A `success_signal`, confirm the stated user-observable outcome during behavioral verification. This is not a second `done_when` — it is a smoke check that the delivered feature produces the effect the user would notice. Record the result in the Behavioral Verification section of the verdict (e.g. "`success_signal` verified: user sees X when Y").
+
 If behavioral verification fails: treat as a blocking finding, go back to Phase 4.
 
 If no user-facing surface was changed: skip and note "no user-facing changes — behavioral verification skipped."

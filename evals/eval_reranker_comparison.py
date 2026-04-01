@@ -20,6 +20,8 @@ Usage:
 """
 
 import argparse
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
+
 import math
 import os
 import statistics
@@ -639,7 +641,7 @@ def main() -> None:
         import httpx
         ollama_ok = False
         try:
-            httpx.get(args.ollama_host, timeout=2.0)
+            httpx.get(args.ollama_host, timeout=EVAL_PROBE_TIMEOUT_SECS)
             ollama_ok = True
         except Exception:
             pass

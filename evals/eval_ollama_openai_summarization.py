@@ -11,6 +11,8 @@ Runs against the real configured system and skips gracefully when Ollama is not 
 from __future__ import annotations
 
 import asyncio
+from evals._timeouts import EVAL_SUMMARIZATION_TIMEOUT_SECS
+
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -20,7 +22,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, TextPart, UserPromp
 from pydantic_ai.models import ModelRequestParameters
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import ROLE_SUMMARIZATION, ModelEntry, settings as _settings
+from co_cli.config import ROLE_SUMMARIZATION, ModelConfig, settings as _settings
 from co_cli.context._history import _run_summarization_with_policy
 from co_cli.deps import CoConfig
 
@@ -72,7 +74,7 @@ def _replacement_config() -> CoConfig | None:
     }
     if _REPLACEMENT_MODEL == "qwen3.5:35b-a3b-think":
         api_params["reasoning_effort"] = "none"
-    role_models[ROLE_SUMMARIZATION] = ModelEntry(
+    role_models[ROLE_SUMMARIZATION] = ModelConfig(
         model=_REPLACEMENT_MODEL,
         api_params=api_params,
     )
@@ -126,7 +128,7 @@ async def _check_openai_compatible_replacement_model_returns_content() -> None:
     resolved = _replacement_resolved()
     assert resolved is not None and resolved.model is not None
 
-    async with asyncio.timeout(120):
+    async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
         response = await resolved.model.request(
             [ModelRequest(parts=[UserPromptPart(content="Reply with exactly: hello")])],
             resolved.settings,
@@ -145,7 +147,7 @@ async def _check_openai_compatible_summarization_pipeline_returns_summary() -> N
     resolved = _replacement_resolved()
     assert resolved is not None
 
-    async with asyncio.timeout(120):
+    async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
         summary = await _run_summarization_with_policy(
             _sample_messages(),
             resolved,

@@ -21,6 +21,8 @@ Usage:
 """
 
 import asyncio
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+
 import logging
 import os
 import sys
@@ -293,13 +295,14 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
         # Tier 1 & 2: run setup turns live through the LLM
         setup_turns = case["turns"][:-1]
         for prompt in setup_turns:
-            result = await agent.run(
-                prompt,
-                deps=deps,
-                message_history=history,
-                model_settings=eval_settings,
-                usage_limits=limits,
-            )
+            async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+                result = await agent.run(
+                    prompt,
+                    deps=deps,
+                    message_history=history,
+                    model_settings=eval_settings,
+                    usage_limits=limits,
+                )
             # Patch dangling tool calls before next turn — overeager models
             # may trigger tool calls during conversational setup prompts
             history = patch_dangling_tool_calls(result.all_messages())
@@ -309,13 +312,14 @@ async def run_case(case: dict, agent, deps: CoDeps, model_settings, model_label:
     # Final scored turn
     scored_prompt = case["turns"][-1]
     t0 = time.monotonic()
-    result = await agent.run(
-        scored_prompt,
-        deps=deps,
-        message_history=history,
-        model_settings=eval_settings,
-        usage_limits=limits,
-    )
+    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
+        result = await agent.run(
+            scored_prompt,
+            deps=deps,
+            message_history=history,
+            model_settings=eval_settings,
+            usage_limits=limits,
+        )
     elapsed = time.monotonic() - t0
 
     # Extract text from result — DeferredToolRequests means the model

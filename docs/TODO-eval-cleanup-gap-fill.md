@@ -53,7 +53,7 @@ with no hangs or TypeError crashes.
 
 ## Implementation Plan
 
-### BUG-A: Fix `run_turn()` signature mismatch
+### ✓ DONE BUG-A: Fix `run_turn()` signature mismatch
 
 **prerequisites:** none
 
@@ -70,7 +70,7 @@ kwargs from both call sites.
 
 ---
 
-### BUG-B: Fix credential check dep path in `eval_tool_chains.py`
+### ✓ DONE BUG-B: Fix credential check dep path in `eval_tool_chains.py`
 
 **prerequisites:** none
 
@@ -86,7 +86,7 @@ the key is configured. Fix: `getattr(deps.config, case.requires, None)`.
 
 ---
 
-### TASK-1: Add graceful model-unavailable exit to benchmark evals
+### ✓ DONE TASK-1: Add graceful model-unavailable exit to benchmark evals
 
 **prerequisites:** none
 
@@ -109,7 +109,7 @@ Note: all three evals are fully synchronous (`def main()`) — `asyncio.timeout`
 
 ---
 
-### TASK-2: Add persistence-failure case to `eval_knowledge_pipeline.py`
+### ✓ DONE TASK-2: Add persistence-failure case to `eval_knowledge_pipeline.py`
 
 **prerequisites:** BUG-A
 
@@ -130,7 +130,7 @@ is already covered by the SKIP guard at the top of the eval.
 
 ---
 
-### TASK-3: Add mid-chain failure case to `eval_tool_chains.py`
+### ✓ DONE TASK-3: Add mid-chain failure case to `eval_tool_chains.py`
 
 **prerequisites:** BUG-A, BUG-B
 
@@ -150,7 +150,7 @@ Scoring: keyword match on agent response acknowledging the failure ("error", "fa
 
 ---
 
-### TASK-4: Add history-overflow boundary to `eval_conversation_history.py`
+### ✓ DONE TASK-4: Add history-overflow boundary to `eval_conversation_history.py`
 
 **prerequisites:** none
 
@@ -176,7 +176,7 @@ contains the prefix `"[Earlier conversation trimmed — "`; agent correctly reca
 
 ---
 
-### TASK-5: Add empty-input and missing-role cases to `eval_ollama_openai_summarization.py`
+### ✓ DONE TASK-5: Add empty-input and missing-role cases to `eval_ollama_openai_summarization.py`
 
 **prerequisites:** none
 
@@ -253,3 +253,14 @@ Remaining gaps (8 goals with open items) are out of scope — tracked for a foll
 > Re-reviewed 2026-03-31 (Skill run): 2 plan corrections applied
 > (TASK-1 arg parsing, TASK-3 error propagation accuracy).
 > Run: `/orchestrate-dev eval-cleanup-gap-fill`
+
+## Delivery Summary
+
+- BUG-A fixed by removing `max_request_limit` and `verbose` from `run_turn()` calls.
+- BUG-B fixed by updating `getattr(deps, ...)` to `getattr(deps.config, ...)`.
+- Verified that evals run without TypeError and correctly process credentials.
+- TASK-1: Verified benchmark evals include httpx.get probes with timeout=5 and sys.exit(0) on exception.
+- TASK-2: Implemented persistence-failure case in `eval_knowledge_pipeline.py` using a read-only temp directory.
+- TASK-3: Implemented mid-chain error-recovery case in `eval_tool_chains.py` for shell command failures.
+- TASK-4: Verified Tier 4 history-overflow case exists in `eval_conversation_history.py`.
+- TASK-5: Verified empty-input and missing-role cases exist in `eval_ollama_openai_summarization.py`.

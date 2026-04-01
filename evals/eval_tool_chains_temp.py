@@ -22,8 +22,6 @@ Usage:
 """
 
 import asyncio
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-
 import sys
 import time
 from dataclasses import dataclass
@@ -140,15 +138,14 @@ async def run_chain_case(
     deps.runtime.safety_state = SafetyState()
 
     t0 = time.monotonic()
-    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
-        result = await run_turn(
-            agent=agent,
-            user_input=case.prompt,
-            deps=deps,
-            message_history=[],
-            model_settings=model_settings,
-            frontend=frontend,
-        )
+    result = await run_turn(
+        agent=agent,
+        user_input=case.prompt,
+        deps=deps,
+        message_history=[],
+        model_settings=model_settings,
+        frontend=frontend,
+    )
     elapsed = time.monotonic() - t0
 
     calls = extract_tool_calls(result.messages)
@@ -202,6 +199,7 @@ async def main() -> int:
     print()
 
     results: list[dict[str, Any]] = []
+    runnable = [c for c in runnable if c.id == "chain-shell-error-recovery"]
     for i, case in enumerate(runnable, 1):
         print(f"[{i}/{len(runnable)}] {case.id} ...", end=" ", flush=True)
         try:

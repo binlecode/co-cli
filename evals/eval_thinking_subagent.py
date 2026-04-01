@@ -17,6 +17,8 @@ Exit codes:
 """
 
 import asyncio
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+
 import pathlib
 import sys
 import time
@@ -110,7 +112,7 @@ async def run_case(
     deps.runtime.safety_state = SafetyState()
 
     t0 = time.monotonic()
-    async with asyncio.timeout(180):
+    async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
         result = await run_turn(
             agent=agent,
             user_input=case.prompt,

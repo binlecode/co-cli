@@ -18,6 +18,8 @@ Usage:
 """
 
 import asyncio
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+
 import os
 import sys
 import tempfile
@@ -139,7 +141,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
 
             frontend = SilentFrontend()
 
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
                 result = await run_turn(
                     agent=agent,
                     user_input=case.prompt,
