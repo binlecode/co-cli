@@ -43,11 +43,13 @@ DEFAULT_OLLAMA_SUMMARIZATION_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_ANALYSIS_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_CODING_MODEL: dict[str, Any] = {
     "model": "qwen3.5:35b-a3b-code",
+    "provider": "ollama-openai",
 }
 DEFAULT_OLLAMA_RESEARCH_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_OLLAMA_TASK_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_GEMINI_REASONING_MODEL: dict[str, Any] = {
     "model": "gemini-3-flash-preview",
+    "provider": "gemini",
 }
 
 # Conservative default safe commands for auto-approval.

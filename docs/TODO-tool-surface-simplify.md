@@ -68,9 +68,11 @@ The model-visible surface then becomes:
 No family-aware routing. No orchestration-owned filter state. No hard-coded core/always-on
 sets outside per-tool loading policy.
 
-**Token budget impact:** the always-loaded set (14 tools) matches the current `CORE_TOOL_NAMES`
-set exactly. The deferred set (~15 native + MCP tools) saves ~3-4K schema tokens per turn.
-This refactor preserves the existing token savings while simplifying the policy path.
+**Token budget impact:** the always-loaded set (15 tools) matches the current `CORE_TOOL_NAMES`
+set plus `list_memories`. The deferred set (~15 native + MCP tools) saves ~3-4K schema tokens
+per turn. The deferred-tool prompt (`build_deferred_tool_prompt`) adds ~300-500 tokens per turn
+listing undiscovered deferred tool names and descriptions — still a net win over sending full
+schemas. This refactor preserves the existing token savings while simplifying the policy path.
 
 ---
 
@@ -118,9 +120,11 @@ This refactor preserves the existing token savings while simplifying the policy 
    This is a contract on the visibility rule, not an implementation-specific timing assumption.
 
 3. **Approval-resume narrowing must expose all approved tools, not just one:** when a segment
-   yields N approved deferred tool calls, `runtime.resume_tool_names` must include all N names
-   plus all always-loaded tool names. No other discovered (but unapproved) deferred tools are
-   visible on the immediate resume hop.
+   yields N approved deferred tool calls, the filter must expose all N approved deferred tool
+   names plus all always-loaded tools on the immediate resume hop. The mechanism is:
+   `runtime.resume_tool_names` holds the N approved names; the `_filter` function checks
+   `resume_tool_names` first, then `entry.always_load` separately. No other discovered (but
+   unapproved) deferred tools are visible on the immediate resume hop.
 
 4. **MCP tools must participate in the same visibility policy as native tools:** MCP tools
    are normalized into `tool_index` with the same `always_load`/`should_defer` flags and
@@ -350,6 +354,7 @@ These should be visible on turn one without a search round-trip:
 - `web_search`
 - `web_fetch`
 - `run_shell_command`
+- `list_memories`
 
 For these tools: `always_load=True`, `should_defer=False`
 
@@ -463,6 +468,32 @@ print('PASS: metadata is loading-policy-first, family-free, single-source')
 "
 ```
 
+Integration boundary check (run after `_reg()` sites are updated):
+
+```bash
+uv run python -c "
+from co_cli.agent import _build_filtered_toolset
+from co_cli.deps import CoConfig
+from co_cli.config import settings
+
+config = CoConfig.from_settings(settings)
+_, _, native_catalog = _build_filtered_toolset(config)
+
+# Representative always-loaded tool
+assert native_catalog['read_file'].always_load is True
+assert native_catalog['read_file'].should_defer is False
+
+# Representative deferred tool
+assert native_catalog['edit_file'].always_load is False
+assert native_catalog['edit_file'].should_defer is True
+
+# list_memories is always-loaded
+assert native_catalog['list_memories'].always_load is True
+
+print('PASS: real agent build produces correct loading-policy flags')
+"
+```
+
 **success_signal:** `ToolConfig` carries `always_load`/`should_defer`/`search_hint` instead
 of `family`. `CoCapabilityState` uses `tool_index` as the single source. Session and runtime
 state use the new field names.
@@ -543,6 +574,8 @@ Visibility is entirely driven by per-tool `always_load`/`should_defer` plus `ses
   - returns `None` when no deferred tools remain undiscovered
 - `co_cli/agent.py`
   - add one dynamic `@agent.instructions` hook that calls `build_deferred_tool_prompt()`
+  - remove the existing `add_tool_surface_hint` instruction hook — `build_deferred_tool_prompt()`
+    subsumes its purpose with dynamic, data-driven content
   - keep `search_tools` description generic (not an authoritative list of deferred tool names)
 
 **files:**
@@ -627,6 +660,7 @@ for rel in [
     'co_cli/bootstrap/_bootstrap.py',
     'co_cli/bootstrap/_check.py',
     'co_cli/tools/capabilities.py',
+    'co_cli/bootstrap/_banner.py',
     'co_cli/commands/_commands.py',
 ]:
     src = Path(rel).read_text(encoding='utf-8')
@@ -725,6 +759,16 @@ TASK-1a  replace taxonomy metadata with loading-policy metadata
 2. **Sub-agent unified construction**: shared `_build_agent_core()`, `discovered_tools_seed`,
    elimination of `@agent.tool` in `_subagent_agents.py`.
 
+3. **Weighted keyword scoring** (adopt fork-cc's `searchToolsWithKeywords` pattern):
+   replace flat token-overlap scoring in `search_tools()` with weighted tiers —
+   name-part exact match (10), substring match (5), `search_hint` word-boundary (4),
+   description word-boundary (2). Add `\b`-regex matching to avoid false positives
+   (e.g. "create" matching "recreate"). Add MCP name parsing (`mcp__server__action` →
+   `[server, action]` parts) with +2 MCP bonus. Add required-term syntax (`+slack send`
+   = must contain "slack", rank by "send"). Revisit when MCP tool count exceeds ~20 or
+   users report wrong search results. Reference implementation:
+   `~/workspace_genai/fork-claude-code/tools/ToolSearchTool/ToolSearchTool.ts`.
+
 ---
 
 ## Non-Goals
@@ -745,9 +789,17 @@ It is not necessary to copy the exact TypeScript naming.
 
 Plan approved.
 
-C2 minor issues addressed inline:
-- CD-m-7: clarified that `AgentCapabilityResult` keeps `tool_index` (renamed from `tool_catalog`) for the bootstrap path; `done_when` updated to verify.
-- CD-m-8: fixed `_filter` pseudocode resume branch to return `False` for un-indexed MCP tools, preventing leak during approval-resume.
+C3 review cycle — issues addressed:
+- CD-M-1 (adopt): added `list_memories` to always-loaded tools; updated tool count 14→15; updated token budget note.
+- CD-m-1 (modify): added integration boundary check to TASK-1a done_when — verifies real `_build_filtered_toolset()` produces correct flags.
+- CD-m-3 (adopt): added `_banner.py` to TASK-3 done_when verification loop.
+- CD-m-6 / PO-m-5 (adopt): clarified BC-3 wording to describe filter behavior (check `resume_tool_names` then `always_load` separately), not set contents.
+- PO-m-2 (modify): added token budget note for deferred-tool prompt (~300-500 tokens/turn, net win vs 3-4K schema savings).
+- PO-m-3 (adopt): added explicit `add_tool_surface_hint` removal to TASK-2 — `build_deferred_tool_prompt` subsumes it.
+
+Previous cycle issues (retained):
+- CD-m-7: `AgentCapabilityResult` keeps `tool_index` (renamed from `tool_catalog`) for bootstrap path.
+- CD-m-8: `_filter` pseudocode resume branch returns `False` for un-indexed MCP tools.
 
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
