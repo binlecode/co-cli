@@ -45,7 +45,6 @@ def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir
         message_history=[],
         deps=deps,
         agent=agent_result.agent,
-        tool_names=agent_result.tool_names,
     )
 
 

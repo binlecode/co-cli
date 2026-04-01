@@ -58,17 +58,17 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
 
     mcp_configured = len(ctx.deps.config.mcp_servers or {})
     mcp_live = caps["mcp_count"]
-    catalog = ctx.deps.capabilities.tool_catalog
-    native_tool_count = sum(1 for tc in catalog.values() if tc.source == "native")
-    mcp_tool_count = sum(1 for tc in catalog.values() if tc.source == "mcp")
+    tool_index = ctx.deps.capabilities.tool_index
+    native_tool_count = sum(1 for tc in tool_index.values() if tc.source == "native")
+    mcp_tool_count = sum(1 for tc in tool_index.values() if tc.source == "mcp")
 
-    # Family breakdown
-    family_counts = st.get("family_counts", {})
-    if family_counts:
-        family_parts = ", ".join(
-            f"{family}: {count}" for family, count in sorted(family_counts.items())
+    # Source breakdown
+    source_counts = st.get("source_counts", {})
+    if source_counts:
+        source_parts = ", ".join(
+            f"{source}: {count}" for source, count in sorted(source_counts.items())
         )
-        lines.append(f"Tools by family: {family_parts}")
+        lines.append(f"Tools by source: {source_parts}")
 
     if mcp_configured == 0:
         lines.append("MCP: none configured")
@@ -93,7 +93,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
         mcp_configured_server_count=mcp_configured,
         mcp_tool_count=mcp_tool_count,
         native_tool_count=native_tool_count,
-        family_counts=family_counts,
+        source_counts=source_counts,
         mcp_server_health=[
             {"name": n, "ok": r.ok, "detail": r.detail} for n, r in result.mcp_probes
         ],

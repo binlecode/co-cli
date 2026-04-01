@@ -359,7 +359,11 @@ def case_banner_produces_output() -> CaseResult:
         tmp = Path(tmp_str)
         try:
             deps = _make_deps(tmp)
-            deps.capabilities.tool_names = ["tool_a", "tool_b"]
+            from co_cli.deps import ToolConfig
+            deps.capabilities.tool_index = {
+                "tool_a": ToolConfig(name="tool_a", description="A", approval=False, source="native", always_load=True),
+                "tool_b": ToolConfig(name="tool_b", description="B", approval=False, source="native", always_load=True),
+            }
             deps.capabilities.skill_registry = [{"name": "skill_x"}]
             deps.capabilities.slash_command_count = 1
 

@@ -45,8 +45,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     skill = SkillConfig(name="my-skill", body="do it")
     cap_state = CoCapabilityState(
-        tool_names=["shell", "memory"],
-        tool_approvals={"shell": True, "memory": False},
         skill_commands={"my-skill": skill},
         skill_registry=[{"name": "my-skill"}],
     )

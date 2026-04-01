@@ -286,13 +286,20 @@ class ToolConfig:
     """Canonical metadata for one registered tool."""
 
     name: str
+    description: str
+    approval: bool
     source: str
     # 'native' | 'mcp'
-    family: str
-    # 'workspace' | 'execution' | 'knowledge' | 'workflow' | 'delegation' | 'web' | 'connectors' | 'system'
-    approval: bool
     integration: str | None = None
-    description: str = ""
+    always_load: bool = False
+    should_defer: bool = False
+    search_hint: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.always_load == self.should_defer:
+            raise ValueError(
+                f"ToolConfig({self.name!r}): exactly one of always_load/should_defer must be True"
+            )
 
 
 @dataclass
@@ -308,9 +315,7 @@ class CoCapabilityState:
     MCP errors, skill commands, skill registry, and slash command count.
     """
 
-    tool_names: list[str] = field(default_factory=list)
-    tool_approvals: dict[str, bool] = field(default_factory=dict)
-    tool_catalog: dict[str, "ToolConfig"] = field(default_factory=dict)
+    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
     mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     skill_registry: list[dict] = field(default_factory=list)
@@ -333,10 +338,10 @@ class CoSessionState:
     session_id: str = ""
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
-    # granted_tools: session-scoped tool grants accumulated by search_tools().
+    # discovered_tools: session-scoped names of deferred tools already exposed to the model.
     # Persists across turns; cleared by /new (full session reset via CoSessionState reset).
     # Sub-agents receive a fresh CoSessionState — they do not inherit parent grants.
-    granted_tools: set[str] = field(default_factory=set)
+    discovered_tools: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -348,7 +353,7 @@ class CoRuntimeState:
     should be explicitly justified.
 
     Per-turn (reset by reset_for_turn() at run_turn() entry):
-      turn_usage, safety_state, tool_progress_callback, active_tool_filter
+      turn_usage, safety_state, tool_progress_callback, resume_tool_names
     Cross-turn (managed by orchestration layer):
       precomputed_compaction, active_skill_name
     """
@@ -366,10 +371,9 @@ class CoRuntimeState:
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
     safety_state: SafetyState | None = field(default=None, repr=False)
     active_skill_name: str | None = None
-    # active_tool_filter: per-segment schema filter set by compute_segment_filter().
-    # set  = only these tool names are sent to the model for this segment.
-    # None = transient init state; compute_segment_filter() replaces it before any segment runs.
-    active_tool_filter: set[str] | None = None
+    # resume_tool_names: temporary post-approval narrowing.
+    # Set before an approval-resume segment, cleared after.
+    resume_tool_names: frozenset[str] | None = None
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call.
@@ -381,7 +385,7 @@ class CoRuntimeState:
         self.turn_usage = None
         self.safety_state = SafetyState()
         self.tool_progress_callback = None
-        self.active_tool_filter = None
+        self.resume_tool_names = None
 
 
 @dataclass

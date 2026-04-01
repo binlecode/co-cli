@@ -171,9 +171,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
     agent_result = build_agent(config=deps.config, resolved=resolved)
     agent = agent_result.agent
-    deps.capabilities.tool_names = agent_result.tool_names
-    deps.capabilities.tool_approvals = agent_result.tool_approvals
-    deps.capabilities.tool_catalog = agent_result.tool_catalog
+    deps.capabilities.tool_index = agent_result.tool_index
 
     if deps.services.model_registry:
         task_resolved = deps.services.model_registry.get(ROLE_TASK, _none_resolved)
@@ -218,7 +216,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                         message_history=message_history,
                         deps=deps,
                         agent=agent,
-                        tool_names=deps.capabilities.tool_names,
                         completer=completer,
                     )
                     outcome = await dispatch_command(user_input, cmd_ctx)

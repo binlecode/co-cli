@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolResult` via `make_result()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Main turns start with a 14-tool core surface (`CORE_TOOL_NAMES`); the model calls `search_tools()` to unlock additional tools into `deps.session.granted_tools` for the session. MCP tools extend the surface at session start and bypass the native filter.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolResult` via `make_result()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
 
 ```
 tools/
@@ -29,23 +29,25 @@ tools/
 
 ### Registration
 
-`_reg(fn, *, approval, family, integration, retries)` in `_build_filtered_toolset()` calls `FunctionToolset.add_function()`, records `tool_name → approval` in `tool_approvals`, and creates a `ToolConfig(name, source, family, approval, integration, description)` entry in `native_catalog`. Description is extracted from the function docstring first line. `_build_filtered_toolset()` returns `(filtered_toolset, tool_approvals, native_catalog)`.
+`_reg(fn, *, approval, always_load, should_defer, search_hint, integration, retries)` in `_build_filtered_toolset()` calls `FunctionToolset.add_function()` and creates a `ToolConfig(name, description, approval, source, integration, always_load, should_defer, search_hint)` entry in `native_index`. Description is extracted from the function docstring first line. `_build_filtered_toolset()` returns `(filtered_toolset, native_index)`.
 
-The `FunctionToolset` is wrapped with `inner.filtered(_filter)`. `_filter` reads `deps.runtime.active_tool_filter` on every API call and passes only tools whose names are in that set. `compute_segment_filter()` in `_orchestrate.py` is the sole policy owner — it sets `active_tool_filter` before every segment.
+The `FunctionToolset` is wrapped with `inner.filtered(_filter)`. `_filter` reads per-tool `always_load`/`should_defer` flags from `deps.capabilities.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call.
 
 **Tool surface split:**
 
-- **Core** (`CORE_TOOL_NAMES`, 14 tools) — always visible on main turns; covers reads, web, execution, and `ALWAYS_ON_TOOL_NAMES`. No search needed.
-- **Discoverable** (~15+ tools) — write tools, connectors, delegation, background tasks. Unlocked via `search_tools(query)`.
+- **Always-loaded** (15 tools, `always_load=True`) — visible on turn one without a search round-trip. Covers reads, web, execution, system, and workflow introspection.
+- **Deferred** (~15+ tools, `should_defer=True`) — write tools, connectors, delegation, background tasks. Unlocked via `search_tools(query)`. Deferred tools are announced to the model by name and description via a dynamic `@agent.instructions` hook (`build_deferred_tool_prompt`), but their schemas are not callable until discovered.
 
 **Filter policy per segment type:**
 
 ```
-main turn:        (CORE_TOOL_NAMES | deps.session.granted_tools) & native_names
-approval-resume:  deferred_tool_names | ALWAYS_ON_TOOL_NAMES
+normal turn:      entry.always_load or tool_def.name in session.discovered_tools
+                  (MCP tools not in tool_index pass through)
+approval-resume:  tool_def.name in resume_tool_names or entry.always_load
+                  (all other tools hidden)
 ```
 
-`ALWAYS_ON_TOOL_NAMES = {check_capabilities, read_todos, write_todos, search_tools}` — always present including on approval-resume turns. These four are also members of `CORE_TOOL_NAMES`.
+**Load-state invariant:** every `ToolConfig` must have exactly one of `always_load=True` or `should_defer=True`. This is enforced in `ToolConfig.__post_init__`.
 
 **Conditional registration gates** — tools excluded at construction when config is absent:
 
@@ -70,52 +72,52 @@ approval-resume:  deferred_tool_names | ALWAYS_ON_TOOL_NAMES
 
 ### Tool Catalog
 
-`*` = member of `ALWAYS_ON_TOOL_NAMES`. Conditional tools excluded when gate is absent.
+Conditional tools excluded when gate is absent.
 
-| Family | Tool | Approval | Gate |
-|--------|------|----------|------|
-| workspace | `list_directory` | auto | — |
-| workspace | `read_file` | auto | — |
-| workspace | `find_in_files` | auto | — |
-| workspace | `write_file` | deferred | — |
-| workspace | `edit_file` | deferred | — |
-| execution | `run_shell_command` | auto¹ | — |
-| knowledge | `save_memory` | deferred | — |
-| knowledge | `update_memory` | deferred | — |
-| knowledge | `append_memory` | deferred | — |
-| knowledge | `list_memories` | auto | — |
-| knowledge | `search_memories` | auto | — |
-| knowledge | `save_article` | deferred | — |
-| knowledge | `read_article` | auto | — |
-| knowledge | `search_articles` | auto | — |
-| knowledge | `search_knowledge` | auto | — |
-| web | `web_search` | auto | — |
-| web | `web_fetch` | auto | — |
-| connectors | `list_notes` | auto | `obsidian_vault_path` |
-| connectors | `search_notes` | auto | `obsidian_vault_path` |
-| connectors | `read_note` | auto | `obsidian_vault_path` |
-| connectors | `search_drive_files` | auto | `google_credentials_path` |
-| connectors | `read_drive_file` | auto | `google_credentials_path` |
-| connectors | `list_gmail_emails` | auto | `google_credentials_path` |
-| connectors | `search_gmail_emails` | auto | `google_credentials_path` |
-| connectors | `create_gmail_draft` | deferred | `google_credentials_path` |
-| connectors | `list_calendar_events` | auto | `google_credentials_path` |
-| connectors | `search_calendar_events` | auto | `google_credentials_path` |
-| delegation | `run_coding_subagent` | auto | `ROLE_CODING` |
-| delegation | `run_research_subagent` | auto | `ROLE_RESEARCH` |
-| delegation | `run_analysis_subagent` | auto | `ROLE_ANALYSIS` |
-| delegation | `run_reasoning_subagent` | auto | `ROLE_REASONING` |
-| workflow | `start_background_task` | deferred | — |
-| workflow | `check_task_status` | auto | — |
-| workflow | `cancel_background_task` | auto | — |
-| workflow | `list_background_tasks` | auto | — |
-| workflow | `write_todos` * | auto | — |
-| workflow | `read_todos` * | auto | — |
-| system | `check_capabilities` * | auto | — |
-| system | `search_tools` * | auto | — |
+| Tool | Loading | Approval | Gate |
+|------|---------|----------|------|
+| `check_capabilities` | always | auto | — |
+| `search_tools` | always | auto | — |
+| `write_todos` | always | auto | — |
+| `read_todos` | always | auto | — |
+| `search_memories` | always | auto | — |
+| `search_knowledge` | always | auto | — |
+| `search_articles` | always | auto | — |
+| `read_article` | always | auto | — |
+| `list_memories` | always | auto | — |
+| `list_directory` | always | auto | — |
+| `read_file` | always | auto | — |
+| `find_in_files` | always | auto | — |
+| `web_search` | always | auto | — |
+| `web_fetch` | always | auto | — |
+| `run_shell_command` | always | auto¹ | — |
+| `write_file` | deferred | deferred | — |
+| `edit_file` | deferred | deferred | — |
+| `save_memory` | deferred | deferred | — |
+| `update_memory` | deferred | deferred | — |
+| `append_memory` | deferred | deferred | — |
+| `save_article` | deferred | deferred | — |
+| `start_background_task` | deferred | deferred | — |
+| `check_task_status` | deferred | auto | — |
+| `cancel_background_task` | deferred | auto | — |
+| `list_background_tasks` | deferred | auto | — |
+| `run_coding_subagent` | deferred | auto | `ROLE_CODING` |
+| `run_research_subagent` | deferred | auto | `ROLE_RESEARCH` |
+| `run_analysis_subagent` | deferred | auto | `ROLE_ANALYSIS` |
+| `run_reasoning_subagent` | deferred | auto | `ROLE_REASONING` |
+| `list_notes` | deferred | auto | `obsidian_vault_path` |
+| `search_notes` | deferred | auto | `obsidian_vault_path` |
+| `read_note` | deferred | auto | `obsidian_vault_path` |
+| `search_drive_files` | deferred | auto | `google_credentials_path` |
+| `read_drive_file` | deferred | auto | `google_credentials_path` |
+| `list_gmail_emails` | deferred | auto | `google_credentials_path` |
+| `search_gmail_emails` | deferred | auto | `google_credentials_path` |
+| `create_gmail_draft` | deferred | deferred | `google_credentials_path` |
+| `list_calendar_events` | deferred | auto | `google_credentials_path` |
+| `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 29 tools.
-**Full pool (all gates active):** 39 tools.
+**Unconditional pool (no integration gates):** 29 tools (15 always-loaded, 14 deferred).
+**Full pool (all gates active):** 39 tools (15 always-loaded, 24 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
 
@@ -129,14 +131,14 @@ flowchart TD
     REG --> POOL[/"Static pool for session lifetime"/]
 
     POOL --> TURN([Per Turn])
-    TURN --> MAIN["Set filter: (CORE_TOOL_NAMES | granted_tools) & native_names"]
+    TURN --> MAIN["Filter: always_load tools visible;\ndeferred visible only if in discovered_tools"]
     MAIN --> SEG[Run segment]
     SEG --> T{tool called?}
 
     T -->|auto| EX[Execute immediately]
     T -->|approval-required| PAUSE[Pause — request approval]
 
-    PAUSE --> NARROW["Narrow filter: deferred_names | ALWAYS_ON_TOOL_NAMES"]
+    PAUSE --> NARROW["Set resume_tool_names = approved deferred names;\nonly those + always_load visible"]
     NARROW --> AP{approved?}
     AP -->|yes| RESUME[Execute — resume segment]
     AP -->|no| DENY[Notify model]
@@ -155,13 +157,13 @@ build_agent(config, resolved)                              # agent.py
   ├─ _build_mcp_toolsets(config)                          # one toolset per mcp_servers entry
   ├─ _build_filtered_toolset(config)
   │    ├─ inner = FunctionToolset()
-  │    ├─ _reg(fn, approval, family, integration, retries) # add_function() + ToolConfig entry
-  │    └─ inner.filtered(_filter)                         # reads active_tool_filter per call
+  │    ├─ _reg(fn, approval, always_load, should_defer, ...) # add_function() + ToolConfig entry
+  │    └─ inner.filtered(_filter)                         # per-tool loading policy + discovered_tools + resume_tool_names
   └─ Agent(toolsets=[filtered_toolset] + mcp_toolsets)
 
 initialize_session_capabilities()                          # _bootstrap.py
   └─ discover_mcp_tools()                                 # list_tools() per MCPServer
-       └─ deps.capabilities.tool_catalog.update(mcp_catalog)
+       └─ deps.capabilities.tool_index.update(mcp_index)
 ```
 
 ---
@@ -188,7 +190,7 @@ All session rules clear when the session ends.
 
 #### Approval-Resume
 
-When the model calls a deferred tool, pydantic-ai pauses and returns `DeferredToolRequests`. `_run_approval_loop()` drives the resume cycle: narrow filter → collect approvals → resume segment executes approved tools. Loop repeats until output is `str`. Denied tools notify the model without retrying. Filter on resume: `deferred_tool_names | ALWAYS_ON_TOOL_NAMES` — only the approved tool plus always-on tools are visible, cutting token cost per hop. The task agent (`ROLE_TASK`, `reasoning_effort: none`) is used on resume when available.
+When the model calls a deferred tool, pydantic-ai pauses and returns `DeferredToolRequests`. `_run_approval_loop()` drives the resume cycle: set `resume_tool_names` → collect approvals → resume segment executes approved tools. Loop repeats until output is `str`. Denied tools notify the model without retrying. Filter on resume: `_filter` checks `resume_tool_names` first (approved deferred tools), then `always_load` separately — only approved deferred tools plus always-loaded tools are visible, cutting token cost per hop. The task agent (`ROLE_TASK`, `reasoning_effort: none`) is used on resume when available.
 
 ---
 
@@ -215,7 +217,7 @@ Exceptions: `run_shell_command` and `read_drive_file` return raw `str`. MCP tool
 
 ### MCP Tool Servers
 
-Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools live in separate toolsets appended after the native filtered toolset and bypass `active_tool_filter`.
+Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `should_defer=True` after discovery and participate in the same visibility policy as native tools. Raw MCP toolsets remain attached to the agent for execution dispatch; MCP tools not yet in `tool_index` (discovery not run or failed) pass through the filter.
 
 **Default servers** (gracefully skipped when `npx` is absent):
 
@@ -313,7 +315,7 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 
 #### Delegation (`tools/subagent.py`)
 
-Sub-agent tools spawn isolated agents via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` (no inherited `granted_tools`) + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
+Sub-agent tools spawn isolated agents via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` (no inherited `discovered_tools`) + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
 
 | Tool | Sub-agent surface | Behavior |
 |------|------------------|---------|
@@ -340,9 +342,9 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
 | `check_capabilities` | — | Runs `check_runtime(deps)`; returns integration health, tool count, MCP server probes, reasoning model status. Emits staged progress via `tool_progress_callback`. Backing tool for `/doctor`. |
-| `search_tools` | `query`, `max_results=8` | Keyword search over `tool_catalog` (name + description + family). Grants matched tools into `session.granted_tools`; tools in the current `active_tool_filter` report as `"already available"`. Returns match list with per-tool status. |
+| `search_tools` | `query`, `max_results=8` | Keyword search over deferred tools in `tool_index` (name + description + integration + search_hint). Discovers matched tools into `session.discovered_tools`; always-loaded tools report as `"already available"`. Returns match list with per-tool status. |
 
-`search_tools` is the progressive-disclosure entry point: start with 14 core tools, call `search_tools("edit file")` to unlock `edit_file` for the session, call `search_tools("gmail")` to unlock Gmail tools, etc. Grants accumulate for the session; `/new` resets them.
+`search_tools` is the progressive-disclosure entry point: start with 15 always-loaded tools, call `search_tools("edit file")` to unlock `edit_file` for the session, call `search_tools("gmail")` to unlock Gmail tools, etc. Discoveries accumulate for the session; `/new` resets them.
 
 ---
 
@@ -386,7 +388,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `write_todos`, `read_todos` |
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
-| `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-grant mechanism |
+| `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-discovery mechanism |
 | `co_cli/tools/subagent.py` | `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
@@ -400,4 +402,5 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
 | `co_cli/tools/_subagent_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` |
-| `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `ALWAYS_ON_TOOL_NAMES`, `CORE_TOOL_NAMES`, `ToolConfig`, `AgentCapabilityResult` |
+| `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
+| `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt()` — dynamic prompt fragment listing undiscovered deferred tools |

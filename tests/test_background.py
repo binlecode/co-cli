@@ -422,7 +422,7 @@ async def test_slash_background_command():
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-        ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
+        ctx = CommandContext(message_history=[], deps=deps, agent=None)
 
         await BUILTIN_COMMANDS["background"].handler(ctx, "echo slash_test")
 
@@ -460,7 +460,7 @@ async def test_slash_tasks_command():
     )
     deps.session.background_tasks[state.task_id] = state
 
-    ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
+    ctx = CommandContext(message_history=[], deps=deps, agent=None)
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         await BUILTIN_COMMANDS["tasks"].handler(ctx, "")
@@ -476,7 +476,7 @@ async def test_slash_cancel_command():
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
-        ctx = CommandContext(message_history=[], deps=deps, agent=None, tool_names=[])
+        ctx = CommandContext(message_history=[], deps=deps, agent=None)
 
         await BUILTIN_COMMANDS["background"].handler(ctx, "sleep 60")
         assert len(deps.session.background_tasks) == 1

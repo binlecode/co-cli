@@ -48,9 +48,7 @@ def _make_deps(session_id: str) -> CoDeps:
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
         capabilities=CoCapabilityState(
-            tool_names=_AGENT_NOREASON.tool_names,
-            tool_approvals=_AGENT_NOREASON.tool_approvals,
-            tool_catalog=_AGENT_NOREASON.tool_catalog,
+            tool_index=dict(_AGENT_NOREASON.tool_index),
         ),
     )
 

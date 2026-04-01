@@ -1,4 +1,4 @@
-"""Tools for running focused tasks via purpose-built sub-agents (family: delegation)."""
+"""Tools for running focused tasks via purpose-built sub-agents."""
 
 from copy import copy
 from typing import Any, NamedTuple

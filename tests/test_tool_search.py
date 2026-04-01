@@ -8,7 +8,6 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.context._orchestrate import compute_segment_filter
 from co_cli.deps import CoDeps, CoCapabilityState, CoConfig, CoServices
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.tool_search import search_tools
@@ -19,14 +18,12 @@ _AGENT = _AGENT_RESULT.agent
 
 
 def _make_deps() -> CoDeps:
-    """Build real CoDeps with tool_catalog populated from build_agent()."""
+    """Build real CoDeps with tool_index populated from build_agent()."""
     return CoDeps(
         services=CoServices(shell=ShellBackend()),
         config=_CONFIG,
         capabilities=CoCapabilityState(
-            tool_names=_AGENT_RESULT.tool_names,
-            tool_approvals=_AGENT_RESULT.tool_approvals,
-            tool_catalog=_AGENT_RESULT.tool_catalog,
+            tool_index=dict(_AGENT_RESULT.tool_index),
         ),
     )
 
@@ -37,17 +34,15 @@ def _make_ctx(deps: CoDeps) -> RunContext:
 
 
 @pytest.mark.asyncio
-async def test_search_tools_grants_discoverable_tool() -> None:
-    """search_tools('edit file') unlocks edit_file and adds it to granted_tools."""
+async def test_search_tools_discovers_deferred_tool() -> None:
+    """search_tools('edit file') unlocks edit_file and adds it to discovered_tools."""
     deps = _make_deps()
-    # Simulate an active main-turn segment so edit_file is not yet in active surface.
-    deps.runtime.active_tool_filter = compute_segment_filter(deps)
     ctx = _make_ctx(deps)
 
     result = await search_tools(ctx, "edit file")
 
-    assert "edit_file" in deps.session.granted_tools, (
-        "edit_file must be added to granted_tools after search"
+    assert "edit_file" in deps.session.discovered_tools, (
+        "edit_file must be added to discovered_tools after search"
     )
     granted = result.get("granted", [])
     assert "edit_file" in granted, f"edit_file missing from granted list: {granted}"
@@ -58,7 +53,6 @@ async def test_search_tools_grants_discoverable_tool() -> None:
 async def test_search_tools_no_match_returns_hint() -> None:
     """search_tools with no matching query returns the fallback hint text."""
     deps = _make_deps()
-    deps.runtime.active_tool_filter = compute_segment_filter(deps)
     ctx = _make_ctx(deps)
 
     result = await search_tools(ctx, "zzznomatch_xyzzy_unlikely_token")
@@ -70,17 +64,15 @@ async def test_search_tools_no_match_returns_hint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_search_tools_core_tool_already_available() -> None:
-    """search_tools for a core tool shows 'already available' and does not re-grant it."""
+async def test_search_tools_always_loaded_tool_already_available() -> None:
+    """search_tools for an always-loaded tool shows 'already available' and does not discover it."""
     deps = _make_deps()
-    # Set active_tool_filter to the real main-turn surface so web_search is in it.
-    deps.runtime.active_tool_filter = compute_segment_filter(deps)
     ctx = _make_ctx(deps)
 
     result = await search_tools(ctx, "web search")
 
-    assert "web_search" not in deps.session.granted_tools, (
-        "web_search is already in core — must not be added to granted_tools"
+    assert "web_search" not in deps.session.discovered_tools, (
+        "web_search is always-loaded — must not be added to discovered_tools"
     )
     assert "already available" in result["display"], (
         f"'already available' expected in display: {result['display']!r}"

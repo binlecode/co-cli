@@ -43,7 +43,7 @@ def display_welcome_banner(deps: "CoDeps", startup_statuses: list[str]) -> None:
         llm_provider = config.llm_provider
 
     from co_cli.commands._commands import BUILTIN_COMMANDS
-    tool_count = len(deps.capabilities.tool_names)
+    tool_count = len(deps.capabilities.tool_index)
     skill_count = len(deps.capabilities.skill_registry)
     mcp_count = len(deps.config.mcp_servers or {})
     cmd_count = len(BUILTIN_COMMANDS) + deps.capabilities.slash_command_count

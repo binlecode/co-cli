@@ -235,14 +235,13 @@ async def initialize_session_capabilities(
 
     # 1. MCP discovery (conditional)
     if deps.config.mcp_servers and mcp_init_ok:
-        mcp_tool_names, discovery_errors, mcp_catalog = await discover_mcp_tools(
-            agent, exclude=set(deps.capabilities.tool_names)
+        mcp_tool_names, discovery_errors, mcp_index = await discover_mcp_tools(
+            agent, exclude=set(deps.capabilities.tool_index.keys())
         )
         deps.capabilities.mcp_discovery_errors = discovery_errors
         for prefix, err in discovery_errors.items():
             frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} ...")
-        deps.capabilities.tool_names = deps.capabilities.tool_names + mcp_tool_names
-        deps.capabilities.tool_catalog.update(mcp_catalog)
+        deps.capabilities.tool_index.update(mcp_index)
 
     # 2. Skill loading
     skill_commands = _load_skills(deps.config.skills_dir, settings=settings, user_skills_dir=deps.config.user_skills_dir)

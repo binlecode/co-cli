@@ -51,7 +51,6 @@ def _make_compact_ctx(message_history: list | None = None) -> CommandContext:
         message_history=message_history or [],
         deps=deps,
         agent=_AGENT,
-        tool_names=[],
     )
 
 

@@ -39,53 +39,12 @@ from co_cli.tools.task_control import (
 
 logger = logging.getLogger(__name__)
 
-# Tools visible on every segment — including approval-resume turns.
-# The model needs these to report status, manage session todos, check capabilities,
-# and discover additional tools even when the filter is narrowed.
-ALWAYS_ON_TOOL_NAMES: frozenset[str] = frozenset({
-    "check_capabilities",
-    "read_todos",
-    "write_todos",
-    "search_tools",
-})
-
-# Core tool surface — always visible on main turns without calling search_tools.
-# Covers the read-heavy 90%: knowledge reads, workspace reads, web, and execution.
-# Write/connector/delegation tools are discoverable via search_tools().
-CORE_TOOL_NAMES: frozenset[str] = frozenset({
-    # always-on subset
-    "check_capabilities",
-    "read_todos",
-    "write_todos",
-    "search_tools",
-    # knowledge reads
-    "search_memories",
-    "search_knowledge",
-    "search_articles",
-    "read_article",
-    # workspace reads
-    "read_file",
-    "list_directory",
-    "find_in_files",
-    # web
-    "web_search",
-    "web_fetch",
-    # execution
-    "run_shell_command",
-})
-
-assert ALWAYS_ON_TOOL_NAMES <= CORE_TOOL_NAMES, (
-    "ALWAYS_ON_TOOL_NAMES must be a subset of CORE_TOOL_NAMES"
-)
-
 
 @dataclass(frozen=True)
 class AgentCapabilityResult:
     """Immutable return value of build_agent()."""
     agent: Agent[CoDeps, str | DeferredToolRequests]
-    tool_names: list[str]
-    tool_approvals: dict[str, bool]
-    tool_catalog: dict[str, ToolConfig] = field(default_factory=dict)
+    tool_index: dict[str, ToolConfig] = field(default_factory=dict)
 
 
 def _build_mcp_toolsets(config: CoConfig) -> list:
@@ -119,31 +78,30 @@ def _build_mcp_toolsets(config: CoConfig) -> list:
 
 def _build_filtered_toolset(
     config: CoConfig,
-) -> "tuple[AbstractToolset[CoDeps], dict[str, bool], dict[str, ToolConfig]]":
+) -> "tuple[AbstractToolset[CoDeps], dict[str, ToolConfig]]":
     """Build a FilteredToolset containing all tools for this config.
 
     Tools are registered into a FunctionToolset wrapped with a per-request filter.
-    The filter reads deps.runtime.active_tool_filter on every API call; only tools
-    whose names are in that set are sent to the model. compute_segment_filter() in
-    _orchestrate.py is the sole owner — it sets active_tool_filter before every segment.
+    The filter uses per-tool always_load/should_defer flags plus session.discovered_tools
+    and runtime.resume_tool_names to decide visibility per API call.
 
     Domain tools (obsidian, google) are conditionally excluded when the relevant
     config paths are absent — they would fail at runtime regardless, so there is no
     point sending their schemas.
 
-    Returns (filtered_toolset, tool_approvals, native_catalog) where tool_approvals maps
-    each registered tool name to its requires_approval flag, and native_catalog maps
-    each tool name to its ToolConfig metadata.
+    Returns (filtered_toolset, native_index) where native_index maps each tool name
+    to its ToolConfig metadata.
     """
     inner: FunctionToolset[CoDeps] = FunctionToolset()
-    tool_approvals: dict[str, bool] = {}
-    native_catalog: dict[str, ToolConfig] = {}
+    native_index: dict[str, ToolConfig] = {}
 
     def _reg(
         fn: Any,
         *,
         approval: bool = False,
-        family: str,
+        always_load: bool = False,
+        should_defer: bool = False,
+        search_hint: str | None = None,
         integration: str | None = None,
         retries: int | None = None,
     ) -> None:
@@ -153,90 +111,108 @@ def _build_filtered_toolset(
         if retries is not None:
             kwargs["retries"] = retries
         inner.add_function(fn, **kwargs)
-        tool_approvals[name] = approval
-        native_catalog[name] = ToolConfig(
+        native_index[name] = ToolConfig(
             name=name,
-            source="native",
-            family=family,
-            approval=approval,
-            integration=integration,
             description=description,
+            approval=approval,
+            source="native",
+            integration=integration,
+            always_load=always_load,
+            should_defer=should_defer,
+            search_hint=search_hint,
         )
 
-    # Background task management
-    _reg(start_background_task, approval=True, family="workflow")
-    _reg(check_task_status, approval=False, family="workflow")
-    _reg(cancel_background_task, approval=False, family="workflow")
-    _reg(list_background_tasks, approval=False, family="workflow")
+    # --- Always-loaded tools ---
 
-    # Capability introspection and tool discovery — no approval (read-only, session-local side effects only)
-    _reg(check_capabilities, approval=False, family="system")
-    _reg(search_tools, approval=False, family="system")
+    # Capability introspection and tool discovery
+    _reg(check_capabilities, approval=False, always_load=True)
+    _reg(search_tools, approval=False, always_load=True)
+
+    # Session task tracking
+    _reg(write_todos, approval=False, always_load=True)
+    _reg(read_todos, approval=False, always_load=True)
+
+    # Knowledge reads
+    _reg(search_memories, approval=False, always_load=True)
+    _reg(search_knowledge, approval=False, always_load=True)
+    _reg(search_articles, approval=False, always_load=True)
+    _reg(read_article, approval=False, always_load=True)
+    _reg(list_memories, approval=False, always_load=True)
+
+    # Workspace reads
+    _reg(list_directory, approval=False, always_load=True)
+    _reg(read_file, approval=False, always_load=True)
+    _reg(find_in_files, approval=False, always_load=True)
+
+    # Web
+    _reg(web_search, approval=False, always_load=True, retries=3)
+    _reg(web_fetch, approval=False, always_load=True, retries=3)
+
+    # Execution
+    _reg(run_shell_command, approval=False, always_load=True)
+
+    # --- Deferred tools ---
+
+    # File write tools
+    _reg(write_file, approval=True, should_defer=True, search_hint="create write new file", retries=1)
+    _reg(edit_file, approval=True, should_defer=True, search_hint="modify patch update file", retries=1)
+
+    # Knowledge write tools
+    _reg(save_memory, approval=True, should_defer=True, search_hint="remember save note memory", retries=1)
+    _reg(save_article, approval=True, should_defer=True, search_hint="save article knowledge", retries=1)
+    _reg(update_memory, approval=True, should_defer=True, search_hint="update edit memory", retries=1)
+    _reg(append_memory, approval=True, should_defer=True, search_hint="append add memory", retries=1)
+
+    # Background task tools
+    _reg(start_background_task, approval=True, should_defer=True, search_hint="background async long running task")
+    _reg(check_task_status, approval=False, should_defer=True, search_hint="background task status check")
+    _reg(cancel_background_task, approval=False, should_defer=True, search_hint="cancel stop background task")
+    _reg(list_background_tasks, approval=False, should_defer=True, search_hint="list background tasks")
 
     # Sub-agent tools — registered only when the role model is configured
     if config.role_models.get(ROLE_CODING):
-        _reg(run_coding_subagent, approval=False, family="delegation")
+        _reg(run_coding_subagent, approval=False, should_defer=True, search_hint="coding sub-agent delegate code")
     if config.role_models.get(ROLE_RESEARCH):
-        _reg(run_research_subagent, approval=False, family="delegation")
+        _reg(run_research_subagent, approval=False, should_defer=True, search_hint="research sub-agent delegate search")
     if config.role_models.get(ROLE_ANALYSIS):
-        _reg(run_analysis_subagent, approval=False, family="delegation")
+        _reg(run_analysis_subagent, approval=False, should_defer=True, search_hint="analysis sub-agent delegate analyze")
     if config.role_models.get(ROLE_REASONING):
-        _reg(run_reasoning_subagent, approval=False, family="delegation")
-
-    # Native file tools — write-once tier: retries=1 (a second attempt on failure is safe)
-    _reg(list_directory, approval=False, family="workspace")
-    _reg(read_file, approval=False, family="workspace")
-    _reg(find_in_files, approval=False, family="workspace")
-    _reg(write_file, approval=True, family="workspace", retries=1)
-    _reg(edit_file, approval=True, family="workspace", retries=1)
-
-    # Shell: fine-grained policy lives inside the tool (DENY/safe-prefix/ask).
-    # Agent-layer approval is False; the tool raises ApprovalRequired for commands
-    # that need user confirmation.
-    _reg(run_shell_command, approval=False, family="execution")
-    # Write-once tier: single retry for transient failures
-    _reg(save_memory, approval=True, family="knowledge", retries=1)
-    _reg(save_article, approval=True, family="knowledge", retries=1)
-    _reg(update_memory, approval=True, family="knowledge", retries=1)
-    _reg(append_memory, approval=True, family="knowledge", retries=1)
-
-    # Session task tracking — no approval (in-memory only, no external side effects)
-    _reg(write_todos, approval=False, family="workflow")
-    _reg(read_todos, approval=False, family="workflow")
-
-    # Read-only tools — no approval needed
-    _reg(list_memories, approval=False, family="knowledge")
-    _reg(search_memories, approval=False, family="knowledge")
-    _reg(read_article, approval=False, family="knowledge")
-    _reg(search_knowledge, approval=False, family="knowledge")
-    _reg(search_articles, approval=False, family="knowledge")
+        _reg(run_reasoning_subagent, approval=False, should_defer=True, search_hint="reasoning sub-agent delegate think")
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
-        _reg(list_notes, approval=False, family="connectors", integration="obsidian")
-        _reg(search_notes, approval=False, family="connectors", integration="obsidian")
-        _reg(read_note, approval=False, family="connectors", integration="obsidian")
+        _reg(list_notes, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian notes list")
+        _reg(search_notes, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian notes search")
+        _reg(read_note, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian note read")
 
     if config.google_credentials_path:
-        # Network tier: retries=3 for transient connectivity failures
-        _reg(search_drive_files, approval=False, family="connectors", integration="google_drive", retries=3)
-        _reg(read_drive_file, approval=False, family="connectors", integration="google_drive", retries=3)
-        _reg(list_gmail_emails, approval=False, family="connectors", integration="google_gmail", retries=3)
-        _reg(search_gmail_emails, approval=False, family="connectors", integration="google_gmail", retries=3)
-        _reg(list_calendar_events, approval=False, family="connectors", integration="google_calendar", retries=3)
-        _reg(search_calendar_events, approval=False, family="connectors", integration="google_calendar", retries=3)
-        _reg(create_gmail_draft, approval=True, family="connectors", integration="google_gmail", retries=1)
-
-    # Network tier: retries=3 for transient connectivity failures
-    _reg(web_search, approval=False, family="web", retries=3)
-    _reg(web_fetch, approval=False, family="web", retries=3)
+        _reg(search_drive_files, approval=False, should_defer=True, integration="google_drive", search_hint="google drive search files", retries=3)
+        _reg(read_drive_file, approval=False, should_defer=True, integration="google_drive", search_hint="google drive read file", retries=3)
+        _reg(list_gmail_emails, approval=False, should_defer=True, integration="google_gmail", search_hint="gmail email list inbox", retries=3)
+        _reg(search_gmail_emails, approval=False, should_defer=True, integration="google_gmail", search_hint="gmail email search", retries=3)
+        _reg(list_calendar_events, approval=False, should_defer=True, integration="google_calendar", search_hint="google calendar events list", retries=3)
+        _reg(search_calendar_events, approval=False, should_defer=True, integration="google_calendar", search_hint="google calendar events search", retries=3)
+        _reg(create_gmail_draft, approval=True, should_defer=True, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
-        f = ctx.deps.runtime.active_tool_filter
-        return f is None or tool_def.name in f
+        entry = ctx.deps.capabilities.tool_index.get(tool_def.name)
+        resume = ctx.deps.runtime.resume_tool_names
 
-    # .filtered() is the correct pydantic-ai 1.73 API for per-request tool filtering — no `PreparedToolset` or equivalent exists.
-    return inner.filtered(_filter), tool_approvals, native_catalog
+        if resume is not None:
+            if tool_def.name in resume:
+                return True
+            if entry is not None and entry.always_load:
+                return True
+            return False
+
+        # Normal turn
+        if entry is None:
+            return True
+        if entry.always_load:
+            return True
+        return tool_def.name in ctx.deps.session.discovered_tools
+
+    return inner.filtered(_filter), native_index
 
 
 _TASK_AGENT_SYSTEM_PROMPT: str = (
@@ -265,7 +241,7 @@ def build_agent(
             ROLE_REASONING, ResolvedModel(model=None, settings=None)
         )
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, tool_approvals, native_catalog = _build_filtered_toolset(config)
+    filtered_toolset, native_index = _build_filtered_toolset(config)
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
@@ -327,21 +303,18 @@ def build_agent(
         return _load_personality_memories()
 
     @agent.instructions
-    def add_tool_surface_hint(ctx: RunContext[CoDeps]) -> str:
-        """Describe the progressive tool surface so the model knows to call search_tools."""
-        return (
-            "Tool surface: core tools are always available. "
-            "Call search_tools(query) to discover and unlock additional tools — "
-            "for writing files, saving memories, background tasks, sub-agents, "
-            "or connectors (Obsidian, Google Drive, Gmail, Calendar). "
-            "Unlocked tools persist for this session; use /new to reset."
+    def add_deferred_tool_prompt(ctx: RunContext[CoDeps]) -> str:
+        """Inject deferred-tool awareness so the model knows to call search_tools."""
+        from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
+        prompt = build_deferred_tool_prompt(
+            ctx.deps.capabilities.tool_index,
+            ctx.deps.session.discovered_tools,
         )
+        return prompt or ""
 
     return AgentCapabilityResult(
         agent=agent,
-        tool_names=list(tool_approvals.keys()),
-        tool_approvals=tool_approvals,
-        tool_catalog=native_catalog,
+        tool_index=native_index,
     )
 
 
@@ -357,7 +330,7 @@ def build_task_agent(
     resume approved deferred tool calls without the full main agent context overhead.
     """
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, tool_approvals, native_catalog = _build_filtered_toolset(config)
+    filtered_toolset, native_index = _build_filtered_toolset(config)
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         resolved.model,
         deps_type=CoDeps,
@@ -369,9 +342,7 @@ def build_task_agent(
     )
     return AgentCapabilityResult(
         agent=agent,
-        tool_names=list(tool_approvals.keys()),
-        tool_approvals=tool_approvals,
-        tool_catalog=native_catalog,
+        tool_index=native_index,
     )
 
 
@@ -380,18 +351,18 @@ async def discover_mcp_tools(
 ) -> tuple[list[str], dict[str, str], dict[str, ToolConfig]]:
     """Discover MCP tool names from connected servers (after async with agent).
 
-    Returns a tuple of (tool_names, errors, mcp_catalog) where errors maps server prefix to
-    the error string for each server where list_tools() failed, and mcp_catalog maps tool
+    Returns a tuple of (tool_names, errors, mcp_index) where errors maps server prefix to
+    the error string for each server where list_tools() failed, and mcp_index maps tool
     name to ToolConfig metadata. Tool names exclude any names already in ``exclude``.
+    MCP tools are deferred by default (should_defer=True).
     """
     from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
-    mcp_catalog: dict[str, ToolConfig] = {}
+    mcp_index: dict[str, ToolConfig] = {}
 
     for toolset in agent.toolsets:
-        # Unwrap approval wrappers to reach the MCPServer base instance
         inner = getattr(toolset, "wrapped", toolset)
         if not isinstance(inner, MCPServer):
             continue
@@ -403,12 +374,12 @@ async def discover_mcp_tools(
                 if name not in exclude:
                     mcp_tool_names.append(name)
                     approval = inner is not toolset
-                    mcp_catalog[name] = ToolConfig(
+                    mcp_index[name] = ToolConfig(
                         name=name,
-                        source="mcp",
-                        family="connectors",
-                        approval=approval,
                         description=t.description or "",
+                        approval=approval,
+                        source="mcp",
+                        should_defer=True,
                     )
         except Exception as e:
             logger.warning(
@@ -416,4 +387,4 @@ async def discover_mcp_tools(
             )
             errors[prefix] = str(e)
 
-    return sorted(mcp_tool_names), errors, mcp_catalog
+    return sorted(mcp_tool_names), errors, mcp_index

@@ -34,7 +34,6 @@ class CommandContext:
     message_history: list[Any]
     deps: CoDeps
     agent: Agent
-    tool_names: list[str]
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
@@ -224,7 +223,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
 
     from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 
-    info = get_status(ctx.deps.config, tool_count=len(ctx.tool_names))
+    info = get_status(ctx.deps.config, tool_count=len(ctx.deps.capabilities.tool_index))
     console.print(render_status_table(info))
     findings = check_security()
     render_security_findings(findings)
@@ -233,7 +232,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_tools(ctx: CommandContext, args: str) -> None:
     """List registered agent tools."""
-    tools = sorted(ctx.tool_names)
+    tools = sorted(ctx.deps.capabilities.tool_index.keys())
     lines = [f"  [accent]{i + 1}.[/accent] {name}" for i, name in enumerate(tools)]
     console.print(f"[info]Registered tools ({len(tools)}):[/info]")
     console.print("\n".join(lines))

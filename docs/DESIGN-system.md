@@ -156,14 +156,14 @@ The foreground runtime now has two distinct agent surfaces:
    - project instructions from `.co-cli/instructions.md`
    - always-on memories
    - personality memories
-   - tool surface hint (describes progressive tool surface; instructs model to call `search_tools`)
+   - deferred tool prompt (dynamic list of undiscovered deferred tools via `build_deferred_tool_prompt`; instructs model to call `search_tools`)
 
 The filtered native toolset matters for approval resumes:
 
 - native tools are always registered once at startup
 - some domain tools are omitted entirely when the integration is absent
-- `ctx.deps.runtime.active_tool_filter` narrows the visible native tool schemas during all segments; set by `compute_segment_filter()` in `_orchestrate.py` before each segment
-- MCP toolsets are attached separately and are not filtered by `active_tool_filter`
+- `_filter` uses per-tool `always_load`/`should_defer` flags from `deps.capabilities.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
+- MCP tools in `tool_index` follow the same visibility rule; MCP tools not yet in `tool_index` pass through the filter
 
 `build_task_agent()` intentionally removes the heavy prompt/context layers:
 
@@ -197,7 +197,7 @@ Practical ownership rules:
 | --- | --- | --- |
 | `services` | shell backend, knowledge index, model registry, optional task agent | built once; shared by reference |
 | `config` | resolved scalar settings and paths | read-only after bootstrap |
-| `capabilities` | tool names, approval map, MCP discovery errors, loaded skill metadata | populated during startup, then treated as stable shared state |
+| `capabilities` | tool index (loading policy, approval, metadata), MCP discovery errors, loaded skill metadata | populated during startup, then treated as stable shared state |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
 
@@ -216,9 +216,7 @@ Shared by reference with sub-agents.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `tool_names` | `build_agent()` seeds native tool names; `initialize_session_capabilities()` appends discovered MCP names | never | shared ref |
-| `tool_approvals` | `build_agent()` | never | shared ref |
-| `tool_catalog` | `build_agent()` seeds native `ToolConfig` map; `initialize_session_capabilities()` merges MCP `ToolConfig` entries after discovery | never | shared ref |
+| `tool_index` | `build_agent()` seeds native `ToolConfig` map (with `always_load`/`should_defer` flags); `initialize_session_capabilities()` merges MCP `ToolConfig` entries after discovery | never | shared ref |
 | `mcp_discovery_errors` | `initialize_session_capabilities()` | never | shared ref |
 | `skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
 | `skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
@@ -238,7 +236,7 @@ Visible to tools and slash commands.
 | `session_id` | `restore_session()` | session restart | fresh empty |
 | `memory_recall_state` | `inject_opening_context()` | new REPL session | fresh default |
 | `background_tasks` | `start_background_task` tool | never (in-memory only) | fresh empty dict |
-| `granted_tools` | `search_tools()` grants | `/new` (session reset) | fresh empty set |
+| `discovered_tools` | `search_tools()` discovers deferred tools | `/new` (session reset) | fresh empty set |
 
 #### `CoRuntimeState` — `deps.runtime`
 
@@ -251,7 +249,7 @@ Owned by orchestration and history processors.
 | `tool_progress_callback` | `StreamRenderer.install_progress()` | `StreamRenderer.clear_progress()` and `run_turn()` finally | fresh `None` |
 | `safety_state` | `create_deps()` init and `reset_for_turn()` | `reset_for_turn()` | fresh default |
 | `active_skill_name` | `_chat_loop()` when a skill delegates to the agent | `_cleanup_skill_run_state()` | fresh `None` |
-| `active_tool_filter` | `compute_segment_filter()` in `run_turn()` before first segment; `compute_segment_filter()` in `_run_approval_loop()` before each resume hop | `_run_approval_loop()` exit and `reset_for_turn()` | fresh `None` |
+| `resume_tool_names` | `_run_approval_loop()` sets `frozenset` of approved deferred tool names before each resume hop | `_run_approval_loop()` exit and `reset_for_turn()` | fresh `None` |
 
 One important split is intentional:
 
@@ -266,14 +264,14 @@ There are three related capability surfaces:
 | --- | --- | --- |
 | static tool definitions | `build_agent()` / `build_task_agent()` | native filtered toolset plus MCP toolset definitions |
 | connected session capabilities | `initialize_session_capabilities()` | discovered MCP tool names plus loaded skills |
-| runtime-visible native schema subset | `compute_segment_filter()` in `run_turn()` (main turns: `(CORE_TOOL_NAMES \| granted_tools) & native_names`) and `_run_approval_loop()` (resume turns: deferred names plus `ALWAYS_ON_TOOL_NAMES`) | owned by `_orchestrate.py` |
+| runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `always_load` tools + `discovered_tools`; resume turns: `resume_tool_names` + `always_load` tools) | owned by per-tool loading policy in `agent.py` |
 
 Key distinctions:
 
 - skills are not tools; they rewrite user input into delegated agent input
 - MCP toolsets are attached during agent construction but only discovered after entering the main agent context
-- `deps.capabilities.tool_names` is a startup metadata list, not the literal schema sent on every segment
-- approval filtering narrows only the native `FunctionToolset`
+- `deps.capabilities.tool_index` is the single source of truth for tool capability state; tool names and approvals are derived from it
+- the `_filter` function in `_build_filtered_toolset()` uses per-tool loading policy to narrow the native `FunctionToolset`
 
 ### 2.7 Persistent Stores And External State
 

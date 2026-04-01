@@ -382,7 +382,7 @@ Examples of `search_hint`:
 
 ## Implementation Plan
 
-### TASK-1a: Replace taxonomy metadata with loading-policy metadata
+### ✓ DONE — TASK-1a: Replace taxonomy metadata with loading-policy metadata
 
 **prerequisites:** none
 
@@ -500,7 +500,7 @@ state use the new field names.
 
 ---
 
-### TASK-1b: Move visibility policy into the toolset filter
+### ✓ DONE — TASK-1b: Move visibility policy into the toolset filter
 
 **prerequisites:** [TASK-1a]
 
@@ -553,7 +553,7 @@ Visibility is entirely driven by per-tool `always_load`/`should_defer` plus `ses
 
 ---
 
-### TASK-2: Rebuild `search_tools()` and add deferred-tool prompt
+### ✓ DONE — TASK-2: Rebuild `search_tools()` and add deferred-tool prompt
 
 **prerequisites:** [TASK-1a, TASK-1b]
 
@@ -614,7 +614,7 @@ indexing, and session discovery only. Deferred-tool awareness is single-source r
 
 ---
 
-### TASK-3: Collapse parallel capability structures
+### ✓ DONE — TASK-3: Collapse parallel capability structures
 
 **prerequisites:** [TASK-1a, TASK-1b, TASK-2]
 
@@ -682,7 +682,7 @@ from `tool_index`. Skills remain separate capability entries.
 
 ---
 
-### TASK-4: Update tests and evals for new APIs
+### ✓ DONE — TASK-4: Update tests and evals for new APIs
 
 **prerequisites:** [TASK-1a, TASK-1b, TASK-2, TASK-3]
 
@@ -804,3 +804,77 @@ Previous cycle issues (retained):
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev tool-surface-simplify`
+
+---
+
+## Independent Review
+
+| File | Finding | Severity | Task |
+|------|---------|----------|------|
+| `co_cli/deps.py:356` | Stale docstring: listed `active_tool_filter` in per-turn fields | minor | TASK-1a |
+| `co_cli/tools/task_control.py:1` | Stale module docstring `(family: workflow)` | minor | TASK-1a |
+| `co_cli/tools/subagent.py:1` | Stale module docstring `(family: delegation)` | minor | TASK-1a |
+
+**Overall: 0 blocking / 3 minor (all fixed before delivery)**
+
+---
+
+## Delivery Summary — 2026-04-01
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1a | ToolConfig has loading-policy fields, no family; load-state invariant enforced; tool_index single source | ✓ pass |
+| TASK-1b | No CORE_TOOL_NAMES/ALWAYS_ON_TOOL_NAMES/compute_segment_filter; visibility from tool_index + discovered_tools | ✓ pass |
+| TASK-2 | search_tools ranks deferred tools; build_deferred_tool_prompt in agent instructions | ✓ pass |
+| TASK-3 | All files derive tool state from tool_index; no parallel structures | ✓ pass |
+| TASK-4 | All tests pass (259); no stale API references in tests/ or evals/ | ✓ pass |
+
+**Tests:** full suite — 259 passed, 0 failed
+**Independent Review:** clean (3 minor findings, all fixed)
+**Doc Sync:** fixed (DESIGN-tools.md, DESIGN-core-loop.md, DESIGN-system.md, DESIGN-bootstrap.md — replaced family/filter/parallel-state references with loading-policy model)
+
+**Overall: DELIVERED**
+Flat per-tool loading policy replaces taxonomy-based tool loading. Progressive injection now uses `always_load`/`should_defer` flags on `ToolConfig`, a single `tool_index` on `CoCapabilityState`, and `discovered_tools`/`resume_tool_names` for session and approval state — eliminating 6 parallel policy sites.
+
+---
+
+## Implementation Review — 2026-04-01
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|--------------|
+| TASK-1a | ToolConfig has loading-policy fields, no family; load-state invariant enforced | ✓ pass | `deps.py:284-302` — `ToolConfig` has `always_load`/`should_defer`/`search_hint`, no `family`; `__post_init__` raises `ValueError` on invalid combos |
+| TASK-1a | `tool_index` single source; no parallel `tool_names`/`tool_approvals`/`tool_catalog` | ✓ pass | `deps.py:306-322` — `CoCapabilityState` has only `tool_index`; `agent.py:43-48` — `AgentCapabilityResult` has `tool_index` only |
+| TASK-1a | Session uses `discovered_tools`; runtime uses `resume_tool_names`, no `active_tool_filter` | ✓ pass | `deps.py:344` — `discovered_tools: set[str]`; `deps.py:376` — `resume_tool_names`; `deps.py:388` — `reset_for_turn()` clears it |
+| TASK-1a | Integration boundary: real `_build_filtered_toolset` produces correct flags | ✓ pass | done_when script executed: `read_file.always_load=True`, `edit_file.should_defer=True`, `list_memories.always_load=True` |
+| TASK-1b | No `CORE_TOOL_NAMES`/`ALWAYS_ON_TOOL_NAMES`/`active_tool_filter` in agent.py | ✓ pass | grep confirmed absent; `agent.py:197-213` — `_filter` uses `entry.always_load` + `session.discovered_tools` + `resume_tool_names` |
+| TASK-1b | No `compute_segment_filter` in orchestrate; `resume_tool_names` in approval loop | ✓ pass | `_orchestrate.py:319-333` — sets `resume_tool_names` before approval segment, clears after |
+| TASK-2 | `search_tools` ranks deferred tools, no family | ✓ pass | `tool_search.py:9-67` — keyword search over `name+description+integration+search_hint`; `always_load` tools → "already available"; deferred → "unlocked" |
+| TASK-2 | `build_deferred_tool_prompt` in `_deferred_tool_prompt.py`; wired via `@agent.instructions` | ✓ pass | `_deferred_tool_prompt.py:6-33` — pure function; `agent.py:305-313` — `@agent.instructions` hook calls it |
+| TASK-3 | All 6 files derive tool state from `tool_index`; no `tool_catalog` | ✓ pass | done_when script confirmed all 6 files; `main.py:174` — `deps.capabilities.tool_index = agent_result.tool_index`; `_banner.py:46` — `len(deps.capabilities.tool_index)` |
+| TASK-3 | `_check.py` derives `tool_names`/`tool_approvals`/`source_counts` from `tool_index` | ✓ pass | `_check.py:435-451` — all derived from `tool_index` loop |
+| TASK-3 | `capabilities.py` reports by source, no family | ✓ pass | `capabilities.py:62-71` — source breakdown from `tool_index`; no `family` reference |
+| TASK-4 | 259 tests pass; no stale API references in tests/evals | ✓ pass | Full suite green; grep for removed APIs in tests/ and evals/ returns zero matches |
+| TASK-4 | `test_orchestration_filter.py` deleted | ✓ pass | File does not exist (glob confirmed) |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Stale `_r.tool_names` (should be `_r.tool_index`) — would crash at runtime | `scripts/trace_report_personality.py:329` | blocking | Fixed to `_r.tool_index` |
+
+### Tests
+- Command: `uv run pytest -v`
+- Result: 259 passed, 0 failed
+- Log: `.pytest-logs/20260401-*-review-impl.log`
+
+### Doc Sync
+- Scope: full — delivery synced DESIGN-tools.md, DESIGN-core-loop.md, DESIGN-system.md, DESIGN-bootstrap.md
+- Result: clean — grep for stale API names in all DESIGN docs returns zero matches
+
+### Behavioral Verification
+- `uv run co config`: ✓ status table renders correctly, system starts without error
+- `success_signal` verified for all 5 tasks: loading-policy metadata, single-source `tool_index`, flat visibility filter, deferred-tool prompt injection, progressive discovery via `search_tools`
+
+### Overall: PASS
+
+All 5 tasks implemented as specified. One blocking finding (stale script reference) auto-fixed. 259 tests green. DESIGN docs clean. Ship-ready.

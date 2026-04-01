@@ -61,16 +61,13 @@ def _make_ctx(
         config=config,
         session=CoSessionState(session_id="test-commands"),
         capabilities=CoCapabilityState(
-            tool_names=_AGENT.tool_names,
-            tool_approvals=_AGENT.tool_approvals,
-            tool_catalog=_AGENT.tool_catalog,
+            tool_index=dict(_AGENT.tool_index),
         ),
     )
     return CommandContext(
         message_history=message_history or [],
         deps=deps,
         agent=_AGENT.agent,
-        tool_names=_AGENT.tool_names,
     )
 
 
@@ -160,9 +157,7 @@ async def test_approval_approve():
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
         capabilities=CoCapabilityState(
-            tool_names=_AGENT.tool_names,
-            tool_approvals=_AGENT.tool_approvals,
-            tool_catalog=_AGENT.tool_catalog,
+            tool_index=dict(_AGENT.tool_index),
         ),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
@@ -201,9 +196,7 @@ async def test_approval_deny():
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
         capabilities=CoCapabilityState(
-            tool_names=_AGENT.tool_names,
-            tool_approvals=_AGENT.tool_approvals,
-            tool_catalog=_AGENT.tool_catalog,
+            tool_index=dict(_AGENT.tool_index),
         ),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
@@ -254,7 +247,6 @@ async def test_forget_command_evicts_fts_row(tmp_path):
             session=CoSessionState(session_id="test-forget-fts"),
         ),
         agent=_AGENT.agent,
-        tool_names=_AGENT.tool_names,
     )
 
     result = await dispatch("/forget 1", ctx)

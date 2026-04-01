@@ -1,4 +1,4 @@
-"""Agent tools for background task management (family: workflow).
+"""Agent tools for background task management.
 
 All four tools follow the standard pattern: RunContext[CoDeps], return ToolResult.
 Background task state lives in ctx.deps.session.background_tasks (session-scoped, no disk I/O).
