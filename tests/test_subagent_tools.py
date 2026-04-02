@@ -9,7 +9,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
+from co_cli.tools._subagent_agents import CoderOutput, ResearchOutput, ThinkingOutput
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
@@ -120,14 +120,14 @@ async def test_run_analysis_subagent_no_model() -> None:
 def test_confidence_out_of_range_fails_validation() -> None:
     """Out-of-range confidence values are rejected at Pydantic validation time."""
     with pytest.raises(ValidationError):
-        ResearchResult(summary="ok", sources=[], confidence=1.5)
+        ResearchOutput(summary="ok", sources=[], confidence=1.5)
     with pytest.raises(ValidationError):
-        CoderResult(summary="ok", diff_preview="", files_touched=[], confidence=-0.1)
+        CoderOutput(summary="ok", diff_preview="", files_touched=[], confidence=-0.1)
 
 
 def test_thinking_result_model() -> None:
-    """ThinkingResult is a valid Pydantic model with expected field values."""
-    r = ThinkingResult(
+    """ThinkingOutput is a valid Pydantic model with expected field values."""
+    r = ThinkingOutput(
         plan="Decompose the problem into three phases.",
         steps=["Phase 1: gather context", "Phase 2: analyze", "Phase 3: synthesize"],
         conclusion="The recommended approach is X.",

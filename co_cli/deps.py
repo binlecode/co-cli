@@ -62,7 +62,7 @@ DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.context._types import CompactionResult, MemoryRecallState, SafetyState
+from co_cli.context._types import Compaction, MemoryRecallState, SafetyState
 from co_cli.tools._background import BackgroundTaskState
 
 if TYPE_CHECKING:
@@ -338,7 +338,7 @@ class CoRuntimeState:
       precomputed_compaction, active_skill_name
     """
 
-    precomputed_compaction: CompactionResult | None = field(default=None, repr=False)
+    precomputed_compaction: Compaction | None = field(default=None, repr=False)
     # turn_usage: authoritative per-turn usage accumulator.
     # Reset to None at the start of each foreground turn by run_turn().
     # The foreground orchestrator merges each segment's usage after _execute_stream_segment().

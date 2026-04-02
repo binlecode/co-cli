@@ -20,7 +20,7 @@ from co_cli.agent import build_agent
 from co_cli.commands._commands import CommandContext, LocalOnly, ReplaceTranscript, dispatch
 from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.context._history import truncate_history_window
-from co_cli.context._types import CompactionResult
+from co_cli.context._types import Compaction
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
@@ -109,7 +109,7 @@ async def test_truncate_history_window_uses_precomputed_result():
     """Valid precomputed result is used — summary text appears in output."""
     msgs = _make_messages(10)
     ctx = _make_processor_ctx(max_history_messages=6)
-    ctx.deps.runtime.precomputed_compaction = CompactionResult(
+    ctx.deps.runtime.precomputed_compaction = Compaction(
         summary_text="PRECOMPUTED_SUMMARY_SENTINEL",
         head_end=2,
         tail_start=6,
@@ -131,7 +131,7 @@ async def test_truncate_history_window_stale_precomputed_uses_static_marker():
     """Precomputed result with wrong head_end/tail_start → static marker, not summary."""
     msgs = _make_messages(10)
     ctx = _make_processor_ctx(max_history_messages=6)
-    ctx.deps.runtime.precomputed_compaction = CompactionResult(
+    ctx.deps.runtime.precomputed_compaction = Compaction(
         summary_text="STALE_MARKER_SENTINEL",
         head_end=999,
         tail_start=999,

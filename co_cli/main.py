@@ -179,13 +179,13 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         except Exception as e:
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
-        session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
+        skill_count = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
         completer.words = _build_completer_words(deps.skill_commands)
 
         initialize_knowledge(deps, frontend)
         sync_knowledge(deps, frontend)
         session_data = restore_session(deps, frontend)
-        frontend.on_status(f"  {session_cap.skill_count} skill(s) loaded")
+        frontend.on_status(f"  {skill_count} skill(s) loaded")
 
         display_welcome_banner(deps)
 

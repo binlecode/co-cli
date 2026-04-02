@@ -127,7 +127,7 @@ def create_deps() -> CoDeps:
     Raises ValueError on provider/model hard errors.
     """
     from co_cli._model_factory import ModelRegistry
-    from co_cli.agent import build_tool_registryistry
+    from co_cli.agent import build_tool_registry
 
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -139,7 +139,7 @@ def create_deps() -> CoDeps:
 
     # Step 3: build registries (pure config — no IO)
     model_registry = ModelRegistry.from_config(config)
-    tool_registry = build_tool_registryistry(config)
+    tool_registry = build_tool_registry(config)
 
     # Step 4: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
@@ -219,19 +219,12 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
         return session_data
 
 
-@dataclass(frozen=True)
-class SessionCapabilityResult:
-    """Startup snapshot of session capability completion."""
-
-    skill_count: int
-
-
 async def initialize_session_capabilities(
     agent: Agent,
     deps: CoDeps,
     frontend: TerminalFrontend,
     mcp_init_ok: bool,
-) -> SessionCapabilityResult:
+) -> int:
     """Complete session capability assembly after agent context entry.
 
     Owns MCP discovery (conditional on mcp_servers configured and mcp_init_ok)
@@ -255,5 +248,5 @@ async def initialize_session_capabilities(
     set_skill_commands(skill_commands, deps)
 
     from co_cli.commands._commands import get_skill_registry
-    return SessionCapabilityResult(skill_count=len(get_skill_registry(deps.skill_commands)))
+    return len(get_skill_registry(deps.skill_commands))
 

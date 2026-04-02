@@ -15,7 +15,7 @@ def _make_base_agent(resolved_model: ResolvedModel, output_type: type, instructi
     return Agent(resolved_model.model, deps_type=CoDeps, output_type=output_type, instructions=instructions)
 
 
-class CoderResult(BaseModel):
+class CoderOutput(BaseModel):
     """Structured output from the coder sub-agent."""
 
     summary: str
@@ -24,7 +24,7 @@ class CoderResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult]:
+def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderOutput]:
     """Create a read-only coder sub-agent with file tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps in the
@@ -33,9 +33,9 @@ def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, CoderResult] = _make_base_agent(
+    agent: Agent[CoDeps, CoderOutput] = _make_base_agent(
         resolved_model,
-        CoderResult,
+        CoderOutput,
         (
             "You are a read-only code analysis agent. "
             "Investigate the codebase using the available file tools and return a structured analysis. "
@@ -48,7 +48,7 @@ def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderResult
     return agent
 
 
-class ResearchResult(BaseModel):
+class ResearchOutput(BaseModel):
     """Structured output from the research sub-agent."""
 
     summary: str
@@ -56,7 +56,7 @@ class ResearchResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ResearchResult]:
+def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ResearchOutput]:
     """Create a read-only research sub-agent with web tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and only
@@ -64,14 +64,14 @@ def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Research
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, ResearchResult] = _make_base_agent(
+    agent: Agent[CoDeps, ResearchOutput] = _make_base_agent(
         resolved_model,
-        ResearchResult,
+        ResearchOutput,
         (
             "You are a read-only research agent. "
             "Search the web and fetch pages to answer the query. "
             "Synthesize what you find into a grounded summary with sources. "
-            "Return a ResearchResult with summary, sources (URLs), and confidence (0.0–1.0). "
+            "Return a ResearchOutput with summary, sources (URLs), and confidence (0.0–1.0). "
             "Set confidence=0.0 only if you found nothing after exhausting available searches."
         ),
     )
@@ -80,7 +80,7 @@ def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Research
     return agent
 
 
-class AnalysisResult(BaseModel):
+class AnalysisOutput(BaseModel):
     """Structured output from the analysis sub-agent."""
 
     conclusion: str
@@ -88,7 +88,7 @@ class AnalysisResult(BaseModel):
     reasoning: str
 
 
-def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, AnalysisResult]:
+def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, AnalysisOutput]:
     """Create a read-only analysis sub-agent with knowledge and Drive search tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and only
@@ -98,14 +98,14 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
 
     Caller passes model_settings=resolved_model.settings to agent.run().
     """
-    agent: Agent[CoDeps, AnalysisResult] = _make_base_agent(
+    agent: Agent[CoDeps, AnalysisOutput] = _make_base_agent(
         resolved_model,
-        AnalysisResult,
+        AnalysisOutput,
         (
             "You are a read-only analysis agent. "
             "Use the available search tools to gather evidence, then compare, evaluate, "
             "and synthesize the provided inputs. "
-            "Return a structured AnalysisResult with a clear conclusion, "
+            "Return a structured AnalysisOutput with a clear conclusion, "
             "supporting evidence list, and your reasoning."
         ),
     )
@@ -114,7 +114,7 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
     return agent
 
 
-class ThinkingResult(BaseModel):
+class ThinkingOutput(BaseModel):
     """Structured output from the thinking sub-agent."""
 
     plan: str
@@ -122,7 +122,7 @@ class ThinkingResult(BaseModel):
     conclusion: str
 
 
-def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ThinkingResult]:
+def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ThinkingOutput]:
     """Create a reasoning-only thinking sub-agent with no tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and has
@@ -136,11 +136,11 @@ def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Thinking
     # No tools registered — pure native reasoning, no external calls.
     return _make_base_agent(
         resolved_model,
-        ThinkingResult,
+        ThinkingOutput,
         (
             "You are a reasoning agent. "
             "Decompose the problem, reason step-by-step, and return a structured result. "
-            "Return a ThinkingResult with: "
+            "Return a ThinkingOutput with: "
             "plan (1–3 sentence high-level approach), "
             "steps (ordered action steps), "
             "and conclusion (synthesized answer or recommendation)."

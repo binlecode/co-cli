@@ -268,7 +268,7 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     assert "test-bootstrap-skill" in skill_names, (
         "Project skill must appear in skill_commands after initialize_session_capabilities"
     )
-    assert result.skill_count >= 1, (
+    assert result >= 1, (
         "skill_count must be at least 1 when a valid project skill is loaded"
     )
 

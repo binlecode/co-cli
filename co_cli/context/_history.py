@@ -46,11 +46,11 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# CompactionResult — pre-computed summary for background compaction
+# Compaction — pre-computed summary for background compaction
 # ---------------------------------------------------------------------------
 
 
-from co_cli.context._types import _CompactionBoundaries, CompactionResult, MemoryRecallState, SafetyState
+from co_cli.context._types import _CompactionBoundaries, Compaction, MemoryRecallState, SafetyState
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ async def truncate_history_window(
       - everything in between, replaced by a cached summary when available,
         else a static marker
 
-    If a pre-computed ``CompactionResult`` is available on
+    If a pre-computed ``Compaction`` is available on
     ``ctx.deps.runtime.precomputed_compaction`` and the message count matches
     (not stale), that cached summary is used directly.
 
@@ -462,7 +462,7 @@ async def truncate_history_window(
     dropped_count = bounds.dropped_count
 
     # Check for pre-computed compaction result (background compaction)
-    precomputed: CompactionResult | None = ctx.deps.runtime.precomputed_compaction
+    precomputed: Compaction | None = ctx.deps.runtime.precomputed_compaction
     summary_text: str | None = None
 
     if (
@@ -505,7 +505,7 @@ _PRECOMPACT_MSG_RATIO = 0.80
 async def precompute_compaction(
     messages: list[ModelMessage],
     deps: CoDeps,
-) -> CompactionResult | None:
+) -> Compaction | None:
     """Pre-compute a compaction summary during user idle time.
 
     Called after each turn completes. Checks if history is approaching
@@ -569,7 +569,7 @@ async def precompute_compaction(
         "Background compaction: pre-computed summary for %d messages",
         len(dropped),
     )
-    return CompactionResult(
+    return Compaction(
         summary_text=summary_text,
         head_end=bounds.head_end,
         tail_start=bounds.tail_start,

@@ -15,7 +15,7 @@ from co_cli.tools._result import ToolResult, make_result
 _TRACER = otel_trace.get_tracer("co-cli.subagent")
 
 
-class SubagentAttemptResult(NamedTuple):
+class SubagentAttempt(NamedTuple):
     output: Any
     usage: RunUsage  # child-only snapshot — safe to read after turn_usage merge
     run_id: str
@@ -36,7 +36,7 @@ async def _run_subagent_attempt(
     budget: int,
     model_settings: Any,
     error_msg: str,
-) -> SubagentAttemptResult:
+) -> SubagentAttempt:
     """Run one subagent attempt with a fresh usage context (Mode 2).
 
     Creates fresh deps per call. Merges child usage into parent turn on success.
@@ -58,9 +58,9 @@ async def _run_subagent_attempt(
     _merge_turn_usage(ctx, usage)
     # Snapshot usage AFTER merge. _merge_turn_usage may alias turn_usage = usage
     # (no copy when turn_usage is None). A later incr() on turn_usage mutates the
-    # original RunUsage object in-place. The snapshot decouples SubagentAttemptResult.usage
+    # original RunUsage object in-place. The snapshot decouples SubagentAttempt.usage
     # from turn_usage so attempt_1.usage.requests stays stable during attempt_2.
-    return SubagentAttemptResult(output=result.output, usage=copy(usage), run_id=run_id)
+    return SubagentAttempt(output=result.output, usage=copy(usage), run_id=run_id)
 
 
 async def run_coding_subagent(

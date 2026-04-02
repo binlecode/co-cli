@@ -26,7 +26,7 @@ class _CompactionBoundaries:
 
 
 @dataclass
-class CompactionResult:
+class Compaction:
     """Pre-computed compaction summary for background processing.
 
     Produced by ``precompute_compaction()`` during user idle time and
