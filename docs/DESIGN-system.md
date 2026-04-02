@@ -12,7 +12,7 @@ bootstrap
     -> create_deps()
        -> CoConfig.from_settings()
        -> config.validate()  # config shape only, no IO
-       -> resolve_knowledge_backend()  # includes reranker resolution
+       -> _discover_knowledge_backend()  # probe + construct store
        -> build CoServices / CoRuntimeState / CoDeps
     -> build_agent()
        -> build_static_instructions()  # personality, rules, counter-steering
@@ -99,9 +99,9 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - Missing reasoning role is a startup error.
    - Gemini without an API key is a startup error.
    - Ollama connectivity and model availability are deferred to runtime (`run_turn()` handles errors).
-3. `resolve_knowledge_backend()` degrades capabilities in place:
-   - on grep: reranker skipped entirely (no index to rerank against)
-   - on hybrid/fts5: rerankers degrade independently to `None`
+3. `_resolve_reranker()` updates config for reranker fields when an index is active (hybrid/fts5); skipped on grep. Then `_discover_knowledge_backend()` probes embedder availability and constructs the store (`config.knowledge_search_backend` is never mutated; `store.backend` holds the actual runtime backend):
+   - on grep: reranker and discovery skipped entirely (no index)
+   - on hybrid/fts5: rerankers degrade independently to `None` in config
    - knowledge degrades through `hybrid -> fts5 -> grep`
 4. `create_deps()` constructs:
    - `CoServices(shell, knowledge_store, model_registry)`

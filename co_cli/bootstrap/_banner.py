@@ -57,26 +57,24 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     except Exception:
         git_branch = ""
 
-    backend = deps.config.knowledge_search_backend
-    if backend == "hybrid":
+    configured_backend = deps.config.knowledge_search_backend
+    actual_backend = deps.knowledge_store.backend if deps.knowledge_store is not None else "grep"
+
+    if configured_backend == "hybrid":
         knowledge_info = (
             f"hybrid · {deps.config.knowledge_embedding_provider}/"
             f"{deps.config.knowledge_embedding_model} {deps.config.knowledge_embedding_dims}d"
         )
-    elif backend == "fts5":
+    elif configured_backend == "fts5":
         knowledge_info = "fts5"
     else:
         knowledge_info = "grep (no index)"
 
-    # Knowledge-index degradation: configured for index-backed search but no index available.
-    # Reranker-only degradation is already reported by individual status lines before the banner.
-    degraded = (
-        deps.knowledge_store is None
-        and deps.config.knowledge_search_backend != "grep"
-    )
+    # Knowledge-index degradation: configured backend differs from actual runtime backend.
+    degraded = configured_backend != actual_backend
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"
     if degraded:
-        knowledge_line += "  [yellow](degraded)[/yellow]"
+        knowledge_line += f"  [yellow](degraded → {actual_backend})[/yellow]"
 
     lines = [
         f"\n[accent]{art}[/accent]\n",

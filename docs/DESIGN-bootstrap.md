@@ -34,12 +34,18 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      discover_mcp_tools(mcp_toolsets, exclude=native_tools) → mcp_index
 │  │      tool_index.update(mcp_index)
 │  ├─ _load_skills(skills_dir, settings, user_skills_dir) → skill_commands
-│  ├─ resolve_knowledge_backend(config) → resolved config + KnowledgeStore | None
-│  │      grep → skip reranker, no index
-│  │      otherwise → _resolve_reranker() → try hybrid → fts5 → grep
+│  ├─ [if not grep] _resolve_reranker(config, statuses) → config
+│  │      resolves reranker fields on config (cross-encoder, LLM reranker)
 │  │      reports degradation statuses via frontend.on_status()
-│  ├─ _sync_knowledge(config, knowledge_store, frontend)
-│  │      sync_dir("memory", ...) + sync_dir("library", ...)
+│  ├─ _discover_knowledge_backend(config, frontend) → KnowledgeStore | None
+│  │      grep → return None (no store needed)
+│  │      otherwise → probe embedder → resolve backend (hybrid | fts5)
+│  │      construct KnowledgeStore with resolved backend
+│  │      on fail → hybrid falls back to fts5, then None
+│  │      config.knowledge_search_backend never mutated; store.backend holds actual
+│  ├─ _sync_knowledge_store(store, config, frontend)
+│  │      reconcile store with memory + library files on disk
+│  │      hash-based — skips unchanged files
 │  │      on fail → store closed, returns None
 │  ├─ [if ROLE_TASK configured] build_task_agent(config, role_model) → task_agents
 │  └─ → CoDeps(shell, config, model_registry, knowledge_store, tool_index, skill_commands, task_agents, runtime)
@@ -110,7 +116,7 @@ create_deps(frontend, stack):
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeStore` construction) and file sync happen inside `create_deps()` as Steps 6-7, before CoDeps assembly.
 
 Key points:
-- `settings.knowledge_search_backend` is the configured backend; `deps.config.knowledge_search_backend` is the resolved backend after degradation (set by `resolve_knowledge_backend` inside `create_deps()`)
+- `deps.config.knowledge_search_backend` is the user's configured backend (never mutated after `from_settings()`); `deps.knowledge_store.backend` is the actual runtime backend after degradation (may differ from config)
 - `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call
 - Static instructions (personality, rules, counter-steering) are assembled inside `build_agent()`, not here — they are an agent concern
 
@@ -172,7 +178,7 @@ inline wakeup (in chat_loop()):
 
 ### Knowledge Sync (inside create_deps)
 
-Knowledge sync runs inside `create_deps()` as Step 7, after backend resolution (Step 6):
+Knowledge sync runs inside `create_deps()` as Step 7, after backend discovery and store construction (Step 6):
 
 ```text
 if knowledge_store is not None and (memory_dir.exists() or library_dir.exists()):
@@ -261,19 +267,22 @@ Live skill reloading happens after startup in the main loop: before each REPL pr
 
 ### Knowledge Backend Resolution
 
-`resolve_knowledge_backend(config)` runs inside `create_deps()` as Step 6, before sync (Step 7) and CoDeps assembly (Step 9):
+Reranker resolution (`_resolve_reranker`) runs inside `create_deps()` as Step 6, before discovery. It updates `config` for reranker fields only (cross-encoder URL, LLM reranker) so `deps.config` reflects actual reranker availability.
+
+`_discover_knowledge_backend(config, frontend)` runs as Step 7, before sync (Step 8) and CoDeps assembly (Step 10). It probes embedder availability, constructs the store with the resolved backend, and returns `KnowledgeStore | None`. `config.knowledge_search_backend` is never mutated.
 
 ```text
-"grep" in config → hard stop, grep only (no index)
-otherwise        → try hybrid first (if embedder available), then fts5, then grep
-                   (configured "fts5" still attempts hybrid when embedder is reachable)
+"grep" in config → return None (no store needed)
+otherwise        → probe embedder
+                   construct KnowledgeStore with resolved backend (hybrid | fts5)
+                   on construction failure: hybrid falls back to fts5, then None
+                   degradation statuses reported via frontend.on_status()
 
-config = resolved config (returned from resolve_knowledge_backend)
 knowledge_store = KnowledgeStore instance or None
-degradation statuses reported directly via frontend.on_status()
+knowledge_store.backend = actual runtime backend (may differ from config)
 ```
 
-Config is fully resolved before CoDeps construction — no post-construction mutation.
+Config holds the user's configured `knowledge_search_backend` value (never mutated). Reranker fields on config are updated by `_resolve_reranker` to reflect degraded availability. The store holds the actual runtime backend (`deps.knowledge_store.backend`). Tools and status read from the store.
 
 ## 7. Boundary, State Mutations, And Failure Paths
 
@@ -287,7 +296,7 @@ display_welcome_banner(deps)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tool_index)`), skill count (`len(deps.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when knowledge-index degradation is detected (`deps.knowledge_store is None and deps.config.knowledge_search_backend != "grep"`). Reranker-only degradation is already reported by individual status lines before the banner.
+The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tool_index)`), skill count (`len(deps.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The knowledge line shows the configured backend; when the actual runtime backend (from `deps.knowledge_store.backend`) differs, it appends `(degraded → actual)`. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when the configured and actual backends differ. Reranker-only degradation is already reported by individual status lines before the banner.
 
 ### State Mutations Summary
 

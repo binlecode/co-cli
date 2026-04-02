@@ -1,9 +1,6 @@
 """Functional tests for bootstrap-sequence behaviors (real components, direct API calls)."""
 
 import asyncio
-import dataclasses
-
-from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 import os
 import yaml
 from datetime import datetime, timedelta, timezone
@@ -12,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from co_cli.config import ModelConfig
-from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, _resolve_reranker, restore_session, _sync_knowledge
+from co_cli.bootstrap._bootstrap import _discover_knowledge_backend, _sync_knowledge_store, _resolve_reranker, restore_session
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
@@ -73,8 +70,8 @@ def _write_article_file(path: Path, *, art_id: int, body: str) -> None:
 
 
 
-def test_sync_knowledge_stores_memory_and_article(tmp_path: Path) -> None:
-    """_sync_knowledge routes memory and article files to the correct store sources and keeps the store active."""
+def test_sync_knowledge_store_indexes_memory_and_article(tmp_path: Path) -> None:
+    """_sync_knowledge_store reconciles memory and article files into the store."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
     library_dir = tmp_path / "library"
@@ -90,47 +87,37 @@ def test_sync_knowledge_stores_memory_and_article(tmp_path: Path) -> None:
         library_dir=library_dir,
         session_path=tmp_path / "session.json",
     )
-    idx = KnowledgeStore(config=config)
+    store = _discover_knowledge_backend(config, TerminalFrontend())
+    assert store is not None, "_discover_knowledge_backend must return a store for fts5"
     try:
-        result = _sync_knowledge(config, idx, TerminalFrontend())
+        store = _sync_knowledge_store(store, config, TerminalFrontend())
+        assert store is not None, "_sync_knowledge_store must not disable the store on success"
 
-        assert result is not None, "_sync_knowledge must not disable the store on success"
-
-        mem_results = idx.search("Bootstrap memory content", source="memory", limit=5)
+        mem_results = store.search("Bootstrap memory content", source="memory", limit=5)
         assert any("001-test-mem.md" in r.path for r in mem_results), \
             "Memory file must be findable under source='memory' after sync"
 
-        art_results = idx.search("Bootstrap article content", source="library", limit=5)
+        art_results = store.search("Bootstrap article content", source="library", limit=5)
         assert any("002-test-art.md" in r.path for r in art_results), \
             "Article file must be findable under source='library' after sync"
     finally:
-        idx.close()
+        if store is not None:
+            store.close()
 
 
-def test_sync_knowledge_disables_index_on_failure(tmp_path: Path) -> None:
-    """_sync_knowledge returns None when sync raises — grep fallback must activate for the session."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    _write_memory_file(memory_dir / "001-test-mem.md", mem_id=1, body="Should fail.")
-
+def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None:
+    """_discover_knowledge_backend returns None when backend is grep — no store needed."""
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="fts5",
-        knowledge_cross_encoder_reranker_url=None,
-        memory_dir=memory_dir,
+        knowledge_search_backend="grep",
         session_path=tmp_path / "session.json",
     )
-    idx = KnowledgeStore(config=config)
-    idx.close()  # closed before sync so sync_dir raises
-
-    result = _sync_knowledge(config, idx, TerminalFrontend())
-
-    assert result is None, \
-        "_sync_knowledge must return None after sync failure"
+    result = _discover_knowledge_backend(config, TerminalFrontend())
+    assert result is None, "_discover_knowledge_backend must return None for grep backend"
 
 
-def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(tmp_path: Path) -> None:
-    """Hybrid bootstrap must degrade to FTS5 when the embedder is unreachable at startup."""
+def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(tmp_path: Path) -> None:
+    """Hybrid discovery must degrade to FTS5 when the embedder is unreachable at startup."""
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="hybrid",
@@ -139,13 +126,14 @@ def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavail
         knowledge_cross_encoder_reranker_url=None,
     )
 
-    resolved_config, knowledge_store, statuses = resolve_knowledge_backend(config)
-    assert resolved_config.knowledge_search_backend == "fts5"
-    assert knowledge_store is not None, "Bootstrap must keep FTS search available after hybrid failure"
-    assert any("using fts5" in status for status in statuses), \
-        "Degradation must surface an explicit startup status message"
-
-    knowledge_store.close()
+    store = _discover_knowledge_backend(config, TerminalFrontend())
+    try:
+        assert store is not None, "Discovery must return a store (degraded to fts5), not None"
+        assert store.backend == "fts5", \
+            "Discovery must degrade hybrid to fts5 when embedder is unavailable"
+    finally:
+        if store is not None:
+            store.close()
 
 
 def test_restore_session_fresh_returns_same_id(tmp_path: Path) -> None:

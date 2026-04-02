@@ -30,7 +30,7 @@ def _summarize_backend_error(exc: Exception) -> str:
 def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
     """Resolve reranker availability, appending degradation messages to statuses.
 
-    Called inside resolve_knowledge_backend only when an index is active (hybrid/fts5).
+    Called from create_deps() only when an index is active (hybrid/fts5).
     Skipped on grep — no index means no reranking.
     """
     updates: dict = {}
@@ -57,37 +57,30 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
     return config
 
 
-def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, KnowledgeStore | None, list[str]]:
-    """Resolve knowledge backend and reranker with graceful degradation.
+def _discover_knowledge_backend(
+    config: CoConfig, frontend: TerminalFrontend,
+) -> KnowledgeStore | None:
+    """Discover which knowledge backend is available and construct the store.
 
-    Bootstrap always prefers max capability and falls back with warnings:
+    Three-tier fallback with graceful degradation:
       1. hybrid  — sqlite-vec + embedding provider (richest search)
       2. fts5    — SQLite FTS5 index (keyword search, no vectors)
-      3. grep    — pure file search, no index required
+      3. grep    — pure file search, no store required
 
-    "grep" in config is the only hard stop — it skips indexing entirely.
-    Otherwise bootstrap always attempts hybrid first regardless of config value,
-    falling back through fts5 to grep as each level fails.
-
-    Reranker resolution runs only when an index is active (hybrid or fts5).
-    On grep there is no index to rerank against, so the probe is skipped.
-
-    Embedding provider "none" explicitly disables hybrid (no point attempting).
+    Probes embedder availability, constructs the store with the resolved backend,
+    and reports degradation to frontend. Config is never mutated for
+    knowledge_search_backend — the store holds the actual backend in store.backend.
+    Reranker fields must already be resolved in config before calling this function.
+    Returns the constructed store, or None on full degradation to grep.
     """
+    if config.knowledge_search_backend == "grep":
+        return None
+
     statuses: list[str] = []
 
-    if config.knowledge_search_backend == "grep":
-        return config, None, statuses
-
-    from co_cli.knowledge._store import KnowledgeStore
-
-    # Resolve reranker before index construction — config fields must reflect
-    # actual availability so the index and query pipeline see correct values.
-    config = _resolve_reranker(config, statuses)
-
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
+    resolved_backend = "fts5"  # default fallback
     if config.knowledge_embedding_provider == "none":
-        # Embedding explicitly disabled — skip hybrid silently.
         logger.info("Hybrid skipped: embedding provider is 'none'")
     else:
         from co_cli.bootstrap._check import check_embedder
@@ -99,29 +92,85 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, KnowledgeStor
                 f"({embedder_check.detail}); using fts5"
             )
         else:
-            hybrid_config = dataclasses.replace(config, knowledge_search_backend="hybrid")
-            try:
-                return hybrid_config, KnowledgeStore(config=hybrid_config), statuses
-            except Exception as exc:
-                logger.warning("Hybrid backend unavailable: %s", exc)
-                statuses.append(
-                    f"  Knowledge degraded — hybrid unavailable "
-                    f"({_summarize_backend_error(exc)}); using fts5"
-                )
+            resolved_backend = "hybrid"
 
-    # --- Level 2: fts5 (index DB required) ---
-    fts5_config = dataclasses.replace(config, knowledge_search_backend="fts5")
+    for status in statuses:
+        frontend.on_status(status)
+
+    # --- Construct store with resolved backend ---
+    store_config = dataclasses.replace(
+        config, knowledge_search_backend=resolved_backend,
+    )
+
+    from co_cli.knowledge._store import KnowledgeStore as _KS
+
     try:
-        return fts5_config, KnowledgeStore(config=fts5_config), statuses
+        return _KS(config=store_config)
     except Exception as exc:
-        logger.warning("FTS5 backend unavailable: %s", exc)
-        statuses.append(
-            f"  Knowledge degraded — fts5 unavailable "
-            f"({_summarize_backend_error(exc)}); using grep"
-        )
+        if resolved_backend == "hybrid":
+            logger.warning("Hybrid backend unavailable: %s", exc)
+            frontend.on_status(
+                f"  Knowledge degraded — hybrid unavailable "
+                f"({_summarize_backend_error(exc)}); trying fts5"
+            )
+            fts5_config = dataclasses.replace(store_config, knowledge_search_backend="fts5")
+            try:
+                return _KS(config=fts5_config)
+            except Exception as exc2:
+                logger.warning("FTS5 backend unavailable: %s", exc2)
+                frontend.on_status(
+                    f"  Knowledge degraded — fts5 unavailable "
+                    f"({_summarize_backend_error(exc2)}); using grep"
+                )
+                return None
+        else:
+            logger.warning("FTS5 backend unavailable: %s", exc)
+            frontend.on_status(
+                f"  Knowledge degraded — fts5 unavailable "
+                f"({_summarize_backend_error(exc)}); using grep"
+            )
+            return None
 
-    # --- Level 3: grep (no index) ---
-    return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
+
+def _sync_knowledge_store(
+    store: KnowledgeStore | None,
+    config: CoConfig,
+    frontend: TerminalFrontend,
+) -> KnowledgeStore | None:
+    """Reconcile the knowledge store with current memory + library files on disk.
+
+    Hash-based — skips unchanged files. On sync failure, closes the store and
+    returns None (grep fallback for the session).
+    """
+    if store is None:
+        frontend.on_status("  Knowledge store not available — skipped")
+        return None
+
+    with _TRACER.start_as_current_span("sync_knowledge") as span:
+        try:
+            if config.memory_dir.exists() or config.library_dir.exists():
+                mem_count = store.sync_dir("memory", config.memory_dir, kind_filter="memory")
+                art_count = store.sync_dir("library", config.library_dir, kind_filter="article")
+                count = mem_count + art_count
+                backend = store.backend
+                span.set_attribute("count", count)
+                span.set_attribute("backend", backend)
+                span.set_attribute("status", "ok")
+                frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
+            else:
+                span.set_attribute("status", "skipped")
+                frontend.on_status("  Knowledge store empty — no memory/library dirs")
+        except Exception as e:
+            span.set_attribute("status", "error")
+            span.set_attribute("error", str(e))
+            try:
+                store.close()
+            except Exception:
+                pass
+            frontend.on_status(f"  Knowledge sync failed — {e}")
+            return None
+
+    return store
 
 
 async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDeps:
@@ -172,15 +221,20 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     from co_cli.commands._commands import _load_skills
     skill_commands = _load_skills(config.skills_dir, settings=settings, user_skills_dir=config.user_skills_dir)
 
-    # Step 6: resolve knowledge backend (IO probes — three-tier fallback)
-    config, knowledge_store, statuses = resolve_knowledge_backend(config)
-    for status in statuses:
-        frontend.on_status(status)
+    # Step 6: resolve reranker availability (updates config for reranker fields only)
+    if config.knowledge_search_backend != "grep":
+        reranker_statuses: list[str] = []
+        config = _resolve_reranker(config, reranker_statuses)
+        for status in reranker_statuses:
+            frontend.on_status(status)
 
-    # Step 7: sync knowledge (memory + library files into store)
-    knowledge_store = _sync_knowledge(config, knowledge_store, frontend)
+    # Step 7: discover knowledge backend + construct store (IO probes — three-tier fallback)
+    knowledge_store = _discover_knowledge_backend(config, frontend)
 
-    # Step 8: build task agent (approval resume — lightweight, no personality)
+    # Step 8: sync knowledge store with current files on disk
+    knowledge_store = _sync_knowledge_store(knowledge_store, config, frontend)
+
+    # Step 9: build task agent (approval resume — lightweight, no personality)
     task_agents: dict = {}
     _no_model = ResolvedModel(model=None, settings=None)
     task_model = model_registry.get(ROLE_TASK, _no_model)
@@ -189,7 +243,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
             config=config, role_model=task_model, tool_registry=tool_registry,
         )
 
-    # Step 9: assemble deps
+    # Step 10: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(
         shell=ShellBackend(),
@@ -202,44 +256,6 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         runtime=runtime,
     )
 
-
-def _sync_knowledge(
-    config: CoConfig,
-    knowledge_store: KnowledgeStore | None,
-    frontend: TerminalFrontend,
-) -> KnowledgeStore | None:
-    """Sync memory + library dirs into the knowledge store.
-
-    Returns the store (possibly None if sync failed and store was disabled).
-    Called inside create_deps() after resolve_knowledge_backend().
-    """
-    with _TRACER.start_as_current_span("sync_knowledge") as span:
-        try:
-            if knowledge_store is not None and (
-                config.memory_dir.exists() or config.library_dir.exists()
-            ):
-                mem_count = knowledge_store.sync_dir("memory", config.memory_dir, kind_filter="memory")
-                art_count = knowledge_store.sync_dir("library", config.library_dir, kind_filter="article")
-                count = mem_count + art_count
-                backend = config.knowledge_search_backend
-                span.set_attribute("count", count)
-                span.set_attribute("backend", backend)
-                span.set_attribute("status", "ok")
-                frontend.on_status(f"  Knowledge synced — {count} item(s) ({backend})")
-            else:
-                span.set_attribute("status", "skipped")
-                frontend.on_status("  Knowledge index not available — skipped")
-        except Exception as e:
-            span.set_attribute("status", "error")
-            span.set_attribute("error", str(e))
-            if knowledge_store is not None:
-                try:
-                    knowledge_store.close()
-                except Exception:
-                    pass
-                knowledge_store = None
-            frontend.on_status(f"  Knowledge sync failed — {e}")
-    return knowledge_store
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:

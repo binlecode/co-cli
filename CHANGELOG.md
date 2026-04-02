@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-04-02
+
+### Changed
+- **Frozen config for knowledge backend**: `deps.config.knowledge_search_backend` now holds the user's configured value, never mutated after `from_settings()`. The actual runtime backend (after degradation) is exposed via `deps.knowledge_store.backend`. Tools, banner, and `/status` read from the store instead of config.
+- **Merged discover + init**: `_discover_knowledge_backend` now probes backend availability AND constructs the `KnowledgeStore` in one step; `_init_knowledge_store` removed. Banner shows `(degraded → actual)` when the runtime backend differs from the configured value.
+
 ## [0.7.10] - 2026-04-02
 
 ### Changed

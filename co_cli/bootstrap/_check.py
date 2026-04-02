@@ -11,9 +11,9 @@ Public entry points:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
-  check_reranker_llm      — bootstrap/_bootstrap.py (_resolve_reranker, inside resolve_knowledge_backend)
-  check_cross_encoder     — bootstrap/_bootstrap.py (_resolve_reranker, inside resolve_knowledge_backend)
-  check_embedder          — bootstrap/_bootstrap.py (resolve_knowledge_backend)
+  check_reranker_llm      — bootstrap/_bootstrap.py (_resolve_reranker, inside _discover_knowledge_backend)
+  check_cross_encoder     — bootstrap/_bootstrap.py (_resolve_reranker, inside _discover_knowledge_backend)
+  check_embedder          — bootstrap/_bootstrap.py (_discover_knowledge_backend)
 
 Config-shape validation lives on CoConfig.validate() (deps.py), not here.
 """
@@ -375,7 +375,8 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_knowledge(deps.knowledge_store, deps.config.knowledge_search_backend)
+    actual_backend = deps.knowledge_store.backend if deps.knowledge_store is not None else "grep"
+    knowledge_result = _check_knowledge(deps.knowledge_store, actual_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands._commands import get_skill_registry
@@ -418,7 +419,7 @@ def check_runtime(
         "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",
         "mcp_count": mcp_count,
-        "knowledge_backend": deps.config.knowledge_search_backend,
+        "knowledge_backend": actual_backend,
         "checks": checks,
     }
 
@@ -437,7 +438,7 @@ def check_runtime(
         "tool_count": len(tool_index),
         "skill_count": len(get_skill_registry(deps.skill_commands)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
-        "knowledge_mode": deps.config.knowledge_search_backend,
+        "knowledge_mode": actual_backend,
         "source_counts": source_counts,
     }
 
