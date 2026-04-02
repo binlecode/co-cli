@@ -61,11 +61,14 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*State` | Mutable data with a lifecycle; persists/mutates across operations | One-shot return values, config, enums |
   | `*Result` | Immutable return value of one operation; consumed, not stored | Mutable accumulators, config, state |
   | `*Config` / `*Settings` / `*Policy` | Static read-only configuration or data-only descriptor; set once, never mutated | Runtime state, return values |
+  | `*Registry` | Read-heavy lookup table; set at bootstrap, queried at runtime | Mutable accumulators, IO adapters, persistent stores |
+  | `*Client` / `*Backend` | IO adapter wrapping an external system (HTTP, subprocess, database) | Pure data, registries, config |
+  | `*Store` / `*Index` | Persistent storage with open/close/query lifecycle | In-memory lookup tables, config |
   | `*Command` | Command pattern; carries a callable `handler` field | Data-only records without a handler |
   | `*Context` | Input bag passed into a handler or function call | State that persists beyond the call |
   | `*Rule` | Authorization or behavioral rule value type | General config, state |
   | `*Enum` | Enumeration type; makes the type contract explicit at the callsite | Classes, dataclasses, results |
-  Prohibited: vague suffixes `*Info`, `*Data`, `*Decision`, `*Check`, `*Finding`, `*Entry`, `*Status` (as standalone class suffix) on public types — these are domain nouns, not type classifiers. Every public type must resolve to one of the suffixes above before merging.
+  Prohibited: vague suffixes `*Info`, `*Data`, `*Decision`, `*Check`, `*Finding`, `*Entry`, `*Status`, `*Service`, `*Manager`, `*Helper` (as standalone class suffix) on public types — these are domain nouns, not type classifiers. Every public type must resolve to one of the suffixes above before merging.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.
 
