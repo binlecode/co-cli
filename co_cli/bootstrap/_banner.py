@@ -57,24 +57,22 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     except Exception:
         git_branch = ""
 
-    configured_backend = deps.config.knowledge_search_backend
-    actual_backend = deps.knowledge_store.backend if deps.knowledge_store is not None else "grep"
+    backend = deps.config.knowledge_search_backend
+    knowledge_degradation = deps.config.degradations.get("knowledge")
 
-    if configured_backend == "hybrid":
+    if backend == "hybrid":
         knowledge_info = (
             f"hybrid · {deps.config.knowledge_embedding_provider}/"
             f"{deps.config.knowledge_embedding_model} {deps.config.knowledge_embedding_dims}d"
         )
-    elif configured_backend == "fts5":
+    elif backend == "fts5":
         knowledge_info = "fts5"
     else:
         knowledge_info = "grep (no index)"
 
-    # Knowledge-index degradation: configured backend differs from actual runtime backend.
-    degraded = configured_backend != actual_backend
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"
-    if degraded:
-        knowledge_line += f"  [yellow](degraded → {actual_backend})[/yellow]"
+    if knowledge_degradation:
+        knowledge_line += f"  [yellow]({knowledge_degradation})[/yellow]"
 
     lines = [
         f"\n[accent]{art}[/accent]\n",
@@ -84,7 +82,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",
-        f"    [success]✓ Ready{'  (degraded)' if degraded else ''}[/success]",
+        f"    [success]✓ Ready{'  (degraded)' if deps.config.degradations else ''}[/success]",
         f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

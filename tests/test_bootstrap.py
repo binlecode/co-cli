@@ -1,6 +1,5 @@
 """Functional tests for bootstrap-sequence behaviors (real components, direct API calls)."""
 
-import asyncio
 import os
 import yaml
 from datetime import datetime, timedelta, timezone
@@ -76,8 +75,23 @@ def test_sync_knowledge_store_indexes_memory_and_article(tmp_path: Path) -> None
     memory_dir.mkdir()
     library_dir = tmp_path / "library"
     library_dir.mkdir()
-    _write_memory_file(memory_dir / "001-test-mem.md", mem_id=1, body="Bootstrap memory content for sync test.")
-    _write_article_file(library_dir / "002-test-art.md", art_id=2, body="Bootstrap article content for sync test.")
+    _write_memory_file(
+        memory_dir / "001-test-mem.md", mem_id=1,
+        body=(
+            "Finch Weinberg is a robotics engineer who survived a solar flare "
+            "that scorched the Earth. He lives in a bunker in St. Louis with his "
+            "dog Goodyear and a robot named Jeff he built to take care of the dog."
+        ),
+    )
+    _write_article_file(
+        library_dir / "002-test-art.md", art_id=2,
+        body=(
+            "The movie Finch (2021) directed by Miguel Sapochnik stars Tom Hanks "
+            "as the titular character. The film explores themes of companionship, "
+            "trust, and what it means to be alive in a post-apocalyptic world. "
+            "Jeff the robot learns to drive an RV across the American West."
+        ),
+    )
 
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
@@ -87,19 +101,108 @@ def test_sync_knowledge_store_indexes_memory_and_article(tmp_path: Path) -> None
         library_dir=library_dir,
         session_path=tmp_path / "session.json",
     )
-    store = _discover_knowledge_backend(config, TerminalFrontend())
+    config, store = _discover_knowledge_backend(config, TerminalFrontend())
     assert store is not None, "_discover_knowledge_backend must return a store for fts5"
     try:
         store = _sync_knowledge_store(store, config, TerminalFrontend())
         assert store is not None, "_sync_knowledge_store must not disable the store on success"
 
-        mem_results = store.search("Bootstrap memory content", source="memory", limit=5)
+        mem_results = store.search("robotics engineer solar flare", source="memory", limit=5)
         assert any("001-test-mem.md" in r.path for r in mem_results), \
-            "Memory file must be findable under source='memory' after sync"
+            "Memory about Finch the engineer must be findable via FTS5"
 
-        art_results = store.search("Bootstrap article content", source="library", limit=5)
+        art_results = store.search("Tom Hanks post-apocalyptic robot", source="library", limit=5)
         assert any("002-test-art.md" in r.path for r in art_results), \
-            "Article file must be findable under source='library' after sync"
+            "Article about the Finch movie must be findable via FTS5"
+    finally:
+        if store is not None:
+            store.close()
+
+
+def _tei_embedder_available() -> bool:
+    """Check if TEI embedder is reachable on the default port."""
+    import urllib.request
+    import json
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:8283/embed",
+            data=json.dumps({"inputs": "test"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _tei_embedder_available(), reason="TEI embedder not running on 127.0.0.1:8283")
+def test_discover_hybrid_happy_path_real_embedder(tmp_path: Path) -> None:
+    """Full hybrid path: real TEI embedder → store, sync, vector+FTS5 search, reranking."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    library_dir = tmp_path / "library"
+    library_dir.mkdir()
+    _write_memory_file(
+        memory_dir / "001-test-hybrid.md", mem_id=1,
+        body=(
+            "Finch built a robot named Jeff from salvaged parts inside his bunker. "
+            "Jeff's neural network learns by observing Finch and Goodyear the dog. "
+            "The robot must understand loyalty and caregiving before Finch dies."
+        ),
+    )
+    _write_memory_file(
+        memory_dir / "002-test-hybrid.md", mem_id=2,
+        body=(
+            "The UV index after the solar flare makes daytime surface travel lethal. "
+            "Finch's RV has reinforced UV shielding. The journey from St. Louis to "
+            "San Francisco tests Jeff's ability to navigate and make decisions alone."
+        ),
+    )
+    _write_article_file(
+        library_dir / "003-test-hybrid.md", art_id=3,
+        body=(
+            "In the film Finch, the relationship between Jeff the robot and "
+            "Goodyear the dog mirrors the bond between Finch and Goodyear. "
+            "Jeff initially frightens the dog but gradually earns trust through "
+            "patience and gentle behavior during the cross-country road trip."
+        ),
+    )
+
+    config = CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_search_backend="hybrid",
+        memory_dir=memory_dir,
+        library_dir=library_dir,
+        session_path=tmp_path / "session.json",
+    )
+
+    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    try:
+        assert store is not None, "Hybrid with real embedder must construct a store"
+        assert resolved_config.knowledge_search_backend == "hybrid", \
+            "Backend must stay hybrid when embedder is available"
+        assert not resolved_config.degradations, "No degradation when hybrid succeeds"
+
+        store = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+        assert store is not None, "Sync must succeed on hybrid store"
+
+        # Semantic search — "robot learning to care for animals" should find the
+        # Jeff/Goodyear memories via embedding similarity, not just keyword match
+        results = store.search("robot learning to care for animals", source="memory", limit=5)
+        assert len(results) >= 1, "Hybrid search must return results for semantic query"
+        assert any("001-test-hybrid.md" in r.path for r in results), \
+            "Semantic search must find the Jeff caregiving memory"
+
+        # Cross-source search — article about Jeff and Goodyear's bond
+        art_results = store.search("robot dog trust road trip", source="library", limit=5)
+        assert any("003-test-hybrid.md" in r.path for r in art_results), \
+            "Hybrid search must find the article about Jeff and Goodyear"
+
+        # Keyword-specific search — "UV index" is only in the second memory
+        uv_results = store.search("UV index solar flare shielding", source="memory", limit=5)
+        assert any("002-test-hybrid.md" in r.path for r in uv_results), \
+            "Search must find the UV/travel memory"
     finally:
         if store is not None:
             store.close()
@@ -112,28 +215,96 @@ def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None
         knowledge_search_backend="grep",
         session_path=tmp_path / "session.json",
     )
-    result = _discover_knowledge_backend(config, TerminalFrontend())
-    assert result is None, "_discover_knowledge_backend must return None for grep backend"
+    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    assert store is None, "_discover_knowledge_backend must return None store for grep backend"
+    assert resolved_config.knowledge_search_backend == "grep"
+    assert not resolved_config.degradations, "grep config must have no degradations"
+
+
+def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
+    """FTS5 configured with embedding disabled → store constructed, no degradation recorded."""
+    config = CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_search_backend="fts5",
+        knowledge_embedding_provider="none",
+        knowledge_cross_encoder_reranker_url=None,
+        session_path=tmp_path / "session.json",
+    )
+    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    try:
+        assert store is not None, "FTS5 must construct a store"
+        assert resolved_config.knowledge_search_backend == "fts5"
+        assert not resolved_config.degradations, "FTS5 happy path must have no degradations"
+    finally:
+        if store is not None:
+            store.close()
 
 
 def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(tmp_path: Path) -> None:
-    """Hybrid discovery must degrade to FTS5 when the embedder is unreachable at startup."""
+    """Hybrid degrades to FTS5 when embedder unreachable — degraded store must sync and search."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory_file(
+        memory_dir / "001-test-degraded.md", mem_id=1,
+        body=(
+            "Finch programmed Jeff with three directives: protect Goodyear, "
+            "never hurt a living thing, and always tell the truth. These rules "
+            "guide Jeff's behavior throughout the journey to San Francisco."
+        ),
+    )
+
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="hybrid",
         knowledge_embedding_provider="tei",
         knowledge_embed_api_url="http://127.0.0.1:1/embed",
         knowledge_cross_encoder_reranker_url=None,
+        memory_dir=memory_dir,
+        library_dir=tmp_path / "library",
+        session_path=tmp_path / "session.json",
     )
 
-    store = _discover_knowledge_backend(config, TerminalFrontend())
+    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
     try:
         assert store is not None, "Discovery must return a store (degraded to fts5), not None"
-        assert store.backend == "fts5", \
+        assert resolved_config.knowledge_search_backend == "fts5", \
             "Discovery must degrade hybrid to fts5 when embedder is unavailable"
+        assert "knowledge" in resolved_config.degradations, \
+            "Discovery must record degradation in degradations dict"
+
+        # Degraded FTS5 store must still sync and search via keyword matching
+        store = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+        assert store is not None, "Sync must succeed on the degraded fts5 store"
+        results = store.search("Jeff directives protect Goodyear", source="memory", limit=5)
+        assert any("001-test-degraded.md" in r.path for r in results), \
+            "Degraded fts5 store must find Jeff's directives via keyword search"
     finally:
         if store is not None:
             store.close()
+
+
+def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
+    """_sync_knowledge_store must close the store and return None when sync raises."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory_file(
+        memory_dir / "001-test-mem.md", mem_id=1,
+        body="Finch's bunker contained decades of canned food and a working power grid.",
+    )
+    config = CoConfig(
+        knowledge_db_path=tmp_path / "search.db",
+        knowledge_search_backend="fts5",
+        knowledge_cross_encoder_reranker_url=None,
+        memory_dir=memory_dir,
+        library_dir=tmp_path / "library",
+        session_path=tmp_path / "session.json",
+    )
+    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    assert store is not None
+    # Close the store to make sync_dir raise on the dead connection
+    store.close()
+    result = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+    assert result is None, "_sync_knowledge_store must return None when sync fails"
 
 
 def test_restore_session_fresh_returns_same_id(tmp_path: Path) -> None:

@@ -247,8 +247,7 @@ async def search_knowledge(
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
-    backend = ctx.deps.knowledge_store.backend if ctx.deps.knowledge_store else "grep"
-    otel_trace.get_current_span().set_attribute("rag.backend", backend)
+    otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
     # Default scope excludes source="memory" — memories are searched via search_memories.
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
@@ -476,7 +475,7 @@ async def search_articles(
     """
     library_dir = ctx.deps.config.library_dir
 
-    if ctx.deps.knowledge_store is not None and ctx.deps.knowledge_store.backend in ("fts5", "hybrid"):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,

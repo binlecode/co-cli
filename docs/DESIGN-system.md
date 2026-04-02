@@ -99,10 +99,11 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - Missing reasoning role is a startup error.
    - Gemini without an API key is a startup error.
    - Ollama connectivity and model availability are deferred to runtime (`run_turn()` handles errors).
-3. `_resolve_reranker()` updates config for reranker fields when an index is active (hybrid/fts5); skipped on grep. Then `_discover_knowledge_backend()` probes embedder availability and constructs the store (`config.knowledge_search_backend` is never mutated; `store.backend` holds the actual runtime backend):
+3. `_discover_knowledge_backend()` resolves reranker and embedder availability, updates config via `replace()` to reflect the runtime backend, and constructs the store:
    - on grep: reranker and discovery skipped entirely (no index)
-   - on hybrid/fts5: rerankers degrade independently to `None` in config
+   - on hybrid/fts5: rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
+   - `config.knowledge_backend_degraded_from` records original when degradation occurs
 4. `create_deps()` constructs:
    - `CoServices(shell, knowledge_store, model_registry)`
    - `CoRuntimeState(safety_state=SafetyState())`

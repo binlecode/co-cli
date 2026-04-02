@@ -102,7 +102,9 @@ class SessionApprovalRule:
 
 @dataclass(frozen=True)
 class CoConfig:
-    """Injected configuration — set at session bootstrap; may be updated during startup (e.g. backend resolution, model check).
+    """Injected configuration — built at bootstrap, updated via replace() during
+    startup (e.g. backend degradation, reranker resolution). Read-only once inside
+    CoDeps — frozen instance is safe to share by reference with sub-agents.
 
     main.py reads Settings once and populates this dataclass with scalar values.
     Tools access ctx.deps.config.field_name. No tool should import Settings.
@@ -155,6 +157,7 @@ class CoConfig:
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
     knowledge_search_backend: str = DEFAULT_KNOWLEDGE_SEARCH_BACKEND
+    degradations: dict[str, str] = field(default_factory=dict)
     knowledge_cross_encoder_reranker_url: str | None = DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
     knowledge_llm_reranker: "ModelConfig | None" = None
     knowledge_embed_api_url: str = DEFAULT_KNOWLEDGE_EMBED_API_URL

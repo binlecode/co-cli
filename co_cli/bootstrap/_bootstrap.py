@@ -30,7 +30,7 @@ def _summarize_backend_error(exc: Exception) -> str:
 def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
     """Resolve reranker availability, appending degradation messages to statuses.
 
-    Called from create_deps() only when an index is active (hybrid/fts5).
+    Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
     Skipped on grep — no index means no reranking.
     """
     updates: dict = {}
@@ -59,7 +59,7 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
 
 def _discover_knowledge_backend(
     config: CoConfig, frontend: TerminalFrontend,
-) -> KnowledgeStore | None:
+) -> tuple[CoConfig, KnowledgeStore | None]:
     """Discover which knowledge backend is available and construct the store.
 
     Three-tier fallback with graceful degradation:
@@ -67,16 +67,19 @@ def _discover_knowledge_backend(
       2. fts5    — SQLite FTS5 index (keyword search, no vectors)
       3. grep    — pure file search, no store required
 
-    Probes embedder availability, constructs the store with the resolved backend,
-    and reports degradation to frontend. Config is never mutated for
-    knowledge_search_backend — the store holds the actual backend in store.backend.
-    Reranker fields must already be resolved in config before calling this function.
-    Returns the constructed store, or None on full degradation to grep.
+    Probes embedder/reranker availability, resolves config via replace(), constructs
+    the store, and reports degradation to frontend. Returns (resolved_config, store).
+    Config reflects the runtime backend; degradations dict records what changed and why.
     """
     if config.knowledge_search_backend == "grep":
-        return None
+        return config, None
 
+    configured = config.knowledge_search_backend
     statuses: list[str] = []
+
+    # Resolve reranker — config fields must reflect actual availability
+    # so the store and query pipeline see correct values.
+    config = _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
     resolved_backend = "fts5"  # default fallback
@@ -97,15 +100,21 @@ def _discover_knowledge_backend(
     for status in statuses:
         frontend.on_status(status)
 
-    # --- Construct store with resolved backend ---
-    store_config = dataclasses.replace(
-        config, knowledge_search_backend=resolved_backend,
-    )
+    def _degrade(cfg: CoConfig, backend: str, reason: str) -> CoConfig:
+        """Update config with degraded backend and record the degradation."""
+        degs = {**cfg.degradations, "knowledge": f"{configured} → {backend} ({reason})"}
+        return dataclasses.replace(cfg, knowledge_search_backend=backend, degradations=degs)
 
+    if resolved_backend != configured:
+        config = _degrade(config, resolved_backend, "embedder unavailable")
+    else:
+        config = dataclasses.replace(config, knowledge_search_backend=resolved_backend)
+
+    # --- Construct store with resolved config ---
     from co_cli.knowledge._store import KnowledgeStore as _KS
 
     try:
-        return _KS(config=store_config)
+        return config, _KS(config=config)
     except Exception as exc:
         if resolved_backend == "hybrid":
             logger.warning("Hybrid backend unavailable: %s", exc)
@@ -113,23 +122,23 @@ def _discover_knowledge_backend(
                 f"  Knowledge degraded — hybrid unavailable "
                 f"({_summarize_backend_error(exc)}); trying fts5"
             )
-            fts5_config = dataclasses.replace(store_config, knowledge_search_backend="fts5")
+            config = _degrade(config, "fts5", _summarize_backend_error(exc))
             try:
-                return _KS(config=fts5_config)
+                return config, _KS(config=config)
             except Exception as exc2:
                 logger.warning("FTS5 backend unavailable: %s", exc2)
                 frontend.on_status(
                     f"  Knowledge degraded — fts5 unavailable "
                     f"({_summarize_backend_error(exc2)}); using grep"
                 )
-                return None
+                return _degrade(config, "grep", _summarize_backend_error(exc2)), None
         else:
             logger.warning("FTS5 backend unavailable: %s", exc)
             frontend.on_status(
                 f"  Knowledge degraded — fts5 unavailable "
                 f"({_summarize_backend_error(exc)}); using grep"
             )
-            return None
+            return _degrade(config, "grep", _summarize_backend_error(exc)), None
 
 
 def _sync_knowledge_store(
@@ -152,7 +161,7 @@ def _sync_knowledge_store(
                 mem_count = store.sync_dir("memory", config.memory_dir, kind_filter="memory")
                 art_count = store.sync_dir("library", config.library_dir, kind_filter="article")
                 count = mem_count + art_count
-                backend = store.backend
+                backend = config.knowledge_search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)
                 span.set_attribute("status", "ok")
@@ -221,20 +230,13 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     from co_cli.commands._commands import _load_skills
     skill_commands = _load_skills(config.skills_dir, settings=settings, user_skills_dir=config.user_skills_dir)
 
-    # Step 6: resolve reranker availability (updates config for reranker fields only)
-    if config.knowledge_search_backend != "grep":
-        reranker_statuses: list[str] = []
-        config = _resolve_reranker(config, reranker_statuses)
-        for status in reranker_statuses:
-            frontend.on_status(status)
+    # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
+    config, knowledge_store = _discover_knowledge_backend(config, frontend)
 
-    # Step 7: discover knowledge backend + construct store (IO probes — three-tier fallback)
-    knowledge_store = _discover_knowledge_backend(config, frontend)
-
-    # Step 8: sync knowledge store with current files on disk
+    # Step 7: sync knowledge store with current files on disk
     knowledge_store = _sync_knowledge_store(knowledge_store, config, frontend)
 
-    # Step 9: build task agent (approval resume — lightweight, no personality)
+    # Step 8: build task agent (approval resume — lightweight, no personality)
     task_agents: dict = {}
     _no_model = ResolvedModel(model=None, settings=None)
     task_model = model_registry.get(ROLE_TASK, _no_model)
@@ -243,7 +245,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
             config=config, role_model=task_model, tool_registry=tool_registry,
         )
 
-    # Step 10: assemble deps
+    # Step 9: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(
         shell=ShellBackend(),

@@ -61,7 +61,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*State` | Mutable data with a lifecycle; persists/mutates across operations | One-shot return values, config, enums |
   | `*Result` | Immutable operation outcome with pass/fail or control-flow semantics (e.g. `TurnResult`, `CheckResult`); consumed, not stored. Do not add `Result` when the base name already conveys the type clearly (e.g. `ToolRegistry`, not `ToolRegistryResult`) | Agent data payloads (use `*Output`), config, state |
   | `*Output` | Structured data produced by an agent, subagent, or pipeline stage; payload consumed by callers | Operation outcomes with pass/fail semantics (use `*Result`), config, mutable state |
-  | `*Config` / `*Settings` / `*Policy` | Static read-only configuration or data-only descriptor; set once, never mutated | Runtime state, return values |
+  | `*Config` / `*Settings` / `*Policy` | Frozen-instance configuration; may be updated via `replace()` during bootstrap, read-only after entering `CoDeps` (safe to share by reference with sub-agents) | Runtime state, return values |
   | `*Registry` | Read-heavy lookup table; set at bootstrap, queried at runtime | Mutable accumulators, IO adapters, persistent stores |
   | `*Client` / `*Backend` | IO adapter wrapping an external system (HTTP, subprocess, database) | Pure data, registries, config |
   | `*Store` / `*Index` | Persistent storage with open/close/query lifecycle | In-memory lookup tables, config |

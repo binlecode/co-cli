@@ -504,10 +504,7 @@ async def recall_memory(
     memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if (
-        ctx.deps.knowledge_store is not None
-        and ctx.deps.knowledge_store.backend in ("fts5", "hybrid")
-    ):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -711,10 +708,7 @@ async def search_memories(
     memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if (
-        ctx.deps.knowledge_store is not None
-        and ctx.deps.knowledge_store.backend in ("fts5", "hybrid")
-    ):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
             results = ctx.deps.knowledge_store.search(
                 query,
@@ -726,7 +720,7 @@ async def search_memories(
                 created_before=created_before,
                 limit=limit,
             )
-            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.knowledge_store.backend)
+            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
             if not results:
                 return make_result(f"No memories found matching '{query}'", count=0, results=[])
 

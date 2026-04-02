@@ -227,7 +227,7 @@ class KnowledgeStore:
     def __init__(self, *, config: "CoConfig") -> None:
         config.knowledge_db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db_path = config.knowledge_db_path
-        self._backend: str = config.knowledge_search_backend
+        self._backend = config.knowledge_search_backend
         self._embedding_provider = config.knowledge_embedding_provider
         self._embedding_model = config.knowledge_embedding_model
         self._embedding_dims = config.knowledge_embedding_dims
@@ -310,11 +310,6 @@ class KnowledgeStore:
                     "Hybrid backend requires sqlite extension loading support. "
                     "Install pysqlite3 and ensure sqlite-vec can be loaded."
                 ) from e
-
-    @property
-    def backend(self) -> str:
-        """The actual runtime backend (may differ from config after degradation)."""
-        return self._backend
 
     def _load_sqlite_vec(self) -> None:
         """Load the sqlite-vec extension into the current connection."""
