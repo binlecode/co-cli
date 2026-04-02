@@ -69,6 +69,7 @@ if TYPE_CHECKING:
     from pydantic_ai import Agent, DeferredToolRequests
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
+    from co_cli.knowledge._store import KnowledgeStore
 
 
 class ApprovalKindEnum(str, Enum):
@@ -373,7 +374,7 @@ class CoDeps:
     """Runtime dependencies for agent tools.
 
     Top-level fields: service handles and bootstrap-set registries (shell,
-    knowledge_index, model_registry, tool_index, skill_commands), plus three
+    knowledge_store, model_registry, tool_index, skill_commands), plus three
     grouped sub-objects for config, session state, and runtime state.
 
     pydantic-ai receives this as the single deps_type. Tools access fields via
@@ -385,7 +386,7 @@ class CoDeps:
     # Config (read-only after bootstrap)
     config: CoConfig
     # Service handles (optional, set during bootstrap)
-    knowledge_index: Any | None = field(default=None, repr=False)
+    knowledge_store: "KnowledgeStore | None" = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
@@ -418,7 +419,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     return CoDeps(
         shell=base.shell,
         config=base.config,
-        knowledge_index=base.knowledge_index,
+        knowledge_store=base.knowledge_store,
         model_registry=base.model_registry,
         task_agents=base.task_agents,
         tool_index=base.tool_index,

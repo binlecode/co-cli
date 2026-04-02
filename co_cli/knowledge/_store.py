@@ -1,6 +1,6 @@
 """SQLite FTS5 knowledge index for ranked search across all text sources.
 
-KnowledgeIndex is a single SQLite-backed search index (search.db) that any
+KnowledgeStore is a single SQLite-backed search index (search.db) that any
 source can write to. The `source` column distinguishes origin. The `kind`
 column ('memory', 'article') distinguishes knowledge file types.
 
@@ -191,7 +191,7 @@ def _nonmemory_sources(source: str | list[str] | None) -> list[str] | None:
 
 @dataclass
 class SearchResult:
-    """A single result from KnowledgeIndex.search()."""
+    """A single result from KnowledgeStore.search()."""
     source: str
     kind: str | None
     path: str
@@ -210,7 +210,7 @@ class SearchResult:
     end_line: int | None = None
 
 
-class KnowledgeIndex:
+class KnowledgeStore:
     """SQLite FTS5 index for ranked search across knowledge sources.
 
     Supports two backends:
@@ -218,7 +218,7 @@ class KnowledgeIndex:
       - 'hybrid': FTS5 + sqlite-vec cosine vector search, RRF merge.
 
     Usage:
-        idx = KnowledgeIndex(config=CoConfig())
+        idx = KnowledgeStore(config=CoConfig())
         idx.sync_dir("memory", knowledge_dir)
         results = idx.search("pytest testing")
         idx.close()

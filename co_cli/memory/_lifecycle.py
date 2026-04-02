@@ -160,7 +160,7 @@ async def _persist_memory_inner(
             )
             result = _update_existing_memory(match, content, tags)
             result["similarity"] = similarity
-            if deps.knowledge_index is not None:
+            if deps.knowledge_store is not None:
                 try:
                     import hashlib as _hashlib
                     raw = match.path.read_text(encoding="utf-8")
@@ -168,7 +168,7 @@ async def _persist_memory_inner(
                     file_hash = _hashlib.sha256(raw.encode()).hexdigest()
                     entry_kind = fm.get("kind", "memory")
                     entry_source = "library" if entry_kind == "article" else "memory"
-                    deps.knowledge_index.index(
+                    deps.knowledge_store.index(
                         source=entry_source,
                         kind=entry_kind,
                         path=str(match.path),
@@ -259,11 +259,11 @@ async def _persist_memory_inner(
 
     logger.info(f"Saved memory {memory_id} to {file_path}")
 
-    # FTS index integration — no-op when knowledge_index is None
-    if deps.knowledge_index is not None:
+    # FTS index integration — no-op when knowledge_store is None
+    if deps.knowledge_store is not None:
         try:
             import hashlib as _hashlib
-            deps.knowledge_index.index(
+            deps.knowledge_store.index(
                 source="memory",
                 kind="memory",
                 path=str(file_path),
@@ -306,10 +306,10 @@ async def _persist_memory_inner(
         )
 
         # FTS: remove stale entries for deleted files
-        if deps.knowledge_index is not None:
+        if deps.knowledge_store is not None:
             try:
                 current_paths = {str(p) for p in memory_dir.rglob("*.md")}
-                deps.knowledge_index.remove_stale(
+                deps.knowledge_store.remove_stale(
                     "memory", current_paths, directory=memory_dir
                 )
             except Exception as e:

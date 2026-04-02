@@ -280,12 +280,12 @@ def _check_brave(api_key: str | None) -> CheckResult:
     return CheckResult(ok=True, status="skipped", detail="not configured")
 
 
-def _check_knowledge(knowledge_index: Any, backend: str) -> CheckResult:
-    if knowledge_index is None:
+def _check_knowledge(knowledge_store: Any, backend: str) -> CheckResult:
+    if knowledge_store is None:
         return CheckResult(ok=True, status="warn", detail="grep mode")
     # Probe: run a minimal health check that raises on FTS/vector schema errors.
     try:
-        knowledge_index.probe()
+        knowledge_store.probe()
     except Exception as e:
         return CheckResult(ok=False, status="error", detail=str(e))
     return CheckResult(ok=True, status="ok", detail=f"{backend} active")
@@ -375,7 +375,7 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_knowledge(deps.knowledge_index, deps.config.knowledge_search_backend)
+    knowledge_result = _check_knowledge(deps.knowledge_store, deps.config.knowledge_search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands._commands import get_skill_registry

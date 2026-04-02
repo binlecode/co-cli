@@ -71,7 +71,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     # Knowledge-index degradation: configured for index-backed search but no index available.
     # Reranker-only degradation is already reported by individual status lines before the banner.
     degraded = (
-        deps.knowledge_index is None
+        deps.knowledge_store is None
         and deps.config.knowledge_search_backend != "grep"
     )
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"

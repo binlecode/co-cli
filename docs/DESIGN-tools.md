@@ -161,9 +161,9 @@ build_agent(config, resolved)                              # agent.py
   │    └─ inner.filtered(_filter)                         # per-tool loading policy + discovered_tools + resume_tool_names
   └─ Agent(toolsets=[filtered_toolset] + mcp_toolsets)
 
-initialize_session_capabilities()                          # _bootstrap.py
+create_deps()                                              # _bootstrap.py
   └─ discover_mcp_tools()                                 # list_tools() per MCPServer
-       └─ deps.services.tool_index.update(mcp_index)
+       └─ tool_registry.tool_index.update(mcp_index)
 ```
 
 ---
@@ -257,7 +257,7 @@ evaluate_shell_command(cmd, safe_commands)
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid when `knowledge_index` is available, grep fallback otherwise. `always_on=True` memories are injected as standing context every turn via `_load_always_on_memories()`.
+YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid when `knowledge_store` is available, grep fallback otherwise. `always_on=True` memories are injected as standing context every turn via `_load_always_on_memories()`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|

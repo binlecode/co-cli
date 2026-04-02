@@ -209,7 +209,7 @@ async def test_approval_deny():
 @pytest.mark.asyncio
 async def test_forget_command_evicts_fts_row(tmp_path):
     """/forget removes the file and evicts the FTS row in the same session."""
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
@@ -221,14 +221,14 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     memory_file = memory_dir / "001-test-forget.md"
     memory_file.write_text(content, encoding="utf-8")
 
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
-            shell=ShellBackend(), knowledge_index=idx,
+            shell=ShellBackend(), knowledge_store=idx,
             config=CoConfig(memory_dir=memory_dir),
             session=CoSessionState(session_id="test-forget-fts"),
         ),

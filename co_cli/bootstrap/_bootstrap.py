@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import dataclasses
 import logging
-from dataclasses import dataclass
+from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
-from pydantic_ai import Agent
 
-from co_cli.agent import discover_mcp_tools
+if TYPE_CHECKING:
+    from co_cli.knowledge._store import KnowledgeStore
+
 from co_cli.config import settings
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
@@ -54,7 +57,7 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
     return config
 
 
-def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, list[str]]:
+def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, KnowledgeStore | None, list[str]]:
     """Resolve knowledge backend and reranker with graceful degradation.
 
     Bootstrap always prefers max capability and falls back with warnings:
@@ -76,7 +79,7 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     if config.knowledge_search_backend == "grep":
         return config, None, statuses
 
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
 
     # Resolve reranker before index construction — config fields must reflect
     # actual availability so the index and query pipeline see correct values.
@@ -98,7 +101,7 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
         else:
             hybrid_config = dataclasses.replace(config, knowledge_search_backend="hybrid")
             try:
-                return hybrid_config, KnowledgeIndex(config=hybrid_config), statuses
+                return hybrid_config, KnowledgeStore(config=hybrid_config), statuses
             except Exception as exc:
                 logger.warning("Hybrid backend unavailable: %s", exc)
                 statuses.append(
@@ -109,7 +112,7 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     # --- Level 2: fts5 (index DB required) ---
     fts5_config = dataclasses.replace(config, knowledge_search_backend="fts5")
     try:
-        return fts5_config, KnowledgeIndex(config=fts5_config), statuses
+        return fts5_config, KnowledgeStore(config=fts5_config), statuses
     except Exception as exc:
         logger.warning("FTS5 backend unavailable: %s", exc)
         statuses.append(
@@ -121,13 +124,18 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
 
 
-def create_deps() -> CoDeps:
-    """Assemble CoDeps from settings — pure config, zero IO.
+async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDeps:
+    """Assemble CoDeps from settings: config, registries, MCP, knowledge, skills.
+
+    MCP servers are entered on the provided stack so they stay alive for the
+    session and are cleaned up when the stack closes. Knowledge backend is
+    resolved with three-tier fallback (hybrid → fts5 → grep) and files synced.
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli._model_factory import ModelRegistry
-    from co_cli.agent import build_tool_registry
+    from co_cli._model_factory import ModelRegistry, ResolvedModel
+    from co_cli.agent import build_tool_registry, build_task_agent, discover_mcp_tools
+    from co_cli.config import ROLE_TASK
 
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -141,41 +149,79 @@ def create_deps() -> CoDeps:
     model_registry = ModelRegistry.from_config(config)
     tool_registry = build_tool_registry(config)
 
-    # Step 4: assemble deps
+    # Step 4: MCP connect + discovery
+    # Enter each server on the caller's stack so connections stay alive for the session.
+    # Only connected servers are passed to discovery (failed ones are skipped).
+    if tool_registry.mcp_toolsets:
+        connected: list = []
+        for ts in tool_registry.mcp_toolsets:
+            try:
+                await stack.enter_async_context(ts)
+                connected.append(ts)
+            except Exception as e:
+                frontend.on_status(f"MCP server failed to connect: {e}")
+        if connected:
+            _, discovery_errors, mcp_index = await discover_mcp_tools(
+                connected, exclude=set(tool_registry.tool_index.keys())
+            )
+            for prefix, err in discovery_errors.items():
+                frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err}")
+            tool_registry.tool_index.update(mcp_index)
+
+    # Step 5: load skills (filesystem reads — three-pass precedence merge)
+    from co_cli.commands._commands import _load_skills
+    skill_commands = _load_skills(config.skills_dir, settings=settings, user_skills_dir=config.user_skills_dir)
+
+    # Step 6: resolve knowledge backend (IO probes — three-tier fallback)
+    config, knowledge_store, statuses = resolve_knowledge_backend(config)
+    for status in statuses:
+        frontend.on_status(status)
+
+    # Step 7: sync knowledge (memory + library files into store)
+    knowledge_store = _sync_knowledge(config, knowledge_store, frontend)
+
+    # Step 8: build task agent (approval resume — lightweight, no personality)
+    task_agents: dict = {}
+    _no_model = ResolvedModel(model=None, settings=None)
+    task_model = model_registry.get(ROLE_TASK, _no_model)
+    if task_model.model:
+        task_agents[ROLE_TASK] = build_task_agent(
+            config=config, role_model=task_model, tool_registry=tool_registry,
+        )
+
+    # Step 9: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(
         shell=ShellBackend(),
         config=config,
         model_registry=model_registry,
+        knowledge_store=knowledge_store,
         tool_index=tool_registry.tool_index,
+        skill_commands=skill_commands,
+        task_agents=task_agents,
         runtime=runtime,
     )
 
 
-def initialize_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
-    """Resolve knowledge backend (IO probes) and update deps in-place.
+def _sync_knowledge(
+    config: CoConfig,
+    knowledge_store: KnowledgeStore | None,
+    frontend: TerminalFrontend,
+) -> KnowledgeStore | None:
+    """Sync memory + library dirs into the knowledge store.
 
-    Called in _chat_loop after initialize_session_capabilities(), before sync_knowledge().
-    Reports degradation statuses directly to frontend.
+    Returns the store (possibly None if sync failed and store was disabled).
+    Called inside create_deps() after resolve_knowledge_backend().
     """
-    config, knowledge_index, statuses = resolve_knowledge_backend(deps.config)
-    # CoConfig is frozen; CoDeps is not — whole-object replacement
-    deps.config = config
-    deps.knowledge_index = knowledge_index
-    for status in statuses:
-        frontend.on_status(status)
-
-
-def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
     with _TRACER.start_as_current_span("sync_knowledge") as span:
         try:
-            if deps.knowledge_index is not None and (
-                deps.config.memory_dir.exists() or deps.config.library_dir.exists()
+            if knowledge_store is not None and (
+                config.memory_dir.exists() or config.library_dir.exists()
             ):
-                mem_count = deps.knowledge_index.sync_dir("memory", deps.config.memory_dir, kind_filter="memory")
-                art_count = deps.knowledge_index.sync_dir("library", deps.config.library_dir, kind_filter="article")
+                mem_count = knowledge_store.sync_dir("memory", config.memory_dir, kind_filter="memory")
+                art_count = knowledge_store.sync_dir("library", config.library_dir, kind_filter="article")
                 count = mem_count + art_count
-                backend = deps.config.knowledge_search_backend
+                backend = config.knowledge_search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)
                 span.set_attribute("status", "ok")
@@ -186,13 +232,14 @@ def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
         except Exception as e:
             span.set_attribute("status", "error")
             span.set_attribute("error", str(e))
-            if deps.knowledge_index is not None:
+            if knowledge_store is not None:
                 try:
-                    deps.knowledge_index.close()
+                    knowledge_store.close()
                 except Exception:
                     pass
-                deps.knowledge_index = None
+                knowledge_store = None
             frontend.on_status(f"  Knowledge sync failed — {e}")
+    return knowledge_store
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
@@ -219,34 +266,4 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
         return session_data
 
 
-async def initialize_session_capabilities(
-    agent: Agent,
-    deps: CoDeps,
-    frontend: TerminalFrontend,
-    mcp_init_ok: bool,
-) -> int:
-    """Complete session capability assembly after agent context entry.
-
-    Owns MCP discovery (conditional on mcp_servers configured and mcp_init_ok)
-    and skill loading. Updates deps.tools in-place; callers read final state
-    from deps after this returns.
-    """
-    # deferred imports to avoid bootstrap→commands module-level cycle
-    from co_cli.commands._commands import _load_skills, set_skill_commands
-
-    # 1. MCP discovery (conditional)
-    if deps.config.mcp_servers and mcp_init_ok:
-        _, discovery_errors, mcp_index = await discover_mcp_tools(
-            agent, exclude=set(deps.tool_index.keys())
-        )
-        for prefix, err in discovery_errors.items():
-            frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} ...")
-        deps.tool_index.update(mcp_index)
-
-    # 2. Skill loading
-    skill_commands = _load_skills(deps.config.skills_dir, settings=settings, user_skills_dir=deps.config.user_skills_dir)
-    set_skill_commands(skill_commands, deps)
-
-    from co_cli.commands._commands import get_skill_registry
-    return len(get_skill_registry(deps.skill_commands))
 

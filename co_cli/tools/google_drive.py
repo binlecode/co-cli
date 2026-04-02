@@ -139,10 +139,10 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
         text = content.decode("utf-8")
 
         # FTS index — opportunistically cache Drive content after full fetch
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.knowledge_store is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.knowledge_store.index(
                     source="drive",
                     path=file_id,
                     title=file.get("name"),
@@ -155,7 +155,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
                     chunk_size=ctx.deps.config.knowledge_chunk_size,
                     overlap=ctx.deps.config.knowledge_chunk_overlap,
                 )
-                ctx.deps.knowledge_index.index_chunks("drive", file_id, drive_chunks)
+                ctx.deps.knowledge_store.index_chunks("drive", file_id, drive_chunks)
             except Exception:
                 pass
 

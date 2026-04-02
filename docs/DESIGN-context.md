@@ -53,23 +53,23 @@ Session persistence
 Memory write path
   persist_memory()
     -> dedup check (recent-window fuzzy match)
-       -> duplicate: update existing memory file + KnowledgeIndex.index()
+       -> duplicate: update existing memory file + KnowledgeStore.index()
        -> non-duplicate: optional LLM consolidation plan
           -> may UPDATE existing memory file
           -> may DELETE unprotected memory file
           -> may return without creating a new entry
     -> write markdown file to memory_dir when a new entry is needed
-    -> KnowledgeIndex.index()
+    -> KnowledgeStore.index()
     -> enforce_retention() when memory_max_count is exceeded
-       -> KnowledgeIndex.remove_stale() for retention-deleted memory files
+       -> KnowledgeStore.remove_stale() for retention-deleted memory files
 
 Knowledge search path
   search_memories()
-    -> KnowledgeIndex.search(source="memory", kind="memory")
+    -> KnowledgeStore.search(source="memory", kind="memory")
        -> memory docs leg (docs_fts; docs_vec + RRF in hybrid mode)
        -> optional TEI or LLM reranking
   search_knowledge()
-    -> KnowledgeIndex.search(source=["library","obsidian","drive"] by default)
+    -> KnowledgeStore.search(source=["library","obsidian","drive"] by default)
        -> non-memory chunks leg (chunks_fts; chunks_vec in hybrid mode)
        -> explicit source="memory" routes to the memory docs leg
        -> RRF merge when hybrid
@@ -93,7 +93,6 @@ flowchart TD
         ChatLoop[_chat_loop]
         TaskGate{ROLE_TASK}
         TaskAgent[build_task_agent]
-        Sync[sync_knowledge]
         Restore[restore_session]
         SessionJson[deps.config.session_path]
 
@@ -153,14 +152,14 @@ flowchart TD
         Consolidate[consolidate]
         ApplyPlan[apply_plan_atomically]
         MemoryDir[deps.config.memory_dir]
-        MemoryIndex[KnowledgeIndex.index]
+        MemoryIndex[KnowledgeStore.index]
         Retention[enforce_retention]
-        RemoveStale[KnowledgeIndex.remove_stale]
+        RemoveStale[KnowledgeStore.remove_stale]
         SaveArticle[save_article]
         ArticleDedup[_find_article_by_url]
         ArticleDir[ctx.deps.config.library_dir]
-        ArticleIndex[KnowledgeIndex.index]
-        ArticleChunks[KnowledgeIndex.index_chunks]
+        ArticleIndex[KnowledgeStore.index]
+        ArticleChunks[KnowledgeStore.index_chunks]
 
         SaveMemory --> Dedup
         Dedup -->|duplicate| MemoryUpdate --> MemoryIndex
@@ -172,9 +171,9 @@ flowchart TD
     subgraph RetrievalFlow[retrieval and metadata]
         direction TB
         SearchMem[search_memories]
-        SearchMemRoute[KnowledgeIndex.search]
+        SearchMemRoute[KnowledgeStore.search]
         SearchKnow[search_knowledge]
-        SearchKnowRoute[KnowledgeIndex.search]
+        SearchKnowRoute[KnowledgeStore.search]
         SearchDB[deps.config.knowledge_db_path]
         Delegate[run_*_subagent]
         ToolMeta[ToolResult content]
@@ -257,13 +256,13 @@ All memory saves route through `persist_memory()` in `memory/_lifecycle.py`, whe
 
 1. Create `memory_dir` if needed, load all items for ID allocation, and load memory-only entries for dedup and consolidation candidates
 2. When `title is None`, check recent memories within `memory_dedup_window_days` using `_check_duplicate()`
-3. If a duplicate is found, call `_update_existing_memory()` and re-index it when `knowledge_index` is available
+3. If a duplicate is found, call `_update_existing_memory()` and re-index it when `knowledge_store` is available
 4. Otherwise, when a resolved model is available, run `consolidate()` against the top `memory_consolidation_top_k` recent memories and apply the resulting plan with `apply_plan_atomically()`
 5. If the consolidation plan contains no `ADD` action and is non-empty, return without writing a new entry
 6. Validate `artifact_type` when one was provided
 7. Write the new markdown file
-8. Index it immediately when `KnowledgeIndex` is available
-9. If `memory_max_count` is exceeded, run `enforce_retention()` and then `remove_stale()` when `KnowledgeIndex` is available
+8. Index it immediately when `KnowledgeStore` is available
+9. If `memory_max_count` is exceeded, run `enforce_retention()` and then `remove_stale()` when `KnowledgeStore` is available
 
 Consolidation timeouts are policy-dependent: explicit saves fall back to ADD, while auto-signal saves can skip the write.
 
@@ -306,7 +305,7 @@ Recall is split in two:
 
 ### Knowledge Index
 
-`KnowledgeIndex` in `knowledge/_index_store.py` is one SQLite database at `knowledge_db_path` (default `co-cli-search.db`) with two retrieval legs:
+`KnowledgeStore` in `knowledge/_store.py` is one SQLite database at `knowledge_db_path` (default `co-cli-search.db`) with two retrieval legs:
 
 - `docs` + `docs_fts`: document rows for all indexed sources; the memory retrieval path uses this leg directly
 - `chunks` + `chunks_fts`: chunk rows for non-memory sources such as library articles, Obsidian notes, and Drive docs
@@ -318,7 +317,7 @@ Optional reranking happens after retrieval:
 - TEI cross-encoder via `knowledge_cross_encoder_reranker_url`
 - LLM reranker via `knowledge_llm_reranker`
 
-`sync_knowledge()` runs once at session start. It syncs memory and library directories immediately; Obsidian is synced lazily before `search_knowledge()` when needed, and Drive documents are indexed as they are read.
+Knowledge sync runs once at session start inside `create_deps()`. It syncs memory and library directories immediately; Obsidian is synced lazily before `search_knowledge()` when needed, and Drive documents are indexed as they are read.
 
 **Source routing in `search_knowledge()`**
 
@@ -418,7 +417,7 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `co_cli/memory/_consolidator.py` | LLM-driven `ConsolidationPlan` generation |
 | `co_cli/memory/_retention.py` | Retention enforcement for over-cap memory sets |
 | `co_cli/memory/_signal_detector.py` | Post-turn signal extraction and admission handling |
-| `co_cli/knowledge/_index_store.py` | `KnowledgeIndex` SQLite schema, sync, search, vector merge, and reranking hooks |
+| `co_cli/knowledge/_store.py` | `KnowledgeStore` SQLite schema, sync, search, vector merge, and reranking hooks |
 | `co_cli/knowledge/_frontmatter.py` | Frontmatter parsing/validation and `ArtifactTypeEnum` |
 | `co_cli/knowledge/_chunker.py` | Chunking for non-memory sources |
 | `co_cli/knowledge/_embedder.py` | Embedding-provider adapters |
@@ -428,5 +427,5 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `co_cli/tools/subagent.py` | Inline subagent tools that emit `run_id` and usage metadata |
 | `co_cli/tools/_background.py` | Session-scoped `BackgroundTaskState` and subprocess monitor helpers |
 | `co_cli/tools/task_control.py` | Background task tools over `session.background_tasks` |
-| `co_cli/bootstrap/_bootstrap.py` | `sync_knowledge()` and `restore_session()` bootstrap the derived index and session identity |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (knowledge store init + sync) and `restore_session()` bootstrap the store and session identity |
 | `co_cli/commands/_commands.py` | `/history` and `/tasks` slash commands over live delegation/background-task state |

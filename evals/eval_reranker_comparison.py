@@ -29,7 +29,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from co_cli.knowledge._index_store import KnowledgeIndex, SearchResult
+from co_cli.knowledge._store import KnowledgeStore, SearchResult
 
 
 # ---------------------------------------------------------------------------
@@ -486,8 +486,8 @@ def build_index(
     backend: str = "fts5",
     reranker_model: str | None = None,
     ollama_host: str = "http://localhost:11434",
-) -> KnowledgeIndex:
-    """Create a fresh KnowledgeIndex with the full synthetic corpus loaded."""
+) -> KnowledgeStore:
+    """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
     from co_cli.deps import CoConfig
     from co_cli.config import ModelConfig
     llm_reranker = (
@@ -505,7 +505,7 @@ def build_index(
         knowledge_llm_reranker=llm_reranker,
         llm_host=ollama_host,
     )
-    idx = KnowledgeIndex(config=config)
+    idx = KnowledgeStore(config=config)
     for doc in CORPUS:
         idx.index(
             source="memory",
@@ -519,7 +519,7 @@ def build_index(
     return idx
 
 
-def run_benchmark(idx: KnowledgeIndex, label: str, notes: str = "", runs: int = 3) -> dict:
+def run_benchmark(idx: KnowledgeStore, label: str, notes: str = "", runs: int = 3) -> dict:
     """Run all 5 queries across multiple runs; return metrics and stable median latency.
 
     cold_ms = first query of first run (model init + first inference).

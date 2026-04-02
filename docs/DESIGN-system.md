@@ -19,9 +19,6 @@ bootstrap
     -> build_task_agent() when ROLE_TASK is configured
 
 session activation
-  async with main agent
-    -> initialize_session_capabilities()
-    -> sync_knowledge()
     -> restore_session()
     -> display banner
 
@@ -54,9 +51,8 @@ flowchart LR
     AgentFactory --> MainAgent[Main Agent]
     TaskAgentFactory --> TaskAgent[Task Agent]
 
-    Main --> Activate[initialize_session_capabilities()]
-    MainAgent --> Activate
-    Activate --> MCP[MCP discovery + skill loading]
+    Main --> CreateDeps[create_deps]
+    CreateDeps --> MCP[MCP discovery + skill loading + knowledge store]
 
     Main --> Turn[_run_foreground_turn()]
     Turn --> Orchestrate[run_turn()]
@@ -108,20 +104,15 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - on hybrid/fts5: rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
 4. `create_deps()` constructs:
-   - `CoServices(shell, knowledge_index, model_registry)`
+   - `CoServices(shell, knowledge_store, model_registry)`
    - `CoRuntimeState(safety_state=SafetyState())`
    - the final `CoDeps`
 5. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
 6. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
 7. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
 8. `async with agent` activates the main agent context, which is required before MCP discovery.
-9. `initialize_session_capabilities()` completes the session capability surface:
-    - discovers MCP tool names from connected servers
-    - logs discovery errors via `frontend.on_status()`
-    - loads skills into `deps.services.skill_commands`
-11. `sync_knowledge()` syncs memory and article directories into the active `KnowledgeIndex` when available.
-12. `restore_session()` restores or creates `.co-cli/session.json`, copying only the `session_id` into `deps.session`.
-13. The REPL loop starts.
+9. `restore_session()` restores or creates `.co-cli/session.json`, copying only the `session_id` into `deps.session`.
+10. The REPL loop starts.
 
 Teardown is owned by `main.py`:
 
@@ -209,12 +200,12 @@ Sub-agent isolation is explicit in `make_subagent_deps(base)`:
 
 #### `CoServices` registries — `deps.services`
 
-Shared by reference with sub-agents. Service handles (shell, knowledge_index) and bootstrap-set registries (tool_index, skill_commands, model_registry) live together.
+Shared by reference with sub-agents. Service handles (shell, knowledge_store) and bootstrap-set registries (tool_index, skill_commands, model_registry) live together.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `tool_index` | `build_agent()` seeds native `ToolConfig` map (with `always_load`/`should_defer` flags); `initialize_session_capabilities()` merges MCP `ToolConfig` entries after discovery | never | shared ref |
-| `skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
+| `tool_index` | `create_deps()` builds native `ToolConfig` map via `build_tool_registry()` and merges MCP entries via `discover_mcp_tools()` | never | shared ref |
+| `skill_commands` | `create_deps()` via `_load_skills()` | replaced on skill reload | shared ref |
 | `model_registry` | `_chat_loop()` via `ModelRegistry.from_config()` | never | shared ref |
 
 #### `CoSessionState` — `deps.session`
@@ -258,7 +249,7 @@ There are three related capability surfaces:
 | Surface | Completed by | Includes |
 | --- | --- | --- |
 | static tool definitions | `build_agent()` / `build_task_agent()` | native filtered toolset plus MCP toolset definitions |
-| connected session capabilities | `initialize_session_capabilities()` | discovered MCP tool names plus loaded skills |
+| connected session capabilities | `create_deps()` | discovered MCP tool names plus loaded skills |
 | runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `always_load` tools + `discovered_tools`; resume turns: `resume_tool_names` + `always_load` tools) | owned by per-tool loading policy in `agent.py` |
 
 Key distinctions:
@@ -275,7 +266,7 @@ The runtime writes to a small, explicit set of stores:
 | Store | Purpose | Writer |
 | --- | --- | --- |
 | `~/.local/share/co-cli/co-cli-logs.db` | OpenTelemetry span storage | `SQLiteSpanExporter` |
-| `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeIndex` |
+| `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeStore` |
 | `<cwd>/.co-cli/memory/` | project-local memory markdown | memory lifecycle and memory tools |
 | configured library dir, default `~/.local/share/co-cli/library/` | article markdown store | article tools |
 | `<cwd>/.co-cli/session.json` | session id, timestamps, compaction count | session helpers in `context/_session.py` |

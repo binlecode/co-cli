@@ -45,8 +45,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ToolRegistry:
-    """Immutable return value of build_tool_registry()."""
+    """Immutable return value of build_tool_registry().
+
+    Holds the native toolset, MCP toolsets (pre-built, not yet connected),
+    and the combined tool_index (native + MCP after discovery).
+    """
     toolset: AbstractToolset[CoDeps]
+    mcp_toolsets: list
     tool_index: dict[str, ToolConfig]
 
 
@@ -219,16 +224,19 @@ def _build_filtered_toolset(
 
 
 def build_tool_registry(config: CoConfig) -> ToolRegistry:
-    """Build the tool registry and pydantic-ai toolsets from config.
+    """Build the tool registry from config.
 
     Pure config — no IO. Called once in create_deps().
-    Returns the toolset (for Agent construction) and tool_index (for deps).
+    Returns native toolset, MCP toolsets (not yet connected), and native tool_index.
+    MCP tool_index entries are added later by discover_mcp_tools().
     """
-    mcp_toolsets = _build_mcp_toolsets(config)
     filtered_toolset, native_index = _build_filtered_toolset(config)
-    combined_toolsets = [filtered_toolset] + mcp_toolsets
-    return ToolRegistry(toolset=combined_toolsets[0] if len(combined_toolsets) == 1 else filtered_toolset,
-                              tool_index=native_index)
+    mcp_toolsets = _build_mcp_toolsets(config)
+    return ToolRegistry(
+        toolset=filtered_toolset,
+        mcp_toolsets=mcp_toolsets,
+        tool_index=native_index,
+    )
 
 
 _TASK_AGENT_SYSTEM_PROMPT: str = (
@@ -270,8 +278,6 @@ def build_agent(
     normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
     static_instructions = build_static_instructions(config.llm_provider, normalized_model, config)
 
-    mcp_toolsets = _build_mcp_toolsets(config)
-
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         reasoning_model.model,
@@ -286,7 +292,7 @@ def build_agent(
             inject_opening_context,
             truncate_history_window,
         ],
-        toolsets=[tool_registry.toolset] + mcp_toolsets,
+        toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
     )
 
     # Conditional prompt layers — runtime-gated via @agent.instructions (fresh per turn, never accumulated)
@@ -358,7 +364,6 @@ def build_task_agent(
     """
     if tool_registry is None:
         tool_registry = build_tool_registry(config)
-    mcp_toolsets = _build_mcp_toolsets(config)
     return Agent(
         role_model.model,
         deps_type=CoDeps,
@@ -366,18 +371,19 @@ def build_task_agent(
         model_settings=role_model.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
-        toolsets=[tool_registry.toolset] + mcp_toolsets,
+        toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
     )
 
 
 async def discover_mcp_tools(
-    agent: Agent, exclude: set[str]
+    mcp_toolsets: list, exclude: set[str]
 ) -> tuple[list[str], dict[str, str], dict[str, ToolConfig]]:
-    """Discover MCP tool names from connected servers (after async with agent).
+    """Discover MCP tool names by connecting to servers and listing tools.
 
-    Returns a tuple of (tool_names, errors, mcp_index) where errors maps server prefix to
-    the error string for each server where list_tools() failed, and mcp_index maps tool
-    name to ToolConfig metadata. Tool names exclude any names already in ``exclude``.
+    Each server self-connects on list_tools() (pydantic-ai lazy init).
+    Returns (tool_names, errors, mcp_index) where errors maps server prefix to
+    the error string for each server where list_tools() failed, and mcp_index maps
+    tool name to ToolConfig metadata. Tool names exclude any in ``exclude``.
     MCP tools are deferred by default (should_defer=True).
     """
     from pydantic_ai.mcp import MCPServer
@@ -386,7 +392,7 @@ async def discover_mcp_tools(
     errors: dict[str, str] = {}
     mcp_index: dict[str, ToolConfig] = {}
 
-    for toolset in agent.toolsets:
+    for toolset in mcp_toolsets:
         inner = getattr(toolset, "wrapped", toolset)
         if not isinstance(inner, MCPServer):
             continue

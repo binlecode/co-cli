@@ -12,19 +12,19 @@ from pathlib import Path
 import pytest
 
 from co_cli.config import ModelConfig
-from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, _resolve_reranker, restore_session, sync_knowledge
+from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, _resolve_reranker, restore_session, _sync_knowledge
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
-from co_cli.knowledge._index_store import KnowledgeIndex
+from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools._shell_backend import ShellBackend
 
 
 def _make_deps(
     tmp_path: Path,
     *,
-    knowledge_index: KnowledgeIndex | None = None,
+    knowledge_store: KnowledgeStore | None = None,
     session_ttl_minutes: int = 60,
     memory_dir: Path | None = None,
     library_dir: Path | None = None,
@@ -38,7 +38,7 @@ def _make_deps(
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
     runtime = CoRuntimeState(safety_state=SafetyState())
-    return CoDeps(shell=ShellBackend(), knowledge_index=knowledge_index, config=config, session=CoSessionState(), runtime=runtime)
+    return CoDeps(shell=ShellBackend(), knowledge_store=knowledge_store, config=config, session=CoSessionState(), runtime=runtime)
 
 
 def _write_memory_file(path: Path, *, mem_id: int, body: str) -> None:
@@ -73,8 +73,8 @@ def _write_article_file(path: Path, *, art_id: int, body: str) -> None:
 
 
 
-def test_sync_knowledge_indexes_memory_and_article(tmp_path: Path) -> None:
-    """sync_knowledge() routes memory and article files to the correct index sources and keeps the index active."""
+def test_sync_knowledge_stores_memory_and_article(tmp_path: Path) -> None:
+    """_sync_knowledge routes memory and article files to the correct store sources and keeps the store active."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
     library_dir = tmp_path / "library"
@@ -82,16 +82,19 @@ def test_sync_knowledge_indexes_memory_and_article(tmp_path: Path) -> None:
     _write_memory_file(memory_dir / "001-test-mem.md", mem_id=1, body="Bootstrap memory content for sync test.")
     _write_article_file(library_dir / "002-test-art.md", art_id=2, body="Bootstrap article content for sync test.")
 
-    idx = KnowledgeIndex(config=CoConfig(
+    config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="fts5",
         knowledge_cross_encoder_reranker_url=None,
-    ))
+        memory_dir=memory_dir,
+        library_dir=library_dir,
+        session_path=tmp_path / "session.json",
+    )
+    idx = KnowledgeStore(config=config)
     try:
-        deps = _make_deps(tmp_path, knowledge_index=idx, memory_dir=memory_dir, library_dir=library_dir)
-        sync_knowledge(deps, TerminalFrontend())
+        result = _sync_knowledge(config, idx, TerminalFrontend())
 
-        assert deps.knowledge_index is not None, "sync_knowledge must not disable the index on success"
+        assert result is not None, "_sync_knowledge must not disable the store on success"
 
         mem_results = idx.search("Bootstrap memory content", source="memory", limit=5)
         assert any("001-test-mem.md" in r.path for r in mem_results), \
@@ -105,23 +108,25 @@ def test_sync_knowledge_indexes_memory_and_article(tmp_path: Path) -> None:
 
 
 def test_sync_knowledge_disables_index_on_failure(tmp_path: Path) -> None:
-    """sync_knowledge() sets knowledge_index=None when sync raises — grep fallback must activate for the session."""
+    """_sync_knowledge returns None when sync raises — grep fallback must activate for the session."""
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
     _write_memory_file(memory_dir / "001-test-mem.md", mem_id=1, body="Should fail.")
 
-    idx = KnowledgeIndex(config=CoConfig(
+    config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="fts5",
         knowledge_cross_encoder_reranker_url=None,
-    ))
+        memory_dir=memory_dir,
+        session_path=tmp_path / "session.json",
+    )
+    idx = KnowledgeStore(config=config)
     idx.close()  # closed before sync so sync_dir raises
 
-    deps = _make_deps(tmp_path, knowledge_index=idx, memory_dir=memory_dir)
-    sync_knowledge(deps, TerminalFrontend())
+    result = _sync_knowledge(config, idx, TerminalFrontend())
 
-    assert deps.knowledge_index is None, \
-        "sync_knowledge must set knowledge_index=None after sync failure"
+    assert result is None, \
+        "_sync_knowledge must return None after sync failure"
 
 
 def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavailable(tmp_path: Path) -> None:
@@ -134,13 +139,13 @@ def test_resolve_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavail
         knowledge_cross_encoder_reranker_url=None,
     )
 
-    resolved_config, knowledge_index, statuses = resolve_knowledge_backend(config)
+    resolved_config, knowledge_store, statuses = resolve_knowledge_backend(config)
     assert resolved_config.knowledge_search_backend == "fts5"
-    assert knowledge_index is not None, "Bootstrap must keep FTS search available after hybrid failure"
+    assert knowledge_store is not None, "Bootstrap must keep FTS search available after hybrid failure"
     assert any("using fts5" in status for status in statuses), \
         "Degradation must surface an explicit startup status message"
 
-    knowledge_index.close()
+    knowledge_store.close()
 
 
 def test_restore_session_fresh_returns_same_id(tmp_path: Path) -> None:
@@ -241,11 +246,10 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
     assert len(statuses) == 2
 
 
-@pytest.mark.asyncio
-async def test_initialize_session_capabilities_project_skill_registered(tmp_path: Path) -> None:
-    """Project skill directory with one valid skill: skill appears in skill_registry and skill_count."""
-    from co_cli.agent import build_agent
-    from co_cli.bootstrap._bootstrap import initialize_session_capabilities
+def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
+    """Project skill directory with one valid skill: skill appears in loaded commands."""
+    from co_cli.commands._commands import _load_skills, get_skill_registry
+    from co_cli.config import settings
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
@@ -257,18 +261,12 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     )
     (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
 
-    deps = _make_deps(tmp_path, mcp_servers={})
-    deps = dataclasses.replace(deps, config=dataclasses.replace(deps.config, skills_dir=skills_dir))
-    agent = build_agent(config=deps.config)
+    skill_commands = _load_skills(skills_dir, settings=settings)
 
-    async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
-        result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
-
-    skill_names = list(deps.skill_commands.keys())
-    assert "test-bootstrap-skill" in skill_names, (
-        "Project skill must appear in skill_commands after initialize_session_capabilities"
+    assert "test-bootstrap-skill" in skill_commands, (
+        "Project skill must appear in skill_commands after _load_skills"
     )
-    assert result >= 1, (
+    assert len(get_skill_registry(skill_commands)) >= 1, (
         "skill_count must be at least 1 when a valid project skill is loaded"
     )
 
@@ -300,7 +298,7 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
             mcp_servers={},
         )
         runtime = CoRuntimeState(safety_state=SafetyState())
-        deps = CoDeps(shell=ShellBackend(), knowledge_index=None, config=config, session=CoSessionState(), runtime=runtime)
+        deps = CoDeps(shell=ShellBackend(), knowledge_store=None, config=config, session=CoSessionState(), runtime=runtime)
         result = restore_session(deps, TerminalFrontend())
         assert isinstance(result, dict), "restore_session() must return a session dict even when save fails"
         assert deps.session.session_id != "", "session_id must be set in deps even when save fails"

@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from co_cli.context._types import SafetyState  # noqa: E402
-from co_cli.knowledge._index_store import KnowledgeIndex  # noqa: E402
+from co_cli.knowledge._store import KnowledgeStore  # noqa: E402
 from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
@@ -155,12 +155,12 @@ async def main() -> int:
     agent_config = dataclasses.replace(agent_config, mcp_servers={})
     agent = build_agent(config=agent_config)
 
-    knowledge_index = KnowledgeIndex(
+    knowledge_store = KnowledgeStore(
         config=CoConfig(knowledge_db_path=Path(".co-cli/search.db"))
     )
     deps = make_eval_deps(mcp_servers={}, 
         session_id="eval-knowledge-pipeline",
-        knowledge_index=knowledge_index,
+        knowledge_store=knowledge_store,
     )
 
     if not deps.config.brave_search_api_key:

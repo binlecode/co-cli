@@ -64,11 +64,11 @@ Later passes win on name collision, so project-local overrides user-global, whic
 
 `_load_skill_file(path, root, scan)` is the per-file loader. The `root` parameter is the load root used for containment checking. `scan=False` is passed for the bundled pass (version-controlled, no runtime scan needed); `scan=True` is passed for user-global and project-local passes.
 
-Loading happens at startup inside `initialize_session_capabilities()` (in `bootstrap/_bootstrap.py`) after MCP initialization and before the welcome banner:
+Loading happens at startup inside `create_deps()` (in `bootstrap/_bootstrap.py`) as part of deps assembly:
 
 1. load bundled, then user-global, then project-local skills
-2. `set_skill_commands(skill_commands, deps.services)`
-3. `completer.words = _build_completer_words(deps.services.skill_commands)` — called in `main.py` immediately after `initialize_session_capabilities()` returns
+2. `skill_commands` passed into `CoDeps` constructor
+3. `completer.words = _build_completer_words(deps.skill_commands)` — called in `main.py` immediately after `create_deps()` returns
 
 ### Load Gating
 
@@ -199,7 +199,7 @@ There is no separate skills config object today.
 | --- | --- |
 | `co_cli/commands/_skill_types.py` | `SkillConfig` frozen dataclass |
 | `co_cli/commands/_commands.py` | skill loader (`_load_skill_file`, `_is_safe_skill_path`), scanner, dispatch, and `/skills` commands |
-| `co_cli/bootstrap/_bootstrap.py` | `initialize_session_capabilities()` — MCP discovery and skill loading at startup |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (config); `skill_commands`, `skill_registry` (session); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |

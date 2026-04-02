@@ -11,7 +11,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.knowledge._index_store import KnowledgeIndex
+from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 
@@ -21,11 +21,11 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 def _make_ctx(
     tmp_path: Path,
     *,
-    knowledge_index: KnowledgeIndex | None = None,
+    knowledge_store: KnowledgeStore | None = None,
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     deps = CoDeps(
-        shell=ShellBackend(), knowledge_index=knowledge_index,
+        shell=ShellBackend(), knowledge_store=knowledge_store,
         config=CoConfig(
             library_dir=tmp_path / "library",
             knowledge_search_backend=knowledge_search_backend,
@@ -87,8 +87,8 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_save_article_indexes_into_fts(tmp_path: Path):
     """save_article indexes the article into the FTS knowledge index."""
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
-    ctx = _make_ctx(tmp_path, knowledge_index=idx, knowledge_search_backend="fts5")
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    ctx = _make_ctx(tmp_path, knowledge_store=idx, knowledge_search_backend="fts5")
 
     await save_article(
         ctx,

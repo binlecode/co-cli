@@ -27,7 +27,7 @@ from pydantic_ai import RunContext
 
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
-from co_cli.knowledge._index_store import SearchResult
+from co_cli.knowledge._store import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
 from co_cli.tools._result import ToolResult, make_result
 
@@ -199,7 +199,7 @@ async def search_knowledge(
         created_after: ISO8601 date string; only return items created on or after this date.
         created_before: ISO8601 date string; only return items created on or before this date.
     """
-    if ctx.deps.knowledge_index is None:
+    if ctx.deps.knowledge_store is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
             return make_result(f"No results for '{query}' (source={source!r} requires FTS)", count=0, results=[])
@@ -243,7 +243,7 @@ async def search_knowledge(
     # Sync Obsidian vault into index before searching
     if ctx.deps.config.obsidian_vault_path and source in (None, "obsidian"):
         try:
-            ctx.deps.knowledge_index.sync_dir("obsidian", ctx.deps.config.obsidian_vault_path)
+            ctx.deps.knowledge_store.sync_dir("obsidian", ctx.deps.config.obsidian_vault_path)
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
@@ -252,7 +252,7 @@ async def search_knowledge(
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
     try:
-        results = ctx.deps.knowledge_index.search(
+        results = ctx.deps.knowledge_store.search(
             query,
             source=fts_source,
             kind=kind,
@@ -346,13 +346,13 @@ async def save_article(
     existing = _find_article_by_url(library_dir, origin_url)
     if existing is not None:
         result = _consolidate_article(existing, content, title, tags, origin_url)
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.knowledge_store is not None:
             try:
                 updated_raw = existing.read_text(encoding="utf-8")
                 fm2, body2 = parse_frontmatter(updated_raw)
                 # Use merged tags from frontmatter, not just the incoming tags arg
                 merged_tags_str = " ".join(fm2.get("tags", []))
-                ctx.deps.knowledge_index.index(
+                ctx.deps.knowledge_store.index(
                     source="library",
                     kind="article",
                     path=str(existing),
@@ -370,7 +370,7 @@ async def save_article(
                     chunk_size=ctx.deps.config.knowledge_chunk_size,
                     overlap=ctx.deps.config.knowledge_chunk_overlap,
                 )
-                ctx.deps.knowledge_index.index_chunks(
+                ctx.deps.knowledge_store.index_chunks(
                     "library", str(existing), consolidated_chunks
                 )
             except Exception as e:
@@ -407,9 +407,9 @@ async def save_article(
     file_path.write_text(md_content, encoding="utf-8")
     logger.info(f"Saved article {article_id} to {file_path}")
 
-    if ctx.deps.knowledge_index is not None:
+    if ctx.deps.knowledge_store is not None:
         try:
-            ctx.deps.knowledge_index.index(
+            ctx.deps.knowledge_store.index(
                 source="library",
                 kind="article",
                 path=str(file_path),
@@ -426,7 +426,7 @@ async def save_article(
                 chunk_size=ctx.deps.config.knowledge_chunk_size,
                 overlap=ctx.deps.config.knowledge_chunk_overlap,
             )
-            ctx.deps.knowledge_index.index_chunks(
+            ctx.deps.knowledge_store.index_chunks(
                 "library", str(file_path), article_chunks
             )
         except Exception as e:
@@ -475,9 +475,9 @@ async def search_articles(
     """
     library_dir = ctx.deps.config.library_dir
 
-    if ctx.deps.knowledge_index is not None and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
+    if ctx.deps.knowledge_store is not None and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
         try:
-            fts_results = ctx.deps.knowledge_index.search(
+            fts_results = ctx.deps.knowledge_store.search(
                 query,
                 source="library",
                 kind="article",

@@ -35,7 +35,7 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 def _make_ctx(
     *,
     memory_dir: Path | None = None,
-    knowledge_index: Any = None,
+    knowledge_store: Any = None,
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
@@ -44,7 +44,7 @@ def _make_ctx(
         from dataclasses import replace
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
-        shell=ShellBackend(), knowledge_index=knowledge_index,
+        shell=ShellBackend(), knowledge_store=knowledge_store,
         config=config,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -141,13 +141,13 @@ def test_list_memories_pagination(tmp_path: Path):
 def test_fts_freshness_after_consolidation(tmp_path: Path):
     """FTS returns updated content after a near-duplicate memory is consolidated."""
     import asyncio
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.memory import save_memory
     from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
     memory_dir = tmp_path / ".co-cli" / "memory"
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
 
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
@@ -297,7 +297,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
     With only a 1-day age gap, the BM25 advantage of M1 overcomes the small recency
     edge of M2, demonstrating that composite scoring is BM25-driven, not decay-only.
     """
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -326,10 +326,10 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
         created=new_time,
     )
 
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5"))
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5"))
     idx.sync_dir("memory", memory_dir)
 
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
+    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
     result = asyncio.run(recall_memory(ctx, "xylobm25score", max_results=5))
 
     assert result["count"] >= 2, "Both memories should match the query"
@@ -343,8 +343,8 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
 
 
 def test_forget_evicts_from_fts(tmp_path: Path):
-    """KnowledgeIndex.remove() evicts a deleted memory from FTS results."""
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    """KnowledgeStore.remove() evicts a deleted memory from FTS results."""
+    from co_cli.knowledge._store import KnowledgeStore
 
     memory_dir = tmp_path / ".co-cli" / "memory"
 
@@ -352,7 +352,7 @@ def test_forget_evicts_from_fts(tmp_path: Path):
     path = _write_memory(memory_dir, 1, "xyloquartz memory for forget eviction test")
 
     # Index it
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
 
     # Verify it's searchable
@@ -377,7 +377,7 @@ def test_forget_evicts_from_fts(tmp_path: Path):
 
 def test_search_memories_finds_saved_memories(tmp_path: Path):
     """search_memories returns saved memories with source='memory'."""
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
 
     memory_dir = tmp_path / ".co-cli" / "memory"
 
@@ -386,10 +386,10 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
     _write_memory(memory_dir, 2, "User uses xyloquartz-search-test for all tests",
                   tags=["context"])
 
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     idx.sync_dir("memory", memory_dir)
 
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
+    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
 
     result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
     assert result["count"] >= 2
@@ -508,7 +508,7 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
 
     config = dc_replace(CoConfig(), memory_dir=memory_dir)
     deps = CoDeps(
-        shell=ShellBackend(), knowledge_index=None,
+        shell=ShellBackend(), knowledge_store=None,
         config=config,
     )
 
@@ -552,7 +552,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from co_cli.knowledge._index_store import KnowledgeIndex
+    from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.articles import search_knowledge
 
     memory_dir = tmp_path / "memory"
@@ -567,16 +567,16 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         encoding="utf-8",
     )
 
-    idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     try:
         idx.sync_dir("memory", memory_dir)
         idx.sync_dir("library", library_dir)
 
-        fts_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
-        grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=None)
+        fts_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
+        grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=None)
         fts_know_ctx = RunContext(
             deps=CoDeps(
-                shell=ShellBackend(), knowledge_index=idx,
+                shell=ShellBackend(), knowledge_store=idx,
                 config=replace(CoConfig(), library_dir=library_dir, knowledge_search_backend="fts5"),
             ),
             model=_AGENT.model,
@@ -584,7 +584,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         )
         grep_know_ctx = RunContext(
             deps=CoDeps(
-                shell=ShellBackend(), knowledge_index=None,
+                shell=ShellBackend(), knowledge_store=None,
                 config=replace(CoConfig(), library_dir=library_dir),
             ),
             model=_AGENT.model,

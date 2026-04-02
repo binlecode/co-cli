@@ -111,11 +111,11 @@ def search_notes(
     search_root = vault / folder if folder else vault
 
     # FTS path — sync on first use, then search the index
-    if ctx.deps.knowledge_index is not None:
+    if ctx.deps.knowledge_store is not None:
         try:
-            ctx.deps.knowledge_index.sync_dir("obsidian", search_root)
+            ctx.deps.knowledge_store.sync_dir("obsidian", search_root)
             tag_filter = tag.lstrip("#") if tag else None
-            fts_results = ctx.deps.knowledge_index.search(
+            fts_results = ctx.deps.knowledge_store.search(
                 query,
                 source="obsidian",
                 tags=[tag_filter] if tag_filter else None,

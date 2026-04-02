@@ -5,7 +5,7 @@ internal knowledge system. Memories are stored as markdown files with YAML
 frontmatter in .co-cli/memory/ (project-local).
 
 Retrieval uses FTS5 search when knowledge_search_backend is 'fts5' or 'hybrid'
-and knowledge_index is set in deps. Falls back to grep-based search otherwise.
+and knowledge_store is set in deps. Falls back to grep-based search otherwise.
 """
 
 import logging
@@ -505,11 +505,11 @@ async def recall_memory(
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.knowledge_index is not None
+        ctx.deps.knowledge_store is not None
         and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            fts_results = ctx.deps.knowledge_index.search(
+            fts_results = ctx.deps.knowledge_store.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -712,11 +712,11 @@ async def search_memories(
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.knowledge_index is not None
+        ctx.deps.knowledge_store is not None
         and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            results = ctx.deps.knowledge_index.search(
+            results = ctx.deps.knowledge_store.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -1014,10 +1014,10 @@ async def update_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.knowledge_store is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.knowledge_store.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),
@@ -1079,10 +1079,10 @@ async def append_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.knowledge_index is not None:
+        if ctx.deps.knowledge_store is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.knowledge_index.index(
+                ctx.deps.knowledge_store.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),

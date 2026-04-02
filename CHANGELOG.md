@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-04-02
+
+### Changed
+- **KnowledgeIndex → KnowledgeStore**: renamed class, field (`deps.knowledge_index` → `deps.knowledge_store`), and file (`_index_store.py` → `_store.py`) to reflect its role as a shared storage service.
+- **Knowledge init absorbed into `create_deps()`**: `initialize_knowledge()` and `sync_knowledge()` removed as public functions; backend resolution (three-tier fallback) and file sync now run as Steps 6-7 inside `create_deps()`. Config is fully resolved before `CoDeps` construction — no post-construction mutation.
+- **Typed knowledge store field**: `deps.knowledge_store` typed as `KnowledgeStore | None` (was `Any | None`).
+
 ## [0.7.8] - 2026-04-01
 
 ### Changed

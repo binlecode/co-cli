@@ -21,9 +21,9 @@ from pydantic_ai.messages import ModelMessage
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn, TurnResult
 from co_cli.context._history import HistoryCompactionState
-from co_cli.agent import build_agent, build_task_agent
+from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES, ROLE_TASK
+from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
 from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
@@ -34,7 +34,7 @@ from co_cli.commands._commands import (
 )
 from co_cli.context._session import touch_session, increment_compaction, save_session
 from co_cli.context._skill_env import _cleanup_skill_run_state
-from co_cli.bootstrap._bootstrap import create_deps, initialize_knowledge, sync_knowledge, restore_session, initialize_session_capabilities
+from co_cli.bootstrap._bootstrap import create_deps, restore_session
 
 exporter = SQLiteSpanExporter()
 
@@ -150,44 +150,28 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         completer=completer,
         complete_while_typing=False,
     )
-    try:
-        deps = create_deps()
-    except ValueError as e:
-        console.print(f"[bold red]Startup error:[/bold red] {e}")
-        raise SystemExit(1)
-
-    from co_cli._model_factory import ResolvedModel
-
-    agent = build_agent(config=deps.config, model_registry=deps.model_registry)
-
-    _no_model = ResolvedModel(model=None, settings=None)
-    if deps.model_registry:
-        task_model = deps.model_registry.get(ROLE_TASK, _no_model)
-        if task_model.model:
-            deps.task_agents[ROLE_TASK] = build_task_agent(config=deps.config, role_model=task_model)
-
     stack = AsyncExitStack()
-    message_history: list[ModelMessage] = []
-    session_data: dict | None = None
-    compactor = HistoryCompactionState()
-    last_interrupt_time = 0.0
+    deps: CoDeps | None = None
+    compactor: HistoryCompactionState | None = None
     try:
-        _mcp_init_ok = False
         try:
-            await stack.enter_async_context(agent)
-            _mcp_init_ok = True
-        except Exception as e:
-            console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
+            deps = await create_deps(frontend, stack)
+        except ValueError as e:
+            console.print(f"[bold red]Startup error:[/bold red] {e}")
+            raise SystemExit(1)
 
-        skill_count = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
         completer.words = _build_completer_words(deps.skill_commands)
+        agent = build_agent(config=deps.config, model_registry=deps.model_registry)
 
-        initialize_knowledge(deps, frontend)
-        sync_knowledge(deps, frontend)
         session_data = restore_session(deps, frontend)
-        frontend.on_status(f"  {skill_count} skill(s) loaded")
+        from co_cli.commands._commands import get_skill_registry
+        frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
         display_welcome_banner(deps)
+
+        message_history: list[ModelMessage] = []
+        compactor = HistoryCompactionState()
+        last_interrupt_time = 0.0
 
         while True:
             _saved_env: dict[str, str | None] = {}
@@ -246,16 +230,18 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        compactor.shutdown()
-        from co_cli.tools._background import kill_task
-        for task_state in deps.session.background_tasks.values():
-            if task_state.status == "running":
-                try:
-                    await kill_task(task_state)
-                except Exception:
-                    pass
+        if compactor is not None:
+            compactor.shutdown()
+        if deps is not None:
+            from co_cli.tools._background import kill_task
+            for task_state in deps.session.background_tasks.values():
+                if task_state.status == "running":
+                    try:
+                        await kill_task(task_state)
+                    except Exception:
+                        pass
+            deps.shell.cleanup()
         await stack.aclose()
-        deps.shell.cleanup()
 
 
 @app.command()
