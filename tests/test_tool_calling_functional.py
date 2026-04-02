@@ -39,7 +39,7 @@ _TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 # build_agent — reducing context from ~27K to ~10K tokens so calls complete faster.
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 # Agents built once at module level to avoid per-test construction overhead.
-_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
+_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED)
 
 
 def _make_deps(session_id: str) -> CoDeps:

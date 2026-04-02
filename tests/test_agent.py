@@ -75,7 +75,7 @@ def test_build_task_agent_registers_same_tools_as_main_agent():
     task_resolved = registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 
     main_result = build_agent(config=config)
-    task_result = build_task_agent(config=config, resolved=task_resolved)
+    task_result = build_task_agent(config=config, role_model=task_resolved)
 
     assert set(task_result.tool_index.keys()) == set(main_result.tool_index.keys())
     main_approvals = {name: tc.approval for name, tc in main_result.tool_index.items()}
@@ -99,7 +99,7 @@ def test_build_task_agent_excludes_domain_tools_when_config_absent():
     """build_task_agent() excludes domain tools when config paths are absent."""
     result = build_task_agent(
         config=CoConfig(),
-        resolved=ResolvedModel(model=None, settings=None),
+        role_model=ResolvedModel(model=None, settings=None),
     )
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index

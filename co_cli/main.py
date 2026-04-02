@@ -162,11 +162,11 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     agent = agent_result.agent
     deps.tool_index = agent_result.tool_index
 
-    _none_resolved = ResolvedModel(model=None, settings=None)
+    _no_model = ResolvedModel(model=None, settings=None)
     if deps.model_registry:
-        task_resolved = deps.model_registry.get(ROLE_TASK, _none_resolved)
-        if task_resolved.model:
-            deps.task_agents[ROLE_TASK] = build_task_agent(config=deps.config, resolved=task_resolved).agent
+        task_model = deps.model_registry.get(ROLE_TASK, _no_model)
+        if task_model.model:
+            deps.task_agents[ROLE_TASK] = build_task_agent(config=deps.config, role_model=task_model).agent
 
     stack = AsyncExitStack()
     message_history: list[ModelMessage] = []

@@ -240,7 +240,7 @@ def build_agent(
     if model_registry is None:
         from co_cli._model_factory import ModelRegistry
         model_registry = ModelRegistry.from_config(config)
-    resolved = model_registry.get(
+    reasoning_model = model_registry.get(
         ROLE_REASONING, ResolvedModel(model=None, settings=None)
     )
 
@@ -256,10 +256,10 @@ def build_agent(
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
-        resolved.model,
+        reasoning_model.model,
         deps_type=CoDeps,
         instructions=static_instructions,
-        model_settings=resolved.settings,
+        model_settings=reasoning_model.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[
@@ -332,7 +332,7 @@ def build_agent(
 def build_task_agent(
     *,
     config: CoConfig,
-    resolved: "ResolvedModel",
+    role_model: "ResolvedModel",
 ) -> AgentCapabilityResult:
     """Build the lightweight task agent for approval resume turns.
 
@@ -343,10 +343,10 @@ def build_task_agent(
     mcp_toolsets = _build_mcp_toolsets(config)
     filtered_toolset, native_index = _build_filtered_toolset(config)
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
-        resolved.model,
+        role_model.model,
         deps_type=CoDeps,
         instructions=_TASK_AGENT_SYSTEM_PROMPT,
-        model_settings=resolved.settings,
+        model_settings=role_model.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         toolsets=[filtered_toolset] + mcp_toolsets,

@@ -31,13 +31,13 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │              runtime=CoRuntimeState(safety_state=SafetyState()))
 │
 ├─ build_agent(config=deps.config, model_registry=deps.model_registry)
-│  ├─ resolved = model_registry.get(ROLE_REASONING, fallback)
+│  ├─ reasoning_model = model_registry.get(ROLE_REASONING, fallback)
 │  ├─ build_static_instructions(provider, model_name, config)
 │  ├─ _build_mcp_toolsets(config) → mcp_toolsets
 │  ├─ _build_filtered_toolset(config) → (filtered_toolset, native_index)
-│  ├─ Agent(resolved.model, deps_type=CoDeps,
+│  ├─ Agent(reasoning_model.model, deps_type=CoDeps,
 │  │        instructions=static_instructions,
-│  │        model_settings=resolved.settings,
+│  │        model_settings=reasoning_model.settings,
 │  │        output_type=[str, DeferredToolRequests],
 │  │        toolsets=[filtered_toolset] + mcp_toolsets,
 │  │        history_processors=[truncate_tool_returns, detect_safety_issues,
@@ -46,7 +46,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ → AgentCapabilityResult(agent, tool_index)
 │
 ├─ deps.tool_index = agent_result.tool_index
-├─ [if ROLE_TASK] build_task_agent(config, resolved=task_resolved) → deps.task_agents[ROLE_TASK]
+├─ [if ROLE_TASK] build_task_agent(config, role_model=task_model) → deps.task_agents[ROLE_TASK]
 │
 ├─ AsyncExitStack.enter_async_context(agent)
 │      on fail → warning, continue without MCP

@@ -44,7 +44,7 @@ _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=Non
 
 # build_task_agent: minimal 1-sentence system prompt + local tools — bakes in
 # ROLE_TASK model settings (reasoning_effort=none) at construction time.
-_AGENT = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVED)
+_AGENT = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED)
 
 
 def _make_ctx(
