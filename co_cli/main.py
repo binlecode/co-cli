@@ -156,9 +156,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         console.print(f"[bold red]Startup error:[/bold red] {e}")
         raise SystemExit(1)
 
-    # Build model registry (pure config — no IO)
-    from co_cli._model_factory import ModelRegistry, ResolvedModel
-    deps.model_registry = ModelRegistry.from_config(deps.config)
+    from co_cli._model_factory import ResolvedModel
 
     agent_result = build_agent(config=deps.config, model_registry=deps.model_registry)
     agent = agent_result.agent

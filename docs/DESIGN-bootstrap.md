@@ -25,10 +25,10 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ create_deps()                          # pure config — zero IO
 │  ├─ CoConfig.from_settings(settings, cwd=Path.cwd())
 │  ├─ config.validate() → error: raise ValueError (no IO — config shape only)
+│  ├─ ModelRegistry.from_config(config) → model_registry
 │  └─ → CoDeps(shell=ShellBackend(), config=config,
+│              model_registry=model_registry,
 │              runtime=CoRuntimeState(safety_state=SafetyState()))
-│
-├─ ModelRegistry.from_config(deps.config) → deps.model_registry
 │
 ├─ build_agent(config=deps.config, model_registry=deps.model_registry)
 │  ├─ resolved = model_registry.get(ROLE_REASONING, fallback)
