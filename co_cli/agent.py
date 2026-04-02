@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ToolRegistryResult:
+class ToolRegistry:
     """Immutable return value of build_tool_registry()."""
     toolset: AbstractToolset[CoDeps]
     tool_index: dict[str, ToolConfig]
@@ -218,7 +218,7 @@ def _build_filtered_toolset(
     return inner.filtered(_filter), native_index
 
 
-def build_tool_registry(config: CoConfig) -> ToolRegistryResult:
+def build_tool_registry(config: CoConfig) -> ToolRegistry:
     """Build the tool registry and pydantic-ai toolsets from config.
 
     Pure config — no IO. Called once in create_deps().
@@ -227,7 +227,7 @@ def build_tool_registry(config: CoConfig) -> ToolRegistryResult:
     mcp_toolsets = _build_mcp_toolsets(config)
     filtered_toolset, native_index = _build_filtered_toolset(config)
     combined_toolsets = [filtered_toolset] + mcp_toolsets
-    return ToolRegistryResult(toolset=combined_toolsets[0] if len(combined_toolsets) == 1 else filtered_toolset,
+    return ToolRegistry(toolset=combined_toolsets[0] if len(combined_toolsets) == 1 else filtered_toolset,
                               tool_index=native_index)
 
 
@@ -241,7 +241,7 @@ def build_agent(
     *,
     config: CoConfig,
     model_registry: "ModelRegistry | None" = None,
-    tool_registry: ToolRegistryResult | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> Agent[CoDeps, str | DeferredToolRequests]:
     """Build the main session Agent with model and settings baked in at construction.
 
@@ -348,7 +348,7 @@ def build_task_agent(
     *,
     config: CoConfig,
     role_model: "ResolvedModel",
-    tool_registry: ToolRegistryResult | None = None,
+    tool_registry: ToolRegistry | None = None,
 ) -> Agent[CoDeps, str | DeferredToolRequests]:
     """Build the lightweight task agent for approval resume turns.
 

@@ -59,7 +59,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | Suffix | Meaning | Do NOT use for |
   |--------|---------|---------------|
   | `*State` | Mutable data with a lifecycle; persists/mutates across operations | One-shot return values, config, enums |
-  | `*Result` | Immutable return value of one operation; consumed, not stored | Mutable accumulators, config, state |
+  | `*Result` | Immutable return value of one operation where the type name would be ambiguous without the suffix (e.g. `TurnResult`, `CheckResult`); consumed, not stored. Do not add `Result` when the base name already conveys the type clearly (e.g. `ToolRegistry`, not `ToolRegistryResult`) | Mutable accumulators, config, state |
   | `*Config` / `*Settings` / `*Policy` | Static read-only configuration or data-only descriptor; set once, never mutated | Runtime state, return values |
   | `*Registry` | Read-heavy lookup table; set at bootstrap, queried at runtime | Mutable accumulators, IO adapters, persistent stores |
   | `*Client` / `*Backend` | IO adapter wrapping an external system (HTTP, subprocess, database) | Pure data, registries, config |
