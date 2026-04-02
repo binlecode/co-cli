@@ -31,18 +31,6 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │              runtime=CoRuntimeState(safety_state=SafetyState()))
 │
 ├─ build_agent(config=deps.config, model_registry=deps.model_registry)
-│  ├─ reasoning_model = model_registry.get(ROLE_REASONING, fallback)
-│  ├─ build_static_instructions(provider, model_name, config)
-│  ├─ _build_mcp_toolsets(config) → mcp_toolsets
-│  ├─ _build_filtered_toolset(config) → (filtered_toolset, native_index)
-│  ├─ Agent(reasoning_model.model, deps_type=CoDeps,
-│  │        instructions=static_instructions,
-│  │        model_settings=reasoning_model.settings,
-│  │        output_type=[str, DeferredToolRequests],
-│  │        toolsets=[filtered_toolset] + mcp_toolsets,
-│  │        history_processors=[truncate_tool_returns, detect_safety_issues,
-│  │                            inject_opening_context, truncate_history_window])
-│  ├─ @agent.instructions: date, shell, project, memories, personality, deferred_tool_prompt
 │  └─ → AgentCapabilityResult(agent, tool_index)
 │
 ├─ deps.tool_index = agent_result.tool_index
