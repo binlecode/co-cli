@@ -87,7 +87,7 @@ async def run_coding_subagent(
 
     from co_cli.tools._subagent_agents import make_coder_agent
 
-    registry = ctx.deps.services.model_registry
+    registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_CODING):
         raise ModelRetry("Coding sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_CODING, ResolvedModel(model=ctx.model, settings=None))
@@ -154,7 +154,7 @@ async def run_research_subagent(
 
     from co_cli.tools._subagent_agents import make_research_agent
 
-    registry = ctx.deps.services.model_registry
+    registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_RESEARCH):
         raise ModelRetry("Research sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_RESEARCH, ResolvedModel(model=ctx.model, settings=None))
@@ -242,7 +242,7 @@ async def run_analysis_subagent(
 
     from co_cli.tools._subagent_agents import make_analysis_agent
 
-    registry = ctx.deps.services.model_registry
+    registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_ANALYSIS):
         raise ModelRetry("Analysis sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_ANALYSIS, ResolvedModel(model=ctx.model, settings=None))
@@ -311,7 +311,7 @@ async def run_reasoning_subagent(
 
     from co_cli.tools._subagent_agents import make_thinking_agent
 
-    registry = ctx.deps.services.model_registry
+    registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_REASONING):
         raise ModelRetry("Thinking sub-agent is unavailable — handle this task directly.")
     rm = registry.get(ROLE_REASONING, ResolvedModel(model=ctx.model, settings=None))

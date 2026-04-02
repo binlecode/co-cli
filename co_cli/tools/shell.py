@@ -47,7 +47,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
 
     effective = min(timeout, ctx.deps.config.shell_max_timeout)
     try:
-        return await ctx.deps.services.shell.run_command(cmd, timeout=effective)
+        return await ctx.deps.shell.run_command(cmd, timeout=effective)
     except RuntimeError as e:
         msg = str(e)
         if "timed out" in msg.lower():

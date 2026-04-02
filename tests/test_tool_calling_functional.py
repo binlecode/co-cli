@@ -21,7 +21,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
 from tests._frontend import SilentFrontend
@@ -44,11 +44,9 @@ _AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVE
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            model_registry=_REGISTRY,
-            tool_index=dict(_AGENT_NOREASON.tool_index),
-        ),
+        shell=ShellBackend(),
+        model_registry=_REGISTRY,
+        tool_index=dict(_AGENT_NOREASON.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
     )
@@ -215,11 +213,11 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     import asyncio
     from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import check_task_status
-    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
     from datetime import datetime, timezone
 
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
@@ -248,11 +246,11 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
     from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import list_background_tasks
-    from co_cli.deps import CoDeps, CoServices, CoConfig
+    from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
     from datetime import datetime, timezone
 
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 

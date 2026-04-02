@@ -438,8 +438,8 @@ async def save_memory(
         span.set_attribute("memory.tags", ",".join(tags or []))
         _fallback = ResolvedModel(model=None, settings=None)
         _consolidation_resolved = (
-            ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _fallback)
-            if ctx.deps.services.model_registry else _fallback
+            ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _fallback)
+            if ctx.deps.model_registry else _fallback
         )
         result = await persist_memory(
             ctx.deps, content, tags, related,
@@ -505,11 +505,11 @@ async def recall_memory(
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.services.knowledge_index is not None
+        ctx.deps.knowledge_index is not None
         and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            fts_results = ctx.deps.services.knowledge_index.search(
+            fts_results = ctx.deps.knowledge_index.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -712,11 +712,11 @@ async def search_memories(
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
     if (
-        ctx.deps.services.knowledge_index is not None
+        ctx.deps.knowledge_index is not None
         and ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid")
     ):
         try:
-            results = ctx.deps.services.knowledge_index.search(
+            results = ctx.deps.knowledge_index.search(
                 query,
                 source="memory",
                 kind="memory",
@@ -1014,10 +1014,10 @@ async def update_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.services.knowledge_index is not None:
+        if ctx.deps.knowledge_index is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.services.knowledge_index.index(
+                ctx.deps.knowledge_index.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),
@@ -1079,10 +1079,10 @@ async def append_memory(
         )
         match.write_text(md_content, encoding="utf-8")
 
-        if ctx.deps.services.knowledge_index is not None:
+        if ctx.deps.knowledge_index is not None:
             try:
                 import hashlib as _hashlib
-                ctx.deps.services.knowledge_index.index(
+                ctx.deps.knowledge_index.index(
                     source="memory",
                     kind=fm.get("kind", "memory"),
                     path=str(match),

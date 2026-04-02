@@ -10,7 +10,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
@@ -25,7 +25,7 @@ def _make_ctx(
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=knowledge_index),
+        shell=ShellBackend(), knowledge_index=knowledge_index,
         config=CoConfig(
             library_dir=tmp_path / "library",
             knowledge_search_backend=knowledge_search_backend,

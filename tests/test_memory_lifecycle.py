@@ -17,7 +17,7 @@ import yaml
 
 from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction
 from co_cli.memory._lifecycle import apply_plan_atomically, persist_memory
 from co_cli.tools._shell_backend import ShellBackend
@@ -83,7 +83,7 @@ def _make_deps(
     )
     if memory_dir is not None:
         cfg = replace(cfg, memory_dir=memory_dir)
-    return CoDeps(services=CoServices(shell=ShellBackend()), config=cfg)
+    return CoDeps(shell=ShellBackend(), config=cfg)
 
 
 # ---------------------------------------------------------------------------

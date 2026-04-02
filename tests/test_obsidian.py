@@ -8,7 +8,7 @@ from pydantic_ai import ModelRetry
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 
 
 @dataclass
@@ -26,7 +26,7 @@ def test_search_notes(tmp_path):
     (tmp_path / "projector.md").write_text("# Equipment\nThe projector needs repair.")
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
 
@@ -65,7 +65,7 @@ def test_search_notes_folder_filter(tmp_path):
     (personal / "journal.md").write_text("# Journal\nWorking on project at home.")
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
 
@@ -96,7 +96,7 @@ def test_search_notes_tag_filter(tmp_path):
     )
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
 
@@ -121,7 +121,7 @@ def test_list_notes_pagination(tmp_path):
         (tmp_path / f"note-{i:02d}.md").write_text(f"# Note {i}\nContent {i}")
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
 
@@ -156,7 +156,7 @@ def test_obsidian_list_and_read(tmp_path):
     (subdir / "Old.md").write_text("Archived content")
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
 
@@ -200,7 +200,7 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        shell=ShellBackend(), knowledge_index=idx,
         config=CoConfig(obsidian_vault_path=vault),
     ))
 
@@ -230,7 +230,7 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        shell=ShellBackend(), knowledge_index=idx,
         config=CoConfig(obsidian_vault_path=vault),
     ))
 
@@ -258,7 +258,7 @@ def test_fts_tag_filter_works_with_index(tmp_path):
     idx.sync_dir("obsidian", vault)
 
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+        shell=ShellBackend(), knowledge_index=idx,
         config=CoConfig(obsidian_vault_path=vault),
     ))
 
@@ -278,7 +278,7 @@ def test_read_note_missing_file_raises_model_retry(tmp_path):
     """read_note raises ModelRetry when the note file does not exist."""
     (tmp_path / "exists.md").write_text("# Exists")
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
     with pytest.raises(ModelRetry, match="not found"):
@@ -288,7 +288,7 @@ def test_read_note_missing_file_raises_model_retry(tmp_path):
 def test_read_note_path_traversal_blocked(tmp_path):
     """read_note blocks path traversal outside the vault."""
     ctx = Context(deps=CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(obsidian_vault_path=tmp_path),
     ))
     with pytest.raises(ModelRetry, match="outside the vault"):

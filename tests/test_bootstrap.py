@@ -15,7 +15,7 @@ from co_cli.config import ModelConfig
 from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, _resolve_reranker, restore_session, sync_knowledge
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, new_session, save_session
-from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools._shell_backend import ShellBackend
@@ -37,9 +37,8 @@ def _make_deps(
         library_dir=library_dir or tmp_path / "library",
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
-    services = CoServices(shell=ShellBackend(), knowledge_index=knowledge_index)
     runtime = CoRuntimeState(safety_state=SafetyState())
-    return CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
+    return CoDeps(shell=ShellBackend(), knowledge_index=knowledge_index, config=config, session=CoSessionState(), runtime=runtime)
 
 
 def _write_memory_file(path: Path, *, mem_id: int, body: str) -> None:
@@ -92,7 +91,7 @@ def test_sync_knowledge_indexes_memory_and_article(tmp_path: Path) -> None:
         deps = _make_deps(tmp_path, knowledge_index=idx, memory_dir=memory_dir, library_dir=library_dir)
         sync_knowledge(deps, TerminalFrontend())
 
-        assert deps.services.knowledge_index is not None, "sync_knowledge must not disable the index on success"
+        assert deps.knowledge_index is not None, "sync_knowledge must not disable the index on success"
 
         mem_results = idx.search("Bootstrap memory content", source="memory", limit=5)
         assert any("001-test-mem.md" in r.path for r in mem_results), \
@@ -121,7 +120,7 @@ def test_sync_knowledge_disables_index_on_failure(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path, knowledge_index=idx, memory_dir=memory_dir)
     sync_knowledge(deps, TerminalFrontend())
 
-    assert deps.services.knowledge_index is None, \
+    assert deps.knowledge_index is None, \
         "sync_knowledge must set knowledge_index=None after sync failure"
 
 
@@ -265,7 +264,7 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
 
-    skill_names = list(deps.services.skill_commands.keys())
+    skill_names = list(deps.skill_commands.keys())
     assert "test-bootstrap-skill" in skill_names, (
         "Project skill must appear in skill_commands after initialize_session_capabilities"
     )
@@ -300,9 +299,8 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
             library_dir=tmp_path / "library",
             mcp_servers={},
         )
-        services = CoServices(shell=ShellBackend(), knowledge_index=None)
         runtime = CoRuntimeState(safety_state=SafetyState())
-        deps = CoDeps(services=services, config=config, session=CoSessionState(), runtime=runtime)
+        deps = CoDeps(shell=ShellBackend(), knowledge_index=None, config=config, session=CoSessionState(), runtime=runtime)
         result = restore_session(deps, TerminalFrontend())
         assert isinstance(result, dict), "restore_session() must return a session dict even when save fails"
         assert deps.session.session_id != "", "session_id must be set in deps even when save fails"

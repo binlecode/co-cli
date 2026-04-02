@@ -11,7 +11,7 @@ from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.display._core import TerminalFrontend
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 
@@ -21,7 +21,7 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).ag
 @pytest.mark.asyncio
 async def test_new_runtime_fields_present() -> None:
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -37,7 +37,7 @@ async def test_new_runtime_fields_present() -> None:
 async def test_capabilities_emits_doctor_progress_updates() -> None:
     statuses: list[str] = []
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
     )
     deps.runtime.tool_progress_callback = statuses.append
@@ -64,7 +64,7 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     """
     frontend = TerminalFrontend()
     tool_id = "cap1"
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     deps.runtime.tool_progress_callback = (
         lambda msg, _tid=tool_id: frontend.on_tool_progress(_tid, msg)
     )

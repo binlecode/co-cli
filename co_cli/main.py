@@ -90,7 +90,7 @@ async def _finalize_turn(
 
     # Signal detection — only on clean (non-interrupted, non-error) turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        signal = await analyze_for_signals(next_history, services=deps.services)
+        signal = await analyze_for_signals(next_history, deps=deps)
         await handle_signal(signal, deps, frontend)
 
     # Touch session and persist
@@ -158,17 +158,17 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
     # Build model registry (pure config — no IO)
     from co_cli._model_factory import ModelRegistry, ResolvedModel
-    deps.services.model_registry = ModelRegistry.from_config(deps.config)
+    deps.model_registry = ModelRegistry.from_config(deps.config)
 
-    agent_result = build_agent(config=deps.config, model_registry=deps.services.model_registry)
+    agent_result = build_agent(config=deps.config, model_registry=deps.model_registry)
     agent = agent_result.agent
-    deps.services.tool_index = agent_result.tool_index
+    deps.tool_index = agent_result.tool_index
 
     _none_resolved = ResolvedModel(model=None, settings=None)
-    if deps.services.model_registry:
-        task_resolved = deps.services.model_registry.get(ROLE_TASK, _none_resolved)
+    if deps.model_registry:
+        task_resolved = deps.model_registry.get(ROLE_TASK, _none_resolved)
         if task_resolved.model:
-            deps.services.task_agent = build_task_agent(config=deps.config, resolved=task_resolved).agent
+            deps.task_agent = build_task_agent(config=deps.config, resolved=task_resolved).agent
 
     stack = AsyncExitStack()
     message_history: list[ModelMessage] = []
@@ -184,7 +184,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
         session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-        completer.words = _build_completer_words(deps.services.skill_commands)
+        completer.words = _build_completer_words(deps.skill_commands)
 
         initialize_knowledge(deps, frontend)
         sync_knowledge(deps, frontend)
@@ -259,7 +259,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                 except Exception:
                     pass
         await stack.aclose()
-        deps.services.shell.cleanup()
+        deps.shell.cleanup()
 
 
 @app.command()

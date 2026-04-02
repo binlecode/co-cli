@@ -43,10 +43,10 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         llm_provider = config.llm_provider
 
     from co_cli.commands._commands import BUILTIN_COMMANDS, get_skill_registry
-    tool_count = len(deps.services.tool_index)
-    skill_count = len(get_skill_registry(deps.services.skill_commands))
+    tool_count = len(deps.tool_index)
+    skill_count = len(get_skill_registry(deps.skill_commands))
     mcp_count = len(deps.config.mcp_servers or {})
-    cmd_count = len(BUILTIN_COMMANDS) + sum(1 for s in deps.services.skill_commands.values() if s.user_invocable)
+    cmd_count = len(BUILTIN_COMMANDS) + sum(1 for s in deps.skill_commands.values() if s.user_invocable)
 
     try:
         git_branch = subprocess.check_output(
@@ -71,7 +71,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     # Knowledge-index degradation: configured for index-backed search but no index available.
     # Reranker-only degradation is already reported by individual status lines before the banner.
     degraded = (
-        deps.services.knowledge_index is None
+        deps.knowledge_index is None
         and deps.config.knowledge_search_backend != "grep"
     )
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"

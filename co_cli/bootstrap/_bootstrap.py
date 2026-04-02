@@ -11,7 +11,7 @@ from co_cli.agent import discover_mcp_tools
 from co_cli.config import settings
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
+from co_cli.deps import CoDeps, CoConfig, CoRuntimeState
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools._shell_backend import ShellBackend
 
@@ -134,10 +134,9 @@ def create_deps() -> CoDeps:
     if error:
         raise ValueError(error)
 
-    # Step 3: construct minimal services shell (no IO)
-    services = CoServices(shell=ShellBackend())
+    # Step 3: construct minimal deps (no IO)
     runtime = CoRuntimeState(safety_state=SafetyState())
-    return CoDeps(services=services, config=config, runtime=runtime)
+    return CoDeps(shell=ShellBackend(), config=config, runtime=runtime)
 
 
 def initialize_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
@@ -149,7 +148,7 @@ def initialize_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
     config, knowledge_index, statuses = resolve_knowledge_backend(deps.config)
     # CoConfig is frozen; CoDeps is not — whole-object replacement
     deps.config = config
-    deps.services.knowledge_index = knowledge_index
+    deps.knowledge_index = knowledge_index
     for status in statuses:
         frontend.on_status(status)
 
@@ -157,11 +156,11 @@ def initialize_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
 def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
     with _TRACER.start_as_current_span("sync_knowledge") as span:
         try:
-            if deps.services.knowledge_index is not None and (
+            if deps.knowledge_index is not None and (
                 deps.config.memory_dir.exists() or deps.config.library_dir.exists()
             ):
-                mem_count = deps.services.knowledge_index.sync_dir("memory", deps.config.memory_dir, kind_filter="memory")
-                art_count = deps.services.knowledge_index.sync_dir("library", deps.config.library_dir, kind_filter="article")
+                mem_count = deps.knowledge_index.sync_dir("memory", deps.config.memory_dir, kind_filter="memory")
+                art_count = deps.knowledge_index.sync_dir("library", deps.config.library_dir, kind_filter="article")
                 count = mem_count + art_count
                 backend = deps.config.knowledge_search_backend
                 span.set_attribute("count", count)
@@ -174,12 +173,12 @@ def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
         except Exception as e:
             span.set_attribute("status", "error")
             span.set_attribute("error", str(e))
-            if deps.services.knowledge_index is not None:
+            if deps.knowledge_index is not None:
                 try:
-                    deps.services.knowledge_index.close()
+                    deps.knowledge_index.close()
                 except Exception:
                     pass
-                deps.services.knowledge_index = None
+                deps.knowledge_index = None
             frontend.on_status(f"  Knowledge sync failed — {e}")
 
 
@@ -232,16 +231,16 @@ async def initialize_session_capabilities(
     # 1. MCP discovery (conditional)
     if deps.config.mcp_servers and mcp_init_ok:
         _, discovery_errors, mcp_index = await discover_mcp_tools(
-            agent, exclude=set(deps.services.tool_index.keys())
+            agent, exclude=set(deps.tool_index.keys())
         )
         for prefix, err in discovery_errors.items():
             frontend.on_status(f"MCP server {prefix!r} failed to list tools: {err} ...")
-        deps.services.tool_index.update(mcp_index)
+        deps.tool_index.update(mcp_index)
 
     # 2. Skill loading
     skill_commands = _load_skills(deps.config.skills_dir, settings=settings, user_skills_dir=deps.config.user_skills_dir)
-    set_skill_commands(skill_commands, deps.services)
+    set_skill_commands(skill_commands, deps)
 
     from co_cli.commands._commands import get_skill_registry
-    return SessionCapabilityResult(skill_count=len(get_skill_registry(deps.services.skill_commands)))
+    return SessionCapabilityResult(skill_count=len(get_skill_registry(deps.skill_commands)))
 

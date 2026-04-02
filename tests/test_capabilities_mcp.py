@@ -6,14 +6,14 @@ path for MCP server checks.
 
 from co_cli.bootstrap._check import check_runtime
 from co_cli.config import MCPServerConfig
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 
 
 def test_check_runtime_mcp_probe_name_matches_config_key() -> None:
     """check_runtime() stores bare config key in mcp_probes, not 'mcp:<name>'."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),
@@ -27,7 +27,7 @@ def test_check_runtime_mcp_probe_name_matches_config_key() -> None:
 def test_check_runtime_binary_probe_passes_when_command_on_path() -> None:
     """Binary on PATH → server reported healthy, no finding."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),

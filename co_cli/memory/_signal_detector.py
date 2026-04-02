@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from co_cli.deps import CoServices, CoDeps
+    from co_cli.deps import CoDeps
     from co_cli.display._core import Frontend
 
 from co_cli._model_factory import ResolvedModel
@@ -94,7 +94,7 @@ _signal_agent: Agent[None, SignalResult] = Agent(
 async def analyze_for_signals(
     messages: list,
     *,
-    services: "CoServices",
+    deps: "CoDeps",
 ) -> SignalResult:
     """Run the signal analyzer on the conversation window.
 
@@ -104,7 +104,7 @@ async def analyze_for_signals(
 
     Args:
         messages: Full message history after run_turn() completes.
-        services: CoServices for registry lookup (ROLE_ANALYSIS model).
+        deps: CoDeps for registry lookup (ROLE_ANALYSIS model).
 
     Returns:
         SignalResult with found/candidate/tag/confidence fields.
@@ -117,8 +117,8 @@ async def analyze_for_signals(
 
     try:
         rm = (
-            services.model_registry.get(ROLE_ANALYSIS, _none_resolved)
-            if services.model_registry else _none_resolved
+            deps.model_registry.get(ROLE_ANALYSIS, _none_resolved)
+            if deps.model_registry else _none_resolved
         )
 
         result = await _signal_agent.run(window, model=rm.model, model_settings=rm.settings)
@@ -145,8 +145,8 @@ async def handle_signal(
         return
     _fallback = ResolvedModel(model=None, settings=None)
     _consolidation_resolved = (
-        deps.services.model_registry.get(ROLE_SUMMARIZATION, _fallback)
-        if deps.services.model_registry else _fallback
+        deps.model_registry.get(ROLE_SUMMARIZATION, _fallback)
+        if deps.model_registry else _fallback
     )
     tags = [signal.tag] + (["personality-context"] if signal.inject else [])
     if signal.confidence == "high":

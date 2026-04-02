@@ -21,7 +21,7 @@ from co_cli.commands._commands import CommandContext, LocalOnly, ReplaceTranscri
 from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.context._history import truncate_history_window
 from co_cli.context._types import CompactionResult
-from co_cli.deps import CoDeps, CoConfig, CoServices, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
@@ -34,7 +34,7 @@ _AGENT = build_agent(config=_CONFIG).agent
 def _make_processor_ctx(max_history_messages: int = 6) -> RunContext:
     """Real RunContext for history processor tests (no LLM call)."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(max_history_messages=max_history_messages),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -43,7 +43,7 @@ def _make_processor_ctx(max_history_messages: int = 6) -> RunContext:
 def _make_compact_ctx(message_history: list | None = None) -> CommandContext:
     """Real CommandContext with model registry for /compact dispatch tests."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
+        shell=ShellBackend(), model_registry=_REGISTRY,
         config=_CONFIG,
         session=CoSessionState(session_id="test-history"),
     )

@@ -375,11 +375,11 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_knowledge(deps.services.knowledge_index, deps.config.knowledge_search_backend)
+    knowledge_result = _check_knowledge(deps.knowledge_index, deps.config.knowledge_search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands._commands import get_skill_registry
-    skills_result = _check_skills(get_skill_registry(deps.services.skill_commands))
+    skills_result = _check_skills(get_skill_registry(deps.skill_commands))
 
     # Probe each configured MCP server via binary PATH/URL check
     mcp_probes: list[tuple[str, CheckResult]] = []
@@ -423,7 +423,7 @@ def check_runtime(
     }
 
     # Build source breakdown from tool_index
-    tool_index = deps.services.tool_index
+    tool_index = deps.tool_index
     source_counts: dict[str, int] = {}
     for tc in tool_index.values():
         source_counts[tc.source] = source_counts.get(tc.source, 0) + 1
@@ -435,7 +435,7 @@ def check_runtime(
         "tool_names": list(tool_index.keys()),
         "tool_approvals": {name: tc.approval for name, tc in tool_index.items()},
         "tool_count": len(tool_index),
-        "skill_count": len(get_skill_registry(deps.services.skill_commands)),
+        "skill_count": len(get_skill_registry(deps.skill_commands)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge_search_backend,
         "source_counts": source_counts,

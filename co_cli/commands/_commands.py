@@ -20,7 +20,7 @@ from co_cli.commands._skill_types import SkillConfig
 from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoServices
+from co_cli.deps import ApprovalKindEnum, CoDeps
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +73,9 @@ class SlashCommand:
     handler: Callable[[CommandContext, str], Awaitable[list[Any] | ReplaceTranscript | None]]
 
 
-def set_skill_commands(new_skills: dict[str, SkillConfig], services: CoServices) -> None:
-    """Replace services.skill_commands with the new skill set."""
-    services.skill_commands = new_skills
+def set_skill_commands(new_skills: dict[str, SkillConfig], deps: CoDeps) -> None:
+    """Replace deps.skill_commands with the new skill set."""
+    deps.skill_commands = new_skills
 
 
 def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:
@@ -136,7 +136,7 @@ def _refresh_completer(ctx: CommandContext) -> None:
     """Refresh the REPL completer words after a skill_commands mutation."""
     if ctx.completer is None:
         return
-    ctx.completer.words = _build_completer_words(ctx.deps.services.skill_commands)
+    ctx.completer.words = _build_completer_words(ctx.deps.skill_commands)
 
 
 
@@ -178,8 +178,8 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
     table.add_column("Description")
     for cmd in BUILTIN_COMMANDS.values():
         table.add_row(f"/{cmd.name}", cmd.description)
-    if ctx.deps.services.skill_commands:
-        for skill in ctx.deps.services.skill_commands.values():
+    if ctx.deps.skill_commands:
+        for skill in ctx.deps.skill_commands.values():
             if skill.user_invocable:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
@@ -226,7 +226,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
 
     from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 
-    info = get_status(ctx.deps.config, tool_count=len(ctx.deps.services.tool_index))
+    info = get_status(ctx.deps.config, tool_count=len(ctx.deps.tool_index))
     console.print(render_status_table(info))
     findings = check_security()
     render_security_findings(findings)
@@ -235,7 +235,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_tools(ctx: CommandContext, args: str) -> None:
     """List registered agent tools."""
-    tools = sorted(ctx.deps.services.tool_index.keys())
+    tools = sorted(ctx.deps.tool_index.keys())
     lines = [f"  [accent]{i + 1}.[/accent] {name}" for i, name in enumerate(tools)]
     console.print(f"[info]Registered tools ({len(tools)}):[/info]")
     console.print("\n".join(lines))
@@ -304,8 +304,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     console.print("[dim]Compacting conversation...[/dim]")
     _none = ResolvedModel(model=None, settings=None)
     resolved = (
-        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _none)
-        if ctx.deps.services.model_registry else _none
+        ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
+        if ctx.deps.model_registry else _none
     )
     summary = await _run_summarization_with_policy(
         ctx.message_history, resolved,
@@ -363,8 +363,8 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     # Delete file
     file_to_delete = matching_files[0]
     file_to_delete.unlink()
-    if ctx.deps.services.knowledge_index is not None:
-        ctx.deps.services.knowledge_index.remove("memory", str(file_to_delete))
+    if ctx.deps.knowledge_index is not None:
+        ctx.deps.knowledge_index.remove("memory", str(file_to_delete))
     console.print(f"[success]✓ Deleted memory {memory_id}: {file_to_delete.name}[/success]")
     return None
 
@@ -382,8 +382,8 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
 
     _none = ResolvedModel(model=None, settings=None)
     resolved = (
-        ctx.deps.services.model_registry.get(ROLE_SUMMARIZATION, _none)
-        if ctx.deps.services.model_registry else _none
+        ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
+        if ctx.deps.model_registry else _none
     )
     summary = await _index_session_summary(
         ctx.message_history,
@@ -420,7 +420,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
     subargs = sub[1] if len(sub) > 1 else ""
 
     if subcmd in ("", "list"):
-        if not ctx.deps.services.skill_commands:
+        if not ctx.deps.skill_commands:
             console.print("[dim]No skills loaded.[/dim]")
             return None
         table = Table(title="Loaded Skills", border_style="accent", expand=False)
@@ -428,7 +428,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         table.add_column("Description")
         table.add_column("Requires")
         table.add_column("User-Invocable")
-        for skill in ctx.deps.services.skill_commands.values():
+        for skill in ctx.deps.skill_commands.values():
             req_keys = ", ".join(skill.requires.keys()) if skill.requires else ""
             table.add_row(
                 skill.name,
@@ -464,7 +464,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
         for path in all_paths:
             name = path.stem
-            if name in ctx.deps.services.skill_commands:
+            if name in ctx.deps.skill_commands:
                 table.add_row(path.name, "[success]✓ Loaded[/success]", "")
             else:
                 try:
@@ -498,8 +498,8 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                         console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
                 except Exception:
                     pass
-        old_names = set(ctx.deps.services.skill_commands.keys())
-        set_skill_commands(new_skills, ctx.deps.services)
+        old_names = set(ctx.deps.skill_commands.keys())
+        set_skill_commands(new_skills, ctx.deps)
         _refresh_completer(ctx)
         added = set(new_skills.keys()) - old_names
         removed = old_names - set(new_skills.keys())
@@ -515,7 +515,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                 console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
         if not added and not removed:
             console.print("[dim]No skill changes.[/dim]")
-        console.print(f"[success]✓ Reloaded {len(ctx.deps.services.skill_commands)} skill(s)[/success]")
+        console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_commands)} skill(s)[/success]")
 
     elif subcmd == "upgrade":
         await _upgrade_skill(ctx, subargs)
@@ -591,7 +591,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
 
     # Reload in-session: package-default + user-global + updated project dir
     new_skills = _load_skills(ctx.deps.config.skills_dir, _settings, user_skills_dir=ctx.deps.config.user_skills_dir)
-    set_skill_commands(new_skills, ctx.deps.services)
+    set_skill_commands(new_skills, ctx.deps)
     _refresh_completer(ctx)
 
     console.print(f"[success]✓ Installed skill: {filename.removesuffix('.md')}[/success]")
@@ -603,7 +603,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if not name:
         console.print("[bold red]Usage:[/bold red] /skills upgrade <name>")
         return
-    if name not in ctx.deps.services.skill_commands:
+    if name not in ctx.deps.skill_commands:
         console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
         return
     skill_file = ctx.deps.config.skills_dir / f"{name}.md"
@@ -990,7 +990,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
         return LocalOnly()
 
     # Check skill registry after built-in commands (skills cannot shadow builtins)
-    skill = ctx.deps.services.skill_commands.get(name)
+    skill = ctx.deps.skill_commands.get(name)
     if skill is not None:
         body = skill.body
         if args and "$ARGUMENTS" in body:

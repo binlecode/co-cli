@@ -98,23 +98,6 @@ class SessionApprovalRule:
     value: str
 
 
-@dataclass
-class CoServices:
-    """Injected service handles and bootstrap-set registries — shared across the session.
-
-    Created once in main.py and shared by reference with sub-agents.
-    Service handles (shell, knowledge_index) are stateless or thread-safe.
-    Registries (tool_index, skill_commands, model_registry) are set during
-    bootstrap and read-only afterward.
-    """
-
-    shell: ShellBackend
-    knowledge_index: Any | None = field(default=None, repr=False)
-    model_registry: "ModelRegistry | None" = field(default=None, repr=False)
-    task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
-    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
-    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
-
 
 @dataclass(frozen=True)
 class CoConfig:
@@ -387,20 +370,28 @@ class CoRuntimeState:
 
 @dataclass
 class CoDeps:
-    """Runtime dependencies for agent tools — grouped by responsibility.
+    """Runtime dependencies for agent tools.
 
-    Ownership rules:
-      services  = service handles + bootstrap-set registries; shared by reference
-      config    = read-only settings (API keys, paths, limits, thresholds)
-      session   = mutable tool-visible session state (creds, approvals, todos)
-      runtime   = mutable orchestration/processor transient state
+    Top-level fields: service handles and bootstrap-set registries (shell,
+    knowledge_index, model_registry, tool_index, skill_commands), plus three
+    grouped sub-objects for config, session state, and runtime state.
 
     pydantic-ai receives this as the single deps_type. Tools access fields via
-    ctx.deps.services.shell, ctx.deps.config.memory_dir, etc.
+    ctx.deps.shell, ctx.deps.config.memory_dir, etc.
     """
 
-    services: CoServices
+    # Service handles
+    shell: ShellBackend
+    # Config (read-only after bootstrap)
     config: CoConfig
+    # Service handles (optional, set during bootstrap)
+    knowledge_index: Any | None = field(default=None, repr=False)
+    model_registry: "ModelRegistry | None" = field(default=None, repr=False)
+    task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
+    # Bootstrap-set registries
+    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
+    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
+    # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
@@ -408,9 +399,9 @@ class CoDeps:
 def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     """Create an isolated CoDeps copy for a sub-agent.
 
-    Shares services and config by reference (safe — handles are stateless or
-    thread-safe; registries on services are read-only after bootstrap; config
-    is frozen).
+    Shares handles, registries, and config by reference (safe — handles are
+    stateless or thread-safe; registries are read-only after bootstrap;
+    config is frozen).
 
     Session fields:
       Inherited: google_creds, google_creds_resolved (resolved once, safe to share),
@@ -425,8 +416,13 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
         session_approval_rules=list(base.session.session_approval_rules),
     )
     return CoDeps(
-        services=base.services,
+        shell=base.shell,
         config=base.config,
+        knowledge_index=base.knowledge_index,
+        model_registry=base.model_registry,
+        task_agent=base.task_agent,
+        tool_index=base.tool_index,
+        skill_commands=base.skill_commands,
         session=inherited_session,
         runtime=CoRuntimeState(),
     )

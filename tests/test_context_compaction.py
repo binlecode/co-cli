@@ -19,7 +19,7 @@ from co_cli.context._history import (
     _latest_response_input_tokens,
     truncate_history_window,
 )
-from co_cli.deps import CoDeps, CoConfig, CoServices
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 
 _CONFIG = CoConfig.from_settings(settings, cwd=__import__("pathlib").Path.cwd())
@@ -28,7 +28,7 @@ _AGENT = build_agent(config=_CONFIG).agent
 
 def _make_ctx(config: CoConfig) -> RunContext:
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=config,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

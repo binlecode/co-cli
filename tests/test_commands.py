@@ -15,7 +15,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 from co_cli.agent import build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoServices, CoConfig, CoSessionState, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools._tool_approvals import (
     is_auto_approved,
@@ -57,11 +57,9 @@ def _make_ctx(
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            model_registry=_REGISTRY,
-            tool_index=dict(_AGENT.tool_index),
-        ),
+        shell=ShellBackend(),
+        model_registry=_REGISTRY,
+        tool_index=dict(_AGENT.tool_index),
         config=config,
         session=CoSessionState(session_id="test-commands"),
     )
@@ -140,12 +138,10 @@ async def test_approval_approve():
     deferred tool → auto-approve → execution → LLM response.
     """
     deps = CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            model_registry=_REGISTRY,
-            task_agent=_AGENT.agent,
-            tool_index=dict(_AGENT.tool_index),
-        ),
+        shell=ShellBackend(),
+        model_registry=_REGISTRY,
+        task_agent=_AGENT.agent,
+        tool_index=dict(_AGENT.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
@@ -170,7 +166,7 @@ async def test_approval_approve():
         assert isinstance(turn.output, str)
         assert len(turn.messages) > 0
     finally:
-        deps.services.shell.cleanup()
+        deps.shell.cleanup()
 
 
 @pytest.mark.asyncio
@@ -181,12 +177,10 @@ async def test_approval_deny():
     deferred tool → deny → LLM acknowledgement response.
     """
     deps = CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            model_registry=_REGISTRY,
-            task_agent=_AGENT.agent,
-            tool_index=dict(_AGENT.tool_index),
-        ),
+        shell=ShellBackend(),
+        model_registry=_REGISTRY,
+        task_agent=_AGENT.agent,
+        tool_index=dict(_AGENT.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
     )
@@ -202,7 +196,7 @@ async def test_approval_deny():
             )
         assert isinstance(turn.output, str)
     finally:
-        deps.services.shell.cleanup()
+        deps.shell.cleanup()
 
 
 # --- /new session checkpoint ---
@@ -233,7 +227,7 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
-            services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+            shell=ShellBackend(), knowledge_index=idx,
             config=CoConfig(memory_dir=memory_dir),
             session=CoSessionState(session_id="test-forget-fts"),
         ),
@@ -278,7 +272,7 @@ async def test_dispatch_skill_returns_delegate_to_agent():
     """Skill dispatch must return DelegateToAgent."""
     test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
     ctx = _make_ctx()
-    ctx.deps.services.skill_commands["test-boundary-skill"] = test_skill
+    ctx.deps.skill_commands["test-boundary-skill"] = test_skill
     result = await dispatch("/test-boundary-skill", ctx)
     assert isinstance(result, DelegateToAgent)
     assert result.delegated_input == "Do the thing."
@@ -298,7 +292,7 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     # 'clear' is a builtin — registering a skill with the same name must not shadow it
     test_skill = SkillConfig(name="clear", body="skill body", description="test")
     ctx = _make_ctx(message_history=["msg"])
-    ctx.deps.services.skill_commands["clear"] = test_skill
+    ctx.deps.skill_commands["clear"] = test_skill
     result = await dispatch("/clear", ctx)
     # Must route to builtin: ReplaceTranscript with cleared history
     assert isinstance(result, ReplaceTranscript)
@@ -343,7 +337,7 @@ def test_resolve_approval_subject_generic_tool_fallback():
 def test_is_auto_approved_false_before_remember():
     """Subject is not auto-approved when no session rule has been stored."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id="test-autoapprove"),
     )
@@ -354,7 +348,7 @@ def test_is_auto_approved_false_before_remember():
 def test_remember_tool_approval_stores_rule_and_auto_approves():
     """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id="test-remember"),
     )
@@ -367,7 +361,7 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
 def test_remember_tool_approval_is_idempotent():
     """Calling remember_tool_approval twice does not duplicate the session rule."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id="test-idem"),
     )
@@ -381,7 +375,7 @@ def test_remember_tool_approval_is_idempotent():
 def test_record_approval_choice_with_remember_stores_rule():
     """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id="test-record"),
     )
@@ -402,7 +396,7 @@ def test_record_approval_choice_with_remember_stores_rule():
 def test_record_approval_choice_deny_does_not_store_rule():
     """Denied approvals must not persist a session rule."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id="test-deny-record"),
     )
@@ -480,7 +474,7 @@ def test_cleanup_skill_restores_set_env_var():
     os.environ[key] = original
     try:
         os.environ[key] = "skill-injected-value"
-        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+        deps = CoDeps(shell=ShellBackend(), config=CoConfig())
         _cleanup_skill_run_state({key: original}, deps)
         assert os.environ[key] == original
     finally:
@@ -494,7 +488,7 @@ def test_cleanup_skill_removes_absent_env_var():
     os.environ.pop(key, None)
     os.environ[key] = "skill-injected-value"
     try:
-        deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+        deps = CoDeps(shell=ShellBackend(), config=CoConfig())
         _cleanup_skill_run_state({key: None}, deps)
         assert key not in os.environ
     finally:
@@ -503,7 +497,7 @@ def test_cleanup_skill_removes_absent_env_var():
 
 def test_cleanup_skill_clears_active_skill_name():
     """active_skill_name is cleared to None after cleanup."""
-    deps = CoDeps(services=CoServices(shell=ShellBackend()), config=CoConfig())
+    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     deps.runtime.active_skill_name = "my-skill"
     _cleanup_skill_run_state({}, deps)
     assert deps.runtime.active_skill_name is None

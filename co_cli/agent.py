@@ -198,7 +198,7 @@ def _build_filtered_toolset(
         _reg(create_gmail_draft, approval=True, should_defer=True, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
-        entry = ctx.deps.services.tool_index.get(tool_def.name)
+        entry = ctx.deps.tool_index.get(tool_def.name)
         resume = ctx.deps.runtime.resume_tool_names
 
         if resume is not None:
@@ -318,7 +318,7 @@ def build_agent(
         """Inject deferred-tool awareness so the model knows to call search_tools."""
         from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
         prompt = build_deferred_tool_prompt(
-            ctx.deps.services.tool_index,
+            ctx.deps.tool_index,
             ctx.deps.session.discovered_tools,
         )
         return prompt or ""

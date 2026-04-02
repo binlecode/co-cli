@@ -109,7 +109,7 @@ async def _run_dispatch(
     messages = [ModelRequest(parts=[UserPromptPart(content=user_message)])]
     files_before = set(memory_dir.glob("*.md"))
 
-    signal = await analyze_for_signals(messages, services=deps.services)
+    signal = await analyze_for_signals(messages, deps=deps)
     if signal.found and signal.candidate and signal.tag:
         if signal.confidence == "high":
             await _save_memory_impl(deps, signal.candidate, [signal.tag], None)

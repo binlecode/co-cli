@@ -13,7 +13,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import (
     recall_memory,
@@ -44,7 +44,7 @@ def _make_ctx(
         from dataclasses import replace
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=knowledge_index),
+        shell=ShellBackend(), knowledge_index=knowledge_index,
         config=config,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -508,7 +508,7 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
 
     config = dc_replace(CoConfig(), memory_dir=memory_dir)
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), knowledge_index=None),
+        shell=ShellBackend(), knowledge_index=None,
         config=config,
     )
 
@@ -576,7 +576,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=None)
         fts_know_ctx = RunContext(
             deps=CoDeps(
-                services=CoServices(shell=ShellBackend(), knowledge_index=idx),
+                shell=ShellBackend(), knowledge_index=idx,
                 config=replace(CoConfig(), library_dir=library_dir, knowledge_search_backend="fts5"),
             ),
             model=_AGENT.model,
@@ -584,7 +584,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         )
         grep_know_ctx = RunContext(
             deps=CoDeps(
-                services=CoServices(shell=ShellBackend(), knowledge_index=None),
+                shell=ShellBackend(), knowledge_index=None,
                 config=replace(CoConfig(), library_dir=library_dir),
             ),
             model=_AGENT.model,

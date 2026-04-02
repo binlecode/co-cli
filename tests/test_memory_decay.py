@@ -13,7 +13,7 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
 
@@ -50,7 +50,7 @@ def _seed_memory(
 
 def _make_ctx(memory_dir: Path, max_count: int = 10) -> RunContext:
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(
             
             memory_max_count=max_count,

@@ -554,8 +554,8 @@ async def precompute_compaction(
 
     _none_resolved = ResolvedModel(model=None, settings=None)
     resolved = (
-        deps.services.model_registry.get(ROLE_SUMMARIZATION, _none_resolved)
-        if deps.services.model_registry else _none_resolved
+        deps.model_registry.get(ROLE_SUMMARIZATION, _none_resolved)
+        if deps.model_registry else _none_resolved
     )
     summary_text = await _run_summarization_with_policy(
         dropped, resolved,

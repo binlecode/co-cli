@@ -34,7 +34,7 @@ class ResolvedModel:
 class ModelRegistry:
     """Session-scoped registry of pre-built ResolvedModel objects keyed by role.
 
-    Built once from config at session start, stored in CoServices, and provides
+    Built once from config at session start, stored in and provides
     a pre-built ResolvedModel for any in-session component by role lookup.
     One model per role.
     """

@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig, CoServices
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.tool_search import search_tools
 
@@ -20,10 +20,8 @@ _AGENT = _AGENT_RESULT.agent
 def _make_deps() -> CoDeps:
     """Build real CoDeps with tool_index populated from build_agent()."""
     return CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            tool_index=dict(_AGENT_RESULT.tool_index),
-        ),
+        shell=ShellBackend(),
+        tool_index=dict(_AGENT_RESULT.tool_index),
         config=_CONFIG,
     )
 

@@ -1,4 +1,3 @@
-import pathlib
 #!/usr/bin/env python3
 """Eval: signal-analyzer — verify analyze_for_signals classification accuracy.
 
@@ -24,6 +23,7 @@ Usage:
 """
 
 import asyncio
+import pathlib
 import sys
 import time
 from dataclasses import dataclass
@@ -31,7 +31,7 @@ from typing import Any
 
 from co_cli.memory._signal_detector import SignalResult, analyze_for_signals  # noqa: E402
 from co_cli.config import settings  # noqa: E402
-from co_cli.deps import CoConfig  # noqa: E402
+from co_cli.deps import CoDeps, CoConfig  # noqa: E402
 
 from evals._fixtures import single_user_turn  # noqa: E402
 
@@ -146,9 +146,9 @@ CASES: list[SignalCase] = [
 # ---------------------------------------------------------------------------
 
 
-async def run_case(case: SignalCase, services: Any) -> dict[str, Any]:
+async def run_case(case: SignalCase, deps: CoDeps) -> dict[str, Any]:
     messages = single_user_turn(case.user_message)
-    result: SignalResult = await analyze_for_signals(messages, services=services)
+    result: SignalResult = await analyze_for_signals(messages, deps=deps)
     return {
         "found": result.found,
         "confidence": result.confidence,
@@ -169,11 +169,14 @@ async def main() -> int:
     print()
 
     from co_cli._model_factory import ModelRegistry
-    from co_cli.deps import CoServices
     from co_cli.tools._shell_backend import ShellBackend
 
     config = CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())
-    services = CoServices(shell=ShellBackend(), model_registry=ModelRegistry.from_config(config))
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model_registry=ModelRegistry.from_config(config),
+        config=config,
+    )
 
     t0 = time.monotonic()
     passed_count = 0
@@ -184,7 +187,7 @@ async def main() -> int:
         print(f'    Prompt: "{case.user_message[:65]}"', end=" ", flush=True)
 
         try:
-            scores = await run_case(case, services)
+            scores = await run_case(case, deps)
         except Exception as exc:
             print(f"ERROR ({exc})")
             continue

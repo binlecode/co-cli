@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import settings, get_settings
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 
 
@@ -66,11 +66,9 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     config_defaults.update(overrides)
 
     return CoDeps(
-        services=CoServices(
-            shell=shell,
-            knowledge_index=knowledge_index,
-            model_registry=model_registry,
-        ),
+        shell=shell,
+        knowledge_index=knowledge_index,
+        model_registry=model_registry,
         config=CoConfig(**config_defaults),
         session=CoSessionState(session_id=session_id_override),
     )

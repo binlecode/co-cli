@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.todo import write_todos, read_todos
 
@@ -17,7 +17,7 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).ag
 
 def _make_ctx(session_id: str = "test-todo") -> RunContext:
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
         session=CoSessionState(session_id=session_id),
     )

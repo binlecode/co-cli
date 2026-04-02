@@ -294,9 +294,9 @@ async def _execute_stream_segment(
 
 def _resolve_task_model_settings(deps: CoDeps) -> dict | None:
     """Return ROLE_TASK model_settings from the registry, or None if not configured."""
-    if not deps.services.model_registry:
+    if not deps.model_registry:
         return None
-    resolved = deps.services.model_registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+    resolved = deps.model_registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
     return resolved.settings
 
 
@@ -325,7 +325,7 @@ async def _run_approval_loop(
         turn_state.current_input = None
         turn_state.current_history = turn_state.latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
-        resume_agent = deps.services.task_agent or agent
+        resume_agent = deps.task_agent or agent
         resume_settings = _resolve_task_model_settings(deps) or model_settings
         await _execute_stream_segment(
             turn_state, resume_agent, deps, resume_settings, reasoning_display, frontend

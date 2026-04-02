@@ -17,7 +17,7 @@ from co_cli.commands._commands import (
     dispatch,
 )
 from co_cli.config import settings
-from co_cli.deps import CoConfig, CoDeps, CoServices, CoSessionState
+from co_cli.deps import CoConfig, CoDeps, CoSessionState
 from co_cli.display._core import console
 from co_cli.tools._shell_backend import ShellBackend
 
@@ -37,7 +37,7 @@ def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir
     )
     agent_result = build_agent(config=config)
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=config,
         session=CoSessionState(session_id="test-skills"),
     )
@@ -79,7 +79,7 @@ async def test_skills_reload_updates_registry_and_completer(tmp_path: Path):
     result = await dispatch("/skills reload", ctx)
 
     assert isinstance(result, LocalOnly)
-    assert "reload-completer-skill" in ctx.deps.services.skill_commands
+    assert "reload-completer-skill" in ctx.deps.skill_commands
     assert "/reload-completer-skill" in ctx.completer.words
 
 
@@ -117,7 +117,7 @@ async def test_skills_install_local_registers_skill(tmp_path: Path):
 
     assert isinstance(result, LocalOnly)
     assert (skills_dir / "myinstallskill.md").exists()
-    assert "myinstallskill" in ctx.deps.services.skill_commands
+    assert "myinstallskill" in ctx.deps.skill_commands
 
 
 @pytest.mark.asyncio

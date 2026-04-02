@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig
+from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.files import (
     list_directory,
@@ -25,7 +25,7 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).ag
 def _make_ctx(workspace: Path) -> RunContext:
     """Return a real RunContext scoped to a workspace directory."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(workspace_root=workspace),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

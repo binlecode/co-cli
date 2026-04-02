@@ -3,14 +3,14 @@
 from pathlib import Path
 
 from co_cli.config import settings
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoServices, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools._tool_approvals import is_auto_approved, resolve_approval_subject
 
 
 def _make_deps() -> CoDeps:
     return CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig.from_settings(settings, cwd=Path.cwd()),
     )
 

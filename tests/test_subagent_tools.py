@@ -11,7 +11,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
+from co_cli.deps import CoDeps, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
 
@@ -22,7 +22,7 @@ _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).ag
 def _make_ctx() -> RunContext:
     """Return a real RunContext with no model_registry — triggers unavailable guard."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=None),
+        shell=ShellBackend(), model_registry=None,
         config=CoConfig(),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -45,10 +45,8 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     skill = SkillConfig(name="my-skill", body="do it")
     base = CoDeps(
-        services=CoServices(
-            shell=ShellBackend(),
-            skill_commands={"my-skill": skill},
-        ),
+        shell=ShellBackend(),
+        skill_commands={"my-skill": skill},
         config=CoConfig(
             brave_search_api_key="test-key",
             memory_max_count=500,
@@ -67,8 +65,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     isolated = make_subagent_deps(base)
 
-    # services shared by reference (registries + handles)
-    assert isolated.services is base.services
+    # service handles shared by reference
+    assert isolated.shell is base.shell
+    assert isolated.skill_commands is base.skill_commands
 
     # Session: inherited fields carry over
     assert isolated.session.google_creds_resolved is True
@@ -93,8 +92,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
     assert isolated.config.brave_search_api_key == "test-key"
     assert isolated.config.memory_max_count == 500
 
-    # Services shared (same object)
-    assert isolated.services is base.services
+    # Service handles shared (same objects)
+    assert isolated.shell is base.shell
+    assert isolated.model_registry is base.model_registry
 
 
 @pytest.mark.asyncio
@@ -149,7 +149,7 @@ async def test_run_reasoning_subagent_no_model() -> None:
 def test_merge_turn_usage_alias_then_accumulate() -> None:
     """_merge_turn_usage aliases on first call (None) and accumulates on second call."""
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        shell=ShellBackend(),
         config=CoConfig(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
