@@ -1,6 +1,6 @@
 # Co CLI — System Bootstrap Design
 
-Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model dependency check, skills load, agent creation, MCP init, and the three inline wakeup steps (knowledge sync, session restore, skills report). Skill file format, load gates, and dispatch semantics live in [DESIGN-skills.md](DESIGN-skills.md).
+Canonical startup flow for co-cli. This doc is the sole owner for startup and wakeup behavior, covering the full sequence from settings loading through `display_welcome_banner()`: settings loading, deps initialization (`create_deps()`), model registry and agent creation, MCP init, session capabilities (MCP discovery + skill load), and four inline wakeup steps (knowledge resolution, knowledge sync, session restore, skills report). Skill file format, load gates, and dispatch semantics live in [DESIGN-skills.md](DESIGN-skills.md).
 
 Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/_check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
 
@@ -26,19 +26,24 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ CoConfig.from_settings(settings, cwd=Path.cwd())
 │  ├─ config.validate() → error: raise ValueError (no IO — config shape only)
 │  ├─ CoServices(shell=ShellBackend())
-│  └─ → CoDeps
+│  ├─ CoRuntimeState(safety_state=SafetyState())
+│  └─ → CoDeps(services, config, runtime)
 │
 ├─ ModelRegistry.from_config(deps.config) → deps.services.model_registry
 ├─ resolved = model_registry.get(ROLE_REASONING, fallback)
 ├─ primary_model = resolved.model
 │
-├─ build_agent(config, resolved)
+├─ build_agent(config=deps.config, resolved=resolved)
 │  ├─ build_static_instructions(provider, model_name, config)
 │  ├─ _build_mcp_toolsets(config) → mcp_toolsets
 │  ├─ _build_filtered_toolset(config) → (filtered_toolset, native_index)
-│  ├─ Agent(resolved.model, instructions=static_instructions,
+│  ├─ Agent(resolved.model, deps_type=CoDeps,
+│  │        instructions=static_instructions,
+│  │        model_settings=resolved.settings,
+│  │        output_type=[str, DeferredToolRequests],
 │  │        toolsets=[filtered_toolset] + mcp_toolsets,
-│  │        history_processors=[...])
+│  │        history_processors=[truncate_tool_returns, detect_safety_issues,
+│  │                            inject_opening_context, truncate_history_window])
 │  ├─ @agent.instructions: date, shell, project, memories, personality, deferred_tool_prompt
 │  └─ → AgentCapabilityResult(agent, tool_index)
 │
@@ -49,8 +54,14 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      on fail → warning, continue without MCP
 │
 ├─ initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-│      [if mcp] discover_mcp_tools() → deps.capabilities.tool_index updated
-│      _load_skills() → deps.capabilities.skill_commands + skill_registry
+│      [if mcp_servers and mcp_init_ok]
+│          discover_mcp_tools(agent, exclude=existing_tools) → (_, errors, mcp_index)
+│          deps.capabilities.mcp_discovery_errors = errors
+│          frontend.on_status(...) for each discovery error
+│          deps.capabilities.tool_index.update(mcp_index)
+│      _load_skills(skills_dir, settings, user_skills_dir) → skill_commands
+│      set_skill_commands(skill_commands, deps.capabilities)
+│      → SessionCapabilityResult(skill_count)
 ├─ completer.words updated with skills
 │
 ├─ initialize_knowledge(deps, frontend)
@@ -66,6 +77,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │
 ├─ restore_session(deps, frontend)
 │      fresh → restore session_id; stale → new session
+│
+├─ frontend.on_status("{session_cap.skill_count} skill(s) loaded")
 │
 ├─ display_welcome_banner(deps)
 ▼
@@ -260,11 +273,15 @@ Skills load inside `initialize_session_capabilities()` (called inside `async wit
 
 ```text
 initialize_session_capabilities(agent, deps, frontend, mcp_init_ok):
-    [if mcp_servers and mcp_init_ok] discover_mcp_tools() → returns 3-tuple (mcp_tool_names, errors, mcp_index)
-        deps.capabilities.tool_index updated with MCP ToolConfig entries (should_defer=True by default)
-    skill_commands = _load_skills(deps.config.skills_dir, settings)
-        pass 1: scan co_cli/skills/*.md
-        pass 2: scan deps.config.skills_dir/*.md
+    [if mcp_servers and mcp_init_ok]
+        discover_mcp_tools(agent, exclude=existing_tools) → (_, errors, mcp_index)
+        deps.capabilities.mcp_discovery_errors = errors
+        frontend.on_status(...) for each discovery error
+        deps.capabilities.tool_index.update(mcp_index)
+    skill_commands = _load_skills(deps.config.skills_dir, settings, user_skills_dir=deps.config.user_skills_dir)
+        pass 1: co_cli/skills/*.md (built-in, lowest precedence)
+        pass 2: user_skills_dir/*.md (user-global)
+        pass 3: skills_dir/*.md (project-local, highest precedence)
         parse frontmatter, check requires, scan for security issues
     set_skill_commands(skill_commands, deps.capabilities)   ← capabilities.skill_commands + skill_registry
     return SessionCapabilityResult(skill_count=len(deps.capabilities.skill_registry))
