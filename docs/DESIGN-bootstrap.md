@@ -25,13 +25,12 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ create_deps()                          # pure config — zero IO
 │  ├─ CoConfig.from_settings(settings, cwd=Path.cwd())
 │  ├─ config.validate() → error: raise ValueError (no IO — config shape only)
-│  ├─ CoServices(shell=ShellBackend())
-│  ├─ CoRuntimeState(safety_state=SafetyState())
-│  └─ → CoDeps(services, config, runtime)
+│  └─ → CoDeps(shell=ShellBackend(), config=config,
+│              runtime=CoRuntimeState(safety_state=SafetyState()))
 │
-├─ ModelRegistry.from_config(deps.config) → deps.services.model_registry
+├─ ModelRegistry.from_config(deps.config) → deps.model_registry
 │
-├─ build_agent(config=deps.config, model_registry=deps.services.model_registry)
+├─ build_agent(config=deps.config, model_registry=deps.model_registry)
 │  ├─ resolved = model_registry.get(ROLE_REASONING, fallback)
 │  ├─ build_static_instructions(provider, model_name, config)
 │  ├─ _build_mcp_toolsets(config) → mcp_toolsets
@@ -46,8 +45,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ @agent.instructions: date, shell, project, memories, personality, deferred_tool_prompt
 │  └─ → AgentCapabilityResult(agent, tool_index)
 │
-├─ deps.services.tool_index = agent_result.tool_index
-├─ [if ROLE_TASK] build_task_agent(config, resolved=task_resolved) → deps.services.task_agent
+├─ deps.tool_index = agent_result.tool_index
+├─ [if ROLE_TASK] build_task_agent(config, resolved=task_resolved) → deps.task_agents[ROLE_TASK]
 │
 ├─ AsyncExitStack.enter_async_context(agent)
 │      on fail → warning, continue without MCP
@@ -56,9 +55,9 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      [if mcp_servers and mcp_init_ok]
 │          discover_mcp_tools(agent, exclude=existing_tools) → (_, errors, mcp_index)
 │          frontend.on_status(...) for each discovery error
-│          deps.services.tool_index.update(mcp_index)
+│          deps.tool_index.update(mcp_index)
 │      _load_skills(skills_dir, settings, user_skills_dir) → skill_commands
-│      set_skill_commands(skill_commands, deps.services)
+│      set_skill_commands(skill_commands, deps)
 │      → SessionCapabilityResult(skill_count)
 ├─ completer.words updated with skills
 │
@@ -66,7 +65,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │      resolve_knowledge_backend(config)
 │      grep → skip reranker, no index
 │      otherwise → _resolve_reranker() → try hybrid → fts5 → grep
-│      updates deps.config + deps.services.knowledge_index
+│      updates deps.config + deps.knowledge_index
 │      reports degradation statuses via frontend.on_status()
 │
 ├─ sync_knowledge(deps, frontend)
@@ -117,14 +116,14 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) is pure config — zero IO. It converts the `Settings` singleton into `CoConfig`, constructs a minimal `CoServices` shell, and assembles `CoDeps`. It calls `config.validate()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
+`create_deps()` (in `bootstrap/_bootstrap.py`) is pure config — zero IO. It converts the `Settings` singleton into `CoConfig`, constructs `CoDeps` with a `ShellBackend` and default-empty registries. It calls `config.validate()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
 
 ```text
 create_deps():
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
     config.validate() → error: raise ValueError  # no IO — config shape only
-    services = CoServices(shell=ShellBackend())
-    return CoDeps(services, config, CoRuntimeState())
+    return CoDeps(shell=ShellBackend(), config=config,
+                  runtime=CoRuntimeState(safety_state=SafetyState()))
 ```
 
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeIndex` construction) happens later in `initialize_knowledge()`, called in `_chat_loop` after `initialize_session_capabilities()`. `ModelRegistry` is also constructed in `_chat_loop`, not in `create_deps()`.
@@ -134,16 +133,17 @@ Key points:
 - `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call
 - Static instructions (personality, rules, counter-steering) are assembled inside `build_agent()`, not here — they are an agent concern
 
-### `CoDeps` Group Semantics
+### `CoDeps` Structure
 
-| Group | Type | Lifetime | Sub-agent inheritance |
-|-------|------|----------|-----------------------|
-| `services` | `CoServices` | Session | Shared by reference |
-| `config` | `CoConfig` | Session | Shared by reference |
-| `session` | `CoSessionState` | Session, partially inherited for sub-agents | Credentials and approval rules inherited; per-session fields reset |
-| `runtime` | `CoRuntimeState` | Orchestration-layer transient state | Reset for sub-agents |
+`CoDeps` is flat — service handles (`shell`, `knowledge_index`), registries (`model_registry`, `tool_index`, `skill_commands`, `task_agents`), and config are top-level fields. Three grouped sub-objects hold mutable state:
 
-`CoServices` holds both service handles (shell, knowledge index) and bootstrap-set registries (tool index, skill commands, model registry) — all shared by reference with sub-agents. The session group holds tool-visible mutable state such as approvals and todos. The runtime group holds orchestration-layer transient state such as compaction, usage, and safety state.
+| Field / Group | Lifetime | Sub-agent inheritance |
+|---------------|----------|-----------------------|
+| `shell`, `knowledge_index`, `model_registry`, `task_agents` | Session | Copied by reference (shared) |
+| `tool_index`, `skill_commands` | Session | Copied by reference (shared) |
+| `config` (`CoConfig`) | Session | Copied by reference (frozen) |
+| `session` (`CoSessionState`) | Session, partially inherited | Credentials and approval rules inherited; per-session fields reset |
+| `runtime` (`CoRuntimeState`) | Per-turn transient | Reset for sub-agents |
 
 ## 2. Provider And Model Checks
 
@@ -164,9 +164,9 @@ The inline wakeup steps run once per `chat_loop()` startup after deps initializa
 
 - `create_deps()` returned without raising (config-shape validation passed)
 - `PromptSession` is constructed before `create_deps()` with a COMMANDS-only completer; `completer.words` is updated after skills load (inside `async with agent`) using `_build_completer_words()`
-- `build_agent()` has returned an `AgentCapabilityResult`; `deps.services.tool_index` is set immediately after from `agent_result.tool_index`
+- `build_agent()` has returned an `AgentCapabilityResult`; `deps.tool_index` is set immediately after from `agent_result.tool_index`
 - `async with agent` has been entered; if MCP init fails, a warning is printed and startup continues with native tools only
-- `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.services.skill_commands`
+- `initialize_session_capabilities()` runs inside `async with agent` after MCP connect; it handles MCP discovery (when `mcp_init_ok=True`) and skill loading, returning `SessionCapabilityResult`; `completer.words` is updated immediately after from `deps.skill_commands`
 
 The inline wakeup steps run inside the `async with agent` block after `initialize_session_capabilities()` completes: `initialize_knowledge()` (IO probes + backend resolution), then `sync_knowledge()`, `restore_session()`, and the skills loaded report.
 
@@ -195,22 +195,22 @@ inline wakeup (in chat_loop()):
     Step 0: initialize_knowledge  →  resolve backend, update deps, report degradation
     Step 1: sync_knowledge
     Step 2: restore_session  →  session_data local variable
-    Step 3: skills_loaded_report  (reads len(deps.services.skill_commands) directly)
+    Step 3: skills_loaded_report  (reads len(deps.skill_commands) directly)
 ```
 
-`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps)` reads tool counts and skill counts from `deps.services`, and MCP server count from `deps.config` — no separate health probe.
+`session_data` stays in `chat_loop()` local state for turn-by-turn persistence. After Step 3, `display_welcome_banner(deps)` reads tool counts and skill counts from `deps`, and MCP server count from `deps.config` — no separate health probe.
 
 ### Step 1 - Knowledge Sync
 
 ```text
-if deps.services.knowledge_index is not None and (memory_dir.exists() or library_dir.exists()):
+if deps.knowledge_index is not None and (memory_dir.exists() or library_dir.exists()):
     try:
         mem_count = knowledge_index.sync_dir("memory", memory_dir, kind_filter="memory")
         art_count = knowledge_index.sync_dir("library", library_dir, kind_filter="article")
         frontend.on_status("Knowledge synced ...")
     except Exception:
         knowledge_index.close()
-        deps.services.knowledge_index = None
+        deps.knowledge_index = None
         frontend.on_status("Knowledge sync failed - index disabled")
 else:
     frontend.on_status("Knowledge index not available - skipped")
@@ -257,7 +257,7 @@ The returned `session_data` stays in `chat_loop()` local state and is reused for
 ### Step 3 - Skills Loaded Report
 
 ```text
-frontend.on_status("{len(deps.services.skill_commands)} skill(s) loaded")
+frontend.on_status("{len(deps.skill_commands)} skill(s) loaded")
 ```
 
 This is a visibility step only. Skill loading already happened inside `async with agent`, after MCP init. The count reflects wired-available skills (description present, not `disable_model_invocation`) — the same set visible to the model via `skill_registry`.
@@ -273,16 +273,16 @@ initialize_session_capabilities(agent, deps, frontend, mcp_init_ok):
     [if mcp_servers and mcp_init_ok]
         discover_mcp_tools(agent, exclude=existing_tools) → (_, errors, mcp_index)
         frontend.on_status(...) for each discovery error
-        deps.services.tool_index.update(mcp_index)
+        deps.tool_index.update(mcp_index)
     skill_commands = _load_skills(deps.config.skills_dir, settings, user_skills_dir=deps.config.user_skills_dir)
         pass 1: co_cli/skills/*.md (built-in, lowest precedence)
         pass 2: user_skills_dir/*.md (user-global)
         pass 3: skills_dir/*.md (project-local, highest precedence)
         parse frontmatter, check requires, scan for security issues
-    set_skill_commands(skill_commands, deps.services)   ← services.skill_commands
-    return SessionCapabilityResult(skill_count=len(get_skill_registry(services.skill_commands)))
+    set_skill_commands(skill_commands, deps)   ← deps.skill_commands
+    return SessionCapabilityResult(skill_count=len(get_skill_registry(deps.skill_commands)))
 
-completer.words = _build_completer_words(deps.services.skill_commands)   ← extends COMMANDS-only list to COMMANDS + skills
+completer.words = _build_completer_words(deps.skill_commands)   ← extends COMMANDS-only list to COMMANDS + skills
 ```
 
 `PromptSession` is built before `create_deps()` with a COMMANDS-only completer. After `initialize_session_capabilities()` returns, `_build_completer_words()` updates `completer.words` in-place to include skill names.
@@ -301,7 +301,7 @@ otherwise        → try hybrid first (if embedder available), then fts5, then g
                    (configured "fts5" still attempts hybrid when embedder is reachable)
 
 deps.config = resolved config (whole-object replacement — CoConfig is frozen)
-deps.services.knowledge_index = KnowledgeIndex instance or None
+deps.knowledge_index = KnowledgeIndex instance or None
 degradation statuses reported directly via frontend.on_status()
 ```
 
@@ -319,17 +319,17 @@ display_welcome_banner(deps)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.services.tool_index)`), skill count (`len(deps.services.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when knowledge-index degradation is detected (`deps.services.knowledge_index is None and deps.config.knowledge_search_backend != "grep"`). Reranker-only degradation is already reported by individual status lines before the banner.
+The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tool_index)`), skill count (`len(deps.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when knowledge-index degradation is detected (`deps.knowledge_index is None and deps.config.knowledge_search_backend != "grep"`). Reranker-only degradation is already reported by individual status lines before the banner.
 
 ### State Mutations Summary
 
 | Field | Set by | Value |
 |-------|--------|-------|
-| `deps.services.knowledge_index` | Step 1 on error | `None` to disable FTS for the session |
+| `deps.knowledge_index` | Step 1 on error | `None` to disable FTS for the session |
 | `deps.session.session_id` | Step 2 (inline restore_session) | Single write: restored or new UUID hex |
-| `deps.services.model_registry` | `_chat_loop()` (after `create_deps()`) | `ModelRegistry` built from resolved `CoConfig` |
-| `deps.services.tool_index` | Native entries set from `agent_result.tool_index` after `build_agent()`; MCP entries merged after `discover_mcp_tools()` | Full `dict[str, ToolConfig]` map with per-tool loading policy (`always_load`/`should_defer`) |
-| `deps.services.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Full dict of all loaded skills; model-facing registry derived via `get_skill_registry()` |
+| `deps.model_registry` | `_chat_loop()` (after `create_deps()`) | `ModelRegistry` built from resolved `CoConfig` |
+| `deps.tool_index` | Native entries set from `agent_result.tool_index` after `build_agent()`; MCP entries merged after `discover_mcp_tools()` | Full `dict[str, ToolConfig]` map with per-tool loading policy (`always_load`/`should_defer`) |
+| `deps.skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | Full dict of all loaded skills; model-facing registry derived via `get_skill_registry()` |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
 
 ### Failure Paths
