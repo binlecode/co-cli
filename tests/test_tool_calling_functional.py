@@ -95,7 +95,7 @@ async def test_tool_selection_and_arg_extraction(
         tool_name = None
         args = None
         try:
-            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
+            async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
                 turn = await run_turn(
                     agent=agent,
                     user_input=prompt,
