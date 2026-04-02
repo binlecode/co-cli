@@ -39,7 +39,7 @@ Evaluate the impact of the newly applied Unsloth parameter tuning (`temperature:
 ---
 
 ## 2. Qualitative Performance (Code Generation Quality)
-*(Extracted from generated sample files `evals/sample_qwen3.5_35b-a3b-code.md` and `evals/sample_qwen3-coder-next_q4_k_m-code.md` using the exact same N-Queens prompt)*
+*(Based on the benchmark-run outputs captured for the same N-Queens prompt.)*
 
 ### `qwen3.5:35b-a3b-code` (The New Default)
 - **Algorithmic Sophistication**: Exceeded expectations by providing a complete module with four distinct implementations scaling in optimization:

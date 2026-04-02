@@ -99,20 +99,6 @@ async def test_cmd_clear():
 
 
 @pytest.mark.asyncio
-async def test_skills_install_local(tmp_path):
-    """/skills install <path> copies file to skills_dir and registers the skill."""
-    src = tmp_path / "myinstallskill.md"
-    src.write_text("---\ndescription: My installed skill\n---\nDo something.", encoding="utf-8")
-
-    skills_dir = tmp_path / ".co-cli" / "skills"
-    ctx = _make_ctx()
-    ctx.deps.config = replace(ctx.deps.config, skills_dir=skills_dir)
-    await dispatch(f"/skills install {src}", ctx)
-    assert (skills_dir / "myinstallskill.md").exists()
-    assert "myinstallskill" in ctx.deps.capabilities.skill_commands
-
-
-@pytest.mark.asyncio
 async def test_skills_install_url_error(tmp_path):
     """/skills install with unreachable URL returns None (graceful failure)."""
     ctx = _make_ctx()

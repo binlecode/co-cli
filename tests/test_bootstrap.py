@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from co_cli.config import ModelConfig
-from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, resolve_reranker, restore_session, sync_knowledge
+from co_cli.bootstrap._bootstrap import resolve_knowledge_backend, _resolve_reranker, restore_session, sync_knowledge
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoServices, CoSessionState
@@ -180,7 +180,8 @@ def test_restore_session_stale_creates_new_id(tmp_path: Path) -> None:
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     """No reranker configured → config unchanged, no status messages."""
     config = CoConfig(knowledge_cross_encoder_reranker_url=None, knowledge_llm_reranker=None)
-    resolved, statuses = resolve_reranker(config)
+    statuses: list[str] = []
+    resolved = _resolve_reranker(config, statuses)
     assert resolved.knowledge_cross_encoder_reranker_url is None
     assert resolved.knowledge_llm_reranker is None
     assert statuses == []
@@ -192,7 +193,8 @@ def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
         knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
         knowledge_llm_reranker=None,
     )
-    resolved, statuses = resolve_reranker(config)
+    statuses: list[str] = []
+    resolved = _resolve_reranker(config, statuses)
     assert resolved.knowledge_cross_encoder_reranker_url is None
     assert any("cross-encoder" in s.lower() or "tei" in s.lower() for s in statuses)
 
@@ -205,7 +207,8 @@ def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
         llm_provider="gemini",
         llm_api_key=None,
     )
-    resolved, statuses = resolve_reranker(config)
+    statuses: list[str] = []
+    resolved = _resolve_reranker(config, statuses)
     assert resolved.knowledge_llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
@@ -218,7 +221,8 @@ def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
         llm_provider="ollama-openai",
         llm_host="http://localhost:1",
     )
-    resolved, statuses = resolve_reranker(config)
+    statuses: list[str] = []
+    resolved = _resolve_reranker(config, statuses)
     assert resolved.knowledge_llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
@@ -231,7 +235,8 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
         llm_provider="gemini",
         llm_api_key=None,
     )
-    resolved, statuses = resolve_reranker(config)
+    statuses: list[str] = []
+    resolved = _resolve_reranker(config, statuses)
     assert resolved.knowledge_cross_encoder_reranker_url is None
     assert resolved.knowledge_llm_reranker is None
     assert len(statuses) == 2
@@ -267,6 +272,18 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     assert result.skill_count >= 1, (
         "skill_count must be at least 1 when a valid project skill is loaded"
     )
+
+
+def test_restore_session_corrupt_json_creates_new_session(tmp_path: Path) -> None:
+    """restore_session() with corrupt session.json creates a new session instead of crashing."""
+    session_path = tmp_path / "session.json"
+    session_path.write_text("not valid json{{{", encoding="utf-8")
+
+    deps = _make_deps(tmp_path)
+    result = restore_session(deps, TerminalFrontend())
+
+    assert isinstance(result, dict), "restore_session() must return a session dict even with corrupt file"
+    assert deps.session.session_id != "", "session_id must be set after corrupt file recovery"
 
 
 def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:

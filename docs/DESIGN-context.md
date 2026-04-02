@@ -89,9 +89,7 @@ flowchart TD
     subgraph StartupFlow[startup]
         direction TB
         CreateDeps[create_deps]
-        BuildPrompt[build_static_instructions]
-        StaticInstructions[config.static_instructions]
-        MainAgent[build_agent]
+        MainAgent[build_agent + build_static_instructions]
         ChatLoop[_chat_loop]
         TaskGate{ROLE_TASK}
         TaskAgent[build_task_agent]
@@ -99,7 +97,7 @@ flowchart TD
         Restore[restore_session]
         SessionJson[deps.config.session_path]
 
-        CreateDeps --> BuildPrompt --> StaticInstructions --> MainAgent --> ChatLoop
+        CreateDeps --> MainAgent --> ChatLoop
         ChatLoop --> TaskGate
         TaskGate -->|yes| TaskAgent
         ChatLoop --> Sync --> Restore --> SessionJson
@@ -200,7 +198,7 @@ flowchart TD
 
 **Static scaffold**
 
-`create_deps()` builds `config.static_instructions` once via `build_static_instructions()` in `prompts/_assembly.py`. Assembly order is strict:
+`build_agent()` assembles static instructions once via `build_static_instructions()` in `prompts/_assembly.py`. Assembly order is strict:
 
 1. Soul seed from `co_cli/prompts/personalities/souls/<role>/seed.md`
 2. Character memories from files in `config.memory_dir` tagged with both `<role>` and `"character"`

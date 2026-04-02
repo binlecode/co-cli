@@ -11,12 +11,11 @@ bootstrap
   main.py
     -> create_deps()
        -> CoConfig.from_settings()
-       -> check_agent_llm()
-       -> build_static_instructions()
-       -> resolve_reranker()
-       -> resolve_knowledge_backend()
+       -> config.validate()  # config shape only, no IO
+       -> resolve_knowledge_backend()  # includes reranker resolution
        -> build CoServices / CoRuntimeState / CoDeps
     -> build_agent()
+       -> build_static_instructions()  # personality, rules, counter-steering
     -> build_task_agent() when ROLE_TASK is configured
 
 session activation
@@ -100,23 +99,23 @@ The design stays close to idiomatic Pydantic-AI:
 Startup is intentionally split between synchronous bootstrap and async activation:
 
 1. `create_deps()` resolves cwd-aware config with `CoConfig.from_settings(settings, cwd=Path.cwd())`.
-2. `check_agent_llm()` performs the hard gate:
+2. `config.validate()` performs the config-shape gate (no IO):
+   - Missing reasoning role is a startup error.
    - Gemini without an API key is a startup error.
-   - Ollama reasoning-model absence is a startup error.
-   - Ollama host unreachability or missing optional-role models is only a warning/degraded startup.
-3. `build_static_instructions()` assembles the static instructions from soul seed, character memories, mindsets, rules, soul examples, counter-steering, and critique — all seven sections in explicit order.
-4. `resolve_reranker()` and `resolve_knowledge_backend()` degrade capabilities in place:
-   - rerankers degrade independently to `None`
+   - Ollama connectivity and model availability are deferred to runtime (`run_turn()` handles errors).
+3. `resolve_knowledge_backend()` degrades capabilities in place:
+   - on grep: reranker skipped entirely (no index to rerank against)
+   - on hybrid/fts5: rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
-5. `create_deps()` constructs:
+4. `create_deps()` constructs:
    - `CoServices(shell, knowledge_index, model_registry)`
    - `CoRuntimeState(safety_state=SafetyState())`
    - the final `CoDeps`
-6. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
-7. `build_agent()` constructs the main foreground agent.
-8. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
-9. `async with agent` activates the main agent context, which is required before MCP discovery.
-10. `initialize_session_capabilities()` completes the session capability surface:
+5. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
+6. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
+7. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
+8. `async with agent` activates the main agent context, which is required before MCP discovery.
+9. `initialize_session_capabilities()` completes the session capability surface:
     - discovers MCP tool names from connected servers
     - records discovery errors in `deps.capabilities.mcp_discovery_errors`
     - loads skills and populates `deps.capabilities.skill_commands`

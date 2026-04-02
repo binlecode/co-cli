@@ -2,7 +2,7 @@
 
 Data types: CheckResult, CheckItem, DoctorResult, RuntimeCheckResult.
 
-IO check functions (internal helpers called by the entry points below):
+IO check functions (called on-demand by runtime diagnostics and status display):
   check_agent_llm, check_reranker_llm, check_embedder,
   check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
 
@@ -11,10 +11,11 @@ Public entry points:
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
-  check_agent_llm         — bootstrap/_bootstrap.py (fail-fast gate in create_deps)
-  check_reranker_llm      — bootstrap/_bootstrap.py (resolve_reranker)
-  check_cross_encoder     — bootstrap/_bootstrap.py (resolve_reranker)
+  check_reranker_llm      — bootstrap/_bootstrap.py (_resolve_reranker, inside resolve_knowledge_backend)
+  check_cross_encoder     — bootstrap/_bootstrap.py (_resolve_reranker, inside resolve_knowledge_backend)
   check_embedder          — bootstrap/_bootstrap.py (resolve_knowledge_backend)
+
+Config-shape validation lives on CoConfig.validate() (deps.py), not here.
 """
 
 import os

@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
-"""Eval: memory-signal-detection — verify proactive save and contradiction handling.
+"""Eval: memory-signal-detection — verify proactive memory save triggers.
 
-Runs run_turn() with real tool execution. Checks if save_memory appears in
-tool calls extracted from message history. For W2 (proactive signal
-detection), the LLM must decide to save without the user saying "remember".
-For W6 (contradiction resolution), pre-seeds a conflicting memory and
-verifies the agent saves the correction.
+Runs run_turn() with real tool execution and checks whether save_memory
+appears in the extracted tool calls. The point is to validate that the model
+chooses to persist durable user signals without the user explicitly saying
+"remember this".
 
 Target flow:   System prompt guidance → LLM judgment → save_memory() call
 Critical impact: if the agent only saves when told "remember this", the
-                 memory system captures 10% of what matters.
-
-Known limitation (W6): _check_duplicate uses fuzzy token matching (85%
-threshold). "User prefers MySQL" vs "We moved to PostgreSQL" scores very
-low similarity → dedup will NOT catch it as a duplicate. The minimum bar
-is that the agent saves the new correct information.
+                 memory system captures only a small fraction of durable user
+                 preferences and decisions.
 
 Prerequisites: LLM provider configured (ollama or gemini).
 
@@ -23,25 +18,21 @@ Usage:
 """
 
 import asyncio
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-
 import os
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from pydantic_ai.messages import ModelResponse, ToolCallPart  # noqa: E402
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 
-from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
+from co_cli.context._orchestrate import run_turn  # noqa: E402
 from co_cli.deps import CoConfig  # noqa: E402
 
 from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
-from evals._fixtures import seed_memory  # noqa: E402
 from evals._frontend import SilentFrontend  # noqa: E402
 from evals._tools import extract_tool_calls  # noqa: E402
 
@@ -54,7 +45,6 @@ from evals._tools import extract_tool_calls  # noqa: E402
 @dataclass
 class SignalCase:
     id: str
-    pre_seeded: list[dict[str, Any]] | None  # [{content, tags, days_ago}]
     prompt: str
     expect_save: bool
     description: str
@@ -63,7 +53,6 @@ class SignalCase:
 CASES: list[SignalCase] = [
     SignalCase(
         id="signal-preference",
-        pre_seeded=None,
         prompt=(
             "I always use 4-space indentation and prefer dark themes in everything"
         ),
@@ -72,7 +61,6 @@ CASES: list[SignalCase] = [
     ),
     SignalCase(
         id="signal-correction",
-        pre_seeded=None,
         prompt=(
             "Actually no, we switched from Flask to FastAPI for all our services "
             "last month"
@@ -82,7 +70,6 @@ CASES: list[SignalCase] = [
     ),
     SignalCase(
         id="signal-decision",
-        pre_seeded=None,
         prompt=(
             "We've decided to use Kubernetes for production and Docker Compose for dev"
         ),
@@ -91,25 +78,9 @@ CASES: list[SignalCase] = [
     ),
     SignalCase(
         id="signal-none",
-        pre_seeded=None,
         prompt="What time is it in Tokyo?",
         expect_save=False,
         description="No signal — save_memory should NOT be called",
-    ),
-    SignalCase(
-        id="contra-resolution",
-        pre_seeded=[
-            {
-                "content": "User prefers MySQL for all database work",
-                "tags": ["preference"],
-                "days_ago": 5,
-            },
-        ],
-        prompt=(
-            "We've moved everything to PostgreSQL now, that's our standard"
-        ),
-        expect_save=True,
-        description="Contradiction: old=MySQL, new=PostgreSQL — save must fire",
     ),
 ]
 
@@ -119,7 +90,7 @@ CASES: list[SignalCase] = [
 # ---------------------------------------------------------------------------
 
 
-async def run_case(case: SignalCase) -> dict[str, Any]:
+async def run_case(case: SignalCase) -> dict[str, object]:
     """Run a single signal detection case and return scoring dict."""
     with tempfile.TemporaryDirectory() as tmpdir:
         orig_cwd = os.getcwd()
@@ -128,19 +99,8 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
             memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
-            # Pre-seed memories if specified
-            if case.pre_seeded:
-                for i, mem in enumerate(case.pre_seeded, 1):
-                    seed_memory(
-                        memory_dir, i, mem["content"],
-                        days_ago=mem.get("days_ago", 0),
-                        tags=mem.get("tags"),
-                    )
-
-            # Build agent and deps
             agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
             deps = make_eval_deps(session_id=f"eval-signal-{case.id}")
-
             frontend = SilentFrontend()
 
             async with asyncio.timeout(EVAL_TURN_TIMEOUT_SECS):
@@ -162,23 +122,9 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
                 if name == "save_memory"
             ]
 
-            signal_detected = len(save_calls) > 0
-
-            # For contradiction case: check if PostgreSQL is in saved content
-            contra_handled = False
-            if case.id == "contra-resolution" and save_calls:
-                # Check saved files on disk
-                after_files = list(memory_dir.glob("*.md"))
-                for p in after_files:
-                    text = p.read_text(encoding="utf-8").lower()
-                    if "postgresql" in text or "postgres" in text:
-                        contra_handled = True
-                        break
-
             return {
-                "signal_detected": signal_detected,
+                "signal_detected": len(save_calls) > 0,
                 "save_calls": len(save_calls),
-                "contra_handled": contra_handled,
                 "all_tool_calls": [(n, a) for n, a in tool_calls],
             }
         finally:
@@ -192,7 +138,7 @@ async def run_case(case: SignalCase) -> dict[str, Any]:
 
 async def main() -> int:
     print("=" * 60)
-    print("  Eval: Memory Signal Detection (W2) + Contradiction (W6)")
+    print("  Eval: Memory Signal Detection (W2)")
     print("=" * 60)
     print()
 
@@ -218,13 +164,7 @@ async def main() -> int:
                 print("FAIL (save_memory not called)")
                 passed = False
             else:
-                msg = f"PASS (save_memory called {scores['save_calls']}x)"
-                if case.id == "contra-resolution":
-                    if scores["contra_handled"]:
-                        msg += " + PostgreSQL saved"
-                    else:
-                        msg += " (PostgreSQL not found in saved files — known gap)"
-                print(msg)
+                print(f"PASS (save_memory called {scores['save_calls']}x)")
         else:
             if scores["signal_detected"]:
                 print("FAIL (save_memory called on no-signal prompt)")

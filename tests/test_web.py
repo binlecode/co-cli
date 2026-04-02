@@ -214,3 +214,25 @@ def test_is_content_type_allowed_rejects_binary():
 def test_is_content_type_allowed_permits_empty():
     """Empty Content-Type is permitted (server may omit it for text responses)."""
     assert _is_content_type_allowed("") is True
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_json_content():
+    """web_fetch returns raw JSON content without HTML-to-markdown conversion."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
+        result = await web_fetch(ctx, "https://httpbin.org/json")
+    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
+    assert "display" in result
+    # JSON content must be preserved as-is, not converted
+    assert "slideshow" in result["display"].lower()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_plain_text():
+    """web_fetch returns plain text content without conversion."""
+    ctx = _make_ctx()
+    async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
+        result = await web_fetch(ctx, "https://httpbin.org/robots.txt")
+    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
+    assert "display" in result

@@ -8,8 +8,7 @@ from opentelemetry import trace
 from pydantic_ai import Agent
 
 from co_cli.agent import discover_mcp_tools
-from co_cli.bootstrap._check import check_agent_llm
-from co_cli.config import settings, ROLE_REASONING
+from co_cli.config import settings
 from co_cli.context._types import SafetyState
 from co_cli.context._session import load_session, is_fresh, new_session, save_session
 from co_cli.deps import CoDeps, CoServices, CoConfig, CoRuntimeState
@@ -25,14 +24,12 @@ def _summarize_backend_error(exc: Exception) -> str:
     return detail.splitlines()[0]
 
 
-def resolve_reranker(config: CoConfig) -> tuple[CoConfig, list[str]]:
-    """Resolve reranker with graceful degradation to none.
+def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
+    """Resolve reranker availability, appending degradation messages to statuses.
 
-    Each reranker degrades independently — cross-encoder and LLM listwise
-    are checked separately. If unavailable, the field is set to None
-    (results returned in BM25/vector order).
+    Called inside resolve_knowledge_backend only when an index is active (hybrid/fts5).
+    Skipped on grep — no index means no reranking.
     """
-    statuses: list[str] = []
     updates: dict = {}
 
     from co_cli.bootstrap._check import check_cross_encoder, check_reranker_llm
@@ -54,11 +51,11 @@ def resolve_reranker(config: CoConfig) -> tuple[CoConfig, list[str]]:
 
     if updates:
         config = dataclasses.replace(config, **updates)
-    return config, statuses
+    return config
 
 
 def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, list[str]]:
-    """Resolve knowledge backend with graceful degradation.
+    """Resolve knowledge backend and reranker with graceful degradation.
 
     Bootstrap always prefers max capability and falls back with warnings:
       1. hybrid  — sqlite-vec + embedding provider (richest search)
@@ -69,6 +66,9 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     Otherwise bootstrap always attempts hybrid first regardless of config value,
     falling back through fts5 to grep as each level fails.
 
+    Reranker resolution runs only when an index is active (hybrid or fts5).
+    On grep there is no index to rerank against, so the probe is skipped.
+
     Embedding provider "none" explicitly disables hybrid (no point attempting).
     """
     statuses: list[str] = []
@@ -77,6 +77,10 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
         return config, None, statuses
 
     from co_cli.knowledge._index_store import KnowledgeIndex
+
+    # Resolve reranker before index construction — config fields must reflect
+    # actual availability so the index and query pipeline see correct values.
+    config = _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
     if config.knowledge_embedding_provider == "none":
@@ -117,45 +121,37 @@ def resolve_knowledge_backend(config: CoConfig) -> tuple[CoConfig, Any | None, l
     return dataclasses.replace(config, knowledge_search_backend="grep"), None, statuses
 
 
-def create_deps() -> tuple[CoDeps, list[str]]:
-    """Assemble CoDeps from settings. Raises ValueError on provider/model hard errors.
+def create_deps() -> CoDeps:
+    """Assemble CoDeps from settings — pure config, zero IO.
 
-    Returns (deps, startup_statuses) where startup_statuses is a one-shot list of
-    degradation warnings to display on startup. Callers must consume this list directly
-    rather than storing it on deps.
+    Raises ValueError on provider/model hard errors.
     """
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
 
-    # Step 2: fail-fast gate (provider credentials + model availability)
-    result = check_agent_llm(config)
-    if result.status == "error":
-        raise ValueError(result.detail)
+    # Step 2: fail-fast gate (config shape only — no IO)
+    error = config.validate()
+    if error:
+        raise ValueError(error)
 
-    from co_cli.prompts._assembly import build_static_instructions
-    from co_cli.prompts.model_quirks._loader import normalize_model_name
-    reasoning_entry = config.role_models.get(ROLE_REASONING)
-    normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
-    config = dataclasses.replace(
-        config,
-        static_instructions=build_static_instructions(config.llm_provider, normalized_model, config),
-    )
+    # Step 3: construct minimal services shell (no IO)
+    services = CoServices(shell=ShellBackend())
+    runtime = CoRuntimeState(safety_state=SafetyState())
+    return CoDeps(services=services, config=config, runtime=runtime)
 
-    # Step 3: construct services
-    config, reranker_statuses = resolve_reranker(config)
-    config, knowledge_index, knowledge_statuses = resolve_knowledge_backend(config)
-    startup_statuses = reranker_statuses + knowledge_statuses
 
-    from co_cli._model_factory import ModelRegistry
-    services = CoServices(
-        shell=ShellBackend(),
-        knowledge_index=knowledge_index,
-        model_registry=ModelRegistry.from_config(config),
-    )
-    runtime = CoRuntimeState(
-        safety_state=SafetyState(),
-    )
-    return CoDeps(services=services, config=config, runtime=runtime), startup_statuses
+def initialize_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
+    """Resolve knowledge backend (IO probes) and update deps in-place.
+
+    Called in _chat_loop after initialize_session_capabilities(), before sync_knowledge().
+    Reports degradation statuses directly to frontend.
+    """
+    config, knowledge_index, statuses = resolve_knowledge_backend(deps.config)
+    # CoConfig is frozen; CoDeps is not — whole-object replacement
+    deps.config = config
+    deps.services.knowledge_index = knowledge_index
+    for status in statuses:
+        frontend.on_status(status)
 
 
 def sync_knowledge(deps: CoDeps, frontend: TerminalFrontend) -> None:
@@ -235,7 +231,7 @@ async def initialize_session_capabilities(
 
     # 1. MCP discovery (conditional)
     if deps.config.mcp_servers and mcp_init_ok:
-        mcp_tool_names, discovery_errors, mcp_index = await discover_mcp_tools(
+        _, discovery_errors, mcp_index = await discover_mcp_tools(
             agent, exclude=set(deps.capabilities.tool_index.keys())
         )
         deps.capabilities.mcp_discovery_errors = discovery_errors

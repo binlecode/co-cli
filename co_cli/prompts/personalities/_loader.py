@@ -15,7 +15,7 @@ The folder structure IS the schema. Adding a role requires only files, no Python
 Callers:
   _assembly.py          — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
                           load_character_memories, load_soul_critique inside
-                          build_static_instructions(), invoked by create_deps()
+                          build_static_instructions(), invoked by build_agent()
 """
 
 from pathlib import Path

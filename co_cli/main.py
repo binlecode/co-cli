@@ -34,7 +34,7 @@ from co_cli.commands._commands import (
 )
 from co_cli.context._session import touch_session, increment_compaction, save_session
 from co_cli.context._skill_env import _cleanup_skill_run_state
-from co_cli.bootstrap._bootstrap import create_deps, sync_knowledge, restore_session, initialize_session_capabilities
+from co_cli.bootstrap._bootstrap import create_deps, initialize_knowledge, sync_knowledge, restore_session, initialize_session_capabilities
 
 exporter = SQLiteSpanExporter()
 
@@ -153,15 +153,15 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         complete_while_typing=False,
     )
     try:
-        deps, startup_statuses = create_deps()
+        deps = create_deps()
     except ValueError as e:
         console.print(f"[bold red]Startup error:[/bold red] {e}")
         raise SystemExit(1)
-    for status in startup_statuses:
-        frontend.on_status(status)
 
-    from co_cli._model_factory import ResolvedModel
+    # Build model registry (pure config — no IO)
+    from co_cli._model_factory import ModelRegistry, ResolvedModel
     from co_cli.config import ROLE_REASONING
+    deps.services.model_registry = ModelRegistry.from_config(deps.config)
     _none_resolved = ResolvedModel(model=None, settings=None)
     resolved = (
         deps.services.model_registry.get(ROLE_REASONING, _none_resolved)
@@ -194,11 +194,12 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
         completer.words = _build_completer_words(deps.capabilities.skill_commands)
 
+        initialize_knowledge(deps, frontend)
         sync_knowledge(deps, frontend)
         session_data = restore_session(deps, frontend)
         frontend.on_status(f"  {session_cap.skill_count} skill(s) loaded")
 
-        display_welcome_banner(deps, startup_statuses)
+        display_welcome_banner(deps)
 
         while True:
             _saved_env: dict[str, str | None] = {}

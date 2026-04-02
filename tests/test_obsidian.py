@@ -2,6 +2,9 @@
 
 from dataclasses import dataclass
 
+import pytest
+from pydantic_ai import ModelRetry
+
 from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools.obsidian import search_notes, list_notes, read_note
 from co_cli.tools._shell_backend import ShellBackend
@@ -266,3 +269,27 @@ def test_fts_tag_filter_works_with_index(tmp_path):
     assert "archived.md" not in result["display"]
 
     idx.close()
+
+
+# --- read_note error paths ---
+
+
+def test_read_note_missing_file_raises_model_retry(tmp_path):
+    """read_note raises ModelRetry when the note file does not exist."""
+    (tmp_path / "exists.md").write_text("# Exists")
+    ctx = Context(deps=CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path),
+    ))
+    with pytest.raises(ModelRetry, match="not found"):
+        read_note(ctx, "nonexistent.md")
+
+
+def test_read_note_path_traversal_blocked(tmp_path):
+    """read_note blocks path traversal outside the vault."""
+    ctx = Context(deps=CoDeps(
+        services=CoServices(shell=ShellBackend()),
+        config=CoConfig(obsidian_vault_path=tmp_path),
+    ))
+    with pytest.raises(ModelRetry, match="outside the vault"):
+        read_note(ctx, "../../etc/passwd")

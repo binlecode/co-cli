@@ -163,7 +163,6 @@ class CoConfig:
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
-    static_instructions: str = ""
     max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
@@ -198,6 +197,20 @@ class CoConfig:
     def supports_context_ratio_tracking(self) -> bool:
         """Return True when input/output usage can be compared against an Ollama context budget."""
         return self.uses_ollama_openai() and self.llm_num_ctx > 0
+
+    def validate(self) -> str | None:
+        """Validate config shape — no IO. Returns error message or None if valid.
+
+        Checks minimum config for the agent to attempt LLM calls:
+          - reasoning role is configured
+          - Gemini: API key is present
+        Provider connectivity is deferred to runtime (first LLM call).
+        """
+        if not self.role_models.get("reasoning"):
+            return "No reasoning model configured — set role_models.reasoning in settings.json"
+        if self.uses_gemini() and not self.llm_api_key:
+            return "LLM_API_KEY not set — required for Gemini provider"
+        return None
 
     @classmethod
     def from_settings(cls, s: "Settings", *, cwd: Path) -> "CoConfig":

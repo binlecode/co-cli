@@ -51,16 +51,10 @@ def run_benchmark(
         with httpx.stream("POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS) as response:
             response.raise_for_status()
 
-            chunk_count = 0
-            full_response = []
             for line in response.iter_lines():
                 if not line:
                     continue
                 data = json.loads(line)
-                chunk_count += 1
-
-                if "response" in data:
-                    full_response.append(data["response"])
 
                 if ttft is None and "response" in data and data["response"]:
                     ttft = time.time() - start_time
@@ -89,7 +83,6 @@ def run_benchmark(
                         "tps": tps,
                         "total_time": total_time,
                         "eval_count": eval_count,
-                        "response": "".join(full_response),
                     }
     except Exception as e:
         logger.error(f"Error benchmarking {model} ctx={ctx_size}: {e}", exc_info=True)
@@ -196,16 +189,6 @@ def main():
         f"\n## 2. Qualitative Findings\n\n(To be analyzed based on evals)\n\n"
     )
     report_content += f"\n## Final Recommendations\n\n(To be analyzed based on evals)\n"
-
-    # Save code samples to evals/
-    for r in results:
-        ctx_label = "64k" if r["ctx_size"] == 65536 else "128k"
-        sample_file = (
-            f"evals/sample_{model.replace(':', '_')}_{ctx_label}_{r['task']}.md"
-        )
-        with open(sample_file, "w") as f:
-            f.write(f"# Prompt\n\n{TASKS[r['task']]}\n\n# Response\n\n{r['response']}")
-        logger.info(f"Saved sample code to {sample_file}")
 
     # Make docs dir if not exists
     os.makedirs(os.path.dirname(report_path), exist_ok=True)

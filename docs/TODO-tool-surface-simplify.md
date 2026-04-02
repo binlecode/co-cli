@@ -709,7 +709,7 @@ from `tool_index`. Skills remain separate capability entries.
   - deferred-tool prompt is rebuilt from `tool_index` each turn
 - Update `tests/test_commands.py`, `tests/test_tool_calling_functional.py`,
   `tests/test_skills_loader.py`, and any other files found by grep scan
-- Update affected eval files in `evals/` (`_common.py`, `eval_tool_chains.py`,
+- Update affected eval files in `evals/` (`_common.py`,
   `eval_knowledge_pipeline.py`, etc.)
 
 **files:**

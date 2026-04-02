@@ -240,6 +240,14 @@ def build_agent(
         resolved = ModelRegistry.from_config(config).get(
             ROLE_REASONING, ResolvedModel(model=None, settings=None)
         )
+
+    # Assemble static instructions (personality, rules, counter-steering) once at build time.
+    from co_cli.prompts._assembly import build_static_instructions
+    from co_cli.prompts.model_quirks._loader import normalize_model_name
+    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
+    static_instructions = build_static_instructions(config.llm_provider, normalized_model, config)
+
     mcp_toolsets = _build_mcp_toolsets(config)
     filtered_toolset, native_index = _build_filtered_toolset(config)
 
@@ -247,7 +255,7 @@ def build_agent(
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         resolved.model,
         deps_type=CoDeps,
-        instructions=config.static_instructions,
+        instructions=static_instructions,
         model_settings=resolved.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-04-01
+
+### Changed
+- **Pure-config bootstrap**: `create_deps()` is now zero-IO (config + validate + minimal services shell). Knowledge backend resolution (embedder/reranker HTTP probes, `KnowledgeIndex` construction) moved to new `initialize_knowledge(deps, frontend)` called in `_chat_loop` after `initialize_session_capabilities()`. `ModelRegistry` construction also moved to `_chat_loop`.
+- **Eliminated `startup_statuses`**: the `list[str]` tuple return from `create_deps()` and its threading through `_chat_loop` and `display_welcome_banner()` is removed. Each bootstrap step now reports status directly via `frontend.on_status()`. Banner derives degraded state from `deps`.
+- **Flat per-tool loading policy**: tool loading uses per-tool `always_load`/`should_defer` flags on `ToolConfig` instead of taxonomy-based family grouping. `tool_catalog` renamed to `tool_index`.
+
+### Removed
+- Stale evals and scripts: `eval_bootstrap_e2e.py`, `eval_coding_toolchain.py`, `eval_jeff_learns_finch.py`, `eval_thinking_subagent.py`, `eval_tool_chains.py`, `_checks.py`, `_report.py`, `_trace.py`, sample output files, `generate_quality_samples.py`, `trace_report_personality.py`.
+
 ## [0.7.6] - 2026-03-31
 
 ### Added

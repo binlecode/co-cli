@@ -143,18 +143,23 @@ def test_fts_freshness_after_consolidation(tmp_path: Path):
     import asyncio
     from co_cli.knowledge._index_store import KnowledgeIndex
     from co_cli.tools.memory import save_memory
+    from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     idx = KnowledgeIndex(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_index=idx, knowledge_search_backend="fts5")
 
-    # Save initial memory
-    asyncio.run(save_memory(ctx, "User prefers zygomorphic-consolidation-test widget",
-                            tags=["preference"]))
+    async def _run() -> None:
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            # Save initial memory
+            await save_memory(ctx, "User prefers zygomorphic-consolidation-test widget",
+                              tags=["preference"])
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            # Save near-duplicate — should consolidate (update) rather than create new
+            await save_memory(ctx, "User prefers zygomorphic-consolidation-test widget v2",
+                              tags=["preference", "updated"])
 
-    # Save near-duplicate — should consolidate (update) rather than create new
-    asyncio.run(save_memory(ctx, "User prefers zygomorphic-consolidation-test widget v2",
-                            tags=["preference", "updated"]))
+    asyncio.run(_run())
 
     # FTS must return the consolidated (updated) content
     results = idx.search("zygomorphic-consolidation-test", source="memory")

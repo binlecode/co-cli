@@ -26,7 +26,7 @@ from tests._timeouts import SUBPROCESS_TIMEOUT_SECS, SUBPROCESS_START_TIMEOUT_SE
 
 
 def _fresh_session() -> CoSessionState:
-    return CoSessionState()
+    return CoSessionState(session_id="test-background")
 
 
 def _make_state(command: str, cwd: str = "/tmp", description: str = "") -> BackgroundTaskState:

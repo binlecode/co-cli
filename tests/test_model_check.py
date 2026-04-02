@@ -7,8 +7,49 @@ from co_cli.bootstrap._check import (
     check_embedder,
     check_cross_encoder,
 )
-from co_cli.config import ModelConfig
+from co_cli.config import ModelConfig, ROLE_REASONING
 from co_cli.deps import CoConfig
+
+
+# --- CoConfig.validate() (config-shape gate, no IO) ---
+
+
+def test_validate_no_reasoning_model_returns_error() -> None:
+    error = CoConfig(role_models={}).validate()
+    assert error is not None
+    assert "reasoning" in error.lower()
+
+
+def test_validate_gemini_no_key_returns_error() -> None:
+    config = CoConfig(
+        llm_provider="gemini",
+        llm_api_key=None,
+        role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
+    )
+    error = config.validate()
+    assert error is not None
+    assert "LLM_API_KEY" in error
+
+
+def test_validate_gemini_with_key_returns_ok() -> None:
+    config = CoConfig(
+        llm_provider="gemini",
+        llm_api_key="test-key",
+        role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
+    )
+    assert config.validate() is None
+
+
+def test_validate_ollama_returns_ok_without_io() -> None:
+    """Ollama config with reasoning model configured passes instantly — no HTTP probe."""
+    config = CoConfig(
+        llm_provider="ollama-openai",
+        role_models={ROLE_REASONING: ModelConfig(provider="ollama-openai", model="qwen3:8b")},
+    )
+    assert config.validate() is None
+
+
+# --- check_agent_llm (IO probe, runtime diagnostics) ---
 
 
 def test_check_agent_llm_gemini_key_missing_returns_error() -> None:

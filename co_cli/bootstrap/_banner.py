@@ -27,7 +27,7 @@ _ASCII_ART = {
 }
 
 
-def display_welcome_banner(deps: "CoDeps", startup_statuses: list[str]) -> None:
+def display_welcome_banner(deps: "CoDeps") -> None:
     """Render welcome banner with ASCII art, model, and environment info."""
     from rich.panel import Panel
 
@@ -68,7 +68,12 @@ def display_welcome_banner(deps: "CoDeps", startup_statuses: list[str]) -> None:
     else:
         knowledge_info = "grep (no index)"
 
-    degraded = startup_statuses
+    # Knowledge-index degradation: configured for index-backed search but no index available.
+    # Reranker-only degradation is already reported by individual status lines before the banner.
+    degraded = (
+        deps.services.knowledge_index is None
+        and deps.config.knowledge_search_backend != "grep"
+    )
     knowledge_line = f"    Knowledge: [accent]{knowledge_info}[/accent]"
     if degraded:
         knowledge_line += "  [yellow](degraded)[/yellow]"
