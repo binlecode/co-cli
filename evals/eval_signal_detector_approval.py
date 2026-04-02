@@ -29,7 +29,6 @@ from typing import Any
 from pydantic_ai.messages import ModelRequest, UserPromptPart  # noqa: E402
 
 from co_cli.memory._signal_detector import analyze_for_signals  # noqa: E402
-from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
 from co_cli.deps import CoConfig  # noqa: E402
 from co_cli.memory._lifecycle import persist_memory as _save_memory_impl  # noqa: E402
@@ -102,7 +101,6 @@ CASES: list[ApprovalCase] = [
 
 async def _run_dispatch(
     user_message: str,
-    model: Any,
     deps: Any,
     frontend: CapturingFrontend,
     memory_dir: Path,
@@ -111,7 +109,7 @@ async def _run_dispatch(
     messages = [ModelRequest(parts=[UserPromptPart(content=user_message)])]
     files_before = set(memory_dir.glob("*.md"))
 
-    signal = await analyze_for_signals(messages, model)
+    signal = await analyze_for_signals(messages, services=deps.services)
     if signal.found and signal.candidate and signal.tag:
         if signal.confidence == "high":
             await _save_memory_impl(deps, signal.candidate, [signal.tag], None)
@@ -142,8 +140,9 @@ async def main() -> int:
     print("=" * 60)
     print()
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
-    model = agent.model
+    from co_cli._model_factory import ModelRegistry
+    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    _model_registry = ModelRegistry.from_config(config)
 
     t0 = time.monotonic()
     passed_count = 0
@@ -160,12 +159,15 @@ async def main() -> int:
                 memory_dir = Path(tmpdir) / ".co-cli" / "knowledge" / "memories"
                 memory_dir.mkdir(parents=True)
 
-                deps = make_eval_deps(session_id=f"eval-approval-{case.id}")
+                deps = make_eval_deps(
+                    session_id=f"eval-approval-{case.id}",
+                    model_registry=_model_registry,
+                )
                 frontend = CapturingFrontend(approval_response=case.approval_response)
 
                 try:
                     scores = await _run_dispatch(
-                        case.user_message, model, deps, frontend, memory_dir
+                        case.user_message, deps, frontend, memory_dir
                     )
                 except Exception as exc:
                     print(f"ERROR ({exc})")

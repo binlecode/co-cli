@@ -76,7 +76,6 @@ async def _finalize_turn(
     session_data: dict,
     deps: CoDeps,
     frontend: Frontend,
-    primary_model: str,
     compactor: "HistoryCompactionState",
 ) -> tuple[list[ModelMessage], dict]:
     """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
@@ -91,15 +90,15 @@ async def _finalize_turn(
 
     # Signal detection — only on clean (non-interrupted, non-error) turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        signal = await analyze_for_signals(next_history, primary_model, services=deps.services)
-        await handle_signal(signal, deps, frontend, primary_model)
+        signal = await analyze_for_signals(next_history, services=deps.services)
+        await handle_signal(signal, deps, frontend)
 
     # Touch session and persist
     next_session = touch_session(session_data)
     save_session(deps.config.session_path, next_session)
 
     # Spawn background compaction for the next turn
-    compactor.on_turn_end(next_history, deps, primary_model)
+    compactor.on_turn_end(next_history, deps)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -118,7 +117,6 @@ async def _run_foreground_turn(
     saved_env: dict[str, str | None],
     deps: CoDeps,
     frontend: Frontend,
-    primary_model: str,
     reasoning_display: str,
 ) -> tuple[list[ModelMessage], dict]:
     """Execute one foreground turn: harvest bg compaction, run turn, cleanup, finalize.
@@ -139,7 +137,7 @@ async def _run_foreground_turn(
     finally:
         _cleanup_skill_run_state(saved_env, deps)
     return await _finalize_turn(
-        turn_result, message_history, session_data, deps, frontend, primary_model, compactor
+        turn_result, message_history, session_data, deps, frontend, compactor
     )
 
 
@@ -160,19 +158,13 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
     # Build model registry (pure config — no IO)
     from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.config import ROLE_REASONING
     deps.services.model_registry = ModelRegistry.from_config(deps.config)
-    _none_resolved = ResolvedModel(model=None, settings=None)
-    resolved = (
-        deps.services.model_registry.get(ROLE_REASONING, _none_resolved)
-        if deps.services.model_registry else _none_resolved
-    )
-    primary_model = resolved.model  # used for signal detection and background compaction
 
-    agent_result = build_agent(config=deps.config, resolved=resolved)
+    agent_result = build_agent(config=deps.config)
     agent = agent_result.agent
     deps.capabilities.tool_index = agent_result.tool_index
 
+    _none_resolved = ResolvedModel(model=None, settings=None)
     if deps.services.model_registry:
         task_resolved = deps.services.model_registry.get(ROLE_TASK, _none_resolved)
         if task_resolved.model:
@@ -244,7 +236,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     saved_env=_saved_env,
                     deps=deps,
                     frontend=frontend,
-                    primary_model=primary_model,
                     reasoning_display=reasoning_display,
                 )
 

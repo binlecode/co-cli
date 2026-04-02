@@ -30,10 +30,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ → CoDeps(services, config, runtime)
 │
 ├─ ModelRegistry.from_config(deps.config) → deps.services.model_registry
-├─ resolved = model_registry.get(ROLE_REASONING, fallback)
-├─ primary_model = resolved.model
 │
-├─ build_agent(config=deps.config, resolved=resolved)
+├─ build_agent(config=deps.config)
 │  ├─ build_static_instructions(provider, model_name, config)
 │  ├─ _build_mcp_toolsets(config) → mcp_toolsets
 │  ├─ _build_filtered_toolset(config) → (filtered_toolset, native_index)

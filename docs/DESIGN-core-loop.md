@@ -236,9 +236,9 @@ Compaction behavior after the refactor:
 
 Background precompute path:
 
-1. after turn `N`, `HistoryCompactionState.on_turn_end()` clears the old cache and spawns `precompute_compaction(history, deps, model)`
+1. after turn `N`, `HistoryCompactionState.on_turn_end()` clears the old cache and spawns `precompute_compaction(history, deps)`
 2. the background job runs only when the transcript is approaching the compaction threshold
-3. `precompute_compaction()` uses the summarization role from `deps.services.model_registry`, falling back to the current primary model if needed
+3. `precompute_compaction()` uses the summarization role from `deps.services.model_registry`
 4. before turn `N+1`, `HistoryCompactionState.on_turn_start()` harvests the completed result or cancels a stale task
 5. `truncate_history_window()` may consume that cached result during turn `N+1`
 
@@ -292,7 +292,7 @@ Interrupt handling is conservative:
    - not interrupted
    - not `outcome == "error"`
 3. `touch_session()` and `save_session()`
-4. `compactor.on_turn_end(next_history, deps, primary_model)`
+4. `compactor.on_turn_end(next_history, deps)`
 5. print a generic error banner when `turn_result.outcome == "error"`
 
 Skill dispatch is intentionally scoped to one delegated turn:

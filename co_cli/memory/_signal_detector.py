@@ -7,7 +7,7 @@ the memory is saved automatically (high) or surfaced for user approval (low).
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from co_cli.deps import CoServices, CoDeps
@@ -93,7 +93,6 @@ _signal_agent: Agent[None, SignalResult] = Agent(
 
 async def analyze_for_signals(
     messages: list,
-    model: Any,
     *,
     services: "CoServices",
 ) -> SignalResult:
@@ -105,8 +104,7 @@ async def analyze_for_signals(
 
     Args:
         messages: Full message history after run_turn() completes.
-        model: pydantic-ai model instance from agent.model (fallback if no analysis role).
-        services: CoServices for registry lookup.
+        services: CoServices for registry lookup (ROLE_ANALYSIS model).
 
     Returns:
         SignalResult with found/candidate/tag/confidence fields.
@@ -115,12 +113,12 @@ async def analyze_for_signals(
     if not window.strip():
         return SignalResult(found=False)
 
-    fallback = ResolvedModel(model=model, settings=None)
+    _none_resolved = ResolvedModel(model=None, settings=None)
 
     try:
         rm = (
-            services.model_registry.get(ROLE_ANALYSIS, fallback)
-            if services.model_registry else fallback
+            services.model_registry.get(ROLE_ANALYSIS, _none_resolved)
+            if services.model_registry else _none_resolved
         )
 
         result = await _signal_agent.run(window, model=rm.model, model_settings=rm.settings)
@@ -135,7 +133,6 @@ async def handle_signal(
     signal: SignalResult,
     deps: "CoDeps",
     frontend: "Frontend",
-    _model: Any,
 ) -> None:
     """Apply admission policy then persist or prompt for a detected signal."""
     if not signal.found or not signal.candidate or not signal.tag:

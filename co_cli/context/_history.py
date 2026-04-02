@@ -505,7 +505,6 @@ _PRECOMPACT_MSG_RATIO = 0.80
 async def precompute_compaction(
     messages: list[ModelMessage],
     deps: CoDeps,
-    model: str,
 ) -> CompactionResult | None:
     """Pre-compute a compaction summary during user idle time.
 
@@ -553,10 +552,10 @@ async def precompute_compaction(
 
     dropped = messages[bounds.head_end:bounds.tail_start]
 
-    fallback = ResolvedModel(model=model, settings=None)
+    _none_resolved = ResolvedModel(model=None, settings=None)
     resolved = (
-        deps.services.model_registry.get(ROLE_SUMMARIZATION, fallback)
-        if deps.services.model_registry else fallback
+        deps.services.model_registry.get(ROLE_SUMMARIZATION, _none_resolved)
+        if deps.services.model_registry else _none_resolved
     )
     summary_text = await _run_summarization_with_policy(
         dropped, resolved,
@@ -597,7 +596,7 @@ class HistoryCompactionState:
         stale one; writes deps.runtime.precomputed_compaction.  Must be called
         before run_turn() so truncate_history_window() sees a valid or None
         precomputed result when history processors fire.
-      on_turn_end(history, deps, model) — invalidates the now-consumed cache
+      on_turn_end(history, deps) — invalidates the now-consumed cache
         entry and spawns the next background pre-compute task.
       shutdown() — cancels any pending task on session end.
     """
@@ -631,14 +630,13 @@ class HistoryCompactionState:
         self,
         history: list[ModelMessage],
         deps: CoDeps,
-        model: str,
     ) -> None:
         """Invalidate the consumed cache entry and spawn the next background task."""
         if self._task is not None and not self._task.done():
             self._task.cancel()
         deps.runtime.precomputed_compaction = None
         self._task = asyncio.create_task(
-            precompute_compaction(history, deps, model)
+            precompute_compaction(history, deps)
         )
 
     def shutdown(self) -> None:
