@@ -35,7 +35,7 @@ def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir
         skills_dir=skills_dir or (tmp_path / ".co-cli" / "skills"),
         user_skills_dir=user_skills_dir or (tmp_path / "user-skills"),
     )
-    agent_result = build_agent(config=config)
+    agent = build_agent(config=config)
     deps = CoDeps(
         shell=ShellBackend(),
         config=config,
@@ -44,7 +44,7 @@ def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=agent_result.agent,
+        agent=agent,
     )
 
 

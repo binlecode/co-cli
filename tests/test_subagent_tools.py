@@ -16,7 +16,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx() -> RunContext:

@@ -127,6 +127,7 @@ def create_deps() -> CoDeps:
     Raises ValueError on provider/model hard errors.
     """
     from co_cli._model_factory import ModelRegistry
+    from co_cli.agent import build_tool_registry
 
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -136,8 +137,9 @@ def create_deps() -> CoDeps:
     if error:
         raise ValueError(error)
 
-    # Step 3: build model registry (pure config — no IO)
+    # Step 3: build registries (pure config — no IO)
     model_registry = ModelRegistry.from_config(config)
+    tool_reg = build_tool_registry(config)
 
     # Step 4: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
@@ -145,6 +147,7 @@ def create_deps() -> CoDeps:
         shell=ShellBackend(),
         config=config,
         model_registry=model_registry,
+        tool_index=tool_reg.tool_index,
         runtime=runtime,
     )
 

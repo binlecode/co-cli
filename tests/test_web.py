@@ -14,7 +14,7 @@ from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
 from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx(brave_search_api_key: str | None = None) -> RunContext:

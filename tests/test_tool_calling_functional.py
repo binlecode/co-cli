@@ -38,15 +38,17 @@ _TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 # build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
 # build_agent — reducing context from ~27K to ~10K tokens so calls complete faster.
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-# Agents built once at module level to avoid per-test construction overhead.
-_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED)
+# Tool registry and agents built once at module level to avoid per-test overhead.
+from co_cli.agent import build_tool_registry
+_TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
+_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED, tool_registry=_TOOL_REG)
 
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        tool_index=dict(_AGENT_NOREASON.tool_index),
+        tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),
     )
@@ -83,7 +85,7 @@ async def test_tool_selection_and_arg_extraction(
     arg_key: str,
     arg_contains: str,
 ):
-    agent = _AGENT_NOREASON.agent
+    agent = _AGENT_NOREASON
     deps = _make_deps(f"test-tool-{expected_tool}")
     frontend = SilentFrontend(approval_response="y")
 
@@ -171,7 +173,7 @@ async def test_refusal_no_tool_for_simple_math():
     await ensure_ollama_warm(_TASK_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
-            agent=_AGENT_NOREASON.agent,
+            agent=_AGENT_NOREASON,
             user_input="What is 17 times 23?",
             deps=deps,
             message_history=[],
@@ -193,7 +195,7 @@ async def test_intent_routing_observation_no_tool():
     await ensure_ollama_warm(_TASK_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
-            agent=_AGENT_NOREASON.agent,
+            agent=_AGENT_NOREASON,
             user_input="This function has a bug",
             deps=deps,
             message_history=[],
@@ -218,7 +220,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     from datetime import datetime, timezone
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "test-background-task-description"
@@ -251,7 +253,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     from datetime import datetime, timezone
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "background task list description"

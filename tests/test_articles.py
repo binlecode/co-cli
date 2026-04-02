@@ -15,7 +15,7 @@ from co_cli.knowledge._index_store import KnowledgeIndex
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx(

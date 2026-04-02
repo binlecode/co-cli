@@ -422,7 +422,7 @@ async def main():
           + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items())))
     print("=" * 70)
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="eval-conversation-history")
 
     all_results: list[dict] = []

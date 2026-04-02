@@ -153,7 +153,7 @@ async def main() -> int:
     agent_config = CoConfig.from_settings(settings, cwd=Path.cwd())
     import dataclasses
     agent_config = dataclasses.replace(agent_config, mcp_servers={})
-    agent = build_agent(config=agent_config).agent
+    agent = build_agent(config=agent_config)
 
     knowledge_index = KnowledgeIndex(
         config=CoConfig(knowledge_db_path=Path(".co-cli/search.db"))

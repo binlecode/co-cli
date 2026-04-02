@@ -158,15 +158,13 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
     from co_cli._model_factory import ResolvedModel
 
-    agent_result = build_agent(config=deps.config, model_registry=deps.model_registry)
-    agent = agent_result.agent
-    deps.tool_index = agent_result.tool_index
+    agent = build_agent(config=deps.config, model_registry=deps.model_registry)
 
     _no_model = ResolvedModel(model=None, settings=None)
     if deps.model_registry:
         task_model = deps.model_registry.get(ROLE_TASK, _no_model)
         if task_model.model:
-            deps.task_agents[ROLE_TASK] = build_task_agent(config=deps.config, role_model=task_model).agent
+            deps.task_agents[ROLE_TASK] = build_task_agent(config=deps.config, role_model=task_model)
 
     stack = AsyncExitStack()
     message_history: list[ModelMessage] = []

@@ -12,7 +12,7 @@ from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.todo import write_todos, read_todos
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx(session_id: str = "test-todo") -> RunContext:

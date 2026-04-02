@@ -44,10 +44,10 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class AgentCapabilityResult:
-    """Immutable return value of build_agent()."""
-    agent: Agent[CoDeps, str | DeferredToolRequests]
-    tool_index: dict[str, ToolConfig] = field(default_factory=dict)
+class ToolRegistryResult:
+    """Immutable return value of build_tool_registry()."""
+    toolset: AbstractToolset[CoDeps]
+    tool_index: dict[str, ToolConfig]
 
 
 def _build_mcp_toolsets(config: CoConfig) -> list:
@@ -218,6 +218,19 @@ def _build_filtered_toolset(
     return inner.filtered(_filter), native_index
 
 
+def build_tool_registry(config: CoConfig) -> ToolRegistryResult:
+    """Build the tool registry and pydantic-ai toolsets from config.
+
+    Pure config — no IO. Called once in create_deps().
+    Returns the toolset (for Agent construction) and tool_index (for deps).
+    """
+    mcp_toolsets = _build_mcp_toolsets(config)
+    filtered_toolset, native_index = _build_filtered_toolset(config)
+    combined_toolsets = [filtered_toolset] + mcp_toolsets
+    return ToolRegistryResult(toolset=combined_toolsets[0] if len(combined_toolsets) == 1 else filtered_toolset,
+                              tool_index=native_index)
+
+
 _TASK_AGENT_SYSTEM_PROMPT: str = (
     "You have received results for tool calls that the user approved. "
     "Process these results and respond to the user concisely and directly."
@@ -228,7 +241,8 @@ def build_agent(
     *,
     config: CoConfig,
     model_registry: "ModelRegistry | None" = None,
-) -> AgentCapabilityResult:
+    tool_registry: ToolRegistryResult | None = None,
+) -> Agent[CoDeps, str | DeferredToolRequests]:
     """Build the main session Agent with model and settings baked in at construction.
 
     Args:
@@ -236,6 +250,8 @@ def build_agent(
         model_registry: Pre-built registry for role→model lookup. When omitted,
             built from config internally (used by evals and tests that don't
             construct a registry).
+        tool_registry: Pre-built tool registry. When omitted, built from config
+            internally.
     """
     if model_registry is None:
         from co_cli._model_factory import ModelRegistry
@@ -243,6 +259,9 @@ def build_agent(
     reasoning_model = model_registry.get(
         ROLE_REASONING, ResolvedModel(model=None, settings=None)
     )
+
+    if tool_registry is None:
+        tool_registry = build_tool_registry(config)
 
     # Assemble static instructions (personality, rules, counter-steering) once at build time.
     from co_cli.prompts._assembly import build_static_instructions
@@ -252,7 +271,6 @@ def build_agent(
     static_instructions = build_static_instructions(config.llm_provider, normalized_model, config)
 
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, native_index = _build_filtered_toolset(config)
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
@@ -268,7 +286,7 @@ def build_agent(
             inject_opening_context,
             truncate_history_window,
         ],
-        toolsets=[filtered_toolset] + mcp_toolsets,
+        toolsets=[tool_registry.toolset] + mcp_toolsets,
     )
 
     # Conditional prompt layers — runtime-gated via @agent.instructions (fresh per turn, never accumulated)
@@ -323,37 +341,32 @@ def build_agent(
         )
         return prompt or ""
 
-    return AgentCapabilityResult(
-        agent=agent,
-        tool_index=native_index,
-    )
+    return agent
 
 
 def build_task_agent(
     *,
     config: CoConfig,
     role_model: "ResolvedModel",
-) -> AgentCapabilityResult:
+    tool_registry: ToolRegistryResult | None = None,
+) -> Agent[CoDeps, str | DeferredToolRequests]:
     """Build the lightweight task agent for approval resume turns.
 
     No personality, no date injection, no project instructions, no history processors.
     Same tools and approval flags as the main agent. Used by _run_approval_loop to
     resume approved deferred tool calls without the full main agent context overhead.
     """
+    if tool_registry is None:
+        tool_registry = build_tool_registry(config)
     mcp_toolsets = _build_mcp_toolsets(config)
-    filtered_toolset, native_index = _build_filtered_toolset(config)
-    agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
+    return Agent(
         role_model.model,
         deps_type=CoDeps,
         instructions=_TASK_AGENT_SYSTEM_PROMPT,
         model_settings=role_model.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
-        toolsets=[filtered_toolset] + mcp_toolsets,
-    )
-    return AgentCapabilityResult(
-        agent=agent,
-        tool_index=native_index,
+        toolsets=[tool_registry.toolset] + mcp_toolsets,
     )
 
 

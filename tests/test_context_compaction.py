@@ -23,7 +23,7 @@ from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 
 _CONFIG = CoConfig.from_settings(settings, cwd=__import__("pathlib").Path.cwd())
-_AGENT = build_agent(config=_CONFIG).agent
+_AGENT = build_agent(config=_CONFIG)
 
 
 def _make_ctx(config: CoConfig) -> RunContext:

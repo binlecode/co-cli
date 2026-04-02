@@ -259,7 +259,7 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
 
     deps = _make_deps(tmp_path, mcp_servers={})
     deps = dataclasses.replace(deps, config=dataclasses.replace(deps.config, skills_dir=skills_dir))
-    agent = build_agent(config=deps.config).agent
+    agent = build_agent(config=deps.config)
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)

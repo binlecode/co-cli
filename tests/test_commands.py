@@ -42,9 +42,10 @@ _REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
 _TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
 _TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
 
-# build_task_agent: minimal 1-sentence system prompt + local tools — bakes in
-# ROLE_TASK model settings (reasoning_effort=none) at construction time.
-_AGENT = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED)
+# Tool registry and task agent built once at module level.
+from co_cli.agent import build_tool_registry
+_TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
+_AGENT = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED, tool_registry=_TOOL_REG)
 
 
 def _make_ctx(
@@ -59,14 +60,14 @@ def _make_ctx(
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        tool_index=dict(_AGENT.tool_index),
+        tool_index=dict(_TOOL_REG.tool_index),
         config=config,
         session=CoSessionState(session_id="test-commands"),
     )
     return CommandContext(
         message_history=message_history or [],
         deps=deps,
-        agent=_AGENT.agent,
+        agent=_AGENT,
     )
 
 
@@ -140,8 +141,8 @@ async def test_approval_approve():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agents={"task": _AGENT.agent},
-        tool_index=dict(_AGENT.tool_index),
+        task_agents={"task": _AGENT},
+        tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
@@ -149,7 +150,7 @@ async def test_approval_approve():
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
-                agent=_AGENT.agent,
+                agent=_AGENT,
                 user_input=_PROMPT_SHELL,
                 deps=deps,
                 message_history=[],
@@ -179,8 +180,8 @@ async def test_approval_deny():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agents={"task": _AGENT.agent},
-        tool_index=dict(_AGENT.tool_index),
+        task_agents={"task": _AGENT},
+        tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
     )
@@ -188,7 +189,7 @@ async def test_approval_deny():
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
-                agent=_AGENT.agent,
+                agent=_AGENT,
                 user_input=_PROMPT_SHELL,
                 deps=deps,
                 message_history=[],
@@ -231,7 +232,7 @@ async def test_forget_command_evicts_fts_row(tmp_path):
             config=CoConfig(memory_dir=memory_dir),
             session=CoSessionState(session_id="test-forget-fts"),
         ),
-        agent=_AGENT.agent,
+        agent=_AGENT,
     )
 
     result = await dispatch("/forget 1", ctx)

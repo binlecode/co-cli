@@ -1,4 +1,4 @@
-# PROPOSAL: Session Workspace & File Exchange Pattern
+# PROPOSAL: Multi-Agent Workroom & File Exchange Pattern
 _Date: 2026-03-10_
 _Status: Proposed (Pending PO & TL Review)_
 
@@ -6,7 +6,7 @@ _Status: Proposed (Pending PO & TL Review)_
 
 Following the review of peer systems and local-first agent runtimes, we identified a critical gap in `co-cli`'s execution model: **File-System Sandboxing and Transparency**.
 
-While `co` enforces strict *tool* boundaries (e.g., read-only sub-agents), it executes all agents within the same global working directory. This proposal introduces the **Session Workspace Pattern**, adapting isolated per-task workspace ideas to fit `co`'s engineering rigor.
+While `co` enforces strict *tool* boundaries (e.g., read-only sub-agents), it executes all agents within the same global working directory. This proposal introduces the **Multi-Agent Workroom Pattern**, adapting isolated per-task workspace ideas to fit `co`'s engineering rigor.
 
 This proposal advocates for three distinct architectural additions under the `.co-cli/` directory:
 1. **Sub-agent Sandboxing** (`.co-cli/workspaces/`): Ephemeral scratchpads for delegated tasks.
@@ -16,7 +16,7 @@ This proposal advocates for three distinct architectural additions under the `.c
 ### Why Adopt This? (Alignment with `co` Principles)
 The `co` architecture explicitly rejects "magic prompt hacking" and "black-box execution." We believe in inspectability, local-first control, and structured tools. 
 
-Adopting a strict File Exchange and Session Workspace pattern provides three massive adoption benefits for `co`:
+Adopting a strict File Exchange and Multi-Agent Workroom pattern provides three massive adoption benefits for `co`:
 1. **It preserves CLI simplicity**: We don't need to build complex WebUI upload widgets or Base64 API payload handlers for future multimodal features (images, PDFs). A simple directory watch on `.co-cli/exchange/` keeps the terminal UX clean.
 2. **It hardens the trust boundary**: `co`'s primary value proposition is being a *trusted* local operator. Sandboxing sub-agents physically (via the file system) before they ever gain write access proves we take execution safety seriously, matching Codex's rigor.
 3. **It makes autonomy legible**: Users hate opaque cron jobs hidden in SQLite tables. Storing background task instructions as standard `.md` files means users can manage their agent's recurring behavior using their own IDE and Git, which perfectly aligns with our existing `skills/*.md` and `memory/*.md` paradigms.

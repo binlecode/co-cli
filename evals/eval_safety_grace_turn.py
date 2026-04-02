@@ -35,7 +35,7 @@ async def main() -> int:
     print("  E2E: Grace Turn on Usage Limit")
     print("=" * 60)
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())).agent
+    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
     deps = make_eval_deps(session_id="e2e-grace-turn")
     deps.runtime.safety_state = SafetyState()
     frontend = CapturingFrontend(verbose=True)

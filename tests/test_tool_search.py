@@ -6,22 +6,22 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import build_agent
+from co_cli.agent import build_agent, build_tool_registry
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.tool_search import search_tools
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_AGENT_RESULT = build_agent(config=_CONFIG)
-_AGENT = _AGENT_RESULT.agent
+_TOOL_REG = build_tool_registry(_CONFIG)
+_AGENT = build_agent(config=_CONFIG)
 
 
 def _make_deps() -> CoDeps:
-    """Build real CoDeps with tool_index populated from build_agent()."""
+    """Build real CoDeps with tool_index populated from build_tool_registry()."""
     return CoDeps(
         shell=ShellBackend(),
-        tool_index=dict(_AGENT_RESULT.tool_index),
+        tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG,
     )
 

@@ -281,7 +281,7 @@ async def main():
     # Web tools auto-execute (no approval prompt) for this demo
     demo_web_policy = WebPolicy(search="allow", fetch="allow")
     _config = CoConfig.from_settings(settings, cwd=Path.cwd())
-    agent = build_agent(config=_config).agent
+    agent = build_agent(config=_config)
     _registry = ModelRegistry.from_config(_config)
     _none_resolved = ResolvedModel(model=None, settings=None)
     model_settings = _registry.get(ROLE_REASONING, _none_resolved).settings

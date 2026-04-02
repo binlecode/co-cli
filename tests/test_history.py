@@ -28,7 +28,7 @@ from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 # Cache agent model reference for RunContext construction — no LLM call made here.
-_AGENT = build_agent(config=_CONFIG).agent
+_AGENT = build_agent(config=_CONFIG)
 
 
 def _make_processor_ctx(max_history_messages: int = 6) -> RunContext:

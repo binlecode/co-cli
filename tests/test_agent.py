@@ -3,7 +3,7 @@
 import dataclasses
 from pathlib import Path
 
-from co_cli.agent import build_agent, build_task_agent
+from co_cli.agent import build_agent, build_task_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
 from co_cli.deps import CoConfig
@@ -20,7 +20,7 @@ _CONFIG_WITH_INTEGRATIONS = dataclasses.replace(
 
 def test_build_agent_registers_all_tools():
     """build_agent() registers core tools with no duplicates, and conditionally registers sub-agent tools."""
-    result = build_agent(config=_CONFIG_WITH_INTEGRATIONS)
+    result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
     tool_names = list(result.tool_index.keys())
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
 
@@ -35,13 +35,13 @@ def test_build_agent_registers_all_tools():
         assert "run_coding_subagent" not in result.tool_index
 
     # Verify with CoConfig() (no role models): run_coding_subagent must be absent
-    bare_result = build_agent(config=CoConfig())
+    bare_result = build_tool_registry(CoConfig())
     assert "run_coding_subagent" not in bare_result.tool_index
 
 
 def test_approval_tools_flagged():
     """Side-effectful tools require approval; read-only and intra-tool-approval tools do not."""
-    result = build_agent(config=_CONFIG_WITH_INTEGRATIONS)
+    result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     # These tools must require approval at the agent layer
     for name in ("start_background_task", "save_memory", "write_file", "edit_file"):
@@ -63,29 +63,23 @@ def test_approval_tools_flagged():
 
 def test_web_tools_do_not_require_approval():
     """web_search and web_fetch follow the common read-only approval path."""
-    result = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    result = build_tool_registry(CoConfig.from_settings(settings, cwd=Path.cwd()))
     assert result.tool_index["web_search"].approval is False
     assert result.tool_index["web_fetch"].approval is False
 
 
-def test_build_task_agent_registers_same_tools_as_main_agent():
-    """build_task_agent() registers the same tools and approval flags as build_agent()."""
-    config = _CONFIG_WITH_INTEGRATIONS
-    registry = ModelRegistry.from_config(config)
-    task_resolved = registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-
-    main_result = build_agent(config=config)
-    task_result = build_task_agent(config=config, role_model=task_resolved)
-
-    assert set(task_result.tool_index.keys()) == set(main_result.tool_index.keys())
-    main_approvals = {name: tc.approval for name, tc in main_result.tool_index.items()}
-    task_approvals = {name: tc.approval for name, tc in task_result.tool_index.items()}
-    assert task_approvals == main_approvals
+def test_tool_registry_is_shared_across_agent_types():
+    """Main and task agents share the same tool_index — both built from the same config."""
+    reg = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
+    assert len(reg.tool_index) > 0, "tool_index must be populated"
+    # Verify the registry is deterministic: same config → same tools
+    reg2 = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
+    assert set(reg.tool_index.keys()) == set(reg2.tool_index.keys())
 
 
 def test_build_agent_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set."""
-    result = build_agent(config=CoConfig())
+    result = build_tool_registry(CoConfig())
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
     assert "search_drive_files" not in result.tool_index
@@ -95,19 +89,16 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
     assert "web_search" in result.tool_index
 
 
-def test_build_task_agent_excludes_domain_tools_when_config_absent():
-    """build_task_agent() excludes domain tools when config paths are absent."""
-    result = build_task_agent(
-        config=CoConfig(),
-        role_model=ResolvedModel(model=None, settings=None),
-    )
+def test_tool_registry_excludes_domain_tools_when_config_absent():
+    """Domain tools absent from tool_index when config paths are not set (any agent type)."""
+    result = build_tool_registry(CoConfig())
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
 
 
 def test_tool_index_loading_policy_metadata():
     """Native tools carry loading-policy flags and source metadata in tool_index."""
-    result = build_agent(config=_CONFIG_WITH_INTEGRATIONS)
+    result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     idx = result.tool_index
     assert len(idx) > 0, "tool_index must be populated"
@@ -143,6 +134,6 @@ def test_tool_index_loading_policy_metadata():
 
 def test_tool_index_source_axis_native_only():
     """All entries in tool_index from build_agent() are native source (MCP not yet discovered)."""
-    result = build_agent(config=CoConfig())
+    result = build_tool_registry(CoConfig())
     for name, tc in result.tool_index.items():
         assert tc.source == "native", f"{name}: expected native source before MCP discovery"

@@ -99,7 +99,7 @@ async def run_case(case: SignalCase) -> dict[str, object]:
             memory_dir = Path(tmpdir) / ".co-cli/knowledge"
             memory_dir.mkdir(parents=True)
 
-            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
             deps = make_eval_deps(session_id=f"eval-signal-{case.id}")
             frontend = SilentFrontend()
 

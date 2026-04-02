@@ -19,7 +19,7 @@ from co_cli.tools.files import (
 )
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 def _make_ctx(workspace: Path) -> RunContext:

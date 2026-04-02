@@ -136,7 +136,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 )
 
             # Build agent and deps
-            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
             deps = make_eval_deps(session_id=f"eval-recall-{case.id}")
 
             frontend = SilentFrontend()

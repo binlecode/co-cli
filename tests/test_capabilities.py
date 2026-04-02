@@ -15,7 +15,7 @@ from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd())).agent
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
 
 
 @pytest.mark.asyncio
