@@ -21,7 +21,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent, build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import CoDeps, CoCapabilityState, CoServices, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
 from tests._frontend import SilentFrontend
@@ -44,12 +44,13 @@ _AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, resolved=_TASK_RESOLVE
 
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id=session_id),
-        capabilities=CoCapabilityState(
+        services=CoServices(
+            shell=ShellBackend(),
+            model_registry=_REGISTRY,
             tool_index=dict(_AGENT_NOREASON.tool_index),
         ),
+        config=_CONFIG_NO_MCP,
+        session=CoSessionState(session_id=session_id),
     )
 
 

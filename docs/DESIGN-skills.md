@@ -67,8 +67,8 @@ Later passes win on name collision, so project-local overrides user-global, whic
 Loading happens at startup inside `initialize_session_capabilities()` (in `bootstrap/_bootstrap.py`) after MCP initialization and before the welcome banner:
 
 1. load bundled, then user-global, then project-local skills
-2. `set_skill_commands(skill_commands, deps.capabilities)`
-3. `completer.words = _build_completer_words(deps.capabilities.skill_commands)` — called in `main.py` immediately after `initialize_session_capabilities()` returns
+2. `set_skill_commands(skill_commands, deps.services)`
+3. `completer.words = _build_completer_words(deps.services.skill_commands)` — called in `main.py` immediately after `initialize_session_capabilities()` returns
 
 ### Load Gating
 
@@ -114,10 +114,10 @@ There are two skill registries:
 
 | Registry | Purpose |
 | --- | --- |
-| `deps.capabilities.skill_commands` | full loaded skill set used by slash-command dispatch |
-| `deps.capabilities.skill_registry` | model-facing list of visible skills with name and description only |
+| `deps.services.skill_commands` | full loaded skill set used by slash-command dispatch |
+| `deps.services.skill_commands` | model-facing list of visible skills with name and description only |
 
-`set_skill_commands()` updates both. `capabilities.skill_registry` excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
+`set_skill_commands()` replaces `services.skill_commands`. The model-facing skill registry is derived on read via `get_skill_registry()`, which excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
 
 ### Dispatch
 
@@ -126,7 +126,7 @@ Slash-command routing lives in `dispatch(raw_input, ctx)`.
 Dispatch order:
 
 1. built-in commands in `BUILTIN_COMMANDS`
-2. skills in `ctx.deps.capabilities.skill_commands`
+2. skills in `ctx.deps.services.skill_commands`
 3. unknown command error
 
 When a skill matches:

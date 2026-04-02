@@ -31,7 +31,7 @@ tools/
 
 `_reg(fn, *, approval, always_load, should_defer, search_hint, integration, retries)` in `_build_filtered_toolset()` calls `FunctionToolset.add_function()` and creates a `ToolConfig(name, description, approval, source, integration, always_load, should_defer, search_hint)` entry in `native_index`. Description is extracted from the function docstring first line. `_build_filtered_toolset()` returns `(filtered_toolset, native_index)`.
 
-The `FunctionToolset` is wrapped with `inner.filtered(_filter)`. `_filter` reads per-tool `always_load`/`should_defer` flags from `deps.capabilities.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call.
+The `FunctionToolset` is wrapped with `inner.filtered(_filter)`. `_filter` reads per-tool `always_load`/`should_defer` flags from `deps.services.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call.
 
 **Tool surface split:**
 
@@ -163,7 +163,7 @@ build_agent(config, resolved)                              # agent.py
 
 initialize_session_capabilities()                          # _bootstrap.py
   └─ discover_mcp_tools()                                 # list_tools() per MCPServer
-       └─ deps.capabilities.tool_index.update(mcp_index)
+       └─ deps.services.tool_index.update(mcp_index)
 ```
 
 ---

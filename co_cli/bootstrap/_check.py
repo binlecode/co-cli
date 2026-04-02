@@ -378,24 +378,14 @@ def check_runtime(
     knowledge_result = _check_knowledge(deps.services.knowledge_index, deps.config.knowledge_search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
-    skills_result = _check_skills(deps.capabilities.skill_registry)
+    from co_cli.commands._commands import get_skill_registry
+    skills_result = _check_skills(get_skill_registry(deps.services.skill_commands))
 
-    # Probe each configured MCP server; count live ones
-    # Prefer discovery errors from session (reflects actual connectivity at session start)
-    # over binary PATH/URL probe when available.
+    # Probe each configured MCP server via binary PATH/URL check
     mcp_probes: list[tuple[str, CheckResult]] = []
     for name, cfg in (deps.config.mcp_servers or {}).items():
         _emit_progress(progress, f"Doctor: checking MCP server '{name}'...")
-        prefix = cfg.prefix or name
-        discovery_error = deps.capabilities.mcp_discovery_errors.get(prefix)
-        if discovery_error is not None:
-            result = CheckResult(
-                ok=False,
-                status="error",
-                detail=f"discovery failed: {discovery_error}",
-            )
-        else:
-            result = check_mcp_server(cfg.command, cfg.url)
+        result = check_mcp_server(cfg.command, cfg.url)
         mcp_probes.append((f"mcp:{name}", result))
     mcp_count = sum(1 for _, r in mcp_probes if r.ok)
 
@@ -433,7 +423,7 @@ def check_runtime(
     }
 
     # Build source breakdown from tool_index
-    tool_index = deps.capabilities.tool_index
+    tool_index = deps.services.tool_index
     source_counts: dict[str, int] = {}
     for tc in tool_index.values():
         source_counts[tc.source] = source_counts.get(tc.source, 0) + 1
@@ -445,7 +435,7 @@ def check_runtime(
         "tool_names": list(tool_index.keys()),
         "tool_approvals": {name: tc.approval for name, tc in tool_index.items()},
         "tool_count": len(tool_index),
-        "skill_count": len(deps.capabilities.skill_registry),
+        "skill_count": len(get_skill_registry(deps.services.skill_commands)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.knowledge_search_backend,
         "source_counts": source_counts,

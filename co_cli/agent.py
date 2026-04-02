@@ -2,7 +2,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from co_cli._model_factory import ModelRegistry
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
@@ -195,7 +198,7 @@ def _build_filtered_toolset(
         _reg(create_gmail_draft, approval=True, should_defer=True, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
-        entry = ctx.deps.capabilities.tool_index.get(tool_def.name)
+        entry = ctx.deps.services.tool_index.get(tool_def.name)
         resume = ctx.deps.runtime.resume_tool_names
 
         if resume is not None:
@@ -224,22 +227,22 @@ _TASK_AGENT_SYSTEM_PROMPT: str = (
 def build_agent(
     *,
     config: CoConfig,
-    resolved: "ResolvedModel | None" = None,
+    model_registry: "ModelRegistry | None" = None,
 ) -> AgentCapabilityResult:
     """Build the main session Agent with model and settings baked in at construction.
 
     Args:
         config: Session config — static instructions, tool policy, MCP servers.
-        resolved: Pre-built reasoning model + inference settings. When omitted,
-            resolved from ModelRegistry.from_config(config). Callers that already
-            hold a resolved model (main.py) pass it explicitly to avoid building
-            the registry twice and to reuse the same instance as primary_model.
+        model_registry: Pre-built registry for role→model lookup. When omitted,
+            built from config internally (used by evals and tests that don't
+            construct a registry).
     """
-    if resolved is None:
+    if model_registry is None:
         from co_cli._model_factory import ModelRegistry
-        resolved = ModelRegistry.from_config(config).get(
-            ROLE_REASONING, ResolvedModel(model=None, settings=None)
-        )
+        model_registry = ModelRegistry.from_config(config)
+    resolved = model_registry.get(
+        ROLE_REASONING, ResolvedModel(model=None, settings=None)
+    )
 
     # Assemble static instructions (personality, rules, counter-steering) once at build time.
     from co_cli.prompts._assembly import build_static_instructions
@@ -315,7 +318,7 @@ def build_agent(
         """Inject deferred-tool awareness so the model knows to call search_tools."""
         from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
         prompt = build_deferred_tool_prompt(
-            ctx.deps.capabilities.tool_index,
+            ctx.deps.services.tool_index,
             ctx.deps.session.discovered_tools,
         )
         return prompt or ""

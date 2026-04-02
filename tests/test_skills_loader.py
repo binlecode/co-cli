@@ -79,7 +79,7 @@ async def test_skills_reload_updates_registry_and_completer(tmp_path: Path):
     result = await dispatch("/skills reload", ctx)
 
     assert isinstance(result, LocalOnly)
-    assert "reload-completer-skill" in ctx.deps.capabilities.skill_commands
+    assert "reload-completer-skill" in ctx.deps.services.skill_commands
     assert "/reload-completer-skill" in ctx.completer.words
 
 
@@ -117,7 +117,7 @@ async def test_skills_install_local_registers_skill(tmp_path: Path):
 
     assert isinstance(result, LocalOnly)
     assert (skills_dir / "myinstallskill.md").exists()
-    assert "myinstallskill" in ctx.deps.capabilities.skill_commands
+    assert "myinstallskill" in ctx.deps.services.skill_commands
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.tools._subagent_agents import CoderResult, ResearchResult, ThinkingResult
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoServices, CoConfig, CoCapabilityState, CoSessionState, CoRuntimeState, make_subagent_deps
+from co_cli.deps import CoDeps, CoServices, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
 
@@ -44,17 +44,15 @@ def test_make_subagent_deps_resets_session_state() -> None:
     from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
     skill = SkillConfig(name="my-skill", body="do it")
-    cap_state = CoCapabilityState(
-        skill_commands={"my-skill": skill},
-        skill_registry=[{"name": "my-skill"}],
-    )
     base = CoDeps(
-        services=CoServices(shell=ShellBackend()),
+        services=CoServices(
+            shell=ShellBackend(),
+            skill_commands={"my-skill": skill},
+        ),
         config=CoConfig(
             brave_search_api_key="test-key",
             memory_max_count=500,
         ),
-        capabilities=cap_state,
         session=CoSessionState(
             session_id="parent-session",
             google_creds_resolved=True,
@@ -69,8 +67,8 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     isolated = make_subagent_deps(base)
 
-    # capabilities shared by reference (same capability registry)
-    assert isolated.capabilities is base.capabilities
+    # services shared by reference (registries + handles)
+    assert isolated.services is base.services
 
     # Session: inherited fields carry over
     assert isolated.session.google_creds_resolved is True

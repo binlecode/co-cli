@@ -15,7 +15,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 from co_cli.agent import build_task_agent
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoCapabilityState, CoServices, CoConfig, CoSessionState, SessionApprovalRule
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoServices, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools._tool_approvals import (
     is_auto_approved,
@@ -57,12 +57,13 @@ def _make_ctx(
     if memory_dir is not None:
         config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY),
-        config=config,
-        session=CoSessionState(session_id="test-commands"),
-        capabilities=CoCapabilityState(
+        services=CoServices(
+            shell=ShellBackend(),
+            model_registry=_REGISTRY,
             tool_index=dict(_AGENT.tool_index),
         ),
+        config=config,
+        session=CoSessionState(session_id="test-commands"),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -139,12 +140,14 @@ async def test_approval_approve():
     deferred tool → auto-approve → execution → LLM response.
     """
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-approval"),
-        capabilities=CoCapabilityState(
+        services=CoServices(
+            shell=ShellBackend(),
+            model_registry=_REGISTRY,
+            task_agent=_AGENT.agent,
             tool_index=dict(_AGENT.tool_index),
         ),
+        config=_CONFIG_NO_MCP,
+        session=CoSessionState(session_id="test-approval"),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
@@ -178,12 +181,14 @@ async def test_approval_deny():
     deferred tool → deny → LLM acknowledgement response.
     """
     deps = CoDeps(
-        services=CoServices(shell=ShellBackend(), model_registry=_REGISTRY, task_agent=_AGENT.agent),
-        config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-denial"),
-        capabilities=CoCapabilityState(
+        services=CoServices(
+            shell=ShellBackend(),
+            model_registry=_REGISTRY,
+            task_agent=_AGENT.agent,
             tool_index=dict(_AGENT.tool_index),
         ),
+        config=_CONFIG_NO_MCP,
+        session=CoSessionState(session_id="test-denial"),
     )
     await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
@@ -273,7 +278,7 @@ async def test_dispatch_skill_returns_delegate_to_agent():
     """Skill dispatch must return DelegateToAgent."""
     test_skill = SkillConfig(name="test-boundary-skill", body="Do the thing.", description="test")
     ctx = _make_ctx()
-    ctx.deps.capabilities.skill_commands["test-boundary-skill"] = test_skill
+    ctx.deps.services.skill_commands["test-boundary-skill"] = test_skill
     result = await dispatch("/test-boundary-skill", ctx)
     assert isinstance(result, DelegateToAgent)
     assert result.delegated_input == "Do the thing."
@@ -293,7 +298,7 @@ async def test_dispatch_builtin_takes_precedence_over_same_name_skill():
     # 'clear' is a builtin — registering a skill with the same name must not shadow it
     test_skill = SkillConfig(name="clear", body="skill body", description="test")
     ctx = _make_ctx(message_history=["msg"])
-    ctx.deps.capabilities.skill_commands["clear"] = test_skill
+    ctx.deps.services.skill_commands["clear"] = test_skill
     result = await dispatch("/clear", ctx)
     # Must route to builtin: ReplaceTranscript with cleared history
     assert isinstance(result, ReplaceTranscript)

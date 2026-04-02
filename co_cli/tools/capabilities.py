@@ -58,7 +58,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
 
     mcp_configured = len(ctx.deps.config.mcp_servers or {})
     mcp_live = caps["mcp_count"]
-    tool_index = ctx.deps.capabilities.tool_index
+    tool_index = ctx.deps.services.tool_index
     native_tool_count = sum(1 for tc in tool_index.values() if tc.source == "native")
     mcp_tool_count = sum(1 for tc in tool_index.values() if tc.source == "mcp")
 

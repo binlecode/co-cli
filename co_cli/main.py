@@ -160,9 +160,9 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     from co_cli._model_factory import ModelRegistry, ResolvedModel
     deps.services.model_registry = ModelRegistry.from_config(deps.config)
 
-    agent_result = build_agent(config=deps.config)
+    agent_result = build_agent(config=deps.config, model_registry=deps.services.model_registry)
     agent = agent_result.agent
-    deps.capabilities.tool_index = agent_result.tool_index
+    deps.services.tool_index = agent_result.tool_index
 
     _none_resolved = ResolvedModel(model=None, settings=None)
     if deps.services.model_registry:
@@ -184,7 +184,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             console.print(f"[warn]MCP server failed to connect: {e} — running without MCP tools.[/warn]")
 
         session_cap = await initialize_session_capabilities(agent, deps, frontend, _mcp_init_ok)
-        completer.words = _build_completer_words(deps.capabilities.skill_commands)
+        completer.words = _build_completer_words(deps.services.skill_commands)
 
         initialize_knowledge(deps, frontend)
         sync_knowledge(deps, frontend)

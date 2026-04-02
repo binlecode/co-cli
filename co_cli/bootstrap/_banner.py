@@ -42,11 +42,11 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     else:
         llm_provider = config.llm_provider
 
-    from co_cli.commands._commands import BUILTIN_COMMANDS
-    tool_count = len(deps.capabilities.tool_index)
-    skill_count = len(deps.capabilities.skill_registry)
+    from co_cli.commands._commands import BUILTIN_COMMANDS, get_skill_registry
+    tool_count = len(deps.services.tool_index)
+    skill_count = len(get_skill_registry(deps.services.skill_commands))
     mcp_count = len(deps.config.mcp_servers or {})
-    cmd_count = len(BUILTIN_COMMANDS) + deps.capabilities.slash_command_count
+    cmd_count = len(BUILTIN_COMMANDS) + sum(1 for s in deps.services.skill_commands.values() if s.user_invocable)
 
     try:
         git_branch = subprocess.check_output(

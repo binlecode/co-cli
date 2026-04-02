@@ -100,17 +100,20 @@ class SessionApprovalRule:
 
 @dataclass
 class CoServices:
-    """Injected service handles — shared across the session.
+    """Injected service handles and bootstrap-set registries — shared across the session.
 
-    Services are created once in main.py and shared by reference. Sub-agents
-    receive the same handles since they are safe to share (shell, index are
-    all stateless or internally thread-safe).
+    Created once in main.py and shared by reference with sub-agents.
+    Service handles (shell, knowledge_index) are stateless or thread-safe.
+    Registries (tool_index, skill_commands, model_registry) are set during
+    bootstrap and read-only afterward.
     """
 
     shell: ShellBackend
     knowledge_index: Any | None = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
     task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
+    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
+    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -315,25 +318,6 @@ class ToolConfig:
             )
 
 
-@dataclass
-class CoCapabilityState:
-    """Bootstrap-set capability registry — shared by reference with sub-agents.
-
-    Populated during agent construction and startup (MCP discovery, skill loading)
-    in main.py and bootstrap; not mutated afterward. Sub-agents receive the same
-    instance via make_subagent_deps (passed by reference), so they always see the
-    correct tool and skill registry.
-
-    Covers the complete bootstrap-set capability surface: tool names, approval map,
-    MCP errors, skill commands, skill registry, and slash command count.
-    """
-
-    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
-    mcp_discovery_errors: dict[str, str] = field(default_factory=dict)
-    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
-    skill_registry: list[dict] = field(default_factory=list)
-    slash_command_count: int = 0
-
 
 @dataclass
 class CoSessionState:
@@ -406,11 +390,10 @@ class CoDeps:
     """Runtime dependencies for agent tools — grouped by responsibility.
 
     Ownership rules:
-      services      = injected capabilities (shell, knowledge index, task runner)
-      config        = injected read-only settings (API keys, paths, limits, thresholds)
-      capabilities  = bootstrap-set capability registry; shared by reference with sub-agents
-      session       = mutable tool-visible session state (creds, approvals, todos)
-      runtime       = mutable orchestration/processor transient state
+      services  = service handles + bootstrap-set registries; shared by reference
+      config    = read-only settings (API keys, paths, limits, thresholds)
+      session   = mutable tool-visible session state (creds, approvals, todos)
+      runtime   = mutable orchestration/processor transient state
 
     pydantic-ai receives this as the single deps_type. Tools access fields via
     ctx.deps.services.shell, ctx.deps.config.memory_dir, etc.
@@ -418,7 +401,6 @@ class CoDeps:
 
     services: CoServices
     config: CoConfig
-    capabilities: CoCapabilityState = field(default_factory=CoCapabilityState)
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
 
@@ -426,15 +408,15 @@ class CoDeps:
 def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     """Create an isolated CoDeps copy for a sub-agent.
 
-    Shares services, config, and capabilities by reference (safe — handles are stateless
-    or thread-safe; config and capabilities are read-only after bootstrap).
+    Shares services and config by reference (safe — handles are stateless or
+    thread-safe; registries on services are read-only after bootstrap; config
+    is frozen).
 
     Session fields:
       Inherited: google_creds, google_creds_resolved (resolved once, safe to share),
                  session_approval_rules (copied — sub-agent grants must not leak to parent).
       Fresh:     drive_page_tokens, session_todos, session_id.
 
-    Capabilities are shared by reference — loaded once at startup, never mutated afterward.
     Runtime is reset to clean defaults (no compaction cache, no turn usage).
     """
     inherited_session = CoSessionState(
@@ -445,7 +427,6 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     return CoDeps(
         services=base.services,
         config=base.config,
-        capabilities=base.capabilities,
         session=inherited_session,
         runtime=CoRuntimeState(),
     )

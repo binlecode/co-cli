@@ -265,9 +265,9 @@ async def test_initialize_session_capabilities_project_skill_registered(tmp_path
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await initialize_session_capabilities(agent, deps, TerminalFrontend(), mcp_init_ok=False)
 
-    skill_names = [s["name"] for s in deps.capabilities.skill_registry]
+    skill_names = list(deps.services.skill_commands.keys())
     assert "test-bootstrap-skill" in skill_names, (
-        "Project skill must appear in skill_registry after initialize_session_capabilities"
+        "Project skill must appear in skill_commands after initialize_session_capabilities"
     )
     assert result.skill_count >= 1, (
         "skill_count must be at least 1 when a valid project skill is loaded"

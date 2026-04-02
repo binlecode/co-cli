@@ -14,7 +14,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
     on the next step. Always-loaded tools matching the query are reported
     as 'already available'.
     """
-    tool_index = ctx.deps.capabilities.tool_index
+    tool_index = ctx.deps.services.tool_index
     query_tokens = set(query.lower().split())
 
     # Exact-name lookup across all tools first

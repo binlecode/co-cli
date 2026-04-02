@@ -117,8 +117,8 @@ Startup is intentionally split between synchronous bootstrap and async activatio
 8. `async with agent` activates the main agent context, which is required before MCP discovery.
 9. `initialize_session_capabilities()` completes the session capability surface:
     - discovers MCP tool names from connected servers
-    - records discovery errors in `deps.capabilities.mcp_discovery_errors`
-    - loads skills and populates `deps.capabilities.skill_commands`
+    - logs discovery errors via `frontend.on_status()`
+    - loads skills into `deps.services.skill_commands`
 11. `sync_knowledge()` syncs memory and article directories into the active `KnowledgeIndex` when available.
 12. `restore_session()` restores or creates `.co-cli/session.json`, copying only the `session_id` into `deps.session`.
 13. The REPL loop starts.
@@ -161,7 +161,7 @@ The filtered native toolset matters for approval resumes:
 
 - native tools are always registered once at startup
 - some domain tools are omitted entirely when the integration is absent
-- `_filter` uses per-tool `always_load`/`should_defer` flags from `deps.capabilities.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
+- `_filter` uses per-tool `always_load`/`should_defer` flags from `deps.services.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
 - MCP tools in `tool_index` follow the same visibility rule; MCP tools not yet in `tool_index` pass through the filter
 
 `build_task_agent()` intentionally removes the heavy prompt/context layers:
@@ -183,9 +183,8 @@ Global instrumentation is enabled once in `main.py`:
 
 ```text
 CoDeps
-├── services      long-lived runtime handles
+├── services      service handles + bootstrap-set registries
 ├── config        resolved read-only session config
-├── capabilities  startup-completed capability registry
 ├── session       mutable session state visible to tools
 └── runtime       mutable orchestration / processor state
 ```
@@ -194,32 +193,29 @@ Practical ownership rules:
 
 | Group | Holds | Mutation model |
 | --- | --- | --- |
-| `services` | shell backend, knowledge index, model registry, optional task agent | built once; shared by reference |
+| `services` | shell backend, knowledge index, model registry, task agent, tool index, skill commands | built once; shared by reference |
 | `config` | resolved scalar settings and paths | read-only after bootstrap |
-| `capabilities` | tool index (loading policy, approval, metadata), MCP discovery errors, loaded skill metadata | populated during startup, then treated as stable shared state |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
 
 Sub-agent isolation is explicit in `make_subagent_deps(base)`:
 
-- shared by reference: `services`, `config`, `capabilities`
+- shared by reference: `services`, `config`
 - inherited as copied session state: `session_approval_rules`
 - inherited as shared resolved creds: `google_creds`, `google_creds_resolved`
 - reset for the child: `drive_page_tokens`, `session_todos`, `session_id`, `memory_recall_state`, all runtime fields
 
 ### 2.5 State Lifecycle Reference
 
-#### `CoCapabilityState` — `deps.capabilities`
+#### `CoServices` registries — `deps.services`
 
-Shared by reference with sub-agents.
+Shared by reference with sub-agents. Service handles (shell, knowledge_index) and bootstrap-set registries (tool_index, skill_commands, model_registry) live together.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
 | `tool_index` | `build_agent()` seeds native `ToolConfig` map (with `always_load`/`should_defer` flags); `initialize_session_capabilities()` merges MCP `ToolConfig` entries after discovery | never | shared ref |
-| `mcp_discovery_errors` | `initialize_session_capabilities()` | never | shared ref |
 | `skill_commands` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
-| `skill_registry` | `initialize_session_capabilities()` via `set_skill_commands()` | replaced on skill reload | shared ref |
-| `slash_command_count` | `set_skill_commands()` counts user-invocable loaded skills | replaced on skill reload | shared ref |
+| `model_registry` | `_chat_loop()` via `ModelRegistry.from_config()` | never | shared ref |
 
 #### `CoSessionState` — `deps.session`
 
@@ -269,7 +265,7 @@ Key distinctions:
 
 - skills are not tools; they rewrite user input into delegated agent input
 - MCP toolsets are attached during agent construction but only discovered after entering the main agent context
-- `deps.capabilities.tool_index` is the single source of truth for tool capability state; tool names and approvals are derived from it
+- `deps.services.tool_index` is the single source of truth for tool capability state; tool names and approvals are derived from it
 - the `_filter` function in `_build_filtered_toolset()` uses per-tool loading policy to narrow the native `FunctionToolset`
 
 ### 2.7 Persistent Stores And External State
@@ -304,7 +300,7 @@ Graceful degradation:
 - unavailable LLM reranker
 - hybrid knowledge unavailable, falling back to `fts5` or `grep`
 - knowledge sync failure, which closes and disables the live knowledge index for the session
-- MCP connection or tool-list failure, which records errors in `deps.capabilities.mcp_discovery_errors`
+- MCP connection or tool-list failure, which logs errors via `frontend.on_status()`
 
 ## 3. Config
 
