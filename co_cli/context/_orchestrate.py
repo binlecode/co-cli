@@ -325,7 +325,8 @@ async def _run_approval_loop(
         turn_state.current_input = None
         turn_state.current_history = turn_state.latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
-        resume_agent = deps.task_agent or agent
+        from co_cli.config import ROLE_TASK
+        resume_agent = deps.task_agents.get(ROLE_TASK, agent)
         resume_settings = _resolve_task_model_settings(deps) or model_settings
         await _execute_stream_segment(
             turn_state, resume_agent, deps, resume_settings, reasoning_display, frontend

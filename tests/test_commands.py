@@ -140,7 +140,7 @@ async def test_approval_approve():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agent=_AGENT.agent,
+        task_agents={"task": _AGENT.agent},
         tool_index=dict(_AGENT.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
@@ -179,7 +179,7 @@ async def test_approval_deny():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agent=_AGENT.agent,
+        task_agents={"task": _AGENT.agent},
         tool_index=dict(_AGENT.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),

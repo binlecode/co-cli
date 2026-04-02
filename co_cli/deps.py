@@ -387,9 +387,9 @@ class CoDeps:
     # Service handles (optional, set during bootstrap)
     knowledge_index: Any | None = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
-    task_agent: "Agent[CoDeps, str | DeferredToolRequests] | None" = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
+    task_agents: "dict[str, Agent]" = field(default_factory=dict, repr=False)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
@@ -420,7 +420,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
         config=base.config,
         knowledge_index=base.knowledge_index,
         model_registry=base.model_registry,
-        task_agent=base.task_agent,
+        task_agents=base.task_agents,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,
         session=inherited_session,
