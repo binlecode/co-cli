@@ -7,7 +7,7 @@ import os
 from co_cli.deps import CoDeps
 
 
-def _cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:
+def cleanup_skill_run_state(saved_env: dict[str, str | None], deps: CoDeps) -> None:
     """Restore saved skill-run env vars and clear active skill session state."""
     for k, v in saved_env.items():
         if v is not None:

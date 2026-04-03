@@ -1,0 +1,138 @@
+"""JSONL transcript persistence for co-cli chat sessions.
+
+Transcripts are stored as JSONL files at .co-cli/sessions/{session-id}.jsonl.
+Each line is a single-element list serialized via ModelMessagesTypeAdapter,
+containing one ModelMessage (request or response).
+
+Transcript files are append-only — never rewritten, never truncated.
+No TTL on transcripts — permanent until user deletes manually.
+
+Compact boundary markers are written when compaction occurs. On resume,
+messages before the last boundary are skipped for files above the
+precompact threshold (5 MB), matching fork-claude-code's pattern.
+"""
+
+import logging
+from pathlib import Path
+
+from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+
+logger = logging.getLogger(__name__)
+
+# Files below this threshold are loaded in full — no boundary scan.
+# Above this, compact boundaries trigger pre-boundary skip on resume.
+# Matches fork-claude-code's SKIP_PRECOMPACT_THRESHOLD.
+SKIP_PRECOMPACT_THRESHOLD = 5 * 1024 * 1024  # 5 MB
+
+# Read-side OOM guard — bail before loading files above this size.
+# Matches fork-claude-code's MAX_TRANSCRIPT_READ_BYTES.
+MAX_TRANSCRIPT_READ_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Marker line written to JSONL when compaction replaces in-memory history.
+# On resume, everything before the last occurrence is skipped (for large files).
+COMPACT_BOUNDARY_MARKER = '{"type":"compact_boundary"}'
+
+
+def append_messages(
+    sessions_dir: Path,
+    session_id: str,
+    messages: list[ModelMessage],
+) -> None:
+    """Append new ModelMessage entries as JSONL lines to the session transcript.
+
+    Each message is serialized as a single-element list via ModelMessagesTypeAdapter.
+    Writer is stateless — derives transcript path from session_id on every call.
+    """
+    if not messages:
+        return
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = sessions_dir / f"{session_id}.jsonl"
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            for msg in messages:
+                line = ModelMessagesTypeAdapter.dump_json([msg])
+                f.write(line.decode("utf-8") + "\n")
+        path.chmod(0o600)
+    except OSError as e:
+        logger.warning("Transcript write failed for session %s: %s", session_id[:8], e)
+
+
+def write_compact_boundary(sessions_dir: Path, session_id: str) -> None:
+    """Write a compact boundary marker to the session transcript.
+
+    On resume, load_transcript skips all messages before the last boundary
+    (for files above SKIP_PRECOMPACT_THRESHOLD). This avoids loading the
+    full uncompacted history — only post-compaction messages are returned.
+    """
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    path = sessions_dir / f"{session_id}.jsonl"
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(COMPACT_BOUNDARY_MARKER + "\n")
+        path.chmod(0o600)
+    except OSError as e:
+        logger.warning("Compact boundary write failed for session %s: %s", session_id[:8], e)
+
+
+def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
+    """Load a transcript from a session's JSONL file.
+
+    For files above SKIP_PRECOMPACT_THRESHOLD (5 MB), messages before the
+    last compact_boundary marker are skipped — only post-compaction messages
+    are returned. Files above MAX_TRANSCRIPT_READ_BYTES (50 MB) are rejected
+    entirely to prevent OOM.
+
+    Returns the deserialized list of ModelMessage objects.
+    Skips malformed lines with a warning.
+    """
+    path = sessions_dir / f"{session_id}.jsonl"
+    if not path.exists():
+        return []
+
+    try:
+        file_size = path.stat().st_size
+    except OSError:
+        return []
+
+    if file_size > MAX_TRANSCRIPT_READ_BYTES:
+        logger.warning(
+            "Transcript too large to load (%d bytes, limit %d): %s",
+            file_size, MAX_TRANSCRIPT_READ_BYTES, path.name,
+        )
+        return []
+
+    skip_precompact = file_size > SKIP_PRECOMPACT_THRESHOLD
+
+    all_messages: list[ModelMessage] = []
+    boundary_found = False
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                # Detect compact boundary marker
+                if line == COMPACT_BOUNDARY_MARKER:
+                    if skip_precompact:
+                        all_messages.clear()
+                        boundary_found = True
+                    continue
+                try:
+                    parsed = ModelMessagesTypeAdapter.validate_json(line)
+                    all_messages.extend(parsed)
+                except Exception:
+                    logger.warning(
+                        "Skipping malformed line %d in %s",
+                        line_num, path.name,
+                    )
+    except OSError as e:
+        logger.warning("Transcript read failed for session %s: %s", session_id[:8], e)
+
+    if skip_precompact and boundary_found:
+        logger.info(
+            "Transcript loaded with compact-boundary skip: %d post-boundary messages from %s",
+            len(all_messages), path.name,
+        )
+
+    return all_messages

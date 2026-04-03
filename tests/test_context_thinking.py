@@ -1,4 +1,4 @@
-"""Tests for ThinkingPart handling in _find_first_run_end (TASK-2)."""
+"""Tests for ThinkingPart handling in find_first_run_end (TASK-2)."""
 
 from pydantic_ai.messages import (
     ModelRequest,
@@ -8,7 +8,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.context._history import _find_first_run_end
+from co_cli.context._history import find_first_run_end
 
 
 def _user(text: str) -> ModelRequest:
@@ -23,7 +23,7 @@ def _user(text: str) -> ModelRequest:
 def test_find_first_run_end_accepts_thinking_only_response():
     """ModelResponse with only ThinkingPart is a valid first-run anchor.
 
-    Without this fix, _find_first_run_end would return 0 (only the initial
+    Without this fix, find_first_run_end would return 0 (only the initial
     ModelRequest pinned), losing the thinking turn from the head.
     """
     messages = [
@@ -32,7 +32,7 @@ def test_find_first_run_end_accepts_thinking_only_response():
         _user("follow up"),
         ModelResponse(parts=[TextPart(content="answer")]),
     ]
-    idx = _find_first_run_end(messages)
+    idx = find_first_run_end(messages)
     # Index 1 is the ThinkingPart-only response — must be anchored
     assert idx == 1
 
@@ -50,5 +50,5 @@ def test_find_first_run_end_accepts_thinking_and_text_response():
         _user("follow up"),
         ModelResponse(parts=[TextPart(content="more")]),
     ]
-    idx = _find_first_run_end(messages)
+    idx = find_first_run_end(messages)
     assert idx == 1

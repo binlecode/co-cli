@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-04-03
+
+### Added
+- **Model-spec-aware compaction budget**: `resolve_compaction_budget()` resolves token budget from model quirks `context_window` (minus output reserve), Ollama `llm_num_ctx` override, or 100K fallback — follows fork-cc's `effectiveContextWindow` pattern instead of hardcoding 100K for all cloud models.
+- **`context_window` in model quirks**: Gemini (1M tokens) and Ollama (262K) models now declare their context window in quirks YAML, surfaced through `ResolvedModel.context_window`.
+- **`/compact` budget visibility**: compaction summary now shows token estimates and budget (e.g. `est. 85K → 12K of 983K budget`).
+
+### Changed
+- **Context module split**: `_history.py` split into `_history.py` (4 pydantic-ai processors) + `_compaction.py` (summarization engine, budget resolution, token estimation). `_transcript.py` split into `_transcript.py` (JSONL I/O) + `_session_browser.py` (session listing/UI). Each module now has a single concern.
+- **Public API naming**: removed `_` prefix from `find_first_run_end`, `format_file_size`, `cleanup_skill_run_state` — these were imported as public API outside the context package.
+- **`_CompactionBoundaries` moved**: from `_types.py` to `_history.py` (its only consumer).
+- **`build_model()` return**: now returns 3-tuple `(model, settings, context_window)` to thread quirks context window through the model registry.
+
+### Fixed
+- **`/resume` empty transcript guard**: `_cmd_resume` now handles empty/oversized transcripts gracefully instead of silently clearing history.
+- **Duplicate import removed**: `ROLE_TASK` was imported both at module level and inline in `_orchestrate.py`.
+
 ## [0.7.14] - 2026-04-02
 
 ### Changed

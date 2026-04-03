@@ -295,7 +295,11 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli.context._history import summarize_messages
+    from co_cli.context._compaction import (
+        summarize_messages,
+        resolve_compaction_budget,
+        estimate_message_tokens,
+    )
     from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
@@ -308,6 +312,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
         if ctx.deps.model_registry else _none
     )
+    pre_tokens = estimate_message_tokens(ctx.message_history)
     try:
         summary = await summarize_messages(ctx.message_history, resolved)
     except (ModelHTTPError, ModelAPIError) as e:
@@ -328,8 +333,11 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         ]),
     ]
     old_len = len(ctx.message_history)
+    post_tokens = estimate_message_tokens(new_history)
+    budget = resolve_compaction_budget(ctx.deps.config, ctx.deps.model_registry)
     console.print(
-        f"[info]Compacted: {old_len} messages → {len(new_history)} messages.[/info]"
+        f"[info]Compacted: {old_len} → {len(new_history)} messages "
+        f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)[/info]"
     )
     return ReplaceTranscript(history=new_history, compaction_applied=True)
 
@@ -373,7 +381,7 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
-    from co_cli.context._history import _index_session_summary
+    from co_cli.context._compaction import index_session_summary
     from co_cli.knowledge._frontmatter import ArtifactTypeEnum
     from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
     from co_cli._model_factory import ResolvedModel
@@ -387,7 +395,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
         if ctx.deps.model_registry else _none
     )
-    summary = await _index_session_summary(
+    summary = await index_session_summary(
         ctx.message_history,
         resolved,
         personality_active=bool(ctx.deps.config.personality),
@@ -407,6 +415,16 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         title=f"session-{timestamp}",
         artifact_type=ArtifactTypeEnum.SESSION_SUMMARY,
     )
+
+    # Rotate session ID — transcript writer is stateless (derives path from
+    # deps.session.session_id), so the next write goes to a new file.
+    from co_cli.context._session import new_session, save_session
+    session_data = new_session()
+    ctx.deps.session.session_id = session_data["session_id"]
+    try:
+        save_session(ctx.deps.config.sessions_dir, session_data)
+    except OSError as e:
+        logger.warning("New session save failed: %s", e)
 
     console.print(f"[dim]Session checkpointed as session-{timestamp}.md. Starting fresh.[/dim]")
     return []
@@ -763,6 +781,39 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     return None
 
 
+async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
+    """Resume a past session via interactive picker."""
+    from co_cli.context._transcript import load_transcript
+    from co_cli.context._session_browser import list_sessions, format_file_size
+    from co_cli.display._core import prompt_selection
+
+    sessions = list_sessions(ctx.deps.config.sessions_dir)
+    if not sessions:
+        console.print("[dim]No past sessions found.[/dim]")
+        return None
+
+    # Build picker items and map back to session summaries
+    items: list[str] = []
+    for s in sessions:
+        date_str = s.last_modified.strftime("%Y-%m-%d %H:%M")
+        items.append(f"{s.title} ({date_str} \u00b7 {format_file_size(s.file_size)})")
+
+    selection = prompt_selection(items, title="Resume session")
+    if selection is None:
+        return None
+
+    # Map selection back to the corresponding session
+    selected_idx = items.index(selection)
+    selected = sessions[selected_idx]
+
+    messages = load_transcript(ctx.deps.config.sessions_dir, selected.session_id)
+    if not messages:
+        console.print("[dim]Could not load transcript (empty or too large).[/dim]")
+        return None
+    ctx.deps.session.session_id = selected.session_id
+    return ReplaceTranscript(history=messages)
+
+
 # -- Skills loader ---------------------------------------------------------
 
 
@@ -944,6 +995,38 @@ def _load_skills(
     return result
 
 
+# -- /sessions -------------------------------------------------------------
+
+
+async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
+    """List past sessions, optionally filtered by keyword."""
+    from rich.table import Table
+
+    from co_cli.context._session_browser import list_sessions, format_file_size
+
+    summaries = list_sessions(ctx.deps.config.sessions_dir)
+    if args:
+        keyword = args.lower()
+        summaries = [s for s in summaries if keyword in s.title.lower()]
+
+    if not summaries:
+        console.print("[dim]No sessions found.[/dim]")
+        return None
+
+    table = Table(title="Sessions", border_style="accent", expand=False)
+    table.add_column("Title", style="accent")
+    table.add_column("Date")
+    table.add_column("Size")
+    for s in summaries:
+        table.add_row(
+            s.title,
+            s.last_modified.strftime("%Y-%m-%d %H:%M"),
+            format_file_size(s.file_size),
+        )
+    console.print(table)
+    return None
+
+
 # -- Registry --------------------------------------------------------------
 
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {
@@ -960,6 +1043,8 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "background": SlashCommand("background", "Run a command in the background", _cmd_background),
     "tasks": SlashCommand("tasks", "List background tasks", _cmd_tasks),
     "cancel": SlashCommand("cancel", "Cancel a running background task", _cmd_cancel),
+    "resume": SlashCommand("resume", "Resume a past session", _cmd_resume),
+    "sessions": SlashCommand("sessions", "List past sessions", _cmd_sessions),
 }
 
 

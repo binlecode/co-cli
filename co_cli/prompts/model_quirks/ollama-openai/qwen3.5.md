@@ -7,6 +7,7 @@ inference:
   temperature: 1.0
   top_p: 0.95
   max_tokens: 32768
+  context_window: 262144
   extra_body:
     top_k: 20
     min_p: 0

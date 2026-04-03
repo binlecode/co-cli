@@ -63,6 +63,7 @@ class ModelInference(TypedDict, total=False):
         top_p: Nucleus sampling threshold.
         max_tokens: Maximum output tokens.
         num_ctx: Context window size (overrides settings.llm_num_ctx).
+        context_window: Total context window in tokens (used for compaction budget).
         extra_body: Additional body params (top_k, repeat_penalty, etc.).
     """
 
@@ -70,6 +71,7 @@ class ModelInference(TypedDict, total=False):
     top_p: float
     max_tokens: int
     num_ctx: int
+    context_window: int
     extra_body: dict
 
 

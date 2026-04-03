@@ -2,7 +2,7 @@
 
 import os
 import yaml
-from datetime import datetime, timedelta, timezone
+
 from pathlib import Path
 
 import pytest
@@ -10,7 +10,7 @@ import pytest
 from co_cli.config import ModelConfig
 from co_cli.bootstrap._bootstrap import _discover_knowledge_backend, _sync_knowledge_store, _resolve_reranker, restore_session
 from co_cli.context._types import SafetyState
-from co_cli.context._session import load_session, new_session, save_session
+from co_cli.context._session import new_session, save_session, find_latest_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
@@ -21,14 +21,12 @@ def _make_deps(
     tmp_path: Path,
     *,
     knowledge_store: KnowledgeStore | None = None,
-    session_ttl_minutes: int = 60,
     memory_dir: Path | None = None,
     library_dir: Path | None = None,
     mcp_servers: dict | None = None,
 ) -> CoDeps:
     config = CoConfig(
-        session_path=tmp_path / "session.json",
-        session_ttl_minutes=session_ttl_minutes,
+        sessions_dir=tmp_path / "sessions",
         memory_dir=memory_dir or tmp_path / "memory",
         library_dir=library_dir or tmp_path / "library",
         mcp_servers=mcp_servers if mcp_servers is not None else {},
@@ -99,7 +97,7 @@ def test_sync_knowledge_store_indexes_memory_and_article(tmp_path: Path) -> None
         knowledge_cross_encoder_reranker_url=None,
         memory_dir=memory_dir,
         library_dir=library_dir,
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
     config, store = _discover_knowledge_backend(config, TerminalFrontend())
     assert store is not None, "_discover_knowledge_backend must return a store for fts5"
@@ -174,7 +172,7 @@ def test_discover_hybrid_happy_path_real_embedder(tmp_path: Path) -> None:
         knowledge_search_backend="hybrid",
         memory_dir=memory_dir,
         library_dir=library_dir,
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
 
     resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
@@ -213,7 +211,7 @@ def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None
     config = CoConfig(
         knowledge_db_path=tmp_path / "search.db",
         knowledge_search_backend="grep",
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
     resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
     assert store is None, "_discover_knowledge_backend must return None store for grep backend"
@@ -228,7 +226,7 @@ def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
         knowledge_search_backend="fts5",
         knowledge_embedding_provider="none",
         knowledge_cross_encoder_reranker_url=None,
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
     resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
     try:
@@ -261,7 +259,7 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
         knowledge_cross_encoder_reranker_url=None,
         memory_dir=memory_dir,
         library_dir=tmp_path / "library",
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
 
     resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
@@ -297,7 +295,7 @@ def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
         knowledge_cross_encoder_reranker_url=None,
         memory_dir=memory_dir,
         library_dir=tmp_path / "library",
-        session_path=tmp_path / "session.json",
+        sessions_dir=tmp_path / "sessions",
     )
     resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
     assert store is not None
@@ -307,37 +305,51 @@ def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
     assert result is None, "_sync_knowledge_store must return None when sync fails"
 
 
-def test_restore_session_fresh_returns_same_id(tmp_path: Path) -> None:
-    """restore_session() with a fresh on-disk session must restore the same session_id into deps."""
-    session_path = tmp_path / "session.json"
+def test_restore_session_existing_returns_same_id(tmp_path: Path) -> None:
+    """restore_session() with an existing session in sessions/ must restore the same session_id."""
+    sessions_dir = tmp_path / "sessions"
     session_data = new_session()
-    save_session(session_path, session_data)
+    save_session(sessions_dir, session_data)
     original_id = session_data["session_id"]
 
     deps = _make_deps(tmp_path)
     restore_session(deps, TerminalFrontend())
 
     assert deps.session.session_id == original_id, \
-        "restore_session() must restore the on-disk session_id when the session is still fresh"
+        "restore_session() must restore the on-disk session_id"
 
 
-def test_restore_session_stale_creates_new_id(tmp_path: Path) -> None:
-    """restore_session() with a stale on-disk session must create and persist a new session_id."""
-    session_path = tmp_path / "session.json"
-    stale = new_session()
-    stale_id = stale["session_id"]
-    stale["last_used_at"] = (datetime.now(timezone.utc) - timedelta(minutes=180)).isoformat()
-    save_session(session_path, stale)
+def test_restore_session_empty_dir_creates_new_id(tmp_path: Path) -> None:
+    """restore_session() with no sessions creates and persists a new session_id."""
+    deps = _make_deps(tmp_path)
+    restore_session(deps, TerminalFrontend())
+
+    assert deps.session.session_id != ""
+    # Verify standard UUID format (with dashes)
+    assert "-" in deps.session.session_id, \
+        "Session ID must use standard UUID format with dashes"
+    sessions_dir = tmp_path / "sessions"
+    on_disk = find_latest_session(sessions_dir)
+    assert on_disk is not None
+    assert on_disk["session_id"] == deps.session.session_id, \
+        "restore_session() must persist the new session_id to disk"
+
+
+def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
+    """restore_session() must pick the most recently modified session file."""
+    import time
+    sessions_dir = tmp_path / "sessions"
+    old = new_session()
+    save_session(sessions_dir, old)
+    time.sleep(0.05)
+    recent = new_session()
+    save_session(sessions_dir, recent)
 
     deps = _make_deps(tmp_path)
     restore_session(deps, TerminalFrontend())
 
-    assert deps.session.session_id != stale_id, \
-        "restore_session() must not reuse a stale session_id"
-    assert deps.session.session_id != ""
-    on_disk = load_session(session_path)
-    assert on_disk["session_id"] == deps.session.session_id, \
-        "restore_session() must persist the new session_id to disk"
+    assert deps.session.session_id == recent["session_id"], \
+        "restore_session() must pick the most recently modified session"
 
 
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
@@ -431,9 +443,10 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
 
 
 def test_restore_session_corrupt_json_creates_new_session(tmp_path: Path) -> None:
-    """restore_session() with corrupt session.json creates a new session instead of crashing."""
-    session_path = tmp_path / "session.json"
-    session_path.write_text("not valid json{{{", encoding="utf-8")
+    """restore_session() with corrupt session files creates a new session instead of crashing."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "bad-session.json").write_text("not valid json{{{", encoding="utf-8")
 
     deps = _make_deps(tmp_path)
     result = restore_session(deps, TerminalFrontend())
@@ -444,14 +457,12 @@ def test_restore_session_corrupt_json_creates_new_session(tmp_path: Path) -> Non
 
 def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
     """restore_session() must not raise when save_session() fails due to a permissions error."""
-    readonly_dir = tmp_path / "readonly"
+    readonly_dir = tmp_path / "readonly_sessions"
     readonly_dir.mkdir()
     os.chmod(readonly_dir, 0o555)
     try:
-        session_path = readonly_dir / "session.json"
         config = CoConfig(
-            session_path=session_path,
-            session_ttl_minutes=60,
+            sessions_dir=readonly_dir,
             memory_dir=tmp_path / "memory",
             library_dir=tmp_path / "library",
             mcp_servers={},

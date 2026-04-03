@@ -33,7 +33,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION, ModelConfig, settings as _settings
-from co_cli.context._history import summarize_messages
+from co_cli.context._compaction import summarize_messages
 from co_cli.deps import CoConfig
 
 from evals._ollama import ensure_ollama_warm

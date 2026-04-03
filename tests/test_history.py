@@ -1,7 +1,6 @@
 """Functional tests for context history processors and compaction."""
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -15,12 +14,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import ModelRegistry
 from co_cli.agent import build_agent
-from co_cli.commands._commands import CommandContext, LocalOnly, ReplaceTranscript, dispatch
-from co_cli.config import settings, ROLE_SUMMARIZATION
+from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
+from co_cli.config import settings
 from co_cli.context._history import truncate_history_window
-from co_cli.context._types import Compaction
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
@@ -31,11 +29,15 @@ _REGISTRY = ModelRegistry.from_config(_CONFIG)
 _AGENT = build_agent(config=_CONFIG)
 
 
-def _make_processor_ctx(max_history_messages: int = 6) -> RunContext:
-    """Real RunContext for history processor tests (no LLM call)."""
+def _make_processor_ctx() -> RunContext:
+    """Real RunContext for history processor tests (no LLM call).
+
+    Uses a tiny Ollama budget (llm_num_ctx=30) so the char-estimate
+    from _make_messages(10) (~33 tokens) exceeds int(30 * 0.85) = 25.
+    """
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(max_history_messages=max_history_messages),
+        config=CoConfig(llm_provider="ollama-openai", llm_num_ctx=30),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -65,12 +67,11 @@ def _assistant(text: str) -> ModelResponse:
 def _make_messages(n: int) -> list:
     """Alternating user/assistant messages; index 1 is always an assistant with TextPart.
 
-    With max_history_messages=6 and n=10:
-      _find_first_run_end → 1  (first ModelResponse with TextPart)
+    With n=10 and tail_count = max(4, 10//2) = 5:
+      find_first_run_end → 1  (first ModelResponse with TextPart)
       head_end = 2
-      tail_count = max(4, 6//2) = 4
-      tail_start = max(2, 10-4) = 6
-      dropped = messages[2:6] (4 messages)
+      tail_start = max(2, 10-5) = 5
+      dropped = messages[2:5] (3 messages)
     """
     msgs = []
     for i in range(n // 2):
@@ -82,16 +83,16 @@ def _make_messages(n: int) -> list:
 
 
 # ---------------------------------------------------------------------------
-# truncate_history_window — static marker and precomputed paths
+# truncate_history_window — inline summarisation and guard paths
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_truncate_history_window_static_marker_when_no_precomputed():
-    """No precomputed result → static marker injected (no LLM call)."""
+async def test_truncate_history_window_static_marker_when_no_model_registry():
+    """model_registry=None → static marker injected (guard path, no LLM call)."""
     msgs = _make_messages(10)
-    ctx = _make_processor_ctx(max_history_messages=6)
-    # precomputed_compaction is None by default
+    ctx = _make_processor_ctx()
+    # model_registry is None by default — guard skips LLM, uses static marker
     result = await truncate_history_window(ctx, msgs)
     marker_texts = [
         p.content
@@ -104,49 +105,35 @@ async def test_truncate_history_window_static_marker_when_no_precomputed():
     assert len(result) < len(msgs)
 
 
+# ---------------------------------------------------------------------------
+# Circuit breaker — skip LLM after 3 consecutive failures
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_truncate_history_window_uses_precomputed_result():
-    """Valid precomputed result is used — summary text appears in output."""
+async def test_circuit_breaker_skips_llm_after_three_failures():
+    """compaction_failure_count >= 3 → static marker without LLM call."""
     msgs = _make_messages(10)
-    ctx = _make_processor_ctx(max_history_messages=6)
-    ctx.deps.runtime.precomputed_compaction = Compaction(
-        summary_text="PRECOMPUTED_SUMMARY_SENTINEL",
-        head_end=2,
-        tail_start=6,
-        message_count=10,
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=CoConfig(llm_provider="ollama-openai", llm_num_ctx=30),
+        model_registry=_REGISTRY,
     )
+    deps.runtime.compaction_failure_count = 3
+    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     result = await truncate_history_window(ctx, msgs)
-    all_content = [
+    marker_texts = [
         p.content
         for m in result
         if isinstance(m, ModelRequest)
         for p in m.parts
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
-    assert any("PRECOMPUTED_SUMMARY_SENTINEL" in t for t in all_content)
-
-
-@pytest.mark.asyncio
-async def test_truncate_history_window_stale_precomputed_uses_static_marker():
-    """Precomputed result with wrong head_end/tail_start → static marker, not summary."""
-    msgs = _make_messages(10)
-    ctx = _make_processor_ctx(max_history_messages=6)
-    ctx.deps.runtime.precomputed_compaction = Compaction(
-        summary_text="STALE_MARKER_SENTINEL",
-        head_end=999,
-        tail_start=999,
-        message_count=10,
-    )
-    result = await truncate_history_window(ctx, msgs)
-    all_content = [
-        p.content
-        for m in result
-        if isinstance(m, ModelRequest)
-        for p in m.parts
-        if hasattr(p, "content") and isinstance(p.content, str)
-    ]
-    assert not any("STALE_MARKER_SENTINEL" in t for t in all_content)
-    assert any("[Earlier conversation trimmed" in t for t in all_content)
+    # Circuit breaker active → static marker, no LLM call
+    assert any("[Earlier conversation trimmed" in t for t in marker_texts)
+    assert len(result) < len(msgs)
+    # Failure count unchanged (no LLM attempt was made)
+    assert deps.runtime.compaction_failure_count == 3
 
 
 # ---------------------------------------------------------------------------

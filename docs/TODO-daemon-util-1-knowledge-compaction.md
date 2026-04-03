@@ -42,3 +42,12 @@ To minimize LLM costs for background housekeeping, the daemon must bypass the st
 ### 2.4 Guardrails & Security
 - The job must execute with `ctx.deps.runtime.is_headless = True`.
 - **Test Mandate:** Write `tests/test_daemon_compaction.py` using a real SQLite DB. Create 5 conflicting memory files, run the job headlessly, and assert that 5 files are deleted and 1 new consolidated file exists.
+
+### 2.5 Session Data Cleanup
+When `.co-cli/sessions/` exceeds a volume threshold (default 500 MB), prune old session files using a combined age + recent-access hotness score. No LLM needed — pure filesystem housekeeping run alongside knowledge compaction.
+
+- **Trigger:** Total size of `sessions/` directory > `SESSION_CLEANUP_THRESHOLD_MB` (default 500). Skip entirely if under threshold.
+- **Scoring:** For each session pair (`{id}.json` + `{id}.jsonl`), compute a hotness score: `score = recency_weight * days_since_last_access + size_weight * file_size_mb`. Lower score = hotter (keep). Sessions accessed within the last 7 days are exempt from pruning.
+- **Pruning:** Sort by score descending (coldest first). Delete `.jsonl` transcript first (bulk of the size), then `.json` metadata. Stop when total directory size drops below 80% of threshold (400 MB default) — leave headroom to avoid thrashing.
+- **Safety:** Never delete the current active session (most recent by mtime). Log each deleted session ID and bytes reclaimed.
+- **Config:** `session_cleanup_threshold_mb: int = 500` in daemon job config (not in `CoConfig` — daemon-only concern).

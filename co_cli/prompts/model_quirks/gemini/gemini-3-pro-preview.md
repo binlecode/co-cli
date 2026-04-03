@@ -8,4 +8,6 @@ inference:
   temperature: 1.0
   top_p: 0.95
   max_tokens: 65536
+  # All Gemini 3 models: 1,048,576 token context window
+  context_window: 1048576
 ---

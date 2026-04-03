@@ -101,7 +101,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `safety_state` | owned by history processors, not by the orchestrator |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by the native filtered toolset `_filter` |
-| `precomputed_compaction` | cross-turn compaction cache managed by `HistoryCompactionState` |
+| `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 consecutive failures skips LLM) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
 
 ### 2.2 Stream Segment Contract
@@ -205,7 +205,7 @@ Shell approval remains split correctly:
 - only the `REQUIRE_APPROVAL` path reaches deferred approval handling
 - denied shell commands never enter `_collect_deferred_tool_approvals()`
 
-### 2.4 History Processors And Background Compaction
+### 2.4 History Processors And Inline Compaction
 
 The main agent is built with four history processors in this exact order:
 
@@ -221,24 +221,17 @@ Processor roles:
 | `truncate_tool_returns` | trims large older `ToolReturnPart` payloads but preserves the latest exchange |
 | `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
 | `inject_opening_context` | recalls memories and injects them as a trailing `SystemPromptPart` |
-| `truncate_history_window` | replaces the middle of long histories with a precomputed summary marker or static trim marker |
+| `truncate_history_window` | replaces the middle of long histories with an inline LLM summary or static marker (circuit-breaker fallback) |
 
-Compaction behavior after the refactor:
+Compaction behavior:
 
-- `truncate_history_window()` does not call an LLM inline
-- it compacts when message count exceeds `max_history_messages` OR when token count exceeds 85% of the budget
+- `truncate_history_window()` calls `summarize_messages()` inline when compaction triggers
+- it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
-- the budget is `llm_num_ctx` when Ollama OpenAI-compat is active and `llm_num_ctx > 0`; otherwise it is `100,000` tokens
-- it uses `deps.runtime.precomputed_compaction` only when the cached boundaries still match the current history
-- if no valid cached result exists, it falls back to a static marker rather than doing synchronous summarization inside the request path
-
-Background precompute path:
-
-1. after turn `N`, `HistoryCompactionState.on_turn_end()` clears the old cache and spawns `precompute_compaction(history, deps)`
-2. the background job runs only when the transcript is approaching the compaction threshold
-3. `precompute_compaction()` uses the summarization role from `deps.services.model_registry`
-4. before turn `N+1`, `HistoryCompactionState.on_turn_start()` harvests the completed result or cancels a stale task
-5. `truncate_history_window()` may consume that cached result during turn `N+1`
+- the budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- when `model_registry` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
+- a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
+- a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 
 Memory recall is also per-turn, not sticky:
 
@@ -310,14 +303,13 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
-| compaction as a sidecar maintenance concern | `HistoryCompactionState` | aligned |
+| compaction as an inline concern with circuit breaker | `truncate_history_window()` with `compaction_failure_count` | aligned |
 | isolated specialist contexts | sub-agents use `make_subagent_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:
 
 - no planner graph in the foreground turn
 - no multi-turn queue inside the loop
-- no inline summarization during history processing
 - no approval memory persisted across sessions
 
 ## 3. Config
@@ -330,7 +322,6 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Trim threshold for older tool returns |
-| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count compaction trigger |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
@@ -341,8 +332,9 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
-| `co_cli/context/_history.py` | history processors, background compaction precompute, and `HistoryCompactionState` |
-| `co_cli/context/_types.py` | shared `CompactionResult`, `MemoryRecallState`, and `SafetyState` dataclasses |
+| `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
+| `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
+| `co_cli/context/_types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent.py` | main/task agent factories and native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/_tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |

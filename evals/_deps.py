@@ -54,7 +54,6 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         "memory_max_count": s.memory_max_count,
         "memory_dedup_window_days": s.memory_dedup_window_days,
         "memory_dedup_threshold": s.memory_dedup_threshold,
-        "max_history_messages": s.max_history_messages,
         "tool_output_trim_chars": s.tool_output_trim_chars,
         "knowledge_cross_encoder_reranker_url": s.knowledge_cross_encoder_reranker_url,
         "knowledge_llm_reranker": s.knowledge_llm_reranker,

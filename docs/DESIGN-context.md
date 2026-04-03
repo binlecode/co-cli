@@ -31,24 +31,17 @@ Conversation-history governance (main agent only)
   inject_opening_context()      — recall_memory() against current user message; inject as SystemPromptPart
   truncate_history_window()     — compact to head + summary marker + tail when over threshold
 
-Turn-start compaction handoff
-  HistoryCompactionState.on_turn_start()
-    -> harvest completed precompute task into runtime.precomputed_compaction
-    -> cancel stale unfinished task before run_turn()
-
 After each foreground turn
   _finalize_turn()
     -> analyze_for_signals() then handle_signal() on clean turns only
     -> touch_session() then save_session()
-    -> HistoryCompactionState.on_turn_end()
-       -> precompute_compaction() in background for the next turn
 
-Session persistence
+Session persistence (see DESIGN-session.md for full details)
   restore_session()
-    -> load_session()
-    -> is_fresh(ttl_minutes) restores session_id within TTL; else new_session() and attempt save_session()
-  .co-cli/session.json          — session_id, created_at, last_used_at, compaction_count
-  message_history               — not persisted to disk
+    -> find_latest_session(sessions_dir) by mtime; else new_session() and attempt save_session()
+  .co-cli/sessions/{session-id}.json  — session_id, created_at, last_used_at, compaction_count
+  .co-cli/sessions/{session-id}.jsonl — JSONL transcript (append-only, one ModelMessage per line)
+  message_history                     — persisted to .jsonl; loaded on /resume
 
 Memory write path
   persist_memory()
@@ -105,8 +98,6 @@ flowchart TD
     subgraph TurnFlow[foreground turn]
         direction TB
         TurnStart[_run_foreground_turn]
-        Harvest[HistoryCompactionState.on_turn_start]
-        Precomputed[deps.runtime.precomputed_compaction]
         RunTurn[run_turn]
         Date[add_current_date]
         Shell[add_shell_guidance]
@@ -127,21 +118,16 @@ flowchart TD
         HandleSignal[handle_signal]
         Touch[touch_session]
         SaveSession[save_session]
-        Compactor[HistoryCompactionState.on_turn_end]
-        BgCompact[precompute_compaction]
 
-        TurnStart --> Harvest --> Precomputed
         TurnStart --> RunTurn
         RunTurn --> Date --> Shell --> Project --> AlwaysOn --> Personality --> ToolHint
         ToolHint --> Trim --> Safety --> Recall --> Compact --> Finalize
         Recall --> RecallTool
         Recall --> RecallState
-        Precomputed --> Compact
         Finalize --> Interrupted
         Interrupted -->|false| Outcome
         Outcome -->|!= error| Signal --> HandleSignal
         Finalize --> Touch --> SaveSession --> SessionJson
-        Finalize --> Compactor --> BgCompact
     end
 
     subgraph PersistenceFlow[persistence]
@@ -244,9 +230,9 @@ Two persistence rules matter here:
 1. `deps.config.session_path` stores only session metadata: `session_id`, `created_at`, `last_used_at`, and `compaction_count`.
 2. `message_history` itself is not written to disk. Restarts do not replay prior messages; only session metadata is restored, while memories and session-summary artifacts remain in the memory store.
 
-Compaction is intentionally split across turns. `precompute_compaction()` may summarize the future middle of the transcript in the background after turn `N`; on turn `N+1`, `truncate_history_window()` either uses that cached summary when the boundaries still match or falls back to a static trim marker. It does not perform an inline summarization call in the foreground request path.
+Compaction runs inline: when `truncate_history_window()` triggers, it calls `summarize_messages()` (from `_compaction.py`) inline — awaited inside the async history processor — to generate a summary of the dropped middle section. A circuit breaker (`compaction_failure_count` on `CoRuntimeState`) skips the LLM call after 3 consecutive failures and falls back to a static marker. When `model_registry` is absent (sub-agents, tests), the static marker is used directly without incrementing the failure counter.
 
-Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available (local or custom models with no reporting), it falls back to a character-count estimate (`total_chars // 4`). The compaction budget is `llm_num_ctx` when `uses_ollama_openai()` and `llm_num_ctx > 0`; otherwise it is `100,000` tokens. The trigger fires when token count exceeds 85% of that budget, or when message count exceeds `max_history_messages` — whichever comes first.
+Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available (local or custom models with no reporting), it falls back to a character-count estimate (`total_chars // 4`). The compaction budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: it first tries the reasoning role's `context_window` from model quirks (with `llm_num_ctx` overriding the spec for Ollama), then falls back to `llm_num_ctx` when Ollama OpenAI-compat is active, then defaults to `100,000` tokens. The trigger fires when token count exceeds 85% of that budget.
 
 ### Memory
 
@@ -353,8 +339,7 @@ The operator surface reads those live structures directly: `/history` scans tran
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Minutes since last use within which a session ID is restored |
-| `max_history_messages` | `CO_CLI_MAX_HISTORY_MESSAGES` | `40` | Message-count trigger for `truncate_history_window()` |
+| _(removed)_ | | | Session TTL removed — sessions persist indefinitely; new session via `/new` |
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max retained chars for older tool-return content before trimming |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Contiguous same-call streak threshold for doom-loop safety injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Shell-error reflection cap enforced by `detect_safety_issues()` |
@@ -409,9 +394,12 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `co_cli/prompts/personalities/_injector.py` | Personality-continuity memory injection for the runtime instruction layer |
 | `co_cli/prompts/model_quirks/` | Provider/model-specific counter-steering overrides |
 | `co_cli/agent.py` | Main/task agent factories and `@agent.instructions` layer registration |
-| `co_cli/context/_history.py` | History processors plus background compaction summarization and lifecycle |
+| `co_cli/context/_history.py` | History processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
+| `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, `estimate_message_tokens`, `latest_response_input_tokens` — shared by history processor and `/compact` |
 | `co_cli/context/_session.py` | Session JSON persistence helpers |
-| `co_cli/context/_types.py` | `CompactionResult`, `MemoryRecallState`, `SafetyState`, and `_CompactionBoundaries` |
+| `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip for session transcript I/O |
+| `co_cli/context/_session_browser.py` | `list_sessions`, `SessionSummary`, `index_session_summary` — session listing and UI metadata |
+| `co_cli/context/_types.py` | `MemoryRecallState`, `SafetyState` dataclasses |
 | `co_cli/memory/_lifecycle.py` | `persist_memory()` write pipeline |
 | `co_cli/memory/_consolidator.py` | LLM-driven `ConsolidationPlan` generation |
 | `co_cli/memory/_retention.py` | Retention enforcement for over-cap memory sets |

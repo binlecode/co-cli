@@ -29,7 +29,7 @@ from co_cli.commands._commands import (
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
 from co_cli.context._orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
-from co_cli.context._skill_env import _cleanup_skill_run_state
+from co_cli.context._skill_env import cleanup_skill_run_state
 from co_cli.display._core import console
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
@@ -463,7 +463,7 @@ def test_build_interrupted_turn_result_keeps_clean_history():
 
 
 # ---------------------------------------------------------------------------
-# _cleanup_skill_run_state — env var restore and skill name clear
+# cleanup_skill_run_state — env var restore and skill name clear
 # ---------------------------------------------------------------------------
 
 
@@ -476,7 +476,7 @@ def test_cleanup_skill_restores_set_env_var():
     try:
         os.environ[key] = "skill-injected-value"
         deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-        _cleanup_skill_run_state({key: original}, deps)
+        cleanup_skill_run_state({key: original}, deps)
         assert os.environ[key] == original
     finally:
         os.environ.pop(key, None)
@@ -490,7 +490,7 @@ def test_cleanup_skill_removes_absent_env_var():
     os.environ[key] = "skill-injected-value"
     try:
         deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-        _cleanup_skill_run_state({key: None}, deps)
+        cleanup_skill_run_state({key: None}, deps)
         assert key not in os.environ
     finally:
         os.environ.pop(key, None)
@@ -500,5 +500,5 @@ def test_cleanup_skill_clears_active_skill_name():
     """active_skill_name is cleared to None after cleanup."""
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     deps.runtime.active_skill_name = "my-skill"
-    _cleanup_skill_run_state({}, deps)
+    cleanup_skill_run_state({}, deps)
     assert deps.runtime.active_skill_name is None

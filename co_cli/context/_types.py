@@ -9,41 +9,6 @@ from dataclasses import dataclass
 
 
 @dataclass
-class _CompactionBoundaries:
-    """Pre-computed head/tail boundary positions for a compaction pass.
-
-    Produced by ``_compute_compaction_boundaries()`` and consumed by both
-    ``truncate_history_window()`` and ``precompute_compaction()``.
-
-    When ``valid`` is ``False``, no clean boundary could be found and the
-    caller must skip compaction.
-    """
-
-    head_end: int
-    tail_start: int
-    dropped_count: int
-    valid: bool
-
-
-@dataclass
-class Compaction:
-    """Pre-computed compaction summary for background processing.
-
-    Produced by ``precompute_compaction()`` during user idle time and
-    consumed by ``truncate_history_window()`` on the next turn when the
-    message boundaries still match.
-
-    The ``message_count`` field is a stale-check: if the message list
-    length has changed since computation, the result is discarded.
-    """
-
-    summary_text: str
-    head_end: int
-    tail_start: int
-    message_count: int
-
-
-@dataclass
 class MemoryRecallState:
     """Session-scoped state. Tracks memory recall across turns to debounce per-turn recall.
 

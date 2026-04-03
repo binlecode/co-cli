@@ -210,19 +210,19 @@ Details:
 - both memory and library trees sync through the same API with source-specific `kind_filter`
 - on failure, FTS is disabled for the session and the system continues with grep fallback
 
-### Step 2 - Session Restore
+### Step 2 - Session Restore (see DESIGN-session.md for full session/transcript design)
 
 ```text
-session_data = load_session(deps.config.session_path)
+session_data = find_latest_session(deps.config.sessions_dir)  # mtime scan
 
-if is_fresh(session_data, deps.config.session_ttl_minutes):
+if session_data is not None:
     deps.session.session_id = session_data["session_id"]
     frontend.on_status("Session restored ...")
 else:
-    session_data = new_session()
+    session_data = new_session()   # standard UUID with dashes
     deps.session.session_id = session_data["session_id"]
     try:
-        save_session(deps.config.session_path, session_data)
+        save_session(deps.config.sessions_dir, session_data)
     except OSError:
         frontend.on_status("Session save failed — session will not persist")
     frontend.on_status("Session new ...")
@@ -333,7 +333,7 @@ The banner marks the boundary between startup and interactive use. All status me
 
 - Knowledge index unavailable: search tools fall back to grep-based search
 - MCP unavailable: session continues with native tools only
-- Session corruption: delete `.co-cli/session.json` to force a fresh session
+- Session corruption: delete `.co-cli/sessions/` directory to force a fresh session
 
 ## 8. Owning Code
 
@@ -343,7 +343,7 @@ The banner marks the boundary between startup and interactive use. All status me
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (config, registries, MCP, knowledge, skills, task agent), `restore_session()` |
 | `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
 | `co_cli/bootstrap/_render_status.py` | `get_status()` / `StatusResult` / `render_status_table()` — system status assembly and display; `check_security()` / `SecurityCheckResult` / `render_security_findings()` — security posture checks: user config file permissions (Check 1), project config file permissions (Check 2), `shell_safe_commands` wildcard `"*"` entries (Check 3) |
-| `co_cli/context/_session.py` | Session helpers: new/load/save/touch/is_fresh/increment_compaction |
+| `co_cli/context/_session.py` | Session helpers: new/load/save/find_latest/touch/increment_compaction |
 | `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps)` — welcome banner |
 | `co_cli/commands/_commands.py` | Skill loading helpers |
 | `co_cli/deps.py` | `CoDeps` groups and sub-agent isolation |

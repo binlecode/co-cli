@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from co_cli.config import settings
 from co_cli.context._types import SafetyState
-from co_cli.context._session import load_session, is_fresh, new_session, save_session
+from co_cli.context._session import find_latest_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools._shell_backend import ShellBackend
@@ -261,9 +261,10 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
+    """Restore the most recent session from sessions/ dir, or create a new one."""
     with _TRACER.start_as_current_span("restore_session") as span:
-        session_data = load_session(deps.config.session_path)
-        if is_fresh(session_data, deps.config.session_ttl_minutes):
+        session_data = find_latest_session(deps.config.sessions_dir)
+        if session_data is not None:
             deps.session.session_id = session_data["session_id"]
             short_id = deps.session.session_id[:8]
             span.set_attribute("status", "restored")
@@ -276,9 +277,8 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
             span.set_attribute("status", "new")
             span.set_attribute("session_id", short_id)
             try:
-                save_session(deps.config.session_path, session_data)
+                save_session(deps.config.sessions_dir, session_data)
             except OSError as e:
-                # Continue without persistence — session_id is still set in deps.session
                 frontend.on_status(f"  Session save failed — {e}; session will not persist")
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data

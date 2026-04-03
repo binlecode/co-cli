@@ -15,7 +15,6 @@ from co_cli.config import (
     DEFAULT_DOOM_LOOP_THRESHOLD,
     DEFAULT_MAX_REFLECTIONS,
     DEFAULT_TOOL_OUTPUT_TRIM_CHARS,
-    DEFAULT_MAX_HISTORY_MESSAGES,
     DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
     DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL,
     DEFAULT_KNOWLEDGE_EMBED_API_URL,
@@ -48,7 +47,7 @@ from co_cli.config import (
     DEFAULT_CTX_WARN_THRESHOLD,
     DEFAULT_CTX_OVERFLOW_THRESHOLD,
     DEFAULT_TOOL_RETRIES,
-    DEFAULT_SESSION_TTL_MINUTES,
+
     DEFAULT_REASONING_DISPLAY,
 )
 from co_cli.tools._shell_backend import ShellBackend
@@ -58,10 +57,10 @@ DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
 DEFAULT_USER_SKILLS_DIR = CONFIG_DIR / "skills"
 DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
-DEFAULT_SESSION_PATH = Path(".co-cli/session.json")
+DEFAULT_SESSIONS_DIR = Path(".co-cli/sessions")
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.context._types import Compaction, MemoryRecallState, SafetyState
+from co_cli.context._types import MemoryRecallState, SafetyState
 from co_cli.tools._background import BackgroundTaskState
 
 if TYPE_CHECKING:
@@ -121,12 +120,11 @@ class CoConfig:
     # knowledge_db_path: global SQLite FTS/vec index (DATA_DIR, not workspace-relative).
     # Overridable so tests can use a tmp_path db without touching the real one.
     knowledge_db_path: Path = field(default_factory=lambda: SEARCH_DB)
-    # session_path: stores session ID and compaction counter across REPL restarts.
-    # Workspace-relative (.co-cli/session.json) so each project directory maintains
-    # its own session — switching projects starts fresh context automatically.
+    # sessions_dir: per-session JSON metadata files live here.
+    # Workspace-relative (.co-cli/sessions/) so each project directory maintains
+    # its own sessions — switching projects starts fresh context automatically.
     # Not tool-accessible; used only by the orchestration layer (_bootstrap, main).
-    session_path: Path = field(default_factory=lambda: DEFAULT_SESSION_PATH)
-    session_ttl_minutes: int = DEFAULT_SESSION_TTL_MINUTES
+    sessions_dir: Path = field(default_factory=lambda: DEFAULT_SESSIONS_DIR)
     llm_api_key: str | None = None
     brave_search_api_key: str | None = None
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
@@ -151,7 +149,6 @@ class CoConfig:
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
-    max_history_messages: int = DEFAULT_MAX_HISTORY_MESSAGES
     tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
@@ -227,7 +224,7 @@ class CoConfig:
             memory_dir=cwd / ".co-cli" / "memory",
             skills_dir=cwd / ".co-cli" / "skills",
             user_skills_dir=CONFIG_DIR / "skills",
-            session_path=cwd / ".co-cli" / "session.json",
+            sessions_dir=cwd / ".co-cli" / "sessions",
             llm_api_key=s.llm_api_key,
             brave_search_api_key=s.brave_search_api_key,
             web_fetch_allowed_domains=list(s.web_fetch_allowed_domains),
@@ -253,7 +250,6 @@ class CoConfig:
             knowledge_chunk_overlap=s.knowledge_chunk_overlap,
             personality=s.personality,
             knowledge_search_backend=s.knowledge_search_backend,
-            max_history_messages=s.max_history_messages,
             tool_output_trim_chars=s.tool_output_trim_chars,
             doom_loop_threshold=s.doom_loop_threshold,
             max_reflections=s.max_reflections,
@@ -277,7 +273,7 @@ class CoConfig:
             ctx_warn_threshold=s.ctx_warn_threshold,
             ctx_overflow_threshold=s.ctx_overflow_threshold,
             tool_retries=s.tool_retries,
-            session_ttl_minutes=s.session_ttl_minutes,
+
         )
 
 
@@ -336,10 +332,14 @@ class CoRuntimeState:
     Per-turn (reset by reset_for_turn() at run_turn() entry):
       turn_usage, safety_state, tool_progress_callback, resume_tool_names
     Cross-turn (managed by orchestration layer):
-      precomputed_compaction, active_skill_name
+      active_skill_name, compaction_failure_count
     """
 
-    precomputed_compaction: Compaction | None = field(default=None, repr=False)
+    # Circuit breaker for inline compaction summarisation.
+    # Incremented on ModelHTTPError/ModelAPIError in truncate_history_window,
+    # reset to 0 on success. At >= 3, LLM call is skipped (static marker only).
+    # Cross-turn state — NOT reset by reset_for_turn().
+    compaction_failure_count: int = 0
     # turn_usage: authoritative per-turn usage accumulator.
     # Reset to None at the start of each foreground turn by run_turn().
     # The foreground orchestrator merges each segment's usage after _execute_stream_segment().
@@ -409,7 +409,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
                  session_approval_rules (copied — sub-agent grants must not leak to parent).
       Fresh:     drive_page_tokens, session_todos, session_id.
 
-    Runtime is reset to clean defaults (no compaction cache, no turn usage).
+    Runtime is reset to clean defaults (no turn usage, fresh circuit breaker).
     """
     inherited_session = CoSessionState(
         google_creds=base.session.google_creds,

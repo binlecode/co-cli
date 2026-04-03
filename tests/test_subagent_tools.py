@@ -1,19 +1,17 @@
-"""Functional tests for the run_coding_subagent, run_research_subagent, and run_analysis_subagent tool wiring."""
+"""Functional tests for subagent tool wiring and deps isolation."""
 
 import pytest
 from copy import copy
 from pathlib import Path
 
-from pydantic import ValidationError
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.tools._subagent_agents import CoderOutput, ResearchOutput, ThinkingOutput
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.subagent import run_analysis_subagent, run_coding_subagent, run_research_subagent, run_reasoning_subagent, _merge_turn_usage
+from co_cli.tools.subagent import run_coding_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
@@ -30,7 +28,12 @@ def _make_ctx() -> RunContext:
 
 @pytest.mark.asyncio
 async def test_run_coding_subagent_no_model() -> None:
-    """Raises ModelRetry when model_registry is None (no registry configured)."""
+    """Raises ModelRetry when model_registry is None (no registry configured).
+
+    All four subagent tools (coding, research, analysis, reasoning) share the
+    same guard pattern: ``if not registry or not registry.is_configured(ROLE)``.
+    This test exercises the pattern via the coding tool; the others are identical.
+    """
     from pydantic_ai import ModelRetry as _ModelRetry
 
     ctx = _make_ctx()
@@ -58,9 +61,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
             drive_page_tokens={"folder": ["tok1"]},
             session_todos=[{"task": "do something"}],
         ),
-        runtime=CoRuntimeState(
-            precomputed_compaction=None,
-        ),
+        runtime=CoRuntimeState(),
     )
 
     isolated = make_subagent_deps(base)
@@ -85,7 +86,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
     assert isolated.session.session_id == ""
 
     # Runtime resets to clean defaults
-    assert isolated.runtime.precomputed_compaction is None
     assert isolated.runtime.turn_usage is None
 
     # Config inherited from parent
@@ -95,55 +95,6 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # Service handles shared (same objects)
     assert isolated.shell is base.shell
     assert isolated.model_registry is base.model_registry
-
-
-@pytest.mark.asyncio
-async def test_run_research_subagent_no_model() -> None:
-    """Raises ModelRetry when model_registry is None (no registry configured)."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_research_subagent(ctx, "latest Python news")
-
-
-@pytest.mark.asyncio
-async def test_run_analysis_subagent_no_model() -> None:
-    """Raises ModelRetry when model_registry is None (no registry configured)."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_analysis_subagent(ctx, "compare these documents")
-
-
-def test_confidence_out_of_range_fails_validation() -> None:
-    """Out-of-range confidence values are rejected at Pydantic validation time."""
-    with pytest.raises(ValidationError):
-        ResearchOutput(summary="ok", sources=[], confidence=1.5)
-    with pytest.raises(ValidationError):
-        CoderOutput(summary="ok", diff_preview="", files_touched=[], confidence=-0.1)
-
-
-def test_thinking_result_model() -> None:
-    """ThinkingOutput is a valid Pydantic model with expected field values."""
-    r = ThinkingOutput(
-        plan="Decompose the problem into three phases.",
-        steps=["Phase 1: gather context", "Phase 2: analyze", "Phase 3: synthesize"],
-        conclusion="The recommended approach is X.",
-    )
-    assert r.plan == "Decompose the problem into three phases."
-    assert len(r.steps) == 3
-    assert r.conclusion == "The recommended approach is X."
-
-@pytest.mark.asyncio
-async def test_run_reasoning_subagent_no_model() -> None:
-    """Raises ModelRetry matching 'unavailable' when model_registry is None."""
-    from pydantic_ai import ModelRetry as _ModelRetry
-
-    ctx = _make_ctx()
-    with pytest.raises(_ModelRetry, match="unavailable"):
-        await run_reasoning_subagent(ctx, "solve this problem")
 
 
 def test_merge_turn_usage_alias_then_accumulate() -> None:

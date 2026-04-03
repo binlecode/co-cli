@@ -182,7 +182,6 @@ DEFAULT_TOOL_RETRIES = 3
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
 DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
-DEFAULT_MAX_HISTORY_MESSAGES = 40
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
 DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
@@ -209,7 +208,7 @@ DEFAULT_WEB_HTTP_MAX_RETRIES = 2
 DEFAULT_WEB_HTTP_BACKOFF_BASE_SECONDS = 1.0
 DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS = 8.0
 DEFAULT_WEB_HTTP_JITTER_RATIO = 0.2
-DEFAULT_SESSION_TTL_MINUTES = 60
+
 DEFAULT_LLM_PROVIDER = "ollama-openai"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 DEFAULT_OLLAMA_NUM_CTX = 262144
@@ -242,7 +241,6 @@ class Settings(BaseModel):
 
     # Conversation memory
     tool_output_trim_chars: int = Field(default=DEFAULT_TOOL_OUTPUT_TRIM_CHARS)
-    max_history_messages: int = Field(default=DEFAULT_MAX_HISTORY_MESSAGES)
 
     # Knowledge search backend
     knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND)
@@ -372,9 +370,6 @@ class Settings(BaseModel):
             )
         return self
 
-    # Session persistence TTL
-    session_ttl_minutes: int = Field(default=DEFAULT_SESSION_TTL_MINUTES, ge=1)
-
     # Role model: one model per role. Mandatory role: reasoning (main agent).
     role_models: dict[str, ModelConfig] = Field(default_factory=dict)
 
@@ -421,7 +416,6 @@ class Settings(BaseModel):
             "web_http_backoff_max_seconds": "CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS",
             "web_http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
             "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
-            "max_history_messages": "CO_CLI_MAX_HISTORY_MESSAGES",
             "knowledge_search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
             "knowledge_embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
             "knowledge_embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",
@@ -443,7 +437,7 @@ class Settings(BaseModel):
             "subagent_max_requests_thinking": "CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING",
             "knowledge_chunk_size": "CO_CLI_KNOWLEDGE_CHUNK_SIZE",
             "knowledge_chunk_overlap": "CO_CLI_KNOWLEDGE_CHUNK_OVERLAP",
-            "session_ttl_minutes": "CO_SESSION_TTL_MINUTES",
+
             "llm_api_key": "LLM_API_KEY",
             "llm_provider": "LLM_PROVIDER",
             "llm_host": "LLM_HOST",

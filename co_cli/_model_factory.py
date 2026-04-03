@@ -6,7 +6,6 @@ from typing import Any
 
 import httpx
 from openai import AsyncOpenAI
-from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.google import GoogleProvider
@@ -30,6 +29,7 @@ class ResolvedModel:
 
     model: Any
     settings: ModelSettings | None
+    context_window: int | None = None
 
 
 class ModelRegistry:
@@ -54,8 +54,8 @@ class ModelRegistry:
         for role, entry in config.role_models.items():
             if not entry:
                 continue
-            model, settings = build_model(entry, config.llm_provider, config.llm_host, api_key=config.llm_api_key)
-            registry._models[role] = ResolvedModel(model=model, settings=settings)
+            model, settings, ctx_window = build_model(entry, config.llm_provider, config.llm_host, api_key=config.llm_api_key)
+            registry._models[role] = ResolvedModel(model=model, settings=settings, context_window=ctx_window)
         return registry
 
     def get(self, role: str, fallback: ResolvedModel) -> ResolvedModel:
@@ -72,8 +72,8 @@ def build_model(
     provider: str,
     llm_host: str,
     api_key: str | None = None,
-) -> tuple[OpenAIChatModel | GoogleModel, ModelSettings | None]:
-    """Construct a pydantic-ai model object and merged ModelSettings for the given provider.
+) -> tuple[OpenAIChatModel | GoogleModel, ModelSettings | None, int | None]:
+    """Construct a pydantic-ai model object, merged ModelSettings, and context_window.
 
     `model_entry.provider` is required and determines which backend to build.
 
@@ -81,6 +81,9 @@ def build_model(
 
     ollama-openai  → OpenAIChatModel wrapping the Ollama OpenAI-compatible API
     gemini         → GoogleModel with GoogleProvider (api_key injected via constructor)
+
+    Returns (model, settings, context_window). context_window is None when not
+    declared in model quirks.
 
     Raises ValueError for unsupported providers.
     """
@@ -127,7 +130,7 @@ def build_model(
             model_name,
             provider=OpenAIProvider(openai_client=_openai_client),
         )
-        return model, model_settings
+        return model, model_settings, inf.get("context_window")
 
     if effective_provider == "gemini":
         inf = get_model_inference("gemini", normalized)
@@ -142,6 +145,6 @@ def build_model(
             max_tokens=inf.get("max_tokens", 65536),
         )
         google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-        return google_model, model_settings
+        return google_model, model_settings, inf.get("context_window")
 
     raise ValueError(f"Unsupported provider: {effective_provider!r}")

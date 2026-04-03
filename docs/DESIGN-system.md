@@ -112,14 +112,14 @@ Startup is intentionally split between synchronous bootstrap and async activatio
 6. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
 7. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
 8. `async with agent` activates the main agent context, which is required before MCP discovery.
-9. `restore_session()` restores or creates `.co-cli/session.json`, copying only the `session_id` into `deps.session`.
+9. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See `DESIGN-session.md` for full session and transcript persistence design.
 10. The REPL loop starts.
 
 Teardown is owned by `main.py`:
 
-1. `HistoryCompactionState.shutdown()`
-2. `AsyncExitStack.aclose()` for the main agent context
-3. `deps.services.shell.cleanup()`
+1. Kill running background tasks
+2. `deps.shell.cleanup()`
+3. `AsyncExitStack.aclose()` for the main agent context
 
 ### 2.3 Agent Construction After The SDK Upgrade
 
@@ -231,7 +231,7 @@ Owned by orchestration and history processors.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `precomputed_compaction` | `HistoryCompactionState.on_turn_start()` harvest | `HistoryCompactionState.on_turn_end()` | fresh `None` |
+| `compaction_failure_count` | `truncate_history_window()` on inline summarization failure | reset to 0 on success; NOT reset by `reset_for_turn()` | fresh `0` |
 | `turn_usage` | `run_turn()` init + `_merge_turn_usage()` | `reset_for_turn()` | fresh `None` |
 | `tool_progress_callback` | `StreamRenderer.install_progress()` | `StreamRenderer.clear_progress()` and `run_turn()` finally | fresh `None` |
 | `safety_state` | `create_deps()` init and `reset_for_turn()` | `reset_for_turn()` | fresh default |
@@ -270,7 +270,8 @@ The runtime writes to a small, explicit set of stores:
 | `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeStore` |
 | `<cwd>/.co-cli/memory/` | project-local memory markdown | memory lifecycle and memory tools |
 | configured library dir, default `~/.local/share/co-cli/library/` | article markdown store | article tools |
-| `<cwd>/.co-cli/session.json` | session id, timestamps, compaction count | session helpers in `context/_session.py` |
+| `<cwd>/.co-cli/sessions/{id}.json` | session id, timestamps, compaction count | session helpers in `context/_session.py` |
+| `<cwd>/.co-cli/sessions/{id}.jsonl` | JSONL conversation transcript (append-only) | `context/_transcript.py` |
 | `~/.config/co-cli/google_token.json` | cached Google authorized-user credentials | Google auth helper |
 
 ### 2.8 Failure And Degradation Boundaries
@@ -311,7 +312,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | `knowledge_cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | Optional TEI reranker endpoint |
 | `memory_dir` | n/a | `<cwd>/.co-cli/memory` | Project-local memory root after cwd resolution |
 | `library_path` | `CO_LIBRARY_PATH` | `~/.local/share/co-cli/library` | Global article store root |
-| `session_ttl_minutes` | `CO_SESSION_TTL_MINUTES` | `60` | Session freshness window for restore |
+| _(removed)_ | | | Session TTL removed — sessions persist indefinitely; new session via `/new` |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode (`off`, `summary`, `full`) |
 
 ## 4. Files
@@ -325,9 +326,12 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/_model_factory.py` | session-scoped resolved model registry by role |
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |
 | `co_cli/context/_orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
-| `co_cli/context/_history.py` | history processors and background compaction lifecycle |
+| `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger |
+| `co_cli/context/_compaction.py` | summarization, budget resolution, and token estimation — shared by history processor and `/compact` |
 | `co_cli/context/_session.py` | session JSON persistence helpers |
-| `co_cli/context/_types.py` | shared compaction and safety dataclasses |
+| `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip |
+| `co_cli/context/_session_browser.py` | session listing, `SessionSummary`, and session summary generation for UI |
+| `co_cli/context/_types.py` | shared safety and memory-recall dataclasses |
 | `co_cli/commands/_commands.py` | built-in slash commands, skill loading, and slash dispatch |
 | `co_cli/display/_core.py` | terminal frontend surfaces and approval prompting |
 | `co_cli/display/_stream_renderer.py` | event-to-frontend stream buffering and progress callback wiring |

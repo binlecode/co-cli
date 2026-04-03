@@ -20,7 +20,6 @@ from pydantic_ai.messages import ModelMessage
 
 from co_cli.deps import CoDeps
 from co_cli.context._orchestrate import run_turn, TurnResult
-from co_cli.context._history import HistoryCompactionState
 from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
@@ -32,8 +31,9 @@ from co_cli.commands._commands import (
     LocalOnly, ReplaceTranscript, DelegateToAgent,
     _build_completer_words,
 )
-from co_cli.context._session import touch_session, increment_compaction, save_session
-from co_cli.context._skill_env import _cleanup_skill_run_state
+from co_cli.context._session import touch_session, increment_compaction, save_session, load_session
+from co_cli.context._transcript import append_messages as append_transcript, write_compact_boundary
+from co_cli.context._skill_env import cleanup_skill_run_state
 from co_cli.bootstrap._bootstrap import create_deps, restore_session
 
 exporter = SQLiteSpanExporter()
@@ -76,12 +76,11 @@ async def _finalize_turn(
     session_data: dict,
     deps: CoDeps,
     frontend: Frontend,
-    compactor: "HistoryCompactionState",
 ) -> tuple[list[ModelMessage], dict]:
-    """Consolidate post-turn lifecycle: history, signals, session, compaction, errors.
+    """Consolidate post-turn lifecycle: history, signals, session, errors.
 
     Returns (next_message_history, next_session_data).
-    Does NOT handle skill-run cleanup — that is done by _cleanup_skill_run_state() in finally.
+    Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
     from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
@@ -95,10 +94,11 @@ async def _finalize_turn(
 
     # Touch session and persist
     next_session = touch_session(session_data)
-    save_session(deps.config.session_path, next_session)
+    save_session(deps.config.sessions_dir, next_session)
 
-    # Spawn background compaction for the next turn
-    compactor.on_turn_end(next_history, deps)
+    # Append new messages to transcript (positional tail slice)
+    new_messages = turn_result.messages[len(message_history):]
+    append_transcript(deps.config.sessions_dir, deps.session.session_id, new_messages)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -111,7 +111,6 @@ async def _run_foreground_turn(
     *,
     message_history: list[ModelMessage],
     session_data: dict,
-    compactor: "HistoryCompactionState",
     agent: Agent,
     user_input: str,
     saved_env: dict[str, str | None],
@@ -119,12 +118,11 @@ async def _run_foreground_turn(
     frontend: Frontend,
     reasoning_display: str,
 ) -> tuple[list[ModelMessage], dict]:
-    """Execute one foreground turn: harvest bg compaction, run turn, cleanup, finalize.
+    """Execute one foreground turn: run turn, cleanup, finalize.
 
-    _cleanup_skill_run_state is guaranteed via finally.
+    cleanup_skill_run_state is guaranteed via finally.
     Returns (next_message_history, next_session_data).
     """
-    compactor.on_turn_start(deps)
     try:
         turn_result = await run_turn(
             agent=agent,
@@ -135,9 +133,9 @@ async def _run_foreground_turn(
             frontend=frontend,
         )
     finally:
-        _cleanup_skill_run_state(saved_env, deps)
+        cleanup_skill_run_state(saved_env, deps)
     return await _finalize_turn(
-        turn_result, message_history, session_data, deps, frontend, compactor
+        turn_result, message_history, session_data, deps, frontend
     )
 
 
@@ -152,7 +150,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     )
     stack = AsyncExitStack()
     deps: CoDeps | None = None
-    compactor: HistoryCompactionState | None = None
     try:
         try:
             deps = await create_deps(frontend, stack)
@@ -167,10 +164,14 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         from co_cli.commands._commands import get_skill_registry
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
+        # Resume hint: check if a transcript exists for the current session
+        transcript_path = deps.config.sessions_dir / f"{deps.session.session_id}.jsonl"
+        if transcript_path.exists():
+            console.print("[dim]Previous session available — /resume to continue[/dim]")
+
         display_welcome_banner(deps)
 
         message_history: list[ModelMessage] = []
-        compactor = HistoryCompactionState()
         last_interrupt_time = 0.0
 
         while True:
@@ -194,9 +195,17 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     outcome = await dispatch_command(user_input, cmd_ctx)
                     if isinstance(outcome, ReplaceTranscript):
                         message_history = outcome.history
+                        # Sync session_data if session ID rotated (/new, /resume)
+                        if deps.session.session_id != session_data.get("session_id"):
+                            rotated = load_session(
+                                deps.config.sessions_dir / f"{deps.session.session_id}.json"
+                            )
+                            if rotated:
+                                session_data = rotated
                         if outcome.compaction_applied:
+                            write_compact_boundary(deps.config.sessions_dir, deps.session.session_id)
                             session_data = increment_compaction(session_data)
-                            save_session(deps.config.session_path, session_data)
+                            save_session(deps.config.sessions_dir, session_data)
                         continue
                     elif isinstance(outcome, DelegateToAgent):
                         # Skill dispatched — fall through to LLM turn with delegated input
@@ -210,7 +219,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                 message_history, session_data = await _run_foreground_turn(
                     message_history=message_history,
                     session_data=session_data,
-                    compactor=compactor,
                     agent=agent,
                     user_input=user_input,
                     saved_env=_saved_env,
@@ -230,8 +238,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
-        if compactor is not None:
-            compactor.shutdown()
         if deps is not None:
             from co_cli.tools._background import kill_task
             for task_state in deps.session.background_tasks.values():

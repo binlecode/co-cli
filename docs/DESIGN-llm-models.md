@@ -59,15 +59,15 @@ When `role_models` is not configured, provider defaults are injected for all rol
 
 `ModelRegistry` is a session-scoped registry of pre-built `ResolvedModel` objects keyed by role. It is built once from `CoConfig` at session start via `ModelRegistry.from_config(config)` and stored on `CoServices.model_registry`. All components look up models by role using `registry.get(role, fallback)` at runtime.
 
-`ResolvedModel` is a dataclass pairing a pre-built model object (`Any`) with its `ModelSettings | None`. Agent factories and summarization functions receive a `ResolvedModel` directly.
+`ResolvedModel` is a dataclass pairing a pre-built model object (`Any`) with its `ModelSettings | None` and an optional `context_window: int | None` from model quirks. Agent factories and summarization functions receive a `ResolvedModel` directly. `resolve_compaction_budget()` reads `context_window` from the reasoning role's `ResolvedModel` to set the compaction token budget.
 
-Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_model_factory.py`:
+Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_model_factory.py`. It returns a 3-tuple `(model, settings, context_window)` — `context_window` is read from model quirks and stored on `ResolvedModel`:
 
 - `ollama-openai` → `OpenAIChatModel(model_name, OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama"))`
 - `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
 - Any other provider → `ValueError` raised.
 
-Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Background compaction passes the main agent's model as the `fallback` argument so it degrades gracefully. The `/compact` and `/new` commands use `None` as fallback — if ROLE_SUMMARIZATION is unconfigured they fail explicitly rather than silently inheriting the reasoning model.
+Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Idle-time summary pre-computation passes the main agent's model as the `fallback` argument so it degrades gracefully. The `/compact` and `/new` commands use `None` as fallback — if ROLE_SUMMARIZATION is unconfigured they fail explicitly rather than silently inheriting the reasoning model.
 
 ### Model Dependency Checks
 
@@ -242,7 +242,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
-| `co_cli/context/_history.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `truncate_history_window` uses `registry.get("summarization", fallback)` for inline compaction; `precompute_compaction` does the same for background pre-computation |
+| `co_cli/context/_compaction.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `resolve_compaction_budget(config, registry)` — reads `context_window` from `ResolvedModel` to set compaction token budget |
 | `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host, api_key)` — builds provider-aware model and `ModelSettings` |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |
