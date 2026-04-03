@@ -64,24 +64,9 @@ This section is constrained to what is directly visible in the local repositorie
 
 ---
 
-# 4. Where co is strong
+# 4. Where co lags the peer-code patterns
 
-co is already well-positioned in six areas:
-
-- **local-first control**: stronger than most frontier cloud assistants
-- **approval boundary**: clearer than many open-source agent stacks
-- **composability**: files, shell, skills, MCP, delegation all compose cleanly
-- **project-local memory**: better than stateless CLI peers
-- **inspectable implementation**: design docs and code structure are unusually legible
-- **context governance**: model-spec-aware compaction budget (`resolve_compaction_budget()` with context_window from quirks, output reserve subtraction, Ollama Modelfile override), dedicated compaction engine separated from history processors, circuit breaker on summarization failures, JSONL transcript with compact-boundary resume. Converges with fork-cc's layered compaction architecture while staying simpler (single-pass summary, no forked agents).
-
-These are real advantages. They should shape the roadmap rather than be treated as incidental.
-
----
-
-# 5. Where co lags the peer-code patterns
-
-## 5.0 Self/personality model quality
+## 4.0 Self/personality model quality
 
 co has a recognizable working style, but not yet a strong explicit self model for how that style should be represented, adapted, and constrained over time.
 
@@ -112,7 +97,7 @@ For co, the practical target is a self model that is:
 - subordinate to usefulness and trust
 - simple enough to maintain without prompt sprawl
 
-## 5.1 User model quality
+## 4.1 User model quality
 
 co has memory, but not yet a strong explicit user model with clear classes like profile, habits, standing instructions, relationships, and project norms.
 
@@ -145,25 +130,25 @@ For co, the practical target is a user model that is:
 
 That is a better design center than maximizing recall count or extraction aggressiveness.
 
-## 5.2 Asynchronous autonomy
+## 4.2 Asynchronous autonomy
 
 co has background subprocesses, but not yet recurring plans, deferred follow-up, or task graphs that combine tools, memory updates, and approvals over time.
 
-## 5.3 Memory legibility
+## 4.3 Memory legibility
 
 Users can store and recall memories, but the system still needs stronger inspectability, editability, and scope separation.
 
-## 5.4 Multimodal continuity
+## 4.4 Multimodal continuity
 
 co remains mostly text-and-file centric. The frontier is shifting toward screenshots, documents, voice, camera, browser context, and cross-device state.
 
-## 5.5 Source freshness and personal-context fusion
+## 4.5 Source freshness and personal-context fusion
 
 co has good retrieval primitives, but still weaker fusion between private sources, learned user context, and current tasks than the best frontier systems are targeting.
 
 ---
 
-# 6. Adoption method
+# 5. Adoption method
 
 The right question for each reference system is:
 
@@ -188,9 +173,9 @@ Examples:
 - from OpenCode: study package-boundary clarity between app, desktop, SDK, and workspace service layers, not unnecessary surface expansion
 ---
 
-# 7. Recommended strategic direction for co
+# 6. Recommended strategic direction for co
 
-## 7.1 Double down on "trusted local operator"
+## 6.1 Double down on "trusted local operator"
 
 Do not compete by breadth. Compete by:
 
@@ -200,7 +185,7 @@ Do not compete by breadth. Compete by:
 - reversible actions
 - project-aware continuity
 
-## 7.2 Evolve memory into a typed personal state layer
+## 6.2 Evolve memory into a typed personal state layer
 
 Recommended next moves:
 
@@ -209,7 +194,7 @@ Recommended next moves:
 - expose edit/review tools for the user model
 - move more extraction/consolidation into background flows
 
-## 7.3 Turn background execution into bounded agent workflows
+## 6.3 Turn background execution into bounded agent workflows
 
 Recommended next moves:
 
@@ -218,7 +203,7 @@ Recommended next moves:
 - approval checkpoints inside long plans
 - delegated specialists that can run under task control
 
-## 7.4 Treat multimodal/cross-surface work as a medium-term requirement
+## 6.4 Treat multimodal/cross-surface work as a medium-term requirement
 
 Recommended next moves:
 
@@ -226,7 +211,7 @@ Recommended next moves:
 - document and screenshot ingestion
 - tighter browser or browser-adjacent action loops
 
-## 7.5 Reframe personality as working style, not product thesis
+## 6.5 Reframe personality as working style, not product thesis
 
 Personality can still matter, but frontier systems win by:
 
@@ -239,7 +224,7 @@ co should preserve style and warmth while making usefulness the center of gravit
 
 ---
 
-# 8. Bottom line
+# 7. Bottom line
 
 The 2026 frontier for personalized autonomous assistants is defined by:
 

@@ -48,7 +48,7 @@ Single-pass removal. The `max_history_messages` field threads through: `config.p
 
 ## Implementation Plan
 
-### TASK-1: Remove message-count trigger and decouple tail-count
+### ✓ DONE — TASK-1: Remove message-count trigger and decouple tail-count
 
 files:
 - `co_cli/context/_history.py`
@@ -60,7 +60,7 @@ Changes:
 done_when: `grep -n "max_msgs\|max_history_messages" co_cli/context/_history.py` returns zero matches AND `uv run pytest tests/test_context_compaction.py tests/test_history.py` passes (non-regression check — tests still reference the old field until TASK-2/3).
 success_signal: N/A (refactor — no user-visible behavior change)
 
-### TASK-2: Remove `max_history_messages` from config chain
+### ✓ DONE — TASK-2: Remove `max_history_messages` from config chain
 
 files:
 - `co_cli/config.py`
@@ -76,7 +76,7 @@ prerequisites: [TASK-1]
 done_when: `grep -rn "max_history_messages\|DEFAULT_MAX_HISTORY_MESSAGES" co_cli/ evals/` returns zero matches.
 success_signal: N/A (refactor)
 
-### TASK-3: Update tests
+### ✓ DONE — TASK-3: Update tests
 
 files:
 - `tests/test_context_compaction.py`
@@ -97,7 +97,7 @@ prerequisites: [TASK-1, TASK-2]
 done_when: `uv run pytest tests/test_context_compaction.py tests/test_history.py -v` passes with all tests green AND `grep -n "max_history_messages" tests/test_context_compaction.py tests/test_history.py` returns zero matches.
 success_signal: N/A (refactor)
 
-### TASK-4: Update docs and reference files
+### ✓ DONE — TASK-4: Update docs and reference files
 
 files:
 - `docs/DESIGN-context.md`
@@ -135,3 +135,49 @@ Key C1 revisions: tail formula `// 3` → `// 2` (parity with old behavior), tes
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev compaction-trigger-simplify`
+
+## Independent Review
+
+| File | Finding | Severity | Task |
+|------|---------|----------|------|
+| `co_cli/config.py` | Also removes `session_ttl_minutes` and `DEFAULT_SESSION_TTL_MINUTES` — out of scope for this TODO (bundled in the same commit as session persistence refactor). Not harmful but the commit is not scoped to this TODO alone. | minor | TASK-2 |
+| `co_cli/deps.py` | Also changes `session_path` → `sessions_dir` and removes `Compaction` import from `_types`. These are part of the larger commit, not this TODO. Same note: not harmful but scope bleed. | minor | TASK-2 |
+| `docs/reference/RESEARCH-peer-session-compaction.md` line 223 | Comparison table still references `tail_count = max(4, max_history_messages // 2)` in the co-cli column — stale after the refactor. Should read `max(4, len(messages) // 2)`. | minor | TASK-4 |
+| `docs/reference/RESEARCH-peer-session-compaction.md` line 245 | Assessment paragraph still references `max_history_messages = 40` and `CO_CLI_MAX_HISTORY_MESSAGES` as current design. Post-delivery, this reads as if the removal hasn't happened. Should be updated to past-tense or note the removal. | minor | TASK-4 |
+| `docs/reference/RESEARCH-peer-session-compaction.md` line 272 | Still says `Currently tail_count = max(4, max_history_messages // 2)` — stale. | minor | TASK-4 |
+| `docs/reference/RESEARCH-peer-session-compaction.md` lines 374, 387 | `~~strikethrough~~` markers remain. TASK-4 spec says "remove all `~~strikethrough~~` annotations added during analysis — replace with clean text reflecting the implemented state." These are not cleaned up. | minor | TASK-4 |
+| `docs/DESIGN-context.md` line 259 | Replaced `max_history_messages` row with `_(removed)_` placeholder for session TTL — this is about `session_ttl_minutes`, not `max_history_messages`. The `max_history_messages` row is removed (correct), but the replacement text documents a different removal. Confusing but not incorrect. | minor | TASK-4 |
+| `tests/test_context_compaction.py` | New `resolve_compaction_budget()` tests (lines 130-185) are additive and outside TODO scope. They test the new `_compaction.py` module, not the message-count removal. Clean tests, no policy violations, but they belong to the parent commit's scope (context module split), not this TODO. | minor | TASK-3 |
+| `co_cli/context/_history.py` | `_CompactionBoundaries` moved from `_types.py` to inline in `_history.py` as a module-private dataclass. Clean refactor. `find_first_run_end` made public (underscore removed). Both changes are correct and coherent with the module split. | — | TASK-1 |
+| `tests/test_history.py` | `LocalOnly` import removed (was in old diff), `replace` import removed — both unused after changes. No stale imports remain. No mocks or patches. | — | TASK-3 |
+
+**Spec fidelity check (done_when verification):**
+
+- TASK-1: `grep max_msgs\|max_history_messages co_cli/context/_history.py` → zero matches. PASS.
+- TASK-2: `grep -rn max_history_messages\|DEFAULT_MAX_HISTORY_MESSAGES co_cli/ evals/` → zero matches. PASS.
+- TASK-3: `grep -n max_history_messages tests/test_context_compaction.py tests/test_history.py` → zero matches. PASS.
+- TASK-4: `grep -rn max_history_messages docs/DESIGN-context.md docs/DESIGN-core-loop.md settings.reference.json` → zero matches. PASS. Strikethrough markers in RESEARCH doc: 2 remain (minor, see above).
+
+**Cross-task coherence:** All four tasks are internally consistent. The config field is removed end-to-end: constant, Settings field, env var mapping, CoConfig field, create_config wiring, eval deps, tests, and docs. No dangling references in production code. The tail-count formula change (`max_msgs // 2` → `len(messages) // 2`) is applied in `_compute_compaction_boundaries` and reflected in test docstrings.
+
+**Anti-pattern check:** No mocks, no patches, no `monkeypatch`. Tests use real `CoDeps`, real `RunContext`, real `ShellBackend`. The circuit breaker test sets `compaction_failure_count = 3` directly on the real runtime state — this is constructing a real runtime container, not faking behavior. PASS.
+
+**Overall: 0 blocking / 8 minor**
+
+## Delivery Summary — 2026-04-03
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | grep returns zero matches in `_history.py` + non-regression tests pass | ✓ pass |
+| TASK-2 | grep returns zero matches in `co_cli/` and `evals/` | ✓ pass |
+| TASK-3 | all 11 tests pass + grep returns zero matches in test files | ✓ pass |
+| TASK-4 | grep returns zero matches in doc/reference files | ✓ pass |
+
+**Tests:** full suite — 298 passed, 0 failed
+**Independent Review:** 0 blocking / 8 minor (scope bleed from pre-existing uncommitted changes in working tree; RESEARCH doc stale references fixed post-review)
+**Doc Sync:** narrow scope — TASK-4 covered all doc updates directly; no additional sync needed
+
+**Overall: DELIVERED**
+Removed `max_history_messages` config field end-to-end (constant, Settings, CoConfig, env var, eval deps, tests, docs). Compaction trigger simplified to token-only. Tail-count decoupled from config to `max(4, len(messages) // 2)`.
+
+> Run `/review-impl compaction-trigger-simplify` for Gate 2 verdict before shipping.

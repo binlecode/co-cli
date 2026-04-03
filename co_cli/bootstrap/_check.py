@@ -120,6 +120,74 @@ def check_ollama_model(host: str, model: str) -> CheckResult:
     return CheckResult(ok=True, status="ok", detail=f"Model available: {model}")
 
 
+# Minimum context window for agentic tool-use sessions.
+# Below this, system prompt + tools (~5.5K) + working history (~20K) +
+# one tool result (~5K) + compaction headroom (13K) + output reserve (~16K)
+# + safety margin (~5.5K) cannot fit. The agent would compact every turn,
+# and the summarizer call itself would consume most of the remaining context.
+MIN_AGENTIC_CONTEXT = 65_536
+
+
+def probe_ollama_context(host: str, model: str) -> CheckResult:
+    """Probe Ollama /api/show for the model's runtime num_ctx.
+
+    Returns CheckResult with extra={"num_ctx": N} on success.
+    The num_ctx value comes from the Modelfile's PARAMETER section —
+    this is the actual runtime allocation, not the model architecture's
+    theoretical maximum (model_info.*.context_length).
+
+    Fail-fast: if num_ctx < MIN_AGENTIC_CONTEXT (64K), returns error
+    with actionable remediation message.
+
+    Unreachable host or missing model → warn (caller decides impact).
+    """
+    try:
+        import httpx
+        resp = httpx.post(f"{host}/api/show", json={"model": model}, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as err:
+        return CheckResult(
+            ok=True, status="warn",
+            detail=f"Ollama context probe skipped — {err}",
+        )
+
+    # Parse num_ctx from the parameters string (Modelfile values)
+    num_ctx = 0
+    params_str = data.get("parameters", "")
+    for line in params_str.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "num_ctx":
+            try:
+                num_ctx = int(parts[1])
+            except ValueError:
+                pass
+            break
+
+    if num_ctx <= 0:
+        return CheckResult(
+            ok=True, status="warn",
+            detail=f"Could not read num_ctx from Modelfile for {model}",
+        )
+
+    if num_ctx < MIN_AGENTIC_CONTEXT:
+        return CheckResult(
+            ok=False, status="error",
+            detail=(
+                f"Model {model} has num_ctx={num_ctx:,} — minimum for agentic "
+                f"tool use is {MIN_AGENTIC_CONTEXT:,} (64K). "
+                f"Update your Modelfile: PARAMETER num_ctx {MIN_AGENTIC_CONTEXT}"
+            ),
+            extra={"num_ctx": num_ctx},
+        )
+
+    return CheckResult(
+        ok=True, status="ok",
+        detail=f"Runtime num_ctx={num_ctx:,}",
+        extra={"num_ctx": num_ctx},
+    )
+
+
 def _check_gemini_key(api_key: str | None) -> CheckResult:
     if api_key:
         return CheckResult(ok=True, status="ok", detail="Gemini API key configured")

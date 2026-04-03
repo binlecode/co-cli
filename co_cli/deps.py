@@ -98,11 +98,11 @@ class SessionApprovalRule:
 
 
 
-@dataclass(frozen=True)
+@dataclass
 class CoConfig:
-    """Injected configuration — built at bootstrap, updated via replace() during
-    startup (e.g. backend degradation, reranker resolution). Read-only once inside
-    CoDeps — frozen instance is safe to share by reference with sub-agents.
+    """Injected configuration — mutable during bootstrap, read-only by convention
+    after entering CoDeps. Safe to share by reference with sub-agents because
+    nothing mutates it after bootstrap completes.
 
     main.py reads Settings once and populates this dataclass with scalar values.
     Tools access ctx.deps.config.field_name. No tool should import Settings.
@@ -203,7 +203,7 @@ class CoConfig:
 
         All cwd-relative paths and settings fields are resolved in a single call.
         """
-        # Resolve MCP server env tokens before construction (frozen=True prevents post-init mutation)
+        # Resolve MCP server env tokens before construction
         resolved_servers: dict[str, "MCPServerConfig"] = {}
         for name, srv_cfg in (s.mcp_servers or {}).items():
             if name == "github":
@@ -402,7 +402,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
 
     Shares handles, registries, and config by reference (safe — handles are
     stateless or thread-safe; registries are read-only after bootstrap;
-    config is frozen).
+    config is read-only by convention after bootstrap).
 
     Session fields:
       Inherited: google_creds, google_creds_resolved (resolved once, safe to share),

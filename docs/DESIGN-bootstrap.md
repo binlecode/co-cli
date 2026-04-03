@@ -37,7 +37,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ _discover_knowledge_backend(config, frontend) → (config, KnowledgeStore | None)
 │  │      grep → return (config, None)
 │  │      _resolve_reranker() → probe embedder → resolve backend
-│  │      config updated via replace() to reflect runtime backend
+│  │      config fields mutated directly to reflect runtime backend
 │  │      degradation recorded in config.degradations dict
 │  │      construct KnowledgeStore with resolved config
 │  │      on fail → hybrid falls back to fts5, then grep (returns None)
@@ -101,6 +101,7 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 create_deps(frontend, stack):
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
     config.validate() → error: raise ValueError
+    [if ollama-openai] probe_ollama_context(host, model)  # Step 2b: fail-fast on undersized num_ctx; override config.llm_num_ctx with runtime value
     model_registry = ModelRegistry.from_config(config)
     tool_registry = build_tool_registry(config)  # native toolset + mcp toolsets
     [if mcp_toolsets]
@@ -113,22 +114,23 @@ create_deps(frontend, stack):
 
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeStore` construction) and file sync happen inside `create_deps()` as Steps 6-7, before CoDeps assembly.
 
-### `CoConfig` Frozen Instance Design
+### `CoConfig` Mutation Model
 
-`CoConfig` is `@dataclass(frozen=True)` — instances are immutable. During bootstrap, `create_deps()` builds new instances via `dataclasses.replace()` as degradation resolves runtime values:
+`CoConfig` is a plain `@dataclass` (not frozen). During bootstrap, `create_deps()` assigns fields directly on the same instance as degradation resolves runtime values:
 
 ```text
 config = CoConfig.from_settings(settings, cwd)   # initial from user settings
-config = _discover_knowledge_backend(config, ...)  # replace() with resolved backend + reranker
+_discover_knowledge_backend(config, ...)          # mutates config fields in-place (backend, reranker, degradations)
 → CoDeps(config=config)                           # final instance shared by reference
 ```
 
-After entering `CoDeps`, config is never replaced — sub-agents share the same instance by reference. The frozen constraint exists for this runtime sharing safety, not to prevent bootstrap assembly. Any service that degrades during bootstrap records the event in `config.degradations` (a `dict[str, str]` keyed by service name), keeping config fields as runtime truth without per-service degradation fields.
+After entering `CoDeps`, config is read-only by convention — sub-agents share the same instance by reference and nothing mutates it once bootstrap completes. Any service that degrades during bootstrap records the event in `config.degradations` (a `dict[str, str]` keyed by service name), keeping config fields as runtime truth without per-service degradation fields.
 
 Key points:
 - Config reflects runtime reality — `deps.config.knowledge_search_backend` is the actual backend after degradation, not the user's original setting
 - `deps.config.degradations` records what changed and why (e.g. `{"knowledge": "hybrid → fts5 (embedder unavailable)"}`) — generic, any service can use it
 - `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call
+- `deps.config.llm_num_ctx` may be overridden during Step 2b with the runtime Modelfile value probed from Ollama — it reflects the actual allocated context window, not just the settings value
 - Static instructions (personality, rules, counter-steering) are assembled inside `build_agent()`, not here — they are an agent concern
 
 ### `CoDeps` Structure
@@ -139,7 +141,7 @@ Key points:
 |---------------|----------|-----------------------|
 | `shell`, `knowledge_store`, `model_registry`, `task_agents` | Session | Copied by reference (shared) |
 | `tool_index`, `skill_commands` | Session | Copied by reference (shared) |
-| `config` (`CoConfig`) | Session | Copied by reference (frozen) |
+| `config` (`CoConfig`) | Session | Copied by reference (read-only by convention after bootstrap) |
 | `session` (`CoSessionState`) | Session, partially inherited | Credentials and approval rules inherited; per-session fields reset |
 | `runtime` (`CoRuntimeState`) | Per-turn transient | Reset for sub-agents |
 
@@ -155,6 +157,32 @@ Key points:
 | Ollama model missing | Startup succeeds; first LLM call gets `ModelHTTPError`, user sees error in REPL |
 
 On-demand diagnostics: `check_agent_llm` (IO probe) is available via `co config` and `check_capabilities` for users who want to verify connectivity.
+
+### Step 2b — Ollama Context Probe
+
+Immediately after `config.validate()`, when the provider is `ollama-openai`, `create_deps()` calls `probe_ollama_context(llm_host, reasoning_model)` from `_check.py`. This probes `/api/show` and extracts `num_ctx` from the Modelfile `parameters` string — the actual runtime allocation, not the model's theoretical maximum from `model_info`.
+
+```text
+probe_ollama_context(host, model):
+    POST /api/show → parse "parameters" string for "num_ctx N"
+    num_ctx <= 0     → warn (no Modelfile param found; proceed)
+    num_ctx < 65536  → error: raise ValueError (fail-fast; session never starts)
+    num_ctx >= 65536 → ok; return extra={"num_ctx": num_ctx}
+
+if ok and runtime num_ctx != config.llm_num_ctx:
+    config.llm_num_ctx = runtime_num_ctx   # direct field assignment; no replace()
+```
+
+`MIN_AGENTIC_CONTEXT = 65_536` (64K) is the hard floor defined in `_check.py`. Below this, system prompt + tools + working history + one tool result + compaction headroom + output reserve + safety margin cannot fit. The agent would compact every turn, and the summarizer call itself would consume most of the remaining context.
+
+| Condition | Behavior |
+|-----------|----------|
+| Ollama unreachable (probe fails) | `warn`; probe skipped; startup continues with settings `llm_num_ctx` |
+| Model not found in `/api/show` | `warn`; probe skipped; startup continues |
+| `num_ctx` absent from Modelfile | `warn`; no override; startup continues |
+| `num_ctx < MIN_AGENTIC_CONTEXT` | `error`; `ValueError` raised; session never starts |
+| `num_ctx >= MIN_AGENTIC_CONTEXT` and differs from config | `config.llm_num_ctx` overridden with runtime value |
+| `num_ctx` matches config exactly | no override; startup continues |
 
 ## 3. Entry Conditions
 
@@ -278,7 +306,7 @@ Live skill reloading happens after startup in the main loop: before each REPL pr
 
 ### Knowledge Backend Resolution
 
-`_discover_knowledge_backend(config, frontend)` runs inside `create_deps()` as Step 6, before sync (Step 7) and CoDeps assembly (Step 9). It resolves reranker availability, probes embedder, constructs the store, and returns `(resolved_config, store)`. Config is updated via `replace()` to reflect the runtime backend.
+`_discover_knowledge_backend(config, frontend)` runs inside `create_deps()` as Step 6, before sync (Step 7) and CoDeps assembly (Step 9). It resolves reranker availability, probes embedder, constructs the store, and returns `(config, store)`. Config fields are mutated directly to reflect the runtime backend.
 
 ```text
 "grep" in config → return (config, None)
@@ -321,7 +349,7 @@ The banner marks the boundary between startup and interactive use. All status me
 
 | Condition | Outcome |
 |-----------|---------|
-| `create_deps()` raises `ValueError` (provider error, missing reasoning model) | `_chat_loop()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 via `SystemExit(1)` |
+| `create_deps()` raises `ValueError` (provider error, missing reasoning model, or Ollama `num_ctx` below `MIN_AGENTIC_CONTEXT`) | `_chat_loop()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 via `SystemExit(1)` |
 | `load_config()` schema validation fails (`ValidationError`) | re-raised as `ValueError` by `load_config()`; caught by `get_settings()`, which prints `"Configuration error: …"` to stderr and raises `SystemExit(1)` — never reaches `_chat_loop()` |
 | Knowledge sync raises | Index closed, `knowledge_store = None`, grep fallback, session continues |
 | Session file missing or unreadable | New session created |
@@ -341,7 +369,7 @@ The banner marks the boundary between startup and interactive use. All status me
 |------|------|
 | `co_cli/main.py` | `_chat_loop()` startup assembly |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (config, registries, MCP, knowledge, skills, task agent), `restore_session()` |
-| `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
+| `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), bootstrap context probe `probe_ollama_context()` + `MIN_AGENTIC_CONTEXT` constant (Step 2b), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
 | `co_cli/bootstrap/_render_status.py` | `get_status()` / `StatusResult` / `render_status_table()` — system status assembly and display; `check_security()` / `SecurityCheckResult` / `render_security_findings()` — security posture checks: user config file permissions (Check 1), project config file permissions (Check 2), `shell_safe_commands` wildcard `"*"` entries (Check 3) |
 | `co_cli/context/_session.py` | Session helpers: new/load/save/find_latest/touch/increment_compaction |
 | `co_cli/bootstrap/_banner.py` | `display_welcome_banner(deps: CoDeps)` — welcome banner |

@@ -356,9 +356,9 @@ def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     """No reranker configured → config unchanged, no status messages."""
     config = CoConfig(knowledge_cross_encoder_reranker_url=None, knowledge_llm_reranker=None)
     statuses: list[str] = []
-    resolved = _resolve_reranker(config, statuses)
-    assert resolved.knowledge_cross_encoder_reranker_url is None
-    assert resolved.knowledge_llm_reranker is None
+    _resolve_reranker(config, statuses)
+    assert config.knowledge_cross_encoder_reranker_url is None
+    assert config.knowledge_llm_reranker is None
     assert statuses == []
 
 
@@ -369,8 +369,8 @@ def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
         knowledge_llm_reranker=None,
     )
     statuses: list[str] = []
-    resolved = _resolve_reranker(config, statuses)
-    assert resolved.knowledge_cross_encoder_reranker_url is None
+    _resolve_reranker(config, statuses)
+    assert config.knowledge_cross_encoder_reranker_url is None
     assert any("cross-encoder" in s.lower() or "tei" in s.lower() for s in statuses)
 
 
@@ -383,8 +383,8 @@ def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
         llm_api_key=None,
     )
     statuses: list[str] = []
-    resolved = _resolve_reranker(config, statuses)
-    assert resolved.knowledge_llm_reranker is None
+    _resolve_reranker(config, statuses)
+    assert config.knowledge_llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
 
@@ -397,8 +397,8 @@ def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
         llm_host="http://localhost:1",
     )
     statuses: list[str] = []
-    resolved = _resolve_reranker(config, statuses)
-    assert resolved.knowledge_llm_reranker is None
+    _resolve_reranker(config, statuses)
+    assert config.knowledge_llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
 
@@ -411,9 +411,9 @@ def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
         llm_api_key=None,
     )
     statuses: list[str] = []
-    resolved = _resolve_reranker(config, statuses)
-    assert resolved.knowledge_cross_encoder_reranker_url is None
-    assert resolved.knowledge_llm_reranker is None
+    _resolve_reranker(config, statuses)
+    assert config.knowledge_cross_encoder_reranker_url is None
+    assert config.knowledge_llm_reranker is None
     assert len(statuses) == 2
 
 

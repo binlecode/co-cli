@@ -99,21 +99,22 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - Missing reasoning role is a startup error.
    - Gemini without an API key is a startup error.
    - Ollama connectivity and model availability are deferred to runtime (`run_turn()` handles errors).
-3. `_discover_knowledge_backend()` resolves reranker and embedder availability, updates config via `replace()` to reflect the runtime backend, and constructs the store:
+3. (Step 2b) When provider is `ollama-openai`, `probe_ollama_context()` probes `/api/show` for the reasoning model's Modelfile `num_ctx`. Fail-fast if `num_ctx < MIN_AGENTIC_CONTEXT` (64K). Overrides `config.llm_num_ctx` with the runtime value via direct field assignment when they differ.
+4. `_discover_knowledge_backend()` resolves reranker and embedder availability, updates config fields directly to reflect the runtime backend, and constructs the store:
    - on grep: reranker and discovery skipped entirely (no index)
    - on hybrid/fts5: rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
-   - `config.knowledge_backend_degraded_from` records original when degradation occurs
-4. `create_deps()` constructs:
+   - `config.degradations["knowledge"]` records what changed and why when degradation occurs
+5. `create_deps()` constructs:
    - `CoServices(shell, knowledge_store, model_registry)`
    - `CoRuntimeState(safety_state=SafetyState())`
    - the final `CoDeps`
-5. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
-6. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
-7. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
-8. `async with agent` activates the main agent context, which is required before MCP discovery.
-9. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See `DESIGN-session.md` for full session and transcript persistence design.
-10. The REPL loop starts.
+6. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
+7. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
+8. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
+9. `async with agent` activates the main agent context, which is required before MCP discovery.
+10. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See `DESIGN-session.md` for full session and transcript persistence design.
+11. The REPL loop starts.
 
 Teardown is owned by `main.py`:
 
@@ -186,7 +187,7 @@ Practical ownership rules:
 | Group | Holds | Mutation model |
 | --- | --- | --- |
 | `services` | shell backend, knowledge index, model registry, task agent, tool index, skill commands | built once; shared by reference |
-| `config` | resolved scalar settings and paths | read-only after bootstrap |
+| `config` | resolved scalar settings and paths; mutable during bootstrap (direct field assignment), read-only by convention after entering CoDeps | read-only after bootstrap |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
 

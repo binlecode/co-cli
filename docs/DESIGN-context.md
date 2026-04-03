@@ -232,7 +232,7 @@ Two persistence rules matter here:
 
 Compaction runs inline: when `truncate_history_window()` triggers, it calls `summarize_messages()` (from `_compaction.py`) inline — awaited inside the async history processor — to generate a summary of the dropped middle section. A circuit breaker (`compaction_failure_count` on `CoRuntimeState`) skips the LLM call after 3 consecutive failures and falls back to a static marker. When `model_registry` is absent (sub-agents, tests), the static marker is used directly without incrementing the failure counter.
 
-Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available (local or custom models with no reporting), it falls back to a character-count estimate (`total_chars // 4`). The compaction budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: it first tries the reasoning role's `context_window` from model quirks (with `llm_num_ctx` overriding the spec for Ollama), then falls back to `llm_num_ctx` when Ollama OpenAI-compat is active, then defaults to `100,000` tokens. The trigger fires when token count exceeds 85% of that budget.
+Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available (local or custom models with no reporting), it falls back to a character-count estimate (`total_chars // 4`). The compaction budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: it first tries the reasoning role's `context_window` from model quirks (with `llm_num_ctx` overriding the spec for Ollama), then falls back to `llm_num_ctx` when Ollama OpenAI-compat is active, then defaults to `100,000` tokens. The trigger fires when token count exceeds 85% of that budget. `deps.config.llm_num_ctx` may be overridden at bootstrap Step 2b with the runtime value probed from Ollama `/api/show` (see DESIGN-bootstrap.md §2), so the compaction budget always reflects the actual allocated context window. The minimum agentic context (`MIN_AGENTIC_CONTEXT = 65_536`, defined in `bootstrap/_check.py`) is the floor enforced at startup; below 64K, system prompt, tools, working history, and output reserve cannot fit without compacting every turn.
 
 ### Memory
 
@@ -343,7 +343,7 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max retained chars for older tool-return content before trimming |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Contiguous same-call streak threshold for doom-loop safety injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Shell-error reflection cap enforced by `detect_safety_issues()` |
-| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds when enabled |
+| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds when enabled; may be overridden at bootstrap Step 2b with the runtime Modelfile value probed from `/api/show` |
 
 ### Memory
 

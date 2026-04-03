@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import dataclasses
 import logging
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -27,14 +26,12 @@ def _summarize_backend_error(exc: Exception) -> str:
     return detail.splitlines()[0]
 
 
-def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
-    """Resolve reranker availability, appending degradation messages to statuses.
+def _resolve_reranker(config: CoConfig, statuses: list[str]) -> None:
+    """Resolve reranker availability, mutating config and appending degradation messages.
 
     Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
     Skipped on grep — no index means no reranking.
     """
-    updates: dict = {}
-
     from co_cli.bootstrap._check import check_cross_encoder, check_reranker_llm
     cross_result = check_cross_encoder(config)
     if cross_result.status not in ("ok", "skipped"):
@@ -42,7 +39,7 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
             "  Reranker degraded — TEI cross-encoder unavailable; search results will be unranked"
         )
         logger.warning("TEI cross-encoder unavailable; degrading to none")
-        updates["knowledge_cross_encoder_reranker_url"] = None
+        config.knowledge_cross_encoder_reranker_url = None
 
     reranker_result = check_reranker_llm(config)
     if reranker_result.status not in ("ok", "skipped"):
@@ -50,11 +47,7 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> CoConfig:
             "  Reranker degraded — LLM reranker unavailable; search results will be unranked"
         )
         logger.warning("LLM reranker unavailable; degrading to none")
-        updates["knowledge_llm_reranker"] = None
-
-    if updates:
-        config = dataclasses.replace(config, **updates)
-    return config
+        config.knowledge_llm_reranker = None
 
 
 def _discover_knowledge_backend(
@@ -67,8 +60,8 @@ def _discover_knowledge_backend(
       2. fts5    — SQLite FTS5 index (keyword search, no vectors)
       3. grep    — pure file search, no store required
 
-    Probes embedder/reranker availability, resolves config via replace(), constructs
-    the store, and reports degradation to frontend. Returns (resolved_config, store).
+    Probes embedder/reranker availability, mutates config fields directly, constructs
+    the store, and reports degradation to frontend. Returns (config, store).
     Config reflects the runtime backend; degradations dict records what changed and why.
     """
     if config.knowledge_search_backend == "grep":
@@ -79,7 +72,7 @@ def _discover_knowledge_backend(
 
     # Resolve reranker — config fields must reflect actual availability
     # so the store and query pipeline see correct values.
-    config = _resolve_reranker(config, statuses)
+    _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
     resolved_backend = "fts5"  # default fallback
@@ -100,18 +93,17 @@ def _discover_knowledge_backend(
     for status in statuses:
         frontend.on_status(status)
 
-    def _degrade(cfg: CoConfig, backend: str, reason: str) -> CoConfig:
-        """Update config with degraded backend and record the degradation."""
-        degs = {**cfg.degradations, "knowledge": f"{configured} → {backend} ({reason})"}
-        return dataclasses.replace(cfg, knowledge_search_backend=backend, degradations=degs)
-
     if resolved_backend != configured:
-        config = _degrade(config, resolved_backend, "embedder unavailable")
-    else:
-        config = dataclasses.replace(config, knowledge_search_backend=resolved_backend)
+        config.degradations = {**config.degradations, "knowledge": f"{configured} → {resolved_backend} (embedder unavailable)"}
+    config.knowledge_search_backend = resolved_backend
 
     # --- Construct store with resolved config ---
     from co_cli.knowledge._store import KnowledgeStore as _KS
+
+    def _degrade_to(backend: str, reason: str) -> None:
+        """Mutate config to reflect degraded backend."""
+        config.knowledge_search_backend = backend
+        config.degradations = {**config.degradations, "knowledge": f"{configured} → {backend} ({reason})"}
 
     try:
         return config, _KS(config=config)
@@ -122,7 +114,7 @@ def _discover_knowledge_backend(
                 f"  Knowledge degraded — hybrid unavailable "
                 f"({_summarize_backend_error(exc)}); trying fts5"
             )
-            config = _degrade(config, "fts5", _summarize_backend_error(exc))
+            _degrade_to("fts5", _summarize_backend_error(exc))
             try:
                 return config, _KS(config=config)
             except Exception as exc2:
@@ -131,14 +123,16 @@ def _discover_knowledge_backend(
                     f"  Knowledge degraded — fts5 unavailable "
                     f"({_summarize_backend_error(exc2)}); using grep"
                 )
-                return _degrade(config, "grep", _summarize_backend_error(exc2)), None
+                _degrade_to("grep", _summarize_backend_error(exc2))
+                return config, None
         else:
             logger.warning("FTS5 backend unavailable: %s", exc)
             frontend.on_status(
                 f"  Knowledge degraded — fts5 unavailable "
                 f"({_summarize_backend_error(exc)}); using grep"
             )
-            return _degrade(config, "grep", _summarize_backend_error(exc)), None
+            _degrade_to("grep", _summarize_backend_error(exc))
+            return config, None
 
 
 def _sync_knowledge_store(
@@ -202,6 +196,23 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     error = config.validate()
     if error:
         raise ValueError(error)
+
+    # Step 2b: Ollama context probe — fail-fast on undersized models,
+    # override llm_num_ctx with runtime Modelfile value when they differ.
+    if config.uses_ollama_openai():
+        reasoning_entry = config.role_models.get("reasoning")
+        if reasoning_entry:
+            from co_cli.bootstrap._check import probe_ollama_context
+            ctx_probe = probe_ollama_context(config.llm_host, reasoning_entry.model)
+            if ctx_probe.status == "error":
+                raise ValueError(ctx_probe.detail)
+            runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
+            if runtime_num_ctx > 0 and runtime_num_ctx != config.llm_num_ctx:
+                logger.info(
+                    "Ollama runtime num_ctx=%d differs from config llm_num_ctx=%d — using runtime value",
+                    runtime_num_ctx, config.llm_num_ctx,
+                )
+                config.llm_num_ctx = runtime_num_ctx
 
     # Step 3: build registries (pure config — no IO)
     model_registry = ModelRegistry.from_config(config)
