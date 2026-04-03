@@ -1,4 +1,3 @@
-import pathlib
 """Eval: conversation-history — multi-turn context retention stress test.
 
 Three tiers of conversation history reasoning:
@@ -21,6 +20,7 @@ Usage:
 """
 
 import asyncio
+import pathlib
 from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 
 import logging

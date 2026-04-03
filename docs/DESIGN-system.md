@@ -80,7 +80,7 @@ The running system is split into five owners:
 | `co_cli/bootstrap/_bootstrap.py` | bootstrap assembly, degradation decisions, knowledge sync, session restore, and session capability completion |
 | `co_cli/agent.py` | main-agent construction, optional task-agent construction, native tool registration, MCP toolset construction, and MCP discovery |
 | `co_cli/deps.py` | grouped runtime contract shared by tools, history processors, orchestration, and sub-agents |
-| `co_cli/context/_orchestrate.py` | one-turn execution, provider retries, approval resumes, interrupt handling, and turn result assembly |
+| `co_cli/context/_orchestrate.py` | one-turn execution, error handling, approval resumes, interrupt handling, and turn result assembly |
 
 The design stays close to idiomatic Pydantic-AI:
 
@@ -324,7 +324,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/deps.py` | grouped dependency dataclasses, runtime/session/capability state, and sub-agent isolation |
 | `co_cli/_model_factory.py` | session-scoped resolved model registry by role |
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |
-| `co_cli/context/_orchestrate.py` | one-turn orchestration, retries, approvals, output-limit checks, and interrupts |
+| `co_cli/context/_orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
 | `co_cli/context/_history.py` | history processors and background compaction lifecycle |
 | `co_cli/context/_session.py` | session JSON persistence helpers |
 | `co_cli/context/_types.py` | shared compaction and safety dataclasses |

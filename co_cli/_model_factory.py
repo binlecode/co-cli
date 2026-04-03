@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from openai import AsyncOpenAI
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -115,9 +116,16 @@ def build_model(
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT, write=_HTTP_WRITE_TIMEOUT, pool=_HTTP_POOL_TIMEOUT)
         )
+        # OpenAI SDK default max_retries=2 with exponential backoff + jitter.
+        # No override needed — matches peer CLI tools (aider, goose, letta, codex).
+        _openai_client = AsyncOpenAI(
+            base_url=f"{llm_host}/v1",
+            api_key="ollama",
+            http_client=_http_client,
+        )
         model = OpenAIChatModel(
             model_name,
-            provider=OpenAIProvider(base_url=f"{llm_host}/v1", api_key="ollama", http_client=_http_client),
+            provider=OpenAIProvider(openai_client=_openai_client),
         )
         return model, model_settings
 

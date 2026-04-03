@@ -36,11 +36,9 @@ flowchart TD
     L -->|final output| P["adopt latest_result.all_messages(); fallback render if no text streamed; run output-limit checks"]
     P --> Q["return TurnResult(outcome='continue')"]
 
-    L -->|HTTP 400 with retries left| R["append reflection request; current_input=None; sleep 0.5s"]
+    L -->|HTTP 400 with reformat budget left| R["append reflection request; current_input=None; sleep 0.5s"]
     R --> K
-    L -->|HTTP 429/5xx or ModelAPIError with retries left| S["sleep with backoff; decrement retry budget"]
-    S --> K
-    L -->|non-retryable or exhausted error| T["return TurnResult(outcome='error')"]
+    L -->|terminal HTTP error or ModelAPIError| T["return TurnResult(outcome='error')"]
     L -->|TimeoutError| T
     L -->|KeyboardInterrupt/CancelledError| U["truncate to last clean point; append abort marker"]
 
@@ -57,7 +55,7 @@ Execution owners:
 | --- | --- |
 | `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
 | `_run_foreground_turn()` | compaction harvest, `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
-| `run_turn()` | one orchestrated LLM turn, including retries, approval resumes, output checks, and interrupt handling |
+| `run_turn()` | one orchestrated LLM turn, including error handling, approval resumes, output checks, and interrupt handling |
 | `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
 | `_finalize_turn()` | history adoption, signal detection, session persistence, next-turn compaction spawn, and generic error banner |
@@ -88,7 +86,7 @@ Turn-scoped mutable state is explicit in `_TurnState`:
 | --- | --- |
 | `current_input` | current prompt text, or `None` for resume/retry hops |
 | `current_history` | message list for the next segment call |
-| `retry_budget_remaining` / `backoff_base` | provider retry policy |
+| `tool_reformat_budget` | HTTP 400 reformulation budget (app logic, not transport retry) |
 | `latest_result` | most recent `AgentRunResult` from a completed segment |
 | `latest_streamed_text` | last-segment streaming signal |
 | `latest_usage` | last-segment usage payload |
@@ -251,18 +249,18 @@ Memory recall is also per-turn, not sticky:
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 
-`run_turn()` owns provider-facing retries and final-turn diagnostics.
+`run_turn()` owns app-level error handling. Transport-level retries (HTTP 429, 5xx, network errors) are delegated to the OpenAI SDK's built-in retry machinery and are not managed by `run_turn()`.
 
-Retry matrix:
+Error matrix:
 
 | Condition | Behavior |
 | --- | --- |
-| HTTP 400 with retries left | append a reflection request describing the rejected tool call, set `current_input=None`, retry |
-| HTTP 429 or 5xx with retries left | sleep with backoff, honoring `Retry-After` when available, then retry |
-| `ModelAPIError` with retries left | sleep with backoff, then retry |
+| HTTP 400 with reformat budget left | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
+| HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'` and return `_build_error_turn_result()` |
+| `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |
 | `TimeoutError` (segment hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
 | `UnexpectedModelBehavior` | no retry; surface as a user-facing status message, set `outcome='error'` and return `_build_error_turn_result()` |
-| unknown 4xx, auth/not-found, or exhausted budget | set `outcome='error'` and return `_build_error_turn_result()` |
+| `KeyboardInterrupt` / `CancelledError` | return `_build_interrupted_turn_result()` |
 
 Output-limit diagnostics happen only after a successful final segment:
 
@@ -311,7 +309,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | event-stream-driven rendering | `_execute_stream_segment()` + `StreamRenderer` | aligned |
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
-| retries and interrupts owned by the loop | `run_turn()` | aligned |
+| error handling and interrupts owned by the loop | `run_turn()` | aligned |
 | compaction as a sidecar maintenance concern | `HistoryCompactionState` | aligned |
 | isolated specialist contexts | sub-agents use `make_subagent_deps()` and stay outside the foreground loop | aligned |
 
@@ -328,7 +326,6 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `model_http_retries` | `CO_CLI_MODEL_HTTP_RETRIES` | `2` | Retry budget for provider HTTP and network failures |
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
@@ -343,7 +340,7 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
-| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, retries, output checks, and interrupt/error builders |
+| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/_history.py` | history processors, background compaction precompute, and `HistoryCompactionState` |
 | `co_cli/context/_types.py` | shared `CompactionResult`, `MemoryRecallState`, and `SafetyState` dataclasses |
 | `co_cli/agent.py` | main/task agent factories and native filtered toolset construction with per-tool loading policy |

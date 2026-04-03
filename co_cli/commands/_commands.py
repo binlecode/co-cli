@@ -292,9 +292,10 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Summarize conversation via LLM to reduce context."""
+    from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli.context._history import _run_summarization_with_policy
+    from co_cli.context._history import summarize_messages
     from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
@@ -307,10 +308,11 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
         if ctx.deps.model_registry else _none
     )
-    summary = await _run_summarization_with_policy(
-        ctx.message_history, resolved,
-        max_retries=ctx.deps.config.model_http_retries,
-    )
+    try:
+        summary = await summarize_messages(ctx.message_history, resolved)
+    except (ModelHTTPError, ModelAPIError) as e:
+        logger.warning("Compact summarization failed: %s", e)
+        summary = None
 
     if summary is None:
         console.print("[bold red]Compact failed:[/bold red] provider error (see logs)")
@@ -389,7 +391,6 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         ctx.message_history,
         resolved,
         personality_active=bool(ctx.deps.config.personality),
-        max_retries=ctx.deps.config.model_http_retries,
     )
 
     if summary is None:

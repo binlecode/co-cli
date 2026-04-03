@@ -1,4 +1,3 @@
-import pathlib
 #!/usr/bin/env python3
 """Eval: abort-marker — Ctrl-C injects history marker for next turn awareness.
 
@@ -17,6 +16,7 @@ Usage:
 """
 
 import asyncio
+import pathlib
 import sys
 
 from pydantic_ai.messages import (  # noqa: E402

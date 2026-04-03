@@ -42,7 +42,6 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
 from co_cli.tools._display_hints import get_tool_start_args_display, format_tool_result_for_display
-from co_cli.tools._http_retry import parse_retry_after
 from co_cli.tools._tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -89,7 +88,7 @@ class _TurnState:
       pre-turn (run_turn init):
         current_input         — user text or None for approval-resume segments
         current_history       — REPL-owned message list at turn entry
-        retry_budget_remaining, backoff_base — HTTP retry counters, set from config
+        tool_reformat_budget  — app-level budget for 400 tool-call reformulation (not HTTP retry)
       in-turn (per segment, updated by _execute_stream_segment / _run_approval_loop):
         latest_result         — AgentRunResult from the most recent segment
         latest_streamed_text  — whether the last segment streamed visible text
@@ -102,9 +101,9 @@ class _TurnState:
     # pre-turn
     current_input: str | None
     current_history: list[ModelMessage]
-    # HTTP retry budget — set from config at turn start
-    retry_budget_remaining: int = 0
-    backoff_base: float = 1.0
+    # Tool-call reformulation budget (HTTP 400 only — app logic, not transport retry).
+    # Independent of SDK transport retries (429/5xx handled by OpenAI SDK).
+    tool_reformat_budget: int = 2
     # in-turn (updated after each segment)
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
@@ -454,11 +453,9 @@ async def run_turn(
 
     # Status before span — matches prior wrapper ordering
     frontend.on_status("Co is thinking...")
-    http_retries = deps.config.model_http_retries
     turn_state = _TurnState(
         current_input=user_input,
         current_history=message_history,
-        retry_budget_remaining=http_retries,
     )
 
     with _TRACER.start_as_current_span("co.turn") as span:
@@ -489,12 +486,11 @@ async def run_turn(
 
                 except ModelHTTPError as e:
                     code = e.status_code
-                    if code == 400 and turn_state.retry_budget_remaining > 0:
-                        turn_state.retry_budget_remaining -= 1
-                        attempt = http_retries - turn_state.retry_budget_remaining
-                        frontend.on_status(
-                            f"Tool call rejected (HTTP 400), reflecting to model... ({attempt}/{http_retries})"
-                        )
+                    # HTTP 400: malformed tool call — reflect error to model for reformulation.
+                    # This is app logic (not transport retry); budget is independent of SDK retries.
+                    if code == 400 and turn_state.tool_reformat_budget > 0:
+                        turn_state.tool_reformat_budget -= 1
+                        frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
                         await asyncio.sleep(0.5)
                         turn_state.current_history = turn_state.current_history + [ModelRequest(parts=[UserPromptPart(
                             content=(
@@ -505,33 +501,13 @@ async def run_turn(
                         )])]
                         turn_state.current_input = None
                         continue
-                    if (code == 429 or code >= 500) and turn_state.retry_budget_remaining > 0:
-                        turn_state.retry_budget_remaining -= 1
-                        attempt = http_retries - turn_state.retry_budget_remaining
-                        delay = parse_retry_after(None, e.body) or (3.0 if code == 429 else 2.0)
-                        wait = min(delay * (turn_state.backoff_base ** attempt), 30.0)
-                        frontend.on_status(
-                            f"Provider error (HTTP {code}), retrying in {wait:.0f}s... ({attempt}/{http_retries})"
-                        )
-                        await asyncio.sleep(wait)
-                        turn_state.backoff_base *= 1.5
-                        continue
-                    # 401/403/404, unknown 4xx, or retries exhausted
+                    # All other HTTP errors (429/5xx already retried by SDK, terminal errors)
                     frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)
 
                 except ModelAPIError as e:
-                    if turn_state.retry_budget_remaining > 0:
-                        turn_state.retry_budget_remaining -= 1
-                        attempt = http_retries - turn_state.retry_budget_remaining
-                        wait = min(2.0 * (turn_state.backoff_base ** attempt), 30.0)
-                        frontend.on_status(
-                            f"Network error: {e}, retrying in {wait:.0f}s... ({attempt}/{http_retries})"
-                        )
-                        await asyncio.sleep(wait)
-                        turn_state.backoff_base *= 1.5
-                        continue
+                    # Network errors already retried by SDK — terminal after SDK exhaustion
                     frontend.on_status(f"Network error: {e}")
                     turn_state.outcome = "error"
                     return _build_error_turn_result(turn_state)

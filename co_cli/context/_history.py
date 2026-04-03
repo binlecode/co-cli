@@ -40,7 +40,6 @@ from pydantic_ai.messages import (
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
-from co_cli.tools._http_retry import parse_retry_after
 
 log = logging.getLogger(__name__)
 
@@ -298,77 +297,22 @@ async def _index_session_summary(
     messages: list[ModelMessage],
     resolved_model: "ResolvedModel",
     *,
-    max_retries: int = 2,
     personality_active: bool = False,
 ) -> str | None:
     """Summarise recent session messages for checkpointing via /new.
 
-    Thin named wrapper around _run_summarization_with_policy — the name makes
-    the /new call-site intent explicit and keeps history.py as the single home
-    for all summarization logic.
+    Returns None on any provider error — SDK handles transport retries internally.
     """
     last_n = min(15, len(messages))
-    return await _run_summarization_with_policy(
-        messages[-last_n:],
-        resolved_model,
-        max_retries=max_retries,
-        personality_active=personality_active,
-    )
-
-
-async def _run_summarization_with_policy(
-    messages: list[ModelMessage],
-    resolved_model: "ResolvedModel",
-    *,
-    max_retries: int = 2,
-    personality_active: bool = False,
-) -> str | None:
-    """Run summarization with retry on transient provider errors.
-
-    - 400/429/5xx/network → exponential backoff retry.
-    - 401/403/404 or retries exhausted → return None.
-    """
-    retries_left = max_retries
-    backoff_base = 1.0
-
-    while True:
-        try:
-            return await summarize_messages(
-                messages, resolved_model,
-                personality_active=personality_active,
-            )
-        except ModelHTTPError as e:
-            if e.status_code in (401, 403, 404):
-                log.warning("Summarization aborted (HTTP %d): %s", e.status_code, e.body)
-                return None
-            if retries_left > 0:
-                retries_left -= 1
-                attempt = max_retries - retries_left
-                delay = parse_retry_after(None, e.body) or (3.0 if e.status_code == 429 else 2.0)
-                wait = min(delay * (backoff_base ** attempt), 30.0)
-                log.warning(
-                    "Summarization HTTP %d (attempt %d/%d), retrying in %.1fs",
-                    e.status_code, attempt, max_retries, wait,
-                )
-                await asyncio.sleep(wait)
-                backoff_base *= 1.5
-                continue
-            log.warning("Summarization failed (HTTP %d, retries exhausted): %s", e.status_code, e.body)
-            return None
-        except ModelAPIError as e:
-            if retries_left > 0:
-                retries_left -= 1
-                attempt = max_retries - retries_left
-                wait = min(2.0 * (backoff_base ** attempt), 30.0)
-                log.warning(
-                    "Summarization network error (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt, max_retries, wait, e,
-                )
-                await asyncio.sleep(wait)
-                backoff_base *= 1.5
-                continue
-            log.warning("Summarization failed (network error): %s", e)
-            return None
+    try:
+        return await summarize_messages(
+            messages[-last_n:],
+            resolved_model,
+            personality_active=personality_active,
+        )
+    except (ModelHTTPError, ModelAPIError) as e:
+        log.warning("Session summarization failed: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -557,11 +501,13 @@ async def precompute_compaction(
         deps.model_registry.get(ROLE_SUMMARIZATION, _none_resolved)
         if deps.model_registry else _none_resolved
     )
-    summary_text = await _run_summarization_with_policy(
-        dropped, resolved,
-        max_retries=deps.config.model_http_retries,
-        personality_active=False,
-    )
+    try:
+        summary_text = await summarize_messages(
+            dropped, resolved, personality_active=False,
+        )
+    except (ModelHTTPError, ModelAPIError) as e:
+        log.warning("Background compaction failed: %s", e)
+        return None
     if summary_text is None:
         return None
 

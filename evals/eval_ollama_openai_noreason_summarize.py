@@ -1,38 +1,43 @@
-"""Compare Ollama OpenAI-compatible think-model outputs: default vs non-reason override.
+"""Eval: Ollama OpenAI noreason path — reasoning suppression + summarization pipeline.
 
 Goal:
-- validate whether `qwen3.5:35b-a3b-think` with `reasoning_effort="none"`
-  suppresses reasoning output and returns a direct final answer
-- contrast that with the same `qwen3.5:35b-a3b-think` model on its default path
+- validate that `qwen3.5:35b-a3b-think` with `reasoning_effort="none"` suppresses
+  reasoning output and returns a direct final answer
+- contrast with the same model on its default think path
+- verify the production summarization pipeline (`ModelRegistry` → `ResolvedModel`
+  → `summarize_messages`) produces valid output over the same transport
 
 Method:
-- same OpenAI-compatible transport for both calls
-- same deterministic request settings for both calls
-- same direct-answer system prompt for both calls
-- constrained prompts so default-vs-nonreason behavior is measurable
+- same OpenAI-compatible transport for all calls
+- same deterministic request settings for both think vs noreason calls
+- constrained prompts so default-vs-noreason behavior is measurable
+- pipeline check uses the real registry and summarization function
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 
 import httpx
 from rapidfuzz.fuzz import ratio
 
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import settings as _settings
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.config import ROLE_SUMMARIZATION, ModelConfig, settings as _settings
+from co_cli.context._history import summarize_messages
 from co_cli.deps import CoConfig
 
 from evals._ollama import ensure_ollama_warm
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_SUMMARIZATION_TIMEOUT_SECS
 
 
 _CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
@@ -49,8 +54,8 @@ _BASE_EXTRA = {
     "min_p": 0.0,
     "presence_penalty": 1.5,
     "repeat_penalty": 1.0,
-    "num_ctx": 131072,
-    "num_predict": 16384,
+    "num_ctx": 8192,
+    "num_predict": 4096,
 }
 _THINK_EXTRA = dict(_BASE_EXTRA) | {"reasoning_effort": "none"}
 _COMMON_SETTINGS = ModelSettings(
@@ -59,8 +64,13 @@ _COMMON_SETTINGS = ModelSettings(
     max_tokens=256,
 )
 _OLLAMA_WARM_TIMEOUT_S = 180
-_MODEL_CALL_TIMEOUT_S = 60
+_THINK_CALL_TIMEOUT_S = EVAL_BENCHMARK_TIMEOUT_SECS
+_NOREASON_CALL_TIMEOUT_S = 60
 
+
+# ---------------------------------------------------------------------------
+# Section 1: Think vs noreason contrast cases
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class Case:
@@ -186,37 +196,43 @@ def _assert_case(case: Case, baseline_text: str, noreason_text: str) -> None:
             f"{case.id}: noreason output leaked think tags\n"
             f"noreason={noreason_text!r}"
         )
-    
 
 
-def _require_ollama_provider() -> bool:
-    if _CONFIG.llm_provider != "ollama-openai":
-        print("SKIP: Ollama not configured")
-        return False
-    return True
+async def _run_think_baseline() -> None:
+    """Single think-mode call to prove the model emits reasoning parts by default.
 
-
-async def _run_case(case: Case) -> None:
-    """Think model with reasoning_effort=none should emit direct-answer output."""
-    assert _THINK_MODEL
-    case_started = perf_counter()
-
+    Run once before per-case noreason checks — avoids repeating expensive
+    think calls (which can loop for minutes on constrained prompts).
+    """
     async with asyncio.timeout(_OLLAMA_WARM_TIMEOUT_S):
         await _timed_await(
             f"warm {_THINK_MODEL}",
             ensure_ollama_warm(_THINK_MODEL, _CONFIG.llm_host),
         )
 
-    async with asyncio.timeout(_MODEL_CALL_TIMEOUT_S):
+    async with asyncio.timeout(_THINK_CALL_TIMEOUT_S):
         baseline_text, baseline_thinking_parts = await _timed_await(
             f"call {_THINK_MODEL} default",
             _call_model(
                 model_name=_THINK_MODEL,
-                prompt=case.prompt,
+                prompt="Reply with exactly: HELLO",
                 extra_body=_BASE_EXTRA,
             ),
         )
-    async with asyncio.timeout(_MODEL_CALL_TIMEOUT_S):
+
+    assert baseline_thinking_parts, (
+        "think baseline: default path emitted no reasoning parts; expected ThinkingPart"
+    )
+    assert baseline_text.strip() or baseline_thinking_parts, (
+        "think baseline: returned neither final text nor reasoning parts"
+    )
+
+
+async def _run_noreason_case(case: Case) -> None:
+    """Noreason call on a single case — assert suppression + output correctness."""
+    case_started = perf_counter()
+
+    async with asyncio.timeout(_NOREASON_CALL_TIMEOUT_S):
         noreason_text, noreason_thinking_parts = await _timed_await(
             f"call {_THINK_MODEL} noreason",
             _call_model(
@@ -229,32 +245,103 @@ async def _run_case(case: Case) -> None:
     assert not noreason_thinking_parts, (
         f"{case.id}: noreason override still emitted reasoning parts: {noreason_thinking_parts}"
     )
-    assert baseline_thinking_parts, (
-        f"{case.id}: default think path emitted no reasoning parts; expected contrast signal"
-    )
-    assert baseline_text.strip() or baseline_thinking_parts, (
-        f"{case.id}: default think path returned neither final text nor reasoning parts"
-    )
     assert noreason_text.strip(), f"{case.id}: noreason think path returned empty text"
 
-    _assert_case(case, baseline_text, noreason_text)
+    _assert_case(case, "", noreason_text)
     case_elapsed = perf_counter() - case_started
     print(f"    case total: {case_elapsed:.2f}s", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Section 2: Production summarization pipeline integration
+# ---------------------------------------------------------------------------
+
+def _build_summarization_resolved() -> ResolvedModel:
+    """Build a ResolvedModel for the summarization role via the real registry."""
+    role_models = dict(_CONFIG.role_models)
+    role_models[ROLE_SUMMARIZATION] = ModelConfig(
+        model=_THINK_MODEL,
+        provider="ollama-openai",
+        api_params={
+            "temperature": 0.1,
+            "top_p": 0.9,
+            "max_tokens": 256,
+            "reasoning_effort": "none",
+        },
+    )
+    config = replace(_CONFIG, llm_provider="ollama-openai", role_models=role_models)
+    registry = ModelRegistry.from_config(config)
+    return registry.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+
+
+def _check_registry_builds_openai_model() -> None:
+    """ModelRegistry must produce an OpenAIChatModel for the summarization role."""
+    resolved = _build_summarization_resolved()
+    assert resolved.model is not None, "Registry returned no model for summarization role"
+    assert type(resolved.model).__name__ == "OpenAIChatModel", (
+        f"Expected OpenAIChatModel, got {type(resolved.model).__name__}"
+    )
+
+
+async def _check_summarization_pipeline() -> None:
+    """Production summarization pipeline must return non-empty content."""
+    await ensure_ollama_warm(_THINK_MODEL, _CONFIG.llm_host)
+    resolved = _build_summarization_resolved()
+    assert resolved.model is not None
+
+    messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="Docker is a container runtime and packaging tool.")]),
+        ModelRequest(parts=[UserPromptPart(content="Summarize in one short sentence.")]),
+    ]
+    async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
+        summary = await summarize_messages(messages, resolved)
+
+    assert summary is not None, "Summarization pipeline returned None"
+    assert summary.strip(), "Summarization pipeline returned empty content"
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def _require_ollama_provider() -> bool:
+    if _CONFIG.llm_provider != "ollama-openai":
+        print("SKIP: Ollama not configured")
+        return False
+    return True
+
+
 async def _main() -> int:
     print("=" * 60)
-    print("  Eval: Think default vs Think+reasoning_effort=none")
+    print("  Eval: Ollama noreason suppression + summarization pipeline")
     print("=" * 60)
 
     if not _require_ollama_provider():
         return 0
 
     try:
-        for idx, case in enumerate(_CASES, start=1):
-            print(f"\n[{idx}/{len(_CASES)}] {case.id}...", flush=True)
-            await _run_case(case)
+        # Part 1: single think baseline proves reasoning is active
+        total = len(_CASES) + 3
+        print(f"\n[1/{total}] think baseline (proves reasoning active)...", flush=True)
+        await _run_think_baseline()
+        print("PASS", flush=True)
+
+        # Part 2: noreason suppression per case
+        for idx, case in enumerate(_CASES, start=2):
+            print(f"\n[{idx}/{total}] noreason: {case.id}...", flush=True)
+            await _run_noreason_case(case)
             print("PASS", flush=True)
+
+        # Part 3: registry + pipeline integration
+        pipe_idx = len(_CASES) + 2
+        print(f"\n[{pipe_idx}/{total}] registry builds OpenAI model...", flush=True)
+        _check_registry_builds_openai_model()
+        print("PASS", flush=True)
+
+        print(f"\n[{total}/{total}] summarization pipeline returns content...", flush=True)
+        await _check_summarization_pipeline()
+        print("PASS", flush=True)
+
     except AssertionError as exc:
         print(f"FAIL: {exc}", flush=True)
         return 1

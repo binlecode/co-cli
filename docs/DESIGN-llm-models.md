@@ -186,6 +186,20 @@ Important backend distinction:
 
 Validate with: `uv run python scripts/validate_ollama_models.py`
 
+### Ollama Parallel Slots — Not Supported by `qwen35moe`
+
+`OLLAMA_NUM_PARALLEL` controls how many concurrent requests Ollama serves per loaded model.
+The `qwen35moe` architecture (used by all `qwen3.5:35b-a3b-*` tags) does not support parallel
+slots. Ollama logs `"model architecture does not currently support parallel requests"` and falls
+back to `Parallel:1` regardless of the env var setting. All concurrent requests to the same model
+are queued serially.
+
+Architectures known to support parallel slots: `llama`, `gemma`, `phi`, `command-r`.
+
+Implication: sub-agent delegation (`coding`, `research`, `analysis`) cannot run truly concurrent
+LLM calls against the same Ollama instance with `qwen3.5` MoE models. Calls are serialized by the
+runner. This is an Ollama engine limitation, not a co-cli issue.
+
 ### Ollama `num_ctx` — Must Be Baked Into Modelfile
 
 Ollama's OpenAI-compatible API silently ignores `num_ctx` sent in request parameters (upstream
@@ -224,7 +238,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | File | Purpose |
 |------|---------|
 | `co_cli/config.py` | `role_models` setting, `ModelConfig` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
-| `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider`, `model_http_retries` in `CoConfig`; `model_registry` in `CoServices` |
+| `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider` in `CoConfig`; `model_registry` in `CoServices` |
 | `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |

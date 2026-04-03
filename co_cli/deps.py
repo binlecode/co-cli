@@ -47,7 +47,6 @@ from co_cli.config import (
     DEFAULT_OLLAMA_NUM_CTX,
     DEFAULT_CTX_WARN_THRESHOLD,
     DEFAULT_CTX_OVERFLOW_THRESHOLD,
-    DEFAULT_MODEL_HTTP_RETRIES,
     DEFAULT_TOOL_RETRIES,
     DEFAULT_SESSION_TTL_MINUTES,
     DEFAULT_REASONING_DISPLAY,
@@ -173,7 +172,6 @@ class CoConfig:
     llm_num_ctx: int = DEFAULT_OLLAMA_NUM_CTX
     ctx_warn_threshold: float = DEFAULT_CTX_WARN_THRESHOLD
     ctx_overflow_threshold: float = DEFAULT_CTX_OVERFLOW_THRESHOLD
-    model_http_retries: int = DEFAULT_MODEL_HTTP_RETRIES
     tool_retries: int = DEFAULT_TOOL_RETRIES
 
     def uses_ollama_openai(self) -> bool:
@@ -278,7 +276,6 @@ class CoConfig:
             llm_num_ctx=s.llm_num_ctx,
             ctx_warn_threshold=s.ctx_warn_threshold,
             ctx_overflow_threshold=s.ctx_overflow_threshold,
-            model_http_retries=s.model_http_retries,
             tool_retries=s.tool_retries,
             session_ttl_minutes=s.session_ttl_minutes,
         )

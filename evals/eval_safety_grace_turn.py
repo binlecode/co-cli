@@ -1,4 +1,3 @@
-import pathlib
 #!/usr/bin/env python3
 """Eval: grace-turn — model summarizes progress when budget is exhausted.
 
@@ -17,6 +16,7 @@ Usage:
 """
 
 import asyncio
+import pathlib
 import sys
 import time
 

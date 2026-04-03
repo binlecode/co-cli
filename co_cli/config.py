@@ -179,7 +179,6 @@ VALID_ROLE_NAMES: frozenset[str] = frozenset({
 DEFAULT_THEME = "light"
 DEFAULT_PERSONALITY = "finch"
 DEFAULT_TOOL_RETRIES = 3
-DEFAULT_MODEL_HTTP_RETRIES = 2
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
 DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
@@ -236,7 +235,6 @@ class Settings(BaseModel):
     reasoning_display: Literal["off", "summary", "full"] = Field(default=DEFAULT_REASONING_DISPLAY)
     personality: str = Field(default=DEFAULT_PERSONALITY)
     tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
-    model_http_retries: int = Field(default=DEFAULT_MODEL_HTTP_RETRIES)
 
     # Safety
     doom_loop_threshold: int = Field(default=DEFAULT_DOOM_LOOP_THRESHOLD, ge=2, le=10)
@@ -411,7 +409,6 @@ class Settings(BaseModel):
             "reasoning_display": "CO_CLI_REASONING_DISPLAY",
             "personality": "CO_CLI_PERSONALITY",
             "tool_retries": "CO_CLI_TOOL_RETRIES",
-            "model_http_retries": "CO_CLI_MODEL_HTTP_RETRIES",
 
             "doom_loop_threshold": "CO_CLI_DOOM_LOOP_THRESHOLD",
             "max_reflections": "CO_CLI_MAX_REFLECTIONS",

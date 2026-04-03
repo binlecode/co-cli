@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-04-02
+
+### Changed
+- **LLM HTTP retry delegated to OpenAI SDK**: removed custom retry/backoff logic from `_orchestrate.py` and `_history.py` — the SDK's built-in `max_retries=2` with exponential backoff + jitter is now the sole retry policy. Eliminates double-retry (SDK 2x + app 2x) that caused compounding backoff stalls on transient 429s.
+- **Tool-reformulation budget decoupled**: HTTP 400 tool-call reformulation now has an independent budget (`tool_reformat_budget`) — transport failures no longer consume reformulation attempts.
+
+### Removed
+- **`model_http_retries` config field**: removed from `Settings`, `CoConfig`, and env var mapping (`CO_CLI_MODEL_HTTP_RETRIES`). No peer CLI tool exposes this; SDK default is the industry standard.
+- **`_run_summarization_with_policy()` wrapper**: callers now call `summarize_messages()` directly with try/except fallback to `None`.
+- **Merged Ollama evals**: `eval_ollama_openai_noreason_equivalence` + `eval_ollama_openai_summarization` → `eval_ollama_openai_noreason_summarize` (single eval covering both).
+
 ## [0.7.12] - 2026-04-02
 
 ### Changed
