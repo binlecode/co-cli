@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-04-03
+
+### Changed
+- **Compaction trigger simplified to token-only**: removed `max_history_messages` config field, `CO_CLI_MAX_HISTORY_MESSAGES` env var, and `DEFAULT_MAX_HISTORY_MESSAGES` constant — compaction now triggers purely on token threshold (85% of budget), matching both peer systems (fork-cc, gemini-cli). Tail-count decoupled from config to `max(4, len(messages) // 2)`.
+
 ## [0.7.16] - 2026-04-03
 
 ### Added
