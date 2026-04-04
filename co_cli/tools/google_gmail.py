@@ -7,9 +7,9 @@ from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._errors import terminal_error, handle_google_api_error
+from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 _GMAIL_NOT_CONFIGURED = (
@@ -55,7 +55,7 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        return None, terminal_error(_GMAIL_NOT_CONFIGURED)
+        return None, tool_error(_GMAIL_NOT_CONFIGURED)
     return build("gmail", "v1", credentials=creds), None
 
 
@@ -86,9 +86,9 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResu
         )
         messages = response.get("messages", [])
         if not messages:
-            return make_result("No emails found.", count=0)
+            return tool_output("No emails found.", count=0)
         display = f"Recent Emails ({len(messages)}):\n" + _format_messages(service, messages)
-        return make_result(display, count=len(messages))
+        return tool_output(display, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:
@@ -129,9 +129,9 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
         )
         messages = response.get("messages", [])
         if not messages:
-            return make_result(f"No emails found for query: {query}", count=0)
+            return tool_output(f"No emails found for query: {query}", count=0)
         display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(service, messages)
-        return make_result(display, count=len(messages))
+        return tool_output(display, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:
@@ -164,7 +164,7 @@ def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         draft_body = {"message": {"raw": raw}}
         draft = service.users().drafts().create(userId="me", body=draft_body).execute()
         display = f"Draft created for {to} with subject '{subject}'. Draft ID: {draft['id']}"
-        return make_result(display, draft_id=draft["id"], to=to, subject=subject)
+        return tool_output(display, draft_id=draft["id"], to=to, subject=subject)
     except ModelRetry:
         raise
     except Exception as e:

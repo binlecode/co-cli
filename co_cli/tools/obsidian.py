@@ -7,7 +7,7 @@ from typing import Any
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 def _extract_frontmatter_tags(content: str) -> set[str]:
@@ -131,7 +131,7 @@ def search_notes(
             fts_results = fts_results[:limit]
 
             if not fts_results:
-                return make_result(
+                return tool_output(
                     f"No notes found matching: {' '.join(keywords)}",
                     count=0,
                     has_more=False,
@@ -149,7 +149,7 @@ def search_notes(
                     lines.append(f"  {r.snippet}")
                 lines.append("")
 
-            return make_result(
+            return tool_output(
                 "\n".join(lines).rstrip(),
                 count=len(fts_results),
                 has_more=has_more,
@@ -193,7 +193,7 @@ def search_notes(
         results = results[:limit]
 
     if not results:
-        return make_result(
+        return tool_output(
             f"No notes found matching: {' '.join(keywords)}",
             count=0,
             has_more=False,
@@ -205,7 +205,7 @@ def search_notes(
         lines.append(f"  {r['snippet']}")
         lines.append("")
 
-    return make_result(
+    return tool_output(
         "\n".join(lines).rstrip(),
         count=len(results),
         has_more=has_more,
@@ -264,7 +264,7 @@ def list_notes(
 
     if not note_paths:
         label = f" with tag {tag}" if tag else ""
-        return make_result(
+        return tool_output(
             f"No notes found{label}.",
             count=0,
             total=0,
@@ -288,7 +288,7 @@ def list_notes(
             f"More available \u2014 call with offset={offset + limit}."
         )
 
-    return make_result(
+    return tool_output(
         "\n".join(lines),
         count=len(page),
         total=total,

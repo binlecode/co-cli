@@ -336,7 +336,7 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/_types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent.py` | main/task agent factories and native filtered toolset construction with per-tool loading policy |
-| `co_cli/tools/_tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
+| `co_cli/tools/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |

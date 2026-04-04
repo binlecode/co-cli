@@ -33,7 +33,7 @@ from co_cli.knowledge._frontmatter import (
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
 
@@ -352,7 +352,7 @@ def _update_existing_memory(
 
     logger.info(f"Updated memory {entry.id} (consolidation)")
 
-    return make_result(
+    return tool_output(
         f"✓ Updated memory {entry.id} (consolidated duplicate)\n"
         f"Location: {entry.path}",
         path=str(entry.path),
@@ -517,7 +517,7 @@ async def recall_memory(
                 limit=max_results * 4,
             )
             if not fts_results:
-                return make_result(
+                return tool_output(
                     f"No memories found matching '{query}'",
                     count=0,
                     results=[],
@@ -595,7 +595,7 @@ async def recall_memory(
         matches = _grep_recall(memories, query, max_results)
 
     if not matches:
-        return make_result(
+        return tool_output(
             f"No memories found matching '{query}'",
             count=0,
             results=[],
@@ -665,7 +665,7 @@ async def recall_memory(
                 }
             )
 
-    return make_result(
+    return tool_output(
         "\n".join(lines),
         count=len(matches) + len(related_entries),
         results=result_dicts,
@@ -701,9 +701,9 @@ async def search_memories(
         created_before: ISO8601 date string; only return items created on or before this date.
     """
     if not query.strip():
-        return make_result("Query is required.", count=0, results=[])
+        return tool_output("Query is required.", count=0, results=[])
     if limit < 1:
-        return make_result("limit must be >= 1.", count=0, results=[])
+        return tool_output("limit must be >= 1.", count=0, results=[])
 
     memory_dir = ctx.deps.config.memory_dir
 
@@ -722,7 +722,7 @@ async def search_memories(
             )
             otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
             if not results:
-                return make_result(f"No memories found matching '{query}'", count=0, results=[])
+                return tool_output(f"No memories found matching '{query}'", count=0, results=[])
 
             # Exclude session-summary artifacts by reading each hit's frontmatter
             filtered = []
@@ -737,7 +737,7 @@ async def search_memories(
                 filtered.append(r)
             results = filtered
             if not results:
-                return make_result(f"No memories found matching '{query}'", count=0, results=[])
+                return tool_output(f"No memories found matching '{query}'", count=0, results=[])
 
             lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
             result_dicts = []
@@ -756,7 +756,7 @@ async def search_memories(
                     "score": r.score,
                     "path": r.path,
                 })
-            return make_result(
+            return tool_output(
                 "\n".join(lines).rstrip(),
                 count=len(results),
                 results=result_dicts,
@@ -780,7 +780,7 @@ async def search_memories(
 
     matches = _grep_recall(memories, query, limit)
     if not matches:
-        return make_result(f"No memories found matching '{query}'", count=0, results=[])
+        return tool_output(f"No memories found matching '{query}'", count=0, results=[])
 
     lines = [f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"]
     result_dicts = []
@@ -794,7 +794,7 @@ async def search_memories(
             "score": 0.0,
             "path": str(m.path),
         })
-    return make_result("\n".join(lines), count=len(matches), results=result_dicts)
+    return tool_output("\n".join(lines), count=len(matches), results=result_dicts)
 
 
 async def list_memories(
@@ -839,7 +839,7 @@ async def list_memories(
         no_dir = not memory_dir.exists()
         kind_note = f" (kind={kind})" if kind else ""
         msg = "No memories saved yet." if no_dir else f"No memories found{kind_note}."
-        return make_result(
+        return tool_output(
             msg,
             count=0,
             total=0,
@@ -914,7 +914,7 @@ async def list_memories(
             f"More available \u2014 call with offset={offset + limit}."
         )
 
-    return make_result(
+    return tool_output(
         "\n".join(lines),
         count=len(page),
         total=total,
@@ -1026,7 +1026,7 @@ async def update_memory(
             except Exception as e:
                 logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
 
-    return make_result(
+    return tool_output(
         f"Updated memory '{slug}'.\n{updated_body.strip()}",
         slug=slug,
     )
@@ -1091,7 +1091,7 @@ async def append_memory(
             except Exception as e:
                 logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
 
-    return make_result(
+    return tool_output(
         f"Appended to '{slug}'.",
         slug=slug,
     )

@@ -38,7 +38,7 @@ async def test_shell_basic_exec():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo hello")
-    assert "hello" in result
+    assert "hello" in result["display"]
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_shell_safe_command_runs_without_deferred_approval():
     ctx = _make_ctx(tool_call_approved=False, shell_safe_commands=["pwd"])
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "pwd")
-    assert result.strip()
+    assert result["display"].strip()
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_shell_pipe():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo hello world | wc -w")
-    assert result.strip() == "2"
+    assert result["display"].strip() == "2"
 
 
 @pytest.mark.asyncio
@@ -105,9 +105,9 @@ async def test_shell_env_sanitized():
         git_pager = await run_shell_command(ctx, "echo $GIT_PAGER")
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         unbuffered = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
-    assert pager.strip() == "cat"
-    assert git_pager.strip() == "cat"
-    assert unbuffered.strip() == "1"
+    assert pager["display"].strip() == "cat"
+    assert git_pager["display"].strip() == "cat"
+    assert unbuffered["display"].strip() == "1"
 
 
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ async def test_shell_dangerous_env_blocked():
         ctx = _make_ctx()
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
             result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
-        assert result.strip() == "unset"
+        assert result["display"].strip() == "unset"
     finally:
         if old is None:
             os.environ.pop("LD_PRELOAD", None)
@@ -133,8 +133,8 @@ async def test_shell_stderr_merged():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
-    assert "err msg" in result
-    assert "ok" in result
+    assert "err msg" in result["display"]
+    assert "ok" in result["display"]
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_shell_cwd_is_host_cwd():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
-    assert "exists" in result
+    assert "exists" in result["display"]
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_shell_variable_expansion():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "X=42 && echo val=$X")
-    assert "val=42" in result
+    assert "val=42" in result["display"]
 
 
 @pytest.mark.asyncio
@@ -202,4 +202,4 @@ async def test_shell_workspace_dir_param():
     ctx = _make_ctx(shell=ShellBackend(workspace_dir="/tmp"))
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "pwd")
-    assert "tmp" in result
+    assert "tmp" in result["display"]

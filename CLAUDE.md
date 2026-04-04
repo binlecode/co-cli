@@ -54,7 +54,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Imports**: always explicit; never `from X import *`.
 - **Comments**: no trailing comments; put comments on the line above, not at end of code lines.
 - **`__init__.py`**: must be docstring-only (one-line module docstring or empty); never add imports, re-exports, or code. When converting a module to a package, all content goes into `_core.py` or named private submodules — never into `__init__.py`.
-- **`_prefix.py` helpers**: internal/shared helpers in a package use a leading underscore. They are private to the package, not registered as tools, and not part of the public API.
+- **`_prefix.py` helpers**: internal/shared helpers in a package use a leading underscore. They are private to the package, not registered as tools, and not part of the public API. If a `_prefix.py` module is imported outside its package, drop the underscore — it is de facto public API. The underscore convention applies only to modules consumed exclusively within their own package.
 - **Class naming conventions** (enforced policy — every new class, renamed class, and reviewed class must conform; violations block merge):
   | Suffix | Meaning | Do NOT use for |
   |--------|---------|---------------|
@@ -70,6 +70,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*Rule` | Authorization or behavioral rule value type | General config, state |
   | `*Enum` | Enumeration type; makes the type contract explicit at the callsite | Classes, dataclasses, results |
   Prohibited: vague suffixes `*Info`, `*Data`, `*Decision`, `*Check`, `*Finding`, `*Entry`, `*Status`, `*Service`, `*Manager`, `*Helper` (as standalone class suffix) on public types — these are domain nouns, not type classifiers. Every public type must resolve to one of the suffixes above before merging.
+  Legacy exemption: `ToolResult` is a TypedDict for the tool output payload — it predates this convention and is exempt from the `*Result` vs `*Output` distinction.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.
 
@@ -78,7 +79,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Tool pattern**: new tools must use `agent.tool()` with `RunContext[CoDeps]`. Do not use `tool_plain()` for new tools.
 - **Tool deps**: access runtime resources via `ctx.deps`. Do not import `settings` directly in tool files. Do not put approval prompts inside tools.
 - **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations (file reads, searches, network fetches) do not. Approval UX lives in the chat loop, not inside tools.
-- **Tool return type**: tools returning user-facing data must return `ToolResult` via `make_result()` from `co_cli.tools._result`. The `display` field is the pre-formatted string shown to the user; additional metadata fields (`count`, `next_page_token`, etc.) are passed as keyword arguments to `make_result()`. Never return a raw `str`, bare `dict`, or `list[dict]`.
+- **Tool return type**: tools returning user-facing data must return `ToolResult` via `tool_output()` from `co_cli.tools.tool_output`. The `display` field is the pre-formatted string shown to the user; additional metadata fields (`count`, `next_page_token`, etc.) are passed as keyword arguments to `tool_output()`. Never return a raw `str`, bare `dict`, or `list[dict]`.
 - **No global state in tools**: tools must not hold or mutate module-level state. All runtime resources are accessed through `ctx.deps`.
 - **CoDeps is grouped, not flat**: `CoDeps` holds four sub-groups:
   - `services`: runtime objects such as `ShellBackend`, `KnowledgeIndex`, `TaskRunner`

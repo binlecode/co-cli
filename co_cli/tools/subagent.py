@@ -10,7 +10,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_ANALYSIS, ROLE_CODING, ROLE_REASONING, ROLE_RESEARCH
 from co_cli.deps import CoDeps, make_subagent_deps
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 _TRACER = otel_trace.get_tracer("co-cli.subagent")
 
@@ -85,7 +85,7 @@ async def run_coding_subagent(
     if max_requests < 1:
         max_requests = ctx.deps.config.subagent_max_requests_coder
 
-    from co_cli.tools._subagent_agents import make_coder_agent
+    from co_cli.tools._subagent_builders import make_coder_agent
 
     registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_CODING):
@@ -108,7 +108,7 @@ async def run_coding_subagent(
         data = attempt.output
     scope = task[:ctx.deps.config.subagent_scope_chars]
     display = f"Scope: {scope}\nCoder analysis complete.\n{data.summary}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
-    return make_result(
+    return tool_output(
         display,
         summary=data.summary,
         diff_preview=data.diff_preview,
@@ -152,7 +152,7 @@ async def run_research_subagent(
     if max_requests < 1:
         max_requests = ctx.deps.config.subagent_max_requests_research
 
-    from co_cli.tools._subagent_agents import make_research_agent
+    from co_cli.tools._subagent_builders import make_research_agent
 
     registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_RESEARCH):
@@ -194,7 +194,7 @@ async def run_research_subagent(
     scope = query[:ctx.deps.config.subagent_scope_chars]
     sources_text = "\n".join(f"- {s}" for s in data.sources) if data.sources else "No sources"
     display = f"Scope: {scope}\n{data.summary}\n\nSources:\n{sources_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
-    return make_result(
+    return tool_output(
         display,
         summary=data.summary,
         sources=data.sources,
@@ -240,7 +240,7 @@ async def run_analysis_subagent(
     # Analysis sub-agent uses search_knowledge and search_drive_files only.
     # It does not depend on direct web tools.
 
-    from co_cli.tools._subagent_agents import make_analysis_agent
+    from co_cli.tools._subagent_builders import make_analysis_agent
 
     registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_ANALYSIS):
@@ -268,7 +268,7 @@ async def run_analysis_subagent(
     scope = question[:ctx.deps.config.subagent_scope_chars]
     evidence_text = "\n".join(f"- {e}" for e in data.evidence) if data.evidence else "No evidence"
     display = f"Scope: {scope}\n{data.conclusion}\n\nEvidence:\n{evidence_text}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
-    return make_result(
+    return tool_output(
         display,
         conclusion=data.conclusion,
         evidence=data.evidence,
@@ -309,7 +309,7 @@ async def run_reasoning_subagent(
     if max_requests < 1:
         max_requests = ctx.deps.config.subagent_max_requests_thinking
 
-    from co_cli.tools._subagent_agents import make_thinking_agent
+    from co_cli.tools._subagent_builders import make_thinking_agent
 
     registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(ROLE_REASONING):
@@ -333,7 +333,7 @@ async def run_reasoning_subagent(
     scope = problem[:ctx.deps.config.subagent_scope_chars]
     steps_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(data.steps))
     display = f"Scope: {scope}\n{data.plan}\n\nSteps:\n{steps_text}\n\nConclusion:\n{data.conclusion}\n[{role} · {model_name} · {requests_used}/{request_limit} req]"
-    return make_result(
+    return tool_output(
         display,
         plan=data.plan,
         steps=data.steps,

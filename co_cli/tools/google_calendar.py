@@ -6,8 +6,8 @@ from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._errors import terminal_error, handle_google_api_error
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_errors import tool_error, handle_google_api_error
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 _CALENDAR_NOT_CONFIGURED = (
@@ -24,7 +24,7 @@ def _get_calendar_service(ctx: RunContext[CoDeps]):
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        return None, terminal_error(_CALENDAR_NOT_CONFIGURED)
+        return None, tool_error(_CALENDAR_NOT_CONFIGURED)
     return build("calendar", "v3", credentials=creds), None
 
 
@@ -147,9 +147,9 @@ def list_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return make_result("No events found in the requested time range.", count=0)
+            return tool_output("No events found in the requested time range.", count=0)
         display = f"Calendar Events ({len(events)}):\n" + _format_events(events)
-        return make_result(display, count=len(events))
+        return tool_output(display, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:
@@ -210,9 +210,9 @@ def search_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return make_result(f"No events found matching '{query}' in the requested time range.", count=0)
+            return tool_output(f"No events found matching '{query}' in the requested time range.", count=0)
         display = f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
-        return make_result(display, count=len(events))
+        return tool_output(display, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:

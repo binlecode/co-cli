@@ -14,7 +14,7 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 # Valid status and priority values
 _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
@@ -81,7 +81,7 @@ def write_todos(
         validated.append({"content": content, "status": status, "priority": priority})
 
     if errors:
-        return make_result(
+        return tool_output(
             "Todo list NOT saved — validation errors:\n"
             + "\n".join(f"  - {e}" for e in errors),
             count=0,
@@ -120,7 +120,7 @@ def write_todos(
         summary_parts.append(f"{cancelled} cancelled")
     lines.append("\n" + ", ".join(summary_parts))
 
-    return make_result(
+    return tool_output(
         "\n".join(lines),
         count=len(validated),
         pending=pending,
@@ -149,7 +149,7 @@ def read_todos(
     todos = ctx.deps.session.session_todos
 
     if not todos:
-        return make_result(
+        return tool_output(
             "No active todo list for this session.",
             count=0,
             pending=0,
@@ -179,7 +179,7 @@ def read_todos(
     else:
         lines.append("\nAll items completed or cancelled.")
 
-    return make_result(
+    return tool_output(
         "\n".join(lines),
         count=len(todos),
         pending=pending,

@@ -8,8 +8,8 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.tools._errors import terminal_error
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_errors import tool_error
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 def _resolve_workspace_path(raw: str, workspace_root: Path) -> Path:
@@ -42,13 +42,13 @@ async def list_directory(
     try:
         resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
     except ValueError as e:
-        return terminal_error(str(e))
+        return tool_error(str(e))
 
     if not resolved.exists():
-        return terminal_error(f"Path not found: {path}")
+        return tool_error(f"Path not found: {path}")
 
     if not resolved.is_dir():
-        return terminal_error(f"Not a directory: {path}")
+        return tool_error(f"Not a directory: {path}")
 
     entries: list[dict[str, str]] = []
     for entry in sorted(resolved.iterdir()):
@@ -62,7 +62,7 @@ async def list_directory(
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
     display = "\n".join(lines) if lines else "(empty)"
 
-    return make_result(
+    return tool_output(
         display,
         path=str(resolved),
         count=len(entries),
@@ -89,13 +89,13 @@ async def read_file(
     try:
         resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
     except ValueError as e:
-        return terminal_error(str(e))
+        return tool_error(str(e))
 
     if not resolved.exists():
-        return terminal_error(f"File not found: {path}")
+        return tool_error(f"File not found: {path}")
 
     if resolved.is_dir():
-        return terminal_error(f"Path is a directory: {path}")
+        return tool_error(f"Path is a directory: {path}")
 
     content = resolved.read_text(encoding="utf-8")
     all_lines = content.splitlines(keepends=True)
@@ -110,7 +110,7 @@ async def read_file(
     else:
         display = content
 
-    return make_result(
+    return tool_output(
         display,
         path=str(resolved),
         lines=total_line_count,
@@ -136,7 +136,7 @@ async def find_in_files(
     try:
         compiled = re.compile(pattern)
     except re.error:
-        return terminal_error(f"Invalid regex: {pattern}")
+        return tool_error(f"Invalid regex: {pattern}")
 
     workspace_root = ctx.deps.config.workspace_root
     matches: list[dict[str, Any]] = []
@@ -163,7 +163,7 @@ async def find_in_files(
 
     display = "\n".join(lines_output) if lines_output else "(no matches)"
 
-    return make_result(
+    return tool_output(
         display,
         pattern=pattern,
         count=len(matches),
@@ -187,13 +187,13 @@ async def write_file(
     try:
         resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
     except ValueError as e:
-        return terminal_error(str(e))
+        return tool_error(str(e))
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
     resolved.write_text(content, encoding="utf-8")
     byte_count = len(content.encode("utf-8"))
 
-    return make_result(
+    return tool_output(
         f"Written: {path} ({byte_count} bytes)",
         path=str(resolved),
         bytes=byte_count,
@@ -221,10 +221,10 @@ async def edit_file(
     try:
         resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
     except ValueError as e:
-        return terminal_error(str(e))
+        return tool_error(str(e))
 
     if not resolved.exists():
-        return terminal_error(f"File not found: {path}")
+        return tool_error(f"File not found: {path}")
 
     content = resolved.read_text(encoding="utf-8")
     count = content.count(search)
@@ -240,7 +240,7 @@ async def edit_file(
     updated = content.replace(search, replacement)
     resolved.write_text(updated, encoding="utf-8")
 
-    return make_result(
+    return tool_output(
         f"Edited: {path} ({count} replacement(s))",
         path=str(resolved),
         replacements=count,

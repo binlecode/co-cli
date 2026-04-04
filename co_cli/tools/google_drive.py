@@ -6,9 +6,9 @@ from googleapiclient.discovery import build
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._errors import terminal_error, handle_google_api_error
+from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 _DRIVE_NOT_CONFIGURED = (
@@ -46,7 +46,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        return terminal_error(_DRIVE_NOT_CONFIGURED)
+        return tool_error(_DRIVE_NOT_CONFIGURED, ctx=ctx)
     service = build("drive", "v3", credentials=creds)
 
     try:
@@ -72,8 +72,8 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         items = results.get("files", [])
         if not items:
             if page == 1:
-                return make_result("No files found.", count=0, page=1, has_more=False)
-            return make_result("No more results.", count=0, page=page, has_more=False)
+                return tool_output("No files found.", count=0, page=1, has_more=False)
+            return tool_output("No more results.", count=0, page=page, has_more=False)
 
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")
@@ -99,14 +99,14 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         has_more = bool(next_token)
         if has_more:
             display += f"\n\n(More results available — request page {page + 1})"
-        return make_result(display, page=page, has_more=has_more)
+        return tool_output(display, page=page, has_more=has_more)
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Drive", e)
+        return handle_google_api_error("Drive", e, ctx=ctx)
 
 
-def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, Any]:
+def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolResult:
     """Fetch the content of a file from Google Drive and return it as text.
 
     Google Workspace documents (Docs, Sheets, Slides) are exported as plain
@@ -114,7 +114,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
 
     Use file IDs from search_drive_files results. Do not guess file IDs.
 
-    Returns the file content as a plain text string — show directly to the user
+    Returns the file content as a ToolResult — show directly to the user
     or pass to further processing.
 
     Caveats:
@@ -127,7 +127,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
-        return terminal_error(_DRIVE_NOT_CONFIGURED)
+        return tool_error(_DRIVE_NOT_CONFIGURED, ctx=ctx)
     service = build("drive", "v3", credentials=creds)
 
     try:
@@ -159,8 +159,8 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> str | dict[str, An
             except Exception:
                 pass
 
-        return text
+        return tool_output(text, ctx=ctx)
     except ModelRetry:
         raise
     except Exception as e:
-        return handle_google_api_error("Drive", e)
+        return handle_google_api_error("Drive", e, ctx=ctx)

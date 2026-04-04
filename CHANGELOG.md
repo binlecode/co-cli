@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.20] - 2026-04-04
+
+### Changed
+- **Tool result foundation**: renamed modules (`_result.py` → `tool_output.py`, `_errors.py` → `tool_errors.py`, `_display_hints.py` → `tool_display.py`, `_tool_approvals.py` → `tool_approvals.py`, `_subagent_agents.py` → `_subagent_builders.py`) and functions (`make_result` → `tool_output`, `terminal_error` → `tool_error`, `format_tool_result_for_display` → `format_for_display`) to reflect cross-package public roles
+- **Zero gateway bypasses**: `run_shell_command` and `read_drive_file` now return `ToolResult` via `tool_output()` instead of raw strings — all tool return paths go through the centralized gateway
+- **Gateway `ctx` parameter**: `tool_output()`, `tool_error()`, and `handle_google_api_error()` accept optional `RunContext[CoDeps]` for follow-up size control
+- **Shell policy consolidation**: merged `_approval.py` into `_shell_policy.py` (single consumer)
+
 ## [0.7.18] - 2026-04-03
 
 ### Changed

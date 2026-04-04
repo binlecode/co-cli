@@ -8,7 +8,7 @@ from pydantic_ai import RunContext
 
 from co_cli.bootstrap._check import check_runtime
 from co_cli.deps import CoDeps
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
@@ -82,7 +82,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
 
     display = "\n".join(lines)
 
-    return make_result(
+    return tool_output(
         display,
         knowledge_backend=caps["knowledge_backend"],
         reranker=reranker,

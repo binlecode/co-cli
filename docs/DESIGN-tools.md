@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolResult` via `make_result()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolResult` via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
 
 ```
 tools/
@@ -22,32 +22,39 @@ tools/
   capabilities.py    — integration health introspection
   tool_search.py     — progressive tool discovery and session grants
   subagent.py        — sub-agent delegation tools
-  _subagent_agents.py — result types + agent factories for delegation
+  _subagent_builders.py — output types + agent factories for delegation
 ```
 
 ## 2. Core Logic
 
-### Registration
+### Registration and Visibility
 
-`_reg(fn, *, approval, always_load, should_defer, search_hint, integration, retries)` in `_build_filtered_toolset()` calls `FunctionToolset.add_function()` and creates a `ToolConfig(name, description, approval, source, integration, always_load, should_defer, search_hint)` entry in `native_index`. Description is extracted from the function docstring first line. `_build_filtered_toolset()` returns `(filtered_toolset, native_index)`.
+Registration, filtering, and progressive disclosure form a single pipeline:
 
-The `FunctionToolset` is wrapped with `inner.filtered(_filter)`. `_filter` reads per-tool `always_load`/`should_defer` flags from `deps.services.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call.
+```
+build_agent()
+  ├─ _build_filtered_toolset(config)
+  │    ├─ FunctionToolset — register all tools via _reg()
+  │    │    each _reg() produces a ToolConfig(always_load | should_defer)
+  │    └─ inner.filtered(_filter) — per-API-call visibility gate
+  │         _filter checks: always_load? OR name in discovered_tools? OR name in resume_tool_names?
+  ├─ _build_mcp_toolsets(config) — one MCPServer* per mcp_servers entry
+  └─ Agent(toolsets=[filtered] + mcp_toolsets)
 
-**Tool surface split:**
+create_deps()
+  └─ discover_mcp_tools() — list_tools() per server → tool_index.update(mcp_index)
+```
 
-- **Always-loaded** (15 tools, `always_load=True`) — visible on turn one without a search round-trip. Covers reads, web, execution, system, and workflow introspection.
-- **Deferred** (~15+ tools, `should_defer=True`) — write tools, connectors, delegation, background tasks. Unlocked via `search_tools(query)`. Deferred tools are announced to the model by name and description via a dynamic `@agent.instructions` hook (`build_deferred_tool_prompt`), but their schemas are not callable until discovered.
+**Surface split:** 15 always-loaded (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced by name via `build_deferred_tool_prompt` but schemas are not callable until the model calls `search_tools()`.
 
 **Filter policy per segment type:**
 
 ```
-normal turn:      entry.always_load or tool_def.name in session.discovered_tools
+normal turn:      entry.always_load OR name in session.discovered_tools
                   (MCP tools not in tool_index pass through)
-approval-resume:  tool_def.name in resume_tool_names or entry.always_load
-                  (all other tools hidden)
+approval-resume:  name in resume_tool_names OR entry.always_load
+                  (all other tools hidden — cuts token cost per hop)
 ```
-
-**Load-state invariant:** every `ToolConfig` must have exactly one of `always_load=True` or `should_defer=True`. This is enforced in `ToolConfig.__post_init__`.
 
 **Conditional registration gates** — tools excluded at construction when config is absent:
 
@@ -67,6 +74,114 @@ approval-resume:  tool_def.name in resume_tool_names or entry.always_load
 | Write-once | 1 | `write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_gmail_draft` |
 | Network read | 3 | `web_search`, `web_fetch`, `list/search_gmail_emails`, `search/read_drive_file`, `list/search_calendar_events` |
 | Default | `config.tool_retries` | all others |
+
+---
+
+### Tool Lifecycle
+
+```mermaid
+flowchart TD
+    S([Session Start]) --> REG["Register tools\nnative — eager, config-gated\nMCP — discovered after connect"]
+    REG --> POOL[/"Static pool for session lifetime"/]
+
+    POOL --> TURN([Per Turn])
+    TURN --> FILTER["_filter: always_load visible;\ndeferred visible only if in discovered_tools"]
+    FILTER --> SEG[_execute_stream_segment]
+    SEG --> T{tool called?}
+
+    T -->|auto| EX["Execute → tool_output() → ToolResult"]
+    T -->|approval-required| PAUSE["Pause — DeferredToolRequests"]
+
+    PAUSE --> COLLECT["_collect_deferred_tool_approvals:\n1. decode_tool_args → resolve_approval_subject\n2. is_auto_approved? → approve silently\n3. prompt user: y / n / a"]
+    COLLECT --> NARROW["resume_tool_names = approved names;\nonly those + always_load visible"]
+    NARROW --> AP{approved?}
+    AP -->|yes| RESUME["_execute_stream_segment\n(task agent when available)"]
+    AP -->|no| DENY["ToolDenied → model notified"]
+    RESUME --> MORE{more pending?}
+    DENY --> MORE
+    MORE -->|yes| COLLECT
+    MORE -->|no| DONE
+
+    EX --> DONE([Turn complete])
+```
+
+---
+
+### Tool Result Contract
+
+All tools return through a single gateway:
+
+```
+tool_output(display, *, ctx=None, **metadata) → ToolResult
+  ToolResult = {"_kind": "tool_result", "display": "...", ...metadata}
+```
+
+- `_kind` — runtime discriminator (TypedDict erased at runtime; distinguishes native results from MCP raw JSON dicts)
+- `display` — pre-formatted string shown in the UI panel
+- metadata — optional fields (`count`, `path`, `task_id`, `granted`, etc.)
+
+MCP tools return raw JSON dicts; `format_for_display()` dispatches on `_kind` presence.
+
+**Error contract — three paths, each with different model visibility:**
+
+| Mechanism | When | Model sees it? | Retries? |
+|-----------|------|----------------|----------|
+| `tool_error(msg, ctx=ctx)` | Terminal — won't fix itself (bad path, missing config) | Yes, as tool output with `error=True` | No |
+| `ModelRetry(msg)` | Transient — might fix itself (bad params, rate limit) | Yes, as retry prompt | Yes, up to `tool_retries` |
+| `ApprovalRequired(metadata=...)` | Needs user confirmation | No — triggers approval loop | N/A |
+
+**Progress reporting:** tools with meaningful latency emit staged updates via `ctx.deps.runtime.tool_progress_callback`. The stream segment installs the callback on `FunctionToolCallEvent` and clears it on `FunctionToolResultEvent`. Tools never write to the terminal directly.
+
+---
+
+### Shell Policy
+
+Three-stage classification before subprocess execution:
+
+```
+evaluate_shell_command(cmd, safe_commands)     # _shell_policy.py
+    → DENY             → tool_error (blocked)
+    → ALLOW            → ShellBackend.run_command() → tool_output(stdout+stderr, ctx=ctx)
+    → REQUIRE_APPROVAL → ctx.tool_call_approved? → execute : ApprovalRequired
+```
+
+DENY tier (checked first): control characters, heredoc injection (`<<`), env-injection (`VAR=$(...)`), absolute-path destruction (`rm -rf /`). ALLOW tier: `_is_safe_command()` matches safe-prefix allowlist + arg validation (rejects path traversal, globs, shell chaining). Everything else: REQUIRE_APPROVAL.
+
+---
+
+### Approval Model
+
+Three approval classes:
+
+| Class | Condition | Examples |
+|-------|-----------|---------|
+| Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `start_background_task`, `create_gmail_draft` |
+| Shell inline | Registered `auto`; classified inside tool body | `run_shell_command` |
+| Always auto | `requires_approval=False` | reads, web, system, subagents, all read-only connector tools |
+
+Approval subject scopes:
+
+| Tool shape | Subject kind | Remembered value |
+|-----------|-------------|-----------------|
+| `run_shell_command` | `shell` | first token of `cmd` |
+| `write_file`, `edit_file` | `path` | parent directory |
+| `web_fetch` | `domain` | parsed hostname |
+| everything else (including MCP) | `tool` | tool name |
+
+User responds `y` (once) / `n` (deny) / `a` (always for this scope this session). Session rules clear when the session ends.
+
+---
+
+### MCP Tool Servers
+
+Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `should_defer=True` after discovery and participate in the same visibility policy as native tools.
+
+**Default servers** (gracefully skipped when `npx` is absent):
+
+| Server | Prefix | Approval |
+|--------|--------|---------|
+| `github` | `github` | `ask` |
+| `context7` | `context7` | `auto` |
 
 ---
 
@@ -123,116 +238,11 @@ Conditional tools excluded when gate is absent.
 
 ---
 
-### Tool Lifecycle
-
-```mermaid
-flowchart TD
-    S([Session Start]) --> REG["Register tools\nnative — eager, config-gated\nMCP — discovered after connect"]
-    REG --> POOL[/"Static pool for session lifetime"/]
-
-    POOL --> TURN([Per Turn])
-    TURN --> MAIN["Filter: always_load tools visible;\ndeferred visible only if in discovered_tools"]
-    MAIN --> SEG[Run segment]
-    SEG --> T{tool called?}
-
-    T -->|auto| EX[Execute immediately]
-    T -->|approval-required| PAUSE[Pause — request approval]
-
-    PAUSE --> NARROW["Set resume_tool_names = approved deferred names;\nonly those + always_load visible"]
-    NARROW --> AP{approved?}
-    AP -->|yes| RESUME[Execute — resume segment]
-    AP -->|no| DENY[Notify model]
-    RESUME --> MORE{more pending?}
-    DENY --> MORE
-    MORE -->|yes| NARROW
-    MORE -->|no| DONE
-
-    EX --> DONE([Turn complete])
-```
-
-**Startup call stack:**
-
-```
-build_agent(config, resolved)                              # agent.py
-  ├─ _build_mcp_toolsets(config)                          # one toolset per mcp_servers entry
-  ├─ _build_filtered_toolset(config)
-  │    ├─ inner = FunctionToolset()
-  │    ├─ _reg(fn, approval, always_load, should_defer, ...) # add_function() + ToolConfig entry
-  │    └─ inner.filtered(_filter)                         # per-tool loading policy + discovered_tools + resume_tool_names
-  └─ Agent(toolsets=[filtered_toolset] + mcp_toolsets)
-
-create_deps()                                              # _bootstrap.py
-  └─ discover_mcp_tools()                                 # list_tools() per MCPServer
-       └─ tool_registry.tool_index.update(mcp_index)
-```
-
----
-
-### Approval Model
-
-#### Approval Classes
-
-| Class | Condition | Examples |
-|-------|-----------|---------|
-| Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `start_background_task`, `create_gmail_draft` |
-| Shell inline | Registered `auto`; command classified inside tool body | `run_shell_command` |
-| Always auto | `requires_approval=False` | `list_directory`, `read_file`, `find_in_files`, `web_search`, `web_fetch`, `check_capabilities`, `search_tools`, `run_*_subagent`, all read-only knowledge/connector tools |
-
-#### Approval Decision Chain
-
-`_collect_deferred_tool_approvals()` resolves each pending call:
-
-1. `decode_tool_args(call.args)` → dict; `resolve_approval_subject()` → `ApprovalSubject(tool_name, kind, value, display, can_remember)`
-2. `is_auto_approved()` → match in `deps.session.session_approval_rules` → approve silently
-3. No match: `frontend.prompt_approval()` → user `y` / `n` / `a`; `"a"` records `SessionApprovalRule` for the session lifetime
-
-All session rules clear when the session ends.
-
-#### Approval-Resume
-
-When the model calls a deferred tool, pydantic-ai pauses and returns `DeferredToolRequests`. `_run_approval_loop()` drives the resume cycle: set `resume_tool_names` → collect approvals → resume segment executes approved tools. Loop repeats until output is `str`. Denied tools notify the model without retrying. Filter on resume: `_filter` checks `resume_tool_names` first (approved deferred tools), then `always_load` separately — only approved deferred tools plus always-loaded tools are visible, cutting token cost per hop. The task agent (`ROLE_TASK`, `reasoning_effort: none`) is used on resume when available.
-
----
-
-### Tool Result Contract
-
-All user-facing native tools return `ToolResult` via `make_result(display, **metadata)`:
-- `_kind` — `"tool_result"` discriminator
-- `display` — pre-formatted string shown in the UI panel
-- metadata fields: `count`, `path`, `task_id`, `granted`, etc.
-
-Exceptions: `run_shell_command` and `read_drive_file` return raw `str`. MCP tools return raw JSON; `format_tool_result_for_display()` handles the `_kind`-absent case.
-
-**Error handling:**
-
-| Class | When to use |
-|-------|------------|
-| `terminal_error(msg)` | Unrecoverable failure (bad path, missing config). Model sees failure without retry. |
-| `ModelRetry(msg)` | LLM-fixable error — bad params, transient failure. Triggers pydantic-ai retry up to `tool_retries`. |
-| `ApprovalRequired(metadata=...)` | Tool needs user confirmation; triggers deferred approval path. |
-
-**Progress reporting:** tools with meaningful latency emit staged updates via `ctx.deps.runtime.tool_progress_callback`. `_execute_stream_segment()` installs the callback on `FunctionToolCallEvent` and clears it on `FunctionToolResultEvent`. Tools never write to the terminal directly.
-
----
-
-### MCP Tool Servers
-
-Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `should_defer=True` after discovery and participate in the same visibility policy as native tools. Raw MCP toolsets remain attached to the agent for execution dispatch; MCP tools not yet in `tool_index` (discovery not run or failed) pass through the filter.
-
-**Default servers** (gracefully skipped when `npx` is absent):
-
-| Server | Prefix | Approval |
-|--------|--------|---------|
-| `github` | `github` | `ask` |
-| `context7` | `context7` | `auto` |
-
----
-
 ### Tool Reference
 
 #### Workspace (`tools/files.py`)
 
-All paths resolved through `_resolve_workspace_path()` and verified against `workspace_root`. Path traversal raises `ValueError` → `terminal_error`.
+All paths resolved through `_resolve_workspace_path()` and verified against `workspace_root`. Path traversal raises `ValueError` → `tool_error`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
@@ -241,19 +251,6 @@ All paths resolved through `_resolve_workspace_path()` and verified against `wor
 | `find_in_files` | `pattern` (regex), `glob="**/*"`, `max_matches=50` | Regex search; skips binary files; returns `file:line: text` |
 | `write_file` | `path`, `content` | Overwrites file; creates parent dirs; returns byte count |
 | `edit_file` | `path`, `search`, `replacement`, `replace_all=False` | Exact-string replace; fails on ambiguous match unless `replace_all=True` |
-
-#### Execution (`tools/shell.py`)
-
-Three-stage classification before subprocess execution:
-
-```
-evaluate_shell_command(cmd, safe_commands)
-    → DENY             → terminal_error
-    → ALLOW            → ShellBackend.run_command() immediately
-    → REQUIRE_APPROVAL → ctx.tool_call_approved? → execute : ApprovalRequired
-```
-
-`run_shell_command` runs in project cwd; stdout+stderr combined; `timeout` capped by `shell_max_timeout`; returns raw text. DENY patterns: `rm -rf /`, `dd if=`, `mkfs`, broad-scope kill signals.
 
 #### Knowledge — Memory (`tools/memory.py`)
 
@@ -306,7 +303,7 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 
 #### Web (`tools/web.py`)
 
-`web_fetch` domain policy: `web_fetch_blocked_domains` blocks by exact/subdomain match; `web_fetch_allowed_domains` is an optional allowlist. Private/internal targets blocked via `_url_safety.py`. Binary content-types return `terminal_error`.
+`web_fetch` domain policy: `web_fetch_blocked_domains` blocks by exact/subdomain match; `web_fetch_allowed_domains` is an optional allowlist. Private/internal targets blocked via `_url_safety.py`. Binary content-types return `tool_error`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
@@ -315,7 +312,7 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 
 #### Delegation (`tools/subagent.py`)
 
-Sub-agent tools spawn isolated agents via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` (no inherited `discovered_tools`) + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
+Sub-agent tools spawn isolated agents via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
 
 | Tool | Sub-agent surface | Behavior |
 |------|------------------|---------|
@@ -390,17 +387,16 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
 | `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-discovery mechanism |
 | `co_cli/tools/subagent.py` | `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
-| `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
+| `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` |
-| `co_cli/tools/_approval.py` | `_is_safe_command()` — safe-prefix classification helper |
-| `co_cli/tools/_display_hints.py` | `get_tool_start_args_display()`, `format_tool_result_for_display()` |
-| `co_cli/tools/_tool_approvals.py` | `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
+| `co_cli/tools/tool_display.py` | `get_tool_start_args_display()`, `format_for_display()` |
+| `co_cli/tools/tool_approvals.py` | `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
 | `co_cli/tools/_background.py` | `BackgroundTaskState`, `spawn_task()`, `kill_task()` |
-| `co_cli/tools/_result.py` | `ToolResult`, `make_result()`, `ToolResultPayload` |
-| `co_cli/tools/_errors.py` | `terminal_error()`, `http_status_code()` |
+| `co_cli/tools/tool_output.py` | `ToolResult`, `tool_output()`, `ToolResultPayload` |
+| `co_cli/tools/tool_errors.py` | `tool_error()`, `handle_google_api_error()`, `http_status_code()` |
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
-| `co_cli/tools/_subagent_agents.py` | `CoderResult`, `make_coder_agent()`, `ResearchResult`, `make_research_agent()`, `AnalysisResult`, `make_analysis_agent()`, `ThinkingResult`, `make_thinking_agent()` |
+| `co_cli/tools/_subagent_builders.py` | `CoderOutput`, `make_coder_agent()`, `ResearchOutput`, `make_research_agent()`, `AnalysisOutput`, `make_analysis_agent()`, `ThinkingOutput`, `make_thinking_agent()` |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` |
 | `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt()` — dynamic prompt fragment listing undiscovered deferred tools |

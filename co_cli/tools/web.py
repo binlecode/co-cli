@@ -10,9 +10,9 @@ import httpx
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._errors import terminal_error
+from co_cli.tools.tool_errors import tool_error
 from co_cli.tools._http_retry import classify_web_http_error, compute_backoff_delay
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 from co_cli.tools._url_safety import is_url_safe
 
 _MAX_RESULTS = 8
@@ -156,10 +156,10 @@ async def _http_get_with_retries(
                 max_retry_after_seconds=backoff_max_seconds,
             )
             if not decision.retryable:
-                return terminal_error(decision.message)
+                return tool_error(decision.message)
 
             if attempt >= attempts_total:
-                return terminal_error(
+                return tool_error(
                     f"{decision.message} Retries exhausted ({max_retries})."
                 )
 
@@ -173,7 +173,7 @@ async def _http_get_with_retries(
                 delay = max(delay, min(decision.delay_seconds, backoff_max_seconds))
             await asyncio.sleep(delay)
 
-    return terminal_error(f"{tool_name} failed for {target}.")
+    return tool_error(f"{tool_name} failed for {target}.")
 
 
 async def web_search(
@@ -252,7 +252,7 @@ async def web_search(
     ]
 
     if not results:
-        return make_result(f"No results for '{query}'.", results=[], count=0)
+        return tool_output(f"No results for '{query}'.", results=[], count=0)
 
     lines = []
     for i, r in enumerate(results, 1):
@@ -261,7 +261,7 @@ async def web_search(
         lines.append("")
 
     display = f"Web search results for '{query}':\n\n" + "\n".join(lines).rstrip()
-    return make_result(display, results=results, count=len(results))
+    return tool_output(display, results=results, count=len(results))
 
 
 async def web_fetch(
@@ -337,7 +337,7 @@ async def web_fetch(
     content_type = resp.headers.get("content-type", "")
 
     if not _is_content_type_allowed(content_type):
-        return terminal_error(
+        return tool_error(
             f"web_fetch blocked: unsupported content type '{content_type}'. "
             "Only text and structured data formats are supported."
         )
@@ -354,7 +354,7 @@ async def web_fetch(
 
     display = f"Content from {final_url}:\n\n{text}"
 
-    return make_result(
+    return tool_output(
         display,
         url=final_url,
         content_type=content_type,

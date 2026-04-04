@@ -47,7 +47,7 @@ def get_tool_start_args_display(tool_name: str, part: "ToolCallPart") -> str:
     return str(val)[:120]
 
 
-def format_tool_result_for_display(content: Any) -> str | dict | None:
+def format_for_display(content: Any) -> str | dict | None:
     """Format a tool result for the on_tool_complete frontend call.
 
     Return contract:

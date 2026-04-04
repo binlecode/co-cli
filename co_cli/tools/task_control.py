@@ -20,7 +20,7 @@ from co_cli.tools._background import (
     spawn_task,
     kill_task,
 )
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 async def start_background_task(
@@ -65,7 +65,7 @@ async def start_background_task(
             raise ModelRetry(f"Failed to start background task: {e}")
 
     display = f"[{task_id}] started — command: {command}"
-    return make_result(display, task_id=task_id, status="running")
+    return tool_output(display, task_id=task_id, status="running")
 
 
 async def check_task_status(
@@ -83,7 +83,7 @@ async def check_task_status(
     """
     state = ctx.deps.session.background_tasks.get(task_id)
     if state is None:
-        return make_result(
+        return tool_output(
             f"Task not found: {task_id}",
             task_id=task_id,
             status="not_found",
@@ -111,7 +111,7 @@ async def check_task_status(
         f"  Started: {state.started_at}  Status: {state.status}  Exit: {state.exit_code}  Duration: {dur_str}\n"
         f"  Output (last {tail_lines} lines):\n{output_display}"
     )
-    return make_result(
+    return tool_output(
         display,
         task_id=task_id,
         status=state.status,
@@ -137,10 +137,10 @@ async def cancel_background_task(
     """
     state = ctx.deps.session.background_tasks.get(task_id)
     if state is None:
-        return make_result(f"Task not found: {task_id}", task_id=task_id, status="not_found")
+        return tool_output(f"Task not found: {task_id}", task_id=task_id, status="not_found")
 
     if state.status != "running":
-        return make_result(
+        return tool_output(
             f"Task already completed (status={state.status})",
             task_id=task_id,
             status=state.status,
@@ -149,14 +149,14 @@ async def cancel_background_task(
     try:
         await kill_task(state)
     except BackgroundCleanupError as e:
-        return make_result(
+        return tool_output(
             f"Task {task_id} cancellation failed during cleanup: {e}",
             task_id=task_id,
             status="cancel_cleanup_failed",
             cleanup_incomplete=state.cleanup_incomplete,
             cleanup_error=state.cleanup_error,
         )
-    return make_result(f"Task {task_id} cancelled.", task_id=task_id, status="cancelled")
+    return tool_output(f"Task {task_id} cancelled.", task_id=task_id, status="cancelled")
 
 
 async def list_background_tasks(
@@ -197,4 +197,4 @@ async def list_background_tasks(
             lines.append(f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})")
         display = "\n".join(lines)
 
-    return make_result(display, tasks=rows, count=len(rows))
+    return tool_output(display, tasks=rows, count=len(rows))

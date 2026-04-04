@@ -3,7 +3,7 @@
 Contains TurnResult, run_turn(), and supporting private functions.
 Frontend lives in co_cli/display/_core.py. Stream rendering policy
 lives in co_cli/display/_stream_renderer.py. Tool display metadata lives in
-co_cli/tools/_display_hints.py. The chat loop in main.py delegates all LLM
+co_cli/tools/tool_display.py. The chat loop in main.py delegates all LLM
 interaction here.
 """
 
@@ -41,8 +41,8 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 
 from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
-from co_cli.tools._display_hints import get_tool_start_args_display, format_tool_result_for_display
-from co_cli.tools._tool_approvals import (
+from co_cli.tools.tool_display import get_tool_start_args_display, format_for_display
+from co_cli.tools.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
     record_approval_choice,
@@ -210,7 +210,7 @@ async def _execute_stream_segment(
     - tool_approval_decisions is cleared (consumed)
 
     Stream rendering policy (buffering, flush, thinking gating) is owned by
-    StreamRenderer. Tool display metadata is owned by _display_hints.
+    StreamRenderer. Tool display metadata is owned by tool_display.
     """
     result = None
     renderer = StreamRenderer(frontend, reasoning_display=reasoning_display)
@@ -267,7 +267,7 @@ async def _execute_stream_segment(
                         frontend.on_tool_complete(tool_id, None)
                         continue
                     frontend.on_tool_complete(
-                        tool_id, format_tool_result_for_display(event.result.content)
+                        tool_id, format_for_display(event.result.content)
                     )
                     continue
 

@@ -18,7 +18,7 @@ from co_cli._model_factory import ResolvedModel
 from co_cli.knowledge._frontmatter import ArtifactTypeEnum, parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
@@ -202,7 +202,7 @@ async def _persist_memory_inner(
             # Empty plan (0 actions) means the LLM had no opinion; fall through to
             # Step 3 so the memory is written rather than silently dropped.
             if not has_add and plan.actions:
-                return make_result(
+                return tool_output(
                     "\u2713 Memory consolidated (no new entry needed)",
                     action="consolidated",
                     memory_id=None,
@@ -210,7 +210,7 @@ async def _persist_memory_inner(
         except asyncio.TimeoutError:
             if on_failure == "skip":
                 logger.info("persist_memory: consolidation timeout, skipping (auto-signal path)")
-                return make_result(
+                return tool_output(
                     "\u26a0 Memory save skipped (consolidation timeout)",
                     action="skipped",
                 )
@@ -278,7 +278,7 @@ async def _persist_memory_inner(
         except Exception as e:
             logger.warning(f"Failed to index memory {memory_id}: {e}")
 
-    result: ToolResult = make_result(
+    result: ToolResult = tool_output(
         f"✓ Saved memory {memory_id}: {filename}\n"
         f"Location: {file_path}",
         path=str(file_path),

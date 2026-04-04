@@ -3,7 +3,7 @@
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps, ToolConfig
-from co_cli.tools._result import ToolResult, make_result
+from co_cli.tools.tool_output import ToolResult, tool_output
 
 
 async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8) -> ToolResult:
@@ -36,7 +36,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
     top = scored[:max_results]
 
     if not top and exact_match is None:
-        return make_result(
+        return tool_output(
             f"No tools found for {query!r}. "
             "Try: 'edit file', 'save memory', 'background task', 'sub-agent', 'gmail'.",
         )
@@ -64,4 +64,4 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
 
     if discovered_now:
         lines.append(f"\n{len(discovered_now)} tool(s) unlocked. Call them in your next step.")
-    return make_result("\n".join(lines), count=len(top), granted=discovered_now)
+    return tool_output("\n".join(lines), count=len(top), granted=discovered_now)

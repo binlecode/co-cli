@@ -17,7 +17,7 @@ from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_TASK
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools._tool_approvals import (
+from co_cli.tools.tool_approvals import (
     is_auto_approved,
     record_approval_choice,
     remember_tool_approval,
