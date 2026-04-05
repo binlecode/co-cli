@@ -1,0 +1,42 @@
+# RESEARCH: Peer Approval & Execution Policy — Five-Way Comparison
+
+Sources: `~/workspace_genai/fork-claude-code`, `~/workspace_genai/gemini-cli`, `~/workspace_genai/codex`, `~/workspace_genai/opencode`, `~/workspace_genai/aider`, co-cli codebase
+Scan date: 2026-04-05
+
+## 1. System Architectures
+
+| System | Source files reviewed | Observed code facts |
+|--------|---------------------|---------------------|
+| **fork-cc** | `types/permissions.ts:16–325`, `Tool.ts:123–503`, `utils/permissions/permissions.ts`, `utils/plugins/loadPluginHooks.ts:91` | Six modes defined at `permissions.ts:16–38`: `default`, `acceptEdits`, `bypassPermissions`, `dontAsk`, `plan`, `auto` (ANT-only). Permission decision is a discriminated union (`permissions.ts:174–236`): `PermissionAllowDecision` (`behavior: 'allow'`, optional `updatedInput`), `PermissionAskDecision` (`behavior: 'ask'`, `message`, optional `suggestions`, `blockedPath`), `PermissionDenyDecision` (`behavior: 'deny'`, `message`). Every tool implements `checkPermissions(input, context): Promise<PermissionResult>` (`Tool.ts:500–503`). Tools declare `isReadOnly()` (`Tool.ts:404`) and optional `isDestructive()` (`Tool.ts:406`). Decision reason hierarchy at `permissions.ts:268–325`: 8 branches (`rule`, `mode`, `classifier`, `hook`, `sandboxOverride`, `workingDir`, `safetyCheck`, `other`). Denial tracking: `DenialTrackingState` + `DENIAL_LIMITS` + `shouldFallbackToPrompting()` at `permissions.ts:95–100`. |
+| **gemini-cli** | `docs/reference/policy-engine.md:1–450`, `packages/core/src/scheduler/policy.ts:52–150` | Four modes: `default`, `autoEdit`, `plan`, `yolo` (`policy-engine.md:158–172`). Decisions: `allow`, `deny` (removed from model's tool context), `ask_user` (`policy-engine.md:104–114`). Five-tier priority: Default (1.0), Extension (2.0), Workspace (3.0), User (4.0), Admin (5.0); formula: `tier_base + (toml_priority / 1000)` (`policy-engine.md:122–157`). Entry point: `checkPolicy(toolCall, config, subagent?)` at `policy.ts:52–107`. TOML rule schema at `policy-engine.md:256–321`: `toolName` (required), `decision`, `priority` (0–999), `interactive?`, `modes?`, `argsPattern?`, `commandPrefix?`, `commandRegex?`, `mcpName?`, `denyMessage?`. Defaults: read tools → allow; write tools → ask_user; yolo mode → high-priority allow-all (`policy-engine.md:436–450`). `updatePolicy()` persists user decisions to workspace or user scope (`policy.ts:113–150`). |
+| **codex** | `codex-rs/core/src/codex_delegate.rs:1–200`, `codex-rs/network-proxy/src/policy.rs:1–200` | Centralized guardian pattern. `GuardianApprovalRequest` routes all approval decisions. `ReviewDecision` enum. MCP-specific: `MCP_TOOL_APPROVAL_ACCEPT`, `MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION`, `MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC` (`codex_delegate.rs:45–51`). Subagent approval delegation: parent receives approval events, `forward_events()` filters (`codex_delegate.rs:105–122`). Exec policy inheritance: `inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy))` (`codex_delegate.rs:95`). Network policy in `policy.rs`: host normalization (lines 16–124), glob pattern matching for allow/deny lists (`compile_allowlist_globset()`, `compile_denylist_globset()` lines 161–199), CIDR validation for IPv4/IPv6, prevents global wildcard `*` in denylist (lines 176–180). |
+| **opencode** | `packages/opencode/src/session/prompt.ts:435–535`, `packages/plugin/src/index.ts:215–223` | No centralized policy engine. Each tool calls `ctx.ask()` at runtime with permission type, patterns, and metadata (e.g. `bash.ts:271–285`). `Permission.disabled()` used for tool filtering in registry (`registry.ts:163–174`). MCP tools require permission via `ctx.ask({ permission: key, patterns: ["*"], always: ["*"] })` (`prompt.ts:486`). No TOML rules, no priority tiers, no mode system. |
+| **aider** | `aider/io.py:807–898`, `aider/coders/base_coder.py:308–2397`, `aider/args.py:440–443` | `confirm_ask(question, default, subject, explicit_yes_required, group, allow_never)` at `io.py:807–898`. Valid responses: `["yes", "no", "skip", "all"]`; with `allow_never`: add `"don't"` (line 831). Persistent decision tracking via `(question, subject)` tuple stored in `self.never_prompts` (line 821–823). Group confirmation: `(A)ll` sets `group.preference` for batch operations (lines 870–871). `--auto-commits` flag (`args.py:440–443`, default True). File creation and git adds go through `confirm_ask()` gates (`base_coder.py:2226–2233`). |
+
+## 2. Approval Declaration
+
+| Aspect | fork-cc | gemini-cli | codex | opencode | aider | co-cli |
+|--------|---------|-----------|-------|----------|-------|--------|
+| **Where declared** | Per-tool: `isReadOnly()` method + `isDestructive()` on `Tool` interface (`Tool.ts:404–406`) | TOML rules: `decision` field per tool name/pattern (`policy-engine.md:256–321`) | Per-handler: `is_mutating()` async trait method (`registry.rs:57`) | Per-tool: runtime `ctx.ask()` call inside tool body (e.g. `bash.ts:271–285`) | Per-operation: `confirm_ask()` at call site (`io.py:807`) | Per-tool: `requires_approval=True` on `agent.tool()` (`agent.py:118`) |
+| **Granularity** | Read-only vs mutating + destructive flag | Per-tool-name with args pattern matching, mode gating, MCP server scoping | Binary mutating check; per-type approval requests (Shell, ExecCommand, Execve, ApplyPatch, NetworkAccess, McpToolCall) | Per-call with permission type + patterns | Per-operation with question/subject tuple | Binary flag (approval required or not) |
+
+## 3. Approval Enforcement
+
+| Aspect | fork-cc | gemini-cli | codex | opencode | aider | co-cli |
+|--------|---------|-----------|-------|----------|-------|--------|
+| **Entry point** | `checkPermissions()` per tool (`Tool.ts:500–503`) | `checkPolicy()` centralized (`policy.ts:52–107`) | `dispatch_any()` → mutating check → tool gate wait (`registry.rs:314–335`) | `ctx.ask()` inside tool body | `confirm_ask()` at call site | `ApprovalRequired` exception → `DeferredToolRequests` |
+| **Deny behavior** | Returns `PermissionDenyDecision` with message + reason | Removes tool from model context (`policy-engine.md:104–114`) | Guardian rejects; synthetic decline for MCP | `Permission.ask()` raises error if denied | Returns False; operation skipped | Model sees error; retries with different approach |
+| **Session persistence** | `alwaysAllowRules` / `alwaysDenyRules` in permission context (`Tool.ts:123–148`). Persisted to settings | `updatePolicy()` writes to workspace or user TOML scope (`policy.ts:113–150`) | `MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION` (`codex_delegate.rs:47`) | Not observed | `never_prompts` set: `(question, subject)` tuple (`io.py:821–823`) | `SessionApprovalRule` list on `CoSessionState` (`deps.py:82–98`). Kinds: SHELL, PATH, DOMAIN, TOOL |
+
+## 4. Subagent Approval
+
+| Aspect | fork-cc | gemini-cli | codex | opencode | co-cli |
+|--------|---------|-----------|-------|----------|--------|
+| **Inheritance** | Permission context carried to subagents. `shouldAvoidPermissionPrompts` flag for background agents (`Tool.ts:141`) | TOML rules apply globally; `subagent?` parameter in `checkPolicy()` (`policy.ts:52`) | `inherited_exec_policy: Some(Arc::clone(...))` (`codex_delegate.rs:95`). Parent receives approval events (`codex_delegate.rs:105–122`) | Not observed | `make_subagent_deps()` copies `session_approval_rules` list (`deps.py:414–418`) |
+
+## 5. Shell/Exec Policy
+
+| Aspect | fork-cc | gemini-cli | codex | opencode | aider | co-cli |
+|--------|---------|-----------|-------|----------|-------|--------|
+| **Safe commands** | Not observed as static list; mode-based (acceptEdits, bypassPermissions) | TOML rules with `commandPrefix?` and `commandRegex?` patterns (`policy-engine.md:285–290`) | Network proxy: host allow/deny globlists + CIDR validation (`policy.rs:161–199`). Exec via sandbox with `SandboxPermissions` enum | Not observed as static list | `--auto-commits` boolean gate (`args.py:440`). File ops go through `confirm_ask()` | Static `shell_safe_commands` list in `CoConfig` (`deps.py:114`). `evaluate_shell_command()` returns DENY/ALLOW/REQUIRE_APPROVAL (`_shell_policy.py`) |
+| **Deny patterns** | Rule-based via `alwaysDenyRules` | TOML deny rules with `denyMessage` field | Network denylist prevents global wildcard `*` (`policy.rs:176–180`) | Not observed | Not observed | DENY patterns in `evaluate_shell_command()` for dangerous commands |

@@ -1,11 +1,11 @@
-# RESEARCH: Peer Session Compaction — Three-Way Comparison
+# RESEARCH: Peer Session Compaction — Five-Way Comparison
 
-Sources: `~/workspace_genai/fork-claude-code` (Anthropic Claude Code), `~/workspace_genai/gemini-cli` (Google Gemini CLI), co-cli current codebase
-Scan date: 2026-04-03
+Sources: `~/workspace_genai/fork-claude-code` (Anthropic Claude Code), `~/workspace_genai/gemini-cli` (Google Gemini CLI), `~/workspace_genai/opencode` (OpenCode), `~/workspace_genai/codex` (OpenAI Codex CLI), co-cli current codebase
+Scan date: 2026-04-03 (fork-cc, gemini-cli, co-cli) · 2026-04-04 (opencode, codex)
 
 ## Purpose
 
-Three-way comparison of session compaction architectures to inform co-cli adoption and refactoring decisions. Each claim is verified against source code — no documentation-only claims.
+Five-way comparison of session compaction architectures to inform co-cli adoption and refactoring decisions. Each claim is verified against source code — no documentation-only claims.
 
 ---
 
@@ -176,229 +176,404 @@ Session summary: fire-and-forget on startup for previous session, 80-char one-li
 
 ---
 
-## 3. co-cli Architecture (Current)
+## 3. OpenCode Architecture
+
+**2 mechanisms** in a dual-phase pipeline, plus manual API.
+
+### 3a. Prune Phase (`packages/opencode/src/session/compaction.ts`)
+
+Lightweight no-LLM pre-pass that clears old tool outputs. Forked asynchronously at session loop end (`prompt.ts:1548`) — non-blocking, failures ignored via `Effect.ignore`.
+
+Backwards scan from latest message:
+- Skips first 2 conversation turns (protected)
+- Stops at first assistant message with `summary: true` (previous compaction boundary)
+- Collects completed tool outputs, skipping protected tools (`PRUNE_PROTECTED_TOOLS = ["skill"]`) and already-pruned outputs (those with `time.compacted` timestamp)
+- Accumulates token count until `PRUNE_PROTECT` (40K) reached, then all subsequent tool outputs go into `toPrune`
+- Commits only if `pruned > PRUNE_MINIMUM` (20K tokens freed)
+
+Pruned outputs are **not deleted** — marked with `time.compacted = Date.now()`. Display converts to `"[Old tool result content cleared]"` in model messages (`message-v2.ts:718`).
+
+| Constant | Value |
+|----------|-------|
+| `PRUNE_MINIMUM` | 20,000 tokens |
+| `PRUNE_PROTECT` | 40,000 tokens |
+| `PRUNE_PROTECTED_TOOLS` | `["skill"]` |
+
+### 3b. Compact Phase (`packages/opencode/src/session/compaction.ts`)
+
+Full LLM summarization, triggered by overflow detection.
+
+**Overflow detection** (`overflow.ts`): `count >= usable` where `count` = total tokens (input + output + cache), `usable` = model context size − reserved buffer. Reserved buffer: `Math.min(COMPACTION_BUFFER, maxOutputTokens)` where `COMPACTION_BUFFER = 20,000`. Disabled when `config.compaction.auto === false`.
+
+**Trigger points**:
+- After agent step completes (`processor.ts:305`): checks `isOverflow()` on response usage
+- Before starting new turn (`prompt.ts:1399`): if last finished turn is not a summary AND overflow detected
+- On `ContextOverflowError` during turn (`processor.ts:417-420`): sets `ctx.needsCompaction = true`, interrupts stream via `takeUntil()`
+
+**What gets summarized**: All previous messages, media stripped (`stripMedia: true`). For overflow cases, finds last user message without a CompactionPart, uses it as replay target, compacts everything before it.
+
+**Summary template** (structured sections):
+```text
+## Goal — what the user is trying to accomplish
+## Instructions — important instructions + plan/spec info
+## Discoveries — notable technical learnings
+## Accomplished — completed/in-progress/remaining work
+## Relevant files / directories — files read/edited/created
+```
+
+**Result handling**:
+- **Success with replay**: recreates user message from earlier turn, auto-continues
+- **Success without replay**: injects synthetic continuation message
+- **Failure** (context overflow during compaction itself): returns `"stop"` with `ContextOverflowError`
+
+### 3c. Message Schema
+
+`CompactionPart` stored per message: `{ type: "compaction", auto: boolean, overflow?: boolean }`. In model messages, converts to text: `"What did we do so far?"`.
+
+Prune state on tool outputs: `state.time.compacted` timestamp marks cleared outputs. `filterCompacted()` traverses forward to first summary+compaction pair, returns all messages before that boundary for UI display.
+
+### 3d. Manual Compaction
+
+HTTP API endpoint `POST /:sessionID/summarize` — no slash command in interactive mode. Calls `SessionCompaction.create()` with `auto: false`, then invokes the standard prompt loop.
+
+### 3e. Session Persistence
+
+Messages stored in database with `PartTable` containing serialized schema per part. CompactionPart and `time.compacted` timestamps persist across restarts. No JSONL — structured DB storage.
+
+---
+
+## 4. Codex Architecture
+
+**2 compaction modes** (inline LLM + remote provider API) with **3 trigger points** in the turn lifecycle.
+
+### 4a. Trigger Points
+
+**Pre-sampling** (`codex.rs:6147`): fires before user input is recorded. Two sub-checks:
+- Model switch: `total_usage_tokens > new_auto_compact_limit AND old_context_window > new_context_window` — proactively compacts when switching to a smaller model
+- Token threshold: `total_usage_tokens >= auto_compact_token_limit` (90% of context window, `openai_models.rs:297-304`)
+- Uses `InitialContextInjection::DoNotInject` — clears context baseline, next turn reinjects fresh
+
+**Post-sampling** (`codex.rs:5979`): fires after model response completes mid-turn when `token_limit_reached AND needs_follow_up`. Uses `InitialContextInjection::BeforeLastUserMessage` — injects context before last user message to match model training expectations (summary must be last item seen).
+
+**Manual** (`Op::Compact`): dispatched via protocol (`codex.rs:4511`). Uses `DoNotInject`.
+
+| Constant | Value |
+|----------|-------|
+| `auto_compact_token_limit` | 90% of model context window |
+| `COMPACT_USER_MESSAGE_MAX_TOKENS` | 20,000 tokens |
+| Configurable override | `model_auto_compact_token_limit` per model |
+
+### 4b. Inline Compaction (Non-OpenAI Providers)
+
+`run_inline_auto_compact_task()` in `compact.rs:54`. Sends full history to model with compaction prompt template:
+
+```text
+CONTEXT CHECKPOINT COMPACTION: Create a handoff summary for another LLM.
+Include: current progress, key decisions, constraints/preferences,
+what remains, critical data/references.
+```
+
+**Summary assembly** (`compact.rs:191-212`):
+1. Extract last assistant message as summary body
+2. Prepend `SUMMARY_PREFIX` (tells next model: "Another LLM started this; use its summary")
+3. Collect all non-summary user messages via `collect_user_messages()`
+4. Build compacted history with token budget
+
+**User message retention** (`build_compacted_history_with_limit`, `compact.rs:337-390`):
+- Iterate user messages **in reverse** (newest first)
+- Accumulate tokens until `COMPACT_USER_MESSAGE_MAX_TOKENS` (20K) exhausted
+- Truncate last included message if it exceeds remaining budget
+- Reverse selected messages to restore chronological order
+
+**Context window overflow during compaction**: removes oldest history item via `remove_first_item()`, retries with exponential backoff up to `stream_max_retries()`.
+
+**Ghost snapshot preservation**: `GhostSnapshot` items (for `/undo`) are collected from original history and appended to compacted history — not sent to model but preserved for rollback.
+
+### 4c. Remote Compaction (OpenAI Only)
+
+`run_inline_remote_auto_compact_task()` in `compact_remote.rs:28`. Dispatched when `provider.is_openai()`.
+
+**Pre-compaction trimming** (`trim_function_call_history_to_fit_context_window`, `compact_remote.rs:273-300`):
+- Removes codex-generated items (tool outputs, developer messages) from newest→oldest
+- Stops when hitting user input or when estimated tokens fit context window
+- Trims generated content first, preserves user intent
+
+**Remote call**: `model_client.compact_conversation_history()` — sends prompt + tools + instructions to OpenAI's native compaction endpoint.
+
+**Post-compaction filtering** (`should_keep_compacted_history_item`, `compact_remote.rs:205-230`):
+- Drops `developer` role messages (stale instructions from provider)
+- Drops `user` messages without real user content (wrapper/prefix messages)
+- Keeps assistant messages, real user messages, hook prompts
+
+### 4d. Initial Context Injection
+
+| Mode | When | Behavior |
+|------|------|----------|
+| `DoNotInject` | Pre-turn, manual `/compact` | Clears `reference_context_item`; next turn fully reinjects context |
+| `BeforeLastUserMessage` | Post-sampling (mid-turn) | Injects initial context before last real user message; falls back to before last summary → before last compaction item → append |
+
+### 4e. Session Persistence
+
+In-memory `ContextManager` (`history.rs`) tracks history items + token estimates. Token estimation: `approx_token_count()` heuristic (~4 bytes/token for text, special handling for reasoning items and images). `CompactedItem` emitted as `RolloutItem` event on successful compaction. No JSONL boundary markers — compacted history replaces in-memory state directly.
+
+### 4f. Failure Handling
+
+- Context window exceeded during compaction → remove oldest item, retry (exponential backoff)
+- Remote compaction failure → `log_remote_compact_failure()` with detailed diagnostics (token counts, model window, request size)
+- No circuit breaker — retries up to `stream_max_retries()` then fails the turn
+
+---
+
+## 5. co-cli Architecture (Current)
 
 **3 mechanisms** built on pydantic-ai's history processor chain.
 
-### 3a. Tool Output Trim (`truncate_tool_returns` — processor #1)
+### 5a. Tool Output Trim (`truncate_tool_returns` — processor #1)
 
 Sync processor, fires before every model API call. Truncates `ToolReturnPart.content` exceeding `tool_output_trim_chars` (default 2000) in all messages except the last 2 (current turn). No LLM call.
 
-### 3b. Sliding Window (`truncate_history_window` — processor #4)
+### 5b. Sliding Window (`truncate_history_window` — processor #4)
 
 **Inline async** processor in `_history.py`, triggers when estimated tokens exceed 85% of `resolve_compaction_budget()` result. Budget resolved from model quirks `context_window - max_tokens` → Ollama `llm_num_ctx` → 100K fallback (in `_compaction.py`). Computes head/tail boundaries (head = first exchange including ThinkingPart, tail = max(4, len(messages)//2)), drops middle, calls `summarize_messages()` inline to generate a summary, and injects it immediately. In-memory only — JSONL unchanged. Both the boundary computation and the LLM summarisation call run inside pydantic-ai's history processor chain, blocking the API call. A `[dim]Compacting conversation...[/dim]` indicator is shown during the LLM call.
 
 **Circuit breaker** (`compaction_failure_count` on `CoRuntimeState`): incremented on `ModelHTTPError`/`ModelAPIError`, reset to 0 on success. At >= 3 consecutive failures, the LLM call is skipped and a static marker `"[N messages trimmed]"` is used directly. When `model_registry` is absent (sub-agents, tests), the static marker is used without incrementing the counter.
 
-### 3c. Manual `/compact`
+### 5c. Manual `/compact`
 
 Foreground `summarize_messages()` LLM call (from `_compaction.py`). Replaces in-memory history with 2 messages. Writes `{"type":"compact_boundary"}` to JSONL. Increments `compaction_count` in session metadata. Shows budget visibility: `Compacted: N → 2 messages (est. XK → YK of ZK budget)`. Only mechanism that affects the JSONL.
 
-### 3d. Session Persistence
+### 5d. Session Persistence
 
 JSONL append-only (`_transcript.py`). Compact boundary markers for resume skip (>5MB threshold). Line-by-line scan, `messages.clear()` on boundary.
 
 ---
 
-## 4. Three-Way Comparison
+## 6. Five-Way Comparison
 
-### 4a. Compaction Triggers and Thresholds
+### 6a. Compaction Triggers and Thresholds
 
-| Aspect | fork-cc | gemini-cli | co-cli |
-|--------|---------|-----------|--------|
-| Auto trigger | `contextWindow - output - 13K` (~85% effective) | 50% of token limit (~524K of 1M) | 85% of `resolve_compaction_budget()` result |
-| Manual trigger | `/compact` command | None — auto only | `/compact` command (shows budget visibility) |
-| Blocking limit | `effectiveContext - 3K` → forced `/compact` | None | None |
-| Token limit | Model-dependent (typically 200K) | 1,048,576 (all Gemini models) | `resolve_compaction_budget()`: model quirks `context_window - max_tokens` → Ollama `llm_num_ctx` override → 100K fallback |
+| Aspect | fork-cc | gemini-cli | opencode | codex | co-cli |
+|--------|---------|-----------|----------|-------|--------|
+| Auto trigger | `contextWindow - output - 13K` (~85% effective) | 50% of token limit (~524K of 1M) | `count >= contextSize - reserved` (reserved default 20K) | 90% of model context window | 85% of `resolve_compaction_budget()` result |
+| Manual trigger | `/compact` command | None — auto only | HTTP API `POST /:sessionID/summarize` | `/compact` protocol op | `/compact` command (shows budget visibility) |
+| Blocking limit | `effectiveContext - 3K` → forced `/compact` | None | None | None | None |
+| Token limit | Model-dependent (typically 200K) | 1,048,576 (all Gemini models) | Model context size from provider config | Model-dependent, configurable per-model | `resolve_compaction_budget()`: model quirks → Ollama `llm_num_ctx` → 100K fallback |
 
-#### 4a-detail. Auto-Trigger Deep Dive (Source-Level)
+#### 6a-detail. Auto-Trigger Deep Dive (Source-Level)
 
-| Aspect | fork-cc | gemini-cli (A: ChatCompressionService / B: AgentHistoryProvider) | co-cli |
-|--------|---------|----------------------------------------------------------------|--------|
-| **Fires when** | - Between turns in query loop (`query.ts:453–468`)<br>- After three pre-passes (snip → micro-compact → context-collapse)<br>- Before model call | - **A** (`contextManagement.enabled=false`): start of every turn in `client.ts` → `processTurn()`, synchronous blocking<br>- **B** (`enabled=true`): before every `sendMessageStream()` call<br>- Mutually exclusive — config toggle selects one | - Last in history processor chain (`_history.py`)<br>- After `truncate_tool_returns` → `detect_safety_issues` → `inject_opening_context`<br>- Before every model API call |
-| **Trigger formula** | - `tokenCount >= contextWindow − min(maxOutputTokens, 20K) − 13K`<br>- Env overrides: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` | - **A**: `originalTokenCount >= threshold × tokenLimit` where `threshold = 0.5`<br>- **B**: Three-phase pipeline: Phase 1 (per-msg normalization) → Phase 2 trigger if `totalTokens > maxTokens` → Phase 3 split+summarize | - `token_count > int(resolve_compaction_budget(config, registry) × 0.85)`<br>- Budget via 3-tier: model quirks `context_window - max_tokens` → Ollama `llm_num_ctx` → 100K fallback<br>- Token-only trigger (message count removed — 0/2 peer convergence) |
-| **Typical threshold** | - ~167K for 200K model: `200K − 20K − 13K`<br>- Warning tier at 147K (`threshold − 20K`)<br>- Blocking limit at 177K (`effectiveWindow − 3K` → forced `/compact`) | - **A**: ~524K (`0.5 × 1,048,576` for all Gemini 1M models)<br>- **B**: 150K high watermark, 40K retained tail budget | - Gemini: `int((1,048,576 − 65,536) × 0.85)` = 835K<br>- Ollama: `int(llm_num_ctx × 0.85)` (overrides spec)<br>- No registry: `int(100K × 0.85)` = 85K fallback |
-| **Token counting** | - **Hybrid exact + estimation** (`utils/tokens.ts`)<br>- (1) Walk backwards for last `ModelResponse` with usage → extract `input_tokens + cache_creation + cache_read + output_tokens`<br>- (2) Estimate new messages: 4 bytes/tok default, JSON 2 bytes/tok, images 2K flat<br>- (3) No usage data → estimate entire array<br>- (4) Subtract `snipTokensFreed` from pre-pass | - **A+B shared** (`utils/tokenCalculation.ts`): `estimateTokenCountSync()` heuristic<br>- ASCII 0.25 tok/char, non-ASCII/CJK 1.3 tok/char, images 3K flat, PDFs 25.8K flat<br>- Text >100K chars: fast-path `length/4`<br>- **A additionally**: `countTokens()` API for media, falls back to heuristic | - **Provider-reported preferred** (`_compaction.py`)<br>- (1) `latest_response_input_tokens()`: scan reverse for last `ModelResponse` with `usage.input_tokens > 0`<br>- (2) Fallback when 0: `estimate_message_tokens()` — `total_chars // 4`<br>- No media-specific handling |
-| **Pre-processing before check** | - Three-stage pipeline before threshold check:<br>- (1) **Snip** — drop oldest below tail budget, track `snipTokensFreed`<br>- (2) **Micro-compact** — trim tool results, replace unchanged file-reads with `FILE_UNCHANGED_STUB`<br>- (3) **Context collapse** (if enabled) — collapses at 90% full | - **A**: `truncateHistoryToBudget()` before threshold check<br>- Iterates backwards, accumulates function response tokens<br>- Truncates older responses to last 30 lines when 50K budget exceeded<br>- Saves raw output to temp file<br>- **B** Phase 1 (always-on): `enforceMessageSizeLimits()`<br>- Grace zone (40K from tail): 12K/msg cap<br>- Older msgs: 2.5K/msg cap<br>- Proportional truncation 25% head + 75% tail | - `truncate_tool_returns` (processor #1): trims `ToolReturnPart.content` > 2000 chars in all messages except last 2<br>- No LLM call<br>- No per-message normalization tiers<br>- No pre-pass token subtraction from threshold |
-| **Split strategy** | - Summarize **ALL** messages via forked agent (out-of-band Claude API call)<br>- (1) Try session memory compaction first — pruning within configurable keep window<br>- (2) Fall back to `compactConversation()` — entire history to summarizer<br>- PTL retry loop (max 3 retries) drops oldest turns on `prompt-too-long` | - **A**: 70/30 char-based split (`findCompressSplitPoint()`)<br>- Split at first user message after ≥ 70% of total chars<br>- Compress first 70% via LLM (2 passes: `<state_snapshot>` + verification probe)<br>- Keep last 30% verbatim<br>- Reject if new tokens > original<br>- **B**: Backward token scan → split at 40K retained tail<br>- Single LLM pass → `<intent_summary>` (max 15 lines)<br>- Merge summary into first retained user message | - Head/tail boundary, drop middle (`_compute_compaction_boundaries()`)<br>- `head_end` = first `ModelResponse` with `TextPart`/`ThinkingPart` + 1<br>- `tail_count = max(4, len(messages) // 2)`<br>- `_align_tail_start()` walks past orphaned `ToolReturnPart`<br>- Invalid boundary → skip compaction<br>- Dropped messages → LLM summary (`summarize_messages()`) or static marker |
-| **Circuit breaker** | - `MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3`<br>- State: `tracking.consecutiveFailures` (persists across turns)<br>- On success: reset to 0<br>- On failure: increment; at ≥ 3 skip LLM<br>- Motivated by BQ: 1,279 sessions had 50+ consecutive failures | - **A**: Single boolean `hasFailedCompressionAttempt`<br>- Set `true` on empty summary or inflated token count<br>- On retry: skip LLM, truncation-only<br>- One failure disables LLM for session<br>- **B**: No circuit breaker; static note on failure | - `CoRuntimeState.compaction_failure_count`<br>- Cross-turn persistent (NOT reset by `reset_for_turn()`)<br>- On `ModelHTTPError`/`ModelAPIError`: increment<br>- On success: reset to 0<br>- At ≥ 3: skip LLM, static marker `"[N messages trimmed]"`<br>- `model_registry is None`: static marker without counting |
-| **Recursion guards** | - 5 query-source guards in `shouldAutoCompact()`<br>- Return `false` for `{session_memory, compact, marble_origami, reactive_compact, collapse}`<br>- Also suppressed by feature gates: `REACTIVE_COMPACT`, `CONTEXT_COLLAPSE` | - N/A — no forked agents, no recursion risk<br>- Mechanism selection is config-driven (`contextManagement.enabled`) | - N/A — no forked agents<br>- `model_registry is None` handles sub-agent/test paths (not a recursion guard) |
-| **Env/config overrides** | - `DISABLE_AUTO_COMPACT`, `DISABLE_COMPACT` (kill switches)<br>- `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (override effective window)<br>- `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (threshold as %)<br>- `CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE`<br>- `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (cap)<br>- `CLAUDE_CODE_DISABLE_1M_CONTEXT` (HIPAA) | - Config-driven only: `config.getCompressionThreshold()` overrides 0.5 default (A)<br>- `contextManagement.*` hierarchy controls all B thresholds<br>- No env var escape hatches | - `resolve_compaction_budget()` 3-tier:<br>- (1) Model quirks `context_window` (spec)<br>- (2) Ollama `llm_num_ctx` (Modelfile override)<br>- (3) 100K fallback<br>- `LLM_PROVIDER` selects Ollama override path<br>- Settings JSON precedence: env > project > user > built-in |
-| **Warning/blocking tiers** | - 4 tiers via `calculateTokenWarningState()`:<br>- (1) Warning at `threshold − 20K` (147K)<br>- (2) Error at same<br>- (3) Auto-compact at `threshold` (167K)<br>- (4) Blocking at `effectiveWindow − 3K` (177K) → forced `/compact` | - None — no graduated warnings<br>- A triggers at 50%, B at 150K high watermark<br>- No blocking limit | - Single threshold at 85%<br>- No warning tiers<br>- No blocking limit |
+| Aspect | fork-cc | gemini-cli (A/B) | opencode | codex | co-cli |
+|--------|---------|-------------------|----------|-------|--------|
+| **Fires when** | Between turns, after 3 pre-passes (snip → micro-compact → collapse), before model call | **A**: start of every turn, synchronous. **B**: before every `sendMessageStream()`. Mutually exclusive | After agent step completes (`processor.ts:305`); before starting new turn (`prompt.ts:1399`); on `ContextOverflowError` mid-turn | **Pre-sampling**: before user input recorded. **Post-sampling**: after model response mid-turn when limit exceeded. **Manual**: `/compact` | Last in history processor chain, after `truncate_tool_returns` → `detect_safety_issues` → `inject_opening_context`, before every model API call |
+| **Trigger formula** | `tokenCount >= contextWindow − min(maxOutputTokens, 20K) − 13K` | **A**: `tokenCount >= 0.5 × tokenLimit`. **B**: Phase 1 per-msg normalization → Phase 2 if `totalTokens > 150K` | `tokens >= modelContextSize − min(COMPACTION_BUFFER, maxOutputTokens)` where `COMPACTION_BUFFER = 20K` | `total_usage_tokens >= auto_compact_token_limit` (90% of context window). Model switch: also fires when switching to smaller model | `token_count > int(resolve_compaction_budget(config, registry) × 0.85)` |
+| **Typical threshold** | ~167K for 200K model. Warning at 147K. Blocking at 177K | **A**: ~524K. **B**: 150K high watermark, 40K retained tail | Model context − 20K (e.g., 180K for 200K model) | 90% of context window (e.g., 180K for 200K model) | Gemini: 835K. Ollama: `llm_num_ctx × 0.85`. Fallback: 85K |
+| **Token counting** | Hybrid exact + estimation. JSON 2 bytes/tok, images 2K flat. Subtracts `snipTokensFreed` | Char-based heuristic. ASCII 0.25 tok/char, CJK 1.3 tok/char, images 3K flat | Simple 4 chars/token estimate on total usage (input + output + cache) | Byte-based heuristic: `approx_token_count()` (~4 bytes/token). Reasoning items: special formula. Images: 1844 tokens flat | Provider-reported preferred. Fallback: `total_chars // 4` |
+| **Pre-processing before check** | 3-stage: snip → micro-compact → context-collapse | **A**: `truncateHistoryToBudget()` (50K function response budget). **B**: per-msg normalization (grace 12K, older 2.5K) | Prune phase runs async independently (fork+ignore). Not subtracted from threshold | Pre-sampling: may compact for model switch first. No separate pre-pass trimming | `truncate_tool_returns`: trims content > 2000 chars in all-but-last-2 messages |
+| **Split strategy** | Entire history → summarizer (out-of-band Claude API call). PTL retry drops oldest turns | **A**: 70/30 char split, compress 70% via LLM (2 passes). **B**: 40K token tail, single LLM pass | All previous messages → compaction agent. Replay: finds last user msg without CompactionPart, compacts everything before it | Inline: entire history → model with compaction prompt. User messages preserved by recency (20K token budget). Remote (OpenAI): provider API handles distillation | Head/tail boundary, drop middle. `head_end` = first model output + 1. `tail_count = max(4, len(messages) // 2)` |
+| **Circuit breaker** | 3 consecutive failures → stop. Cross-turn persistent | **A**: single boolean, session-scoped. One failure → truncation-only | Catastrophic: if compaction itself overflows → `ContextOverflowError` → stop. Prune failures: `Effect.ignore` | No circuit breaker. Retries with exponential backoff up to `stream_max_retries()`. Context overflow during compaction → remove oldest item, retry | 3 consecutive failures → static marker. Cross-turn persistent. `model_registry is None` → static marker without counting |
+| **Env/config overrides** | `DISABLE_AUTO_COMPACT`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, etc. | Config: `compressionThreshold`, `contextManagement.*` | `config.compaction.auto` (enable/disable), `config.compaction.reserved` (buffer override) | `model_auto_compact_token_limit` (per-model override), `model_context_window` (override) | `resolve_compaction_budget()` 3-tier: model quirks → Ollama `llm_num_ctx` → 100K fallback |
 
-#### 4a-assessment. Comparison and Adoption Assessment
+#### 6a-assessment. Comparison and Adoption Assessment
 
 ##### Trigger Timing: Where in the Turn Cycle
 
-All three fire **before the model call**, but at different granularities. fork-cc runs after a three-stage pre-processing pipeline (snip → micro-compact → collapse) that shrinks context before the threshold check — meaning the trigger sees a smaller, already-optimized message set. gemini-cli's Mechanism B runs per-message normalization as Phase 1 (always-on, regardless of whether compaction triggers), ensuring every model call gets size-limited messages. co-cli runs `truncate_tool_returns` first but does not subtract freed tokens from the threshold check — the trigger sees the raw post-trim message set.
+All five fire **before the model call**, but codex adds a second trigger point: **post-sampling** (mid-turn, after model response during tool-calling loops). opencode also fires **mid-turn** on `ContextOverflowError`. The remaining three (fork-cc, gemini-cli, co-cli) compact only between turns.
 
-**Gap for co-cli**: The lack of freed-token subtraction means the threshold can over-trigger when tool trimming has already reduced effective context. Low priority — the 85% threshold provides sufficient margin, and over-triggering is safer than under-triggering.
+Mid-turn compaction is relevant for long tool-calling sequences where context grows within a single turn. co-cli's inline compaction runs inside the history processor chain, which fires before every model API call (including tool-resumption calls within a turn) — so co-cli already has implicit mid-turn coverage without an explicit second trigger point.
+
+**Gap for co-cli**: None — the history processor architecture provides equivalent coverage. The explicit mid-turn triggers in codex and opencode solve a problem that co-cli's per-API-call processor already addresses.
 
 ##### Threshold Calibration
 
-The three systems reflect fundamentally different context window economics:
+The five systems cluster into two approaches:
 
-- **fork-cc** (200K window): threshold at ~83% effective (`167K / 200K`), tight — compacts aggressively to preserve response quality in a constrained window. Multi-tier warnings (147K → 167K → 177K blocking) give progressive feedback.
-- **gemini-cli** (1M window): threshold at 50% (`524K / 1M`), conservative — can afford to compress early because the window is enormous. The newer Mechanism B uses a much tighter 150K absolute ceiling, suggesting Google found 524K too late for quality.
-- **co-cli** (model-spec-aware): Gemini threshold at 835K (`(1M − 65K) × 0.85`), now proportionate to actual window. Ollama threshold at `llm_num_ctx × 0.85` (user's Modelfile is truth). Fallback 85K for unknown models (`100K × 0.85`).
+- **Percentage-based** (4/5): fork-cc ~85%, codex 90%, co-cli 85%, opencode ~90% (context − 20K buffer ≈ 90% for 200K models). All within the 85–90% range.
+- **Absolute ceiling** (1/5): gemini-cli Mechanism B uses 150K absolute, regardless of 1M window.
 
-**Assessment**: Message count trigger removed — was over-design with 0/2 peer convergence. co-cli now uses token-only trigger, matching both peers. Tail-count decoupled from config: `max(4, len(messages) // 2)`.
+**Assessment**: co-cli's 85% is well within the converged range. No change needed.
 
 ##### Token Counting Accuracy
 
-| Strategy | Accuracy | Latency | When wrong |
-|----------|----------|---------|------------|
-| fork-cc hybrid (exact base + estimate delta) | **High** — exact for bulk, estimate only for new messages since last response | Near-zero — reads cached usage, estimates only the delta | Under-counts when many new tool results arrive between API calls (estimated portion grows) |
-| gemini-cli heuristic (char-based with script awareness) | **Medium** — CJK-aware ratios are more accurate for multilingual content, but no exact baseline | Zero — pure arithmetic | Over-counts for dense JSON/code (no JSON-specific ratio like fork-cc's 2 bytes/token) |
-| co-cli provider-reported fallback | **High when available** — uses provider's own count. **Low when falling back** — uniform `chars//4` ignores JSON density, CJK, media | Zero | Falls back to estimate for: (1) local models with no usage reporting (Ollama common case), (2) first turn before any API response exists. Uniform `chars//4` over-counts JSON, under-counts CJK |
+| Strategy | Systems | Accuracy |
+|----------|---------|----------|
+| Provider-reported + heuristic fallback | co-cli, fork-cc | **Highest when available**, weakest on fallback |
+| Pure byte/char heuristic (~4 chars/token) | opencode, codex | **Consistent** but no exact baseline |
+| Char-based with script awareness | gemini-cli | **Medium** — CJK-aware but no exact baseline |
 
-**Gap for co-cli**: The fallback estimator (`chars // 4`) is the weakest of the three — no JSON-specific ratio, no CJK awareness, no media handling. This matters most for Ollama (where provider-reported tokens are often unavailable) and for multilingual sessions. However, the impact is limited because: (1) the threshold has sufficient margin (85%), (2) over-estimation triggers compaction earlier (safe direction), (3) media content is rare in CLI sessions.
+4/5 systems use a ~4 chars/token (or ~4 bytes/token) heuristic as baseline or fallback. co-cli's `chars // 4` is in line. The main gap remains: no JSON-density adjustment (fork-cc uses 2 bytes/token for JSON).
 
-**Adoption suggestion** (Priority 3 — low): Add JSON-density ratio (`chars // 2` for dict content) to `estimate_message_tokens()` in `_compaction.py`. Minimal effort, directly matches fork-cc's approach. CJK awareness is higher effort for marginal benefit in current user base.
+**Assessment**: co-cli's approach matches the majority. JSON-density ratio remains P3.
 
 ##### Pre-Processing Pipeline Depth
 
-fork-cc's three-stage pipeline (snip + micro-compact + context-collapse) is the most sophisticated — each stage reduces context before the threshold check, so compaction fires less often and operates on a smaller input. gemini-cli's Mechanism B achieves similar efficiency through always-on per-message normalization (Phase 1) that caps message sizes proactively. co-cli's `truncate_tool_returns` is the simplest — binary trim on a char threshold, no per-message budgeting, no freed-token subtraction.
+| Depth | Systems |
+|-------|---------|
+| Multi-stage pipeline before threshold check | fork-cc (3-stage), gemini-cli B (per-msg normalization) |
+| Separate async prune phase (independent) | opencode (prune fork+ignore) |
+| No pre-processing before threshold | codex, co-cli (tool trim runs but not subtracted) |
 
-**Gap for co-cli**: The single-threshold binary trim (`tool_output_trim_chars = 2000` for all-but-last-2 messages) is coarser than both peers. This is already identified in §4c and §5b/Priority 2 recommendation #3 (two-tier per-message normalization). No new recommendation needed here — the existing Priority 2 item covers it.
+co-cli and codex share the simplest approach. opencode's async prune is interesting but not subtracted from the threshold either. **No change in priority** — the existing P2 recommendation for two-tier normalization (§8b #3) covers this gap.
 
 ##### Split Strategy and What Gets Summarized
 
-The three approaches represent fundamentally different trade-offs:
+All five summarize via LLM and preserve recent context. The split strategies:
 
-- **fork-cc** sends ALL messages to the summarizer (or prunes to a keep-window in session memory mode). The summarizer sees complete history, producing the most context-aware summary. Cost: largest LLM input per compaction.
-- **gemini-cli Mechanism A** splits 70/30 by characters — only the first 70% is summarized, last 30% kept verbatim. Cost-efficient, preserves recent context perfectly. Weakness: char-based split can misalign with semantic boundaries.
-- **gemini-cli Mechanism B** keeps a fixed 40K token tail, summarizes everything before it. Token-based split is more semantically meaningful than char-based.
-- **co-cli** drops the middle, keeps head (first model output) + tail (`max(4, len(messages) // 2)` messages). Summarizes only the dropped middle. The head-pinning preserves the initial context/personality establishment.
+- **Preserve recent user messages by token budget**: codex (20K), gemini-cli B (40K)
+- **Preserve recent by message count**: co-cli (`max(4, len(messages) // 2)`), opencode (replay last user msg)
+- **Preserve recent by percentage**: gemini-cli A (last 30%)
+- **Send all to summarizer**: fork-cc
 
-**Assessment**: co-cli's head-pinning is unique and valuable — it preserves the initial exchange that establishes personality and task context. The split strategy is sound. Tail-count derivation needs updating after message-count removal (see `TODO-compaction-trigger-simplify.md`).
+3/5 systems (codex, gemini-cli A, gemini-cli B) use a **token or character budget** to determine the tail, not a message count. co-cli's `max(4, len(messages) // 2)` is message-count-based, which can over- or under-preserve depending on message sizes.
+
+**New gap**: Token-based tail sizing is the majority pattern. co-cli should consider converting `tail_count` from message count to a token budget. Low priority — current heuristic works but is less precise.
 
 ##### Circuit Breaker Design
 
-All three implement failure protection, but with different sophistication:
+| Design | Systems |
+|--------|---------|
+| Counter (3 failures → stop) | fork-cc, co-cli |
+| Single boolean (1 failure → fallback) | gemini-cli A |
+| No circuit breaker (retry with backoff) | codex |
+| Catastrophic stop (overflow during compaction) | opencode |
 
-- **fork-cc**: Counting (3 failures), cross-turn persistent. Production-proven — the BQ finding (250K wasted API calls/day) validates the need.
-- **gemini-cli A**: Single boolean, session-scoped. Simpler but effective — one failure is enough to stop wasting calls for the session.
-- **co-cli**: Counting (3 failures), cross-turn persistent, with `model_registry is None` escape hatch for sub-agents.
-
-**Assessment**: co-cli's circuit breaker already matches fork-cc's design (the strongest). The `model_registry is None` path is a clean addition that neither peer has. No change needed.
+3/5 have explicit circuit breakers. co-cli matches the strongest design. **No change needed.**
 
 ##### Summary of Adoption Priorities (Trigger-Specific)
 
 | # | Item | Priority | Rationale |
 |---|------|----------|-----------|
-| 1 | ~~**Remove message count trigger**~~ | **DONE** | Removed: token-only trigger now, tail-count decoupled to `max(4, len(messages) // 2)` |
-| — | Head-pinning in split | **Keep** | Unique to co-cli — preserves personality/context establishment |
-| — | Circuit breaker (3 failures + registry-absent path) | **Keep** | Already matches or exceeds both peers |
-| 2 | JSON-density ratio in fallback estimator | **P3** | Low effort. Add `chars // 2` for dict content in `_estimate_message_tokens()`. Matches fork-cc. Benefits Ollama users most |
-| 3 | Subtract freed tokens from threshold check | **P3** | Low effort. After `truncate_tool_returns`, subtract the delta from `token_count` before threshold comparison. Reduces over-triggering |
-| 4 | Two-tier per-message normalization | **P2** | Already in §5b recommendation #3. Grace zone (recent msgs: higher limit) + older msgs (lower limit). Both peers converge on this |
-| 5 | Warning tiers before compaction | **P3** | fork-cc has 4 tiers; co-cli has none. Low effort to add a `[dim]Context: N% used[/dim]` indicator. Nice UX but not load-bearing |
+| 1 | ~~**Remove message count trigger**~~ | **DONE** | Token-only trigger, tail-count decoupled |
+| — | Head-pinning in split | **Keep** | Preserves personality/context establishment. No peer does this — co-cli-specific value |
+| — | Circuit breaker (3 failures + registry-absent path) | **Keep** | Matches strongest peer design (fork-cc) |
+| 2 | JSON-density ratio in fallback estimator | **P3** | Add `chars // 2` for dict content. Matches fork-cc. Benefits Ollama users |
+| 3 | Subtract freed tokens from threshold check | **P3** | After `truncate_tool_returns`, subtract delta. Reduces over-triggering |
+| 4 | Two-tier per-message normalization | **P2** | Grace zone + older. 3/5 peers have granular per-message sizing (gemini-cli B, opencode prune thresholds, fork-cc micro-compact) |
+| 5 | Warning tiers before compaction | **P3** | fork-cc has 4 tiers; others have none. Nice UX, not load-bearing |
+| 6 | Token-based tail sizing | **P3** | 3/5 use token budget for tail (codex 20K, gemini-cli 30%/40K). co-cli uses message count. Less precise but functional |
 
-### 4b. Compression Method
+### 6b. Compression Method
 
-| Aspect | fork-cc | gemini-cli | co-cli |
-|--------|---------|-----------|--------|
-| Summary engine | Out-of-band Claude API call (forked agent) | In-process LLM call (same client) | Inline `summarize_messages()` call inside history processor (blocks the model request) |
-| Summary passes | 1 (single generation) | 2 (generate + verification probe) | 1 (single generation) |
-| Summary format | Free-form text | Structured XML (`<state_snapshot>`) | Free-form text |
-| Multi-cycle survival | Implicit (prior summary in post-boundary messages) | Explicit (new snapshot integrates prior `<state_snapshot>`) | Implicit (prior summary in messages that get re-summarized) |
-| Prompt context | Rich: plan + memory + file state + tools + MCP + agents | History + compression system prompt + plan path | Bare: conversation history only |
-| Split strategy | Entire history → summarizer | 70/30 char-based split, keep last 30% | Head/tail boundary, drop middle |
-| Fallback on failure | Circuit breaker (3 failures → stop) | Circuit breaker (skip LLM, truncate-only) | Circuit breaker (3 failures → static marker; `model_registry` absent → static marker without counting) |
+| Aspect | fork-cc | gemini-cli | opencode | codex | co-cli |
+|--------|---------|-----------|----------|-------|--------|
+| Summary engine | Out-of-band Claude API call (forked agent) | In-process LLM call (same client) | Dedicated compaction agent (in-process) | Same model or remote provider API | Inline `summarize_messages()` (blocks model request) |
+| Summary passes | 1 | 2 (generate + verification probe) | 1 | 1 | 1 |
+| Summary format | Free-form text | Structured XML (`<state_snapshot>`) | Structured sections (Goal, Instructions, Discoveries, Accomplished, Files) | Free-form text ("handoff summary") | Free-form text |
+| Multi-cycle survival | Implicit (prior summary in post-boundary messages) | Explicit (new snapshot integrates prior `<state_snapshot>`) | Implicit (summary is `assistant` msg with `summary: true` flag) | Implicit (prior summary prefixed with `SUMMARY_PREFIX`) | Implicit (prior summary in messages that get re-summarized) |
+| Prompt context | Rich: plan + memory + file state + tools + MCP + agents | History + compression system prompt + plan path | History + compaction template (overridable via plugin hook) | Compaction prompt template (overridable via config) | Bare: conversation history only |
+| Split strategy | Entire history → summarizer | 70/30 char-based split, keep last 30% | All messages → compaction agent; replay last user msg on overflow | User messages preserved by 20K token budget + summary | Head/tail boundary, drop middle |
+| Post-compaction continuation | N/A (boundary marker, resume naturally) | N/A (summary replaces history head) | Auto-replay of triggering user message; synthetic continuation message if no replay | N/A (summary is last item, next turn continues) | N/A (summary injected, model call proceeds) |
+| Fallback on failure | Circuit breaker (3 failures → stop) | Circuit breaker (skip LLM, truncate-only) | `ContextOverflowError` → stop with user-facing error | Remove oldest item, retry with backoff | Circuit breaker (3 failures → static marker) |
 
-### 4c. Tool Output Management
+### 6c. Tool Output Management
 
-| Aspect | fork-cc | gemini-cli | co-cli |
-|--------|---------|-----------|--------|
-| When it fires | Before full compact (micro-compact pre-pass) | At tool return time (per-call) AND before compression (budget pre-pass) | Before every model API call (always-on processor) |
-| LLM-assisted | No | Yes — intent summary for large outputs (15s timeout) | No |
-| File-read optimization | `FILE_UNCHANGED_STUB` for unchanged reads | Exempt `read_file`/`read_many_files` from distillation | None |
-| Per-message normalization | No | Two-tier: grace zone 12K/msg, older 2.5K/msg, proportional | Binary: trim all-but-last-2 at char threshold |
-| Disk save of full output | No | Yes — raw output saved to temp file before truncation | No |
+| Aspect | fork-cc | gemini-cli | opencode | codex | co-cli |
+|--------|---------|-----------|----------|-------|--------|
+| When it fires | Before full compact (micro-compact pre-pass) | At tool return time AND before compression | Async prune phase after turn completes (fork+ignore) | Pre-compaction: trim function calls newest→oldest | Before every model API call (always-on processor) |
+| LLM-assisted | No | Yes — intent summary (15s timeout) | No | No (compaction itself is LLM, but tool trimming is mechanical) | No |
+| File-read optimization | `FILE_UNCHANGED_STUB` for unchanged reads | Exempt `read_file`/`read_many_files` from distillation | None | None | None |
+| Per-message normalization | No | Two-tier: grace 12K/msg, older 2.5K/msg | Token-based: `PRUNE_PROTECT` 40K threshold, `PRUNE_MINIMUM` 20K commit threshold | No per-message (trim generated items before user items) | Binary: trim all-but-last-2 at char threshold |
+| Protected tools | Compactable set (file read, shell, grep, glob, web search/fetch, file edit/write) | Exempt `read_file`/`read_many_files` | `PRUNE_PROTECTED_TOOLS = ["skill"]` | User messages, ghost snapshots | None — uniform trim |
+| Disk save of full output | No | Yes — temp file | No (pruned content marked, not saved) | No | No |
+| Non-destructive | No (content replaced) | No (distilled/truncated) | **Yes** — marks `time.compacted`, display shows `[Old tool result content cleared]` | No (items removed from history) | No (content truncated in-place) |
 
-### 4d. Persistence and Resume
+### 6d. Persistence and Resume
 
-| Aspect | fork-cc | gemini-cli | co-cli |
-|--------|---------|-----------|--------|
-| Format | JSONL append-only | Single JSON, full rewrite per update | JSONL append-only |
-| Boundary markers | Rich `SystemCompactBoundaryMessage` with `compactMetadata` + `preservedSegment` | None — compression is in-memory only | Minimal `{"type":"compact_boundary"}` |
-| Resume optimization | Stream 65KB chunks, skip to last boundary (>5MB) | Load full JSON | Line-by-line scan, skip to last boundary (>5MB) |
-| Preserved segment | Explicit UUID pointers in boundary metadata | N/A | Head pinning (structural guarantee) |
+| Aspect | fork-cc | gemini-cli | opencode | codex | co-cli |
+|--------|---------|-----------|----------|-------|--------|
+| Format | JSONL append-only | Single JSON, full rewrite | Structured DB (PartTable) | In-memory ContextManager | JSONL append-only |
+| Boundary markers | Rich `SystemCompactBoundaryMessage` with metadata | None — compression is in-memory | `CompactionPart` per message (`auto`, `overflow` flags) + `summary: true` on assistant msg | `CompactedItem` emitted as event | Minimal `{"type":"compact_boundary"}` |
+| Resume optimization | Stream 65KB chunks, skip to last boundary (>5MB) | Load full JSON | DB query (structured storage, no scan needed) | N/A (in-memory, no resume) | Line-by-line scan, skip to last boundary (>5MB) |
+| Preserved segment | Explicit UUID pointers in boundary metadata | N/A | `filterCompacted()` traverses to boundary for UI | Ghost snapshots preserved for `/undo` | Head pinning (structural guarantee) |
 
-### 4e. Safety Mechanisms
+### 6e. Safety Mechanisms
 
-| Aspect | fork-cc | gemini-cli | co-cli |
-|--------|---------|-----------|--------|
-| Circuit breaker | 3 consecutive failures → stop | `hasFailedCompressionAttempt` → truncate-only | 3 consecutive failures → static marker (`compaction_failure_count` on `CoRuntimeState`) |
-| Recursion guard | Won't fire inside forked agents | N/A (no forked agents) | N/A (no forked agents) |
-| 413 recovery | Reactive compact (feature-gated) | `AgentHistoryProvider` prevents overflow proactively | None (relies on 85% pre-emptive threshold + inline compaction) |
-| Summary inflation guard | N/A | Reject if new tokens > original | N/A |
-| Adversarial content in summary | N/A | Security rule in compression prompt | Security rule in summarizer system prompt |
+| Aspect | fork-cc | gemini-cli | opencode | codex | co-cli |
+|--------|---------|-----------|----------|-------|--------|
+| Circuit breaker | 3 consecutive failures → stop | `hasFailedCompressionAttempt` → truncate-only | Catastrophic stop on compaction overflow | No breaker — retry with backoff | 3 consecutive failures → static marker |
+| Recursion guard | Won't fire inside forked agents | N/A | N/A | N/A | N/A (`model_registry is None` path) |
+| 413/overflow recovery | Reactive compact (feature-gated) | `AgentHistoryProvider` prevents overflow proactively | Mid-turn: `ContextOverflowError` → `needsCompaction` flag → compact and retry | Post-sampling: compact when `token_limit_reached AND needs_follow_up`. Context overflow during compaction → remove oldest, retry | None (relies on 85% pre-emptive threshold) |
+| Summary inflation guard | N/A | Reject if new tokens > original | N/A | N/A | N/A |
+| Adversarial content guard | N/A | Security rule in compression prompt | N/A | N/A | Security rule in summarizer system prompt |
+| Doom loop detection | N/A | N/A | `DOOM_LOOP_THRESHOLD = 3` identical tool calls → user approval | N/A | `doom_loop_threshold = 3` → warning injection |
 
 ---
 
-## 5. Convergence Analysis
+## 7. Convergence Analysis
 
-Patterns where **2+ systems** agree — strongest signal for adoption.
+Patterns where **3+ systems** agree — strongest signal for adoption.
 
-### 5a. All Three Agree (3/3)
+### 7a. All Five Agree (5/5)
 
-| Pattern | fork-cc | gemini-cli | co-cli | Status |
-|---------|---------|-----------|--------|--------|
-| Auto-compaction (LLM summary replaces old history) | ✓ | ✓ | ✓ | Implemented |
-| Tool output trimming (no-LLM pre-pass on large outputs) | ✓ micro-compact | ✓ distillation service | ✓ `truncate_tool_returns` | Implemented |
-| Adversarial content security rule in summarizer prompt | ✓ | ✓ | ✓ | Implemented |
-| Circuit breaker for compression failures | ✓ (3 failures → stop) | ✓ (`hasFailedCompressionAttempt` → truncate-only) | ✓ (3 failures → static marker) | Implemented |
+| Pattern | fork-cc | gemini-cli | opencode | codex | co-cli | Status |
+|---------|---------|-----------|----------|-------|--------|--------|
+| Auto-compaction via LLM summary | ✓ | ✓ | ✓ | ✓ | ✓ | Implemented |
+| Token-based trigger (not message count) | ✓ | ✓ | ✓ | ✓ | ✓ | Implemented |
+| Tool output trimming (no-LLM pre-pass) | ✓ micro-compact | ✓ distillation | ✓ prune phase | ✓ trim function calls | ✓ `truncate_tool_returns` | Implemented |
+| ~4 chars/token heuristic for estimation | ✓ (4 bytes/tok default) | ✓ (`length/4` fast path) | ✓ (4 chars = 1 token) | ✓ (`approx_token_count` ~4 bytes/tok) | ✓ (`chars // 4`) | Implemented |
+| Threshold in 85–90% range | ✓ ~85% | ✓ (Mechanism B: 150K absolute) | ✓ ~90% | ✓ 90% | ✓ 85% | Implemented |
 
-### 5b. Two of Three Agree (2/3)
+### 7b. Four of Five Agree (4/5)
 
-| Pattern | Who has it | Who lacks it | Evidence weight |
-|---------|-----------|-------------|----------------|
-| **Rich compact prompt** (plan, tools, file state) | fork-cc (forked agent with full context), gemini-cli (plan path + step status in compression prompt) | **co-cli** (bare summarizer) | **High** — both peers include plan/tool context. Directly impacts summary quality. |
-| **Structured summary format** | gemini-cli (`<state_snapshot>` XML), fork-cc (free-form but with rich structured prompt) | **co-cli** (free-form text) | **Medium** — gemini-cli is explicit; fork-cc achieves structure through prompt context rather than output format. |
-| **Per-message size normalization** (granular, not binary) | gemini-cli (two-tier: 12K/2.5K), fork-cc (micro-compact: `FILE_UNCHANGED_STUB`) | **co-cli** (binary: trim all-but-last-2) | **Medium** — approaches differ but both are more granular than co-cli's single threshold. |
-| **JSONL append-only persistence** | fork-cc, co-cli | gemini-cli (JSON rewrite) | Already implemented |
-| **Boundary skip on resume** (>5MB threshold) | fork-cc, co-cli | gemini-cli (no boundaries) | Already implemented |
-| **Manual `/compact` command** | fork-cc, co-cli | gemini-cli (auto-only) | Already implemented |
-| **Disk save of truncated tool output** | gemini-cli (temp file), fork-cc (micro-compact saves to file in `truncateHistoryToBudget`) | **co-cli** | **Low** — useful for debugging but adds disk I/O complexity. |
+| Pattern | Who has it | Who lacks it | co-cli status |
+|---------|-----------|-------------|---------------|
+| **Protect recent turns from trimming** (last N turns or last X% exempted from tool output pruning) | fork-cc, gemini-cli, opencode (skip first 2 turns), co-cli (last 2 messages) | codex (trims newest→oldest for remote, but preserves user messages for inline) | **Implemented** |
+| **Circuit breaker for compaction failures** | fork-cc (3), gemini-cli (1), co-cli (3), opencode (catastrophic stop) | codex (retry with backoff, no breaker) | **Implemented** |
+| **Structured or sectioned summary template** | gemini-cli (`<state_snapshot>` XML), opencode (Goal/Instructions/Discoveries/Accomplished/Files), codex ("handoff summary" with structured prompt), fork-cc (rich prompt context) | **co-cli** (bare free-form text) | **Gap — P1** |
+| **Manual compact command** | fork-cc (`/compact`), co-cli (`/compact`), opencode (HTTP API), codex (`Op::Compact`) | gemini-cli (auto-only) | **Implemented** |
+| **Configurable compaction threshold** | fork-cc (env vars), opencode (`config.compaction`), codex (`model_auto_compact_token_limit`), co-cli (3-tier budget resolution) | gemini-cli (config exists but limited) | **Implemented** |
+| **Protected/exempt tools in pruning** | fork-cc (compactable set), gemini-cli (exempt read_file), opencode (`PRUNE_PROTECTED_TOOLS`), codex (preserve user messages over generated) | **co-cli** (uniform trim, no per-tool distinction) | **Gap — P2** |
+| **Overflow/413 recovery** (compact-and-retry when context exceeded) | fork-cc (reactive compact), opencode (`ContextOverflowError` → compact), codex (post-sampling compact + remove-oldest retry), gemini-cli B (proactive prevention) | **co-cli** | **Gap — P2** |
 
-### 5c. Only One System Has (1/3)
+### 7c. Three of Five Agree (3/5)
 
-| Pattern | Who | Adopt? |
+| Pattern | Who has it | Who lacks it | co-cli status |
+|---------|-----------|-------------|---------------|
+| **Rich compaction prompt** (plan, tools, file state — not just history) | fork-cc (plan + memory + file state + tools), gemini-cli (plan path + step status), opencode (overridable via plugin hook with context injection) | codex (generic template), **co-cli** (bare summarizer) | **Gap — P1** |
+| **Token-based tail sizing** (tail budget in tokens, not message count) | codex (20K user message budget), gemini-cli A (30% chars), gemini-cli B (40K tokens) | fork-cc (all → summarizer), **co-cli** (`max(4, len(messages) // 2)` message count) | **Gap — P3** |
+| **Doom loop detection** (repeated identical tool calls) | opencode (3 identical → approval), co-cli (3 identical → warning), fork-cc (implicit via micro-compact stability) | codex, gemini-cli | **Implemented** |
+
+### 7d. Two of Five Agree (2/5) — Monitor
+
+| Pattern | Who | Status |
 |---------|-----|--------|
-| Two-pass verification (self-correction probe) | gemini-cli | No — cost/latency too high for small-context frequent compression |
-| Session memory compact (fact extraction pre-pass) | fork-cc | No — experimental, GrowthBook-gated, co-cli knowledge system serves different purpose |
-| Reactive compact (413 recovery) | fork-cc (feature-gated) | Defer — Ollama silently truncates (no trigger signal); revisit when Gemini provider matures |
-| LLM-assisted tool output distillation | gemini-cli | Defer — adds LLM call per large tool output; justified for 1M context, expensive for small context |
-| ~~Summary pre-computation (background idle-time LLM call)~~ | ~~co-cli~~ | **Removed** — replaced by inline synchronous summarisation. The pre-computation pattern added staleness complexity (boundary mismatch between turns) and silent quality degradation (static marker fallback was the common case during tool-heavy turns). Inline summarisation eliminates both problems at the cost of one blocking LLM call per compaction event. |
-| `FILE_UNCHANGED_STUB` for repeat reads | fork-cc | **Consider** — simple optimization, no LLM cost, reduces redundant file content in history |
+| Disk save of truncated tool output | gemini-cli (temp file), fork-cc (micro-compact file save) | Defer |
+| Two-pass verification of summary | gemini-cli (probe pass) | Skip — cost too high |
+| Non-destructive compaction (mark, don't delete) | opencode (`time.compacted` timestamp) | Monitor — interesting UX but adds complexity |
+| Provider-delegated compaction | codex (OpenAI remote compact API) | Monitor — not available for non-OpenAI providers |
+| Ghost snapshot / undo preservation through compaction | codex (`GhostSnapshot`) | Monitor — co-cli has no undo mechanism yet |
+| `FILE_UNCHANGED_STUB` for repeated reads | fork-cc | Consider — simple, no LLM cost |
+| Post-compaction auto-continuation | opencode (replay user msg), codex (summary is last item) | Monitor — co-cli's inline processor model doesn't need explicit replay |
 
 ---
 
-## 6. Adoption Recommendations for co-cli
+## 8. Adoption Recommendations for co-cli
 
-Ranked by evidence weight (peer convergence × impact).
+Ranked by convergence weight (peer count × production validation × impact).
 
-### Priority 1 — Both Peers Converge, Clear Gap
+### Priority 1 — Majority Converge (4/5+), Clear Gap
 
 | # | Recommendation | Evidence | Effort | Risk |
 |---|---------------|----------|--------|------|
-| 1 | ~~**Add circuit breaker to `HistoryCompactionState`**~~ | ~~fork-cc: 3 failures → stop. gemini-cli: `hasFailedCompressionAttempt` → truncate-only.~~ | **DONE** — `compaction_failure_count` on `CoRuntimeState`, threshold 3, inline in `truncate_history_window`. Pre-computation machinery (`HistoryCompactionState`, `precompute_compaction`, `Compaction` dataclass) removed entirely. | — |
-| 2 | **Enrich compaction prompt with plan/tool context** | fork-cc: forked agent receives plan + memory + file state + tools + MCP. gemini-cli: compression prompt includes plan path + step status. co-cli: bare summarizer with history only. | Medium — gather active plan, registered tools, recent file paths into summarization prompt | None — additive change, fallback to bare summary if context unavailable |
+| 1 | ~~**Circuit breaker**~~ | ~~4/5 have circuit breakers~~ | **DONE** — `compaction_failure_count` on `CoRuntimeState`, threshold 3 | — |
+| 2 | **Structured summary template** | 4/5 use structured/sectioned summaries (gemini-cli XML, opencode Goal/Instructions/Discoveries/Accomplished/Files, codex handoff template, fork-cc rich prompt). co-cli: bare free-form text. Directly impacts multi-cycle summary quality and information retention. | Low — define markdown template with sections (Goal, Key Decisions, Working Set, Remaining Work, Files), add to `summarize_messages()` prompt | None — additive, degrades gracefully to free-form if model ignores structure |
+| 3 | **Enrich compaction prompt with context** | 3/5 include plan/tool/file context beyond bare history (fork-cc, gemini-cli, opencode). co-cli: history only. | Medium — gather active plan, registered tools, recent file paths into summarization prompt | None — fallback to bare summary if context unavailable |
+| 4 | **Protected/exempt tools in pruning** | 4/5 distinguish compactable vs non-compactable tools (fork-cc compactable set, gemini-cli exempt read_file, opencode `PRUNE_PROTECTED_TOOLS`, codex preserve user over generated). co-cli: uniform `tool_output_trim_chars = 2000` for all. | Medium — define `COMPACTABLE_TOOLS` set, per-tool-type recency in `truncate_tool_returns` | Low — already scoped in existing TODO-tool-output-compaction |
+| 5 | **Overflow/413 recovery** | 4/5 have some form of recovery when context is exceeded (fork-cc reactive compact, opencode `ContextOverflowError` → compact, codex post-sampling compact + remove-oldest, gemini-cli B proactive prevention). co-cli relies solely on 85% pre-emptive threshold. | Medium — catch context-exceeded errors from provider, trigger emergency compaction (drop middle + static marker), retry the failed request | Low — fail-safe path, only fires when pre-emptive threshold is insufficient |
 
 ### Priority 2 — Strong Signal, Moderate Effort
 
 | # | Recommendation | Evidence | Effort | Risk |
 |---|---------------|----------|--------|------|
-| 3 | **Two-tier per-message normalization** (grace zone + older) | gemini-cli: 12K recent / 2.5K older per message. fork-cc: micro-compact `FILE_UNCHANGED_STUB`. co-cli: binary trim all-but-last-2. | Medium — extend `truncate_tool_returns` with per-message token budgets and grace zone logic | Low — more granular control, degrades gracefully |
-| 4 | **Structured summary format for multi-cycle compaction** | gemini-cli: `<state_snapshot>` XML with explicit prior-snapshot integration. fork-cc: rich structured prompt. co-cli: free-form text. | Medium — define XML/markdown template for summaries, add "integrate prior summary" instruction | Low — improves quality over compression cycles |
+| 6 | **Two-tier per-message normalization** (grace zone + older) | gemini-cli: 12K/2.5K. opencode: 40K/20K prune thresholds. fork-cc: micro-compact compactable set. co-cli: binary trim all-but-last-2. | Medium — extend `truncate_tool_returns` with per-message token budgets and grace zone | Low — more granular, degrades gracefully |
+| 7 | **Structured summary with prior-snapshot integration** | gemini-cli: new `<state_snapshot>` explicitly integrates prior snapshots. codex: `SUMMARY_PREFIX` tells next model to build on prior summary. 2/5 have explicit multi-cycle integration. | Medium — add "integrate prior summary" instruction to template, detect prior summary in history | Low — improves quality over repeated compaction cycles |
 
 ### Priority 3 — Monitor / Defer
 
 | # | Recommendation | Trigger |
 |---|---------------|---------|
-| 5 | `FILE_UNCHANGED_STUB` for repeat file reads | When users report context bloat from repeated reads of same file |
-| 6 | Reactive compact (413 recovery) | When Gemini provider matures and returns 413 errors |
-| 7 | Disk save of full truncated tool output | When users report needing to review truncated content post-session |
-| 8 | LLM-assisted tool output distillation | When tool output quality issues surface in long sessions with large outputs |
+| 8 | `FILE_UNCHANGED_STUB` for repeat file reads | When users report context bloat from repeated reads of same file |
+| 9 | Token-based tail sizing (replace message count with token budget) | When message-count heuristic causes over/under-preservation in practice |
+| 10 | JSON-density ratio in fallback estimator | Low effort. Add `chars // 2` for dict content. Benefits Ollama users |
+| 11 | Subtract freed tokens from threshold check | Low effort. Reduces over-triggering |
+| 12 | Warning tiers before compaction | Nice UX. fork-cc has 4 tiers; no other peer does. 1/5 signal |
+| 13 | Disk save of full truncated tool output | When users need to review truncated content post-session |
+| 14 | LLM-assisted tool output distillation | When tool output quality issues surface in long sessions |
