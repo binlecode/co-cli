@@ -36,10 +36,9 @@ def test_write_todos_stores_and_returns_counts():
         {"content": "Step 3", "status": "completed"},
     ])
 
-    assert result["_kind"] == "tool_result"
-    assert result["count"] == 3
-    assert result["pending"] == 1
-    assert result["in_progress"] == 1
+    assert result.metadata["count"] == 3
+    assert result.metadata["pending"] == 1
+    assert result.metadata["in_progress"] == 1
     assert len(ctx.deps.session.session_todos) == 3
 
 
@@ -67,8 +66,8 @@ def test_write_todos_rejects_invalid_status():
     ctx = _make_ctx()
     result = write_todos(ctx, [{"content": "Bad", "status": "bogus"}])
 
-    assert result["count"] == 0
-    assert "errors" in result
+    assert result.metadata["count"] == 0
+    assert "errors" in result.metadata
     assert ctx.deps.session.session_todos == []
 
 
@@ -77,8 +76,8 @@ def test_write_todos_rejects_invalid_priority():
     ctx = _make_ctx()
     result = write_todos(ctx, [{"content": "Bad", "status": "pending", "priority": "urgent"}])
 
-    assert result["count"] == 0
-    assert "errors" in result
+    assert result.metadata["count"] == 0
+    assert "errors" in result.metadata
 
 
 def test_write_todos_rejects_empty_content():
@@ -86,8 +85,8 @@ def test_write_todos_rejects_empty_content():
     ctx = _make_ctx()
     result = write_todos(ctx, [{"content": "", "status": "pending"}])
 
-    assert result["count"] == 0
-    assert "errors" in result
+    assert result.metadata["count"] == 0
+    assert "errors" in result.metadata
 
 
 def test_write_todos_rejects_non_dict_item():
@@ -95,8 +94,8 @@ def test_write_todos_rejects_non_dict_item():
     ctx = _make_ctx()
     result = write_todos(ctx, ["not a dict"])
 
-    assert result["count"] == 0
-    assert "errors" in result
+    assert result.metadata["count"] == 0
+    assert "errors" in result.metadata
 
 
 # --- read_todos ---
@@ -107,9 +106,8 @@ def test_read_todos_empty_session():
     ctx = _make_ctx()
     result = read_todos(ctx)
 
-    assert result["_kind"] == "tool_result"
-    assert result["count"] == 0
-    assert result["todos"] == []
+    assert result.metadata["count"] == 0
+    assert result.metadata["todos"] == []
 
 
 def test_read_todos_reflects_written_state():
@@ -122,11 +120,11 @@ def test_read_todos_reflects_written_state():
 
     result = read_todos(ctx)
 
-    assert result["count"] == 2
-    assert result["pending"] == 1
-    assert result["in_progress"] == 0
-    assert len(result["todos"]) == 2
-    assert result["todos"][0]["content"] == "Task A"
+    assert result.metadata["count"] == 2
+    assert result.metadata["pending"] == 1
+    assert result.metadata["in_progress"] == 0
+    assert len(result.metadata["todos"]) == 2
+    assert result.metadata["todos"][0]["content"] == "Task A"
 
 
 def test_read_todos_all_complete_message():
@@ -136,4 +134,4 @@ def test_read_todos_all_complete_message():
 
     result = read_todos(ctx)
 
-    assert "All items completed" in result["display"]
+    assert "All items completed" in result.return_value

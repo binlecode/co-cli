@@ -8,7 +8,8 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 
 _DRIVE_NOT_CONFIGURED = (
@@ -18,7 +19,7 @@ _DRIVE_NOT_CONFIGURED = (
 )
 
 
-def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolResult:
+def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
     """Search files in Google Drive by name or content. Returns up to 10
     results per page. Matches files whose name contains the query OR whose
     full text body contains the query.
@@ -106,7 +107,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         return handle_google_api_error("Drive", e, ctx=ctx)
 
 
-def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolResult:
+def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
     """Fetch the content of a file from Google Drive and return it as text.
 
     Google Workspace documents (Docs, Sheets, Slides) are exported as plain
@@ -114,7 +115,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolResult:
 
     Use file IDs from search_drive_files results. Do not guess file IDs.
 
-    Returns the file content as a ToolResult — show directly to the user
+    Returns the file content as a ToolReturn — show directly to the user
     or pass to further processing.
 
     Caveats:

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-04-05
+
+### Changed
+- **Tool result separation**: `tool_output()` now returns pydantic-ai's `ToolReturn` instead of a custom `ToolResult` TypedDict — model sees clean display text, metadata (`count`, `error`, `path`) stays app-side via `ToolReturnPart.metadata`
+- **Display dispatch simplified**: `_kind` discriminator eliminated — native tool results are strings, MCP results are dicts; no collision surface
+
+### Removed
+- **`ToolResult` TypedDict**: replaced by `ToolReturn` from `pydantic_ai.messages`; `_kind` runtime discriminator no longer needed
+
 ## [0.7.22] - 2026-04-05
 
 ### Added

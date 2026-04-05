@@ -49,8 +49,8 @@ async def test_save_article_creates_file(tmp_path: Path):
         tags=["python", "async"],
     )
 
-    assert result["action"] == "saved"
-    assert result["article_id"] == 1
+    assert result.metadata["action"] == "saved"
+    assert result.metadata["article_id"] == 1
     library_dir = tmp_path / "library"
     files = list(library_dir.glob("*.md"))
     assert len(files) == 1
@@ -73,7 +73,7 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
     await save_article(ctx, content="Version 1", title="Article", origin_url=url, tags=["v1"])
     result = await save_article(ctx, content="Version 2", title="Article Updated", origin_url=url, tags=["v2"])
 
-    assert result["action"] == "consolidated"
+    assert result.metadata["action"] == "consolidated"
     library_dir = tmp_path / "library"
     files = list(library_dir.glob("*.md"))
     assert len(files) == 1, "Consolidation must not create a second file"
@@ -119,8 +119,8 @@ async def test_search_articles_grep_fallback(tmp_path: Path):
     )
 
     result = await search_articles(ctx, "xyloquartz-article-grep-unique")
-    assert result["count"] >= 1
-    assert result["results"][0]["origin_url"] == "https://example.com/grep"
+    assert result.metadata["count"] >= 1
+    assert result.metadata["results"][0]["origin_url"] == "https://example.com/grep"
 
 
 @pytest.mark.asyncio
@@ -128,8 +128,8 @@ async def test_search_articles_no_match(tmp_path: Path):
     """search_articles returns zero count when nothing matches."""
     ctx = _make_ctx(tmp_path)
     result = await search_articles(ctx, "zzz_no_match_ever_xyz")
-    assert result["count"] == 0
-    assert result["results"] == []
+    assert result.metadata["count"] == 0
+    assert result.metadata["results"] == []
 
 
 # --- read_article ---
@@ -150,10 +150,10 @@ async def test_read_article_returns_full_body(tmp_path: Path):
     slug = list(library_dir.glob("*.md"))[0].stem
 
     result = await read_article(ctx, slug)
-    assert result["title"] == "Read Test Article"
-    assert result["origin_url"] == "https://example.com/read"
-    assert "Full body content" in result["content"]
-    assert "Second paragraph" in result["content"]
+    assert result.metadata["title"] == "Read Test Article"
+    assert result.metadata["origin_url"] == "https://example.com/read"
+    assert "Full body content" in result.metadata["content"]
+    assert "Second paragraph" in result.metadata["content"]
 
 
 @pytest.mark.asyncio
@@ -162,8 +162,8 @@ async def test_read_article_not_found(tmp_path: Path):
     ctx = _make_ctx(tmp_path)
     (tmp_path / "library").mkdir(parents=True, exist_ok=True)
     result = await read_article(ctx, "999-nonexistent-article")
-    assert result["article_id"] is None
-    assert "not found" in result["display"].lower()
+    assert result.metadata["article_id"] is None
+    assert "not found" in result.return_value.lower()
 
 
 # --- search_knowledge (cross-source) ---
@@ -181,5 +181,5 @@ async def test_search_knowledge_grep_finds_articles(tmp_path: Path):
     )
 
     result = await search_knowledge(ctx, "xyloquartz-crosssource-unique")
-    assert result["count"] >= 1
-    assert all(r["source"] == "library" for r in result["results"])
+    assert result.metadata["count"] >= 1
+    assert all(r["source"] == "library" for r in result.metadata["results"])

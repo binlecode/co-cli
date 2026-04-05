@@ -3,10 +3,12 @@
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps, ToolConfig
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 
-async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8) -> ToolResult:
+async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8) -> ToolReturn:
     """Discover and unlock additional tools by keyword search.
 
     Searches tool name, description, integration, and search_hint. Matched

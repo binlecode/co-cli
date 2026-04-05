@@ -7,7 +7,8 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
 from co_cli.tools.tool_errors import tool_error, handle_google_api_error
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 
 _CALENDAR_NOT_CONFIGURED = (
@@ -98,7 +99,7 @@ def list_calendar_events(
     days_back: int = 0,
     days_ahead: int = 1,
     max_results: int = 25,
-) -> ToolResult:
+) -> ToolReturn:
     """List calendar events in a time window around today. Auto-paginates
     internally — all matching events up to max_results are returned in one call.
 
@@ -162,7 +163,7 @@ def search_calendar_events(
     days_back: int = 0,
     days_ahead: int = 30,
     max_results: int = 25,
-) -> ToolResult:
+) -> ToolReturn:
     """Search calendar events by keyword in titles, descriptions, and locations.
     Auto-paginates internally — all matching events up to max_results are
     returned in one call.

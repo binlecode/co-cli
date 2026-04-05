@@ -14,7 +14,9 @@ from typing import Any
 from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 # Valid status and priority values
 _VALID_STATUS = {"pending", "in_progress", "completed", "cancelled"}
@@ -24,7 +26,7 @@ _VALID_PRIORITY = {"high", "medium", "low"}
 def write_todos(
     ctx: RunContext[CoDeps],
     todos: list[dict[str, Any]],
-) -> ToolResult:
+) -> ToolReturn:
     """Replace the session todo list with the provided items.
 
     Call this to create or update the task list for a multi-step directive.
@@ -130,7 +132,7 @@ def write_todos(
 
 def read_todos(
     ctx: RunContext[CoDeps],
-) -> ToolResult:
+) -> ToolReturn:
     """Read the current session todo list.
 
     Call before ending a turn to verify completeness — if any items are

@@ -1,6 +1,6 @@
 """Agent tools for background task management.
 
-All four tools follow the standard pattern: RunContext[CoDeps], return ToolResult.
+All four tools follow the standard pattern: RunContext[CoDeps], return ToolReturn.
 Background task state lives in ctx.deps.session.background_tasks (session-scoped, no disk I/O).
 """
 
@@ -20,7 +20,9 @@ from co_cli.tools._background import (
     spawn_task,
     kill_task,
 )
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 
 async def start_background_task(
@@ -28,7 +30,7 @@ async def start_background_task(
     command: str,
     description: str,
     working_directory: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Start a shell command in the background without blocking the chat session.
 
     Use for long-running operations: test suites, batch processing, research scripts,
@@ -72,7 +74,7 @@ async def check_task_status(
     ctx: RunContext[CoDeps],
     task_id: str,
     tail_lines: int = 20,
-) -> ToolResult:
+) -> ToolReturn:
     """Check the status and recent output of a background task.
 
     Returns status, duration, exit code, and the last N lines of output.
@@ -127,7 +129,7 @@ async def check_task_status(
 async def cancel_background_task(
     ctx: RunContext[CoDeps],
     task_id: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Cancel a running background task (sends SIGTERM, then SIGKILL after 200ms).
 
     No-op if the task has already completed, failed, or been cancelled.
@@ -162,7 +164,7 @@ async def cancel_background_task(
 async def list_background_tasks(
     ctx: RunContext[CoDeps],
     status_filter: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """List background tasks, optionally filtered by status.
 
     Args:

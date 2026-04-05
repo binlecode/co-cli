@@ -10,7 +10,8 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_ANALYSIS, ROLE_CODING, ROLE_REASONING, ROLE_RESEARCH
 from co_cli.deps import CoDeps, make_subagent_deps
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 _TRACER = otel_trace.get_tracer("co-cli.subagent")
 
@@ -67,7 +68,7 @@ async def run_coding_subagent(
     ctx: RunContext[CoDeps],
     task: str,
     max_requests: int = 0,
-) -> ToolResult:
+) -> ToolReturn:
     """Delegate a coding analysis task to a read-only sub-agent.
 
     The coder sub-agent has access to list_directory, read_file, and
@@ -128,7 +129,7 @@ async def run_research_subagent(
     query: str,
     domains: list[str] | None = None,
     max_requests: int = 0,
-) -> ToolResult:
+) -> ToolReturn:
     """Delegate a research task to a focused sub-agent (web_search + web_fetch only).
 
     The research sub-agent searches the web and synthesizes a grounded summary
@@ -213,7 +214,7 @@ async def run_analysis_subagent(
     question: str,
     inputs: list[str] | None = None,
     max_requests: int = 0,
-) -> ToolResult:
+) -> ToolReturn:
     """Delegate a knowledge-base and Drive analysis task to a read-only sub-agent.
 
     The analysis sub-agent has access to search_knowledge and search_drive_files
@@ -286,7 +287,7 @@ async def run_reasoning_subagent(
     ctx: RunContext[CoDeps],
     problem: str,
     max_requests: int = 0,
-) -> ToolResult:
+) -> ToolReturn:
     """Delegate a structured reasoning task to a thinking sub-agent.
 
     The thinking sub-agent has NO tools — it reasons purely via the model's

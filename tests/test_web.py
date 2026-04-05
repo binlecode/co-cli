@@ -77,14 +77,13 @@ async def test_web_search_functional():
     ctx = _make_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "python programming language")
-    assert isinstance(result, dict)
-    assert "display" in result
-    if result.get("error"):
-        assert result["error"] is True
+    assert result.return_value
+    if (result.metadata or {}).get("error"):
+        assert result.metadata["error"] is True
         return
-    assert result["count"] > 0
-    assert isinstance(result["results"], list)
-    first = result["results"][0]
+    assert result.metadata["count"] > 0
+    assert isinstance(result.metadata["results"], list)
+    first = result.metadata["results"][0]
     assert "title" in first
     assert "url" in first
     assert "snippet" in first
@@ -96,10 +95,9 @@ async def test_web_search_domains_parameter():
     ctx = _make_policy_ctx(brave_search_api_key=_brave_key_for_search_tests())
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_search(ctx, "test", domains=["example.com"])
-    assert isinstance(result, dict)
-    assert "display" in result
-    if not result.get("error"):
-        assert "results" in result
+    assert result.return_value
+    if not (result.metadata or {}).get("error"):
+        assert "results" in result.metadata
 
 
 @pytest.mark.asyncio
@@ -127,7 +125,7 @@ async def test_web_fetch_blocks_redirect_to_private():
             result = await web_fetch(ctx, "https://httpbin.org/redirect-to?url=http://127.0.0.1/")
     except ModelRetry:
         return
-    assert result["error"] is True
+    assert result.metadata["error"] is True
 
 
 @pytest.mark.asyncio
@@ -157,15 +155,15 @@ async def test_web_fetch_html_to_markdown():
     ctx = _make_ctx()
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://en.wikipedia.org/wiki/Python_(programming_language)")
-    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
-    assert "display" in result
-    assert "url" in result
-    assert "content_type" in result
-    assert "truncated" in result
+    assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
+    assert result.return_value
+    assert "url" in result.metadata
+    assert "content_type" in result.metadata
+    assert "truncated" in result.metadata
     # HTML-to-markdown conversion must have run: raw <html> tag must not survive
-    assert "<html" not in result["display"].lower()
+    assert "<html" not in result.return_value.lower()
     # Wikipedia Python page must contain readable content
-    assert "Python" in result["display"]
+    assert "Python" in result.return_value
 
 
 def test_html_to_markdown_converts_tags():
@@ -222,10 +220,10 @@ async def test_web_fetch_json_content():
     ctx = _make_ctx()
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/json")
-    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
-    assert "display" in result
+    assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
+    assert result.return_value
     # JSON content must be preserved as-is, not converted
-    assert "slideshow" in result["display"].lower()
+    assert "slideshow" in result.return_value.lower()
 
 
 @pytest.mark.asyncio
@@ -234,5 +232,5 @@ async def test_web_fetch_plain_text():
     ctx = _make_ctx()
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
         result = await web_fetch(ctx, "https://httpbin.org/robots.txt")
-    assert not result.get("error"), f"Unexpected error: {result.get('display')}"
-    assert "display" in result
+    assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
+    assert result.return_value

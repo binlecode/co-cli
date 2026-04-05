@@ -33,7 +33,8 @@ from co_cli.knowledge._frontmatter import (
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
 
@@ -310,7 +311,7 @@ def _check_duplicate(
 
 def _update_existing_memory(
     entry: MemoryEntry, new_content: str, new_tags: list[str] | None
-) -> ToolResult:
+) -> ToolReturn:
     """Update existing memory with new content (consolidation).
 
     Takes a MemoryEntry (with path already known) to avoid re-scanning.
@@ -392,7 +393,7 @@ async def save_memory(
     tags: list[str] | None = None,
     related: list[str] | None = None,
     always_on: bool = False,
-) -> ToolResult:
+) -> ToolReturn:
     """Save a memory for cross-session persistence. Duplicates are
     auto-detected and consolidated — safe to call without checking first.
     For targeted in-place edits to an existing memory, use update_memory (exact-match replace)
@@ -445,14 +446,15 @@ async def save_memory(
             ctx.deps, content, tags, related,
             on_failure="add", resolved=_consolidation_resolved, always_on=always_on,
         )
-        span.set_attribute("memory.action", result.get("action", "unknown"))
-        span.set_attribute("memory.memory_id", result.get("memory_id", 0))
-        if "similarity" in result:
-            span.set_attribute("memory.dedup_similarity", result["similarity"])
-        if result.get("decay_triggered"):
+        meta = result.metadata or {}
+        span.set_attribute("memory.action", meta.get("action", "unknown"))
+        span.set_attribute("memory.memory_id", meta.get("memory_id", 0))
+        if "similarity" in meta:
+            span.set_attribute("memory.dedup_similarity", meta["similarity"])
+        if meta.get("decay_triggered"):
             span.set_attribute("memory.decay_triggered", True)
-            span.set_attribute("memory.decay_count", result.get("decay_count", 0))
-            span.set_attribute("memory.decay_strategy", result.get("decay_strategy", ""))
+            span.set_attribute("memory.decay_count", meta.get("decay_count", 0))
+            span.set_attribute("memory.decay_strategy", meta.get("decay_strategy", ""))
 
     return result
 
@@ -465,7 +467,7 @@ async def recall_memory(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Search the internal memory system by keyword. Memories hold cross-session
     knowledge: preferences, decisions, corrections, and research findings.
     Call proactively at conversation start to load context relevant to the
@@ -681,7 +683,7 @@ async def search_memories(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Dedicated semantic search over saved memories. Use this to look up
     preferences, decisions, corrections, and context facts saved across sessions.
 
@@ -802,7 +804,7 @@ async def list_memories(
     offset: int = 0,
     limit: int = 20,
     kind: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """List saved memories with IDs, dates, tags, and one-line summaries.
     Returns one page at a time (default 20 per page).
 
@@ -931,7 +933,7 @@ async def update_memory(
     slug: str,
     old_content: str,
     new_content: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Surgically replace a specific passage in a memory file without rewriting
     the entire body.  Safer than save_memory for targeted edits — no dedup
     path, no full-body replacement.
@@ -1036,7 +1038,7 @@ async def append_memory(
     ctx: RunContext[CoDeps],
     slug: str,
     content: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Append content to the end of an existing memory file.
 
     Use when new information extends a memory rather than replacing it.

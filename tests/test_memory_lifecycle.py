@@ -278,7 +278,7 @@ def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
     assert after_count == before_count, (
         "on_failure='skip' must NOT write a file when consolidation times out"
     )
-    assert result["action"] == "skipped"
+    assert result.metadata["action"] == "skipped"
 
 
 # ---------------------------------------------------------------------------

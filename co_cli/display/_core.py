@@ -324,11 +324,7 @@ class TerminalFrontend:
         Extracted so new result types (v2) require one edit here, not in on_tool_complete.
         """
         if isinstance(result, str) and result.strip():
-            console.print(Panel(result.rstrip(), title=f"$ {label}", border_style="shell"))
-        elif isinstance(result, dict) and result.get("_kind") == "tool_result":
-            display_text = result.get("display", "")
-            if display_text:
-                console.print(Panel(display_text, title=label, border_style="shell"))
+            console.print(Panel(result.rstrip(), title=label, border_style="shell"))
 
     def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
         """Tool lifecycle: tool invocation started."""

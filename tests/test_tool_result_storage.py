@@ -44,7 +44,7 @@ def test_tool_output_persists_oversized_content(tmp_path: Path) -> None:
 
     result = tool_output(big_content, ctx=ctx)
 
-    display = result["display"]
+    display = result.return_value
     assert display.startswith(PERSISTED_OUTPUT_TAG)
     assert "read_file" in display
     # Verify a file was actually created
@@ -65,7 +65,7 @@ def test_tool_output_small_content_unchanged(tmp_path: Path) -> None:
 
     result = tool_output(small_content, ctx=ctx)
 
-    assert result["display"] == small_content
+    assert result.return_value == small_content
     # No files should be created
     results_dir = tmp_path / "tool-results"
     assert not results_dir.exists()
@@ -77,7 +77,7 @@ def test_tool_output_no_ctx_oversized_unchanged() -> None:
 
     result = tool_output(big_content)
 
-    assert result["display"] == big_content
+    assert result.return_value == big_content
 
 
 def test_persist_if_oversized_idempotent(tmp_path: Path) -> None:

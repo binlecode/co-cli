@@ -9,7 +9,9 @@ from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_errors import tool_error
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 
 def _resolve_workspace_path(raw: str, workspace_root: Path) -> Path:
@@ -28,7 +30,7 @@ async def list_directory(
     path: str = ".",
     pattern: str = "*",
     max_entries: int = 200,
-) -> ToolResult:
+) -> ToolReturn:
     """List directory contents, optionally filtered by a glob pattern.
 
     Returns files and subdirectories matching the pattern up to max_entries.
@@ -76,7 +78,7 @@ async def read_file(
     path: str,
     start_line: int | None = None,
     end_line: int | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Read a file's contents, optionally restricted to a line range.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
@@ -124,7 +126,7 @@ async def find_in_files(
     pattern: str,
     glob: str = "**/*",
     max_matches: int = 50,
-) -> ToolResult:
+) -> ToolReturn:
     """Search for a regex pattern across files in the workspace.
 
     Skips binary files. Returns up to max_matches results formatted as
@@ -178,7 +180,7 @@ async def write_file(
     ctx: RunContext[CoDeps],
     path: str,
     content: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Write content to a file, creating parent directories as needed.
 
     Overwrites the file if it already exists.
@@ -209,7 +211,7 @@ async def edit_file(
     search: str,
     replacement: str,
     replace_all: bool = False,
-) -> ToolResult:
+) -> ToolReturn:
     """Edit a file by replacing a search string with a replacement.
 
     Raises ValueError if the search string is not found or if there are multiple

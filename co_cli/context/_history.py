@@ -457,11 +457,11 @@ async def inject_opening_context(
         log.debug("inject_opening_context: recall_memory failed", exc_info=True)
         return messages
 
-    if result.get("count", 0) == 0:
+    if (result.metadata or {}).get("count", 0) == 0:
         return messages
 
     # Inject as a system message at the end of the message list
-    memory_content = result["display"]
+    memory_content = result.return_value
     max_chars = ctx.deps.config.memory_injection_max_chars
     if len(memory_content) > max_chars:
         memory_content = memory_content[:max_chars]
@@ -561,7 +561,7 @@ def detect_safety_issues(
                     else:
                         str_is_error = False
                     is_error = (
-                        (isinstance(content, dict) and content.get("error"))
+                        (isinstance(part.metadata, dict) and part.metadata.get("error"))
                         or (isinstance(content, str) and part.tool_name == "run_shell_command"
                             and str_is_error)
                     )

@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING
 
 from pydantic_ai import ModelRetry
 
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -15,8 +17,8 @@ def tool_error(
     message: str,
     *,
     ctx: "RunContext[CoDeps] | None" = None,
-) -> ToolResult:
-    """Return a ToolResult for terminal (non-retryable) tool failures.
+) -> ToolReturn:
+    """Return a ToolReturn for terminal (non-retryable) tool failures.
 
     Unlike ModelRetry, this stops the retry loop immediately — the model
     sees the error in the tool result and can pick a different tool.
@@ -49,7 +51,7 @@ def handle_google_api_error(
     e: Exception,
     *,
     ctx: "RunContext[CoDeps] | None" = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Route Google API errors to tool_error or ModelRetry.
 
     401 → terminal (auth failure, user must fix credentials)

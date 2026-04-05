@@ -9,7 +9,8 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 
 _GMAIL_NOT_CONFIGURED = (
@@ -51,7 +52,7 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 def _get_gmail_service(ctx: RunContext[CoDeps]):
     """Extract and validate Gmail service from context.
 
-    Returns (service, None) on success, or (None, ToolResult) for terminal config errors.
+    Returns (service, None) on success, or (None, ToolReturn) for terminal config errors.
     """
     creds = get_cached_google_creds(ctx.deps)
     if not creds:
@@ -59,7 +60,7 @@ def _get_gmail_service(ctx: RunContext[CoDeps]):
     return build("gmail", "v1", credentials=creds), None
 
 
-def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResult:
+def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolReturn:
     """List the most recent emails from the user's Gmail inbox.
 
     Use this for a quick inbox overview. For targeted queries (by sender,
@@ -95,7 +96,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolResu
         return handle_google_api_error("Gmail", e)
 
 
-def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolResult:
+def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 5) -> ToolReturn:
     """Search emails in Gmail using Gmail search syntax.
 
     Supports the full Gmail query language. Common operators:
@@ -138,7 +139,7 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
         return handle_google_api_error("Gmail", e)
 
 
-def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolResult:
+def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
     """Create a draft email in Gmail. Does NOT send — the user reviews and
     sends manually from Gmail.
 

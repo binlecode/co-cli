@@ -8,13 +8,15 @@ from pydantic_ai import RunContext
 
 from co_cli.bootstrap._check import check_runtime
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 
-async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolResult:
+async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
     """Return a summary of active capabilities and integration health.
 
-    Returns a ToolResult with display (formatted summary string) and metadata:
+    Returns a ToolReturn with display (formatted summary string) and metadata:
     knowledge_backend, reranker, google, obsidian, brave, mcp_count,
     reasoning_model, reasoning_ready, checks, tool_count,
     active_skill, mcp_mode, knowledge_mode.

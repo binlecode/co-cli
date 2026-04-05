@@ -226,7 +226,7 @@ async def test_kill_already_completed_task():
 
 @pytest.mark.asyncio
 async def test_tool_start_background_task_signature():
-    """start_background_task returns ToolResult with task_id and status keys."""
+    """start_background_task returns ToolReturn with task_id and status keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
@@ -238,10 +238,9 @@ async def test_tool_start_background_task_signature():
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await start_background_task(ctx, "echo tool_test", "test task")
 
-    assert result["_kind"] == "tool_result"
-    assert "task_id" in result
-    assert result["status"] == "running"
-    task_id = result["task_id"]
+    assert "task_id" in result.metadata
+    assert result.metadata["status"] == "running"
+    task_id = result.metadata["task_id"]
     assert task_id in deps.session.background_tasks
 
     # Cleanup
@@ -258,7 +257,7 @@ async def test_tool_start_background_task_signature():
 
 @pytest.mark.asyncio
 async def test_tool_check_task_status_signature():
-    """check_task_status returns ToolResult with expected keys."""
+    """check_task_status returns ToolReturn with expected keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
@@ -269,18 +268,17 @@ async def test_tool_check_task_status_signature():
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         start_result = await start_background_task(ctx, "echo check_test", "check test")
-    task_id = start_result["task_id"]
+    task_id = start_result.metadata["task_id"]
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await check_task_status(ctx, task_id, tail_lines=5)
 
-    assert result["_kind"] == "tool_result"
-    assert result["task_id"] == task_id
-    assert "status" in result
-    assert "output_lines" in result
-    assert "exit_code" in result
-    assert "is_binary" in result
-    assert result["is_binary"] is False
+    assert result.metadata["task_id"] == task_id
+    assert "status" in result.metadata
+    assert "output_lines" in result.metadata
+    assert "exit_code" in result.metadata
+    assert "is_binary" in result.metadata
+    assert result.metadata["is_binary"] is False
 
     state = deps.session.background_tasks[task_id]
     if state.process is not None:
@@ -305,12 +303,12 @@ async def test_tool_check_task_status_not_found():
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await check_task_status(ctx, "nonexistent_id_xyz")
 
-    assert result["status"] == "not_found"
+    assert result.metadata["status"] == "not_found"
 
 
 @pytest.mark.asyncio
 async def test_tool_cancel_background_task_signature():
-    """cancel_background_task returns ToolResult with cancelled status."""
+    """cancel_background_task returns ToolReturn with cancelled status."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
@@ -321,7 +319,7 @@ async def test_tool_cancel_background_task_signature():
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         start_result = await start_background_task(ctx, "sleep 60", "sleep task")
-    task_id = start_result["task_id"]
+    task_id = start_result.metadata["task_id"]
 
     # Wait for running
     state = deps.session.background_tasks[task_id]
@@ -334,9 +332,8 @@ async def test_tool_cancel_background_task_signature():
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         result = await cancel_background_task(ctx, task_id)
 
-    assert result["_kind"] == "tool_result"
-    assert result["task_id"] == task_id
-    assert result["status"] == "cancelled"
+    assert result.metadata["task_id"] == task_id
+    assert result.metadata["status"] == "cancelled"
     assert state.cleanup_incomplete is False
     assert state.cleanup_error is None
     assert state.process is None
@@ -346,7 +343,7 @@ async def test_tool_cancel_background_task_signature():
 
 @pytest.mark.asyncio
 async def test_tool_list_background_tasks_signature():
-    """list_background_tasks returns ToolResult with tasks and count keys."""
+    """list_background_tasks returns ToolReturn with tasks and count keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
     from co_cli.tools._shell_backend import ShellBackend
@@ -357,8 +354,8 @@ async def test_tool_list_background_tasks_signature():
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result_empty = await list_background_tasks(ctx)
-    assert result_empty["count"] == 0
-    assert result_empty["tasks"] == []
+    assert result_empty.metadata["count"] == 0
+    assert result_empty.metadata["tasks"] == []
 
     async with asyncio.timeout(SUBPROCESS_START_TIMEOUT_SECS):
         await start_background_task(ctx, "sleep 10", "list test")
@@ -366,9 +363,8 @@ async def test_tool_list_background_tasks_signature():
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await list_background_tasks(ctx)
 
-    assert result["_kind"] == "tool_result"
-    assert result["count"] == 1
-    rows = result["tasks"]
+    assert result.metadata["count"] == 1
+    rows = result.metadata["tasks"]
     assert len(rows) == 1
     assert "task_id" in rows[0]
     assert "status" in rows[0]

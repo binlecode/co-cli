@@ -1,9 +1,8 @@
-"""Typed tool result payload for the tool lifecycle contract.
+"""Tool result construction using pydantic-ai's ToolReturn separation.
 
-ToolResult is a TypedDict with a _kind discriminator. pydantic-ai serializes
-tool returns to dict before _run_stream_segment() sees them, so isinstance(content,
-ToolResult) would never be True. The _kind discriminator is the only reliable
-detection mechanism.
+tool_output() returns ToolReturn(return_value=display, metadata=metadata_dict).
+pydantic-ai places the display string into ToolReturnPart.content (model sees plain
+text) and metadata into ToolReturnPart.metadata (app-side, not sent to LLM).
 
 Usage:
     from co_cli.tools.tool_output import tool_output
@@ -11,7 +10,9 @@ Usage:
     return tool_output("formatted display text", count=3)
 """
 
-from typing import Any, Literal, Required, TypedDict, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
+
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.context._tool_result_storage import persist_if_oversized, TOOL_RESULT_MAX_SIZE
 
@@ -20,31 +21,20 @@ if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
 
-class ToolResult(TypedDict, total=False):
-    """Typed completion payload for the tool lifecycle contract.
-
-    _kind must always be "tool_result". display is the rendered panel content.
-    Additional metadata fields are allowed via **metadata in tool_output().
-    """
-
-    _kind: Required[Literal["tool_result"]]
-    display: str
-
-
 def tool_output(
     display: str,
     *,
     ctx: "RunContext[CoDeps] | None" = None,
     **metadata: Any,
-) -> ToolResult:
-    """Construct a ToolResult payload with the required _kind discriminator."""
+) -> ToolReturn:
+    """Construct a ToolReturn with display as return_value and extras as metadata."""
     if ctx is not None and len(display) > TOOL_RESULT_MAX_SIZE:
         display = persist_if_oversized(
             display, ctx.deps.config.tool_results_dir, ctx.tool_name,
         )
-    return ToolResult(_kind="tool_result", display=display, **metadata)  # type: ignore[misc]
+    return ToolReturn(return_value=display, metadata=metadata or None)
 
 
 # Shared type alias for Frontend.on_tool_complete, _run_stream_segment dispatch,
 # and TerminalFrontend._render_tool_panel — one edit point if a new result type is added.
-ToolResultPayload = str | ToolResult | None
+ToolResultPayload = str | ToolReturn | None

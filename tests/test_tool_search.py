@@ -42,9 +42,9 @@ async def test_search_tools_discovers_deferred_tool() -> None:
     assert "edit_file" in deps.session.discovered_tools, (
         "edit_file must be added to discovered_tools after search"
     )
-    granted = result.get("granted", [])
+    granted = (result.metadata or {}).get("granted", [])
     assert "edit_file" in granted, f"edit_file missing from granted list: {granted}"
-    assert "unlocked" in result["display"], "display must mention 'unlocked'"
+    assert "unlocked" in result.return_value, "display must mention 'unlocked'"
 
 
 @pytest.mark.asyncio
@@ -55,10 +55,10 @@ async def test_search_tools_no_match_returns_hint() -> None:
 
     result = await search_tools(ctx, "zzznomatch_xyzzy_unlikely_token")
 
-    assert "Try:" in result["display"], (
-        f"Fallback hint expected in display: {result['display']!r}"
+    assert "Try:" in result.return_value, (
+        f"Fallback hint expected in display: {result.return_value!r}"
     )
-    assert result.get("granted", []) == []
+    assert (result.metadata or {}).get("granted", []) == []
 
 
 @pytest.mark.asyncio
@@ -72,8 +72,8 @@ async def test_search_tools_always_loaded_tool_already_available() -> None:
     assert "web_search" not in deps.session.discovered_tools, (
         "web_search is always-loaded — must not be added to discovered_tools"
     )
-    assert "already available" in result["display"], (
-        f"'already available' expected in display: {result['display']!r}"
+    assert "already available" in result.return_value, (
+        f"'already available' expected in display: {result.return_value!r}"
     )
-    granted = result.get("granted", [])
+    granted = (result.metadata or {}).get("granted", [])
     assert "web_search" not in granted, "web_search must not appear in granted list"

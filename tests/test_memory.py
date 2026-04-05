@@ -89,7 +89,7 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
     result = asyncio.run(
         recall_memory(_make_ctx(memory_dir=memory_dir), "dark theme")
     )
-    assert result["count"] >= 1
+    assert result.metadata["count"] >= 1
     after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
     assert before == after, "recall_memory must not modify any file's mtime"
 
@@ -112,30 +112,30 @@ def test_list_memories_pagination(tmp_path: Path):
     r1 = asyncio.run(
         list_memories(ctx, offset=0, limit=2)
     )
-    assert r1["count"] == 2
-    assert r1["total"] == 5
-    assert r1["offset"] == 0
-    assert r1["limit"] == 2
-    assert r1["has_more"] is True
-    assert "capacity" in r1
-    assert r1["memories"][0]["id"] == 1
-    assert r1["memories"][1]["id"] == 2
+    assert r1.metadata["count"] == 2
+    assert r1.metadata["total"] == 5
+    assert r1.metadata["offset"] == 0
+    assert r1.metadata["limit"] == 2
+    assert r1.metadata["has_more"] is True
+    assert "capacity" in r1.metadata
+    assert r1.metadata["memories"][0]["id"] == 1
+    assert r1.metadata["memories"][1]["id"] == 2
 
     # Page 2: offset=2, limit=2
     r2 = asyncio.run(
         list_memories(ctx, offset=2, limit=2)
     )
-    assert r2["count"] == 2
-    assert r2["total"] == 5
-    assert r2["has_more"] is True
+    assert r2.metadata["count"] == 2
+    assert r2.metadata["total"] == 5
+    assert r2.metadata["has_more"] is True
 
     # Page 3: offset=4, limit=2 — partial last page
     r3 = asyncio.run(
         list_memories(ctx, offset=4, limit=2)
     )
-    assert r3["count"] == 1
-    assert r3["total"] == 5
-    assert r3["has_more"] is False
+    assert r3.metadata["count"] == 1
+    assert r3.metadata["total"] == 5
+    assert r3.metadata["has_more"] is False
 
 
 def test_fts_freshness_after_consolidation(tmp_path: Path):
@@ -332,10 +332,10 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
     result = asyncio.run(recall_memory(ctx, "xylobm25score", max_results=5))
 
-    assert result["count"] >= 2, "Both memories should match the query"
+    assert result.metadata["count"] >= 2, "Both memories should match the query"
     # Memory 1 (id=1) must rank first: high BM25 (15 occurrences) outweighs
     # the small recency advantage of M2 (1-day newer, decay diff ≈ 0.977 vs 1.0)
-    first_result = result["results"][0]
+    first_result = result.metadata["results"][0]
     assert first_result["id"] == 1, (
         f"High-relevance older memory (id=1) should rank first; got id={first_result['id']}"
     )
@@ -392,8 +392,8 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
 
     result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
-    assert result["count"] >= 2
-    assert all(r["source"] == "memory" for r in result["results"])
+    assert result.metadata["count"] >= 2
+    assert all(r["source"] == "memory" for r in result.metadata["results"])
     idx.close()
 
 
@@ -402,8 +402,8 @@ def test_search_memories_empty_query_returns_guard(tmp_path: Path):
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "   "))
-    assert result["count"] == 0
-    assert "required" in result["display"].lower()
+    assert result.metadata["count"] == 0
+    assert "required" in result.return_value.lower()
 
 
 def test_search_memories_grep_fallback(tmp_path: Path):
@@ -413,8 +413,8 @@ def test_search_memories_grep_fallback(tmp_path: Path):
     _write_memory(memory_dir, 1, "User prefers xyloquartz-grep-test tools", tags=["preference"])
 
     result = asyncio.run(search_memories(_make_ctx(memory_dir=memory_dir), "xyloquartz-grep-test"))
-    assert result["count"] >= 1
-    assert all(r["source"] == "memory" for r in result["results"])
+    assert result.metadata["count"] >= 1
+    assert all(r["source"] == "memory" for r in result.metadata["results"])
 
 
 # ---------------------------------------------------------------------------
@@ -457,7 +457,7 @@ def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(recall_memory(ctx, keyword))
 
-    ids_returned = [r["id"] for r in result["results"]]
+    ids_returned = [r["id"] for r in result.metadata["results"]]
     assert 1 in ids_returned, "durable memory must be returned"
     assert 2 not in ids_returned, "session_summary artifact must be excluded"
 
@@ -473,7 +473,7 @@ def test_search_memories_excludes_session_summary_artifacts(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(search_memories(ctx, keyword))
 
-    paths_returned = [r["path"] for r in result["results"]]
+    paths_returned = [r["path"] for r in result.metadata["results"]]
     assert not any("002-" in p for p in paths_returned), "session_summary artifact must be excluded"
     assert any("001-" in p for p in paths_returned), "durable memory must be returned"
 
@@ -487,7 +487,7 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(list_memories(ctx))
 
-    assert "session_summary" in result["display"]
+    assert "session_summary" in result.return_value
 
 
 # ---------------------------------------------------------------------------

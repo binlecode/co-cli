@@ -38,7 +38,7 @@ async def test_shell_basic_exec():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo hello")
-    assert "hello" in result["display"]
+    assert "hello" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -47,7 +47,7 @@ async def test_shell_safe_command_runs_without_deferred_approval():
     ctx = _make_ctx(tool_call_approved=False, shell_safe_commands=["pwd"])
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "pwd")
-    assert result["display"].strip()
+    assert result.return_value.strip()
 
 
 @pytest.mark.asyncio
@@ -83,7 +83,7 @@ async def test_shell_pipe():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo hello world | wc -w")
-    assert result["display"].strip() == "2"
+    assert result.return_value.strip() == "2"
 
 
 @pytest.mark.asyncio
@@ -105,9 +105,9 @@ async def test_shell_env_sanitized():
         git_pager = await run_shell_command(ctx, "echo $GIT_PAGER")
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         unbuffered = await run_shell_command(ctx, "echo $PYTHONUNBUFFERED")
-    assert pager["display"].strip() == "cat"
-    assert git_pager["display"].strip() == "cat"
-    assert unbuffered["display"].strip() == "1"
+    assert pager.return_value.strip() == "cat"
+    assert git_pager.return_value.strip() == "cat"
+    assert unbuffered.return_value.strip() == "1"
 
 
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ async def test_shell_dangerous_env_blocked():
         ctx = _make_ctx()
         async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
             result = await run_shell_command(ctx, "echo ${LD_PRELOAD:-unset}")
-        assert result["display"].strip() == "unset"
+        assert result.return_value.strip() == "unset"
     finally:
         if old is None:
             os.environ.pop("LD_PRELOAD", None)
@@ -133,8 +133,8 @@ async def test_shell_stderr_merged():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo 'err msg' >&2; echo 'ok'")
-    assert "err msg" in result["display"]
-    assert "ok" in result["display"]
+    assert "err msg" in result.return_value
+    assert "ok" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_shell_cwd_is_host_cwd():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "test -f pyproject.toml && echo exists")
-    assert "exists" in result["display"]
+    assert "exists" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_shell_variable_expansion():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "X=42 && echo val=$X")
-    assert "val=42" in result["display"]
+    assert "val=42" in result.return_value
 
 
 @pytest.mark.asyncio
@@ -161,8 +161,7 @@ async def test_shell_deny_pattern_returns_terminal_error():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "rm -rf /")
-    assert isinstance(result, dict)
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -172,8 +171,7 @@ async def test_shell_deny_control_character():
     # U+0001 (SOH) is a control character below 0x20 and not \t or \n
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "echo \x01hello")
-    assert isinstance(result, dict)
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -182,8 +180,7 @@ async def test_shell_deny_heredoc():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "cat <<EOF\nhello\nEOF")
-    assert isinstance(result, dict)
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -192,8 +189,7 @@ async def test_shell_deny_env_injection():
     ctx = _make_ctx()
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "EVIL=$(whoami) && echo $EVIL")
-    assert isinstance(result, dict)
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -202,4 +198,4 @@ async def test_shell_workspace_dir_param():
     ctx = _make_ctx(shell=ShellBackend(workspace_dir="/tmp"))
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         result = await run_shell_command(ctx, "pwd")
-    assert "tmp" in result["display"]
+    assert "tmp" in result.return_value

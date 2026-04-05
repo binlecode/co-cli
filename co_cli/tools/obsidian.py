@@ -7,7 +7,9 @@ from typing import Any
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+
+from co_cli.tools.tool_output import tool_output
 
 
 def _extract_frontmatter_tags(content: str) -> set[str]:
@@ -60,7 +62,7 @@ def search_notes(
     limit: int = 10,
     folder: str | None = None,
     tag: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Search Obsidian vault notes by keyword. All keywords must match
     (AND logic, whole words, case-insensitive). Returns matching filenames
     with text snippets around the first match.
@@ -217,7 +219,7 @@ def list_notes(
     tag: str | None = None,
     offset: int = 0,
     limit: int = 20,
-) -> ToolResult:
+) -> ToolReturn:
     """List markdown note filenames in the Obsidian vault. Returns one page
     at a time (default 20 per page).
 

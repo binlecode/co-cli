@@ -51,9 +51,8 @@ def format_for_display(content: Any) -> str | dict | None:
     """Format a tool result for the on_tool_complete frontend call.
 
     Return contract:
-    - str with content → return as-is
-    - dict with _kind='tool_result' → return the dict as-is (frontend renders display field)
-    - dict without _kind (MCP raw JSON) → return a compact key: val summary string
+    - str with content → return as-is (native tools always produce strings)
+    - dict (MCP raw JSON) → return a compact key: val summary string
       - at most 5 entries; values truncated to 60 chars; (+N more) suffix; capped at 300 chars
       - returns None if the resulting summary is empty
     - everything else → return None
@@ -61,8 +60,6 @@ def format_for_display(content: Any) -> str | dict | None:
     if isinstance(content, str) and content.strip():
         return content
     if isinstance(content, dict):
-        if content.get("_kind") == "tool_result":
-            return content
         # MCP tools return raw JSON dicts — render as compact key: value summary
         summary = "; ".join(f"{k}: {str(v)[:60]}" for k, v in list(content.items())[:5])
         if len(content) > 5:

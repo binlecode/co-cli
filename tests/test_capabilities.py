@@ -27,10 +27,10 @@ async def test_new_runtime_fields_present() -> None:
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
         result = await check_capabilities(ctx)
-    assert "tool_count" in result
-    assert "mcp_mode" in result
-    assert result["mcp_mode"] in ("mcp", "native-only")
-    assert isinstance(result["tool_count"], int)
+    assert "tool_count" in result.metadata
+    assert "mcp_mode" in result.metadata
+    assert result.metadata["mcp_mode"] in ("mcp", "native-only")
+    assert isinstance(result.metadata["tool_count"], int)
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,6 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
         assert frontend.active_surface() == "tool"
         assert frontend.active_tool_messages(), "Expected tool progress to be rendered"
         assert frontend.active_tool_messages()[0] == "Doctor: checking loaded skills..."
-        assert result.get("_kind") == "tool_result", f"check_capabilities must return ToolResult; got: {result!r}"
-        assert result.get("display"), "display field missing or empty in check_capabilities ToolResult"
+        assert result.return_value, "return_value missing or empty in check_capabilities ToolReturn"
     finally:
         frontend.cleanup()

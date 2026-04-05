@@ -29,7 +29,8 @@ from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import SearchResult
 from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ async def search_knowledge(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Primary cross-source knowledge search — use this when the source is unknown
     or when you want unified results across memories, articles, Obsidian notes,
     and Drive docs in a single ranked result set.
@@ -314,7 +315,7 @@ async def save_article(
     origin_url: str,
     tags: list[str] | None = None,
     related: list[str] | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Save external reference material (web page, documentation, research) as
     a knowledge article for future retrieval. Articles are decay-protected and
     persist indefinitely unlike memories.
@@ -449,7 +450,7 @@ async def search_articles(
     tag_match_mode: Literal["any", "all"] = "any",
     created_after: str | None = None,
     created_before: str | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Search saved articles by keyword and return summary index only
     (title, origin_url, tags, first paragraph). Use read_article
     to load the full body after identifying an article here.
@@ -600,7 +601,7 @@ async def search_articles(
 async def read_article(
     ctx: RunContext[CoDeps],
     slug: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Load the full markdown body of a saved article on demand.
 
     Always call search_articles first to find the slug, then call
@@ -690,7 +691,7 @@ def _consolidate_article(
     new_title: str,
     new_tags: list[str] | None,
     origin_url: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Consolidate an existing article (same origin_url) with new content."""
     raw = path.read_text(encoding="utf-8")
     fm, _ = parse_frontmatter(raw)

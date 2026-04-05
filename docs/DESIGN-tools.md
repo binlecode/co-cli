@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolResult` via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
 
 ```
 tools/
@@ -89,7 +89,7 @@ flowchart TD
     FILTER --> SEG[_execute_stream_segment]
     SEG --> T{tool called?}
 
-    T -->|auto| EX["Execute → tool_output() → ToolResult"]
+    T -->|auto| EX["Execute → tool_output() → ToolReturn"]
     T -->|approval-required| PAUSE["Pause — DeferredToolRequests"]
 
     PAUSE --> COLLECT["_collect_deferred_tool_approvals:\n1. decode_tool_args → resolve_approval_subject\n2. is_auto_approved? → approve silently\n3. prompt user: y / n / a"]
@@ -112,15 +112,16 @@ flowchart TD
 All tools return through a single gateway:
 
 ```
-tool_output(display, *, ctx=None, **metadata) → ToolResult
-  ToolResult = {"_kind": "tool_result", "display": "...", ...metadata}
+tool_output(display, *, ctx=None, **metadata) → ToolReturn
+  ToolReturn(return_value=display, metadata=metadata_dict)
+  → ToolReturnPart.content = display (string — model sees plain text)
+  → ToolReturnPart.metadata = metadata_dict (app-side, not sent to LLM)
 ```
 
-- `_kind` — runtime discriminator (TypedDict erased at runtime; distinguishes native results from MCP raw JSON dicts)
-- `display` — pre-formatted string shown in the UI panel
-- metadata — optional fields (`count`, `path`, `task_id`, `granted`, etc.)
+- `return_value` — the display string shown in the UI panel and seen by the model as plain text
+- `metadata` — optional app-side fields (`count`, `path`, `task_id`, `granted`, `error`, etc.) accessible via `ToolReturnPart.metadata` but not sent to the LLM
 
-MCP tools return raw JSON dicts; `format_for_display()` dispatches on `_kind` presence.
+Native tools always produce strings in `ToolReturnPart.content`; MCP tools produce dicts. `format_for_display()` dispatches on `isinstance(content, str)` vs `isinstance(content, dict)`.
 
 **Error contract — three paths, each with different model visibility:**
 

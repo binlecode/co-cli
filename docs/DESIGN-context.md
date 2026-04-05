@@ -70,7 +70,7 @@ Knowledge search path
 
 Delegation metadata
   run_*_subagent
-    -> ToolResult includes run_id, role, model_name, requests_used, request_limit, scope
+    -> ToolReturn includes run_id, role, model_name, requests_used, request_limit, scope
   start_background_task
     -> session.background_tasks[task_id] stores command, cwd, description, status, timestamps, exit code, output ring buffer, process handle
 ```
@@ -162,7 +162,7 @@ flowchart TD
         SearchKnowRoute[KnowledgeStore.search]
         SearchDB[deps.config.knowledge_db_path]
         Delegate[run_*_subagent]
-        ToolMeta[ToolResult content]
+        ToolMeta[ToolReturn content]
         BgTasks[start_background_task]
         TaskMeta[deps.session.background_tasks]
 
@@ -321,7 +321,7 @@ In grep fallback mode, only library and memory searches are supported.
 
 Delegation provenance is captured in live session structures, not in a separate work-record store.
 
-- Inline subagents return `ToolResult` payloads that include `run_id`, `role`, `model_name`, `requests_used`, `request_limit`, and `scope`.
+- Inline subagents return `ToolReturn` payloads that include `run_id`, `role`, `model_name`, `requests_used`, `request_limit`, and `scope`.
 - `truncate_tool_returns()` content-clears compactable tool results by per-tool-type recency (keeping 5 most recent per type). Non-compactable tools (including subagent results) pass through intact, so delegation identity keys survive.
 - Background tasks are tracked in `ctx.deps.session.background_tasks` as `BackgroundTaskState` objects with command, cwd, status, timestamps, exit code, and an in-memory ring buffer of recent output.
 

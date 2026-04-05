@@ -18,7 +18,8 @@ from co_cli._model_factory import ResolvedModel
 from co_cli.knowledge._frontmatter import ArtifactTypeEnum, parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ async def persist_memory(
     resolved: ResolvedModel | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
-) -> ToolResult:
+) -> ToolReturn:
     """Write a memory through the full lifecycle: dedup → consolidate → write → retention.
 
     Entry point for all write paths (explicit save_memory tool and
@@ -159,7 +160,7 @@ async def _persist_memory_inner(
                 f"- updating memory {match.id}"
             )
             result = _update_existing_memory(match, content, tags)
-            result["similarity"] = similarity
+            result.metadata["similarity"] = similarity
             if deps.knowledge_store is not None:
                 try:
                     import hashlib as _hashlib
@@ -278,7 +279,7 @@ async def _persist_memory_inner(
         except Exception as e:
             logger.warning(f"Failed to index memory {memory_id}: {e}")
 
-    result: ToolResult = tool_output(
+    result: ToolReturn = tool_output(
         f"✓ Saved memory {memory_id}: {filename}\n"
         f"Location: {file_path}",
         path=str(file_path),
@@ -297,10 +298,10 @@ async def _persist_memory_inner(
             f"- triggering retention cut"
         )
         decay_result = await enforce_retention(deps, all_memories)
-        result["decay_triggered"] = True
-        result["decay_count"] = decay_result["decayed"]
-        result["decay_strategy"] = decay_result["strategy"]
-        result["display"] += (
+        result.metadata["decay_triggered"] = True
+        result.metadata["decay_count"] = decay_result["decayed"]
+        result.metadata["decay_strategy"] = decay_result["strategy"]
+        result.return_value += (
             f"\n♻️ Decayed {decay_result['decayed']} old memories "
             f"({decay_result['strategy']})"
         )

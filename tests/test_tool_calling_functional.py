@@ -239,8 +239,8 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
         await asyncio.sleep(0.3)
         result = await check_task_status(ctx, state.task_id)
 
-    assert result.get("description") == task_description
-    assert result.get("started_at") is not None
+    assert (result.metadata or {}).get("description") == task_description
+    assert (result.metadata or {}).get("started_at") is not None
 
 
 @pytest.mark.asyncio
@@ -272,6 +272,6 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
         await asyncio.sleep(0.3)
         result = await list_background_tasks(ctx)
 
-    assert result["count"] == 1
-    assert result["tasks"][0]["description"] == task_description
-    assert task_description in result["display"]
+    assert result.metadata["count"] == 1
+    assert result.metadata["tasks"][0]["description"] == task_description
+    assert task_description in result.return_value

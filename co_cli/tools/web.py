@@ -12,7 +12,8 @@ from pydantic_ai import RunContext, ModelRetry
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_errors import tool_error
 from co_cli.tools._http_retry import classify_web_http_error, compute_backoff_delay
-from co_cli.tools.tool_output import ToolResult, tool_output
+from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_output import tool_output
 from co_cli.tools._url_safety import is_url_safe
 
 _MAX_RESULTS = 8
@@ -134,7 +135,7 @@ async def _http_get_with_retries(
     backoff_max_seconds: float,
     backoff_jitter_ratio: float,
     cf_fallback_headers: dict[str, str] | None = None,
-) -> "httpx.Response | ToolResult":
+) -> "httpx.Response | ToolReturn":
     attempts_total = max(0, max_retries) + 1
 
     for attempt in range(1, attempts_total + 1):
@@ -181,7 +182,7 @@ async def web_search(
     query: str,
     max_results: int = 5,
     domains: list[str] | None = None,
-) -> ToolResult:
+) -> ToolReturn:
     """Search the web via Brave Search. Returns ranked result snippets with
     titles and URLs. Each result includes a short text preview.
 
@@ -235,7 +236,7 @@ async def web_search(
             backoff_max_seconds=ctx.deps.config.web_http_backoff_max_seconds,
             backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
         )
-    if isinstance(resp_or_error, dict):
+    if not isinstance(resp_or_error, httpx.Response):
         return resp_or_error
     resp = resp_or_error
 
@@ -267,7 +268,7 @@ async def web_search(
 async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
-) -> ToolResult:
+) -> ToolReturn:
     """Fetch a web page and return its content converted to readable markdown.
     HTML pages are converted to markdown; JSON and XML are returned as-is.
 
@@ -326,7 +327,7 @@ async def web_fetch(
             backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
             cf_fallback_headers=_CF_FALLBACK_HEADERS,
         )
-    if isinstance(resp_or_error, dict):
+    if not isinstance(resp_or_error, httpx.Response):
         return resp_or_error
     resp = resp_or_error
 

@@ -43,9 +43,9 @@ async def test_list_directory_basic(tmp_path):
 
     result = await list_directory(_make_ctx(tmp_path), path=".")
 
-    assert not result.get("error")
-    assert result["count"] >= 3
-    names = [e["name"] for e in result["entries"]]
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] >= 3
+    names = [e["name"] for e in result.metadata["entries"]]
     assert "a.py" in names
     assert "b.txt" in names
     assert "subdir" in names
@@ -60,8 +60,8 @@ async def test_list_directory_pattern(tmp_path):
 
     result = await list_directory(_make_ctx(tmp_path), path=".", pattern="*.py")
 
-    assert not result.get("error")
-    names = [e["name"] for e in result["entries"]]
+    assert not result.metadata.get("error")
+    names = [e["name"] for e in result.metadata["entries"]]
     assert "main.py" in names
     assert "util.py" in names
     assert "readme.txt" not in names
@@ -72,7 +72,7 @@ async def test_list_directory_not_found(tmp_path):
     """Returns error dict when path does not exist."""
     result = await list_directory(_make_ctx(tmp_path), path="nonexistent_dir")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -82,7 +82,7 @@ async def test_list_directory_not_a_dir(tmp_path):
 
     result = await list_directory(_make_ctx(tmp_path), path="afile.txt")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 # --- read_file ---
@@ -95,10 +95,10 @@ async def test_read_file_full(tmp_path):
 
     result = await read_file(_make_ctx(tmp_path), path="hello.txt")
 
-    assert not result.get("error")
-    assert "hello" in result["display"]
-    assert "world" in result["display"]
-    assert result["lines"] == 2
+    assert not result.metadata.get("error")
+    assert "hello" in result.return_value
+    assert "world" in result.return_value
+    assert result.metadata["lines"] == 2
 
 
 @pytest.mark.asyncio
@@ -109,9 +109,9 @@ async def test_read_file_line_range(tmp_path):
 
     result = await read_file(_make_ctx(tmp_path), path="numbered.txt", start_line=3, end_line=7)
 
-    assert not result.get("error")
-    assert result["lines"] == 10
-    display = result["display"]
+    assert not result.metadata.get("error")
+    assert result.metadata["lines"] == 10
+    display = result.return_value
     assert "line3" in display
     assert "line7" in display
     # Lines outside the range must not appear
@@ -125,7 +125,7 @@ async def test_read_file_not_found(tmp_path):
     """Returns error dict when file does not exist."""
     result = await read_file(_make_ctx(tmp_path), path="missing.txt")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_read_file_path_is_dir(tmp_path):
 
     result = await read_file(_make_ctx(tmp_path), path="adir")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 # --- find_in_files ---
@@ -150,9 +150,9 @@ async def test_find_in_files(tmp_path):
 
     result = await find_in_files(_make_ctx(tmp_path), pattern="foo")
 
-    assert not result.get("error")
-    assert result["count"] == 2
-    files_matched = {m["file"] for m in result["matches"]}
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 2
+    files_matched = {m["file"] for m in result.metadata["matches"]}
     assert "alpha.txt" in files_matched
     assert "beta.txt" in files_matched
     assert "gamma.txt" not in files_matched
@@ -163,7 +163,7 @@ async def test_find_in_files_invalid_regex(tmp_path):
     """Returns error dict for malformed regex patterns."""
     result = await find_in_files(_make_ctx(tmp_path), pattern="[unclosed")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 @pytest.mark.asyncio
@@ -173,9 +173,9 @@ async def test_find_in_files_no_matches(tmp_path):
 
     result = await find_in_files(_make_ctx(tmp_path), pattern="zzz_will_never_match")
 
-    assert not result.get("error")
-    assert result["count"] == 0
-    assert result["matches"] == []
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 0
+    assert result.metadata["matches"] == []
 
 
 # --- write_file ---
@@ -186,7 +186,7 @@ async def test_write_file_creates_dirs(tmp_path):
     """Creates parent directories automatically when writing to nested path."""
     result = await write_file(_make_ctx(tmp_path), path="deep/nested/dir/file.txt", content="test content")
 
-    assert not result.get("error")
+    assert not result.metadata.get("error")
     written = tmp_path / "deep" / "nested" / "dir" / "file.txt"
     assert written.exists()
     assert written.read_text() == "test content"
@@ -199,7 +199,7 @@ async def test_write_file_overwrites_existing(tmp_path):
 
     result = await write_file(_make_ctx(tmp_path), path="existing.txt", content="new content")
 
-    assert not result.get("error")
+    assert not result.metadata.get("error")
     assert (tmp_path / "existing.txt").read_text() == "new content"
 
 
@@ -209,8 +209,8 @@ async def test_write_file_returns_byte_count(tmp_path):
     content = "hello"
     result = await write_file(_make_ctx(tmp_path), path="bytes.txt", content=content)
 
-    assert not result.get("error")
-    assert result["bytes"] == len(content.encode("utf-8"))
+    assert not result.metadata.get("error")
+    assert result.metadata["bytes"] == len(content.encode("utf-8"))
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_write_file_path_escape(tmp_path):
     """Returns error dict when path escapes the workspace root."""
     result = await write_file(_make_ctx(tmp_path), path="../../etc/passwd", content="evil")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True
 
 
 # --- edit_file ---
@@ -231,8 +231,8 @@ async def test_edit_file_single(tmp_path):
 
     result = await edit_file(_make_ctx(tmp_path), path="config.txt", search="localhost", replacement="example.com")
 
-    assert not result.get("error")
-    assert result["replacements"] == 1
+    assert not result.metadata.get("error")
+    assert result.metadata["replacements"] == 1
     assert (tmp_path / "config.txt").read_text() == "host=example.com\nport=8080\n"
 
 
@@ -263,8 +263,8 @@ async def test_edit_file_replace_all(tmp_path):
         _make_ctx(tmp_path), path="multi.txt", search="foo", replacement="qux", replace_all=True
     )
 
-    assert not result.get("error")
-    assert result["replacements"] == 2
+    assert not result.metadata.get("error")
+    assert result.metadata["replacements"] == 2
     assert (tmp_path / "multi.txt").read_text() == "qux\nqux\nbar\n"
 
 
@@ -273,4 +273,4 @@ async def test_edit_file_not_found_path(tmp_path):
     """Returns error dict when the target file does not exist."""
     result = await edit_file(_make_ctx(tmp_path), path="ghost.txt", search="x", replacement="y")
 
-    assert result.get("error") is True
+    assert result.metadata.get("error") is True

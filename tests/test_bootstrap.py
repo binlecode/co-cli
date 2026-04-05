@@ -15,6 +15,7 @@ from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools._shell_backend import ShellBackend
+from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 
 def _make_deps(
@@ -128,7 +129,7 @@ def _tei_embedder_available() -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        urllib.request.urlopen(req, timeout=2)
+        urllib.request.urlopen(req, timeout=HTTP_HEALTH_TIMEOUT_SECS)
         return True
     except Exception:
         return False
