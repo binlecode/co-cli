@@ -181,7 +181,6 @@ DEFAULT_PERSONALITY = "finch"
 DEFAULT_TOOL_RETRIES = 3
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
-DEFAULT_TOOL_OUTPUT_TRIM_CHARS = 2000
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
 DEFAULT_KNOWLEDGE_EMBEDDING_MODEL = "embeddinggemma"
@@ -238,9 +237,6 @@ class Settings(BaseModel):
     # Safety
     doom_loop_threshold: int = Field(default=DEFAULT_DOOM_LOOP_THRESHOLD, ge=2, le=10)
     max_reflections: int = Field(default=DEFAULT_MAX_REFLECTIONS, ge=1, le=10)
-
-    # Conversation memory
-    tool_output_trim_chars: int = Field(default=DEFAULT_TOOL_OUTPUT_TRIM_CHARS)
 
     # Knowledge search backend
     knowledge_search_backend: Literal["grep", "fts5", "hybrid"] = Field(default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND)
@@ -415,7 +411,6 @@ class Settings(BaseModel):
             "web_http_backoff_base_seconds": "CO_CLI_WEB_HTTP_BACKOFF_BASE_SECONDS",
             "web_http_backoff_max_seconds": "CO_CLI_WEB_HTTP_BACKOFF_MAX_SECONDS",
             "web_http_jitter_ratio": "CO_CLI_WEB_HTTP_JITTER_RATIO",
-            "tool_output_trim_chars": "CO_CLI_TOOL_OUTPUT_TRIM_CHARS",
             "knowledge_search_backend": "CO_KNOWLEDGE_SEARCH_BACKEND",
             "knowledge_embedding_provider": "CO_KNOWLEDGE_EMBEDDING_PROVIDER",
             "knowledge_embedding_model": "CO_KNOWLEDGE_EMBEDDING_MODEL",

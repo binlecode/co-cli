@@ -13,6 +13,8 @@ Usage:
 
 from typing import Any, Literal, Required, TypedDict, TYPE_CHECKING
 
+from co_cli.context._tool_result_storage import persist_if_oversized, TOOL_RESULT_MAX_SIZE
+
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps
@@ -36,6 +38,10 @@ def tool_output(
     **metadata: Any,
 ) -> ToolResult:
     """Construct a ToolResult payload with the required _kind discriminator."""
+    if ctx is not None and len(display) > TOOL_RESULT_MAX_SIZE:
+        display = persist_if_oversized(
+            display, ctx.deps.config.tool_results_dir, ctx.tool_name,
+        )
     return ToolResult(_kind="tool_result", display=display, **metadata)  # type: ignore[misc]
 
 

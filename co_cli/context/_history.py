@@ -5,7 +5,7 @@ before every model request and transform the message list in-place.
 
 Public API (registered on the agent):
     inject_opening_context  — async, injects recalled memories on each new user turn
-    truncate_tool_returns   — sync, truncates large ToolReturnPart.content
+    truncate_tool_returns   — sync, content-clears compactable tool results by recency
     detect_safety_issues    — sync, doom-loop detection + shell reflection cap
     truncate_history_window — async, drops middle messages + inline LLM summary or static marker
 """
@@ -17,7 +17,6 @@ import json
 import logging
 
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
@@ -53,6 +52,20 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class TurnGroup:
+    """A contiguous group of messages forming one user turn.
+
+    Boundary detection: a new group starts at each ``ModelRequest`` containing
+    a ``UserPromptPart``.  Messages before the first such boundary form group 0.
+    ``tool_names`` is populated by ``group_by_turn()``, not by callers.
+    """
+
+    messages: list[ModelMessage]
+    start_index: int
+    tool_names: frozenset[str]
+
+
+@dataclass
 class _CompactionBoundaries:
     """Head/tail boundary positions for a compaction pass.
 
@@ -74,21 +87,54 @@ class _CompactionBoundaries:
 # ---------------------------------------------------------------------------
 
 
-def _align_tail_start(messages: list[ModelMessage], tail_start: int) -> int:
-    """Walk tail_start forward to a clean user-turn boundary.
+def _make_turn_group(msgs: list[ModelMessage], start: int) -> TurnGroup:
+    """Construct a TurnGroup with tool_names extracted from ToolReturnParts."""
+    tool_names: set[str] = set()
+    for msg in msgs:
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if isinstance(part, ToolReturnPart):
+                    tool_names.add(part.tool_name)
+    return TurnGroup(messages=list(msgs), start_index=start, tool_names=frozenset(tool_names))
 
-    Ensures the tail never starts at a ModelRequest containing ToolReturnPart
-    whose matching ToolCallPart was dropped into the middle section.
-    Returns len(messages) if no clean boundary exists (caller should skip drop).
+
+def group_by_turn(messages: list[ModelMessage]) -> list[TurnGroup]:
+    """Group messages into turn-sized units at ``UserPromptPart`` boundaries.
+
+    A new group starts at each ``ModelRequest`` that contains a
+    ``UserPromptPart`` (not just ``ToolReturnPart``).  Messages before the
+    first such boundary form group 0.
     """
-    while tail_start < len(messages):
-        msg = messages[tail_start]
-        if isinstance(msg, ModelRequest) and not any(
-            isinstance(p, ToolReturnPart) for p in msg.parts
-        ):
-            break
-        tail_start += 1
-    return tail_start
+    if not messages:
+        return []
+
+    groups: list[TurnGroup] = []
+    current_msgs: list[ModelMessage] = []
+    current_start: int = 0
+
+    for i, msg in enumerate(messages):
+        is_boundary = (
+            isinstance(msg, ModelRequest)
+            and any(isinstance(p, UserPromptPart) for p in msg.parts)
+        )
+        if is_boundary and current_msgs:
+            groups.append(_make_turn_group(current_msgs, current_start))
+            current_msgs = []
+            current_start = i
+        current_msgs.append(msg)
+
+    if current_msgs:
+        groups.append(_make_turn_group(current_msgs, current_start))
+
+    return groups
+
+
+def groups_to_messages(groups: list[TurnGroup]) -> list[ModelMessage]:
+    """Flatten turn groups back to a message list."""
+    result: list[ModelMessage] = []
+    for group in groups:
+        result.extend(group.messages)
+    return result
 
 
 def find_first_run_end(messages: list[ModelMessage]) -> int:
@@ -126,18 +172,6 @@ def _static_marker(dropped_count: int) -> ModelRequest:
     ])
 
 
-def _content_length(content: Any) -> tuple[str, int]:
-    """Normalise ToolReturnPart.content to a string and return (text, length).
-
-    ``content`` may be ``str`` or ``dict`` (tool return convention).
-    """
-    if isinstance(content, str):
-        return content, len(content)
-    # dict → JSON-serialise for measurement
-    text = json.dumps(content, ensure_ascii=False)
-    return text, len(text)
-
-
 # ---------------------------------------------------------------------------
 # Shared boundary helper
 # ---------------------------------------------------------------------------
@@ -155,8 +189,14 @@ def _compute_compaction_boundaries(
     first_run_end = find_first_run_end(messages)
     head_end = first_run_end + 1
     tail_count = max(4, len(messages) // 2)
-    tail_start = max(head_end, len(messages) - tail_count)
-    tail_start = _align_tail_start(messages, tail_start)
+    raw_tail_start = max(head_end, len(messages) - tail_count)
+    # Snap to the nearest group boundary at or after raw_tail_start
+    groups = group_by_turn(messages)
+    tail_start = len(messages)
+    for group in groups:
+        if group.start_index >= raw_tail_start:
+            tail_start = group.start_index
+            break
     if tail_start >= len(messages) or tail_start <= head_end:
         return _CompactionBoundaries(
             head_end=head_end,
@@ -173,70 +213,92 @@ def _compute_compaction_boundaries(
 
 
 # ---------------------------------------------------------------------------
-# 1. Tool-output trim processor (sync — no I/O)
+# 1. Tool-output compaction processor (sync — no I/O)
 # ---------------------------------------------------------------------------
+
+COMPACTABLE_TOOLS: frozenset[str] = frozenset({
+    "read_file", "run_shell_command", "find_in_files",
+    "list_directory", "web_search", "web_fetch",
+})
+COMPACTABLE_KEEP_RECENT = 5
+_CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
 
 
 def truncate_tool_returns(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
-    """Truncate large ``ToolReturnPart.content`` in older messages.
+    """Content-clear compactable tool results older than the 5 most recent per tool type.
 
-    "Older" means everything except the **last exchange** (the trailing
-    ``ModelRequest`` + ``ModelResponse`` pair that represents the current
-    turn).  Recent tool output stays intact so the model can reason about
-    the latest results.
+    Protects the last turn group (all messages in the current turn).
+    Non-compactable tools pass through intact regardless of count.
 
-    Registered as the *first* history processor — cheap string work, no
-    LLM call.
+    Registered as the *first* history processor — cheap in-memory work, no
+    LLM call.  ``ctx`` is required by pydantic-ai's history processor
+    signature but no config fields are accessed.
     """
-    threshold = ctx.deps.config.tool_output_trim_chars
-    if threshold <= 0:
+    groups = group_by_turn(messages)
+    if not groups:
         return messages
 
-    # Protect the last 2 messages (current turn).
-    safe_tail = 2
-    boundary = max(0, len(messages) - safe_tail)
+    # Protect the last turn group
+    boundary_group = max(0, len(groups) - 1)
+    process_groups = groups[:boundary_group]
+    protected_groups = groups[boundary_group:]
 
-    out: list[ModelMessage] = []
-    for i, msg in enumerate(messages):
-        if i >= boundary or not isinstance(msg, ModelRequest):
-            out.append(msg)
-            continue
-        new_parts = []
-        modified = False
-        for part in msg.parts:
-            if isinstance(part, ToolReturnPart):
-                if isinstance(part.content, dict):
-                    d = dict(part.content)
-                    disp = d.get("display", "")
-                    if isinstance(disp, str) and len(disp) > threshold:
-                        d["display"] = disp[:threshold] + f"\n[…truncated, {len(disp)} chars total]"
-                        new_parts.append(ToolReturnPart(
-                            tool_name=part.tool_name,
-                            content=d,
-                            tool_call_id=part.tool_call_id,
-                        ))
-                        modified = True
-                        continue
+    if not process_groups:
+        return messages
+
+    # Reverse scan: build keep_set of part object ids for the 5 most
+    # recent per compactable tool type.  Uses id() rather than index tuples
+    # because p_idx restarts at 0 for each ModelRequest within a group.
+    keep_ids: set[int] = set()
+    seen_counts: dict[str, int] = {}
+
+    for g_idx in range(len(process_groups) - 1, -1, -1):
+        for msg in reversed(process_groups[g_idx].messages):
+            if not isinstance(msg, ModelRequest):
+                continue
+            for part in reversed(msg.parts):
+                if not isinstance(part, ToolReturnPart):
+                    continue
+                if part.tool_name not in COMPACTABLE_TOOLS:
+                    continue
+                count = seen_counts.get(part.tool_name, 0)
+                if count < COMPACTABLE_KEEP_RECENT:
+                    keep_ids.add(id(part))
+                seen_counts[part.tool_name] = count + 1
+
+    # Forward pass: content-clear compactable parts not in keep_ids
+    modified = False
+    for group in process_groups:
+        for msg in group.messages:
+            if not isinstance(msg, ModelRequest):
+                continue
+            new_parts: list = []
+            msg_modified = False
+            for part in msg.parts:
+                if (
+                    isinstance(part, ToolReturnPart)
+                    and part.tool_name in COMPACTABLE_TOOLS
+                    and id(part) not in keep_ids
+                ):
+                    new_parts.append(ToolReturnPart(
+                        tool_name=part.tool_name,
+                        content=_CLEARED_PLACEHOLDER,
+                        tool_call_id=part.tool_call_id,
+                    ))
+                    msg_modified = True
                 else:
-                    text, length = _content_length(part.content)
-                    if length > threshold:
-                        truncated = text[:threshold] + f"\n[…truncated, {length} chars total]"
-                        new_parts.append(ToolReturnPart(
-                            tool_name=part.tool_name,
-                            content=truncated,
-                            tool_call_id=part.tool_call_id,
-                        ))
-                        modified = True
-                        continue
-            new_parts.append(part)
-        if modified:
-            out.append(ModelRequest(parts=new_parts))
-        else:
-            out.append(msg)
-    return out
+                    new_parts.append(part)
+            if msg_modified:
+                msg.parts = new_parts
+                modified = True
+
+    if not modified:
+        return messages
+
+    return groups_to_messages(process_groups + protected_groups)
 
 
 # ---------------------------------------------------------------------------

@@ -26,7 +26,7 @@ Per-request dynamic layers (@agent.instructions — evaluated fresh, never accum
   add_tool_surface_hint()       — progressive tool surface description; instructs model to call search_tools
 
 Conversation-history governance (main agent only)
-  truncate_tool_returns()       — trim old ToolReturnPart.content > tool_output_trim_chars
+  truncate_tool_returns()       — content-clear compactable tool results by per-tool-type recency (keep 5 most recent per type)
   detect_safety_issues()        — doom-loop detection + shell reflection cap
   inject_opening_context()      — recall_memory() against current user message; inject as SystemPromptPart
   truncate_history_window()     — compact to head + summary marker + tail when over threshold
@@ -322,7 +322,7 @@ In grep fallback mode, only library and memory searches are supported.
 Delegation provenance is captured in live session structures, not in a separate work-record store.
 
 - Inline subagents return `ToolResult` payloads that include `run_id`, `role`, `model_name`, `requests_used`, `request_limit`, and `scope`.
-- `truncate_tool_returns()` only trims the `display` field for dict-shaped tool results, so those identity keys survive transcript trimming.
+- `truncate_tool_returns()` content-clears compactable tool results by per-tool-type recency (keeping 5 most recent per type). Non-compactable tools (including subagent results) pass through intact, so delegation identity keys survive.
 - Background tasks are tracked in `ctx.deps.session.background_tasks` as `BackgroundTaskState` objects with command, cwd, status, timestamps, exit code, and an in-memory ring buffer of recent output.
 
 The operator surface reads those live structures directly: `/history` scans transcript `ToolReturnPart`s for `run_*_subagent` and `start_background_task`, and `/tasks` reads `session.background_tasks`.
@@ -340,7 +340,6 @@ The operator surface reads those live structures directly: `/history` scans tran
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | _(removed)_ | | | Session TTL removed — sessions persist indefinitely; new session via `/new` |
-| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Max retained chars for older tool-return content before trimming |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Contiguous same-call streak threshold for doom-loop safety injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Shell-error reflection cap enforced by `detect_safety_issues()` |
 | `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds when enabled; may be overridden at bootstrap Step 2b with the runtime Modelfile value probed from `/api/show` |
@@ -394,7 +393,8 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `co_cli/prompts/personalities/_injector.py` | Personality-continuity memory injection for the runtime instruction layer |
 | `co_cli/prompts/model_quirks/` | Provider/model-specific counter-steering overrides |
 | `co_cli/agent.py` | Main/task agent factories and `@agent.instructions` layer registration |
-| `co_cli/context/_history.py` | History processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
+| `co_cli/context/_history.py` | History processors: compactable-tool recency clearing, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker. Turn grouping primitive (`group_by_turn`, `TurnGroup`) used by processors and compaction boundaries |
+| `co_cli/context/_tool_result_storage.py` | Persistence engine for oversized tool results (>50KB): `persist_if_oversized()` writes content-addressed files, `check_tool_results_size()` utility for disk usage warnings |
 | `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, `estimate_message_tokens`, `latest_response_input_tokens` — shared by history processor and `/compact` |
 | `co_cli/context/_session.py` | Session JSON persistence helpers |
 | `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip for session transcript I/O |

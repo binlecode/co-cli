@@ -64,6 +64,7 @@ async def list_directory(
 
     return tool_output(
         display,
+        ctx=ctx,
         path=str(resolved),
         count=len(entries),
         entries=entries,
@@ -112,6 +113,7 @@ async def read_file(
 
     return tool_output(
         display,
+        ctx=ctx,
         path=str(resolved),
         lines=total_line_count,
     )
@@ -165,6 +167,7 @@ async def find_in_files(
 
     return tool_output(
         display,
+        ctx=ctx,
         pattern=pattern,
         count=len(matches),
         matches=matches,

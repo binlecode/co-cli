@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.22] - 2026-04-05
+
+### Added
+- **Tool result persistence**: oversized tool output (>50KB) is persisted to `.co-cli/tool-results/` with a 2KB preview — the model never sees the full content, reducing context bloat from large `read_file` and `web_fetch` results
+- **Turn grouping primitive**: `group_by_turn()` and `TurnGroup` in `_history.py` — reusable foundation for group-safe history processing and compaction boundaries
+
+### Changed
+- **Per-tool-type recency clearing**: `truncate_tool_returns` now content-clears compactable tool results by recency (keep 5 most recent per tool type) instead of flat char-based truncation, with group-based current-turn protection
+- **Compaction boundary refactor**: `_compute_compaction_boundaries()` uses turn-group snap instead of manual `_align_tail_start` walk — behaviorally equivalent, cleaner implementation
+
+### Removed
+- **`tool_output_trim_chars` config**: replaced by the two-layer tool output management (persistence + per-tool-type recency)
+
 ## [0.7.20] - 2026-04-04
 
 ### Changed

@@ -14,7 +14,6 @@ from co_cli.config import (
     SEARCH_DB,
     DEFAULT_DOOM_LOOP_THRESHOLD,
     DEFAULT_MAX_REFLECTIONS,
-    DEFAULT_TOOL_OUTPUT_TRIM_CHARS,
     DEFAULT_KNOWLEDGE_SEARCH_BACKEND,
     DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL,
     DEFAULT_KNOWLEDGE_EMBED_API_URL,
@@ -58,6 +57,7 @@ DEFAULT_USER_SKILLS_DIR = CONFIG_DIR / "skills"
 DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSIONS_DIR = Path(".co-cli/sessions")
+DEFAULT_TOOL_RESULTS_DIR = Path(".co-cli/tool-results")
 
 from co_cli.commands._skill_types import SkillConfig
 from co_cli.context._types import MemoryRecallState, SafetyState
@@ -125,6 +125,7 @@ class CoConfig:
     # its own sessions — switching projects starts fresh context automatically.
     # Not tool-accessible; used only by the orchestration layer (_bootstrap, main).
     sessions_dir: Path = field(default_factory=lambda: DEFAULT_SESSIONS_DIR)
+    tool_results_dir: Path = field(default_factory=lambda: DEFAULT_TOOL_RESULTS_DIR)
     llm_api_key: str | None = None
     brave_search_api_key: str | None = None
     web_fetch_allowed_domains: list[str] = field(default_factory=list)
@@ -149,7 +150,6 @@ class CoConfig:
     knowledge_chunk_size: int = DEFAULT_KNOWLEDGE_CHUNK_SIZE
     knowledge_chunk_overlap: int = DEFAULT_KNOWLEDGE_CHUNK_OVERLAP
     personality: str | None = None
-    tool_output_trim_chars: int = DEFAULT_TOOL_OUTPUT_TRIM_CHARS
     doom_loop_threshold: int = DEFAULT_DOOM_LOOP_THRESHOLD
     max_reflections: int = DEFAULT_MAX_REFLECTIONS
     knowledge_search_backend: str = DEFAULT_KNOWLEDGE_SEARCH_BACKEND
@@ -225,6 +225,7 @@ class CoConfig:
             skills_dir=cwd / ".co-cli" / "skills",
             user_skills_dir=CONFIG_DIR / "skills",
             sessions_dir=cwd / ".co-cli" / "sessions",
+            tool_results_dir=cwd / ".co-cli" / "tool-results",
             llm_api_key=s.llm_api_key,
             brave_search_api_key=s.brave_search_api_key,
             web_fetch_allowed_domains=list(s.web_fetch_allowed_domains),
@@ -250,7 +251,6 @@ class CoConfig:
             knowledge_chunk_overlap=s.knowledge_chunk_overlap,
             personality=s.personality,
             knowledge_search_backend=s.knowledge_search_backend,
-            tool_output_trim_chars=s.tool_output_trim_chars,
             doom_loop_threshold=s.doom_loop_threshold,
             max_reflections=s.max_reflections,
             knowledge_cross_encoder_reranker_url=s.knowledge_cross_encoder_reranker_url,

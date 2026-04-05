@@ -218,7 +218,7 @@ Processor roles:
 
 | Processor | Role |
 | --- | --- |
-| `truncate_tool_returns` | trims large older `ToolReturnPart` payloads but preserves the latest exchange |
+| `truncate_tool_returns` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn group |
 | `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
 | `inject_opening_context` | recalls memories and injects them as a trailing `SystemPromptPart` |
 | `truncate_history_window` | replaces the middle of long histories with an inline LLM summary or static marker (circuit-breaker fallback) |
@@ -321,7 +321,6 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `tool_retries` | `CO_CLI_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
-| `tool_output_trim_chars` | `CO_CLI_TOOL_OUTPUT_TRIM_CHARS` | `2000` | Trim threshold for older tool returns |
 | `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
 | `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |

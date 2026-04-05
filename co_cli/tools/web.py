@@ -261,7 +261,7 @@ async def web_search(
         lines.append("")
 
     display = f"Web search results for '{query}':\n\n" + "\n".join(lines).rstrip()
-    return tool_output(display, results=results, count=len(results))
+    return tool_output(display, ctx=ctx, results=results, count=len(results))
 
 
 async def web_fetch(
@@ -356,6 +356,7 @@ async def web_fetch(
 
     return tool_output(
         display,
+        ctx=ctx,
         url=final_url,
         content_type=content_type,
         truncated=truncated,
