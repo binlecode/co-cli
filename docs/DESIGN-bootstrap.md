@@ -238,7 +238,7 @@ Details:
 - both memory and library trees sync through the same API with source-specific `kind_filter`
 - on failure, FTS is disabled for the session and the system continues with grep fallback
 
-### Step 2 - Session Restore (see DESIGN-session.md for full session/transcript design)
+### Step 2 - Session Restore (see [DESIGN-context.md](DESIGN-context.md) §2.3)
 
 ```text
 session_data = find_latest_session(deps.config.sessions_dir)  # mtime scan

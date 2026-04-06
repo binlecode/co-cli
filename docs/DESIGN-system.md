@@ -113,7 +113,7 @@ Startup is intentionally split between synchronous bootstrap and async activatio
 7. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
 8. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
 9. `async with agent` activates the main agent context, which is required before MCP discovery.
-10. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See `DESIGN-session.md` for full session and transcript persistence design.
+10. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See [DESIGN-context.md](DESIGN-context.md) §2.3 for session and transcript persistence.
 11. The REPL loop starts.
 
 Teardown is owned by `main.py`:
