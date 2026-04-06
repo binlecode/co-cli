@@ -7,7 +7,7 @@ This doc covers the persistent and injected context layers that shape what the a
 The agent has no persistent state in model weights. Carry-forward context is split by lifecycle and consumer:
 
 - **System prompt**: the highest-priority behavioral contract. A static scaffold is assembled once at startup, then runtime instruction layers are evaluated fresh on each request. Neither is subject to history compaction.
-- **Conversation history**: the in-session message list passed to the model on each foreground turn. History processors run in a fixed order: trim old tool output, detect safety issues, recall relevant memory, then compact long transcripts. The message list itself is process memory only.
+- **Conversation history**: the in-session message list passed to the model on each foreground turn. History processors run in a fixed order: trim old tool output, cap large assistant responses, detect safety issues, recall relevant memory, then compact long transcripts with context enrichment. Messages are persisted to JSONL transcript and can be restored via `/resume`.
 - **Memory**: conversation-derived facts, corrections, preferences, and session-summary artifacts stored as YAML-frontmatter markdown under `ctx.deps.config.memory_dir` (`.co-cli/memory/` in normal startup). Writes enter one lifecycle entrypoint: recent-window dedup may update and reindex an existing file, non-duplicate writes may optionally consolidate against recent memories, and only surviving ADD paths create a new file that is then indexed and subject to retention.
 - **Knowledge index**: a derived SQLite search index over memories, library articles, Obsidian notes, and Drive documents cached after `read_drive_file()`. It is rebuildable and searched through `search_memories` for memory-only recall or `search_knowledge` for cross-source retrieval; `search_knowledge` defaults to non-memory sources unless `source="memory"` is requested explicitly.
 - **Delegation metadata**: inline subagent provenance is carried in `ToolReturnPart.content`; background task state lives in `ctx.deps.session.background_tasks`. These support operator inspection but are not a separate recalled context layer.
@@ -23,25 +23,26 @@ Per-request dynamic layers (@agent.instructions — evaluated fresh, never accum
   add_project_instructions()    — .co-cli/instructions.md content (if present)
   add_always_on_memories()      — always_on=True memories as standing context
   add_personality_memories()    — personality-continuity memories
-  add_tool_surface_hint()       — progressive tool surface description; instructs model to call search_tools
+  add_deferred_tool_prompt()    — deferred tool awareness + discovery prompt (instructs model to call search_tools)
 
 Conversation-history governance (main agent only)
-  truncate_tool_returns()       — content-clear compactable tool results by per-tool-type recency (keep 5 most recent per type)
-  detect_safety_issues()        — doom-loop detection + shell reflection cap
-  inject_opening_context()      — recall_memory() against current user message; inject as SystemPromptPart
-  truncate_history_window()     — compact to head + summary marker + tail when over threshold
+  truncate_tool_results()         — content-clear compactable tool results by per-tool-type recency (keep 5 most recent per type)
+  compact_assistant_responses()   — cap large TextPart/ThinkingPart in older ModelResponse messages (2.5K chars)
+  detect_safety_issues()          — doom-loop detection + shell reflection cap
+  inject_opening_context()        — recall_memory() against current user message; inject as SystemPromptPart
+  summarize_history_window()      — compact to head + summary marker + tail when over threshold; context enrichment injected
 
 After each foreground turn
   _finalize_turn()
     -> analyze_for_signals() then handle_signal() on clean turns only
     -> touch_session() then save_session()
 
-Session persistence (see DESIGN-session.md for full details)
+Session persistence
   restore_session()
     -> find_latest_session(sessions_dir) by mtime; else new_session() and attempt save_session()
   .co-cli/sessions/{session-id}.json  — session_id, created_at, last_used_at, compaction_count
   .co-cli/sessions/{session-id}.jsonl — JSONL transcript (append-only, one ModelMessage per line)
-  message_history                     — persisted to .jsonl; loaded on /resume
+  message_history                     — appended to .jsonl per turn; loaded on /resume via load_transcript()
 
 Memory write path
   persist_memory()
@@ -77,104 +78,64 @@ Delegation metadata
 
 ```mermaid
 flowchart TD
-    Start[startup]
-
-    subgraph StartupFlow[startup]
-        direction TB
-        CreateDeps[create_deps]
-        MainAgent[build_agent + build_static_instructions]
-        ChatLoop[_chat_loop]
-        TaskGate{ROLE_TASK}
-        TaskAgent[build_task_agent]
-        Restore[restore_session]
-        SessionJson[deps.config.session_path]
-
-        CreateDeps --> MainAgent --> ChatLoop
-        ChatLoop --> TaskGate
-        TaskGate -->|yes| TaskAgent
-        ChatLoop --> Sync --> Restore --> SessionJson
+    subgraph Startup
+        CreateDeps[create_deps] --> BuildAgent[build_agent]
+        BuildAgent --> ChatLoop[_chat_loop]
+        ChatLoop --> Restore[restore_session]
     end
 
-    subgraph TurnFlow[foreground turn]
+    subgraph Turn["foreground turn"]
         direction TB
-        TurnStart[_run_foreground_turn]
         RunTurn[run_turn]
-        Date[add_current_date]
-        Shell[add_shell_guidance]
-        Project[add_project_instructions]
-        AlwaysOn[add_always_on_memories]
-        Personality[add_personality_memories]
-        ToolHint[add_tool_surface_hint]
-        Trim[truncate_tool_returns]
-        Safety[detect_safety_issues]
-        Recall[inject_opening_context]
-        RecallTool[recall_memory]
-        RecallState[deps.session.memory_recall_state]
-        Compact[truncate_history_window]
-        Finalize[_finalize_turn]
-        Interrupted{turn_result.interrupted}
-        Outcome{turn_result.outcome}
-        Signal[analyze_for_signals]
-        HandleSignal[handle_signal]
-        Touch[touch_session]
-        SaveSession[save_session]
 
-        TurnStart --> RunTurn
-        RunTurn --> Date --> Shell --> Project --> AlwaysOn --> Personality --> ToolHint
-        ToolHint --> Trim --> Safety --> Recall --> Compact --> Finalize
-        Recall --> RecallTool
-        Recall --> RecallState
-        Finalize --> Interrupted
-        Interrupted -->|false| Outcome
-        Outcome -->|!= error| Signal --> HandleSignal
-        Finalize --> Touch --> SaveSession --> SessionJson
+        subgraph Instructions["@agent.instructions (per request)"]
+            Date[current_date]
+            Shell[shell_guidance]
+            Project[project_instructions]
+            AlwaysOn[always_on_memories]
+            PersonalityMem[personality_memories]
+            DeferredTool[deferred_tool_prompt]
+        end
+
+        subgraph Processors["history processors (in order)"]
+            Trim[1. truncate_tool_results]
+            CompactResp[2. compact_assistant_responses]
+            Safety[3. detect_safety_issues]
+            Recall[4. inject_opening_context]
+            Compact[5. summarize_history_window]
+        end
+
+        subgraph PostTurn["_finalize_turn"]
+            Signal[analyze_for_signals]
+            HandleSignal[handle_signal]
+            SaveSession[save_session]
+        end
+
+        RunTurn --> Instructions --> Processors --> ModelCall[model API call]
+        ModelCall --> PostTurn
     end
 
-    subgraph PersistenceFlow[persistence]
+    subgraph Persistence
         direction TB
-        SaveMemory[persist_memory]
+        PersistMem[persist_memory]
         Dedup[_check_duplicate]
-        MemoryUpdate[_update_existing_memory]
         Consolidate[consolidate]
-        ApplyPlan[apply_plan_atomically]
-        MemoryDir[deps.config.memory_dir]
-        MemoryIndex[KnowledgeStore.index]
+        MemDir[memory_dir]
+        KSIndex[KnowledgeStore.index]
         Retention[enforce_retention]
-        RemoveStale[KnowledgeStore.remove_stale]
-        SaveArticle[save_article]
-        ArticleDedup[_find_article_by_url]
-        ArticleDir[ctx.deps.config.library_dir]
-        ArticleIndex[KnowledgeStore.index]
-        ArticleChunks[KnowledgeStore.index_chunks]
 
-        SaveMemory --> Dedup
-        Dedup -->|duplicate| MemoryUpdate --> MemoryIndex
-        Dedup -->|non-duplicate| Consolidate --> ApplyPlan --> MemoryDir
-        MemoryDir --> MemoryIndex --> Retention --> RemoveStale
-        SaveArticle --> ArticleDedup --> ArticleDir --> ArticleIndex --> ArticleChunks
+        PersistMem --> Dedup
+        Dedup -->|dup| KSIndex
+        Dedup -->|new| Consolidate --> MemDir --> KSIndex --> Retention
     end
 
-    subgraph RetrievalFlow[retrieval and metadata]
-        direction TB
-        SearchMem[search_memories]
-        SearchMemRoute[KnowledgeStore.search]
-        SearchKnow[search_knowledge]
-        SearchKnowRoute[KnowledgeStore.search]
-        SearchDB[deps.config.knowledge_db_path]
-        Delegate[run_*_subagent]
-        ToolMeta[ToolReturn content]
-        BgTasks[start_background_task]
-        TaskMeta[deps.session.background_tasks]
-
-        SearchMem --> SearchMemRoute --> SearchDB
-        SearchKnow --> SearchKnowRoute --> SearchDB
-        Delegate --> ToolMeta
-        BgTasks --> TaskMeta
+    subgraph Retrieval
+        SearchMem[search_memories] --> KS[KnowledgeStore.search]
+        SearchKnow[search_knowledge] --> KS
     end
 
-    Start --> StartupFlow --> TurnFlow
-    HandleSignal --> PersistenceFlow
-    PersistenceFlow --> RetrievalFlow
+    Startup --> Turn
+    HandleSignal --> Persistence
 ```
 
 ## 2. Core Logic
@@ -206,9 +167,9 @@ When no personality is configured, only numbered rules are guaranteed to partici
 | `add_project_instructions` | `.co-cli/instructions.md` exists | Full file contents |
 | `add_always_on_memories` | `always_on=True` memories exist | Standing context block, capped by `memory_injection_max_chars` |
 | `add_personality_memories` | personality configured | Relationship-continuity memories from the personality injector |
-| `add_tool_surface_hint` | always | Description of progressive tool surface; instructs model to call `search_tools` to unlock additional tools |
+| `add_deferred_tool_prompt` | deferred tools exist or discovery needed | Deferred tool awareness; instructs model to call `search_tools` to unlock additional tools |
 
-The static instructions and these runtime instruction layers are not written into `message_history`, so `truncate_history_window()` does not operate on them.
+The static instructions and these runtime instruction layers are not written into `message_history`, so `summarize_history_window()` does not operate on them.
 
 **Task agent**
 
@@ -216,23 +177,51 @@ The static instructions and these runtime instruction layers are not written int
 
 ### Conversation History
 
-Conversation history is the ephemeral transcript passed into each foreground turn. The main agent registers four history processors in this order:
+Conversation history is the ephemeral transcript passed into each foreground turn. The main agent registers five history processors in this order:
 
-1. `truncate_tool_returns`
-2. `detect_safety_issues`
-3. `inject_opening_context`
-4. `truncate_history_window`
+1. `truncate_tool_results`
+2. `compact_assistant_responses`
+3. `detect_safety_issues`
+4. `inject_opening_context`
+5. `summarize_history_window`
 
 This doc treats them as the context-governance layer. Their exact execution contract, retry boundaries, and approval interaction live in [DESIGN-core-loop.md](DESIGN-core-loop.md).
 
-Two persistence rules matter here:
+**Session persistence**
 
-1. `deps.config.session_path` stores only session metadata: `session_id`, `created_at`, `last_used_at`, and `compaction_count`.
-2. `message_history` itself is not written to disk. Restarts do not replay prior messages; only session metadata is restored, while memories and session-summary artifacts remain in the memory store.
+- `deps.config.session_path` stores session metadata: `session_id`, `created_at`, `last_used_at`, `compaction_count`.
+- `message_history` is appended to a JSONL transcript (`.co-cli/sessions/{session-id}.jsonl`) after each turn. On `/resume`, `load_transcript()` restores the message list from JSONL, skipping messages before the last compact boundary for files >5MB (threshold: `SKIP_PRECOMPACT_THRESHOLD`). Files >50MB are rejected entirely (`MAX_TRANSCRIPT_READ_BYTES`).
+- On normal restart without `/resume`, the session metadata is restored but message history starts fresh. Memories and session-summary artifacts remain in the memory store for recall.
 
-Compaction runs inline: when `truncate_history_window()` triggers, it calls `summarize_messages()` (from `_compaction.py`) inline — awaited inside the async history processor — to generate a summary of the dropped middle section. A circuit breaker (`compaction_failure_count` on `CoRuntimeState`) skips the LLM call after 3 consecutive failures and falls back to a static marker. When `model_registry` is absent (sub-agents, tests), the static marker is used directly without incrementing the failure counter.
+**Compaction**
 
-Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available (local or custom models with no reporting), it falls back to a character-count estimate (`total_chars // 4`). The compaction budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: it first tries the reasoning role's `context_window` from model quirks (with `llm_num_ctx` overriding the spec for Ollama), then falls back to `llm_num_ctx` when Ollama OpenAI-compat is active, then defaults to `100,000` tokens. The trigger fires when token count exceeds 85% of that budget. `deps.config.llm_num_ctx` may be overridden at bootstrap Step 2b with the runtime value probed from Ollama `/api/show` (see DESIGN-bootstrap.md §2), so the compaction budget always reflects the actual allocated context window. The minimum agentic context (`MIN_AGENTIC_CONTEXT = 65_536`, defined in `bootstrap/_check.py`) is the floor enforced at startup; below 64K, system prompt, tools, working history, and output reserve cannot fit without compacting every turn.
+When `summarize_history_window()` triggers (token count > 85% of budget), it gathers side-channel context via `_gather_compaction_context()` (file working set from `ToolCallPart.args`, pending session todos, always-on memories, prior-summary text from dropped messages — capped at 4K chars), then calls `summarize_messages()` inline with `context=` to generate a structured summary of the dropped middle section. The summarizer uses a sectioned template (Goal, Key Decisions, Working Set, Progress, Next Steps) assembled by `_build_summarizer_prompt()`. The circuit breaker (`compaction_failure_count` on `CoRuntimeState`) skips the LLM call after 3 consecutive failures and falls back to a static marker. When `model_registry` is absent (sub-agents, tests), the static marker is used directly without incrementing the failure counter.
+
+Design constraints:
+
+- **Prompt, not parser.** The structured template is a request to the LLM — the output is free-form. If the model ignores the sections, the summary still works. No post-hoc parsing or validation.
+- **Context enrichment is best-effort and capped.** Missing sources (no todos, no always-on memories, no file paths) never block summarization — `_gather_compaction_context()` returns `None` when empty. The assembled context string is hard-capped at 4K chars to prevent the summarizer itself from hitting token limits.
+- **Prior-summary detection.** When a prior compaction summary exists in the dropped messages (detected by scanning for the `"[Summary of"` prefix on `UserPromptPart.content`), it is appended to the context enrichment so the summarizer can integrate rather than re-summarize blindly. The template includes an explicit integration instruction.
+- **Prompt assembly order.** `_build_summarizer_prompt()` assembles: template → context addendum (`## Additional Context`) → personality addendum. Personality is always last — it modifies tone, while context provides factual input. When `context` is `None` or empty, the context addendum is omitted.
+- **In-place mutation.** Both `truncate_tool_results` and `compact_assistant_responses` mutate message parts in-place. This is acceptable because the REPL's `message_history` is overwritten with `turn_result.messages` each turn, and transcript writes only new messages per turn.
+
+Token counting uses real provider-reported `input_tokens` from the most recent `ModelResponse` as the primary source. When no usage data is available, it falls back to `total_chars // 4`. The compaction budget is resolved by `resolve_compaction_budget()`: model spec `context_window − max_tokens` (with `llm_num_ctx` overriding for Ollama) → `llm_num_ctx` when Ollama OpenAI-compat is active → `100,000` fallback.
+
+**Overflow recovery**
+
+When `run_turn()` catches a `ModelHTTPError`, `_is_context_overflow()` checks whether it is a context-length error: status code must be 400 or 413 AND the body must contain a context-length pattern (`"prompt is too long"`, `"context_length_exceeded"`, or `"maximum context length"`). Both conditions must match — bare 400 without a context-length message falls through to the tool-reformulation handler. Body is coerced via `str(e.body)` before matching because `ModelHTTPError.body` is typed `object | None` (OpenAI sends `dict`, Ollama may send `str`).
+
+On match, `emergency_compact()` runs: it calls `group_by_turn()` on the current history and returns `None` if ≤2 groups (nothing safe to drop). Otherwise it keeps the first group + a static marker + the last group. Recovery is one-shot — on second overflow after a successful compact, or when compaction is impossible, the error is terminal. The overflow handler resolves completely and never falls through to the 400 reformulation handler.
+
+**Tool output management**
+
+Two distinct mechanisms handle tool output size:
+
+1. **At return time** (`tool_output.py` → `persist_if_oversized()`): tool results >50K chars are saved to disk as content-addressed files under `.co-cli/tool-results/`, and a 2K-char preview placeholder is returned to the model. This is per-result, at the moment the tool returns.
+
+2. **In history** (`truncate_tool_results`): compactable tool results older than the 5 most recent per tool type are content-cleared with a static placeholder `"[tool result cleared — older than 5 most recent calls]"`. This runs before every model API call as processor #1. Compactable tools: `read_file`, `run_shell_command`, `find_in_files`, `list_directory`, `web_search`, `web_fetch`. The last turn (from the last `UserPromptPart` onward) is always protected.
+
+3. **Assistant response capping** (`compact_assistant_responses`): `TextPart` and `ThinkingPart` in `ModelResponse` messages before the last turn are capped at 2.5K chars with proportional head(25%)/tail(75%) truncation. Runs as processor #2. Uses a simple reverse scan for the last `UserPromptPart` as the protection boundary (no turn grouping — per-message operation, aligned with gemini-cli's `enforceMessageSizeLimits`). `ToolCallPart` args are never touched (critical for file path extraction by the summarizer's context enrichment).
 
 ### Memory
 
@@ -267,7 +256,7 @@ Recall is split in two:
 1. `add_always_on_memories()` injects up to five `always_on=True` memories as a standing instruction layer every request.
 2. `inject_opening_context()` runs once per new user turn, calls `recall_memory(query, max_results=3)`, and appends the formatted result as a trailing `SystemPromptPart`.
 
-`MemoryRecallState` only debounces recall to once per user turn and tracks counters. The decay policy governed by `memory_recall_half_life_days` lives inside `recall_memory()` scoring, not in the history processor itself.
+`MemoryRecallState` debounces recall to once per user turn and tracks counters (`recall_count`, `model_request_count`, `last_recall_user_turn`). The decay policy governed by `memory_recall_half_life_days` lives inside `recall_memory()` scoring, not in the history processor itself.
 
 **Frontmatter schema**
 
@@ -303,7 +292,7 @@ Optional reranking happens after retrieval:
 - TEI cross-encoder via `knowledge_cross_encoder_reranker_url`
 - LLM reranker via `knowledge_llm_reranker`
 
-Knowledge sync runs once at session start inside `create_deps()`. It syncs memory and library directories immediately; Obsidian is synced lazily before `search_knowledge()` when needed, and Drive documents are indexed as they are read.
+Knowledge sync runs once at session start inside `create_deps()`. It syncs memory and library directories immediately (hash-based, skips unchanged files); Obsidian is synced lazily before `search_knowledge()` when needed, and Drive documents are indexed as they are read.
 
 **Source routing in `search_knowledge()`**
 
@@ -321,9 +310,9 @@ In grep fallback mode, only library and memory searches are supported.
 
 Delegation provenance is captured in live session structures, not in a separate work-record store.
 
-- Inline subagents return `ToolReturn` payloads that include `run_id`, `role`, `model_name`, `requests_used`, `request_limit`, and `scope`.
-- `truncate_tool_returns()` content-clears compactable tool results by per-tool-type recency (keeping 5 most recent per type). Non-compactable tools (including subagent results) pass through intact, so delegation identity keys survive.
-- Background tasks are tracked in `ctx.deps.session.background_tasks` as `BackgroundTaskState` objects with command, cwd, status, timestamps, exit code, and an in-memory ring buffer of recent output.
+- Inline subagents return `ToolReturn` payloads that include `run_id`, `role`, `model_name`, `requests_used`, `request_limit`, and `scope`. Each subagent type adds domain-specific fields (e.g., coding: `summary`, `diff_preview`, `files_touched`, `confidence`; research: `summary`, `sources`, `confidence`).
+- `truncate_tool_results()` content-clears compactable tool results by per-tool-type recency (keeping 5 most recent per type). Non-compactable tools (including subagent results) pass through intact, so delegation identity keys survive.
+- Background tasks are tracked in `ctx.deps.session.background_tasks` as `BackgroundTaskState` objects with command, cwd, status (`running`/`completed`/`failed`/`cancelled`), timestamps, exit code, and an in-memory ring buffer of recent output (capped at 500 lines).
 
 The operator surface reads those live structures directly: `/history` scans transcript `ToolReturnPart`s for `run_*_subagent` and `start_background_task`, and `/tasks` reads `session.background_tasks`.
 
@@ -339,10 +328,9 @@ The operator surface reads those live structures directly: `/history` scans tran
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| _(removed)_ | | | Session TTL removed — sessions persist indefinitely; new session via `/new` |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | Contiguous same-call streak threshold for doom-loop safety injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | Shell-error reflection cap enforced by `detect_safety_issues()` |
-| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds when enabled; may be overridden at bootstrap Step 2b with the runtime Modelfile value probed from `/api/show` |
+| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama OpenAI context budget used by token-based compaction thresholds; may be overridden at bootstrap Step 2b with the runtime Modelfile value probed from `/api/show` |
 
 ### Memory
 
@@ -387,23 +375,24 @@ The operator surface reads those live structures directly: `/history` scans tran
 
 | File | Purpose |
 |------|---------|
-| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — single function assembling all 7 static instruction sections in explicit order |
+| `co_cli/prompts/_assembly.py` | `build_static_instructions()` — assembles all 7 static instruction sections in explicit order |
 | `co_cli/prompts/rules/` | Numbered behavioral rule files loaded in strict order |
 | `co_cli/prompts/personalities/_loader.py` | Soul seed, character memories, mindsets, examples, and critique loaders |
 | `co_cli/prompts/personalities/_injector.py` | Personality-continuity memory injection for the runtime instruction layer |
-| `co_cli/prompts/model_quirks/` | Provider/model-specific counter-steering overrides |
-| `co_cli/agent.py` | Main/task agent factories and `@agent.instructions` layer registration |
-| `co_cli/context/_history.py` | History processors: compactable-tool recency clearing, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker. Turn grouping primitive (`group_by_turn`, `TurnGroup`) used by processors and compaction boundaries |
-| `co_cli/context/_tool_result_storage.py` | Persistence engine for oversized tool results (>50KB): `persist_if_oversized()` writes content-addressed files, `check_tool_results_size()` utility for disk usage warnings |
-| `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, `estimate_message_tokens`, `latest_response_input_tokens` — shared by history processor and `/compact` |
-| `co_cli/context/_session.py` | Session JSON persistence helpers |
-| `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip for session transcript I/O |
-| `co_cli/context/_session_browser.py` | `list_sessions`, `SessionSummary`, `index_session_summary` — session listing and UI metadata |
-| `co_cli/context/_types.py` | `MemoryRecallState`, `SafetyState` dataclasses |
+| `co_cli/prompts/model_quirks/_loader.py` | Provider/model-specific counter-steering overrides |
+| `co_cli/agent.py` | Main/task agent factories, `@agent.instructions` layer registration, history processor registration, tool filter logic |
+| `co_cli/context/_history.py` | History processors: `truncate_tool_results`, `compact_assistant_responses`, `detect_safety_issues`, `inject_opening_context`, `summarize_history_window`. Context enrichment (`_gather_compaction_context`), emergency compaction (`emergency_compact`), turn grouping (`group_by_turn`, `TurnGroup`, `groups_to_messages`) |
+| `co_cli/context/_tool_result_storage.py` | Persistence for oversized tool results (>50K chars): `persist_if_oversized()` writes content-addressed files, returns 2K preview |
+| `co_cli/context/_summarization.py` | `summarize_messages`, `_build_summarizer_prompt`, `resolve_compaction_budget`, `estimate_message_tokens`, `latest_response_input_tokens` — shared by history processor and `/compact` |
+| `co_cli/context/_session.py` | Session JSON persistence: `new_session`, `save_session`, `load_session`, `find_latest_session`, `touch_session`, `increment_compaction` |
+| `co_cli/context/_transcript.py` | JSONL transcript: `append_messages`, `write_compact_boundary`, `load_transcript` with boundary-skip for resume |
+| `co_cli/context/_session_browser.py` | `list_sessions`, `SessionSummary` — session listing via mtime + head-read title extraction |
+| `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt` — generates the progressive tool discovery prompt for `add_deferred_tool_prompt()` |
+| `co_cli/context/_types.py` | `MemoryRecallState` (recall_count, model_request_count, last_recall_user_turn), `SafetyState` (doom_loop_injected, reflection_injected) |
 | `co_cli/memory/_lifecycle.py` | `persist_memory()` write pipeline |
 | `co_cli/memory/_consolidator.py` | LLM-driven `ConsolidationPlan` generation |
 | `co_cli/memory/_retention.py` | Retention enforcement for over-cap memory sets |
-| `co_cli/memory/_signal_detector.py` | Post-turn signal extraction and admission handling |
+| `co_cli/memory/_signal_detector.py` | Post-turn signal extraction (`analyze_for_signals`) and admission handling (`handle_signal`) |
 | `co_cli/knowledge/_store.py` | `KnowledgeStore` SQLite schema, sync, search, vector merge, and reranking hooks |
 | `co_cli/knowledge/_frontmatter.py` | Frontmatter parsing/validation and `ArtifactTypeEnum` |
 | `co_cli/knowledge/_chunker.py` | Chunking for non-memory sources |
@@ -411,8 +400,9 @@ The operator surface reads those live structures directly: `/history` scans tran
 | `co_cli/knowledge/_reranker.py` | TEI and LLM reranker adapters |
 | `co_cli/tools/memory.py` | `recall_memory`, `search_memories`, and memory file helpers |
 | `co_cli/tools/articles.py` | `search_knowledge`, article persistence, and article-detail retrieval |
-| `co_cli/tools/subagent.py` | Inline subagent tools that emit `run_id` and usage metadata |
-| `co_cli/tools/_background.py` | Session-scoped `BackgroundTaskState` and subprocess monitor helpers |
+| `co_cli/tools/tool_output.py` | `tool_output()` helper: `ToolReturn` construction with display/metadata separation; calls `persist_if_oversized()` for >50K content |
+| `co_cli/tools/subagent.py` | Inline subagent tools that emit `run_id`, `role`, `model_name`, usage metadata, and domain-specific fields |
+| `co_cli/tools/_background.py` | `BackgroundTaskState` dataclass and subprocess monitor (`spawn_task`, `_monitor`, `kill_task`) |
 | `co_cli/tools/task_control.py` | Background task tools over `session.background_tasks` |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (knowledge store init + sync) and `restore_session()` bootstrap the store and session identity |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (knowledge store init + sync) and `restore_session()` |
 | `co_cli/commands/_commands.py` | `/history` and `/tasks` slash commands over live delegation/background-task state |

@@ -4,10 +4,11 @@ Processors are chained via ``Agent(history_processors=[...])``. They run
 before every model request and transform the message list in-place.
 
 Public API (registered on the agent):
-    inject_opening_context  — async, injects recalled memories on each new user turn
-    truncate_tool_returns   — sync, content-clears compactable tool results by recency
-    detect_safety_issues    — sync, doom-loop detection + shell reflection cap
-    truncate_history_window — async, drops middle messages + inline LLM summary or static marker
+    truncate_tool_results        — sync, content-clears compactable tool results by recency
+    compact_assistant_responses  — sync, caps large TextPart/ThinkingPart in older ModelResponse
+    detect_safety_issues         — sync, doom-loop detection + shell reflection cap
+    inject_opening_context       — async, injects recalled memories on each new user turn
+    summarize_history_window     — async, summarizes middle messages via inline LLM or static marker
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from pydantic_ai.messages import (
 
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION
-from co_cli.context._compaction import (
+from co_cli.context._summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
     resolve_compaction_budget,
@@ -57,29 +58,14 @@ class TurnGroup:
 
     Boundary detection: a new group starts at each ``ModelRequest`` containing
     a ``UserPromptPart``.  Messages before the first such boundary form group 0.
-    ``tool_names`` is populated by ``group_by_turn()``, not by callers.
     """
 
     messages: list[ModelMessage]
     start_index: int
-    tool_names: frozenset[str]
 
 
-@dataclass
-class _CompactionBoundaries:
-    """Head/tail boundary positions for a compaction pass.
-
-    Produced by ``_compute_compaction_boundaries()`` and consumed by
-    ``truncate_history_window()``.
-
-    When ``valid`` is ``False``, no clean boundary could be found and the
-    caller must skip compaction.
-    """
-
-    head_end: int
-    tail_start: int
-    dropped_count: int
-    valid: bool
+_CompactionBoundaries = tuple[int, int, int]
+"""(head_end, tail_start, dropped_count) — None when no valid boundary exists."""
 
 
 # ---------------------------------------------------------------------------
@@ -88,14 +74,8 @@ class _CompactionBoundaries:
 
 
 def _make_turn_group(msgs: list[ModelMessage], start: int) -> TurnGroup:
-    """Construct a TurnGroup with tool_names extracted from ToolReturnParts."""
-    tool_names: set[str] = set()
-    for msg in msgs:
-        if isinstance(msg, ModelRequest):
-            for part in msg.parts:
-                if isinstance(part, ToolReturnPart):
-                    tool_names.add(part.tool_name)
-    return TurnGroup(messages=list(msgs), start_index=start, tool_names=frozenset(tool_names))
+    """Construct a TurnGroup from a contiguous slice of messages."""
+    return TurnGroup(messages=list(msgs), start_index=start)
 
 
 def group_by_turn(messages: list[ModelMessage]) -> list[TurnGroup]:
@@ -179,12 +159,11 @@ def _static_marker(dropped_count: int) -> ModelRequest:
 
 def _compute_compaction_boundaries(
     messages: list[ModelMessage],
-) -> _CompactionBoundaries:
+) -> _CompactionBoundaries | None:
     """Compute head/tail boundary positions for a compaction pass.
 
-    Runs the full boundary calculation sequence and returns a
-    ``_CompactionBoundaries`` with ``valid=False`` if no clean boundary
-    exists or there is nothing to drop.
+    Returns ``(head_end, tail_start, dropped_count)`` or ``None`` when no
+    clean boundary exists or there is nothing to drop.
     """
     first_run_end = find_first_run_end(messages)
     head_end = first_run_end + 1
@@ -198,23 +177,19 @@ def _compute_compaction_boundaries(
             tail_start = group.start_index
             break
     if tail_start >= len(messages) or tail_start <= head_end:
-        return _CompactionBoundaries(
-            head_end=head_end,
-            tail_start=tail_start,
-            dropped_count=0,
-            valid=False,
-        )
-    return _CompactionBoundaries(
-        head_end=head_end,
-        tail_start=tail_start,
-        dropped_count=tail_start - head_end,
-        valid=True,
-    )
+        return None
+    return (head_end, tail_start, tail_start - head_end)
 
 
 # ---------------------------------------------------------------------------
-# 1. Tool-output compaction processor (sync — no I/O)
+# Processor helpers (shared by #1 and #2)
 # ---------------------------------------------------------------------------
+
+OLDER_MSG_MAX_CHARS = 2_500
+
+FILE_TOOLS: frozenset[str] = frozenset({
+    "read_file", "write_file", "edit_file", "find_in_files", "list_directory",
+})
 
 COMPACTABLE_TOOLS: frozenset[str] = frozenset({
     "read_file", "run_shell_command", "find_in_files",
@@ -224,89 +199,221 @@ COMPACTABLE_KEEP_RECENT = 5
 _CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
 
 
-def truncate_tool_returns(
+def _find_last_turn_start(messages: list[ModelMessage]) -> int:
+    """Return the index of the last ModelRequest containing a UserPromptPart.
+
+    Returns 0 when no such message exists (protect nothing — degenerate case).
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], ModelRequest):
+            if any(isinstance(p, UserPromptPart) for p in messages[i].parts):
+                return i
+    return 0
+
+
+def _truncate_proportional(text: str, max_chars: int, head_ratio: float = 0.25) -> str:
+    """Truncate text keeping head(head_ratio) + tail(1-head_ratio) with a marker between."""
+    if len(text) <= max_chars:
+        return text
+    marker = "\n[...truncated...]\n"
+    available = max_chars - len(marker)
+    if available <= 0:
+        # max_chars too small for marker — hard truncate
+        return text[:max_chars]
+    head_size = int(available * head_ratio)
+    tail_size = available - head_size
+    return text[:head_size] + marker + text[-tail_size:]
+
+
+# ---------------------------------------------------------------------------
+# 1. truncate_tool_results (sync — no I/O)
+# ---------------------------------------------------------------------------
+
+
+def truncate_tool_results(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Content-clear compactable tool results older than the 5 most recent per tool type.
 
-    Protects the last turn group (all messages in the current turn).
+    Protects the last turn (everything from the last UserPromptPart onward).
     Non-compactable tools pass through intact regardless of count.
 
     Registered as the *first* history processor — cheap in-memory work, no
     LLM call.  ``ctx`` is required by pydantic-ai's history processor
     signature but no config fields are accessed.
     """
-    groups = group_by_turn(messages)
-    if not groups:
+    boundary = _find_last_turn_start(messages)
+    if boundary == 0:
         return messages
 
-    # Protect the last turn group
-    boundary_group = max(0, len(groups) - 1)
-    process_groups = groups[:boundary_group]
-    protected_groups = groups[boundary_group:]
-
-    if not process_groups:
-        return messages
+    older = messages[:boundary]
 
     # Reverse scan: build keep_set of part object ids for the 5 most
-    # recent per compactable tool type.  Uses id() rather than index tuples
-    # because p_idx restarts at 0 for each ModelRequest within a group.
+    # recent per compactable tool type.
     keep_ids: set[int] = set()
     seen_counts: dict[str, int] = {}
 
-    for g_idx in range(len(process_groups) - 1, -1, -1):
-        for msg in reversed(process_groups[g_idx].messages):
-            if not isinstance(msg, ModelRequest):
+    for msg in reversed(older):
+        if not isinstance(msg, ModelRequest):
+            continue
+        for part in reversed(msg.parts):
+            if not isinstance(part, ToolReturnPart):
                 continue
-            for part in reversed(msg.parts):
-                if not isinstance(part, ToolReturnPart):
-                    continue
-                if part.tool_name not in COMPACTABLE_TOOLS:
-                    continue
-                count = seen_counts.get(part.tool_name, 0)
-                if count < COMPACTABLE_KEEP_RECENT:
-                    keep_ids.add(id(part))
-                seen_counts[part.tool_name] = count + 1
+            if part.tool_name not in COMPACTABLE_TOOLS:
+                continue
+            count = seen_counts.get(part.tool_name, 0)
+            if count < COMPACTABLE_KEEP_RECENT:
+                keep_ids.add(id(part))
+            seen_counts[part.tool_name] = count + 1
 
     # Forward pass: content-clear compactable parts not in keep_ids
-    modified = False
-    for group in process_groups:
-        for msg in group.messages:
-            if not isinstance(msg, ModelRequest):
-                continue
-            new_parts: list = []
-            msg_modified = False
-            for part in msg.parts:
-                if (
-                    isinstance(part, ToolReturnPart)
-                    and part.tool_name in COMPACTABLE_TOOLS
-                    and id(part) not in keep_ids
-                ):
-                    new_parts.append(ToolReturnPart(
-                        tool_name=part.tool_name,
-                        content=_CLEARED_PLACEHOLDER,
-                        tool_call_id=part.tool_call_id,
-                    ))
-                    msg_modified = True
-                else:
-                    new_parts.append(part)
-            if msg_modified:
-                msg.parts = new_parts
-                modified = True
+    for msg in older:
+        if not isinstance(msg, ModelRequest):
+            continue
+        new_parts: list = []
+        msg_modified = False
+        for part in msg.parts:
+            if (
+                isinstance(part, ToolReturnPart)
+                and part.tool_name in COMPACTABLE_TOOLS
+                and id(part) not in keep_ids
+            ):
+                new_parts.append(ToolReturnPart(
+                    tool_name=part.tool_name,
+                    content=_CLEARED_PLACEHOLDER,
+                    tool_call_id=part.tool_call_id,
+                ))
+                msg_modified = True
+            else:
+                new_parts.append(part)
+        if msg_modified:
+            msg.parts = new_parts
 
-    if not modified:
+    return messages
+
+
+# ---------------------------------------------------------------------------
+# 2. compact_assistant_responses (sync — no I/O)
+# ---------------------------------------------------------------------------
+
+
+def compact_assistant_responses(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Cap large TextPart/ThinkingPart in older ModelResponse messages.
+
+    Protects the last turn (everything from the last UserPromptPart onward).
+    Does NOT touch ToolCallPart (args are critical for file path extraction),
+    ToolReturnPart, or UserPromptPart.  Mutates in-place — no list rebuild.
+    """
+    boundary = _find_last_turn_start(messages)
+    if boundary == 0:
         return messages
 
-    return groups_to_messages(process_groups + protected_groups)
+    for msg in messages[:boundary]:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if isinstance(part, (TextPart, ThinkingPart)) and len(part.content) > OLDER_MSG_MAX_CHARS:
+                part.content = _truncate_proportional(part.content, OLDER_MSG_MAX_CHARS)
+
+    return messages
 
 
 # ---------------------------------------------------------------------------
-# 2. Sliding-window processor (async — LLM call)
+# Context enrichment for summarization
+# ---------------------------------------------------------------------------
+
+_CONTEXT_MAX_CHARS = 4_000
+_SUMMARY_MARKER_PREFIX = "[Summary of"
+
+
+def _gather_compaction_context(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+    dropped: list[ModelMessage],
+) -> str | None:
+    """Gather side-channel context for the summarizer from sources that survive truncation.
+
+    Sources:
+    1. File working set from ToolCallPart.args (never truncated by processor #1)
+    2. Pending session todos from ctx.deps.session
+    3. Always-on memories (the summarizer is a separate agent without the main agent's dynamic layers)
+    4. Prior-summary text from dropped messages
+
+    Returns None when no context was gathered.
+    """
+    context_parts: list[str] = []
+
+    # 1. File working set — extracted from ToolCallPart.args (never truncated)
+    file_paths: set[str] = set()
+    for msg in messages:
+        if isinstance(msg, ModelResponse):
+            for part in msg.parts:
+                if isinstance(part, ToolCallPart) and part.tool_name in FILE_TOOLS:
+                    args = part.args_as_dict()
+                    path = args.get("path") or args.get("file_path")
+                    if path:
+                        file_paths.add(path)
+    if file_paths:
+        context_parts.append(f"Files touched: {', '.join(sorted(file_paths)[:20])}")
+
+    # 2. Session todos — in-memory, always current
+    todos = ctx.deps.session.session_todos
+    if todos:
+        pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]
+        if pending:
+            todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]]
+            context_parts.append("Active tasks:\n" + "\n".join(todo_lines))
+
+    # 3. Always-on memories — standing context the model always sees
+    from co_cli.tools.memory import load_always_on_memories
+    memories = load_always_on_memories(ctx.deps.config.memory_dir)
+    if memories:
+        mem_lines = [m.content[:200] for m in memories[:5]]
+        context_parts.append("Standing memories:\n" + "\n".join(mem_lines))
+
+    # 4. Prior-summary text from dropped messages
+    for msg in dropped:
+        if isinstance(msg, ModelRequest):
+            for part in msg.parts:
+                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                    if part.content.startswith(_SUMMARY_MARKER_PREFIX):
+                        context_parts.append(f"Prior summary:\n{part.content}")
+
+    if not context_parts:
+        return None
+
+    result = "\n\n".join(context_parts)
+    return result[:_CONTEXT_MAX_CHARS] if len(result) > _CONTEXT_MAX_CHARS else result
+
+
+# ---------------------------------------------------------------------------
+# Emergency compaction (no LLM — used by overflow recovery)
 # ---------------------------------------------------------------------------
 
 
-async def truncate_history_window(
+def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None:
+    """Static emergency compaction for overflow recovery — no LLM call.
+
+    Keeps first group + last group + static marker between.
+    Returns None if ≤2 groups (nothing to compact).
+    """
+    groups = group_by_turn(messages)
+    if len(groups) <= 2:
+        return None
+    dropped_count = sum(len(g.messages) for g in groups[1:-1])
+    return groups_to_messages([groups[0]]) + [_static_marker(dropped_count)] + groups_to_messages([groups[-1]])
+
+
+# ---------------------------------------------------------------------------
+# 5. summarize_history_window (async — LLM call)
+# ---------------------------------------------------------------------------
+
+
+async def summarize_history_window(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
@@ -338,13 +445,11 @@ async def truncate_history_window(
         return messages
 
     bounds = _compute_compaction_boundaries(messages)
-    if not bounds.valid:
+    if bounds is None:
         return messages
 
-    head_end = bounds.head_end
-    tail_start = bounds.tail_start
+    head_end, tail_start, dropped_count = bounds
     dropped = messages[head_end:tail_start]
-    dropped_count = bounds.dropped_count
 
     # Inline summarisation — single code path, no pre-computation
     summary_text: str | None = None
@@ -359,6 +464,10 @@ async def truncate_history_window(
     else:
         from co_cli.display._core import console
         console.print("[dim]Compacting conversation...[/dim]")
+        # Context enrichment — gather side-channel context only when the LLM
+        # summarizer will actually run. Skipped on static-marker fallback paths
+        # (no registry, circuit breaker) to avoid wasted I/O.
+        enrichment = _gather_compaction_context(ctx, messages, dropped)
         _none_resolved = ResolvedModel(model=None, settings=None)
         resolved = registry.get(ROLE_SUMMARIZATION, _none_resolved)
         try:
@@ -366,6 +475,7 @@ async def truncate_history_window(
                 dropped,
                 resolved,
                 personality_active=bool(ctx.deps.config.personality),
+                context=enrichment,
             )
             ctx.deps.runtime.compaction_failure_count = 0
         except (ModelHTTPError, ModelAPIError) as e:
@@ -388,7 +498,7 @@ async def truncate_history_window(
 
 
 # ---------------------------------------------------------------------------
-# 3. Opening context injection (async — memory recall, no LLM)
+# 4. inject_opening_context (async — memory recall, no LLM)
 # ---------------------------------------------------------------------------
 
 
@@ -474,7 +584,7 @@ async def inject_opening_context(
 
 
 # ---------------------------------------------------------------------------
-# 4. Safety processor: doom loop detection + shell reflection cap
+# 3. detect_safety_issues (sync — doom loop + shell reflection cap)
 # ---------------------------------------------------------------------------
 
 

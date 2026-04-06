@@ -104,6 +104,8 @@ class _TurnState:
     # Tool-call reformulation budget (HTTP 400 only — app logic, not transport retry).
     # Independent of SDK transport retries (429/5xx handled by OpenAI SDK).
     tool_reformat_budget: int = 2
+    # Overflow recovery: one-shot flag — emergency compact attempted at most once per turn.
+    overflow_recovery_attempted: bool = False
     # in-turn (updated after each segment)
     latest_result: AgentRunResult | None = None
     latest_streamed_text: bool = False
@@ -423,6 +425,30 @@ def _check_output_limits(
 
 
 # ---------------------------------------------------------------------------
+# Overflow detection
+# ---------------------------------------------------------------------------
+
+_CONTEXT_OVERFLOW_PATTERNS = (
+    "prompt is too long",
+    "context_length_exceeded",
+    "maximum context length",
+)
+
+
+def _is_context_overflow(e: ModelHTTPError) -> bool:
+    """Detect context-overflow errors from provider HTTP responses.
+
+    Both status code AND body pattern must match — bare 400 without a
+    context-length message falls through to the reformulation handler.
+    """
+    if e.status_code not in (400, 413):
+        return False
+    body_str = str(e.body) if e.body is not None else ""
+    body_lower = body_str.lower()
+    return any(pat in body_lower for pat in _CONTEXT_OVERFLOW_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
 
@@ -485,6 +511,23 @@ async def run_turn(
 
                 except ModelHTTPError as e:
                     code = e.status_code
+                    # Context overflow — must resolve completely (compact+retry OR terminal).
+                    # Design invariant: NEVER falls through to the 400 reformulation handler.
+                    if _is_context_overflow(e):
+                        if not turn_state.overflow_recovery_attempted:
+                            turn_state.overflow_recovery_attempted = True
+                            from co_cli.context._history import emergency_compact
+                            compacted = emergency_compact(turn_state.current_history)
+                            if compacted is not None:
+                                turn_state.current_history = compacted
+                                turn_state.current_input = None
+                                frontend.on_status("Context overflow — compacting and retrying...")
+                                continue
+                        # Terminal: either second overflow after retry, or compaction
+                        # impossible (≤2 groups). Both are unrecoverable.
+                        frontend.on_status("Context overflow — unrecoverable.")
+                        turn_state.outcome = "error"
+                        return _build_error_turn_result(turn_state)
                     # HTTP 400: malformed tool call — reflect error to model for reformulation.
                     # This is app logic (not transport retry); budget is independent of SDK retries.
                     if code == 400 and turn_state.tool_reformat_budget > 0:

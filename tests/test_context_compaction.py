@@ -15,12 +15,15 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.agent import build_agent
 from co_cli.config import ROLE_REASONING, settings
-from co_cli.context._compaction import (
+from co_cli.context._summarization import (
     _DEFAULT_TOKEN_BUDGET,
+    _PERSONALITY_COMPACTION_ADDENDUM,
+    _SUMMARIZE_PROMPT,
+    _build_summarizer_prompt,
     latest_response_input_tokens,
     resolve_compaction_budget,
 )
-from co_cli.context._history import truncate_history_window
+from co_cli.context._history import summarize_history_window
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools._shell_backend import ShellBackend
 
@@ -76,7 +79,7 @@ async def test_compaction_triggers_on_real_input_tokens():
     # Use a non-Ollama provider so budget = _DEFAULT_TOKEN_BUDGET (100k), not llm_num_ctx
     config = CoConfig(llm_provider="anthropic")
     ctx = _make_ctx(config)
-    result = await truncate_history_window(ctx, msgs)
+    result = await summarize_history_window(ctx, msgs)
     assert len(result) < len(msgs)
 
 
@@ -99,7 +102,7 @@ async def test_compaction_fallback_when_no_usage_data():
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
     config = CoConfig(llm_provider="ollama-openai", llm_num_ctx=30)
     ctx = _make_ctx(config)
-    result = await truncate_history_window(ctx, msgs_no_usage)
+    result = await summarize_history_window(ctx, msgs_no_usage)
     assert len(result) < len(msgs_no_usage)
 
 
@@ -122,7 +125,7 @@ async def test_compaction_triggers_on_ollama_budget():
     )
     assert config.uses_ollama_openai()
     ctx = _make_ctx(config)
-    result = await truncate_history_window(ctx, msgs)
+    result = await summarize_history_window(ctx, msgs)
     assert len(result) < len(msgs)
 
 
@@ -183,3 +186,47 @@ def test_budget_floor_prevents_negative():
     budget = resolve_compaction_budget(config, registry)
     # max(100K - 80K, 100K // 2) = max(20K, 50K) = 50K
     assert budget == 50_000
+
+
+# ---------------------------------------------------------------------------
+# _build_summarizer_prompt() — pure function, 4 combinations
+# ---------------------------------------------------------------------------
+
+
+def test_build_summarizer_prompt_no_context_no_personality():
+    """(a) context=None, personality_active=False → template unchanged."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=False)
+    assert result == _SUMMARIZE_PROMPT
+
+
+def test_build_summarizer_prompt_with_context_no_personality():
+    """(b) context present, personality_active=False → template + Additional Context."""
+    ctx_text = "Files touched: /foo/bar.py"
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=ctx_text, personality_active=False)
+    assert result.startswith(_SUMMARIZE_PROMPT)
+    assert "## Additional Context" in result
+    assert ctx_text in result
+    # No personality addendum
+    assert _PERSONALITY_COMPACTION_ADDENDUM not in result
+
+
+def test_build_summarizer_prompt_no_context_with_personality():
+    """(c) context=None, personality_active=True → template + personality addendum."""
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=None, personality_active=True)
+    assert result.startswith(_SUMMARIZE_PROMPT)
+    assert _PERSONALITY_COMPACTION_ADDENDUM in result
+    assert "## Additional Context" not in result
+
+
+def test_build_summarizer_prompt_with_context_and_personality():
+    """(d) context + personality → template + context + personality (personality always last)."""
+    ctx_text = "Active tasks:\n- [pending] fix bug"
+    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=ctx_text, personality_active=True)
+    assert result.startswith(_SUMMARIZE_PROMPT)
+    assert "## Additional Context" in result
+    assert ctx_text in result
+    assert _PERSONALITY_COMPACTION_ADDENDUM in result
+    # Personality comes after context
+    ctx_pos = result.index("## Additional Context")
+    personality_pos = result.index("Additionally, preserve:")
+    assert personality_pos > ctx_pos

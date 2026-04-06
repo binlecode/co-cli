@@ -207,28 +207,37 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors And Inline Compaction
 
-The main agent is built with four history processors in this exact order:
+The main agent is built with five history processors in this exact order:
 
-1. `truncate_tool_returns`
-2. `detect_safety_issues`
-3. `inject_opening_context`
-4. `truncate_history_window`
+1. `truncate_tool_results`
+2. `compact_assistant_responses`
+3. `detect_safety_issues`
+4. `inject_opening_context`
+5. `summarize_history_window`
 
 Processor roles:
 
 | Processor | Role |
 | --- | --- |
-| `truncate_tool_returns` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn group |
+| `truncate_tool_results` | content-clears compactable tool results by per-tool-type recency (keep 5 most recent per type); protects the last turn (from last `UserPromptPart` onward) |
+| `compact_assistant_responses` | caps large `TextPart`/`ThinkingPart` in older `ModelResponse` messages at 2.5K chars with proportional head/tail truncation; protects the last turn (from last `UserPromptPart` onward); does not touch `ToolCallPart` args |
 | `detect_safety_issues` | injects guardrails for doom loops and repeated shell failures |
 | `inject_opening_context` | recalls memories and injects them as a trailing `SystemPromptPart` |
-| `truncate_history_window` | replaces the middle of long histories with an inline LLM summary or static marker (circuit-breaker fallback) |
+| `summarize_history_window` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
+
+Ordering rationale:
+
+- **#1–2 before #5**: truncation and response capping run before summarization. The summarizer sees partially cleared content but receives rich side-channel context (file working set from `ToolCallPart.args`, session todos, always-on memories) to compensate. This avoids architectural complexity (persistent history, non-destructive processors) while matching fork-cc's proven strategy.
+- **#3 before #5**: `detect_safety_issues` scans recent tool calls for doom loops and shell error streaks. Running it before summarization ensures it scans the full un-compacted history — if summarization drops the middle first, streak evidence in the dropped slice would be missed.
+- **#4 before #5**: `inject_opening_context` appends recalled memories at the tail, outside the summarizer's dropped slice. Placed before summarization to keep the costliest processor (LLM call) last.
+- **All sync processors (#1–3) before async (#4–5)**: sync processors run inline with zero overhead. Async processors are awaited directly on the event loop.
 
 Compaction behavior:
 
-- `truncate_history_window()` calls `summarize_messages()` inline when compaction triggers
+- `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, always-on memories, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
-- the budget is resolved by `resolve_compaction_budget()` in `context/_compaction.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- the budget is resolved by `resolve_compaction_budget()` in `context/_summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `model_registry` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
@@ -248,7 +257,8 @@ Error matrix:
 
 | Condition | Behavior |
 | --- | --- |
-| HTTP 400 with reformat budget left | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
+| HTTP 400/413 with context-length body pattern (`_is_context_overflow`) | one-shot `emergency_compact()` — keeps first + last turn group with static marker. Retry on success; terminal if ≤2 groups or second overflow. Never falls through to 400 reformulation. |
+| HTTP 400 with reformat budget left (not context overflow) | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
 | HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'` and return `_build_error_turn_result()` |
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |
 | `TimeoutError` (segment hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
@@ -303,7 +313,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
-| compaction as an inline concern with circuit breaker | `truncate_history_window()` with `compaction_failure_count` | aligned |
+| compaction as an inline concern with circuit breaker | `summarize_history_window()` with `compaction_failure_count` | aligned |
 | isolated specialist contexts | sub-agents use `make_subagent_deps()` and stay outside the foreground loop | aligned |
 
 The intentional simplification remains:
@@ -332,7 +342,7 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
-| `co_cli/context/_compaction.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
+| `co_cli/context/_summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/_types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent.py` | main/task agent factories and native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |

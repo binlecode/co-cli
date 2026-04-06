@@ -1,4 +1,4 @@
-"""Compaction engine — summarization, budget resolution, and token estimation.
+"""Summarization engine — LLM summarizer agent, budget resolution, and token estimation.
 
 Shared by both the sliding-window history processor (``_history.py``) and the
 ``/compact`` slash command (``_commands.py``).
@@ -114,19 +114,24 @@ def resolve_compaction_budget(
 # ---------------------------------------------------------------------------
 
 _SUMMARIZE_PROMPT = (
-    "Distill the conversation history into a handoff summary for another LLM "
-    "that will resume this conversation.\n\n"
-    "Write the summary from the user's perspective. Start with 'I asked you...' "
-    "and use first person throughout.\n\n"
-    "Include:\n"
-    "- Current progress and what has been accomplished\n"
-    "- Key decisions made and why\n"
-    "- Remaining work and next steps\n"
-    "- Critical file paths, URLs, and tool results still needed\n"
-    "- User constraints, preferences, and stated requirements\n"
-    "- Any delegated work in progress and its status\n\n"
-    "Prioritize recent actions and unfinished work over completed early steps.\n"
-    "Be concise — this replaces the original messages to save context space."
+    "Distill the conversation history into a structured handoff summary.\n"
+    "Write from the user's perspective. Start with 'I asked you...'\n\n"
+    "Use these sections:\n\n"
+    "## Goal\n"
+    "What the user is trying to accomplish. Include constraints and preferences.\n\n"
+    "## Key Decisions\n"
+    "Important decisions made and why. Include rejected alternatives if relevant.\n\n"
+    "## Working Set\n"
+    "Files read, edited, or created. URLs fetched. Tools actively in use.\n\n"
+    "## Progress\n"
+    "What has been accomplished. What is in progress. What remains.\n\n"
+    "## Next Steps\n"
+    "Immediate next actions. Any blockers or pending dependencies.\n\n"
+    "If a prior summary exists in the conversation, integrate its content —\n"
+    "do not discard it. Update sections with new information.\n"
+    "Skip sections that have no content — do not generate filler.\n\n"
+    "Be concise — this replaces the original messages to save context space.\n"
+    "Prioritize recent actions and unfinished work over completed early steps."
 )
 
 _PERSONALITY_COMPACTION_ADDENDUM = (
@@ -147,6 +152,24 @@ _SUMMARIZER_SYSTEM_PROMPT = (
 )
 
 
+def _build_summarizer_prompt(
+    template: str,
+    context: str | None,
+    personality_active: bool,
+) -> str:
+    """Assemble the final summarizer prompt from template + optional context + personality.
+
+    Assembly order: template → context addendum → personality addendum.
+    Personality is always last (tone modifier); context provides factual input.
+    """
+    parts = [template]
+    if context:
+        parts.append(f"\n\n## Additional Context\n{context}")
+    if personality_active:
+        parts.append(_PERSONALITY_COMPACTION_ADDENDUM)
+    return "".join(parts)
+
+
 _summarizer_agent: Agent[None, str] = Agent(
     output_type=str,
     # Use instructions (not system_prompt) so the guardrail is applied
@@ -160,16 +183,16 @@ async def summarize_messages(
     resolved_model: ResolvedModel,
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
+    context: str | None = None,
 ) -> str:
     """Summarise *messages* via the module-level summariser Agent (no tools).
 
     Used by both the sliding-window processor and ``/compact``.
     Returns the summary text, or raises on failure (caller handles fallback).
     """
-    if personality_active:
-        prompt = prompt + _PERSONALITY_COMPACTION_ADDENDUM
+    final_prompt = _build_summarizer_prompt(prompt, context, personality_active)
     result = await _summarizer_agent.run(
-        prompt,
+        final_prompt,
         message_history=messages,
         model=resolved_model.model,
         model_settings=resolved_model.settings,

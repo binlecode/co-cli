@@ -16,9 +16,10 @@ from co_cli.deps import CoDeps, CoConfig, ToolConfig
 from co_cli._model_factory import ResolvedModel
 from co_cli.context._history import (
     inject_opening_context,
-    truncate_tool_returns,
+    truncate_tool_results,
+    compact_assistant_responses,
     detect_safety_issues,
-    truncate_history_window,
+    summarize_history_window,
 )
 from co_cli.tools.shell import run_shell_command
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
@@ -26,7 +27,7 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_gmail_emails, search_gmail_emails, create_gmail_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, _load_always_on_memories
+from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, load_always_on_memories
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 from co_cli.tools.todo import write_todos, read_todos
 from co_cli.tools.capabilities import check_capabilities
@@ -287,10 +288,11 @@ def build_agent(
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[
-            truncate_tool_returns,
+            truncate_tool_results,
+            compact_assistant_responses,
             detect_safety_issues,
             inject_opening_context,
-            truncate_history_window,
+            summarize_history_window,
         ],
         toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
     )
@@ -322,7 +324,7 @@ def build_agent(
     def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject always_on memories as standing context every turn."""
         memory_dir = ctx.deps.config.memory_dir
-        entries = _load_always_on_memories(memory_dir)
+        entries = load_always_on_memories(memory_dir)
         if not entries:
             return ""
         max_chars = ctx.deps.config.memory_injection_max_chars
