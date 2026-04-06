@@ -50,7 +50,8 @@ async def test_save_article_creates_file(tmp_path: Path):
     )
 
     assert result.metadata["action"] == "saved"
-    assert result.metadata["article_id"] == 1
+    assert isinstance(result.metadata["article_id"], str)
+    assert len(result.metadata["article_id"]) == 36  # standard UUID with dashes
     library_dir = tmp_path / "library"
     files = list(library_dir.glob("*.md"))
     assert len(files) == 1

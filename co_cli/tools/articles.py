@@ -28,7 +28,7 @@ from pydantic_ai import RunContext
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import SearchResult
-from co_cli.tools.memory import _slugify, _load_memories, _grep_recall
+from co_cli.tools.memory import slugify, load_memories, grep_recall
 from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
 
@@ -218,7 +218,7 @@ async def search_knowledge(
             grep_dir = ctx.deps.config.memory_dir
         else:
             grep_dir = ctx.deps.config.library_dir
-        memories = _load_memories(grep_dir, kind=effective_kind)
+        memories = load_memories(grep_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
                 memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -228,7 +228,7 @@ async def search_knowledge(
             memories = [m for m in memories if m.created and m.created >= created_after]
         if created_before:
             memories = [m for m in memories if m.created and m.created <= created_before]
-        matches = _grep_recall(memories, query, limit)
+        matches = grep_recall(memories, query, limit)
         if not matches:
             return tool_output(f"No results found for '{query}'", count=0, results=[])
         lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
@@ -378,12 +378,10 @@ async def save_article(
                 logger.warning(f"Failed to reindex consolidated article: {e}")
         return result
 
-    # Load all items to determine next ID
-    all_items = _load_memories(library_dir)
-    max_id = max((m.id for m in all_items), default=0)
-    article_id = max_id + 1
-    slug = _slugify(title[:50])
-    filename = f"{article_id:03d}-{slug}.md"
+    import uuid as _uuid
+    article_id = str(_uuid.uuid4())
+    slug = slugify(title[:50])
+    filename = f"{slug}-{article_id[:6]}.md"
 
     frontmatter: dict[str, Any] = {
         "id": article_id,
@@ -476,7 +474,7 @@ async def search_articles(
     """
     library_dir = ctx.deps.config.library_dir
 
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -535,7 +533,7 @@ async def search_articles(
             logger.warning(f"FTS search failed, falling back to grep: {e}")
 
     # Grep fallback
-    articles = _load_memories(library_dir, kind="article")
+    articles = load_memories(library_dir, kind="article")
     query_lower = query.lower()
     matches = [
         a for a in articles
@@ -575,7 +573,8 @@ async def search_articles(
         if len(first_para) > 200:
             first_para = first_para[:197] + "..."
 
-        lines.append(f"**{title}** (id: {a.id})")
+        display_id = str(a.id)[:8] if isinstance(a.id, str) else str(a.id)
+        lines.append(f"**{title}** (id: {display_id})")
         if origin_url:
             lines.append(f"Source: {origin_url}")
         if a.tags:

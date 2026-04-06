@@ -295,7 +295,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli.context._compaction import (
+    from co_cli.context._summarization import (
         summarize_messages,
         resolve_compaction_budget,
         estimate_message_tokens,
@@ -346,42 +346,57 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     """Delete a memory by ID."""
     from pathlib import Path
 
+    from co_cli.knowledge._frontmatter import parse_frontmatter
+
     if not args.strip():
         console.print("[bold red]Usage:[/bold red] /forget <memory_id>")
-        console.print("[dim]Example: /forget 5[/dim]")
+        console.print("[dim]Example: /forget 5  or  /forget a1b2c3d4[/dim]")
         return None
 
-    try:
-        memory_id = int(args.strip())
-    except ValueError:
-        console.print(f"[bold red]Invalid memory ID:[/bold red] {args}")
-        console.print("[dim]Memory ID must be a number.[/dim]")
-        return None
-
+    arg = args.strip()
     memory_dir = ctx.deps.config.memory_dir
     if not memory_dir.exists():
         console.print("[dim]No memory directory found.[/dim]")
         return None
 
-    # Find file with this ID
-    matching_files = list(memory_dir.glob(f"{memory_id:03d}-*.md"))
-    if not matching_files:
-        console.print(f"[bold red]Memory {memory_id} not found[/bold red]")
+    # Legacy integer path: glob {id:03d}-*.md
+    file_to_delete = None
+    try:
+        memory_id_int = int(arg)
+        matching_files = list(memory_dir.glob(f"{memory_id_int:03d}-*.md"))
+        if matching_files:
+            file_to_delete = matching_files[0]
+    except ValueError:
+        pass
+
+    # UUID prefix path: scan frontmatter for startswith match
+    if file_to_delete is None and len(arg) >= 6:
+        for p in memory_dir.glob("*.md"):
+            try:
+                raw = p.read_text(encoding="utf-8")
+                fm, _ = parse_frontmatter(raw)
+                fid = str(fm.get("id", ""))
+                if fid.startswith(arg):
+                    file_to_delete = p
+                    break
+            except Exception:
+                continue
+
+    if file_to_delete is None:
+        console.print(f"[bold red]Memory {arg} not found[/bold red]")
         console.print("[dim]Use /list_memories to see available IDs.[/dim]")
         return None
 
-    # Delete file
-    file_to_delete = matching_files[0]
     file_to_delete.unlink()
     if ctx.deps.knowledge_store is not None:
         ctx.deps.knowledge_store.remove("memory", str(file_to_delete))
-    console.print(f"[success]✓ Deleted memory {memory_id}: {file_to_delete.name}[/success]")
+    console.print(f"[success]✓ Deleted memory {arg}: {file_to_delete.name}[/success]")
     return None
 
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
-    from co_cli.context._compaction import index_session_summary
+    from co_cli.context._summarization import index_session_summary
     from co_cli.knowledge._frontmatter import ArtifactTypeEnum
     from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
     from co_cli._model_factory import ResolvedModel

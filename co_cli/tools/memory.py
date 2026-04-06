@@ -31,7 +31,7 @@ from co_cli.knowledge._frontmatter import (
     validate_memory_frontmatter,
 )
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import DEFAULT_MEMORY_DEDUP_THRESHOLD, DEFAULT_MEMORY_AUTO_SAVE_TAGS, ROLE_SUMMARIZATION
+from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
 from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 class MemoryEntry:
     """In-memory representation of a loaded memory file."""
 
-    id: int
+    id: int | str
     path: Path
     content: str
     tags: list[str]
@@ -68,7 +68,7 @@ class MemoryEntry:
 # ---------------------------------------------------------------------------
 
 
-def _load_memories(
+def load_memories(
     memory_dir: Path,
     *,
     tags: list[str] | None = None,
@@ -139,7 +139,7 @@ def _load_memories(
 # ---------------------------------------------------------------------------
 
 
-def _slugify(text: str) -> str:
+def slugify(text: str) -> str:
     """Convert text to URL-friendly slug (max 50 chars).
 
     Args:
@@ -177,11 +177,12 @@ def _classify_certainty(content: str) -> str:
     return "medium"
 
 
-def _detect_provenance(tags: list[str] | None) -> str:
+def _detect_provenance(tags: list[str] | None, auto_save_tags: list[str]) -> str:
     """Detect if memory was auto-saved (detected) or explicitly requested (user-told).
 
     Args:
         tags: Tags list from save_memory call
+        auto_save_tags: Tags that indicate auto-save (from config)
 
     Returns:
         "detected" if signal tags present, "user-told" otherwise
@@ -189,7 +190,7 @@ def _detect_provenance(tags: list[str] | None) -> str:
     if not tags:
         return "user-told"
 
-    signal_tags = set(DEFAULT_MEMORY_AUTO_SAVE_TAGS)
+    signal_tags = set(auto_save_tags)
     return "detected" if any(t in signal_tags for t in tags) else "user-told"
 
 
@@ -239,7 +240,7 @@ def _decay_multiplier(ts_iso: str, half_life_days: int) -> float:
         return 1.0
 
 
-def _grep_recall(
+def grep_recall(
     memories: list[MemoryEntry],
     query: str,
     max_results: int,
@@ -267,7 +268,7 @@ def _grep_recall(
 
 
 def _check_duplicate(
-    new_content: str, recent_memories: list[MemoryEntry], threshold: int = DEFAULT_MEMORY_DEDUP_THRESHOLD
+    new_content: str, recent_memories: list[MemoryEntry], threshold: int
 ) -> tuple[bool, MemoryEntry | None, float]:
     """Check if new content is duplicate of existing memory using token-based similarity.
 
@@ -310,7 +311,8 @@ def _check_duplicate(
 
 
 def _update_existing_memory(
-    entry: MemoryEntry, new_content: str, new_tags: list[str] | None
+    entry: MemoryEntry, new_content: str, new_tags: list[str] | None,
+    auto_save_tags: list[str],
 ) -> ToolReturn:
     """Update existing memory with new content (consolidation).
 
@@ -339,7 +341,7 @@ def _update_existing_memory(
     # Update frontmatter
     existing_fm["updated"] = datetime.now(timezone.utc).isoformat()
     existing_fm["tags"] = merged_tags
-    existing_fm["provenance"] = _detect_provenance(merged_tags)
+    existing_fm["provenance"] = _detect_provenance(merged_tags, auto_save_tags)
     existing_fm["auto_category"] = _detect_category(merged_tags)
     existing_fm["certainty"] = _classify_certainty(new_content)
     existing_fm.setdefault("kind", "memory")
@@ -370,7 +372,7 @@ def _update_existing_memory(
 _ALWAYS_ON_CAP = 5
 
 
-def _load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
+def load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
     """Return up to _ALWAYS_ON_CAP memories with always_on=True.
 
     Loads all memories, filters to always_on entries, and caps at 5.
@@ -378,7 +380,7 @@ def _load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
     """
     if not memory_dir.exists():
         return []
-    memories = _load_memories(memory_dir)
+    memories = load_memories(memory_dir)
     return [m for m in memories if m.always_on][:_ALWAYS_ON_CAP]
 
 
@@ -448,7 +450,7 @@ async def save_memory(
         )
         meta = result.metadata or {}
         span.set_attribute("memory.action", meta.get("action", "unknown"))
-        span.set_attribute("memory.memory_id", meta.get("memory_id", 0))
+        span.set_attribute("memory.memory_id", meta.get("memory_id", ""))
         if "similarity" in meta:
             span.set_attribute("memory.dedup_similarity", meta["similarity"])
         if meta.get("decay_triggered"):
@@ -506,7 +508,7 @@ async def recall_memory(
     memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -570,7 +572,7 @@ async def recall_memory(
         except Exception as e:
             logger.warning(f"FTS recall failed, falling back to grep: {e}")
             # Fall through to grep path
-            memories = _load_memories(memory_dir)
+            memories = load_memories(memory_dir)
             if tags:
                 if tag_match_mode == "all":
                     memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -581,9 +583,9 @@ async def recall_memory(
             if created_before:
                 memories = [m for m in memories if m.created and m.created <= created_before]
             memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
-            matches = _grep_recall(memories, query, max_results)
+            matches = grep_recall(memories, query, max_results)
     else:
-        memories = _load_memories(memory_dir)
+        memories = load_memories(memory_dir)
         if tags:
             if tag_match_mode == "all":
                 memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -594,7 +596,7 @@ async def recall_memory(
         if created_before:
             memories = [m for m in memories if m.created and m.created <= created_before]
         memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
-        matches = _grep_recall(memories, query, max_results)
+        matches = grep_recall(memories, query, max_results)
 
     if not matches:
         return tool_output(
@@ -604,11 +606,11 @@ async def recall_memory(
         )
 
     # One-hop traversal: surface related memories (§14.1)
-    match_ids = {m.id for m in matches}
+    match_ids = {str(m.id) for m in matches}
     # Lazy full load: only when matched entries have related slugs to follow
     has_related = any(m.related for m in matches)
     if has_related:
-        _all_memories = _load_memories(memory_dir)
+        _all_memories = load_memories(memory_dir)
         all_by_slug: dict[str, MemoryEntry] = {m.path.stem: m for m in _all_memories}
     else:
         all_by_slug: dict[str, MemoryEntry] = {}
@@ -619,9 +621,9 @@ async def recall_memory(
             continue
         for slug in m.related:
             linked = all_by_slug.get(slug)
-            if linked and linked.id not in match_ids:
+            if linked and str(linked.id) not in match_ids:
                 related_entries.append(linked)
-                match_ids.add(linked.id)
+                match_ids.add(str(linked.id))
             if len(related_entries) >= 5:
                 break
         if len(related_entries) >= 5:
@@ -634,7 +636,8 @@ async def recall_memory(
     ]
     result_dicts: list[dict[str, Any]] = []
     for r in matches:
-        lines.append(f"**Memory {r.id}** (created {r.created[:10]})")
+        display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
+        lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
         if r.tags:
             lines.append(f"Tags: {', '.join(r.tags)}")
         lines.append(f"{r.content}\n")
@@ -652,7 +655,8 @@ async def recall_memory(
     if related_entries:
         lines.append("**Related memories:**\n")
         for r in related_entries:
-            lines.append(f"**Memory {r.id}** (created {r.created[:10]})")
+            display_id = str(r.id)[:8] if isinstance(r.id, str) else str(r.id)
+            lines.append(f"**Memory {display_id}** (created {r.created[:10]})")
             if r.tags:
                 lines.append(f"Tags: {', '.join(r.tags)}")
             lines.append(f"{r.content}\n")
@@ -710,7 +714,7 @@ async def search_memories(
     memory_dir = ctx.deps.config.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid"):
+    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             results = ctx.deps.knowledge_store.search(
                 query,
@@ -768,7 +772,7 @@ async def search_memories(
 
     otel_trace.get_current_span().set_attribute("rag.backend", "grep")
     # Grep fallback
-    memories = _load_memories(memory_dir, kind="memory")
+    memories = load_memories(memory_dir, kind="memory")
     if tags:
         if tag_match_mode == "all":
             memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -780,7 +784,7 @@ async def search_memories(
         memories = [m for m in memories if m.created and m.created <= created_before]
     memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
 
-    matches = _grep_recall(memories, query, limit)
+    matches = grep_recall(memories, query, limit)
     if not matches:
         return tool_output(f"No memories found matching '{query}'", count=0, results=[])
 
@@ -835,7 +839,7 @@ async def list_memories(
               Passing kind="memory" returns only conversation memories.
     """
     memory_dir = ctx.deps.config.memory_dir
-    memories = _load_memories(memory_dir, kind=kind)
+    memories = load_memories(memory_dir, kind=kind)
 
     if not memories:
         no_dir = not memory_dir.exists()
@@ -853,7 +857,7 @@ async def list_memories(
         )
 
     # Sort by ID
-    memories.sort(key=lambda m: m.id)
+    memories.sort(key=lambda m: str(m.id))
     total = len(memories)
 
     # Paginate
@@ -905,8 +909,9 @@ async def list_memories(
 
         kind_str = f" [{md.get('kind', 'memory')}]"
         artifact_str = f" ({md['artifact_type']})" if md.get("artifact_type") else ""
+        display_id = str(md['id'])[:8] if isinstance(md['id'], str) else f"{md['id']:03d}"
         lines.append(
-            f"**{md['id']:03d}** ({date_str}){kind_str}{artifact_str}{category_str}{protected_str} "
+            f"**{display_id}** ({date_str}){kind_str}{artifact_str}{category_str}{protected_str} "
             f": {md['summary']}"
         )
 

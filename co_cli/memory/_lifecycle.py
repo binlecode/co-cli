@@ -29,6 +29,7 @@ def apply_plan_atomically(
     plan: Any,
     alias_map: dict[str, Any],
     new_content: str,
+    auto_save_tags: list[str],
 ) -> None:
     """Apply a ConsolidationPlan against resolved MemoryEntry objects.
 
@@ -48,7 +49,7 @@ def apply_plan_atomically(
             if action.target_alias and action.target_alias in alias_map:
                 entry = alias_map[action.target_alias]
                 try:
-                    _update_existing_memory(entry, new_content, entry.tags)
+                    _update_existing_memory(entry, new_content, entry.tags, auto_save_tags)
                 except Exception as e:
                     logger.warning(f"apply_plan_atomically UPDATE failed for {action.target_alias}: {e}")
         elif action.action == "DELETE":
@@ -118,10 +119,10 @@ async def _persist_memory_inner(
 ) -> dict[str, Any]:
     # Import here to avoid module-level circular import
     from co_cli.tools.memory import (
-        _load_memories,
+        load_memories,
         _check_duplicate,
         _update_existing_memory,
-        _slugify,
+        slugify,
         _classify_certainty,
         _detect_provenance,
         _detect_category,
@@ -131,10 +132,8 @@ async def _persist_memory_inner(
     memory_dir = deps.config.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    # For next-id: must include all items (memories + articles share the ID sequence)
-    all_items_for_id = _load_memories(memory_dir)
     # For dedup/consolidation candidates: memories only
-    memories = _load_memories(memory_dir, kind="memory")
+    memories = load_memories(memory_dir, kind="memory")
 
     # When title is provided (e.g. session checkpoints), skip dedup — the
     # filename is already unique by design (timestamp-based).
@@ -159,7 +158,7 @@ async def _persist_memory_inner(
                 f"Duplicate detected (similarity: {similarity:.1f}%) "
                 f"- updating memory {match.id}"
             )
-            result = _update_existing_memory(match, content, tags)
+            result = _update_existing_memory(match, content, tags, deps.config.memory_auto_save_tags)
             result.metadata["similarity"] = similarity
             if deps.knowledge_store is not None:
                 try:
@@ -173,7 +172,7 @@ async def _persist_memory_inner(
                         source=entry_source,
                         kind=entry_kind,
                         path=str(match.path),
-                        title=_slugify(content[:50]),
+                        title=slugify(content[:50]),
                         content=body.strip(),
                         mtime=match.path.stat().st_mtime,
                         hash=file_hash,
@@ -195,7 +194,7 @@ async def _persist_memory_inner(
             candidates = sorted(memories, key=lambda m: m.created, reverse=True)[:deps.config.memory_consolidation_top_k]
             alias_map = {f"M{i+1}": entry for i, entry in enumerate(candidates)}
             plan = await consolidate(content, candidates, resolved, timeout_seconds=timeout)
-            apply_plan_atomically(plan, alias_map, content)
+            apply_plan_atomically(plan, alias_map, content, deps.config.memory_auto_save_tags)
 
             has_add = any(a.action == "ADD" for a in plan.actions)
             # Only exit early when there are non-ADD actions (MERGEs): content was
@@ -227,9 +226,10 @@ async def _persist_memory_inner(
             )
 
     # Step 3: No duplicate — create new memory
-    max_id = max((m.id for m in all_items_for_id), default=0)
-    memory_id = max_id + 1
-    filename = f"{title}.md" if title else f"{memory_id:03d}-{_slugify(content[:50])}.md"
+    import uuid as _uuid
+    memory_id = str(_uuid.uuid4())
+    slug = slugify(content[:50])
+    filename = f"{title}.md" if title else f"{slug}-{memory_id[:6]}.md"
 
     # Normalize tags to lowercase so detection functions match consistently
     tags = [t.lower() for t in tags] if tags else []
@@ -239,7 +239,7 @@ async def _persist_memory_inner(
         "kind": "memory",
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tags,
-        "provenance": provenance if provenance is not None else _detect_provenance(tags),
+        "provenance": provenance if provenance is not None else _detect_provenance(tags, deps.config.memory_auto_save_tags),
         "auto_category": _detect_category(tags),
         "certainty": _classify_certainty(content),
     }
@@ -268,7 +268,7 @@ async def _persist_memory_inner(
                 source="memory",
                 kind="memory",
                 path=str(file_path),
-                title=_slugify(content[:50]),
+                title=slugify(content[:50]),
                 content=content.strip(),
                 mtime=file_path.stat().st_mtime,
                 hash=_hashlib.sha256(md_content.encode()).hexdigest(),
@@ -289,7 +289,7 @@ async def _persist_memory_inner(
 
     # Step 4: Retention cap — trigger if strictly exceeded (memories only;
     # articles are decay_protected and must not be evicted by memory pressure)
-    all_memories = _load_memories(memory_dir, kind="memory")
+    all_memories = load_memories(memory_dir, kind="memory")
     total_count = len(all_memories)
 
     if total_count > deps.config.memory_max_count:
