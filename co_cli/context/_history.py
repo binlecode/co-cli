@@ -211,7 +211,7 @@ def _find_last_turn_start(messages: list[ModelMessage]) -> int:
     return 0
 
 
-def _truncate_proportional(text: str, max_chars: int, head_ratio: float = 0.25) -> str:
+def _truncate_proportional(text: str, max_chars: int, head_ratio: float = 0.20) -> str:
     """Truncate text keeping head(head_ratio) + tail(1-head_ratio) with a marker between."""
     if len(text) <= max_chars:
         return text

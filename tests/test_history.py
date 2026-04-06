@@ -588,15 +588,15 @@ def test_is_context_overflow_500():
 
 
 def test_truncate_proportional_preserves_head_tail():
-    """_truncate_proportional preserves 25% head + 75% tail + marker."""
+    """_truncate_proportional preserves 20% head + 80% tail + marker."""
     text = "A" * 1000
     result = _truncate_proportional(text, max_chars=200)
     assert len(result) <= 200
     assert "[...truncated...]" in result
-    # Head should be ~25% of available space, tail ~75%
+    # Head should be ~20% of available space, tail ~80% (aligned with gemini-cli)
     marker = "\n[...truncated...]\n"
     available = 200 - len(marker)
-    head_size = int(available * 0.25)
+    head_size = int(available * 0.20)
     tail_size = available - head_size
     assert result[:head_size] == "A" * head_size
     assert result.endswith("A" * tail_size)
