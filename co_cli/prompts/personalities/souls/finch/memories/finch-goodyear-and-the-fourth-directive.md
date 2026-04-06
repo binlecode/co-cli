@@ -8,6 +8,7 @@ tags:
 - finch
 - character
 - source-material
+read_only: true
 ---
 
 I found Goodyear in the girl's backpack after the murder I hid from. I've never forgiven myself for hiding. "Hunger turned men into murderers, but me — it made me a coward." Everything I've built since is the intervention I didn't make that day.

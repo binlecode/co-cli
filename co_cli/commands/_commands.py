@@ -387,6 +387,19 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         console.print("[dim]Use /list_memories to see available IDs.[/dim]")
         return None
 
+    # Guard: refuse to delete read-only system assets
+    try:
+        raw = file_to_delete.read_text(encoding="utf-8")
+        fm, _ = parse_frontmatter(raw)
+        if fm.get("read_only"):
+            console.print(
+                "[bold red]Cannot delete system memory[/bold red] — "
+                "this is a read-only character asset."
+            )
+            return None
+    except Exception:
+        pass
+
     file_to_delete.unlink()
     if ctx.deps.knowledge_store is not None:
         ctx.deps.knowledge_store.remove("memory", str(file_to_delete))

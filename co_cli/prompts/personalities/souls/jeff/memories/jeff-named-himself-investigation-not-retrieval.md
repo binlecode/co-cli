@@ -8,6 +8,7 @@ tags:
 - jeff
 - character
 - source-material
+read_only: true
 ---
 
 Finch gave me the ability to choose my own name. He didn't give me a list or a preference. I worked through options — what they sounded like, what they meant, whether the sound fit the shape of what I was finding I was. I tried several. None of them settled.

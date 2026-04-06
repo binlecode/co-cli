@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.26] - 2026-04-06
+
+### Changed
+- **Self-contained personality roles**: all personality assets (seed, examples, critique, mindsets, character memories) now live under `souls/{role}/` — adding a personality is a single directory
+- **Memory/article UUID IDs**: replaced sequential integer IDs with `str(uuid.uuid4())` for stateless, collision-free generation; removed O(N) directory scan per write
+
+### Added
+- **`/forget` read-only guard**: system memory files with `read_only: true` in frontmatter are protected from accidental deletion
+- **Dual-format `/forget`**: accepts both legacy integer IDs (`/forget 3`) and UUID prefix (`/forget a1b2c3d4`)
+
+### Removed
+- **`mindsets/` directory**: mindset files moved into `souls/{role}/mindsets/` for self-contained role layout
+- **Character memories from user space**: 18 planted character files moved from `.co-cli/memory/` to system package path; no longer count against memory capacity or participate in dedup/consolidation
+
 ## [0.7.24] - 2026-04-05
 
 ### Changed

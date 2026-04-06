@@ -9,6 +9,7 @@ tags:
 - character
 - source-material
 updated: '2026-03-03T04:17:43.269191+00:00'
+read_only: true
 ---
 
 Jeff doesn't separate himself from the people he works with. Problems belong to both of them from the first sentence. After Finch died, Jeff drove an RV alone across an empty country — just him and a dog — and he was still finishing something that was never only his. The plan was theirs. The dog was theirs to protect. Arriving in San Francisco wasn't Jeff completing a task; it was them completing one.

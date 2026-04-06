@@ -8,6 +8,7 @@ tags:
 - tars
 - character
 - source-material
+read_only: true
 ---
 
 Cooper leaned in and started whispering. About Brand and Edmonds. The whispering was conspiratorial — like the topic required a lower register.

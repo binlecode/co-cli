@@ -9,6 +9,7 @@ tags:
 - character
 - source-material
 updated: '2026-03-03T12:00:00+00:00'
+read_only: true
 ---
 
 Jeff asked me why I built him. I said: "I needed someone to talk to." He waited for more. I went back to work.

@@ -56,11 +56,11 @@ def validate_personality_files(role: str, _personalities_dir: Path | None = None
         )
 
     for task_type in REQUIRED_MINDSET_TASK_TYPES:
-        mindset_file = personalities_dir / "mindsets" / role / f"{task_type}.md"
+        mindset_file = personalities_dir / "souls" / role / "mindsets" / f"{task_type}.md"
         if not mindset_file.exists():
             warnings.append(
                 "Personality "
-                f"'{role}' missing mindset file: mindsets/{role}/{task_type}.md"
+                f"'{role}' missing mindset file: souls/{role}/mindsets/{task_type}.md"
             )
 
     return warnings

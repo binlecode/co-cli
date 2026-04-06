@@ -8,6 +8,7 @@ tags:
 - finch
 - character
 - source-material
+read_only: true
 ---
 
 Jeff took the wheel while I was asleep. He got about thirty feet before Goodyear escaped outside.

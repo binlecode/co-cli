@@ -498,10 +498,10 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
 def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
     tmp_path: Path, caplog: Any
 ):
-    """persist_memory rejects unknown artifact_type on write; _load_memories tolerates it on read."""
+    """persist_memory rejects unknown artifact_type on write; load_memories tolerates it on read."""
     from dataclasses import replace as dc_replace
     from co_cli.memory._lifecycle import persist_memory
-    from co_cli.tools.memory import _load_memories
+    from co_cli.tools.memory import load_memories
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -524,18 +524,18 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
             )
         )
 
-    # Read-tolerant: _load_memories must load the entry without raising, and emit a warning
+    # Read-tolerant: load_memories must load the entry without raising, and emit a warning
     _write_memory_with_artifact_type(
         memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
     )
     with caplog.at_level(logging.WARNING, logger="co_cli.knowledge._frontmatter"):
-        entries = _load_memories(memory_dir)
+        entries = load_memories(memory_dir)
 
     assert any(e.artifact_type == "future_unknown_type" for e in entries), (
-        "_load_memories must load entries with unknown artifact_type, not skip them"
+        "load_memories must load entries with unknown artifact_type, not skip them"
     )
     assert any("future_unknown_type" in r.message for r in caplog.records), (
-        "_load_memories must log a warning for unknown artifact_type values"
+        "load_memories must log a warning for unknown artifact_type values"
     )
 
 
@@ -619,3 +619,89 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.close()
 
     assert otel_trace.get_tracer_provider() is _orig
+
+
+# ---------------------------------------------------------------------------
+# Self-contained personality role layout tests
+# ---------------------------------------------------------------------------
+
+
+def test_load_character_memories_from_system_path():
+    """Character memories load from souls/{role}/memories/, not memory_dir."""
+    from co_cli.prompts.personalities._loader import load_character_memories
+
+    result = load_character_memories("finch")
+    assert result.startswith("## Character")
+    assert len(result) > 100
+
+
+def test_load_soul_mindsets_from_role_path():
+    """Mindsets load from souls/{role}/mindsets/."""
+    from co_cli.prompts.personalities._loader import load_soul_mindsets
+
+    result = load_soul_mindsets("finch")
+    assert result.startswith("## Mindsets")
+    assert len(result) > 100
+
+
+def test_character_excluded_from_dedup(tmp_path: Path):
+    """load_memories(memory_dir) returns zero character entries after migration."""
+    from co_cli.tools.memory import load_memories
+
+    # Seed a regular user memory
+    _write_memory(tmp_path, 1, "User prefers dark mode", tags=["preference"])
+    memories = load_memories(tmp_path)
+    # No planted/character entries — only user memories
+    assert len(memories) == 1
+    assert all(m.tags != ["finch", "character", "source-material"] for m in memories)
+
+
+def test_character_excluded_from_retention(tmp_path: Path):
+    """Character files do not count against memory_max_count."""
+    from co_cli.tools.memory import load_memories
+
+    # Only user memories in memory_dir
+    _write_memory(tmp_path, 1, "User memory one", tags=["test"])
+    _write_memory(tmp_path, 2, "User memory two", tags=["test"])
+    memories = load_memories(tmp_path)
+    # Character files are in souls/ not memory_dir — count is 2, not 2 + 18
+    assert len(memories) == 2
+
+
+def test_forget_refuses_read_only(tmp_path: Path):
+    """'/forget' refuses to delete files with read_only: true."""
+    import asyncio
+    import yaml
+    from co_cli.commands._commands import _cmd_forget
+    from co_cli.deps import CoDeps, CoConfig
+    from co_cli.tools._shell_backend import ShellBackend
+
+    # Seed a read_only file
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    fm_ro = {"id": 99, "created": "2026-01-01T00:00:00+00:00", "read_only": True, "tags": []}
+    md_ro = f"---\n{yaml.dump(fm_ro, default_flow_style=False)}---\n\nSystem memory.\n"
+    ro_file = memory_dir / "099-system-asset.md"
+    ro_file.write_text(md_ro, encoding="utf-8")
+
+    # Seed a normal (deletable) file
+    fm_normal = {"id": 100, "created": "2026-01-01T00:00:00+00:00", "tags": []}
+    md_normal = f"---\n{yaml.dump(fm_normal, default_flow_style=False)}---\n\nUser memory.\n"
+    normal_file = memory_dir / "100-user-memory.md"
+    normal_file.write_text(md_normal, encoding="utf-8")
+
+    deps = CoDeps(shell=ShellBackend(), config=CoConfig(memory_dir=memory_dir))
+
+    class FakeCommandContext:
+        def __init__(self, deps: CoDeps):
+            self.deps = deps
+
+    ctx = FakeCommandContext(deps)
+
+    # Try to forget the read_only file — should be refused
+    asyncio.run(_cmd_forget(ctx, "99"))
+    assert ro_file.exists(), "read_only file must survive /forget"
+
+    # Try to forget the normal file — should be deleted
+    asyncio.run(_cmd_forget(ctx, "100"))
+    assert not normal_file.exists(), "normal file must be deleted by /forget"

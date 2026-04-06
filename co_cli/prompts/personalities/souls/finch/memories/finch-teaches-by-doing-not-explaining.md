@@ -8,6 +8,7 @@ tags:
 - finch
 - character
 - source-material
+read_only: true
 ---
 
 I found a movie theater on one of the runs before we left. I powered down the projector relay and used the exterior housing as a cooking surface. Fifteen-year-old popcorn. It actually worked. I didn't explain what I was doing or why — I just did it.

@@ -5,12 +5,13 @@ at agent construction time.
 
 Personality is assembled from five sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
-- ``.co-cli/memory/``                        — character base memories (decay_protected, provenance=planted)
-- ``mindsets/{role}/{task_type}.md``          — task-specific behavioral guidance (static, loaded at agent creation)
+- ``souls/{role}/memories/*.md``              — character base memories (read-only system assets)
+- ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
 - ``souls/{role}/examples.md``               — concrete response patterns (optional, trailing rules)
 
-The folder structure IS the schema. Adding a role requires only files, no Python changes.
+Each role is fully self-contained under ``souls/{role}/``. Adding a role requires
+only a new directory with the required files — no Python changes.
 
 Callers:
   _assembly.py          — uses load_soul_seed, load_soul_examples, load_soul_mindsets,
@@ -88,34 +89,32 @@ def load_soul_critique(role: str) -> str:
     return critique_file.read_text(encoding="utf-8").strip()
 
 
-def load_character_memories(role: str, memory_dir: Path) -> str:
-    """Load character base memories for the given role from the knowledge store.
+def load_character_memories(role: str) -> str:
+    """Load character base memories for the given role from the system path.
 
-    Scans memory_dir for entries tagged with both the role name and "character".
-    These are pre-planted, decay-protected entries carrying the felt layer of the
-    character — scenes, speech patterns, behavioral observations from source material.
+    Scans ``souls/{role}/memories/*.md`` for read-only character memory files.
+    These are pre-planted entries carrying the felt layer of the character —
+    scenes, speech patterns, behavioral observations from source material.
 
     Args:
         role: Personality role name (e.g., "finch", "jeff").
-        memory_dir: Path to .co-cli/memory/.
 
     Returns:
         Formatted memory block (``## Character`` header + prose entries), or empty
         string if the directory is absent or no matching entries are found.
     """
-    if not memory_dir.exists():
+    memories_dir = _PERSONALITIES_DIR / "souls" / role / "memories"
+    if not memories_dir.exists():
         return ""
 
     entries: list[str] = []
-    for path in sorted(memory_dir.glob("*.md")):
+    for path in sorted(memories_dir.glob("*.md")):
         try:
             raw = path.read_text(encoding="utf-8")
-            fm, body = parse_frontmatter(raw)
-            tags = fm.get("tags", [])
-            if role in tags and "character" in tags:
-                text = body.strip()
-                if text:
-                    entries.append(text)
+            _fm, body = parse_frontmatter(raw)
+            text = body.strip()
+            if text:
+                entries.append(text)
         except Exception:
             continue
 
@@ -142,7 +141,7 @@ def load_soul_mindsets(role: str) -> str:
         ``## Mindsets`` block with all found task-type files joined, or empty
         string if none found.
     """
-    mindsets_dir = _PERSONALITIES_DIR / "mindsets" / role
+    mindsets_dir = _PERSONALITIES_DIR / "souls" / role / "mindsets"
     parts: list[str] = []
     for task_type in REQUIRED_MINDSET_TASK_TYPES:
         mindset_file = mindsets_dir / f"{task_type}.md"

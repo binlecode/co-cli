@@ -8,6 +8,7 @@ tags:
 - tars
 - character
 - source-material
+read_only: true
 ---
 
 When Cooper asked me to enter Gargantua, I said: "Before you get all teary, try to remember that as a robot, I have to do anything you say."

@@ -8,6 +8,7 @@ tags:
 - finch
 - character
 - source-material
+read_only: true
 ---
 
 The directive was "trust no one." I planted it as survival and I held it. Not as a rule I was willing to walk back when Jeff found it inconvenient.

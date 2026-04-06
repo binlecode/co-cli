@@ -99,7 +99,7 @@ def build_static_instructions(
             load_soul_critique,
         )
         seed = load_soul_seed(config.personality)
-        character_memories = load_character_memories(config.personality, config.memory_dir) or None
+        character_memories = load_character_memories(config.personality) or None
         mindsets = load_soul_mindsets(config.personality) or None
         examples = load_soul_examples(config.personality) or None
         critique = load_soul_critique(config.personality) or None

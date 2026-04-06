@@ -147,8 +147,8 @@ flowchart TD
 `build_agent()` assembles static instructions once via `build_static_instructions()` in `prompts/_assembly.py`. Assembly order is strict:
 
 1. Soul seed from `co_cli/prompts/personalities/souls/<role>/seed.md`
-2. Character memories from files in `config.memory_dir` tagged with both `<role>` and `"character"`
-3. Mindsets from `co_cli/prompts/personalities/mindsets/<role>/<task_type>.md`
+2. Character memories from `co_cli/prompts/personalities/souls/<role>/memories/*.md` (read-only system assets)
+3. Mindsets from `co_cli/prompts/personalities/souls/<role>/mindsets/<task_type>.md`
 4. Behavioral rules from `co_cli/prompts/rules/NN_rule_id.md`, loaded in contiguous numeric order
 5. Soul examples from `co_cli/prompts/personalities/souls/<role>/examples.md`
 6. Model-specific counter-steering from `co_cli/prompts/model_quirks/`
@@ -221,7 +221,22 @@ Two distinct mechanisms handle tool output size:
 
 2. **In history** (`truncate_tool_results`): compactable tool results older than the 5 most recent per tool type are content-cleared with a static placeholder `"[tool result cleared — older than 5 most recent calls]"`. This runs before every model API call as processor #1. Compactable tools: `read_file`, `run_shell_command`, `find_in_files`, `list_directory`, `web_search`, `web_fetch`. The last turn (from the last `UserPromptPart` onward) is always protected.
 
-3. **Assistant response capping** (`compact_assistant_responses`): `TextPart` and `ThinkingPart` in `ModelResponse` messages before the last turn are capped at 2.5K chars with proportional head(25%)/tail(75%) truncation. Runs as processor #2. Uses a simple reverse scan for the last `UserPromptPart` as the protection boundary (no turn grouping — per-message operation, aligned with gemini-cli's `enforceMessageSizeLimits`). `ToolCallPart` args are never touched (critical for file path extraction by the summarizer's context enrichment).
+3. **Assistant response capping** (`compact_assistant_responses`): caps large assistant text in older messages. Runs as processor #2.
+
+```text
+boundary = reverse scan for last ModelRequest with UserPromptPart
+if boundary == 0: return (single turn — nothing to cap)
+
+for each ModelResponse in messages[:boundary]:
+    for each TextPart or ThinkingPart:
+        if len(content) > 2500:
+            content = head(20%) + "[...truncated...]" + tail(80%)
+            (in-place mutation — no new object, no list rebuild)
+
+skip: ToolCallPart (args needed for file path extraction), ToolReturnPart, UserPromptPart
+```
+
+Protection boundary uses `_find_last_turn_start()` — a single reverse scan, no turn grouping. Per-message operation aligned with gemini-cli's `enforceMessageSizeLimits` (same 2.5K cap for older messages). The 20/80 head/tail ratio (aligned with gemini-cli's `truncateProportionally`) preserves conclusions and final code over preamble.
 
 ### Memory
 
