@@ -173,6 +173,22 @@ User responds `y` (once) / `n` (deny) / `a` (always for this scope this session)
 
 ---
 
+### Concurrency Safety — Resource Locks
+
+Approval controls permission; resource locks control correctness. When pydantic-ai dispatches multiple tool calls in parallel (or parent + subagent touch the same resource), read-modify-write tools must not corrupt data.
+
+`ResourceLockStore` (`co_cli/tools/_resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite.
+
+| Tool | Lock key | Why |
+|------|----------|-----|
+| `edit_file` | resolved absolute path | read-modify-write; second edit reads stale content |
+| `update_memory` | memory slug | read-modify-write on `.md` body |
+| `append_memory` | memory slug | read-append-write on `.md` body |
+
+Tools that do NOT need locking: `write_file` (blind overwrite, no read step), `save_memory` / `save_article` (UUID IDs eliminate IO conflict; dedup is best-effort under concurrency), `run_shell_command` (too broad to guard), `create_gmail_draft` (independent external resources).
+
+---
+
 ### MCP Tool Servers
 
 Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `should_defer=True` after discovery and participate in the same visibility policy as native tools.
@@ -255,7 +271,7 @@ All paths resolved through `_resolve_workspace_path()` and verified against `wor
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid when `knowledge_store` is available, grep fallback otherwise. `always_on=True` memories are injected as standing context every turn via `_load_always_on_memories()`.
+YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid when `knowledge_store` is available, grep fallback otherwise. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|

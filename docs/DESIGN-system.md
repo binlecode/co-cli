@@ -136,10 +136,10 @@ The foreground runtime now has two distinct agent surfaces:
 1. resolved model object plus `ModelSettings`
 2. static `instructions=config.static_instructions`
 3. four history processors:
-   - `truncate_tool_returns`
+   - `truncate_tool_results`
    - `detect_safety_issues`
    - `inject_opening_context`
-   - `truncate_history_window`
+   - `summarize_history_window`
 4. a native `FunctionToolset` wrapped by `filtered(...)`
 5. optional MCP toolsets built from `config.mcp_servers`
 6. per-turn dynamic instruction layers:
@@ -186,14 +186,14 @@ Practical ownership rules:
 
 | Group | Holds | Mutation model |
 | --- | --- | --- |
-| `services` | shell backend, knowledge index, model registry, task agent, tool index, skill commands | built once; shared by reference |
+| `services` | shell backend, knowledge index, model registry, task agent, tool index, skill commands, resource lock store | built once; shared by reference |
 | `config` | resolved scalar settings and paths; mutable during bootstrap (direct field assignment), read-only by convention after entering CoDeps | read-only after bootstrap |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
 
 Sub-agent isolation is explicit in `make_subagent_deps(base)`:
 
-- shared by reference: `services`, `config`
+- shared by reference: `services`, `config`, `resource_locks`
 - inherited as copied session state: `session_approval_rules`
 - inherited as shared resolved creds: `google_creds`, `google_creds_resolved`
 - reset for the child: `drive_page_tokens`, `session_todos`, `session_id`, `memory_recall_state`, all runtime fields
@@ -232,7 +232,7 @@ Owned by orchestration and history processors.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `compaction_failure_count` | `truncate_history_window()` on inline summarization failure | reset to 0 on success; NOT reset by `reset_for_turn()` | fresh `0` |
+| `compaction_failure_count` | `summarize_history_window()` on inline summarization failure | reset to 0 on success; NOT reset by `reset_for_turn()` | fresh `0` |
 | `turn_usage` | `run_turn()` init + `_merge_turn_usage()` | `reset_for_turn()` | fresh `None` |
 | `tool_progress_callback` | `StreamRenderer.install_progress()` | `StreamRenderer.clear_progress()` and `run_turn()` finally | fresh `None` |
 | `safety_state` | `create_deps()` init and `reset_for_turn()` | `reset_for_turn()` | fresh default |
@@ -328,7 +328,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |
 | `co_cli/context/_orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger |
-| `co_cli/context/_compaction.py` | summarization, budget resolution, and token estimation — shared by history processor and `/compact` |
+| `co_cli/context/_summarization.py` | summarization, budget resolution, and token estimation — shared by history processor and `/compact` |
 | `co_cli/context/_session.py` | session JSON persistence helpers |
 | `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip |
 | `co_cli/context/_session_browser.py` | session listing, `SessionSummary`, and session summary generation for UI |
