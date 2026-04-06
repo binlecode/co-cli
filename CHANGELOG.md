@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.28] - 2026-04-06
+
+### Added
+- **Per-resource fail-fast locking**: `edit_file`, `update_memory`, and `append_memory` acquire an in-process async lock before read-modify-write — concurrent tool calls on the same resource return a clear error instead of silently corrupting data
+
 ## [0.7.26] - 2026-04-06
 
 ### Changed

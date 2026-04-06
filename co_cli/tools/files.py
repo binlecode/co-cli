@@ -231,22 +231,27 @@ async def edit_file(
     if not resolved.exists():
         return tool_error(f"File not found: {path}")
 
-    content = resolved.read_text(encoding="utf-8")
-    count = content.count(search)
+    from co_cli.tools._resource_lock import ResourceBusyError
+    try:
+        async with ctx.deps.resource_locks.try_acquire(str(resolved)):
+            content = resolved.read_text(encoding="utf-8")
+            count = content.count(search)
 
-    if count == 0:
-        raise ValueError(f"Search string not found in {path}: {search!r}")
+            if count == 0:
+                raise ValueError(f"Search string not found in {path}: {search!r}")
 
-    if count > 1 and not replace_all:
-        raise ValueError(
-            f"Found {count} occurrences of search string in {path}; use replace_all=True to replace all"
-        )
+            if count > 1 and not replace_all:
+                raise ValueError(
+                    f"Found {count} occurrences of search string in {path}; use replace_all=True to replace all"
+                )
 
-    updated = content.replace(search, replacement)
-    resolved.write_text(updated, encoding="utf-8")
+            updated = content.replace(search, replacement)
+            resolved.write_text(updated, encoding="utf-8")
 
-    return tool_output(
-        f"Edited: {path} ({count} replacement(s))",
-        path=str(resolved),
-        replacements=count,
-    )
+            return tool_output(
+                f"Edited: {path} ({count} replacement(s))",
+                path=str(resolved),
+                replacements=count,
+            )
+    except ResourceBusyError:
+        return tool_error(f"File {path} is being modified by another tool call — retry next turn")

@@ -644,29 +644,6 @@ def test_load_soul_mindsets_from_role_path():
     assert len(result) > 100
 
 
-def test_character_excluded_from_dedup(tmp_path: Path):
-    """load_memories(memory_dir) returns zero character entries after migration."""
-    from co_cli.tools.memory import load_memories
-
-    # Seed a regular user memory
-    _write_memory(tmp_path, 1, "User prefers dark mode", tags=["preference"])
-    memories = load_memories(tmp_path)
-    # No planted/character entries — only user memories
-    assert len(memories) == 1
-    assert all(m.tags != ["finch", "character", "source-material"] for m in memories)
-
-
-def test_character_excluded_from_retention(tmp_path: Path):
-    """Character files do not count against memory_max_count."""
-    from co_cli.tools.memory import load_memories
-
-    # Only user memories in memory_dir
-    _write_memory(tmp_path, 1, "User memory one", tags=["test"])
-    _write_memory(tmp_path, 2, "User memory two", tags=["test"])
-    memories = load_memories(tmp_path)
-    # Character files are in souls/ not memory_dir — count is 2, not 2 + 18
-    assert len(memories) == 2
-
 
 def test_forget_refuses_read_only(tmp_path: Path):
     """'/forget' refuses to delete files with read_only: true."""

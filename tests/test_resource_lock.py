@@ -1,0 +1,130 @@
+"""Functional tests for per-resource fail-fast locking."""
+
+import asyncio
+from pathlib import Path
+
+import pytest
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
+
+from co_cli.agent import build_agent
+from co_cli.config import settings
+from co_cli.deps import CoDeps, CoConfig
+from co_cli.tools._resource_lock import ResourceBusyError, ResourceLockStore
+from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.files import edit_file
+
+_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+
+
+def _make_ctx(tmp_path: Path) -> RunContext:
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=CoConfig(workspace_root=tmp_path),
+    )
+    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
+
+
+# --- ResourceLockStore unit behavior ---
+
+
+@pytest.mark.asyncio
+async def test_lock_store_acquire_and_release():
+    """Lock can be acquired, and after release another acquire succeeds."""
+    store = ResourceLockStore()
+    async with store.try_acquire("key-a"):
+        pass
+    # After release, re-acquire should succeed
+    async with store.try_acquire("key-a"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_lock_store_contention_raises():
+    """Concurrent acquire on same key raises ResourceBusyError."""
+    store = ResourceLockStore()
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+
+    async def holder():
+        async with store.try_acquire("contested"):
+            acquired.set()
+            await release.wait()
+
+    task = asyncio.create_task(holder())
+    await acquired.wait()
+
+    with pytest.raises(ResourceBusyError):
+        async with store.try_acquire("contested"):
+            pass
+
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_lock_store_different_keys_no_contention():
+    """Different keys do not contend."""
+    store = ResourceLockStore()
+    results = []
+
+    async def acquire_key(key: str):
+        async with store.try_acquire(key):
+            results.append(key)
+
+    await asyncio.gather(acquire_key("a"), acquire_key("b"))
+    assert set(results) == {"a", "b"}
+
+
+# --- edit_file integration ---
+
+
+@pytest.mark.asyncio
+async def test_edit_file_same_path_contention(tmp_path: Path):
+    """Two concurrent edit_file on the same path: first succeeds, second gets tool error."""
+    ctx = _make_ctx(tmp_path)
+    test_file = tmp_path / "target.txt"
+    test_file.write_text("hello world", encoding="utf-8")
+
+    acquired = asyncio.Event()
+    release = asyncio.Event()
+
+    # Hold the lock on the file path manually
+    async def hold_lock():
+        async with ctx.deps.resource_locks.try_acquire(str(test_file)):
+            acquired.set()
+            await release.wait()
+
+    task = asyncio.create_task(hold_lock())
+    await acquired.wait()
+
+    # edit_file should fail with tool error (lock held)
+    result = await edit_file(ctx, "target.txt", "hello", "goodbye")
+    assert result.metadata.get("error") is True
+    assert "being modified" in result.return_value
+
+    # File should be unchanged (edit didn't happen)
+    assert test_file.read_text() == "hello world"
+
+    release.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_edit_file_different_paths_no_contention(tmp_path: Path):
+    """Two concurrent edit_file on different paths: both succeed."""
+    ctx = _make_ctx(tmp_path)
+    file_a = tmp_path / "a.txt"
+    file_b = tmp_path / "b.txt"
+    file_a.write_text("aaa", encoding="utf-8")
+    file_b.write_text("bbb", encoding="utf-8")
+
+    result_a, result_b = await asyncio.gather(
+        edit_file(ctx, "a.txt", "aaa", "AAA"),
+        edit_file(ctx, "b.txt", "bbb", "BBB"),
+    )
+
+    assert result_a.metadata.get("error") is not True
+    assert result_b.metadata.get("error") is not True
+    assert file_a.read_text() == "AAA"
+    assert file_b.read_text() == "BBB"

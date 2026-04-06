@@ -973,70 +973,77 @@ async def update_memory(
                 "Strip them before calling update_memory."
             )
 
-    raw = match.read_text(encoding="utf-8")
-    fm, body = parse_frontmatter(raw)
+    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.tool_errors import tool_error
 
-    # Tab normalization — treat tabs and equivalent spaces as equivalent
-    body_text = body.expandtabs()
-    old_norm = old_content.expandtabs()
-    new_norm = new_content.expandtabs()
+    try:
+        async with ctx.deps.resource_locks.try_acquire(slug):
+            raw = match.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(raw)
 
-    count = body_text.count(old_norm)
-    if count == 0:
-        raise ValueError(
-            f"old_content not found in memory '{slug}'. "
-            "Check for exact match (case-sensitive, whitespace-sensitive)."
-        )
-    if count > 1:
-        # Find line numbers of each occurrence for a useful error message
-        positions: list[int] = []
-        pos = 0
-        while True:
-            idx = body_text.find(old_norm, pos)
-            if idx == -1:
-                break
-            line_num = body_text[:idx].count("\n") + 1
-            positions.append(line_num)
-            pos = idx + 1
-        raise ValueError(
-            f"old_content appears {count} times in '{slug}' "
-            f"(body lines ~{positions}). Provide more context to make it unique."
-        )
+            # Tab normalization — treat tabs and equivalent spaces as equivalent
+            body_text = body.expandtabs()
+            old_norm = old_content.expandtabs()
+            new_norm = new_content.expandtabs()
 
-    with _TRACER.start_as_current_span("co.memory.update") as span:
-        span.set_attribute("memory.slug", slug)
-        span.set_attribute("memory.action", "update")
-
-        updated_body = body_text.replace(old_norm, new_norm, 1)
-        fm["updated"] = datetime.now(timezone.utc).isoformat()
-        md_content = (
-            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-            f"{updated_body.strip()}\n"
-        )
-        match.write_text(md_content, encoding="utf-8")
-
-        if ctx.deps.knowledge_store is not None:
-            try:
-                import hashlib as _hashlib
-                ctx.deps.knowledge_store.index(
-                    source="memory",
-                    kind=fm.get("kind", "memory"),
-                    path=str(match),
-                    title=slug,
-                    content=updated_body.strip(),
-                    mtime=match.stat().st_mtime,
-                    hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                    tags=" ".join(fm.get("tags", [])),
-                    created=fm.get("created"),
-                    updated=fm.get("updated"),
+            count = body_text.count(old_norm)
+            if count == 0:
+                raise ValueError(
+                    f"old_content not found in memory '{slug}'. "
+                    "Check for exact match (case-sensitive, whitespace-sensitive)."
                 )
-            except Exception as e:
-                logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
+            if count > 1:
+                # Find line numbers of each occurrence for a useful error message
+                positions: list[int] = []
+                pos = 0
+                while True:
+                    idx = body_text.find(old_norm, pos)
+                    if idx == -1:
+                        break
+                    line_num = body_text[:idx].count("\n") + 1
+                    positions.append(line_num)
+                    pos = idx + 1
+                raise ValueError(
+                    f"old_content appears {count} times in '{slug}' "
+                    f"(body lines ~{positions}). Provide more context to make it unique."
+                )
 
-    return tool_output(
-        f"Updated memory '{slug}'.\n{updated_body.strip()}",
-        slug=slug,
-    )
+            with _TRACER.start_as_current_span("co.memory.update") as span:
+                span.set_attribute("memory.slug", slug)
+                span.set_attribute("memory.action", "update")
+
+                updated_body = body_text.replace(old_norm, new_norm, 1)
+                fm["updated"] = datetime.now(timezone.utc).isoformat()
+                md_content = (
+                    f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+                    f"{updated_body.strip()}\n"
+                )
+                match.write_text(md_content, encoding="utf-8")
+
+                if ctx.deps.knowledge_store is not None:
+                    try:
+                        import hashlib as _hashlib
+                        ctx.deps.knowledge_store.index(
+                            source="memory",
+                            kind=fm.get("kind", "memory"),
+                            path=str(match),
+                            title=slug,
+                            content=updated_body.strip(),
+                            mtime=match.stat().st_mtime,
+                            hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                            tags=" ".join(fm.get("tags", [])),
+                            created=fm.get("created"),
+                            updated=fm.get("updated"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
+
+            return tool_output(
+                f"Updated memory '{slug}'.\n{updated_body.strip()}",
+                slug=slug,
+            )
+    except ResourceBusyError:
+        return tool_error(f"Memory '{slug}' is being modified by another tool call — retry next turn")
 
 
 async def append_memory(
@@ -1060,45 +1067,52 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
+    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.tool_errors import tool_error
+
     knowledge_dir = ctx.deps.config.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
 
-    raw = match.read_text(encoding="utf-8")
-    fm, body = parse_frontmatter(raw)
+    try:
+        async with ctx.deps.resource_locks.try_acquire(slug):
+            raw = match.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(raw)
 
-    with _TRACER.start_as_current_span("co.memory.append") as span:
-        span.set_attribute("memory.slug", slug)
-        span.set_attribute("memory.action", "append")
+            with _TRACER.start_as_current_span("co.memory.append") as span:
+                span.set_attribute("memory.slug", slug)
+                span.set_attribute("memory.action", "append")
 
-        updated_body = body.rstrip() + "\n" + content
-        fm["updated"] = datetime.now(timezone.utc).isoformat()
-        md_content = (
-            f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-            f"{updated_body.strip()}\n"
-        )
-        match.write_text(md_content, encoding="utf-8")
-
-        if ctx.deps.knowledge_store is not None:
-            try:
-                import hashlib as _hashlib
-                ctx.deps.knowledge_store.index(
-                    source="memory",
-                    kind=fm.get("kind", "memory"),
-                    path=str(match),
-                    title=slug,
-                    content=updated_body.strip(),
-                    mtime=match.stat().st_mtime,
-                    hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                    tags=" ".join(fm.get("tags", [])),
-                    created=fm.get("created"),
-                    updated=fm.get("updated"),
+                updated_body = body.rstrip() + "\n" + content
+                fm["updated"] = datetime.now(timezone.utc).isoformat()
+                md_content = (
+                    f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
+                    f"{updated_body.strip()}\n"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
+                match.write_text(md_content, encoding="utf-8")
 
-    return tool_output(
-        f"Appended to '{slug}'.",
-        slug=slug,
-    )
+                if ctx.deps.knowledge_store is not None:
+                    try:
+                        import hashlib as _hashlib
+                        ctx.deps.knowledge_store.index(
+                            source="memory",
+                            kind=fm.get("kind", "memory"),
+                            path=str(match),
+                            title=slug,
+                            content=updated_body.strip(),
+                            mtime=match.stat().st_mtime,
+                            hash=_hashlib.sha256(md_content.encode()).hexdigest(),
+                            tags=" ".join(fm.get("tags", [])),
+                            created=fm.get("created"),
+                            updated=fm.get("updated"),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
+
+            return tool_output(
+                f"Appended to '{slug}'.",
+                slug=slug,
+            )
+    except ResourceBusyError:
+        return tool_error(f"Memory '{slug}' is being modified by another tool call — retry next turn")

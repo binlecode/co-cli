@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from co_cli._model_factory import ModelRegistry
     from co_cli.config import Settings
     from co_cli.knowledge._store import KnowledgeStore
+    from co_cli.tools._resource_lock import ResourceLockStore
 
 
 class ApprovalKindEnum(str, Enum):
@@ -336,7 +337,7 @@ class CoRuntimeState:
     """
 
     # Circuit breaker for inline compaction summarisation.
-    # Incremented on ModelHTTPError/ModelAPIError in truncate_history_window,
+    # Incremented on ModelHTTPError/ModelAPIError in summarize_history_window,
     # reset to 0 on success. At >= 3, LLM call is skipped (static marker only).
     # Cross-turn state — NOT reset by reset_for_turn().
     compaction_failure_count: int = 0
@@ -385,6 +386,8 @@ class CoDeps:
     shell: ShellBackend
     # Config (read-only after bootstrap)
     config: CoConfig
+    # Resource lock store (shared across parent + subagents)
+    resource_locks: "ResourceLockStore" = field(default=None, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: "KnowledgeStore | None" = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
@@ -395,6 +398,11 @@ class CoDeps:
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
+
+    def __post_init__(self) -> None:
+        if self.resource_locks is None:
+            from co_cli.tools._resource_lock import ResourceLockStore
+            self.resource_locks = ResourceLockStore()
 
 
 def make_subagent_deps(base: "CoDeps") -> "CoDeps":
@@ -419,6 +427,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
     return CoDeps(
         shell=base.shell,
         config=base.config,
+        resource_locks=base.resource_locks,
         knowledge_store=base.knowledge_store,
         model_registry=base.model_registry,
         task_agents=base.task_agents,
