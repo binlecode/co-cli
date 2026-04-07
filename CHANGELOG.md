@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.34] - 2025-07-12
+
+### Changed
+- **Subagent dispatch table**: replaced 4 copy-pasted subagent tool functions (~280 lines) with a declarative `SubagentRoleConfig` dispatch table + single `_run_subagent()` dispatch function, reducing `subagent.py` from 348 to 256 lines while preserving all behavioral contracts
+
 ## [0.7.32] - 2026-04-07
 
 ### Removed

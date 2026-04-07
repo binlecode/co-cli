@@ -329,13 +329,15 @@ Requires `google_credentials_path`. Credentials resolved via `tools/_google_auth
 
 #### Delegation (`tools/subagent.py`)
 
-Sub-agent tools spawn isolated agents via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
+Sub-agent tools use a dispatch-table architecture: `SUBAGENT_ROLES` maps role keys to `SubagentRoleConfig` (role constant, factory callable, config key, error/guard messages, behavioral flags). A single `_run_subagent()` function handles registry guard, model resolution, prompt scoping, tracing, attempt execution, and `tool_output()` formatting for all roles. Per-role display formatting lives in `_format_output()` via `match/case`. The 4 tool functions are thin wrappers (signature + docstring + one `return await _run_subagent(...)` call). Agents are spawned with isolated deps via `make_subagent_deps(base)` — shared `services` + `config`, fresh `session` + `runtime`, explicit `UsageLimits`. Child `RunUsage` merges back into the parent accumulator.
+
+Role-specific behavioral flags: `retry_on_empty` (research only — retries with rephrased query when budget remains and result is empty), `input_prepend` (analysis only — prepends `inputs` as context to the question).
 
 | Tool | Sub-agent surface | Behavior |
 |------|------------------|---------|
 | `run_coding_subagent` | `list_directory`, `read_file`, `find_in_files` | Read-only workspace analysis; returns `summary`, `diff_preview`, `files_touched`, `confidence` |
-| `run_research_subagent` | `web_search`, `web_fetch` | Web-only research; retries once with rephrased query |
-| `run_analysis_subagent` | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; returns `conclusion`, `evidence`, `reasoning` |
+| `run_research_subagent` | `web_search`, `web_fetch` | Web-only research; retries once with rephrased query (`retry_on_empty`) |
+| `run_analysis_subagent` | `search_knowledge`, `search_drive_files` | Knowledge + Drive read; prepends `inputs` as context (`input_prepend`); returns `conclusion`, `evidence`, `reasoning` |
 | `run_reasoning_subagent` | none | Structured decomposition via reasoning model; returns `plan`, `steps`, `conclusion` |
 
 #### Workflow (`tools/task_control.py`, `tools/todo.py`)
@@ -403,7 +405,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/todo.py` | `write_todos`, `read_todos` |
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
 | `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-discovery mechanism |
-| `co_cli/tools/subagent.py` | `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
+| `co_cli/tools/subagent.py` | `SubagentRoleConfig`, `SUBAGENT_ROLES`, `_run_subagent()`, `_format_output()`, thin wrappers: `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` |
