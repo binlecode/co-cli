@@ -198,16 +198,23 @@ async def write_file(
     except ValueError as e:
         return tool_error(str(e))
 
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding="utf-8")
-    byte_count = len(content.encode("utf-8"))
+    from co_cli.tools.resource_lock import ResourceBusyError
 
-    return tool_output(
-        f"Written: {path} ({byte_count} bytes)",
-        ctx=ctx,
-        path=str(resolved),
-        bytes=byte_count,
-    )
+    try:
+        async with ctx.deps.resource_locks.try_acquire(str(resolved)):
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.write_text(content, encoding="utf-8")
+            byte_count = len(content.encode("utf-8"))
+            return tool_output(
+                f"Written: {path} ({byte_count} bytes)",
+                ctx=ctx,
+                path=str(resolved),
+                bytes=byte_count,
+            )
+    except ResourceBusyError:
+        return tool_error(
+            f"File {path} is being modified by another tool call — retry next turn"
+        )
 
 
 async def edit_file(

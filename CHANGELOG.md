@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.41] - 2026-04-07
+
+### Fixed
+- **Write file race condition**: `write_file()` now acquires the same per-path resource lock as `edit_file()`, preventing concurrent writes from silently clobbering content
+- **Read tool context governance**: `read_note()` now returns `ToolReturn` via `tool_output(ctx=ctx)` for oversized-result offloading; both `read_note` and `read_article` added to compaction recency clearing
+
 ## [0.7.40] - 2026-04-07
 
 ### Changed

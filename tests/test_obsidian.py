@@ -175,9 +175,10 @@ def test_obsidian_list_and_read(tmp_path):
     assert "Archive/Old.md" not in tagged.return_value
 
     # Test read_note
-    content = read_note(ctx, "Project.md")
-    assert "# Project" in content
-    assert "#work" in content
+    result = read_note(ctx, "Project.md")
+    assert "# Project" in result.return_value
+    assert "#work" in result.return_value
+    assert result.metadata["path"] == "Project.md"
 
 
 def test_fts_folder_filter_excludes_siblings(tmp_path):

@@ -194,6 +194,7 @@ FILE_TOOLS: frozenset[str] = frozenset({
 COMPACTABLE_TOOLS: frozenset[str] = frozenset({
     "read_file", "run_shell_command", "find_in_files",
     "list_directory", "web_search", "web_fetch",
+    "read_article", "read_note",
 })
 COMPACTABLE_KEEP_RECENT = 5
 _CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"

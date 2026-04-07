@@ -306,7 +306,7 @@ def list_notes(
     )
 
 
-def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
+def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     """Read the full markdown content of a note from the Obsidian vault.
 
     Use filenames from search_notes or list_notes results. Do not guess paths.
@@ -343,6 +343,12 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> str:
         )
 
     try:
-        return safe_path.read_text(encoding="utf-8")
+        text = safe_path.read_text(encoding="utf-8")
     except Exception as e:
         raise ModelRetry(f"Obsidian: error reading note ({e}).")
+
+    return tool_output(
+        text,
+        ctx=ctx,
+        path=str(safe_path.relative_to(vault)),
+    )
