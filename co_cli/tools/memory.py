@@ -22,7 +22,6 @@ _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 
 import yaml
 from opentelemetry import trace as otel_trace
-from rapidfuzz import fuzz
 from pydantic_ai import RunContext
 
 from co_cli.knowledge._frontmatter import (
@@ -263,108 +262,6 @@ def grep_recall(
 
 
 # ---------------------------------------------------------------------------
-# Dedup
-# ---------------------------------------------------------------------------
-
-
-def _check_duplicate(
-    new_content: str, recent_memories: list[MemoryEntry], threshold: int
-) -> tuple[bool, MemoryEntry | None, float]:
-    """Check if new content is duplicate of existing memory using token-based similarity.
-
-    Uses token_sort_ratio which handles word reordering better than plain ratio.
-    For example: "I prefer TypeScript" vs "TypeScript I prefer" will score 100%.
-
-    Args:
-        new_content: Content to check for duplicates
-        recent_memories: List of recent MemoryEntry objects to compare against
-        threshold: Similarity threshold percentage (default 85)
-
-    Returns:
-        Tuple of (is_duplicate, matching_entry, similarity_score)
-        - is_duplicate: True if similarity >= threshold
-        - matching_entry: MemoryEntry of match (None if no duplicate)
-        - similarity_score: Highest similarity score found (0-100)
-    """
-    if not recent_memories:
-        return False, None, 0.0
-
-    new_lower = new_content.lower().strip()
-    max_similarity = 0.0
-    best_match: MemoryEntry | None = None
-
-    for candidate in recent_memories:
-        candidate_lower = candidate.content.lower().strip()
-        similarity = fuzz.token_sort_ratio(new_lower, candidate_lower)
-
-        if similarity > max_similarity:
-            max_similarity = similarity
-            best_match = candidate
-
-    is_duplicate = max_similarity >= threshold
-    return is_duplicate, best_match if is_duplicate else None, max_similarity
-
-
-# ---------------------------------------------------------------------------
-# Consolidation
-# ---------------------------------------------------------------------------
-
-
-def _update_existing_memory(
-    entry: MemoryEntry, new_content: str, new_tags: list[str] | None,
-    auto_save_tags: list[str],
-) -> ToolReturn:
-    """Update existing memory with new content (consolidation).
-
-    Takes a MemoryEntry (with path already known) to avoid re-scanning.
-
-    Args:
-        entry: MemoryEntry to update
-        new_content: New content to replace old content
-        new_tags: New tags to merge with existing tags
-
-    Returns:
-        dict with keys:
-            - display: Pre-formatted string for user
-            - path: File path where memory was updated
-            - memory_id: ID of updated memory
-            - action: "consolidated"
-    """
-    # Read current frontmatter from the known path
-    content = entry.path.read_text(encoding="utf-8")
-    existing_fm, _ = parse_frontmatter(content)
-
-    # Merge tags (union)
-    existing_tags = existing_fm.get("tags", [])
-    merged_tags = list(set(existing_tags + (new_tags or [])))
-
-    # Update frontmatter
-    existing_fm["updated"] = datetime.now(timezone.utc).isoformat()
-    existing_fm["tags"] = merged_tags
-    existing_fm["provenance"] = _detect_provenance(merged_tags, auto_save_tags)
-    existing_fm["auto_category"] = _detect_category(merged_tags)
-    existing_fm["certainty"] = _classify_certainty(new_content)
-    existing_fm.setdefault("kind", "memory")
-
-    # Write back to same file (in-place update)
-    md_content = (
-        f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n"
-        f"{new_content.strip()}\n"
-    )
-    entry.path.write_text(md_content, encoding="utf-8")
-
-    logger.info(f"Updated memory {entry.id} (consolidation)")
-
-    return tool_output(
-        f"✓ Updated memory {entry.id} (consolidated duplicate)\n"
-        f"Location: {entry.path}",
-        path=str(entry.path),
-        memory_id=entry.id,
-        action="consolidated",
-    )
-
-
-# ---------------------------------------------------------------------------
 # Always-on standing context
 # ---------------------------------------------------------------------------
 
@@ -396,11 +293,10 @@ async def save_memory(
     related: list[str] | None = None,
     always_on: bool = False,
 ) -> ToolReturn:
-    """Save a memory for cross-session persistence. Duplicates are
-    auto-detected and consolidated — safe to call without checking first.
-    For targeted in-place edits to an existing memory, use update_memory (exact-match replace)
-    or append_memory (additive write) instead — both avoid the full-body overwrite risk of this
-    dedup path.
+    """Saves a memory. If a near-duplicate exists, the existing memory is
+    updated instead of creating a new file. Always use save_memory to persist
+    facts — never call update_memory for dedup purposes. update_memory is for
+    surgical find-and-replace edits only.
 
     When to save — detect these signals proactively:
     - Preference: "I always use 4-space indentation", "I prefer dark themes"
@@ -451,8 +347,6 @@ async def save_memory(
         meta = result.metadata or {}
         span.set_attribute("memory.action", meta.get("action", "unknown"))
         span.set_attribute("memory.memory_id", meta.get("memory_id", ""))
-        if "similarity" in meta:
-            span.set_attribute("memory.dedup_similarity", meta["similarity"])
         if meta.get("decay_triggered"):
             span.set_attribute("memory.decay_triggered", True)
             span.set_attribute("memory.decay_count", meta.get("decay_count", 0))

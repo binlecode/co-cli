@@ -1,1 +1,1 @@
-"""Memory lifecycle, consolidation, retention, and signal analysis."""
+"""Memory lifecycle, retention, extraction, and save agent."""

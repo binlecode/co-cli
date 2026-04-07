@@ -95,16 +95,16 @@ Five history processors run in this exact order:
 | Processor | Behavior |
 | --- | --- |
 | `truncate_tool_results` | clears older `ToolReturnPart` content per tool type; keeps 5 most recent per type; always protects last user turn |
-| `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with proportional head/tail retention |
+| `compact_assistant_responses` | caps older `TextPart`/`ThinkingPart` to 2,500 chars with 20/80 head/tail retention; uses `_find_last_turn_start()` boundary, not turn grouping |
 | `detect_safety_issues` | detects identical-tool-call streaks and shell-error streaks; injects system warning at threshold |
 | `inject_opening_context` | once per new user turn, recalls top-3 memories matching user message as trailing `SystemPromptPart` |
-| `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail |
+| `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
-**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm_num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths, pending todos, always-on memories, and prior summary text (capped at 4K chars).
+**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm_num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, always-on memories, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
 
 LLM summarization falls back to a static marker when model registry is absent, failure count ≥ 3, or the summarizer call fails.
 
-**Overflow recovery** — `emergency_compact()` performs a non-LLM fallback: keep first + last turn groups, drop middle, insert static trim marker. At most once per foreground turn.
+**Overflow recovery** — `_is_context_overflow()` detects context-length errors by requiring both status 400/413 AND a body pattern match (coerces `e.body` via `str()` for OpenAI dict / Ollama str). On match, `emergency_compact()` performs a non-LLM fallback: keep first + last turn groups, drop middle, insert static trim marker. At most once per foreground turn; never falls through to the 400 reformulation handler.
 
 ### 2.3 Session & Transcript Persistence
 
@@ -176,18 +176,23 @@ Persistent knowledge is flat Markdown files with YAML frontmatter.
 | `always_on` | `bool` | standing prompt injection |
 | `read_only` | `bool` | `/forget` deletion guard |
 
-**Memory write lifecycle** — all writes route through `persist_memory()`:
+**Memory write lifecycle** — all writes route through `persist_memory()`, which acts as an upsert:
 
 ```text
 persist_memory()
-  -> duplicate check against recent memories (fuzzy, within dedup window)
-     -> duplicate: update existing file and reindex
-  -> optional LLM consolidation against top-K candidates
-     -> may UPDATE, DELETE (non-protected), or return without ADD
-  -> write new markdown file when ADD remains
-  -> index in KnowledgeStore
+  -> acquire resource lock on memory_dir path
+  -> upsert check (when resolved model available and title not preset):
+     -> build manifest of existing memories (100 most recent, one line each)
+     -> _memory_save_agent decides SAVE_NEW or UPDATE(slug)
+     -> UPDATE: overwrite_memory() replaces body, merges tags, refreshes frontmatter, reindexes
+  -> SAVE_NEW: write new markdown file + index in KnowledgeStore
+  -> release lock
   -> enforce_retention() if memory_max_count exceeded (cut oldest non-protected)
 ```
+
+The memory save agent (`_save.py`) is a singleton `Agent[None, SaveResult]` following the same pattern as `_signal_agent` and `_summarizer_agent`. It receives the candidate content + manifest and returns a structured decision. Zero context debt on the main agent. Falls back to SAVE_NEW on timeout or error.
+
+The resource lock (`memory:persist`) serialises concurrent callers (explicit save + auto-signal). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
 
 Retention applies to `kind="memory"` only; articles are not part of the memory cap.
 
@@ -274,11 +279,7 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | memory-only retention cap |
-| `memory_dedup_window_days` | `CO_CLI_MEMORY_DEDUP_WINDOW_DAYS` | `7` | recent-window for duplicate detection |
-| `memory_dedup_threshold` | `CO_CLI_MEMORY_DEDUP_THRESHOLD` | `85` | fuzzy duplicate threshold |
 | `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
-| `memory_consolidation_top_k` | `CO_MEMORY_CONSOLIDATION_TOP_K` | `5` | candidates for LLM consolidation |
-| `memory_consolidation_timeout_seconds` | `CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS` | `20` | consolidation timeout |
 | `memory_auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["correction", "preference"]` | tags for auto-signal saving |
 | `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
 
@@ -325,9 +326,9 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `co_cli/context/_tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/_types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
-| `co_cli/memory/_consolidator.py` | LLM consolidation planning |
+| `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
 | `co_cli/memory/_retention.py` | cut-only memory retention |
-| `co_cli/memory/_signal_detector.py` | post-turn signal extraction and admission |
+| `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
 | `co_cli/tools/memory.py` | memory load, recall, search, update, append, always-on loading |

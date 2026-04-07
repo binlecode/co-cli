@@ -138,39 +138,6 @@ def test_list_memories_pagination(tmp_path: Path):
     assert r3.metadata["has_more"] is False
 
 
-def test_fts_freshness_after_consolidation(tmp_path: Path):
-    """FTS returns updated content after a near-duplicate memory is consolidated."""
-    import asyncio
-    from co_cli.knowledge._store import KnowledgeStore
-    from co_cli.tools.memory import save_memory
-    from tests._timeouts import FILE_DB_TIMEOUT_SECS
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
-
-    async def _run() -> None:
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            # Save initial memory
-            await save_memory(ctx, "User prefers zygomorphic-consolidation-test widget",
-                              tags=["preference"])
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            # Save near-duplicate — should consolidate (update) rather than create new
-            await save_memory(ctx, "User prefers zygomorphic-consolidation-test widget v2",
-                              tags=["preference", "updated"])
-
-    asyncio.run(_run())
-
-    # FTS must return the consolidated (updated) content
-    results = idx.search("zygomorphic-consolidation-test", source="memory")
-    assert len(results) >= 1, "FTS must find the consolidated memory"
-    # The consolidated entry must carry the updated tag
-    assert any(r.tags and "updated" in r.tags for r in results), (
-        "FTS result must reflect consolidated tags"
-    )
-    idx.close()
-
-
 # ---------------------------------------------------------------------------
 # update_memory — surgical text replacement
 # ---------------------------------------------------------------------------

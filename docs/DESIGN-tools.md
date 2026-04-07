@@ -275,7 +275,7 @@ YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid wh
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
-| `save_memory` | `content`, `tags?`, `related?`, `always_on=False` | Saves or consolidates via lifecycle dedup; returns `action="saved"` or `"consolidated"` |
+| `save_memory` | `content`, `tags?`, `related?`, `always_on=False` | Upsert via memory save agent; returns `action="saved"` or `"consolidated"` |
 | `update_memory` | `slug`, `old_content`, `new_content` | Surgical exact-passage replacement; rejects line-number artifacts |
 | `append_memory` | `slug`, `content` | Appends to end of existing memory file |
 | `list_memories` | `offset=0`, `limit=20`, `kind?` | Paginated inventory with lifecycle metadata and `has_more` |

@@ -242,7 +242,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 | `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
-| `co_cli/context/_compaction.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `resolve_compaction_budget(config, registry)` — reads `context_window` from `ResolvedModel` to set compaction token budget |
+| `co_cli/context/_summarization.py` | `summarize_messages(messages, resolved_model, ...)` — bare Agent summariser; `resolve_compaction_budget(config, registry)` — reads `context_window` from `ResolvedModel` to set compaction token budget |
 | `co_cli/_model_factory.py` | `ResolvedModel` — pre-built model + settings pair; `ModelRegistry` — session-scoped registry built via `ModelRegistry.from_config(config)`; `build_model(model_entry, provider, llm_host, api_key)` — builds provider-aware model and `ModelSettings` |
 | `ollama/Modelfile.qwen3.5-35b-a3b-think` | Primary reasoning model — thinking enabled |
 | `ollama/Modelfile.qwen3.5-35b-a3b-code` | Coding sub-agent — deterministic params |

@@ -83,14 +83,13 @@ async def _finalize_turn(
     Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
-    from co_cli.memory._signal_detector import analyze_for_signals, handle_signal
+    from co_cli.memory._extractor import fire_and_forget_extraction
 
     next_history = turn_result.messages
 
-    # Signal detection — only on clean (non-interrupted, non-error) turns
+    # Memory extraction — fire-and-forget on clean (non-interrupted, non-error) turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        signal = await analyze_for_signals(next_history, deps=deps)
-        await handle_signal(signal, deps, frontend)
+        fire_and_forget_extraction(next_history, deps=deps, frontend=frontend)
 
     # Touch session and persist
     next_session = touch_session(session_data)
@@ -238,6 +237,10 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             except Exception as e:
                 console.print(f"[bold red]Error:[/bold red] {e}")
     finally:
+        # Drain pending memory extraction before exit
+        from co_cli.memory._extractor import drain_pending_extraction
+        await drain_pending_extraction()
+
         if deps is not None:
             from co_cli.tools._background import kill_task
             for task_state in deps.session.background_tasks.values():

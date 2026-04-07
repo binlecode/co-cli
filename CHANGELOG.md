@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-04-06
+
+### Changed
+- **Memory upsert rewrite**: replaced 2-tier dedup (rapidfuzz + LLM consolidator) with a singleton memory save agent following the fork-cc manifest pattern — `persist_memory` is now an atomic upsert protected by per-file resource lock
+- **General-purpose memory extraction**: broadened signal detector from narrow correction/preference extraction to all 4 memory types (user, feedback, project, reference) with up to 3 candidates per turn
+- **Fire-and-forget async extraction**: memory extraction runs in the background after each turn — REPL prompt returns immediately, with overlap guard and drain-on-exit
+
+### Removed
+- `rapidfuzz` dependency
+- 4 config fields: `memory_dedup_window_days`, `memory_dedup_threshold`, `memory_consolidation_top_k`, `memory_consolidation_timeout_seconds`
+- `_consolidator.py`, `_signal_detector.py`, and associated prompts (~200 lines of dead code)
+
 ## [0.7.28] - 2026-04-06
 
 ### Added

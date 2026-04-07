@@ -50,3 +50,6 @@ When the deferred task completes, the user needs to see the result next time the
 ### 2.4 Guardrails & Security
 - **Security Rule:** If `deps.runtime.is_headless == True` and the deferred prompt attempts to invoke a tool with `requires_approval=True` (like `bash` or `edit`), `_tool_approvals.py` MUST intercept it and return `ModelRetry("Headless daemon cannot execute tools requiring approval.")`.
 - **Test Mandate:** Write `tests/test_daemon_deferred.py`. Insert a deferred job trying to run `rm -rf /tmp/test`, execute the daemon polling loop, and assert the job `status='failed'` or the response clearly indicates permission denied.
+
+### 2.5 Peer-System Review Task
+- **Code Review Task:** Review `fork-claude-code`'s `autoDream` implementation as a peer reference for automated knowledge consolidation. Focus on trigger conditions, source selection, consolidation flow, conflict handling, and unattended-execution guardrails, then capture any reusable patterns that should inform this daemon work and `docs/TODO-daemon-util-1-knowledge-compaction.md`.

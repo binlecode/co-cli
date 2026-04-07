@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from copy import deepcopy
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
 APP_NAME = "co-cli"
 
@@ -188,13 +188,9 @@ DEFAULT_KNOWLEDGE_EMBEDDING_DIMS = 1024
 DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_MEMORY_MAX_COUNT = 200
-DEFAULT_MEMORY_DEDUP_WINDOW_DAYS = 7
-DEFAULT_MEMORY_DEDUP_THRESHOLD = 85
 DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS = 30
-DEFAULT_MEMORY_CONSOLIDATION_TOP_K = 5
-DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS = 20
 DEFAULT_MEMORY_INJECTION_MAX_CHARS = 2000
-DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["correction", "preference"]
+DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["user", "feedback", "project", "reference"]
 DEFAULT_SUBAGENT_SCOPE_CHARS = 120
 DEFAULT_SUBAGENT_MAX_REQUESTS_CODER = 10
 DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH = 10
@@ -221,6 +217,8 @@ VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset({REASONING_DISPLAY_OFF
 
 
 class Settings(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     # Core Tools
     obsidian_vault_path: Optional[str] = Field(default=None)
     brave_search_api_key: Optional[str] = Field(default=None)
@@ -249,14 +247,8 @@ class Settings(BaseModel):
 
     # Memory lifecycle (notes with gravity)
     memory_max_count: int = Field(default=DEFAULT_MEMORY_MAX_COUNT, ge=10)
-    memory_dedup_window_days: int = Field(default=DEFAULT_MEMORY_DEDUP_WINDOW_DAYS, ge=1)
-    memory_dedup_threshold: int = Field(default=DEFAULT_MEMORY_DEDUP_THRESHOLD, ge=0, le=100)
     # Temporal decay half-life for FTS5 recall scoring (days; larger = slower decay)
     memory_recall_half_life_days: int = Field(default=DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS, ge=1)
-    # Consolidation: top-K related memories retrieved for contradiction resolution
-    memory_consolidation_top_k: int = Field(default=DEFAULT_MEMORY_CONSOLIDATION_TOP_K, ge=1)
-    # Consolidation: per-call timeout budget (seconds) for extract_facts and resolve
-    memory_consolidation_timeout_seconds: int = Field(default=DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS, ge=0)
     # Auto-save allowlist: only signals with these tags are saved without prompting
     memory_auto_save_tags: list[str] = Field(default=DEFAULT_MEMORY_AUTO_SAVE_TAGS)
     # Max characters injected into context from memory recall per turn
@@ -418,11 +410,7 @@ class Settings(BaseModel):
             "knowledge_cross_encoder_reranker_url": "CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL",
             "knowledge_embed_api_url": "CO_KNOWLEDGE_EMBED_API_URL",
             "memory_max_count": "CO_CLI_MEMORY_MAX_COUNT",
-            "memory_dedup_window_days": "CO_CLI_MEMORY_DEDUP_WINDOW_DAYS",
-            "memory_dedup_threshold": "CO_CLI_MEMORY_DEDUP_THRESHOLD",
             "memory_recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
-            "memory_consolidation_top_k": "CO_MEMORY_CONSOLIDATION_TOP_K",
-            "memory_consolidation_timeout_seconds": "CO_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS",
             "memory_auto_save_tags": "CO_CLI_MEMORY_AUTO_SAVE_TAGS",
             "memory_injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
             "subagent_scope_chars": "CO_CLI_SUBAGENT_SCOPE_CHARS",

@@ -23,7 +23,7 @@ from pathlib import Path
 from time import perf_counter
 
 import httpx
-from rapidfuzz.fuzz import ratio
+from difflib import SequenceMatcher
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
@@ -33,7 +33,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION, ModelConfig, settings as _settings
-from co_cli.context._compaction import summarize_messages
+from co_cli.context._summarization import summarize_messages
 from co_cli.deps import CoConfig
 
 from evals._ollama import ensure_ollama_warm
@@ -186,7 +186,7 @@ def _assert_case(case: Case, baseline_text: str, noreason_text: str) -> None:
     noreason_norm = _normalize(noreason_text)
     assert noreason_norm, f"{case.id}: noreason output empty"
     if baseline_norm:
-        sim = ratio(baseline_norm, noreason_norm)
+        sim = SequenceMatcher(None, baseline_norm, noreason_norm).ratio() * 100
         assert sim >= case.similarity_floor, (
             f"{case.id}: similarity {sim} < {case.similarity_floor}\n"
             f"baseline={baseline_text!r}\nnoreason={noreason_text!r}"

@@ -7,7 +7,7 @@ only the per-turn personality-context memory injection.
 
 from pathlib import Path
 
-from co_cli.tools.memory import _load_memories
+from co_cli.tools.memory import load_memories
 
 
 def _load_personality_memories() -> str:
@@ -20,7 +20,7 @@ def _load_personality_memories() -> str:
     Called by ``add_personality_memories()`` in ``agent.py`` on every turn.
     """
     memory_dir = Path.cwd() / ".co-cli" / "memory"
-    personality_memories = _load_memories(
+    personality_memories = load_memories(
         memory_dir, tags=["personality-context"]
     )
     if not personality_memories:

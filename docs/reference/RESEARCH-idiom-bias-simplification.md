@@ -65,163 +65,21 @@ If the Pydantic-model-as-deps concern is real (it isn't — pydantic-ai accepts 
 
 ---
 
-## Finding 2: `_TurnState` Dataclass — Over-Formalization of Ephemeral Locals
+## ~~Finding 2: `_TurnState` Dataclass~~ — REMOVED
 
-### Severity: MEDIUM | Migration effort: LOW
-
-### What exists today
-
-`_TurnState` (`_orchestrate.py:81-116`) is a dataclass with 8 fields used only within `run_turn()` and its two private callees (`_execute_stream_segment`, `_run_approval_loop`):
-
-```python
-@dataclass
-class _TurnState:
-    # pre-turn
-    current_input: str | None
-    current_history: list[ModelMessage]
-    tool_reformat_budget: int = 2
-    # in-turn
-    latest_result: AgentRunResult | None = None
-    latest_streamed_text: bool = False
-    latest_usage: Any = None
-    tool_approval_decisions: ToolApprovalDecisions | None = None
-    # cross-turn
-    outcome: TurnOutcome = "continue"
-    interrupted: bool = False
-```
-
-The 20-line docstring documents "Phase ownership" and claims the class makes "invariants explicit and mutation paths auditable". In practice, every field is freely mutated by all three functions with no validation or guarding.
-
-### Peer practice
-
-| System | Turn state |
-|--------|-----------|
-| claude-code | Local variables in `AgentLoop.run()` — `let result`, `let messages`, etc. |
-| codex | Local variables in `runTurn()` |
-| opencode | Local variables in the session loop function |
-| letta | Local variables in `Agent.step()` |
-
-**Converged pattern**: ephemeral turn state lives in local variables. No formalization.
-
-### Cost
-
-- **Cognitive overhead**: a reader must understand the `_TurnState` class before reading `run_turn()`.
-- **False precision**: the docstring implies lifecycle contracts ("pre-turn", "in-turn") that aren't enforced by the dataclass.
-- **Indirection**: `_execute_stream_segment` takes `turn_state` and mutates 4 fields; the caller then reads them back. With locals, the data flow would be explicit via return values.
-
-### Simplification path
-
-`_execute_stream_segment` returns a named tuple `(result, streamed_text, usage)`. `_run_approval_loop` takes and returns `(result, history)`. `run_turn()` uses plain locals. The function signatures become slightly longer, but the data flow is explicit and there's no mutable bag to reason about.
+Removed: style preference, not a value-add. Dissolving `_TurnState` into locals trades a documented dataclass with lifecycle annotations for 8-element return tuples and longer function signatures. Peers use locals because their turn functions are simpler (no approval loop, no multi-error-handler recovery). co-cli's `run_turn()` has approval chaining, 400/413/timeout/cancellation handlers, and segment looping — the dataclass groups related state and documents the lifecycle, which is net-positive for this complexity level.
 
 ---
 
-## Finding 3: `ToolResult` TypedDict + `_kind` Discriminator
+## ~~Finding 3: `ToolResult` TypedDict + `_kind` Discriminator~~ — SHIPPED
 
-### Severity: MEDIUM | Migration effort: LOW
-
-### What exists today
-
-`_result.py:17-35` defines:
-
-```python
-class ToolResult(TypedDict, total=False):
-    _kind: Required[Literal["tool_result"]]
-    display: str
-
-def make_result(display: str, **metadata: Any) -> ToolResult:
-    return ToolResult(_kind="tool_result", display=display, **metadata)
-```
-
-Every user-facing tool must call `make_result()`. The `_kind` discriminator exists because "pydantic-ai serializes tool returns to dict before `_run_stream_segment()` sees them, so isinstance(content, ToolResult) would never be True" (docstring, `_result.py:5-6`).
-
-The discriminator is consumed in `_display_hints.py`'s `format_tool_result_for_display()`:
-
-```python
-def format_tool_result_for_display(content: Any) -> ToolResultPayload:
-    if isinstance(content, dict) and content.get("_kind") == "tool_result":
-        return content  # type: ignore
-    if isinstance(content, str):
-        return content
-    return str(content)
-```
-
-### Peer practice
-
-| System | Tool return type |
-|--------|-----------------|
-| claude-code | `string` (content block text) — model and user both see the same string |
-| codex | `{ type, data }` simple convention, no TypedDict |
-| letta | `ToolExecutionResult(status, output_str)` — plain dataclass |
-| opencode | `string` — tool output is always text |
-
-**Converged pattern**: tools return strings or simple status+string pairs. No runtime discriminator tags.
-
-### Cost
-
-- **Ceremony**: every tool must import `make_result` and wrap its output. A tool that naturally returns a string must be wrapped.
-- **Fragile detection**: the `_kind` check is a stringly-typed runtime dispatch. If someone returns a dict with `_kind="tool_result"` accidentally, it's treated as a ToolResult.
-- **Metadata goes nowhere useful**: the `**metadata` kwargs (count, sources, confidence, etc.) are stuffed into the dict but the model just sees the `display` string. The metadata is only consumed by the parent agent's tool-calling code (subagent tools), where a structured return type on the specific tool would be cleaner.
-
-### Simplification path
-
-Tools return `str`. The display layer receives `ToolReturnPart.content` which is always the string. Metadata needed by parent orchestration (subagent results) uses a structured pydantic-ai `output_type` on the subagent, not a universal TypedDict. Delete `_result.py`, `make_result`, and the `_kind` dispatch.
+Shipped: replaced with pydantic-ai native `ToolReturn(return_value, metadata)` in commit 6191bfd. `_kind` discriminator and `make_result()` deleted. Tools now return `ToolReturn` via `tool_output()`, with `return_value` → model content and `metadata` → app-side data.
 
 ---
 
-## Finding 4: Four-Class Grouped Deps Hierarchy
+## ~~Finding 4: Four-Class Grouped Deps Hierarchy~~ — REMOVED
 
-### Severity: MEDIUM | Migration effort: MEDIUM
-
-### What exists today
-
-`CoDeps` (`deps.py:373-397`) has this shape:
-
-```python
-@dataclass
-class CoDeps:
-    shell: ShellBackend              # service handle
-    config: CoConfig                 # read-only after bootstrap (~70 fields)
-    knowledge_store: KnowledgeStore  # optional service
-    model_registry: ModelRegistry    # optional service
-    tool_index: dict[str, ToolConfig]
-    task_agents: dict[str, Agent]
-    skill_commands: dict[str, SkillConfig]
-    session: CoSessionState          # grouped mutable state (~10 fields)
-    runtime: CoRuntimeState          # grouped transient state (~6 fields)
-```
-
-Tools access deps via two-level paths: `ctx.deps.config.memory_dir`, `ctx.deps.session.session_id`, `ctx.deps.runtime.turn_usage`.
-
-`CoSessionState` (`deps.py:302-321`) has 10 fields. `CoRuntimeState` (`deps.py:325-369`) has 6 fields plus `reset_for_turn()`.
-
-### Peer practice
-
-| System | Deps structure |
-|--------|---------------|
-| claude-code | Flat `AgentContext` — no sub-grouping |
-| codex | `AppContext` with `config` + `services` — two levels max |
-| letta | Flat `AgentState` (Pydantic model) |
-| opencode | Flat `Session` struct |
-
-**Converged pattern**: two levels max (context + services or context + config). No further nesting.
-
-### Cost
-
-- **Verbosity**: every tool access pays `ctx.deps.config.X` or `ctx.deps.session.Y` instead of `ctx.deps.X`.
-- **Sub-agent isolation didn't get simpler**: `make_subagent_deps()` (`deps.py:400-429`) manually copies fields across the groups anyway — the grouping doesn't automate the isolation.
-- **Four classes to understand**: `CoDeps`, `CoConfig`, `CoSessionState`, `CoRuntimeState` each have their own file-level documentation and lifecycle rules.
-
-### Simplification path
-
-Flatten all frequently-accessed fields into `CoDeps` directly. Keep service handles (`shell`, `knowledge_store`, `model_registry`) as top-level fields (they already are). Move config scalars (`memory_dir`, `personality`, `doom_loop_threshold`) to top-level. Move session state fields (`session_id`, `session_approval_rules`, `discovered_tools`) to top-level. `reset_for_turn()` becomes a module function operating on `CoDeps`.
-
-Sub-agent isolation: `make_subagent_deps(base)` copies the 5-6 fields that need resetting — same as today, just without the `.config.` / `.session.` indirection.
-
-If grouping is still desired for readability, use prefixed names (`config_memory_dir`, `session_id`) rather than nested objects. This eliminates the extra indirection without losing clarity.
-
-### Note
-
-This finding compounds with Finding 1 — if `CoConfig` is eliminated (Finding 1), the four-class hierarchy naturally collapses to two (CoDeps + mutable state).
+Removed: style preference, not a value-add. Flattening saves `.config.` / `.session.` typing but loses semantic grouping that documents lifecycle boundaries (read-only config vs mutable session vs per-turn runtime). The grouping makes `make_subagent_deps()` isolation intent explicit — which fields are shared vs reset. A flat 90-field `CoDeps` with prefixed names (`config_memory_dir`, `session_id`) is harder to reason about than three small grouped classes. Peers use flat contexts because they have fewer fields (~20-30 vs co-cli's ~90).
 
 ---
 
@@ -294,69 +152,9 @@ This is the highest-ROI change but also the most invasive. It fundamentally chan
 
 ---
 
-## Finding 6: History Processors Mutating Deps — Fighting the Pure-Transformer Contract
+## ~~Finding 6: History Processors Mutating Deps~~ — REMOVED
 
-### Severity: MEDIUM | Migration effort: MEDIUM
-
-### What exists today
-
-Two of the four history processors mutate `ctx.deps` state:
-
-**`inject_opening_context`** (`_history.py:353-411`) mutates `ctx.deps.session.memory_recall_state`:
-```python
-# _history.py:374-375
-state: MemoryRecallState = ctx.deps.session.memory_recall_state
-state.model_request_count += 1  # mutation
-# ...
-state.recall_count += 1          # mutation
-state.last_recall_user_turn = user_turn_count  # mutation
-```
-
-**`detect_safety_issues`** (`_history.py:419-545`) mutates `ctx.deps.runtime.safety_state`:
-```python
-# _history.py:527-528
-state.doom_loop_injected = True   # mutation
-# _history.py:540-541
-state.reflection_injected = True  # mutation
-```
-
-Both have prominent `# INTENTIONAL DEVIATION` comments (`_history.py:365-370` and `_history.py:429-436`) explaining why they violate pydantic-ai's pure-transformer contract.
-
-The deviation is necessary because pydantic-ai creates a fresh processor call per model request — local variables don't survive across segments within a turn. The state must live somewhere persistent (deps).
-
-Supporting types exist solely for this: `MemoryRecallState` (`_types.py:12-20`) and `SafetyState` (`_types.py:23-31`), extracted to `_types.py` to break a circular import between `deps.py` and `_history.py`.
-
-### Peer practice
-
-| System | Pre-turn processing |
-|--------|-------------------|
-| claude-code | Memory injection and safety checks run as explicit pre-turn steps before calling the model. Not inside a message transformer. |
-| codex | Message preprocessing happens in the turn orchestrator, before `createChatCompletion()`. |
-| letta | Pre-step hooks run before the agent step. Post-step hooks run after. Neither is a message transformer. |
-| opencode | Context assembly happens before the model call in the session loop. |
-
-**Converged pattern**: stateful pre-processing runs as explicit steps in the orchestration loop, not inside a "pure transformer" pipeline.
-
-### Cost
-
-- **Contract violation**: the `# INTENTIONAL DEVIATION` comments are a permanent code smell. Any reader must understand why the contract is broken.
-- **Circular import**: `_types.py` exists solely to break the `deps.py` ↔ `_history.py` import cycle caused by putting state types in deps that are mutated by processors.
-- **Hidden side effects**: a reader of `run_turn()` sees `history_processors=[..., inject_opening_context, detect_safety_issues]` and reasonably assumes they're pure transforms. The mutations are hidden.
-
-### Simplification path
-
-Move memory injection and safety detection to explicit async steps in `run_turn()`, called before `_execute_stream_segment()`:
-
-```python
-# In run_turn(), before the segment call:
-messages = await inject_memories(deps, messages)     # explicit, stateful, returns new messages
-messages = check_safety(deps, messages)              # explicit, stateful, returns new messages + injections
-await _execute_stream_segment(...)
-```
-
-Keep only `truncate_tool_returns` and `truncate_history_window` as history processors — they are genuinely stateless (or state-free from deps' perspective: `truncate_history_window` reads deps but only mutates `compaction_failure_count`, which could also be moved out).
-
-Delete `_types.py` (inline the two small dataclasses into their sole consumers). Remove `MemoryRecallState` from `CoSessionState` and `SafetyState` from `CoRuntimeState` — they become local state in the pre-turn functions.
+Removed: impl preference mismatch, not a value-add. Moving `inject_opening_context` and `detect_safety_issues` from the processor chain to explicit pre-turn steps reshuffles where code lives without improving behavior, reducing complexity, or enabling new capabilities. The pydantic-ai processor chain is a valid pattern — the deps mutations are documented (`# INTENTIONAL DEVIATION`), scoped per-turn, and the supporting types (`MemoryRecallState`, `SafetyState`) are minimal (31 lines in `_types.py`).
 
 ---
 
@@ -463,96 +261,33 @@ Make filtering opt-in: add a `deferred_tool_discovery: bool` config flag (defaul
 
 ---
 
-## Finding 9: `ModelRegistry` Class Wrapper
+## ~~Finding 9: `ModelRegistry` Class Wrapper~~ — REMOVED
 
-### Severity: LOW | Migration effort: LOW
-
-### What exists today
-
-`ModelRegistry` (`_model_factory.py:35-68`) wraps a `dict[str, ResolvedModel]`:
-
-```python
-class ModelRegistry:
-    def __init__(self) -> None:
-        self._models: dict[str, ResolvedModel] = {}
-
-    @classmethod
-    def from_config(cls, config: Any) -> "ModelRegistry":
-        registry = cls()
-        for role, entry in config.role_models.items():
-            if not entry:
-                continue
-            model, settings, ctx_window = build_model(entry, config.llm_provider, config.llm_host, api_key=config.llm_api_key)
-            registry._models[role] = ResolvedModel(model=model, settings=settings, context_window=ctx_window)
-        return registry
-
-    def get(self, role: str, fallback: ResolvedModel) -> ResolvedModel:
-        return self._models.get(role, fallback)
-
-    def is_configured(self, role: str) -> bool:
-        return role in self._models
-```
-
-Three methods, all trivial dict operations. Used in ~8 callsites across the codebase.
-
-### Peer practice
-
-| System | Model management |
-|--------|-----------------|
-| claude-code | Direct model client construction, no registry |
-| codex | `ModelProvider.create(config)` factory function, no registry class |
-| letta | Model set directly on agent, no registry |
-| opencode | Model resolved from config at session start, stored in session struct |
-
-### Cost
-
-- **Indirection**: callers write `registry.get(ROLE_X, ResolvedModel(model=None, settings=None))` instead of `role_models.get(ROLE_X)` or `role_models[ROLE_X]`.
-- **The fallback pattern is awkward**: every callsite must construct a `ResolvedModel(model=None, settings=None)` as fallback, because `get()` has no default-default.
-
-### Simplification path
-
-Replace with `build_role_models(config) -> dict[str, ResolvedModel]` (the `from_config` body, as a module function). Store the dict directly in `CoDeps`. Callsites use `deps.role_models.get(ROLE_X)` with standard dict semantics. Delete the `ModelRegistry` class.
+Removed: minimal value. The class is 30 lines, provides a `from_config` factory and typed `get()` with fallback. Replacing with a plain dict saves one small class but loses the factory encapsulation and typed access pattern. The "awkward fallback" is a style issue, not a complexity issue. 8 callsites is not enough to justify the churn.
 
 ---
 
-## Priority Matrix
+## Priority Matrix (active findings only)
 
 | # | Finding | Severity | Effort | ROI | Key metric |
 |---|---------|----------|--------|-----|-----------|
 | 5 | Approval resume loop | HIGH | HIGH | Highest | Eliminates extra LLM call per approval |
 | 1 | Settings→CoConfig transcription | HIGH | MEDIUM | High | Eliminates ~100 lines boilerplate + 2-file tax |
-| 2 | `_TurnState` dataclass | MEDIUM | LOW | Quick win | Clearer data flow in run_turn() |
-| 6 | History processors mutating deps | MEDIUM | MEDIUM | Cleaner arch | Removes contract violations + _types.py |
-| 4 | Four-class grouped deps | MEDIUM | MEDIUM | Simpler API | Flatter tool access paths |
-| 3 | `ToolResult` TypedDict | MEDIUM | LOW | Simpler tools | Tools return strings directly |
 | 7 | Subagent 4x copy-paste | LOW-MED | LOW | Less code | ~280 lines → ~80 lines |
-| 9 | `ModelRegistry` class | LOW | LOW | Quick win | Delete class, use plain dict |
 | 8 | Deferred tool filtering | LOW | LOW | Justified | Make opt-in, not default |
 
-## Dependencies Between Findings
-
-```
-Finding 1 (delete CoConfig) ──► Finding 4 (flatten deps) naturally follows
-Finding 5 (approval rewrite) ──► Finding 2 (_TurnState simplification) — approval loop removal simplifies turn state
-Finding 6 (move processors out) ──► Finding 4 (flatten deps) — removes SafetyState/MemoryRecallState from deps
-```
+Removed: Finding 2 (style preference), Finding 3 (shipped), Finding 4 (style preference), Finding 6 (impl mismatch), Finding 9 (minimal value).
 
 ## Recommended TODO Sequencing
 
-1. **Phase 1 — Quick wins** (low risk, immediate clarity):
-   - Finding 9: Replace `ModelRegistry` with plain dict
-   - Finding 2: Dissolve `_TurnState` into locals + return values
-   - Finding 3: Tools return `str`, delete `ToolResult` / `make_result`
-
-2. **Phase 2 — Config simplification** (medium risk, high LOC reduction):
+1. **Phase 1 — Config simplification** (medium risk, high LOC reduction):
    - Finding 1: Eliminate `CoConfig`, use `Settings` directly in deps
-   - Finding 4: Flatten `CoDeps` (follows naturally from Finding 1)
 
-3. **Phase 3 — Architecture alignment** (medium risk, cleaner design):
-   - Finding 6: Move stateful processors to explicit pre-turn steps
+2. **Phase 2 — Code consolidation** (low risk, less code):
    - Finding 7: Consolidate subagent tools into dispatch table
+   - Finding 8: Make deferred tool filtering opt-in per provider
 
-4. **Phase 4 — Approval rewrite** (high risk, highest ROI):
+3. **Phase 3 — Approval rewrite** (high risk, highest ROI):
    - Finding 5: Replace deferred approval with pre-execution interception
 
-Each phase is independently shippable. Phase 4 is the most impactful but can be deferred until the simpler phases prove out the simplification direction.
+Each phase is independently shippable.

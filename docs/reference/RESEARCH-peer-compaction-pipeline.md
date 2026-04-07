@@ -163,7 +163,7 @@ BEFORE EVERY MODEL API CALL (history processor chain)
   │
   ├─ 2. compact_assistant_responses [sync, no LLM]
   │     Caps TextPart/ThinkingPart in older ModelResponse at 2.5K chars
-  │     Proportional head(25%)/tail(75%) truncation
+  │     Proportional head(20%)/tail(80%) truncation (aligned with gemini-cli)
   │     Protected: last turn (same boundary as #1)
   │     Does NOT touch ToolCallPart args (critical for context enrichment)
   │
@@ -305,15 +305,14 @@ Four peer strategies were evaluated. **Strategy C was chosen and shipped:**
 
 Rationale: selective truncation already preserves tool call args (file paths, commands) and the 5 most recent results per tool type. Adding structured context enrichment addresses the quality gap without architectural changes to the processor pipeline.
 
-### 6d. Monitoring (2/5 or lower — defer)
+### 6d. Remaining Peer-Only Patterns (2/5 or lower — not planned)
 
-| Pattern | Who | Notes |
-|---------|-----|-------|
-| Disk save of truncated tool output | gemini-cli, fork-cc | Consider when users need post-session review |
-| Two-pass verification of summary | gemini-cli | Cost too high (2× LLM calls) |
-| Non-destructive compaction (mark, don't delete) | opencode | Interesting UX, adds complexity |
-| Provider-delegated compaction | codex (OpenAI only) | Not available for non-OpenAI |
-| Summary inflation guard | gemini-cli | Low priority — reject if tokens increase |
-| Ghost snapshot / undo through compaction | codex | co-cli has no undo mechanism |
-| `FILE_UNCHANGED_STUB` for repeated reads | fork-cc | Simple, no LLM cost — consider |
-| Token-based tail sizing | codex 20K, gemini-cli 30%/40K | P3 — message count heuristic works |
+| Pattern | Who | Why not |
+|---------|-----|---------|
+| Feed originals to summarizer | gemini-cli A | Strategy C compensates; selective truncation preserves most content |
+| Two-pass summary verification | gemini-cli | 2× LLM cost for marginal gain |
+| Non-destructive marking | opencode | Strategy C achieves same goal more simply |
+| Summary inflation guard | gemini-cli | No observed issue — summary is always shorter than dropped content |
+| Provider-delegated compaction | codex (OpenAI only) | Not available for non-OpenAI providers |
+| Two-tier per-message grace zone (12K recent / 2.5K older) | gemini-cli | co-cli uses single-tier 2.5K; grace zone adds complexity for marginal benefit in shorter contexts |
+| Token-based tail sizing | codex 20K, gemini-cli 30%/40K | Message-count heuristic (`max(4, len//2)`) is sufficient |

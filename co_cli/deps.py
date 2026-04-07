@@ -26,11 +26,7 @@ from co_cli.config import (
     DEFAULT_KNOWLEDGE_EMBEDDING_MODEL,
     DEFAULT_KNOWLEDGE_EMBEDDING_DIMS,
     DEFAULT_MEMORY_MAX_COUNT,
-    DEFAULT_MEMORY_DEDUP_WINDOW_DAYS,
-    DEFAULT_MEMORY_DEDUP_THRESHOLD,
     DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS,
-    DEFAULT_MEMORY_CONSOLIDATION_TOP_K,
-    DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS,
     DEFAULT_MEMORY_AUTO_SAVE_TAGS,
     DEFAULT_MEMORY_INJECTION_MAX_CHARS,
     DEFAULT_KNOWLEDGE_CHUNK_SIZE,
@@ -136,11 +132,7 @@ class CoConfig:
     web_http_backoff_max_seconds: float = DEFAULT_WEB_HTTP_BACKOFF_MAX_SECONDS
     web_http_jitter_ratio: float = DEFAULT_WEB_HTTP_JITTER_RATIO
     memory_max_count: int = DEFAULT_MEMORY_MAX_COUNT
-    memory_dedup_window_days: int = DEFAULT_MEMORY_DEDUP_WINDOW_DAYS
-    memory_dedup_threshold: int = DEFAULT_MEMORY_DEDUP_THRESHOLD
     memory_recall_half_life_days: int = DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS
-    memory_consolidation_top_k: int = DEFAULT_MEMORY_CONSOLIDATION_TOP_K
-    memory_consolidation_timeout_seconds: int = DEFAULT_MEMORY_CONSOLIDATION_TIMEOUT_SECONDS
     memory_auto_save_tags: list[str] = field(default_factory=lambda: list(DEFAULT_MEMORY_AUTO_SAVE_TAGS))
     memory_injection_max_chars: int = DEFAULT_MEMORY_INJECTION_MAX_CHARS
     subagent_scope_chars: int = DEFAULT_SUBAGENT_SCOPE_CHARS
@@ -236,11 +228,7 @@ class CoConfig:
             web_http_backoff_max_seconds=s.web_http_backoff_max_seconds,
             web_http_jitter_ratio=s.web_http_jitter_ratio,
             memory_max_count=s.memory_max_count,
-            memory_dedup_window_days=s.memory_dedup_window_days,
-            memory_dedup_threshold=s.memory_dedup_threshold,
             memory_recall_half_life_days=s.memory_recall_half_life_days,
-            memory_consolidation_top_k=s.memory_consolidation_top_k,
-            memory_consolidation_timeout_seconds=s.memory_consolidation_timeout_seconds,
             memory_auto_save_tags=list(s.memory_auto_save_tags),
             memory_injection_max_chars=s.memory_injection_max_chars,
             subagent_scope_chars=s.subagent_scope_chars,

@@ -226,4 +226,4 @@ TODO lifecycle:
 
 ## Reference Repos
 
-Peer CLI tools in `~/workspace_genai/` are used for design research. Key repos: `codex` (shell safety, sandbox), `claude-code` (permission engine), `openclaw` (hybrid memory search), `letta` (three-tier memory), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, and `opencode`. File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`.
+Peer CLI tools in `~/workspace_genai/` are used for design research. Key repos: `codex` (shell safety, sandbox), `openclaw` (hybrid memory search), `letta` (three-tier memory), `mem0` (LLM-driven extraction), `aider` (minimal approval model), `gemini-cli`, and `opencode`. Personality/character design peers: `animaworks` (neuroscience-inspired memory + personality priming), `elizaos` (character interface spec), `sillytavern` (Character Card V3, context-over-command). File-level notes moved to `docs/reference/RESEARCH-peer-systems.md`. Personality research in `docs/reference/RESEARCH-peer-personality.md`.

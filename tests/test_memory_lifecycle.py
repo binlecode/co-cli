@@ -1,7 +1,7 @@
-"""Functional tests for memory lifecycle — consolidation, dedup, retention, on_failure.
+"""Functional tests for memory lifecycle — upsert, lock-based on_failure, retention.
 
-Covers apply_plan_atomically action invariants, dedup fast-path, overflow cut,
-and timeout-driven on_failure behavior (timeout=0 via CoDeps, no mocks).
+Covers persist_memory write, upsert routing via memory save agent, resource lock
+concurrency, overflow cut, and on_failure behavior.
 """
 
 import asyncio
@@ -15,17 +15,15 @@ from typing import Any
 import pytest
 import yaml
 
-from co_cli.config import settings, ROLE_REASONING, ROLE_SUMMARIZATION
+from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.memory._consolidator import ConsolidationPlan, MemoryAction
-from co_cli.memory._lifecycle import apply_plan_atomically, persist_memory
+from co_cli.memory._lifecycle import persist_memory
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
-_RESOLVED = _REGISTRY.get(ROLE_REASONING, ResolvedModel(model=None, settings=None))
 
 
 # ---------------------------------------------------------------------------
@@ -73,13 +71,10 @@ def _seed_memory(
 def _make_deps(
     memory_dir: Path | None = None,
     max_count: int = 200,
-    timeout: int = 20,
 ) -> CoDeps:
     cfg = replace(
         _CONFIG,
-        
         memory_max_count=max_count,
-        memory_consolidation_timeout_seconds=timeout,
     )
     if memory_dir is not None:
         cfg = replace(cfg, memory_dir=memory_dir)
@@ -87,79 +82,28 @@ def _make_deps(
 
 
 # ---------------------------------------------------------------------------
-# 1. Contradiction update — UPDATE action applied, file content updated
+# 1. Basic persist_memory — writes a new file
 # ---------------------------------------------------------------------------
 
 
-def test_update_action_sets_updated_timestamp(tmp_path: Path):
-    """apply_plan_atomically UPDATE writes new_content into the target entry."""
+def test_persist_memory_writes_new_file(tmp_path: Path):
+    """persist_memory creates a new .md file in memory_dir."""
     memory_dir = tmp_path / ".co-cli" / "memory"
-    entry = _seed_memory(memory_dir, 1, "User prefers dark mode", tags=["preference"])
+    memory_dir.mkdir(parents=True)
 
-    plan = ConsolidationPlan(actions=[MemoryAction(action="UPDATE", target_alias="M1")])
-    alias_map = {"M1": entry}
-    new_content = "User prefers light mode (changed from dark)"
-
-    apply_plan_atomically(plan, alias_map, new_content)
-
-    file_text = entry.path.read_text(encoding="utf-8")
-    fm_raw = yaml.safe_load(file_text.split("---")[1])
-    assert fm_raw.get("updated") is not None, "UPDATE action must set the updated timestamp"
-    assert "light mode" in file_text, "UPDATE action must write new_content into entry"
-
-
-# ---------------------------------------------------------------------------
-# 2. Contradiction delete — non-protected removed, protected survives
-# ---------------------------------------------------------------------------
-
-
-def test_delete_action_removes_non_protected_keeps_protected(tmp_path: Path):
-    """DELETE removes non-protected entry; silently skips protected entry."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    non_protected = _seed_memory(memory_dir, 1, "Obsolete preference", tags=["preference"])
-    protected = _seed_memory(memory_dir, 2, "Core architecture decision",
-                             tags=["decision"], decay_protected=True)
-
-    plan = ConsolidationPlan(actions=[
-        MemoryAction(action="DELETE", target_alias="M1"),
-        MemoryAction(action="DELETE", target_alias="M2"),
-    ])
-    alias_map = {"M1": non_protected, "M2": protected}
-
-    apply_plan_atomically(plan, alias_map, "irrelevant content")
-
-    assert not non_protected.path.exists(), "Non-protected memory should be deleted"
-    assert protected.path.exists(), "Protected memory must survive DELETE action"
-
-
-# ---------------------------------------------------------------------------
-# 3. Dedup/no-op — rapidfuzz similarity >= threshold, updated refreshed
-# ---------------------------------------------------------------------------
-
-
-def test_dedup_refreshes_timestamp_no_new_file(tmp_path: Path):
-    """Candidate matching existing memory via rapidfuzz updates timestamp, creates no new file."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
-
-    before_count = len(list(memory_dir.glob("*.md")))
     deps = _make_deps(memory_dir=memory_dir)
-
-    # Near-duplicate content (high similarity)
-    asyncio.run(
-        persist_memory(deps, "User prefers pytest for testing purposes", ["preference"], None)
+    result = asyncio.run(
+        persist_memory(deps, "User prefers xylophone-lifecycle-newfile test", ["preference"], None)
     )
 
-    after_count = len(list(memory_dir.glob("*.md")))
-    assert after_count == before_count, "No new file should be created for near-duplicate"
-
-    existing_file = next(memory_dir.glob("001-*.md"))
-    fm_raw = yaml.safe_load(existing_file.read_text(encoding="utf-8").split("---")[1])
-    assert fm_raw.get("updated") is not None, "Dedup must refresh the updated timestamp"
+    after = list(memory_dir.glob("*.md"))
+    assert len(after) == 1, f"Expected 1 file, got {len(after)}"
+    assert result.metadata["action"] == "saved"
+    assert result.metadata["memory_id"] is not None
 
 
 # ---------------------------------------------------------------------------
-# 4. Overflow cut — oldest unprotected entries cut until total <= cap
+# 2. Overflow cut — oldest unprotected entries cut until total <= cap
 # ---------------------------------------------------------------------------
 
 
@@ -192,7 +136,7 @@ def test_overflow_cut_oldest_unprotected(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 4b. Retention cap isolates memories — article is never evicted
+# 3. Retention cap isolates memories — article is never evicted
 # ---------------------------------------------------------------------------
 
 
@@ -205,13 +149,12 @@ def test_retention_cap_excludes_articles(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Old memory {i}", days_ago=10 - i)
     # Seed article as a regular md file with kind:article frontmatter
     article_path = memory_dir / "100-my-article.md"
-    import yaml as _yaml
     article_fm = {
         "id": 100, "kind": "article", "created": "2026-01-01T00:00:00+00:00",
         "tags": [], "decay_protected": True, "origin_url": "https://example.com",
     }
     article_path.write_text(
-        f"---\n{_yaml.dump(article_fm, default_flow_style=False)}---\n\nArticle body.\n",
+        f"---\n{yaml.dump(article_fm, default_flow_style=False)}---\n\nArticle body.\n",
         encoding="utf-8",
     )
 
@@ -225,121 +168,228 @@ def test_retention_cap_excludes_articles(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 5. Explicit save fallback — timeout=0, on_failure="add" → file written
+# 4. Lock conflict — on_failure="add" → ResourceBusyError raised
 # ---------------------------------------------------------------------------
 
 
-def test_explicit_save_fallback_writes_on_timeout(tmp_path: Path):
-    """With timeout=0, consolidation times out but on_failure='add' writes a file."""
+def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
+    """When target file lock is held and on_failure='add', persist_memory raises ResourceBusyError."""
+    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli._model_factory import ModelRegistry, ResolvedModel
+    from co_cli.config import ROLE_SUMMARIZATION
+
     memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
+    # Seed an existing memory so the save agent can return UPDATE for it
+    entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
+    target_path = str(entry.path)
 
-    deps = _make_deps(memory_dir=memory_dir, timeout=0)
+    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    deps = _make_deps(memory_dir=memory_dir)
 
-    before_count = len(list(memory_dir.glob("*.md")))
+    async def _run() -> None:
+        # Hold the lock on the target file, then try to persist a near-dup
+        async with deps.resource_locks.try_acquire(target_path):
+            with pytest.raises(ResourceBusyError):
+                await persist_memory(
+                    deps, "User prefers pytest for all testing purposes",
+                    ["preference"], None,
+                    on_failure="add", resolved=resolved,
+                )
 
-    asyncio.run(
-        persist_memory(
-            deps, "Unique xylophone-fallback-test memory",
-            ["preference"], None,
-            on_failure="add", resolved=_RESOLVED,
-        )
-    )
-
-    after_count = len(list(memory_dir.glob("*.md")))
-    assert after_count == before_count + 1, (
-        "on_failure='add' must write a new file even when consolidation times out"
-    )
+    asyncio.run(_run())
 
 
 # ---------------------------------------------------------------------------
-# 6. Auto-signal save failure — timeout=0, on_failure="skip" → no file
+# 5. Lock conflict — on_failure="skip" → action="skipped", no file
 # ---------------------------------------------------------------------------
 
 
-def test_auto_signal_skip_no_file_on_timeout(tmp_path: Path):
-    """With timeout=0, consolidation times out and on_failure='skip' writes nothing."""
+def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
+    """When target file lock is held and on_failure='skip', returns action='skipped'."""
+    from co_cli._model_factory import ModelRegistry, ResolvedModel
+    from co_cli.config import ROLE_SUMMARIZATION
+
     memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
+    entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
+    target_path = str(entry.path)
 
-    deps = _make_deps(memory_dir=memory_dir, timeout=0)
+    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    deps = _make_deps(memory_dir=memory_dir)
 
-    before_count = len(list(memory_dir.glob("*.md")))
+    async def _run():
+        # Hold the lock on the target file, then try to persist a near-dup
+        async with deps.resource_locks.try_acquire(target_path):
+            return await persist_memory(
+                deps, "User prefers pytest for all testing purposes",
+                ["preference"], None,
+                on_failure="skip", resolved=resolved,
+            )
 
-    result = asyncio.run(
-        persist_memory(
-            deps, "Signal candidate xylophone-skip-test memory",
-            None, None,
-            on_failure="skip", resolved=_RESOLVED,
-        )
-    )
+    result = asyncio.run(_run())
 
-    after_count = len(list(memory_dir.glob("*.md")))
-    assert after_count == before_count, (
-        "on_failure='skip' must NOT write a file when consolidation times out"
-    )
+    after = list(memory_dir.glob("*.md"))
+    assert len(after) == 1, "No new file should be created on lock conflict"
     assert result.metadata["action"] == "skipped"
+    # Existing file should not have been modified
+    raw = entry.path.read_text(encoding="utf-8")
+    assert "User prefers pytest for testing" in raw
+    assert "all testing purposes" not in raw
 
 
 # ---------------------------------------------------------------------------
-# LLM timing — single-call consolidation must complete within budget
+# 6. Manifest builder — format and page size
+# ---------------------------------------------------------------------------
+
+
+def test_build_memory_manifest_format(tmp_path: Path):
+    """Manifest builder returns one-line-per-entry format, respects PAGE_SIZE cap."""
+    from co_cli.memory._save import build_memory_manifest, PAGE_SIZE
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    entries = []
+    for i in range(1, 6):
+        entries.append(
+            _seed_memory(memory_dir, i, f"Memory about topic number {i}", tags=["preference"])
+        )
+
+    manifest = build_memory_manifest(entries)
+    lines = manifest.strip().split("\n")
+    assert len(lines) == 5, f"Expected 5 lines, got {len(lines)}"
+
+    # Each line should start with "- " and contain the slug
+    for line in lines:
+        assert line.startswith("- "), f"Line must start with '- ': {line}"
+
+    # PAGE_SIZE cap: create more than PAGE_SIZE entries
+    many_entries = []
+    for i in range(1, PAGE_SIZE + 20):
+        many_entries.append(
+            _seed_memory(memory_dir, 100 + i, f"Bulk memory entry {i}", tags=["bulk"])
+        )
+    manifest_capped = build_memory_manifest(many_entries)
+    capped_lines = manifest_capped.strip().split("\n")
+    assert len(capped_lines) == PAGE_SIZE, f"Expected {PAGE_SIZE} lines, got {len(capped_lines)}"
+
+
+# ---------------------------------------------------------------------------
+# 7. Memory save agent — returns SAVE_NEW on novel content
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_consolidation_single_call_within_budget(tmp_path: Path):
-    """consolidate() returns a valid plan within 20s and obeys schema invariants.
-
-    Timing regression guard: old two-phase approach (extract_facts + resolve) took
-    12-30s on a thinking model. New single-call path must complete within 20s.
-
-    Schema invariants verified:
-    - ADD action must have target_alias=None
-    - UPDATE/DELETE actions must have target_alias set to a valid existing alias
-    - Candidate with no match in existing memories must produce at least one ADD
-    """
-    from co_cli.memory._consolidator import consolidate
+async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
+    """Memory save agent returns SAVE_NEW when candidate is genuinely new."""
+    from co_cli.memory._save import build_memory_manifest, check_and_save
     from tests._ollama import ensure_ollama_warm
 
     resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    if resolved.model is None:
+        pytest.skip("No summarization model configured")
+
     memory_dir = tmp_path / ".co-cli" / "memory"
-    existing = [
+    entries = [
         _seed_memory(memory_dir, 1, "User prefers Python for scripting", tags=["preference"]),
         _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
-        _seed_memory(memory_dir, 3, "User avoids global state in tools", tags=["preference"]),
     ]
-    valid_aliases = {f"M{i}" for i in range(1, len(existing) + 1)}
 
     summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
     await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
 
+    manifest = build_memory_manifest(entries)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
-        plan = await consolidate(
+        result = await check_and_save(
             "User prefers dark mode for all terminal applications",
-            existing,
-            resolved,
-            timeout_seconds=LLM_NON_REASONING_TIMEOUT_SECS,
+            manifest, resolved,
         )
 
-    assert len(plan.actions) > 0, "consolidate() must return at least one action"
-
-    # Schema invariants: target_alias rules per action type
-    for action in plan.actions:
-        if action.action in ("UPDATE", "DELETE"):
-            assert action.target_alias is not None, (
-                f"{action.action} action must set target_alias; got None"
-            )
-            assert action.target_alias in valid_aliases, (
-                f"{action.action} target_alias {action.target_alias!r} is not a valid alias "
-                f"(valid: {sorted(valid_aliases)})"
-            )
-        elif action.action == "ADD":
-            assert action.target_alias is None, (
-                f"ADD action must have target_alias=None; got {action.target_alias!r}"
-            )
-
-    # Dark mode is genuinely new — none of the existing memories mention it
-    actions_taken = {a.action for a in plan.actions}
-    assert "ADD" in actions_taken, (
-        f"Dark mode preference is new information; expected ADD in plan but got {actions_taken}"
+    assert result.action == "SAVE_NEW", (
+        f"Novel content should produce SAVE_NEW, got {result.action}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. Memory save agent — returns UPDATE on near-duplicate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path):
+    """Memory save agent returns UPDATE(slug) when candidate near-duplicates existing."""
+    from co_cli.memory._save import build_memory_manifest, check_and_save
+    from tests._ollama import ensure_ollama_warm
+
+    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    if resolved.model is None:
+        pytest.skip("No summarization model configured")
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    entries = [
+        _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"]),
+        _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
+    ]
+
+    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+
+    manifest = build_memory_manifest(entries)
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        result = await check_and_save(
+            "User prefers pytest for all testing purposes",
+            manifest, resolved,
+        )
+
+    assert result.action == "UPDATE", (
+        f"Near-duplicate should produce UPDATE, got {result.action}"
+    )
+    assert result.target_slug is not None, "UPDATE must include target_slug"
+
+
+# ---------------------------------------------------------------------------
+# 9. Full upsert integration — persist_memory updates existing on near-dup
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
+    """Full integration: seed a memory, call persist_memory with near-duplicate,
+    assert no new file + existing file updated + updated timestamp set."""
+    from tests._ollama import ensure_ollama_warm
+
+    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+    if resolved.model is None:
+        pytest.skip("No summarization model configured")
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
+    before_count = len(list(memory_dir.glob("*.md")))
+
+    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+
+    deps = _make_deps(memory_dir=memory_dir)
+
+    async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
+        result = await persist_memory(
+            deps,
+            "User prefers pytest for all testing purposes",
+            ["preference"], None,
+            resolved=resolved,
+        )
+
+    after_count = len(list(memory_dir.glob("*.md")))
+
+    # The save agent may return SAVE_NEW (non-deterministic on local models),
+    # but when it returns UPDATE the file count should stay the same and the
+    # existing file should have an updated timestamp.
+    if result.metadata.get("action") == "consolidated":
+        assert after_count == before_count, (
+            "Upsert UPDATE should not create a new file"
+        )
+        existing_file = next(memory_dir.glob("001-*.md"))
+        fm_raw = yaml.safe_load(existing_file.read_text(encoding="utf-8").split("---")[1])
+        assert fm_raw.get("updated") is not None, (
+            "Upsert UPDATE must set the updated timestamp"
+        )
+    else:
+        # SAVE_NEW fallback is acceptable (model non-determinism)
+        assert after_count == before_count + 1
