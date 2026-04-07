@@ -9,12 +9,12 @@ import pytest
 
 from co_cli.config import ModelConfig
 from co_cli.bootstrap._bootstrap import _discover_knowledge_backend, _sync_knowledge_store, _resolve_reranker, restore_session
-from co_cli.context._types import SafetyState
-from co_cli.context._session import new_session, save_session, find_latest_session
+from co_cli.context.types import SafetyState
+from co_cli.context.session import new_session, save_session, find_latest_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 

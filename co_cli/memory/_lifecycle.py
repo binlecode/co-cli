@@ -155,7 +155,7 @@ async def _write_memory(
 ) -> ToolReturn:
     """Upsert check + per-file locked write."""
     from co_cli.tools.memory import load_memories
-    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.resource_lock import ResourceBusyError
 
     # Upsert check: when a model is available and title is not preset,
     # consult the memory save agent to decide create vs update.

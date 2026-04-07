@@ -9,13 +9,13 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.context._tool_result_storage import (
+from co_cli.tools.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     persist_if_oversized,
 )
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_output import tool_output
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())

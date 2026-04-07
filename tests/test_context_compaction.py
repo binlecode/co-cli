@@ -15,7 +15,7 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.agent import build_agent
 from co_cli.config import ROLE_REASONING, settings
-from co_cli.context._summarization import (
+from co_cli.context.summarization import (
     _DEFAULT_TOKEN_BUDGET,
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
@@ -25,7 +25,7 @@ from co_cli.context._summarization import (
 )
 from co_cli.context._history import summarize_history_window
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = CoConfig.from_settings(settings, cwd=__import__("pathlib").Path.cwd())
 _AGENT = build_agent(config=_CONFIG)

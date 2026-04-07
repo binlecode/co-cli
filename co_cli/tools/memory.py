@@ -11,7 +11,6 @@ and knowledge_store is set in deps. Falls back to grep-based search otherwise.
 import logging
 import math
 import re
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +28,11 @@ from co_cli.knowledge._frontmatter import (
     parse_frontmatter,
     validate_memory_frontmatter,
 )
+from co_cli.memory.recall import (
+    MemoryEntry,
+    load_memories,
+    load_always_on_memories,
+)
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
@@ -39,98 +43,8 @@ _TRACER = otel_trace.get_tracer("co.memory")
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class MemoryEntry:
-    """In-memory representation of a loaded memory file."""
-
-    id: int | str
-    path: Path
-    content: str
-    tags: list[str]
-    created: str  # ISO8601
-    updated: str | None = None
-    decay_protected: bool = False
-    related: list[str] | None = None
-    kind: str = "memory"
-    artifact_type: str | None = None
-    always_on: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Single file scanner — supports optional tag filtering at parse time
-# ---------------------------------------------------------------------------
-
-
-def load_memories(
-    memory_dir: Path,
-    *,
-    tags: list[str] | None = None,
-    kind: str | None = None,
-) -> list[MemoryEntry]:
-    """Load and validate memory files from a directory.
-
-    When *tags* is provided, only entries whose tags intersect with the
-    requested tags are returned (filtering at parse time). When *tags* is
-    None, all entries are loaded.
-
-    When *kind* is provided, only entries of that kind are returned.
-    Files without a kind field default to "memory".
-
-    Args:
-        memory_dir: Path to the knowledge directory
-        tags: Optional tag filter — only entries matching at least one tag
-              are included. None means load all.
-        kind: Optional kind filter — "memory" or "article". None means load all.
-
-    Returns:
-        List of validated MemoryEntry objects
-    """
-    if not memory_dir.exists():
-        return []
-
-    entries: list[MemoryEntry] = []
-    for path in memory_dir.glob("*.md"):
-        try:
-            raw = path.read_text(encoding="utf-8")
-            fm, body = parse_frontmatter(raw)
-            validate_memory_frontmatter(fm)
-
-            # Early exit: skip entries that don't match requested kind
-            entry_kind = fm.get("kind", "memory")
-            if kind is not None and entry_kind != kind:
-                continue
-
-            # Early exit: skip entries that don't match requested tags
-            if tags is not None:
-                entry_tags = fm.get("tags", [])
-                if not any(t in entry_tags for t in tags):
-                    continue
-
-            entries.append(
-                MemoryEntry(
-                    id=fm["id"],
-                    path=path,
-                    content=body.strip(),
-                    tags=fm.get("tags", []),
-                    created=fm["created"],
-                    updated=fm.get("updated"),
-                    decay_protected=fm.get("decay_protected", False),
-                    related=fm.get("related"),
-                    kind=entry_kind,
-                    artifact_type=fm.get("artifact_type"),
-                    always_on=fm.get("always_on", False),
-                )
-            )
-        except Exception as e:
-            logger.warning(f"Failed to load {path}: {e}")
-            continue
-    return entries
+# MemoryEntry, load_memories, load_always_on_memories
+# are re-imported from co_cli.memory.recall (extracted to break context/ → tools/ cycle)
 
 
 # ---------------------------------------------------------------------------
@@ -261,24 +175,6 @@ def grep_recall(
     return matches[:max_results]
 
 
-# ---------------------------------------------------------------------------
-# Always-on standing context
-# ---------------------------------------------------------------------------
-
-
-_ALWAYS_ON_CAP = 5
-
-
-def load_always_on_memories(memory_dir: "Path") -> list[MemoryEntry]:
-    """Return up to _ALWAYS_ON_CAP memories with always_on=True.
-
-    Loads all memories, filters to always_on entries, and caps at 5.
-    Returns an empty list when memory_dir does not exist.
-    """
-    if not memory_dir.exists():
-        return []
-    memories = load_memories(memory_dir)
-    return [m for m in memories if m.always_on][:_ALWAYS_ON_CAP]
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +763,7 @@ async def update_memory(
                 "Strip them before calling update_memory."
             )
 
-    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.resource_lock import ResourceBusyError
     from co_cli.tools.tool_errors import tool_error
 
     try:
@@ -961,7 +857,7 @@ async def append_memory(
         slug: Full file stem of the target memory (e.g. "003-user-prefers-pytest").
         content: Text to append (added on a new line at the end of the body).
     """
-    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.resource_lock import ResourceBusyError
     from co_cli.tools.tool_errors import tool_error
 
     knowledge_dir = ctx.deps.config.memory_dir

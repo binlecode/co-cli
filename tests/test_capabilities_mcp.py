@@ -7,7 +7,7 @@ path for MCP server checks.
 from co_cli.bootstrap._check import check_runtime
 from co_cli.config import MCPServerConfig
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 
 
 def test_check_runtime_mcp_probe_name_matches_config_key() -> None:

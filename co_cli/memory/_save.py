@@ -3,7 +3,7 @@
 Module-level Agent singleton with structured output. Receives a candidate
 memory + manifest of existing memories and returns SAVE_NEW or UPDATE(slug).
 Same pattern as _extraction_agent (memory/_extractor.py) and _summarizer_agent
-(context/_summarization.py).
+(context/summarization.py).
 """
 
 import logging

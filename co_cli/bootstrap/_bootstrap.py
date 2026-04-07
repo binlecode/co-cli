@@ -11,11 +11,11 @@ if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
 from co_cli.config import settings
-from co_cli.context._types import SafetyState
-from co_cli.context._session import find_latest_session, new_session, save_session
+from co_cli.context.types import SafetyState
+from co_cli.context.session import find_latest_session, new_session, save_session
 from co_cli.deps import CoDeps, CoConfig, CoRuntimeState
 from co_cli.display._core import TerminalFrontend
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
 _TRACER = trace.get_tracer("co-cli.bootstrap")

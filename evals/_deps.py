@@ -6,7 +6,7 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.config import settings, get_settings
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 
 
 def detect_model_tag() -> str:

@@ -83,21 +83,21 @@ from co_cli.context._history import (
     summarize_history_window,
     truncate_tool_results,
 )
-from co_cli.context._orchestrate import _is_context_overflow
-from co_cli.context._summarization import (
+from co_cli.context.orchestrate import _is_context_overflow
+from co_cli.context.summarization import (
     _PERSONALITY_COMPACTION_ADDENDUM,
     _SUMMARIZE_PROMPT,
     _build_summarizer_prompt,
     summarize_messages,
 )
-from co_cli.context._tool_result_storage import (
+from co_cli.tools.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     TOOL_RESULT_PREVIEW_SIZE,
     persist_if_oversized,
 )
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from evals._timeouts import EVAL_SUMMARIZATION_TIMEOUT_SECS
 
 log = logging.getLogger(__name__)
@@ -1524,7 +1524,7 @@ def step_8_overflow() -> bool:
             print(f"  PASS: {n} group(s) → None")
 
     # [BC5] one-shot guard — overflow_recovery_attempted field exists on _TurnState
-    from co_cli.context._orchestrate import _TurnState
+    from co_cli.context.orchestrate import _TurnState
     ts = _TurnState(current_input="test", current_history=[])
     if not hasattr(ts, "overflow_recovery_attempted") or ts.overflow_recovery_attempted is not False:
         print(f"  FAIL: overflow_recovery_attempted not on _TurnState or not False")
@@ -1924,7 +1924,7 @@ async def step_12_prompt_composition() -> bool:
     print(f"\n--- Step 12: Prompt composition validation [LLM input inspection] ---")
     passed = True
 
-    from co_cli.context._summarization import (
+    from co_cli.context.summarization import (
         _SUMMARIZER_SYSTEM_PROMPT,
         _summarizer_agent,
     )

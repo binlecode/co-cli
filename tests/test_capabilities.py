@@ -12,7 +12,7 @@ from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.display._core import TerminalFrontend
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.capabilities import check_capabilities
 
 _AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))

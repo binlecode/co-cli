@@ -3,7 +3,7 @@
 Contains TurnResult, run_turn(), and supporting private functions.
 Frontend lives in co_cli/display/_core.py. Stream rendering policy
 lives in co_cli/display/_stream_renderer.py. Tool display metadata lives in
-co_cli/tools/tool_display.py. The chat loop in main.py delegates all LLM
+co_cli/context/tool_display.py. The chat loop in main.py delegates all LLM
 interaction here.
 """
 
@@ -41,8 +41,8 @@ _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 
 from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
-from co_cli.tools.tool_display import get_tool_start_args_display, format_for_display
-from co_cli.tools.tool_approvals import (
+from co_cli.context.tool_display import get_tool_start_args_display, format_for_display
+from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
     record_approval_choice,

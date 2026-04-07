@@ -14,7 +14,7 @@ from typing import Any, TYPE_CHECKING
 
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.context._tool_result_storage import persist_if_oversized, TOOL_RESULT_MAX_SIZE
+from co_cli.tools.tool_result_storage import persist_if_oversized, TOOL_RESULT_MAX_SIZE
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext

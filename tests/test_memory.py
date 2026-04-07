@@ -14,7 +14,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import (
     recall_memory,
     list_memories,
@@ -618,7 +618,7 @@ def test_forget_refuses_read_only(tmp_path: Path):
     import yaml
     from co_cli.commands._commands import _cmd_forget
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
 
     # Seed a read_only file
     memory_dir = tmp_path / "memory"

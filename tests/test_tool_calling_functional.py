@@ -25,8 +25,8 @@ from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
-from co_cli.tools._shell_backend import ShellBackend
-from co_cli.context._orchestrate import run_turn
+from co_cli.tools.shell_backend import ShellBackend
+from co_cli.context.orchestrate import run_turn
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
@@ -222,10 +222,10 @@ async def test_intent_routing_observation_no_tool():
 async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     """check_task_status result includes description and started_at from task metadata."""
     import asyncio
-    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import check_task_status
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from datetime import datetime, timezone
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -255,10 +255,10 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
 @pytest.mark.asyncio
 async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
-    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import list_background_tasks
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from datetime import datetime, timezone
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())

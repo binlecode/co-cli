@@ -262,7 +262,7 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `personality` | `CO_CLI_PERSONALITY` | `finch` | personality for static prompt assembly and memory injection |
+| `personality` | `CO_CLI_PERSONALITY` | `tars` | personality for static prompt assembly and memory injection |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
 | `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama context budget for compaction |
@@ -318,12 +318,12 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `co_cli/prompts/personalities/_injector.py` | per-turn `personality-context` memory injection |
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
 | `co_cli/context/_history.py` | history processors, compaction boundaries, emergency compaction, context enrichment |
-| `co_cli/context/_summarization.py` | summarizer agent, compaction budget, token estimation |
-| `co_cli/context/_session.py` | session metadata: create, load, save, find latest, touch, UUID validation |
-| `co_cli/context/_transcript.py` | JSONL transcript: append, load, list sessions, title extraction |
+| `co_cli/context/summarization.py` | summarizer agent, compaction budget, token estimation |
+| `co_cli/context/session.py` | session metadata: create, load, save, find latest, touch, UUID validation |
+| `co_cli/context/transcript.py` | JSONL transcript: append, load, list sessions, title extraction |
 | `co_cli/context/_deferred_tool_prompt.py` | deferred-tool awareness prompt builder |
-| `co_cli/context/_tool_result_storage.py` | oversized tool-result persistence |
-| `co_cli/context/_types.py` | `MemoryRecallState` and `SafetyState` |
+| `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
+| `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
 | `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
 | `co_cli/memory/_retention.py` | cut-only memory retention |
@@ -334,7 +334,7 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |
-| `co_cli/tools/_background.py` | session-scoped background task state and subprocess monitor |
+| `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
 | `co_cli/commands/_commands.py` | `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
 | `co_cli/bootstrap/_bootstrap.py` | knowledge backend discovery, store sync, session restore |

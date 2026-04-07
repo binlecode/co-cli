@@ -14,7 +14,7 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.

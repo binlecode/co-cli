@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -45,7 +47,6 @@ from co_cli.config import (
 
     DEFAULT_REASONING_DISPLAY,
 )
-from co_cli.tools._shell_backend import ShellBackend
 
 # CoConfig-specific path defaults (relative to cwd; overridden at runtime in create_deps())
 DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
@@ -55,16 +56,17 @@ DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 DEFAULT_SESSIONS_DIR = Path(".co-cli/sessions")
 DEFAULT_TOOL_RESULTS_DIR = Path(".co-cli/tool-results")
 
-from co_cli.commands._skill_types import SkillConfig
-from co_cli.context._types import MemoryRecallState, SafetyState
-from co_cli.tools._background import BackgroundTaskState
+from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
     from pydantic_ai import Agent, DeferredToolRequests
     from co_cli._model_factory import ModelRegistry
+    from co_cli.commands._skill_types import SkillConfig
     from co_cli.config import Settings
     from co_cli.knowledge._store import KnowledgeStore
-    from co_cli.tools._resource_lock import ResourceLockStore
+    from co_cli.tools.background import BackgroundTaskState
+    from co_cli.tools.resource_lock import ResourceLockStore
+    from co_cli.tools.shell_backend import ShellBackend
 
 
 class ApprovalKindEnum(str, Enum):
@@ -388,7 +390,7 @@ class CoDeps:
 
     def __post_init__(self) -> None:
         if self.resource_locks is None:
-            from co_cli.tools._resource_lock import ResourceLockStore
+            from co_cli.tools.resource_lock import ResourceLockStore
             self.resource_locks = ResourceLockStore()
 
 

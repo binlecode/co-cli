@@ -27,7 +27,8 @@ from co_cli.tools.google_drive import search_drive_files, read_drive_file
 from co_cli.tools.google_gmail import list_gmail_emails, search_gmail_emails, create_gmail_draft
 from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
 from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories, load_always_on_memories
+from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories
+from co_cli.memory.recall import load_always_on_memories
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 from co_cli.tools.todo import write_todos, read_todos
 from co_cli.tools.capabilities import check_capabilities

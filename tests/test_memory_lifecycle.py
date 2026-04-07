@@ -19,7 +19,7 @@ from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.memory._lifecycle import persist_memory
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -174,7 +174,7 @@ def test_retention_cap_excludes_articles(tmp_path: Path):
 
 def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
     """When target file lock is held and on_failure='add', persist_memory raises ResourceBusyError."""
-    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.resource_lock import ResourceBusyError
     from co_cli._model_factory import ModelRegistry, ResolvedModel
     from co_cli.config import ROLE_SUMMARIZATION
 

@@ -75,7 +75,7 @@ The running system is split into five owners:
 | `co_cli/bootstrap/_bootstrap.py` | bootstrap assembly, degradation decisions, knowledge sync, session restore, and session capability completion |
 | `co_cli/agent.py` | main-agent construction, optional task-agent construction, native tool registration, MCP toolset construction, and MCP discovery |
 | `co_cli/deps.py` | grouped runtime contract shared by tools, history processors, orchestration, and sub-agents |
-| `co_cli/context/_orchestrate.py` | one-turn execution, error handling, approval resumes, interrupt handling, and turn result assembly |
+| `co_cli/context/orchestrate.py` | one-turn execution, error handling, approval resumes, interrupt handling, and turn result assembly |
 
 The design stays close to idiomatic Pydantic-AI:
 
@@ -252,8 +252,8 @@ The runtime writes to a small, explicit set of stores:
 | `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeStore` |
 | `<cwd>/.co-cli/memory/` | project-local memory markdown | memory lifecycle and memory tools |
 | configured library dir, default `~/.local/share/co-cli/library/` | article markdown store | article tools |
-| `<cwd>/.co-cli/sessions/{id}.json` | session id, timestamps, compaction count | session helpers in `context/_session.py` |
-| `<cwd>/.co-cli/sessions/{id}.jsonl` | JSONL conversation transcript (append-only) | `context/_transcript.py` |
+| `<cwd>/.co-cli/sessions/{id}.json` | session id, timestamps, compaction count | session helpers in `context/session.py` |
+| `<cwd>/.co-cli/sessions/{id}.jsonl` | JSONL conversation transcript (append-only) | `context/transcript.py` |
 | `~/.config/co-cli/google_token.json` | cached Google authorized-user credentials | Google auth helper |
 
 ### 2.8 Failure And Degradation Boundaries
@@ -288,7 +288,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | `llm_api_key` | `LLM_API_KEY` | unset | Required for Gemini and provider-specific auth flows |
 | `role_models` | `CO_MODEL_ROLE_<ROLE>` | built-in role map | Per-role model selection for reasoning, summarization, coding, research, analysis, and task |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled GitHub + Context7 defaults | MCP transport definitions and approval mode |
-| `personality` | `CO_CLI_PERSONALITY` | `finch` | Personality assets used during prompt assembly and instruction injection |
+| `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality assets used during prompt assembly and instruction injection |
 | `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred knowledge backend before degradation |
 | `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Embedding provider used for hybrid search |
 | `knowledge_cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | Optional TEI reranker endpoint |
@@ -307,13 +307,13 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/deps.py` | grouped dependency dataclasses, runtime/session/capability state, and sub-agent isolation |
 | `co_cli/_model_factory.py` | session-scoped resolved model registry by role |
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |
-| `co_cli/context/_orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
+| `co_cli/context/orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger |
-| `co_cli/context/_summarization.py` | summarization, budget resolution, and token estimation — shared by history processor and `/compact` |
-| `co_cli/context/_session.py` | session JSON persistence helpers |
-| `co_cli/context/_transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip |
-| `co_cli/context/_session_browser.py` | session listing, `SessionSummary`, and session summary generation for UI |
-| `co_cli/context/_types.py` | shared safety and memory-recall dataclasses |
+| `co_cli/context/summarization.py` | summarization, budget resolution, and token estimation — shared by history processor and `/compact` |
+| `co_cli/context/session.py` | session JSON persistence helpers |
+| `co_cli/context/transcript.py` | JSONL transcript append, compact-boundary write, and load-with-boundary-skip |
+| `co_cli/context/session_browser.py` | session listing, `SessionSummary`, and session summary generation for UI |
+| `co_cli/context/types.py` | shared safety and memory-recall dataclasses |
 | `co_cli/commands/_commands.py` | built-in slash commands, skill loading, and slash dispatch |
 | `co_cli/display/_core.py` | terminal frontend surfaces and approval prompting |
 | `co_cli/display/_stream_renderer.py` | event-to-frontend stream buffering and progress callback wiring |

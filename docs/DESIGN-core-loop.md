@@ -236,7 +236,7 @@ Compaction behavior:
 - `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, always-on memories, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
-- the budget is resolved by `resolve_compaction_budget()` in `context/_summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `model_registry` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
@@ -339,14 +339,14 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
-| `co_cli/context/_orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
+| `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
-| `co_cli/context/_summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
-| `co_cli/context/_types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
+| `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
+| `co_cli/context/types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
 | `co_cli/agent.py` | main agent factory and native filtered toolset construction with per-tool loading policy |
-| `co_cli/tools/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
+| `co_cli/context/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |
-| `co_cli/context/_session.py` | session touch/save/increment helpers used after each turn |
-| `co_cli/context/_skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |
+| `co_cli/context/session.py` | session touch/save/increment helpers used after each turn |
+| `co_cli/context/skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |

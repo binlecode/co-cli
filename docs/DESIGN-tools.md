@@ -177,7 +177,7 @@ User responds `y` (once) / `n` (deny) / `a` (always for this scope this session)
 
 Approval controls permission; resource locks control correctness. When pydantic-ai dispatches multiple tool calls in parallel (or parent + subagent touch the same resource), read-modify-write tools must not corrupt data.
 
-`ResourceLockStore` (`co_cli/tools/_resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite.
+`ResourceLockStore` (`co_cli/tools/resource_lock.py`) is an in-process `asyncio.Lock` store keyed by resource identifier. Shared by reference across parent and subagents via `CoDeps.resource_locks`. Fail-fast: if the lock is held, the tool returns `tool_error()` immediately — no blocking, no silent overwrite.
 
 | Tool | Lock key | Why |
 |------|----------|-----|
@@ -407,11 +407,11 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-discovery mechanism |
 | `co_cli/tools/subagent.py` | `SubagentRoleConfig`, `SUBAGENT_ROLES`, `_run_subagent()`, `_format_output()`, thin wrappers: `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
-| `co_cli/tools/_shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
+| `co_cli/tools/shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
 | `co_cli/tools/_shell_env.py` | `restricted_env()`, `kill_process_tree()` |
-| `co_cli/tools/tool_display.py` | `get_tool_start_args_display()`, `format_for_display()` |
-| `co_cli/tools/tool_approvals.py` | `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
-| `co_cli/tools/_background.py` | `BackgroundTaskState`, `spawn_task()`, `kill_task()` |
+| `co_cli/context/tool_display.py` | `get_tool_start_args_display()`, `format_for_display()` |
+| `co_cli/context/tool_approvals.py` | `ApprovalSubject`, `resolve_approval_subject()`, `is_auto_approved()`, `remember_tool_approval()`, `record_approval_choice()`, `decode_tool_args()` |
+| `co_cli/tools/background.py` | `BackgroundTaskState`, `spawn_task()`, `kill_task()` |
 | `co_cli/tools/tool_output.py` | `ToolResult`, `tool_output()`, `ToolResultPayload` |
 | `co_cli/tools/tool_errors.py` | `tool_error()`, `handle_google_api_error()`, `http_status_code()` |
 | `co_cli/tools/_google_auth.py` | Google credential resolution |

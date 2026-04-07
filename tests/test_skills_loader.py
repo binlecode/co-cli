@@ -19,7 +19,7 @@ from co_cli.commands._commands import (
 from co_cli.config import settings
 from co_cli.deps import CoConfig, CoDeps, CoSessionState
 from co_cli.display._core import console
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 
 
 def _write_skill(skills_dir: Path, name: str, content: str) -> Path:

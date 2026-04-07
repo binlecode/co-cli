@@ -14,7 +14,7 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task, kill_task
+from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task, kill_task
 from co_cli.deps import CoSessionState
 
 
@@ -229,7 +229,7 @@ async def test_tool_start_background_task_signature():
     """start_background_task returns ToolReturn with task_id and status keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import start_background_task
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -260,7 +260,7 @@ async def test_tool_check_task_status_signature():
     """check_task_status returns ToolReturn with expected keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import start_background_task, check_task_status
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -294,7 +294,7 @@ async def test_tool_check_task_status_not_found():
     """check_task_status returns not_found for unknown task_id."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import check_task_status
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -311,7 +311,7 @@ async def test_tool_cancel_background_task_signature():
     """cancel_background_task returns ToolReturn with cancelled status."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import start_background_task, cancel_background_task
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -346,7 +346,7 @@ async def test_tool_list_background_tasks_signature():
     """list_background_tasks returns ToolReturn with tasks and count keys."""
     from pydantic_ai import RunContext
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import start_background_task, list_background_tasks
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -371,7 +371,7 @@ async def test_tool_list_background_tasks_signature():
     assert "command" in rows[0]
 
     # Cleanup
-    from co_cli.tools._background import kill_task
+    from co_cli.tools.background import kill_task
     for s in deps.session.background_tasks.values():
         if s.status == "running":
             await kill_task(s)
@@ -414,7 +414,7 @@ async def test_slash_background_command():
     """Slash /background spawns a task and stores it in session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         deps = CoDeps(shell=ShellBackend(), config=CoConfig())
@@ -427,7 +427,7 @@ async def test_slash_background_command():
         assert state.command == "echo slash_test"
 
         # Cleanup
-        from co_cli.tools._background import kill_task
+        from co_cli.tools.background import kill_task
         for s in deps.session.background_tasks.values():
             if s.process is not None:
                 await kill_task(s)
@@ -441,9 +441,9 @@ async def test_slash_tasks_command():
     """Slash /tasks lists tasks from session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
     from datetime import datetime, timezone
-    from co_cli.tools._background import BackgroundTaskState, _make_task_id
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id
 
     deps = CoDeps(shell=ShellBackend(), config=CoConfig())
     state = BackgroundTaskState(
@@ -468,7 +468,7 @@ async def test_slash_cancel_command():
     """Slash /cancel cancels a running task in session state."""
     from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
     from co_cli.deps import CoDeps, CoConfig
-    from co_cli.tools._shell_backend import ShellBackend
+    from co_cli.tools.shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
         deps = CoDeps(shell=ShellBackend(), config=CoConfig())

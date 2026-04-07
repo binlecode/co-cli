@@ -41,7 +41,7 @@ from co_cli.memory._extractor import (
 )
 from co_cli.memory._lifecycle import persist_memory
 from co_cli.memory._save import build_memory_manifest, check_and_save
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
 
 from evals._fixtures import seed_memory, single_user_turn
@@ -472,7 +472,7 @@ INLINE_CASES: list[InlineSaveCase] = [
 async def run_inline_case(case: InlineSaveCase) -> dict[str, Any]:
     """Run a full run_turn() and check if save_memory was called."""
     from co_cli.agent import build_agent
-    from co_cli.context._orchestrate import run_turn
+    from co_cli.context.orchestrate import run_turn
 
     with tempfile.TemporaryDirectory() as tmpdir:
         orig_cwd = os.getcwd()

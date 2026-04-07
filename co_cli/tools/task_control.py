@@ -13,7 +13,7 @@ from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext, ModelRetry
 
 from co_cli.deps import CoDeps
-from co_cli.tools._background import (
+from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
     _make_task_id,

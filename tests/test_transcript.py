@@ -11,8 +11,8 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from co_cli.context._session_browser import format_file_size, list_sessions
-from co_cli.context._transcript import (
+from co_cli.context.session_browser import format_file_size, list_sessions
+from co_cli.context.transcript import (
     append_messages,
     load_transcript,
     write_compact_boundary,

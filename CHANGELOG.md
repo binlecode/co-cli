@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.36] - 2026-04-07
+
+### Changed
+- **Module boundary cleanup**: fixed 6 structural anti-patterns — 13 file renames (underscore drops + cross-package relocations), 1 function extraction (`memory/recall.py`), and partial `deps.py` TYPE_CHECKING decoupling. One-directional dependency graph enforced: `main.py` -> `context/` -> `tools/` -> `memory/`. All `_prefix` modules now genuinely private.
+
 ## [0.7.34] - 2025-07-12
 
 ### Changed

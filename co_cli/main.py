@@ -19,7 +19,7 @@ from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
 from co_cli.deps import CoDeps
-from co_cli.context._orchestrate import run_turn, TurnResult
+from co_cli.context.orchestrate import run_turn, TurnResult
 from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
 from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
@@ -31,9 +31,9 @@ from co_cli.commands._commands import (
     LocalOnly, ReplaceTranscript, DelegateToAgent,
     _build_completer_words,
 )
-from co_cli.context._session import touch_session, increment_compaction, save_session, load_session
-from co_cli.context._transcript import append_messages as append_transcript, write_compact_boundary
-from co_cli.context._skill_env import cleanup_skill_run_state
+from co_cli.context.session import touch_session, increment_compaction, save_session, load_session
+from co_cli.context.transcript import append_messages as append_transcript, write_compact_boundary
+from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.bootstrap._bootstrap import create_deps, restore_session
 
 exporter = SQLiteSpanExporter()
@@ -242,7 +242,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         await drain_pending_extraction()
 
         if deps is not None:
-            from co_cli.tools._background import kill_task
+            from co_cli.tools.background import kill_task
             for task_state in deps.session.background_tasks.values():
                 if task_state.status == "running":
                     try:

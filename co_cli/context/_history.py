@@ -35,13 +35,13 @@ from pydantic_ai.messages import (
 
 from co_cli._model_factory import ResolvedModel
 from co_cli.config import ROLE_SUMMARIZATION
-from co_cli.context._summarization import (
+from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
     resolve_compaction_budget,
     summarize_messages,
 )
-from co_cli.context._types import MemoryRecallState, SafetyState
+from co_cli.context.types import MemoryRecallState, SafetyState
 from co_cli.deps import CoDeps
 
 log = logging.getLogger(__name__)
@@ -369,7 +369,7 @@ def _gather_compaction_context(
             context_parts.append("Active tasks:\n" + "\n".join(todo_lines))
 
     # 3. Always-on memories — standing context the model always sees
-    from co_cli.tools.memory import load_always_on_memories
+    from co_cli.memory.recall import load_always_on_memories
     memories = load_always_on_memories(ctx.deps.config.memory_dir)
     if memories:
         mem_lines = [m.content[:200] for m in memories[:5]]

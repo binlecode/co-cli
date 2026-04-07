@@ -39,9 +39,9 @@ from co_cli.context._history import (
     truncate_tool_results,
     summarize_history_window,
 )
-from co_cli.context._orchestrate import _is_context_overflow
+from co_cli.context.orchestrate import _is_context_overflow
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())

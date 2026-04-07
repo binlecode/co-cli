@@ -231,7 +231,7 @@ async def edit_file(
     if not resolved.exists():
         return tool_error(f"File not found: {path}")
 
-    from co_cli.tools._resource_lock import ResourceBusyError
+    from co_cli.tools.resource_lock import ResourceBusyError
     try:
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
             content = resolved.read_text(encoding="utf-8")

@@ -18,8 +18,8 @@ from pydantic_ai.result import DeferredToolRequests
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoSessionState, SessionApprovalRule
-from co_cli.tools._shell_backend import ShellBackend
-from co_cli.tools.tool_approvals import (
+from co_cli.tools.shell_backend import ShellBackend
+from co_cli.context.tool_approvals import (
     is_auto_approved,
     record_approval_choice,
     remember_tool_approval,
@@ -30,8 +30,8 @@ from co_cli.commands._commands import (
     SkillConfig,
     LocalOnly, ReplaceTranscript, DelegateToAgent,
 )
-from co_cli.context._orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
-from co_cli.context._skill_env import cleanup_skill_run_state
+from co_cli.context.orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
+from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.display._core import console
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm

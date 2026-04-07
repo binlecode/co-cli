@@ -24,8 +24,8 @@ from pydantic_ai.messages import (  # noqa: E402
     UserPromptPart,
 )
 
-from co_cli.context._types import SafetyState  # noqa: E402
-from co_cli.context._orchestrate import run_turn  # noqa: E402
+from co_cli.context.types import SafetyState  # noqa: E402
+from co_cli.context.orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
 from co_cli.config import settings  # noqa: E402
 from co_cli.deps import CoConfig  # noqa: E402

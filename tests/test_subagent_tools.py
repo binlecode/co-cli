@@ -10,7 +10,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.subagent import run_coding_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.

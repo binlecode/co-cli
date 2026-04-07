@@ -11,7 +11,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import build_agent
 from co_cli.config import settings
 from co_cli.deps import CoConfig, CoDeps
-from co_cli.tools._shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.shell import run_shell_command
 from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 

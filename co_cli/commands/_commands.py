@@ -295,7 +295,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
     from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
 
-    from co_cli.context._summarization import (
+    from co_cli.context.summarization import (
         summarize_messages,
         resolve_compaction_budget,
         estimate_message_tokens,
@@ -409,7 +409,7 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
-    from co_cli.context._summarization import index_session_summary
+    from co_cli.context.summarization import index_session_summary
     from co_cli.knowledge._frontmatter import ArtifactTypeEnum
     from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
     from co_cli._model_factory import ResolvedModel
@@ -446,7 +446,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
 
     # Rotate session ID — transcript writer is stateless (derives path from
     # deps.session.session_id), so the next write goes to a new file.
-    from co_cli.context._session import new_session, save_session
+    from co_cli.context.session import new_session, save_session
     session_data = new_session()
     ctx.deps.session.session_id = session_data["session_id"]
     try:
@@ -727,7 +727,7 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
 async def _cmd_background(ctx: CommandContext, args: str) -> None:
     """Run a command in the background. Usage: /background <cmd>"""
     from datetime import datetime, timezone
-    from co_cli.tools._background import BackgroundTaskState, _make_task_id, spawn_task
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
 
     cmd = args.strip()
     if not cmd:
@@ -784,7 +784,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     """Cancel a running background task. Usage: /cancel <task_id>"""
-    from co_cli.tools._background import BackgroundCleanupError, kill_task
+    from co_cli.tools.background import BackgroundCleanupError, kill_task
 
     task_id = args.strip()
     if not task_id:
@@ -811,8 +811,8 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
-    from co_cli.context._transcript import load_transcript
-    from co_cli.context._session_browser import list_sessions, format_file_size
+    from co_cli.context.transcript import load_transcript
+    from co_cli.context.session_browser import list_sessions, format_file_size
     from co_cli.display._core import prompt_selection
 
     sessions = list_sessions(ctx.deps.config.sessions_dir)
@@ -1030,7 +1030,7 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
     """List past sessions, optionally filtered by keyword."""
     from rich.table import Table
 
-    from co_cli.context._session_browser import list_sessions, format_file_size
+    from co_cli.context.session_browser import list_sessions, format_file_size
 
     summaries = list_sessions(ctx.deps.config.sessions_dir)
     if args:
