@@ -381,7 +381,6 @@ class CoDeps:
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
-    task_agents: "dict[str, Agent]" = field(default_factory=dict, repr=False)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
@@ -418,7 +417,6 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
         resource_locks=base.resource_locks,
         knowledge_store=base.knowledge_store,
         model_registry=base.model_registry,
-        task_agents=base.task_agents,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,
         session=inherited_session,

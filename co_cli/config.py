@@ -46,7 +46,6 @@ DEFAULT_OLLAMA_CODING_MODEL: dict[str, Any] = {
     "provider": "ollama-openai",
 }
 DEFAULT_OLLAMA_RESEARCH_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
-DEFAULT_OLLAMA_TASK_MODEL = deepcopy(DEFAULT_OLLAMA_NOREASON_MODEL)
 DEFAULT_GEMINI_REASONING_MODEL: dict[str, Any] = {
     "model": "gemini-3-flash-preview",
     "provider": "gemini",
@@ -168,10 +167,8 @@ ROLE_SUMMARIZATION = "summarization"
 ROLE_CODING = "coding"
 ROLE_RESEARCH = "research"
 ROLE_ANALYSIS = "analysis"
-ROLE_TASK = "task"
-
 VALID_ROLE_NAMES: frozenset[str] = frozenset({
-    ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK,
+    ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS,
 })
 
 # Named defaults for Settings fields — used by Settings field definitions and
@@ -444,14 +441,13 @@ class Settings(BaseModel):
                 ROLE_ANALYSIS: DEFAULT_OLLAMA_ANALYSIS_MODEL,
                 ROLE_CODING: DEFAULT_OLLAMA_CODING_MODEL,
                 ROLE_RESEARCH: DEFAULT_OLLAMA_RESEARCH_MODEL,
-                ROLE_TASK: DEFAULT_OLLAMA_TASK_MODEL,
             }
         else:
             raise ValueError(f"Unsupported llm_provider: {provider!r}")
         # Per-role model overrides — merge per-key, not whole-dict replacement.
         # Env vars use plain model-name strings, so inject the session provider explicitly.
         role_models_env: dict[str, dict[str, Any]] = {}
-        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_TASK):
+        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
             env_var = f"CO_MODEL_ROLE_{role.upper()}"
             val = env_source.get(env_var)
             if val:

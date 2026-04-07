@@ -48,9 +48,8 @@ from co_cli.tools.tool_approvals import (
     record_approval_choice,
     resolve_approval_subject,
 )
-from co_cli.config import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY, ROLE_TASK
+from co_cli.config import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY
 from co_cli.deps import CoDeps
-from co_cli._model_factory import ResolvedModel
 
 
 # ---------------------------------------------------------------------------
@@ -293,14 +292,6 @@ async def _execute_stream_segment(
     _merge_turn_usage(deps, turn_state.latest_usage)
 
 
-def _resolve_task_model_settings(deps: CoDeps) -> dict | None:
-    """Return ROLE_TASK model_settings from the registry, or None if not configured."""
-    if not deps.model_registry:
-        return None
-    resolved = deps.model_registry.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
-    return resolved.settings
-
-
 async def _run_approval_loop(
     turn_state: _TurnState,
     agent: Agent,
@@ -312,8 +303,9 @@ async def _run_approval_loop(
     """Run approval-resume segments until no deferred tool requests remain.
 
     Each iteration: collect approvals → prepare resume → execute segment.
-    Resume segments run on the task agent (short system prompt, no personality,
-    reasoning_effort=none) when available, falling back to the main agent.
+    Resume segments run on the main agent directly — the SDK skips
+    ModelRequestNode entirely on the deferred_tool_results path, so zero
+    tokens are sent to the model regardless of which agent runs.
     Exits when latest_result.output is no longer DeferredToolRequests.
     """
     while isinstance(turn_state.latest_result.output, DeferredToolRequests):
@@ -326,10 +318,8 @@ async def _run_approval_loop(
         turn_state.current_input = None
         turn_state.current_history = turn_state.latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
-        resume_agent = deps.task_agents.get(ROLE_TASK, agent)
-        resume_settings = _resolve_task_model_settings(deps) or model_settings
         await _execute_stream_segment(
-            turn_state, resume_agent, deps, resume_settings, reasoning_display, frontend
+            turn_state, agent, deps, model_settings, reasoning_display, frontend
         )
     deps.runtime.resume_tool_names = None
 

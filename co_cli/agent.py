@@ -240,12 +240,6 @@ def build_tool_registry(config: CoConfig) -> ToolRegistry:
     )
 
 
-_TASK_AGENT_SYSTEM_PROMPT: str = (
-    "You have received results for tool calls that the user approved. "
-    "Process these results and respond to the user concisely and directly."
-)
-
-
 def build_agent(
     *,
     config: CoConfig,
@@ -350,31 +344,6 @@ def build_agent(
         return prompt or ""
 
     return agent
-
-
-def build_task_agent(
-    *,
-    config: CoConfig,
-    role_model: "ResolvedModel",
-    tool_registry: ToolRegistry | None = None,
-) -> Agent[CoDeps, str | DeferredToolRequests]:
-    """Build the lightweight task agent for approval resume turns.
-
-    No personality, no date injection, no project instructions, no history processors.
-    Same tools and approval flags as the main agent. Used by _run_approval_loop to
-    resume approved deferred tool calls without the full main agent context overhead.
-    """
-    if tool_registry is None:
-        tool_registry = build_tool_registry(config)
-    return Agent(
-        role_model.model,
-        deps_type=CoDeps,
-        instructions=_TASK_AGENT_SYSTEM_PROMPT,
-        model_settings=role_model.settings,
-        retries=config.tool_retries,
-        output_type=[str, DeferredToolRequests],
-        toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
-    )
 
 
 async def discover_mcp_tools(

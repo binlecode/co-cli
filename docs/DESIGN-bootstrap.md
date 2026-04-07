@@ -45,8 +45,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      reconcile store with memory + library files on disk
 │  │      hash-based — skips unchanged files
 │  │      on fail → store closed, returns None
-│  ├─ [if ROLE_TASK configured] build_task_agent(config, role_model) → task_agents
-│  └─ → CoDeps(shell, config, model_registry, knowledge_store, tool_index, skill_commands, task_agents, runtime)
+│  └─ → CoDeps(shell, config, model_registry, knowledge_store, tool_index, skill_commands, runtime)
 │
 ├─ completer.words updated with skills
 ├─ build_agent(config=deps.config, model_registry=deps.model_registry) → Agent
@@ -95,7 +94,7 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It converts the `Settings` singleton into `CoConfig`, builds `ModelRegistry` and `ToolRegistry`, connects MCP servers and discovers their tools, builds the task agent, and assembles `CoDeps`. It calls `config.validate()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
+`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It converts the `Settings` singleton into `CoConfig`, builds `ModelRegistry` and `ToolRegistry`, connects MCP servers and discovers their tools, and assembles `CoDeps`. It calls `config.validate()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
 
 ```text
 create_deps(frontend, stack):
@@ -108,8 +107,7 @@ create_deps(frontend, stack):
         enter each MCP server on stack  # stays alive for session
         discover_mcp_tools(mcp_toolsets) → mcp_index
         tool_index.update(mcp_index)
-    [if ROLE_TASK] build_task_agent → task_agents
-    return CoDeps(shell, config, model_registry, tool_index, task_agents, runtime)
+    return CoDeps(shell, config, model_registry, tool_index, runtime)
 ```
 
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeStore` construction) and file sync happen inside `create_deps()` as Steps 6-7, before CoDeps assembly.
@@ -135,11 +133,11 @@ Key points:
 
 ### `CoDeps` Structure
 
-`CoDeps` is flat — service handles (`shell`, `knowledge_store`), registries (`model_registry`, `tool_index`, `skill_commands`, `task_agents`), and config are top-level fields. Three grouped sub-objects hold mutable state:
+`CoDeps` is flat — service handles (`shell`, `knowledge_store`), registries (`model_registry`, `tool_index`, `skill_commands`), and config are top-level fields. Three grouped sub-objects hold mutable state:
 
 | Field / Group | Lifetime | Sub-agent inheritance |
 |---------------|----------|-----------------------|
-| `shell`, `knowledge_store`, `model_registry`, `task_agents` | Session | Copied by reference (shared) |
+| `shell`, `knowledge_store`, `model_registry` | Session | Copied by reference (shared) |
 | `tool_index`, `skill_commands` | Session | Copied by reference (shared) |
 | `config` (`CoConfig`) | Session | Copied by reference (read-only by convention after bootstrap) |
 | `session` (`CoSessionState`) | Session, partially inherited | Credentials and approval rules inherited; per-session fields reset |
@@ -368,7 +366,7 @@ The banner marks the boundary between startup and interactive use. All status me
 | File | Role |
 |------|------|
 | `co_cli/main.py` | `_chat_loop()` startup assembly |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (config, registries, MCP, knowledge, skills, task agent), `restore_session()` |
+| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` (config, registries, MCP, knowledge, skills), `restore_session()` |
 | `co_cli/bootstrap/_check.py` | IO check functions (`check_agent_llm`, `check_reranker_llm`, `check_embedder`, `check_cross_encoder`, `check_mcp_server`, `check_tei`), bootstrap context probe `probe_ollama_context()` + `MIN_AGENTIC_CONTEXT` constant (Step 2b), settings-level entry point `check_settings()` (used by `_render_status.py`), runtime entry point `check_runtime()` / `RuntimeCheck` (used by `/status` tool), data types `CheckResult`, `CheckItem`, `DoctorResult` |
 | `co_cli/bootstrap/_render_status.py` | `get_status()` / `StatusResult` / `render_status_table()` — system status assembly and display; `check_security()` / `SecurityCheckResult` / `render_security_findings()` — security posture checks: user config file permissions (Check 1), project config file permissions (Check 2), `shell_safe_commands` wildcard `"*"` entries (Check 3) |
 | `co_cli/context/_session.py` | Session helpers: new/load/save/find_latest/touch/increment_compaction |

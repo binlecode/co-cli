@@ -98,7 +98,6 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 | `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model entry |
 | `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model entry |
 | `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model entry |
-| `role_models["task"]` | `CO_MODEL_ROLE_TASK` | provider default when absent | Optional task agent model entry for approval resume turns (no personality, `reasoning_effort: none`) |
 
 ## 4. Provider Quirks
 

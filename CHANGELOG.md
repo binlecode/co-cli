@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-04-07
+
+### Removed
+- **Task agent infrastructure**: deleted `ROLE_TASK`, `build_task_agent()`, `_TASK_AGENT_SYSTEM_PROMPT`, `DEFAULT_OLLAMA_TASK_MODEL`, `task_agents` field on `CoDeps`, and `_resolve_task_model_settings()` — the pydantic-ai SDK skips `ModelRequestNode` entirely on deferred resume, so the separate agent added zero value
+- **`CO_MODEL_ROLE_TASK` env var**: no longer recognized (the model was never called during resume)
+
+### Changed
+- **Approval resume uses main agent**: `_run_approval_loop()` passes the main agent and its model settings directly to `_execute_stream_segment()` instead of resolving a separate task agent
+
 ## [0.7.30] - 2026-04-06
 
 ### Changed

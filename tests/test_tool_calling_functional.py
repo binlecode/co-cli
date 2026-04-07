@@ -18,9 +18,12 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.usage import RunUsage
 
 
-from co_cli.agent import build_agent, build_task_agent
+from pydantic_ai import Agent
+from pydantic_ai.result import DeferredToolRequests
+
+from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_TASK
+from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoConfig, CoSessionState
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.context._orchestrate import run_turn
@@ -32,16 +35,22 @@ _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
 _CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
 _REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
-_TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
+_SUMM_MODEL = _CONFIG_NO_MCP.role_models[ROLE_SUMMARIZATION].model
 
-# Tool selection tests use ROLE_TASK (reasoning_effort=none) with build_task_agent.
-# build_task_agent uses a 1-sentence system prompt vs the full 16K system prompt in
-# build_agent — reducing context from ~27K to ~10K tokens so calls complete faster.
-_TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+# Tool selection tests use ROLE_SUMMARIZATION (reasoning_effort=none) with a direct
+# Agent construction. This gives fast, non-reasoning tool selection without the full
+# main agent system prompt overhead.
+_SUMM_RESOLVED = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
 # Tool registry and agents built once at module level to avoid per-test overhead.
-from co_cli.agent import build_tool_registry
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
-_AGENT_NOREASON = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED, tool_registry=_TOOL_REG)
+_AGENT_NOREASON = Agent(
+    _SUMM_RESOLVED.model,
+    deps_type=CoDeps,
+    model_settings=_SUMM_RESOLVED.settings,
+    retries=_CONFIG_NO_MCP.tool_retries,
+    output_type=[str, DeferredToolRequests],
+    toolsets=[_TOOL_REG.toolset] + _TOOL_REG.mcp_toolsets,
+)
 
 
 def _make_deps(session_id: str) -> CoDeps:
@@ -89,7 +98,7 @@ async def test_tool_selection_and_arg_extraction(
     deps = _make_deps(f"test-tool-{expected_tool}")
     frontend = SilentFrontend(approval_response="y")
 
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
     last_details = "no run executed"
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -170,7 +179,7 @@ async def test_tool_selection_and_arg_extraction(
 @pytest.mark.asyncio
 async def test_refusal_no_tool_for_simple_math():
     deps = _make_deps("test-refusal")
-    await ensure_ollama_warm(_TASK_MODEL)
+    await ensure_ollama_warm(_SUMM_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
             agent=_AGENT_NOREASON,
@@ -192,7 +201,7 @@ async def test_intent_routing_observation_no_tool():
     """Observation-only statement must not trigger a tool call."""
     deps = _make_deps("test-intent-routing")
 
-    await ensure_ollama_warm(_TASK_MODEL)
+    await ensure_ollama_warm(_SUMM_MODEL)
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
         turn = await run_turn(
             agent=_AGENT_NOREASON,

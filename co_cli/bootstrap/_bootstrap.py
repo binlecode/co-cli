@@ -185,9 +185,8 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.agent import build_tool_registry, build_task_agent, discover_mcp_tools
-    from co_cli.config import ROLE_TASK
+    from co_cli._model_factory import ModelRegistry
+    from co_cli.agent import build_tool_registry, discover_mcp_tools
 
     # Step 1: build config (single call, fully resolved)
     config = CoConfig.from_settings(settings, cwd=Path.cwd())
@@ -247,16 +246,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 7: sync knowledge store with current files on disk
     knowledge_store = _sync_knowledge_store(knowledge_store, config, frontend)
 
-    # Step 8: build task agent (approval resume — lightweight, no personality)
-    task_agents: dict = {}
-    _no_model = ResolvedModel(model=None, settings=None)
-    task_model = model_registry.get(ROLE_TASK, _no_model)
-    if task_model.model:
-        task_agents[ROLE_TASK] = build_task_agent(
-            config=config, role_model=task_model, tool_registry=tool_registry,
-        )
-
-    # Step 9: assemble deps
+    # Step 8: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
     return CoDeps(
         shell=ShellBackend(),
@@ -265,10 +255,8 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         knowledge_store=knowledge_store,
         tool_index=tool_registry.tool_index,
         skill_commands=skill_commands,
-        task_agents=task_agents,
         runtime=runtime,
     )
-
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:

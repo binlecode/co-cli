@@ -30,7 +30,7 @@ flowchart TD
 
     L -->|DeferredToolRequests| M["_run_approval_loop()"]
     M --> N["set resume_tool_names = approved deferred names; collect approvals"]
-    N --> O["_execute_stream_segment() using task agent when available"]
+    N --> O["_execute_stream_segment() using main agent"]
     O --> L
 
     L -->|final output| P["adopt latest_result.all_messages(); fallback render if no text streamed; run output-limit checks"]
@@ -114,7 +114,7 @@ Inputs:
 - `turn_state.current_history`
 - `turn_state.tool_approval_decisions`
 - `turn_state.latest_usage`
-- selected agent surface: main agent for the initial pass, task agent for resume hops when configured
+- selected agent surface: main agent for all passes (SDK skips `ModelRequestNode` on resume, so zero additional tokens)
 
 Per-event handling:
 
@@ -188,8 +188,7 @@ while latest_result.output is DeferredToolRequests:
   current_input = None
   current_history = latest_result.all_messages()
   tool_approval_decisions = approvals
-  resume_agent = deps.services.task_agent or main agent
-  run next segment
+  run next segment with main agent
 clear deps.runtime.resume_tool_names
 ```
 
@@ -344,7 +343,7 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger with circuit breaker |
 | `co_cli/context/_summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/context/_types.py` | shared `MemoryRecallState` and `SafetyState` dataclasses |
-| `co_cli/agent.py` | main/task agent factories and native filtered toolset construction with per-tool loading policy |
+| `co_cli/agent.py` | main agent factory and native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/tool_approvals.py` | approval-subject resolution, remembered rule matching, and decision recording |
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |

@@ -23,7 +23,6 @@ flowchart TD
     subgraph Build["agent construction"]
         Static[build_static_instructions]
         MainAgent[build_agent]
-        TaskAgent[build_task_agent]
         Static --> MainAgent
     end
 
@@ -86,7 +85,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 
 These layers are not persisted into `message_history`.
 
-**Task agent** — `build_task_agent()` builds the lightweight approval-resume surface with a fixed short system prompt, same toolsets, no history processors, no dynamic layers.
+**Approval resume** — the SDK skips `ModelRequestNode` entirely on the `deferred_tool_results` path, so resume segments run on the main agent with zero additional tokens. No separate agent is needed.
 
 ### 2.2 History Governance
 

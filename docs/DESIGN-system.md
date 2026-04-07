@@ -16,7 +16,6 @@ bootstrap
        -> build CoServices / CoRuntimeState / CoDeps
     -> build_agent()
        -> build_static_instructions()  # personality, rules, counter-steering
-    -> build_task_agent() when ROLE_TASK is configured
 
 session activation
     -> restore_session()
@@ -42,14 +41,10 @@ flowchart LR
     Bootstrap --> Deps[CoDeps]
 
     Main --> AgentFactory[build_agent()]
-    Main --> TaskAgentFactory[build_task_agent()]
     Config --> AgentFactory
-    Config --> TaskAgentFactory
     Deps --> AgentFactory
-    Deps --> TaskAgentFactory
 
     AgentFactory --> MainAgent[Main Agent]
-    TaskAgentFactory --> TaskAgent[Task Agent]
 
     Main --> CreateDeps[create_deps]
     CreateDeps --> MCP[MCP discovery + skill loading + knowledge store]
@@ -111,8 +106,7 @@ Startup is intentionally split between synchronous bootstrap and async activatio
    - the final `CoDeps`
 6. `main.py` looks up the resolved reasoning model from `deps.services.model_registry`.
 7. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
-8. `build_task_agent()` constructs the lightweight resume agent only when `ROLE_TASK` is configured.
-9. `async with agent` activates the main agent context, which is required before MCP discovery.
+8. `async with agent` activates the main agent context, which is required before MCP discovery.
 10. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See [DESIGN-context.md](DESIGN-context.md) §2.3 for session and transcript persistence.
 11. The REPL loop starts.
 
@@ -124,12 +118,7 @@ Teardown is owned by `main.py`:
 
 ### 2.3 Agent Construction After The SDK Upgrade
 
-The foreground runtime now has two distinct agent surfaces:
-
-| Agent | Built by | Purpose |
-| --- | --- | --- |
-| main agent | `build_agent()` | normal foreground turns |
-| task agent | `build_task_agent()` | approval-resume hops inside an existing turn |
+The foreground runtime uses a single main agent for all turns, including approval-resume segments (the SDK skips `ModelRequestNode` on the `deferred_tool_results` path, so resume adds zero tokens).
 
 `build_agent()` bakes these pieces into the main agent:
 
@@ -157,14 +146,6 @@ The filtered native toolset matters for approval resumes:
 - `_filter` uses per-tool `always_load`/`should_defer` flags from `deps.services.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
 - MCP tools in `tool_index` follow the same visibility rule; MCP tools not yet in `tool_index` pass through the filter
 
-`build_task_agent()` intentionally removes the heavy prompt/context layers:
-
-- short fixed system prompt
-- same native filtered toolset construction path
-- same MCP toolset definitions
-- no history processors
-- no dynamic date/project/personality/memory instruction layers
-
 Global instrumentation is enabled once in `main.py`:
 
 - `TracerProvider` uses `SQLiteSpanExporter`
@@ -186,7 +167,7 @@ Practical ownership rules:
 
 | Group | Holds | Mutation model |
 | --- | --- | --- |
-| `services` | shell backend, knowledge index, model registry, task agent, tool index, skill commands, resource lock store | built once; shared by reference |
+| `services` | shell backend, knowledge index, model registry, tool index, skill commands, resource lock store | built once; shared by reference |
 | `config` | resolved scalar settings and paths; mutable during bootstrap (direct field assignment), read-only by convention after entering CoDeps | read-only after bootstrap |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
@@ -250,7 +231,7 @@ There are three related capability surfaces:
 
 | Surface | Completed by | Includes |
 | --- | --- | --- |
-| static tool definitions | `build_agent()` / `build_task_agent()` | native filtered toolset plus MCP toolset definitions |
+| static tool definitions | `build_agent()` | native filtered toolset plus MCP toolset definitions |
 | connected session capabilities | `create_deps()` | discovered MCP tool names plus loaded skills |
 | runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `always_load` tools + `discovered_tools`; resume turns: `resume_tool_names` + `always_load` tools) | owned by per-tool loading policy in `agent.py` |
 
@@ -322,7 +303,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | --- | --- |
 | `co_cli/main.py` | CLI entrypoints, global telemetry wiring, REPL startup, foreground-turn wrapper, and teardown |
 | `co_cli/bootstrap/_bootstrap.py` | bootstrap assembly, degradation, knowledge sync, session restore, and capability completion |
-| `co_cli/agent.py` | main/task agent factories, native filtered toolset construction, MCP toolset construction, and MCP discovery |
+| `co_cli/agent.py` | main agent factory, native filtered toolset construction, MCP toolset construction, and MCP discovery |
 | `co_cli/deps.py` | grouped dependency dataclasses, runtime/session/capability state, and sub-agent isolation |
 | `co_cli/_model_factory.py` | session-scoped resolved model registry by role |
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |

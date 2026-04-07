@@ -95,7 +95,7 @@ flowchart TD
     PAUSE --> COLLECT["_collect_deferred_tool_approvals:\n1. decode_tool_args → resolve_approval_subject\n2. is_auto_approved? → approve silently\n3. prompt user: y / n / a"]
     COLLECT --> NARROW["resume_tool_names = approved names;\nonly those + always_load visible"]
     NARROW --> AP{approved?}
-    AP -->|yes| RESUME["_execute_stream_segment\n(task agent when available)"]
+    AP -->|yes| RESUME["_execute_stream_segment\n(main agent)"]
     AP -->|no| DENY["ToolDenied → model notified"]
     RESUME --> MORE{more pending?}
     DENY --> MORE
@@ -415,5 +415,5 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
 | `co_cli/tools/_subagent_builders.py` | `CoderOutput`, `make_coder_agent()`, `ResearchOutput`, `make_research_agent()`, `AnalysisOutput`, `make_analysis_agent()`, `ThinkingOutput`, `make_thinking_agent()` |
 | `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` |
-| `co_cli/agent.py` | `build_agent()`, `build_task_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
+| `co_cli/agent.py` | `build_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt()` — dynamic prompt fragment listing undiscovered deferred tools |

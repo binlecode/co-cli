@@ -3,9 +3,9 @@
 import dataclasses
 from pathlib import Path
 
-from co_cli.agent import build_agent, build_task_agent, build_tool_registry
-from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_TASK
+from co_cli.agent import build_agent, build_tool_registry
+from co_cli._model_factory import ModelRegistry
+from co_cli.config import settings
 from co_cli.deps import CoConfig
 
 

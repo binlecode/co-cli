@@ -12,9 +12,11 @@ import pytest
 from pydantic_ai import DeferredToolResults
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 
-from co_cli.agent import build_task_agent
+from pydantic_ai import Agent
+from pydantic_ai.result import DeferredToolRequests
+
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_TASK
+from co_cli.config import settings, ROLE_SUMMARIZATION
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoSessionState, SessionApprovalRule
 from co_cli.tools._shell_backend import ShellBackend
 from co_cli.tools.tool_approvals import (
@@ -39,13 +41,21 @@ _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
 _CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
 _REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
-_TASK_MODEL = _CONFIG_NO_MCP.role_models[ROLE_TASK].model
-_TASK_RESOLVED = _REGISTRY.get(ROLE_TASK, ResolvedModel(model=None, settings=None))
+_SUMM_MODEL = _CONFIG_NO_MCP.role_models[ROLE_SUMMARIZATION].model
+_SUMM_RESOLVED = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
 
-# Tool registry and task agent built once at module level.
+# Tool registry and agent built once at module level.
+# Uses ROLE_SUMMARIZATION (reasoning_effort=none) for fast, non-reasoning tool-calling tests.
 from co_cli.agent import build_tool_registry
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
-_AGENT = build_task_agent(config=_CONFIG_NO_MCP, role_model=_TASK_RESOLVED, tool_registry=_TOOL_REG)
+_AGENT = Agent(
+    _SUMM_RESOLVED.model,
+    deps_type=CoDeps,
+    model_settings=_SUMM_RESOLVED.settings,
+    retries=_CONFIG_NO_MCP.tool_retries,
+    output_type=[str, DeferredToolRequests],
+    toolsets=[_TOOL_REG.toolset] + _TOOL_REG.mcp_toolsets,
+)
 
 
 def _make_ctx(
@@ -141,12 +151,11 @@ async def test_approval_approve():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agents={"task": _AGENT},
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
@@ -180,12 +189,11 @@ async def test_approval_deny():
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        task_agents={"task": _AGENT},
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
     )
-    await ensure_ollama_warm(_TASK_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
