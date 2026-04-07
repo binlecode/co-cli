@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.42] - 2026-04-07
+
+### Fixed
+- **Binary file crash**: `read_file` now catches `UnicodeDecodeError` and returns a clear error instead of an unhandled traceback
+- **Broken symlink crash**: `list_directory` recursive glob tolerates broken symlinks via `_safe_mtime` fallback instead of crashing on `.stat()`
+
+### Added
+- **Line-numbered output**: `read_file` always returns `cat -n` style numbered lines (`{n:>6}\t{line}`), enabling precise `edit_file` targeting without manual line counting
+
 ## [0.7.41] - 2026-04-07
 
 ### Fixed

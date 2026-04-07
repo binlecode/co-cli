@@ -12,6 +12,7 @@ from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.files import (
     _enforce_workspace_boundary,
+    _is_recursive_pattern,
     list_directory,
     read_file,
     find_in_files,
@@ -66,6 +67,84 @@ async def test_list_directory_pattern(tmp_path):
     assert "main.py" in names
     assert "util.py" in names
     assert "readme.txt" not in names
+
+
+@pytest.mark.asyncio
+async def test_list_directory_recursive_glob(tmp_path):
+    """Recursive glob pattern finds files across nested directories, sorted by mtime."""
+    sub = tmp_path / "src" / "pkg"
+    sub.mkdir(parents=True)
+    # Create files with controlled mtime ordering
+    import time
+    (tmp_path / "root.py").write_text("r")
+    time.sleep(0.05)
+    (sub / "deep.py").write_text("d")
+    time.sleep(0.05)
+    (tmp_path / "src" / "mid.py").write_text("m")
+    (tmp_path / "readme.txt").write_text("ignore me")
+
+    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*.py")
+
+    assert not result.metadata.get("error")
+    names = [e["name"] for e in result.metadata["entries"]]
+    assert len(names) == 3
+    # All three .py files found, .txt excluded
+    assert any("root.py" in n for n in names)
+    assert any("deep.py" in n for n in names)
+    assert any("mid.py" in n for n in names)
+    assert not any(".txt" in n for n in names)
+    # Newest first (mid.py was written last)
+    assert "mid.py" in names[0]
+
+
+@pytest.mark.asyncio
+async def test_list_directory_recursive_truncation(tmp_path):
+    """Recursive glob truncates at max_entries and reports truncation."""
+    for i in range(10):
+        (tmp_path / f"file{i:02d}.py").write_text("")
+
+    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*.py", max_entries=3)
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 3
+    assert result.metadata["truncated"] is True
+    assert "truncated" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_list_directory_broken_symlink(tmp_path):
+    """Broken symlinks do not crash recursive glob — they appear in results."""
+    (tmp_path / "real.txt").write_text("exists")
+    (tmp_path / "broken_link").symlink_to(tmp_path / "nonexistent_target")
+
+    result = await list_directory(_make_ctx(tmp_path), path=".", pattern="**/*")
+
+    assert not result.metadata.get("error")
+    names = [e["name"] for e in result.metadata["entries"]]
+    assert any("broken_link" in n for n in names)
+    assert any("real.txt" in n for n in names)
+
+
+@pytest.mark.asyncio
+async def test_list_directory_shallow_truncation(tmp_path):
+    """Shallow listing truncates at max_entries and reports truncation."""
+    for i in range(10):
+        (tmp_path / f"file{i:02d}.txt").write_text("")
+
+    result = await list_directory(_make_ctx(tmp_path), path=".", max_entries=3)
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 3
+    assert result.metadata["truncated"] is True
+
+
+def test_is_recursive_pattern():
+    """Recursive pattern detection for ** and path separators."""
+    assert _is_recursive_pattern("**/*.py") is True
+    assert _is_recursive_pattern("src/**/*.ts") is True
+    assert _is_recursive_pattern("src/pkg/*.py") is True
+    assert _is_recursive_pattern("*.py") is False
+    assert _is_recursive_pattern("*") is False
 
 
 @pytest.mark.asyncio
@@ -139,6 +218,57 @@ async def test_read_file_path_is_dir(tmp_path):
     assert result.metadata.get("error") is True
 
 
+@pytest.mark.asyncio
+async def test_read_file_binary(tmp_path):
+    """Returns error for binary files instead of crashing with UnicodeDecodeError."""
+    (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
+
+    result = await read_file(_make_ctx(tmp_path), path="image.png")
+
+    assert result.metadata.get("error") is True
+    assert "Binary file" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_path_escape(tmp_path):
+    """Returns error when path escapes workspace — tool-level wiring test.
+
+    Complements test_enforce_workspace_boundary_escape_blocked which tests the
+    boundary function directly. This test verifies read_file catches the ValueError
+    and converts it to tool_error.
+    """
+    result = await read_file(_make_ctx(tmp_path), path="../../etc/passwd")
+
+    assert result.metadata.get("error") is True
+
+
+@pytest.mark.asyncio
+async def test_read_file_line_numbers(tmp_path):
+    """Full-file read returns cat -n style numbered output."""
+    (tmp_path / "five.txt").write_text("aaa\nbbb\nccc\nddd\neee\n")
+
+    result = await read_file(_make_ctx(tmp_path), path="five.txt")
+
+    assert not result.metadata.get("error")
+    assert "     1\t" in result.return_value
+    assert "     5\t" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_read_file_line_numbers_ranged(tmp_path):
+    """Ranged read line numbers reflect actual file positions."""
+    lines = [f"line{i}\n" for i in range(1, 11)]
+    (tmp_path / "ten.txt").write_text("".join(lines))
+
+    result = await read_file(_make_ctx(tmp_path), path="ten.txt", start_line=3, end_line=5)
+
+    assert not result.metadata.get("error")
+    # First line in output should be numbered 3
+    first_line = result.return_value.split("\n")[0]
+    assert first_line.startswith("     3\t")
+    assert "     5\t" in result.return_value
+
+
 # --- find_in_files ---
 
 
@@ -177,6 +307,21 @@ async def test_find_in_files_no_matches(tmp_path):
     assert not result.metadata.get("error")
     assert result.metadata["count"] == 0
     assert result.metadata["matches"] == []
+
+
+@pytest.mark.asyncio
+async def test_find_in_files_recursive_subdirectory(tmp_path):
+    """Recursive glob reaches files in deeply nested subdirectories."""
+    deep = tmp_path / "src" / "pkg"
+    deep.mkdir(parents=True)
+    (deep / "deep.py").write_text("TARGET_MARKER = True\n")
+    (tmp_path / "top.txt").write_text("no match here\n")
+
+    result = await find_in_files(_make_ctx(tmp_path), pattern="TARGET_MARKER")
+
+    assert not result.metadata.get("error")
+    assert result.metadata["count"] == 1
+    assert "src/pkg/deep.py" in result.metadata["matches"][0]["file"]
 
 
 # --- write_file ---

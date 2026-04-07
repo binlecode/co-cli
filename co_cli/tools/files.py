@@ -29,6 +29,19 @@ def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
     return resolved
 
 
+def _safe_mtime(p: Path) -> float:
+    """Return file mtime, falling back to 0.0 for broken symlinks or inaccessible paths."""
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _is_recursive_pattern(pattern: str) -> bool:
+    """Return True when the glob pattern requires recursive traversal."""
+    return "**" in pattern or "/" in pattern
+
+
 async def list_directory(
     ctx: RunContext[CoDeps],
     path: str = ".",
@@ -40,9 +53,14 @@ async def list_directory(
     Returns files and subdirectories matching the pattern up to max_entries.
     Each entry is prefixed with [dir] or [file] to indicate type.
 
+    Supports recursive glob patterns: use "**" to match across directory
+    levels (e.g. "**/*.py" finds all Python files in the tree). Results
+    for recursive patterns are sorted by modification time (newest first).
+
     Args:
         path: Directory path relative to the workspace root (default: current directory).
         pattern: Glob pattern to filter entries (default: "*" matches all).
+                 Use "**/*.ext" for recursive file search by name.
         max_entries: Maximum number of entries to return (default: 200).
     """
     try:
@@ -56,16 +74,42 @@ async def list_directory(
     if not resolved.is_dir():
         return tool_error(f"Not a directory: {path}")
 
-    entries: list[dict[str, str]] = []
-    for entry in sorted(resolved.iterdir()):
-        if not fnmatch.fnmatch(entry.name, pattern):
-            continue
-        kind = "dir" if entry.is_dir() else "file"
-        entries.append({"name": entry.name, "type": kind})
-        if len(entries) >= max_entries:
-            break
+    workspace_root = ctx.deps.config.workspace_root
+    truncated = False
+
+    if _is_recursive_pattern(pattern):
+        # Recursive glob — sorted by mtime (newest first), paths relative to workspace
+        raw = sorted(
+            resolved.glob(pattern),
+            key=_safe_mtime,
+            reverse=True,
+        )
+        entries: list[dict[str, str]] = []
+        for entry in raw:
+            kind = "dir" if entry.is_dir() else "file"
+            try:
+                rel = str(entry.relative_to(workspace_root))
+            except ValueError:
+                rel = str(entry)
+            entries.append({"name": rel, "type": kind})
+            if len(entries) >= max_entries:
+                truncated = True
+                break
+    else:
+        # Shallow listing — sorted alphabetically by name
+        entries = []
+        for entry in sorted(resolved.iterdir()):
+            if not fnmatch.fnmatch(entry.name, pattern):
+                continue
+            kind = "dir" if entry.is_dir() else "file"
+            entries.append({"name": entry.name, "type": kind})
+            if len(entries) >= max_entries:
+                truncated = True
+                break
 
     lines = [f"[{e['type']}] {e['name']}" for e in entries]
+    if truncated:
+        lines.append(f"(truncated at {max_entries} entries — use a more specific pattern)")
     display = "\n".join(lines) if lines else "(empty)"
 
     return tool_output(
@@ -73,6 +117,7 @@ async def list_directory(
         ctx=ctx,
         path=str(resolved),
         count=len(entries),
+        truncated=truncated,
         entries=entries,
     )
 
@@ -104,18 +149,24 @@ async def read_file(
     if resolved.is_dir():
         return tool_error(f"Path is a directory: {path}")
 
-    content = resolved.read_text(encoding="utf-8")
+    try:
+        content = resolved.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return tool_error(f"Binary file — cannot display as text: {path}")
+
     all_lines = content.splitlines(keepends=True)
     total_line_count = len(all_lines)
 
     if start_line is not None or end_line is not None:
-        # Slice is 0-indexed; start_line/end_line are 1-indexed inclusive
         lo = (start_line - 1) if start_line is not None else 0
         hi = end_line if end_line is not None else total_line_count
         sliced = all_lines[lo:hi]
-        display = "".join(sliced)
     else:
-        display = content
+        sliced = all_lines
+
+    # cat -n style: right-justified 6-char line number + tab
+    base = start_line if start_line is not None else 1
+    display = "".join(f"{base + i:>6}\t{line}" for i, line in enumerate(sliced))
 
     return tool_output(
         display,

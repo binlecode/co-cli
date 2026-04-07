@@ -270,8 +270,8 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
-| `list_directory` | `path="."`, `pattern="*"`, `max_entries=200` | Lists dir contents filtered by glob; entries tagged `[dir]` or `[file]` |
-| `read_file` | `path`, `start_line?`, `end_line?` | Reads content; optional 1-indexed line range |
+| `list_directory` | `path="."`, `pattern="*"`, `max_entries=200` | Lists dir contents filtered by glob; entries tagged `[dir]` or `[file]`. Recursive patterns (`**`) sorted by mtime; tolerates broken symlinks |
+| `read_file` | `path`, `start_line?`, `end_line?` | Returns `cat -n` numbered content (`{n:>6}\t{line}`); optional 1-indexed line range; returns error on binary files |
 | `find_in_files` | `pattern` (regex), `glob="**/*"`, `max_matches=50` | Regex search; skips binary files; returns `file:line: text` |
 | `write_file` | `path`, `content` | Overwrites file; creates parent dirs; returns byte count |
 | `edit_file` | `path`, `search`, `replacement`, `replace_all=False` | Exact-string replace; fails on ambiguous match unless `replace_all=True` |
