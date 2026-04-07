@@ -162,6 +162,7 @@ Approval collection sequence:
 4. otherwise prompt the user for `y`, `n`, or `a`
 5. encode the decision into `DeferredToolResults`
 6. optionally remember the scope when the user chose `a`
+7. if denied, emit `logger.debug("tool_denied", tool_name, subject_kind, subject_value)`
 
 Approval subject scopes:
 

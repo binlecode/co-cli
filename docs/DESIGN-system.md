@@ -124,14 +124,16 @@ The foreground runtime uses a single main agent for all turns, including approva
 
 1. resolved model object plus `ModelSettings`
 2. static `instructions=config.static_instructions`
-3. four history processors:
+3. five history processors:
    - `truncate_tool_results`
+   - `compact_assistant_responses`
    - `detect_safety_issues`
    - `inject_opening_context`
    - `summarize_history_window`
-4. a native `FunctionToolset` wrapped by `filtered(...)`
-5. optional MCP toolsets built from `config.mcp_servers`
-6. per-turn dynamic instruction layers:
+4. `CoToolLifecycle` capability — `before_tool_execute` (path normalization for file tools), `after_tool_execute` (OTel span enrichment + audit logging)
+5. a native `FunctionToolset` wrapped by `filtered(...)`
+6. optional MCP toolsets built from `config.mcp_servers`
+7. per-turn dynamic instruction layers:
    - current date
    - shell guidance
    - project instructions from `.co-cli/instructions.md`

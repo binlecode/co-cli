@@ -176,14 +176,20 @@ async def _collect_deferred_tool_approvals(
         # User prompt
         choice = frontend.prompt_approval(subject.display) if frontend is not None else "n"
 
+        approved = choice in ("y", "a")
         record_approval_choice(
             approvals,
             tool_call_id=call.tool_call_id,
-            approved=choice in ("y", "a"),
+            approved=approved,
             subject=subject,
             deps=deps,
             remember=choice == "a" and subject.can_remember,
         )
+        if not approved:
+            logger.debug(
+                "tool_denied tool_name=%s subject_kind=%s subject_value=%s",
+                call.tool_name, subject.kind, subject.value,
+            )
 
     return approvals
 

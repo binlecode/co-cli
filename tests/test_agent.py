@@ -6,6 +6,7 @@ from pathlib import Path
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings
+from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.deps import CoConfig, LoadPolicy, ToolSource
 
 
@@ -171,3 +172,15 @@ def test_toolinfo_enum_construction():
             name="x", description="x", approval=False,
             source=ToolSource.NATIVE, should_defer=True,
         )
+
+
+def test_build_agent_registers_tool_lifecycle_capability():
+    """build_agent() registers CoToolLifecycle as a capability on the agent."""
+    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    agent = build_agent(config=config)
+    # _root_capability.capabilities holds the user-provided capability list
+    children = agent._root_capability.capabilities
+    lifecycle_caps = [c for c in children if isinstance(c, CoToolLifecycle)]
+    assert len(lifecycle_caps) == 1, (
+        f"Expected exactly one CoToolLifecycle capability, found {len(lifecycle_caps)}"
+    )

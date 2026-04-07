@@ -105,6 +105,13 @@ flowchart TD
     EX --> DONE([Turn complete])
 ```
 
+**CoToolLifecycle capability** (registered via `capabilities=[CoToolLifecycle()]` in `build_agent()`) intercepts every tool execution with two hooks:
+
+- `before_tool_execute` — resolves relative `path` args to absolute for file tools (`read_file`, `write_file`, `edit_file`, `list_directory`)
+- `after_tool_execute` — enriches the SDK's `execute_tool` OTel span with `co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size`; emits `logger.debug("tool_executed")`
+
+Denial logging (`tool_denied`) is emitted in `_collect_deferred_tool_approvals()` when approval is rejected.
+
 ---
 
 ### Tool Result Contract
@@ -259,7 +266,7 @@ Conditional tools excluded when gate is absent.
 
 #### Workspace (`tools/files.py`)
 
-All paths resolved through `_resolve_workspace_path()` and verified against `workspace_root`. Path traversal raises `ValueError` → `tool_error`.
+All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified against `workspace_root` by `_enforce_workspace_boundary()` (defense in depth). Path traversal raises `ValueError` → `tool_error`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|

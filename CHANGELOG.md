@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.40] - 2026-04-07
+
+### Changed
+- **pydantic-ai 1.77.0**: bumped from 1.73.0 — gains smart instruction caching on Anthropic/Bedrock, approval span tracing fix, `RunContext.agent` access, SDK-native `defer_loading`, and `ThreadExecutor` capability
+- **CoToolLifecycle capability**: centralized cross-cutting tool concerns via SDK `AbstractCapability` hooks — `before_tool_execute` (path normalization for file tools) and `after_tool_execute` (OTel span enrichment + audit logging)
+- **Path resolution defense in depth**: file tool paths pre-resolved by capability hook; `_enforce_workspace_boundary()` remains in tools as security boundary check
+- **Tool span enrichment**: SDK `execute_tool` spans enriched with `co.tool.source`, `co.tool.requires_approval`, `co.tool.result_size` — no duplicate spans
+
+### Added
+- **Denial audit logging**: `_collect_deferred_tool_approvals()` now logs `tool_denied` with tool name, subject kind, and subject value when user rejects a tool call
+
+### Fixed
+- **Research doc accuracy**: corrected stale `ToolInfo` fields (`always_load`/`should_defer` → `load: LoadPolicy`), removed phantom `retries`, fixed `tool_output()` signatures across 4 peer-comparison research docs
+
 ## [0.7.38] - 2026-04-07
 
 ### Changed

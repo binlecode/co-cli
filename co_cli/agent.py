@@ -14,6 +14,7 @@ from pydantic_ai.tools import ToolDefinition
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
 from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
 from co_cli._model_factory import ResolvedModel
+from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.context._history import (
     inject_opening_context,
     truncate_tool_results,
@@ -294,6 +295,7 @@ def build_agent(
             summarize_history_window,
         ],
         toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
+        capabilities=[CoToolLifecycle()],
     )
 
     # Conditional prompt layers — runtime-gated via @agent.instructions (fresh per turn, never accumulated)

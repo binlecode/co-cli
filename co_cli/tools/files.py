@@ -14,14 +14,18 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
 
 
-def _resolve_workspace_path(raw: str, workspace_root: Path) -> Path:
-    """Resolve path and verify it stays within workspace_root.
+def _enforce_workspace_boundary(path: Path, workspace_root: Path) -> Path:
+    """Resolve path against workspace_root and verify it stays within.
+
+    Defense in depth: CoToolLifecycle.before_tool_execute pre-resolves paths,
+    but this function handles both pre-resolved (absolute) and raw (relative)
+    paths as a safety net.
 
     Raises ValueError if path escapes workspace.
     """
-    resolved = (workspace_root / raw).resolve()
+    resolved = (workspace_root / path).resolve()
     if not resolved.is_relative_to(workspace_root.resolve()):
-        raise ValueError(f"Path escapes workspace: {raw}")
+        raise ValueError(f"Path escapes workspace: {path}")
     return resolved
 
 
@@ -42,7 +46,7 @@ async def list_directory(
         max_entries: Maximum number of entries to return (default: 200).
     """
     try:
-        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -90,7 +94,7 @@ async def read_file(
         end_line: Last line to include (1-indexed, inclusive). Optional.
     """
     try:
-        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -190,7 +194,7 @@ async def write_file(
         content: Text content to write.
     """
     try:
-        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -225,7 +229,7 @@ async def edit_file(
         replace_all: If True, replace all occurrences; otherwise requires exactly one.
     """
     try:
-        resolved = _resolve_workspace_path(path, ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 

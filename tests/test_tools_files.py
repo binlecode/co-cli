@@ -11,6 +11,7 @@ from co_cli.config import settings
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.files import (
+    _enforce_workspace_boundary,
     list_directory,
     read_file,
     find_in_files,
@@ -274,3 +275,83 @@ async def test_edit_file_not_found_path(tmp_path):
     result = await edit_file(_make_ctx(tmp_path), path="ghost.txt", search="x", replacement="y")
 
     assert result.metadata.get("error") is True
+
+
+# --- _enforce_workspace_boundary ---
+
+
+def test_enforce_workspace_boundary_relative_path(tmp_path):
+    """Relative path is resolved to absolute path within workspace."""
+    (tmp_path / "sub").mkdir()
+    resolved = _enforce_workspace_boundary(Path("sub/file.txt"), tmp_path)
+    assert resolved == (tmp_path / "sub" / "file.txt").resolve()
+    assert resolved.is_absolute()
+
+
+def test_enforce_workspace_boundary_absolute_within(tmp_path):
+    """Absolute path within workspace passes through unchanged."""
+    target = tmp_path / "inner" / "doc.txt"
+    resolved = _enforce_workspace_boundary(target, tmp_path)
+    assert resolved == target.resolve()
+
+
+def test_enforce_workspace_boundary_escape_blocked(tmp_path):
+    """Path that escapes workspace root raises ValueError."""
+    with pytest.raises(ValueError, match="Path escapes workspace"):
+        _enforce_workspace_boundary(Path("../../etc/passwd"), tmp_path)
+
+
+def test_enforce_workspace_boundary_symlink_escape_blocked(tmp_path):
+    """Symlink that resolves outside workspace is blocked."""
+    outside = tmp_path.parent / "outside_target"
+    outside.mkdir(exist_ok=True)
+    link = tmp_path / "sneaky_link"
+    link.symlink_to(outside)
+    with pytest.raises(ValueError, match="Path escapes workspace"):
+        _enforce_workspace_boundary(Path("sneaky_link"), tmp_path)
+
+
+# --- CoToolLifecycle path normalization ---
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_normalizes_relative_path(tmp_path):
+    """CoToolLifecycle.before_tool_execute resolves relative paths to absolute for file tools."""
+    from pydantic_ai.capabilities import ValidatedToolArgs
+    from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.tools import ToolDefinition
+    from co_cli.context._tool_lifecycle import CoToolLifecycle
+
+    lifecycle = CoToolLifecycle()
+    ctx = _make_ctx(tmp_path)
+    call = ToolCallPart(tool_name="read_file", args={"path": "subdir/file.txt"})
+    tool_def = ToolDefinition(name="read_file", description="read", parameters_json_schema={})
+    args: ValidatedToolArgs = {"path": "subdir/file.txt"}
+
+    result_args = await lifecycle.before_tool_execute(
+        ctx, call=call, tool_def=tool_def, args=args,
+    )
+
+    expected = str((tmp_path / "subdir" / "file.txt").resolve())
+    assert result_args["path"] == expected
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_skips_non_file_tools(tmp_path):
+    """CoToolLifecycle.before_tool_execute leaves non-file-tool args unchanged."""
+    from pydantic_ai.capabilities import ValidatedToolArgs
+    from pydantic_ai.messages import ToolCallPart
+    from pydantic_ai.tools import ToolDefinition
+    from co_cli.context._tool_lifecycle import CoToolLifecycle
+
+    lifecycle = CoToolLifecycle()
+    ctx = _make_ctx(tmp_path)
+    call = ToolCallPart(tool_name="web_search", args={"query": "hello"})
+    tool_def = ToolDefinition(name="web_search", description="search", parameters_json_schema={})
+    args: ValidatedToolArgs = {"query": "hello"}
+
+    result_args = await lifecycle.before_tool_execute(
+        ctx, call=call, tool_def=tool_def, args=args,
+    )
+
+    assert result_args == {"query": "hello"}
