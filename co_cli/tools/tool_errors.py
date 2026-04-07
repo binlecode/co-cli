@@ -6,7 +6,7 @@ from pydantic_ai import ModelRetry
 
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
@@ -23,7 +23,9 @@ def tool_error(
     Unlike ModelRetry, this stops the retry loop immediately — the model
     sees the error in the tool result and can pick a different tool.
     """
-    return tool_output(message, ctx=ctx, error=True)
+    if ctx is not None:
+        return tool_output(message, ctx=ctx, error=True)
+    return tool_output_raw(message, error=True)
 
 
 def http_status_code(e: Exception) -> int | None:

@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries flat loading-policy flags (`always_load` / `should_defer`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `should_defer=True` by default and follow the same visibility rule.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries a `LoadPolicy` enum (`ALWAYS` or `DEFERRED`) and a `ToolSource` enum (`NATIVE` or `MCP`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `load=LoadPolicy.DEFERRED` by default and follow the same visibility rule.
 
 ```
 tools/
@@ -35,9 +35,9 @@ Registration, filtering, and progressive disclosure form a single pipeline:
 build_agent()
   ├─ _build_filtered_toolset(config)
   │    ├─ FunctionToolset — register all tools via _reg()
-  │    │    each _reg() produces a ToolInfo(always_load | should_defer)
+  │    │    each _reg() produces a ToolInfo(load=ALWAYS | DEFERRED)
   │    └─ inner.filtered(_filter) — per-API-call visibility gate
-  │         _filter checks: always_load? OR name in discovered_tools? OR name in resume_tool_names?
+  │         _filter checks: load==ALWAYS? OR name in discovered_tools? OR name in resume_tool_names?
   ├─ _build_mcp_toolsets(config) — one MCPServer* per mcp_servers entry
   └─ Agent(toolsets=[filtered] + mcp_toolsets)
 
@@ -50,9 +50,9 @@ create_deps()
 **Filter policy per segment type:**
 
 ```
-normal turn:      entry.always_load OR name in session.discovered_tools
+normal turn:      entry.load == ALWAYS OR name in session.discovered_tools
                   (MCP tools not in tool_index pass through)
-approval-resume:  name in resume_tool_names OR entry.always_load
+approval-resume:  name in resume_tool_names OR entry.load == ALWAYS
                   (all other tools hidden — cuts token cost per hop)
 ```
 
@@ -85,7 +85,7 @@ flowchart TD
     REG --> POOL[/"Static pool for session lifetime"/]
 
     POOL --> TURN([Per Turn])
-    TURN --> FILTER["_filter: always_load visible;\ndeferred visible only if in discovered_tools"]
+    TURN --> FILTER["_filter: ALWAYS visible;\nDEFERRED visible only if in discovered_tools"]
     FILTER --> SEG[_execute_stream_segment]
     SEG --> T{tool called?}
 
@@ -93,7 +93,7 @@ flowchart TD
     T -->|approval-required| PAUSE["Pause — DeferredToolRequests"]
 
     PAUSE --> COLLECT["_collect_deferred_tool_approvals:\n1. decode_tool_args → resolve_approval_subject\n2. is_auto_approved? → approve silently\n3. prompt user: y / n / a"]
-    COLLECT --> NARROW["resume_tool_names = approved names;\nonly those + always_load visible"]
+    COLLECT --> NARROW["resume_tool_names = approved names;\nonly those + ALWAYS visible"]
     NARROW --> AP{approved?}
     AP -->|yes| RESUME["_execute_stream_segment\n(main agent)"]
     AP -->|no| DENY["ToolDenied → model notified"]
@@ -191,7 +191,7 @@ Tools that do NOT need locking: `write_file` (blind overwrite, no read step), `s
 
 ### MCP Tool Servers
 
-Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `should_defer=True` after discovery and participate in the same visibility policy as native tools.
+Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `load=LoadPolicy.DEFERRED` after discovery and participate in the same visibility policy as native tools. MCP tools derive `integration` and `search_hint` from the server prefix.
 
 **Default servers** (gracefully skipped when `npx` is absent):
 

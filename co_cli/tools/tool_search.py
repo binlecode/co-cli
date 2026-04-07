@@ -1,8 +1,10 @@
 """Progressive tool discovery — search_tools discovers deferred tools into the session."""
 
+import re
+
 from pydantic_ai import RunContext
 
-from co_cli.deps import CoDeps, ToolInfo
+from co_cli.deps import CoDeps, ToolInfo, LoadPolicy
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.tools.tool_output import tool_output
@@ -17,7 +19,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
     as 'already available'.
     """
     tool_index = ctx.deps.tool_index
-    query_tokens = set(query.lower().split())
+    query_tokens = set(re.split(r"[_\s\-]+", query.lower()))
 
     # Exact-name lookup across all tools first
     exact_match = tool_index.get(query.strip())
@@ -30,7 +32,8 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
         if tc.search_hint:
             search_text += f" {tc.search_hint}"
         search_text = search_text.lower()
-        score = sum(1 for t in query_tokens if t in search_text)
+        search_tokens = set(re.split(r"[_\s\-]+", search_text))
+        score = sum(1 for t in query_tokens if t in search_tokens)
         if score > 0:
             scored.append((score, name, tc))
 
@@ -41,6 +44,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
         return tool_output(
             f"No tools found for {query!r}. "
             "Try: 'edit file', 'save memory', 'background task', 'sub-agent', 'gmail'.",
+            ctx=ctx,
         )
 
     # Include exact match if not already in scored results
@@ -51,7 +55,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
     discovered_now: list[str] = []
     lines = [f"Found {len(top)} tool(s):"]
     for _, name, tc in top:
-        if tc.always_load:
+        if tc.load == LoadPolicy.ALWAYS:
             status = "already available"
         elif name in ctx.deps.session.discovered_tools:
             status = "already available"
@@ -66,4 +70,4 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
 
     if discovered_now:
         lines.append(f"\n{len(discovered_now)} tool(s) unlocked. Call them in your next step.")
-    return tool_output("\n".join(lines), count=len(top), granted=discovered_now)
+    return tool_output("\n".join(lines), ctx=ctx, count=len(top), granted=discovered_now)

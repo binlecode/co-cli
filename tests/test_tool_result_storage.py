@@ -16,7 +16,7 @@ from co_cli.tools.tool_result_storage import (
 )
 from co_cli.deps import CoDeps, CoConfig
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 _CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
 _AGENT = build_agent(config=_CONFIG)
@@ -71,11 +71,11 @@ def test_tool_output_small_content_unchanged(tmp_path: Path) -> None:
     assert not results_dir.exists()
 
 
-def test_tool_output_no_ctx_oversized_unchanged() -> None:
-    """tool_output() without ctx and oversized content returns content unchanged."""
+def test_tool_output_raw_oversized_unchanged() -> None:
+    """tool_output_raw() without ctx and oversized content returns content unchanged."""
     big_content = "y" * (TOOL_RESULT_MAX_SIZE + 1)
 
-    result = tool_output(big_content)
+    result = tool_output_raw(big_content)
 
     assert result.return_value == big_content
 

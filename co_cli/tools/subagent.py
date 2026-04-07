@@ -198,7 +198,7 @@ async def _run_subagent(
         role_key, data, scope, cfg.role, model_name, requests_used, request_limit,
     )
     return tool_output(
-        display, **extra_meta, role=cfg.role, model_name=model_name,
+        display, ctx=ctx, **extra_meta, role=cfg.role, model_name=model_name,
         requests_used=requests_used, request_limit=request_limit,
         scope=scope, run_id=attempt_1.run_id,
     )

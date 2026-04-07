@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
-from co_cli.deps import CoDeps, CoConfig, ToolInfo
+from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
 from co_cli._model_factory import ResolvedModel
 from co_cli.context._history import (
     inject_opening_context,
@@ -92,7 +92,7 @@ def _build_filtered_toolset(
     """Build a FilteredToolset containing all tools for this config.
 
     Tools are registered into a FunctionToolset wrapped with a per-request filter.
-    The filter uses per-tool always_load/should_defer flags plus session.discovered_tools
+    The filter uses per-tool LoadPolicy plus session.discovered_tools
     and runtime.resume_tool_names to decide visibility per API call.
 
     Domain tools (obsidian, google) are conditionally excluded when the relevant
@@ -109,8 +109,7 @@ def _build_filtered_toolset(
         fn: Any,
         *,
         approval: bool = False,
-        always_load: bool = False,
-        should_defer: bool = False,
+        load: LoadPolicy,
         search_hint: str | None = None,
         integration: str | None = None,
         retries: int | None = None,
@@ -126,85 +125,86 @@ def _build_filtered_toolset(
             name=name,
             description=description,
             approval=approval,
-            source="native",
+            source=ToolSource.NATIVE,
+            load=load,
             integration=integration,
-            always_load=always_load,
-            should_defer=should_defer,
             search_hint=search_hint,
             max_result_size=max_result_size,
         )
 
     # --- Always-loaded tools ---
+    _A = LoadPolicy.ALWAYS
 
     # Capability introspection and tool discovery
-    _reg(check_capabilities, approval=False, always_load=True)
-    _reg(search_tools, approval=False, always_load=True)
+    _reg(check_capabilities, load=_A)
+    _reg(search_tools, load=_A)
 
     # Session task tracking
-    _reg(write_todos, approval=False, always_load=True)
-    _reg(read_todos, approval=False, always_load=True)
+    _reg(write_todos, load=_A)
+    _reg(read_todos, load=_A)
 
     # Knowledge reads
-    _reg(search_memories, approval=False, always_load=True)
-    _reg(search_knowledge, approval=False, always_load=True)
-    _reg(search_articles, approval=False, always_load=True)
-    _reg(read_article, approval=False, always_load=True)
-    _reg(list_memories, approval=False, always_load=True)
+    _reg(search_memories, load=_A)
+    _reg(search_knowledge, load=_A)
+    _reg(search_articles, load=_A)
+    _reg(read_article, load=_A)
+    _reg(list_memories, load=_A)
 
     # Workspace reads
-    _reg(list_directory, approval=False, always_load=True)
-    _reg(read_file, approval=False, always_load=True, max_result_size=80_000)
-    _reg(find_in_files, approval=False, always_load=True)
+    _reg(list_directory, load=_A)
+    _reg(read_file, load=_A, max_result_size=80_000)
+    _reg(find_in_files, load=_A)
 
     # Web
-    _reg(web_search, approval=False, always_load=True, retries=3)
-    _reg(web_fetch, approval=False, always_load=True, retries=3)
+    _reg(web_search, load=_A, retries=3)
+    _reg(web_fetch, load=_A, retries=3)
 
     # Execution
-    _reg(run_shell_command, approval=False, always_load=True, max_result_size=30_000)
+    _reg(run_shell_command, load=_A, max_result_size=30_000)
 
     # --- Deferred tools ---
+    _D = LoadPolicy.DEFERRED
 
     # File write tools
-    _reg(write_file, approval=True, should_defer=True, search_hint="create write new file", retries=1)
-    _reg(edit_file, approval=True, should_defer=True, search_hint="modify patch update file", retries=1)
+    _reg(write_file, approval=True, load=_D, search_hint="create write new file", retries=1)
+    _reg(edit_file, approval=True, load=_D, search_hint="modify patch update file", retries=1)
 
     # Knowledge write tools
-    _reg(save_memory, approval=True, should_defer=True, search_hint="remember save note memory", retries=1)
-    _reg(save_article, approval=True, should_defer=True, search_hint="save article knowledge", retries=1)
-    _reg(update_memory, approval=True, should_defer=True, search_hint="update edit memory", retries=1)
-    _reg(append_memory, approval=True, should_defer=True, search_hint="append add memory", retries=1)
+    _reg(save_memory, approval=True, load=_D, search_hint="remember save note memory", retries=1)
+    _reg(save_article, approval=True, load=_D, search_hint="save article knowledge", retries=1)
+    _reg(update_memory, approval=True, load=_D, search_hint="update edit memory", retries=1)
+    _reg(append_memory, approval=True, load=_D, search_hint="append add memory", retries=1)
 
     # Background task tools
-    _reg(start_background_task, approval=True, should_defer=True, search_hint="background async long running task")
-    _reg(check_task_status, approval=False, should_defer=True, search_hint="background task status check")
-    _reg(cancel_background_task, approval=False, should_defer=True, search_hint="cancel stop background task")
-    _reg(list_background_tasks, approval=False, should_defer=True, search_hint="list background tasks")
+    _reg(start_background_task, approval=True, load=_D, search_hint="background async long running task")
+    _reg(check_task_status, load=_D, search_hint="background task status check")
+    _reg(cancel_background_task, load=_D, search_hint="cancel stop background task")
+    _reg(list_background_tasks, load=_D, search_hint="list background tasks")
 
     # Sub-agent tools — registered only when the role model is configured
     if config.role_models.get(ROLE_CODING):
-        _reg(run_coding_subagent, approval=False, should_defer=True, search_hint="coding sub-agent delegate code")
+        _reg(run_coding_subagent, load=_D, search_hint="coding sub-agent delegate code")
     if config.role_models.get(ROLE_RESEARCH):
-        _reg(run_research_subagent, approval=False, should_defer=True, search_hint="research sub-agent delegate search")
+        _reg(run_research_subagent, load=_D, search_hint="research sub-agent delegate search")
     if config.role_models.get(ROLE_ANALYSIS):
-        _reg(run_analysis_subagent, approval=False, should_defer=True, search_hint="analysis sub-agent delegate analyze")
+        _reg(run_analysis_subagent, load=_D, search_hint="analysis sub-agent delegate analyze")
     if config.role_models.get(ROLE_REASONING):
-        _reg(run_reasoning_subagent, approval=False, should_defer=True, search_hint="reasoning sub-agent delegate think")
+        _reg(run_reasoning_subagent, load=_D, search_hint="reasoning sub-agent delegate think")
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
-        _reg(list_notes, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian notes list")
-        _reg(search_notes, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian notes search")
-        _reg(read_note, approval=False, should_defer=True, integration="obsidian", search_hint="obsidian note read")
+        _reg(list_notes, load=_D, integration="obsidian", search_hint="obsidian notes list")
+        _reg(search_notes, load=_D, integration="obsidian", search_hint="obsidian notes search")
+        _reg(read_note, load=_D, integration="obsidian", search_hint="obsidian note read")
 
     if config.google_credentials_path:
-        _reg(search_drive_files, approval=False, should_defer=True, integration="google_drive", search_hint="google drive search files", retries=3)
-        _reg(read_drive_file, approval=False, should_defer=True, integration="google_drive", search_hint="google drive read file", retries=3)
-        _reg(list_gmail_emails, approval=False, should_defer=True, integration="google_gmail", search_hint="gmail email list inbox", retries=3)
-        _reg(search_gmail_emails, approval=False, should_defer=True, integration="google_gmail", search_hint="gmail email search", retries=3)
-        _reg(list_calendar_events, approval=False, should_defer=True, integration="google_calendar", search_hint="google calendar events list", retries=3)
-        _reg(search_calendar_events, approval=False, should_defer=True, integration="google_calendar", search_hint="google calendar events search", retries=3)
-        _reg(create_gmail_draft, approval=True, should_defer=True, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
+        _reg(search_drive_files, load=_D, integration="google_drive", search_hint="google drive search files", retries=3)
+        _reg(read_drive_file, load=_D, integration="google_drive", search_hint="google drive read file", retries=3)
+        _reg(list_gmail_emails, load=_D, integration="google_gmail", search_hint="gmail email list inbox", retries=3)
+        _reg(search_gmail_emails, load=_D, integration="google_gmail", search_hint="gmail email search", retries=3)
+        _reg(list_calendar_events, load=_D, integration="google_calendar", search_hint="google calendar events list", retries=3)
+        _reg(search_calendar_events, load=_D, integration="google_calendar", search_hint="google calendar events search", retries=3)
+        _reg(create_gmail_draft, approval=True, load=_D, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
 
     def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
         entry = ctx.deps.tool_index.get(tool_def.name)
@@ -213,14 +213,16 @@ def _build_filtered_toolset(
         if resume is not None:
             if tool_def.name in resume:
                 return True
-            if entry is not None and entry.always_load:
+            if entry is not None and entry.load == LoadPolicy.ALWAYS:
                 return True
             return False
 
-        # Normal turn
+        # Normal turn — unknown tools (not in tool_index) are hidden.
+        # MCP tools are added to tool_index during bootstrap before the first agent.run().
         if entry is None:
-            return True
-        if entry.always_load:
+            logger.warning("_filter: tool %r not in tool_index — hidden", tool_def.name)
+            return False
+        if entry.load == LoadPolicy.ALWAYS:
             return True
         return tool_def.name in ctx.deps.session.discovered_tools
 
@@ -358,7 +360,7 @@ async def discover_mcp_tools(
     Returns (tool_names, errors, mcp_index) where errors maps server prefix to
     the error string for each server where list_tools() failed, and mcp_index maps
     tool name to ToolInfo metadata. Tool names exclude any in ``exclude``.
-    MCP tools are deferred by default (should_defer=True).
+    MCP tools are deferred by default (load=LoadPolicy.DEFERRED).
     """
     from pydantic_ai.mcp import MCPServer
 
@@ -382,8 +384,10 @@ async def discover_mcp_tools(
                         name=name,
                         description=t.description or "",
                         approval=approval,
-                        source="mcp",
-                        should_defer=True,
+                        source=ToolSource.MCP,
+                        load=LoadPolicy.DEFERRED,
+                        integration=prefix or None,
+                        search_hint=prefix or None,
                     )
         except Exception as e:
             logger.warning(

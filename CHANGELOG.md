@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.38] - 2026-04-07
+
+### Changed
+- **ToolInfo API safety**: replaced `always_load`/`should_defer` booleans with `LoadPolicy` enum and `source: str` with `ToolSource` enum — invalid registration state is now unrepresentable
+- **Tool search scoring**: switched from substring to token-set intersection, eliminating false positives ("create" no longer matches "recreate")
+- **Discovery quality**: deferred-tool prompt now shows `[hints: ...]` tags; MCP tools derive `integration` and `search_hint` from server prefix
+- **Filter default-deny**: `_filter` returns `False` for unknown tools instead of silently passing them through
+- **tool_output ctx required**: `ctx` is now a required parameter — omission is a TypeError, not a silent size-policy bypass
+
 ## [0.7.36] - 2026-04-07
 
 ### Changed

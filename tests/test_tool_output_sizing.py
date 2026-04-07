@@ -7,9 +7,9 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig, ToolInfo
+from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output, tool_output_raw
 from co_cli.tools.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
@@ -30,8 +30,8 @@ def _make_ctx_with_index(
         name=tool_name,
         description="test tool",
         approval=False,
-        source="native",
-        always_load=True,
+        source=ToolSource.NATIVE,
+        load=LoadPolicy.ALWAYS,
         max_result_size=max_result_size,
     )
     deps = CoDeps(
@@ -63,10 +63,10 @@ def test_tool_output_under_per_tool_threshold(tmp_path: Path) -> None:
     assert result.return_value == content
 
 
-def test_tool_output_no_ctx_returns_unchanged() -> None:
-    """tool_output() with ctx=None returns content unchanged regardless of size."""
+def test_tool_output_raw_returns_unchanged() -> None:
+    """tool_output_raw() returns content unchanged regardless of size (no ctx)."""
     content = "x" * (TOOL_RESULT_MAX_SIZE + 1000)
-    result = tool_output(content, ctx=None)
+    result = tool_output_raw(content)
     assert result.return_value == content
 
 

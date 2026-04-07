@@ -135,6 +135,7 @@ def search_notes(
             if not fts_results:
                 return tool_output(
                     f"No notes found matching: {' '.join(keywords)}",
+                    ctx=ctx,
                     count=0,
                     has_more=False,
                 )
@@ -153,6 +154,7 @@ def search_notes(
 
             return tool_output(
                 "\n".join(lines).rstrip(),
+                ctx=ctx,
                 count=len(fts_results),
                 has_more=has_more,
             )
@@ -197,6 +199,7 @@ def search_notes(
     if not results:
         return tool_output(
             f"No notes found matching: {' '.join(keywords)}",
+            ctx=ctx,
             count=0,
             has_more=False,
         )
@@ -209,6 +212,7 @@ def search_notes(
 
     return tool_output(
         "\n".join(lines).rstrip(),
+        ctx=ctx,
         count=len(results),
         has_more=has_more,
     )
@@ -268,6 +272,7 @@ def list_notes(
         label = f" with tag {tag}" if tag else ""
         return tool_output(
             f"No notes found{label}.",
+            ctx=ctx,
             count=0,
             total=0,
             offset=offset,
@@ -292,6 +297,7 @@ def list_notes(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(page),
         total=total,
         offset=offset,

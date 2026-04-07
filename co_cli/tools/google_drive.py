@@ -73,8 +73,8 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         items = results.get("files", [])
         if not items:
             if page == 1:
-                return tool_output("No files found.", count=0, page=1, has_more=False)
-            return tool_output("No more results.", count=0, page=page, has_more=False)
+                return tool_output("No files found.", ctx=ctx, count=0, page=1, has_more=False)
+            return tool_output("No more results.", ctx=ctx, count=0, page=page, has_more=False)
 
         # Store next page token for future use
         next_token = results.get("nextPageToken", "")
@@ -100,7 +100,7 @@ def search_drive_files(ctx: RunContext[CoDeps], query: str, page: int = 1) -> To
         has_more = bool(next_token)
         if has_more:
             display += f"\n\n(More results available — request page {page + 1})"
-        return tool_output(display, page=page, has_more=has_more)
+        return tool_output(display, ctx=ctx, page=page, has_more=has_more)
     except ModelRetry:
         raise
     except Exception as e:

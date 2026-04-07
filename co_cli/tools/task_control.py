@@ -67,7 +67,7 @@ async def start_background_task(
             raise ModelRetry(f"Failed to start background task: {e}")
 
     display = f"[{task_id}] started — command: {command}"
-    return tool_output(display, task_id=task_id, status="running")
+    return tool_output(display, ctx=ctx, task_id=task_id, status="running")
 
 
 async def check_task_status(
@@ -87,6 +87,7 @@ async def check_task_status(
     if state is None:
         return tool_output(
             f"Task not found: {task_id}",
+            ctx=ctx,
             task_id=task_id,
             status="not_found",
             duration=None,
@@ -115,6 +116,7 @@ async def check_task_status(
     )
     return tool_output(
         display,
+        ctx=ctx,
         task_id=task_id,
         status=state.status,
         duration=duration,
@@ -139,11 +141,12 @@ async def cancel_background_task(
     """
     state = ctx.deps.session.background_tasks.get(task_id)
     if state is None:
-        return tool_output(f"Task not found: {task_id}", task_id=task_id, status="not_found")
+        return tool_output(f"Task not found: {task_id}", ctx=ctx, task_id=task_id, status="not_found")
 
     if state.status != "running":
         return tool_output(
             f"Task already completed (status={state.status})",
+            ctx=ctx,
             task_id=task_id,
             status=state.status,
         )
@@ -153,12 +156,13 @@ async def cancel_background_task(
     except BackgroundCleanupError as e:
         return tool_output(
             f"Task {task_id} cancellation failed during cleanup: {e}",
+            ctx=ctx,
             task_id=task_id,
             status="cancel_cleanup_failed",
             cleanup_incomplete=state.cleanup_incomplete,
             cleanup_error=state.cleanup_error,
         )
-    return tool_output(f"Task {task_id} cancelled.", task_id=task_id, status="cancelled")
+    return tool_output(f"Task {task_id} cancelled.", ctx=ctx, task_id=task_id, status="cancelled")
 
 
 async def list_background_tasks(
@@ -199,4 +203,4 @@ async def list_background_tasks(
             lines.append(f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})")
         display = "\n".join(lines)
 
-    return tool_output(display, tasks=rows, count=len(rows))
+    return tool_output(display, ctx=ctx, tasks=rows, count=len(rows))

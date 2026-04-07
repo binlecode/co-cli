@@ -1,7 +1,7 @@
 """Memory data access — loading and filtering memory files.
 
 Extracted from tools/memory.py to break the context/ → tools/ cycle.
-tools/memory.py re-imports these symbols for backward compatibility.
+tools/memory.py re-imports these symbols so tool functions can use them directly.
 """
 
 import logging

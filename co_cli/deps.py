@@ -268,6 +268,18 @@ class CoConfig:
         )
 
 
+class LoadPolicy(Enum):
+    """Whether a tool is always visible or requires discovery via search_tools."""
+    ALWAYS = "always"
+    DEFERRED = "deferred"
+
+
+class ToolSource(Enum):
+    """Origin of a registered tool."""
+    NATIVE = "native"
+    MCP = "mcp"
+
+
 @dataclass(frozen=True)
 class ToolInfo:
     """Canonical metadata for one registered tool — set once at registration, never mutated."""
@@ -275,19 +287,11 @@ class ToolInfo:
     name: str
     description: str
     approval: bool
-    source: str
-    # 'native' | 'mcp'
+    source: ToolSource
+    load: LoadPolicy
     integration: str | None = None
-    always_load: bool = False
-    should_defer: bool = False
     search_hint: str | None = None
     max_result_size: int = 50_000
-
-    def __post_init__(self) -> None:
-        if self.always_load == self.should_defer:
-            raise ValueError(
-                f"ToolInfo({self.name!r}): exactly one of always_load/should_defer must be True"
-            )
 
 
 

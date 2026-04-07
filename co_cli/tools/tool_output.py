@@ -7,7 +7,12 @@ text) and metadata into ToolReturnPart.metadata (app-side, not sent to LLM).
 Usage:
     from co_cli.tools.tool_output import tool_output
 
-    return tool_output("formatted display text", count=3)
+    return tool_output("formatted display text", ctx=ctx, count=3)
+
+For call sites without RunContext (helper functions, lifecycle modules):
+    from co_cli.tools.tool_output import tool_output_raw
+
+    return tool_output_raw("formatted display text", action="saved")
 """
 
 from typing import Any, TYPE_CHECKING
@@ -24,18 +29,29 @@ if TYPE_CHECKING:
 def tool_output(
     display: str,
     *,
-    ctx: "RunContext[CoDeps] | None" = None,
+    ctx: "RunContext[CoDeps]",
     **metadata: Any,
 ) -> ToolReturn:
     """Construct a ToolReturn with display as return_value and extras as metadata."""
-    if ctx is not None:
-        info = ctx.deps.tool_index.get(ctx.tool_name)
-        threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
-        if len(display) > threshold:
-            display = persist_if_oversized(
-                display, ctx.deps.config.tool_results_dir, ctx.tool_name,
-                max_size=threshold,
-            )
+    info = ctx.deps.tool_index.get(ctx.tool_name)
+    threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
+    if len(display) > threshold:
+        display = persist_if_oversized(
+            display, ctx.deps.config.tool_results_dir, ctx.tool_name,
+            max_size=threshold,
+        )
+    return ToolReturn(return_value=display, metadata=metadata or None)
+
+
+def tool_output_raw(
+    display: str,
+    **metadata: Any,
+) -> ToolReturn:
+    """Construct a ToolReturn without RunContext — no size checking.
+
+    Use only in helper functions that lack RunContext (e.g. memory lifecycle,
+    memory save). Tool functions with ctx should always use tool_output().
+    """
     return ToolReturn(return_value=display, metadata=metadata or None)
 
 

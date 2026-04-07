@@ -200,6 +200,7 @@ async def write_file(
 
     return tool_output(
         f"Written: {path} ({byte_count} bytes)",
+        ctx=ctx,
         path=str(resolved),
         bytes=byte_count,
     )
@@ -250,6 +251,7 @@ async def edit_file(
 
             return tool_output(
                 f"Edited: {path} ({count} replacement(s))",
+                ctx=ctx,
                 path=str(resolved),
                 replacements=count,
             )

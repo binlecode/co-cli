@@ -176,7 +176,7 @@ Resume-loop behavior:
 
 ```text
 # run_turn() — before first segment
-# No explicit filter setup needed — _filter reads per-tool always_load/should_defer
+# No explicit filter setup needed — _filter reads per-tool LoadPolicy
 # plus session.discovered_tools on every API call.
 
 # _run_approval_loop() — each resume hop
@@ -194,8 +194,8 @@ clear deps.runtime.resume_tool_names
 
 Important precision:
 
-- `_filter` uses per-tool `always_load`/`should_defer` flags from `tool_index` plus `session.discovered_tools` and `runtime.resume_tool_names`
-- MCP tools in `tool_index` follow the same visibility rule; MCP tools not yet in `tool_index` pass through the filter
+- `_filter` uses per-tool `LoadPolicy` (`ALWAYS`/`DEFERRED`) from `tool_index` plus `session.discovered_tools` and `runtime.resume_tool_names`
+- MCP tools in `tool_index` follow the same visibility rule; unknown tools not in `tool_index` are hidden (default-deny)
 - approval resumes happen inside the same user turn; they are not a new REPL iteration
 
 Shell approval remains split correctly:

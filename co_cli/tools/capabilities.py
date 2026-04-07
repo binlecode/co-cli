@@ -86,6 +86,7 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
 
     return tool_output(
         display,
+        ctx=ctx,
         knowledge_backend=caps["knowledge_backend"],
         reranker=reranker,
         google=caps["google"],

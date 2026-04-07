@@ -86,6 +86,7 @@ def write_todos(
         return tool_output(
             "Todo list NOT saved — validation errors:\n"
             + "\n".join(f"  - {e}" for e in errors),
+            ctx=ctx,
             count=0,
             pending=0,
             in_progress=0,
@@ -124,6 +125,7 @@ def write_todos(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(validated),
         pending=pending,
         in_progress=in_progress,
@@ -153,6 +155,7 @@ def read_todos(
     if not todos:
         return tool_output(
             "No active todo list for this session.",
+            ctx=ctx,
             count=0,
             pending=0,
             in_progress=0,
@@ -183,6 +186,7 @@ def read_todos(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(todos),
         pending=pending,
         in_progress=in_progress,

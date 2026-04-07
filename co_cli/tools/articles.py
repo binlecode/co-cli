@@ -30,7 +30,7 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._store import SearchResult
 from co_cli.tools.memory import slugify, load_memories, grep_recall
 from pydantic_ai.messages import ToolReturn
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +203,7 @@ async def search_knowledge(
     if ctx.deps.knowledge_store is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
-            return tool_output(f"No results for '{query}' (source={source!r} requires FTS)", count=0, results=[])
+            return tool_output(f"No results for '{query}' (source={source!r} requires FTS)", ctx=ctx, count=0, results=[])
         otel_trace.get_current_span().set_attribute("rag.backend", "grep")
         # Derive effective_kind so the source="memory" escape hatch works in grep mode.
         # Default (source=None or source="library"): library only (articles).
@@ -230,7 +230,7 @@ async def search_knowledge(
             memories = [m for m in memories if m.created and m.created <= created_before]
         matches = grep_recall(memories, query, limit)
         if not matches:
-            return tool_output(f"No results found for '{query}'", count=0, results=[])
+            return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
         lines = [f"Found {len(matches)} result(s) for '{query}':\n"]
         result_dicts = []
         for m in matches:
@@ -239,7 +239,7 @@ async def search_knowledge(
             lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
             result_dicts.append({"source": result_source, "kind": m.kind, "title": m.path.stem,
                                   "snippet": m.content[:100], "score": 0.0, "path": str(m.path)})
-        return tool_output("\n".join(lines), count=len(matches), results=result_dicts)
+        return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
     # Sync Obsidian vault into index before searching
     if ctx.deps.config.obsidian_vault_path and source in (None, "obsidian"):
@@ -265,10 +265,10 @@ async def search_knowledge(
         )
     except Exception as e:
         logger.warning(f"search_knowledge FTS error: {e}")
-        return tool_output(f"Search error: {e}", count=0, results=[])
+        return tool_output(f"Search error: {e}", ctx=ctx, count=0, results=[])
 
     if not results:
-        return tool_output(f"No results found for '{query}'", count=0, results=[])
+        return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
 
     # Compute confidence for each result (post-retrieval, tool layer)
     half_life_days = ctx.deps.config.memory_recall_half_life_days or 0
@@ -303,6 +303,7 @@ async def search_knowledge(
 
     return tool_output(
         "\n".join(lines).rstrip(),
+        ctx=ctx,
         count=len(results),
         results=result_dicts,
     )
@@ -435,6 +436,7 @@ async def save_article(
         f"✓ Saved article {article_id}: {filename}\n"
         f"Source: {origin_url}\n"
         f"Location: {file_path}",
+        ctx=ctx,
         article_id=article_id,
         action="saved",
     )
@@ -489,6 +491,7 @@ async def search_articles(
             if not fts_results:
                 return tool_output(
                     f"No articles found matching '{query}'",
+                    ctx=ctx,
                     count=0,
                     results=[],
                 )
@@ -526,6 +529,7 @@ async def search_articles(
                 })
             return tool_output(
                 "\n".join(lines),
+                ctx=ctx,
                 count=len(fts_results),
                 results=result_dicts,
             )
@@ -555,6 +559,7 @@ async def search_articles(
     if not matches:
         return tool_output(
             f"No articles found matching '{query}'",
+            ctx=ctx,
             count=0,
             results=[],
         )
@@ -592,6 +597,7 @@ async def search_articles(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(matches),
         results=result_dicts,
     )
@@ -630,6 +636,7 @@ async def read_article(
     if not candidates:
         return tool_output(
             f"Article '{slug}' not found.",
+            ctx=ctx,
             article_id=None,
             title=None,
             origin_url=None,
@@ -651,6 +658,7 @@ async def read_article(
 
     return tool_output(
         f"{header}\n\n{body.strip()}",
+        ctx=ctx,
         article_id=article_id,
         title=title,
         origin_url=origin_url,
@@ -709,7 +717,7 @@ def _consolidate_article(
     path.write_text(md_content, encoding="utf-8")
     logger.info(f"Consolidated article {fm.get('id')} (same origin_url)")
 
-    return tool_output(
+    return tool_output_raw(
         f"✓ Updated article {fm.get('id')}: {path.name}\n"
         f"Source: {origin_url}\n"
         f"Location: {path}",

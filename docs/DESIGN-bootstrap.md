@@ -339,7 +339,7 @@ The banner marks the boundary between startup and interactive use. All status me
 | `deps.knowledge_store` | `create_deps()` Step 6-7 | `KnowledgeStore` or `None` (sync failure disables FTS) — set at construction, never mutated |
 | `deps.session.session_id` | `restore_session()` (inline wakeup) | Single write: restored or new UUID hex |
 | `deps.model_registry` | `create_deps()` Step 3 | `ModelRegistry` built from resolved `CoConfig` |
-| `deps.tool_index` | Native + MCP entries set by `create_deps()` (native via `build_tool_registry()`, MCP via `discover_mcp_tools()`) | Full `dict[str, ToolInfo]` map with per-tool loading policy (`always_load`/`should_defer`) |
+| `deps.tool_index` | Native + MCP entries set by `create_deps()` (native via `build_tool_registry()`, MCP via `discover_mcp_tools()`) | Full `dict[str, ToolInfo]` map with per-tool `LoadPolicy` enum (`ALWAYS`/`DEFERRED`) |
 | `deps.skill_commands` | `create_deps()` via `_load_skills()` | Full dict of all loaded skills; model-facing registry derived via `get_skill_registry()` |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
 

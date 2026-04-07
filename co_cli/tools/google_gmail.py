@@ -87,9 +87,9 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
         )
         messages = response.get("messages", [])
         if not messages:
-            return tool_output("No emails found.", count=0)
+            return tool_output("No emails found.", ctx=ctx, count=0)
         display = f"Recent Emails ({len(messages)}):\n" + _format_messages(service, messages)
-        return tool_output(display, count=len(messages))
+        return tool_output(display, ctx=ctx, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:
@@ -130,9 +130,9 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
         )
         messages = response.get("messages", [])
         if not messages:
-            return tool_output(f"No emails found for query: {query}", count=0)
+            return tool_output(f"No emails found for query: {query}", ctx=ctx, count=0)
         display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(service, messages)
-        return tool_output(display, count=len(messages))
+        return tool_output(display, ctx=ctx, count=len(messages))
     except ModelRetry:
         raise
     except Exception as e:
@@ -165,7 +165,7 @@ def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
         draft_body = {"message": {"raw": raw}}
         draft = service.users().drafts().create(userId="me", body=draft_body).execute()
         display = f"Draft created for {to} with subject '{subject}'. Draft ID: {draft['id']}"
-        return tool_output(display, draft_id=draft["id"], to=to, subject=subject)
+        return tool_output(display, ctx=ctx, draft_id=draft["id"], to=to, subject=subject)
     except ModelRetry:
         raise
     except Exception as e:

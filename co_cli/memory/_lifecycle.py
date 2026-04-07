@@ -18,7 +18,7 @@ from co_cli.knowledge._frontmatter import ArtifactTypeEnum
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
 from pydantic_ai.messages import ToolReturn
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output_raw
 
 _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
@@ -181,7 +181,7 @@ async def _write_memory(
                 except ResourceBusyError:
                     if on_failure == "skip":
                         logger.info("persist_memory: target file busy, skipping")
-                        return tool_output("⚠ Memory save skipped (file busy)", action="skipped")
+                        return tool_output_raw("⚠ Memory save skipped (file busy)", action="skipped")
                     raise
                 # None = slug invalid or not found; fall through to SAVE_NEW
                 if update_result is not None:
@@ -244,10 +244,10 @@ async def _write_memory(
     except ResourceBusyError:
         if on_failure == "skip":
             logger.info("persist_memory: new file busy, skipping")
-            return tool_output("⚠ Memory save skipped (file busy)", action="skipped")
+            return tool_output_raw("⚠ Memory save skipped (file busy)", action="skipped")
         raise
 
-    return tool_output(
+    return tool_output_raw(
         f"✓ Saved memory {memory_id}: {filename}\n"
         f"Location: {file_path}",
         path=str(file_path),

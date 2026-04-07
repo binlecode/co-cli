@@ -6,7 +6,7 @@ from pathlib import Path
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry
 from co_cli.config import settings
-from co_cli.deps import CoConfig
+from co_cli.deps import CoConfig, LoadPolicy, ToolSource
 
 
 # Config with fake integration paths so domain tools are always registered in tests,
@@ -105,22 +105,20 @@ def test_tool_index_loading_policy_metadata():
 
     # Every entry must be native source with valid loading policy
     for name, tc in idx.items():
-        assert tc.source == "native", f"{name}: source must be 'native', got {tc.source!r}"
-        assert tc.always_load != tc.should_defer, (
-            f"{name}: exactly one of always_load/should_defer must be True"
+        assert tc.source == ToolSource.NATIVE, f"{name}: source must be NATIVE, got {tc.source!r}"
+        assert tc.load in (LoadPolicy.ALWAYS, LoadPolicy.DEFERRED), (
+            f"{name}: load must be a LoadPolicy enum value"
         )
         assert tc.name == name, f"index key {name!r} mismatches ToolInfo.name {tc.name!r}"
 
     # Spot-check always-loaded tools
     for name in ("check_capabilities", "search_tools", "read_file", "web_search",
                   "run_shell_command", "list_memories", "search_knowledge"):
-        assert idx[name].always_load is True, f"{name} should be always_load"
-        assert idx[name].should_defer is False, f"{name} should not be deferred"
+        assert idx[name].load == LoadPolicy.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
     for name in ("edit_file", "write_file", "save_memory", "start_background_task"):
-        assert idx[name].should_defer is True, f"{name} should be deferred"
-        assert idx[name].always_load is False, f"{name} should not be always_load"
+        assert idx[name].load == LoadPolicy.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata
     assert idx["list_notes"].integration == "obsidian"
@@ -146,4 +144,30 @@ def test_tool_index_source_axis_native_only():
     """All entries in tool_index from build_agent() are native source (MCP not yet discovered)."""
     result = build_tool_registry(CoConfig())
     for name, tc in result.tool_index.items():
-        assert tc.source == "native", f"{name}: expected native source before MCP discovery"
+        assert tc.source == ToolSource.NATIVE, f"{name}: expected NATIVE source before MCP discovery"
+
+
+def test_toolinfo_enum_construction():
+    """ToolInfo accepts LoadPolicy/ToolSource enums; old boolean kwargs raise TypeError."""
+    from co_cli.deps import ToolInfo, LoadPolicy, ToolSource
+
+    # New enum API works
+    info = ToolInfo(
+        name="x", description="x", approval=False,
+        source=ToolSource.NATIVE, load=LoadPolicy.ALWAYS,
+    )
+    assert info.load == LoadPolicy.ALWAYS
+    assert info.source == ToolSource.NATIVE
+
+    # Old boolean kwargs are rejected
+    import pytest
+    with pytest.raises(TypeError):
+        ToolInfo(
+            name="x", description="x", approval=False,
+            source=ToolSource.NATIVE, always_load=True,
+        )
+    with pytest.raises(TypeError):
+        ToolInfo(
+            name="x", description="x", approval=False,
+            source=ToolSource.NATIVE, should_defer=True,
+        )

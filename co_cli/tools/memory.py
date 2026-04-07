@@ -313,6 +313,7 @@ async def recall_memory(
             if not fts_results:
                 return tool_output(
                     f"No memories found matching '{query}'",
+                    ctx=ctx,
                     count=0,
                     results=[],
                 )
@@ -391,6 +392,7 @@ async def recall_memory(
     if not matches:
         return tool_output(
             f"No memories found matching '{query}'",
+            ctx=ctx,
             count=0,
             results=[],
         )
@@ -463,6 +465,7 @@ async def recall_memory(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(matches) + len(related_entries),
         results=result_dicts,
     )
@@ -497,9 +500,9 @@ async def search_memories(
         created_before: ISO8601 date string; only return items created on or before this date.
     """
     if not query.strip():
-        return tool_output("Query is required.", count=0, results=[])
+        return tool_output("Query is required.", ctx=ctx, count=0, results=[])
     if limit < 1:
-        return tool_output("limit must be >= 1.", count=0, results=[])
+        return tool_output("limit must be >= 1.", ctx=ctx, count=0, results=[])
 
     memory_dir = ctx.deps.config.memory_dir
 
@@ -518,7 +521,7 @@ async def search_memories(
             )
             otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
             if not results:
-                return tool_output(f"No memories found matching '{query}'", count=0, results=[])
+                return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
             # Exclude session-summary artifacts by reading each hit's frontmatter
             filtered = []
@@ -533,7 +536,7 @@ async def search_memories(
                 filtered.append(r)
             results = filtered
             if not results:
-                return tool_output(f"No memories found matching '{query}'", count=0, results=[])
+                return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
             lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
             result_dicts = []
@@ -554,6 +557,7 @@ async def search_memories(
                 })
             return tool_output(
                 "\n".join(lines).rstrip(),
+                ctx=ctx,
                 count=len(results),
                 results=result_dicts,
             )
@@ -576,7 +580,7 @@ async def search_memories(
 
     matches = grep_recall(memories, query, limit)
     if not matches:
-        return tool_output(f"No memories found matching '{query}'", count=0, results=[])
+        return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
     lines = [f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"]
     result_dicts = []
@@ -590,7 +594,7 @@ async def search_memories(
             "score": 0.0,
             "path": str(m.path),
         })
-    return tool_output("\n".join(lines), count=len(matches), results=result_dicts)
+    return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
 
 async def list_memories(
@@ -637,6 +641,7 @@ async def list_memories(
         msg = "No memories saved yet." if no_dir else f"No memories found{kind_note}."
         return tool_output(
             msg,
+            ctx=ctx,
             count=0,
             total=0,
             offset=offset,
@@ -713,6 +718,7 @@ async def list_memories(
 
     return tool_output(
         "\n".join(lines),
+        ctx=ctx,
         count=len(page),
         total=total,
         offset=offset,
@@ -830,6 +836,7 @@ async def update_memory(
 
             return tool_output(
                 f"Updated memory '{slug}'.\n{updated_body.strip()}",
+                ctx=ctx,
                 slug=slug,
             )
     except ResourceBusyError:
@@ -902,6 +909,7 @@ async def append_memory(
 
             return tool_output(
                 f"Appended to '{slug}'.",
+                ctx=ctx,
                 slug=slug,
             )
     except ResourceBusyError:

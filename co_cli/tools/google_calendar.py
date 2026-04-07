@@ -148,9 +148,9 @@ def list_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return tool_output("No events found in the requested time range.", count=0)
+            return tool_output("No events found in the requested time range.", ctx=ctx, count=0)
         display = f"Calendar Events ({len(events)}):\n" + _format_events(events)
-        return tool_output(display, count=len(events))
+        return tool_output(display, ctx=ctx, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:
@@ -211,9 +211,9 @@ def search_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return tool_output(f"No events found matching '{query}' in the requested time range.", count=0)
+            return tool_output(f"No events found matching '{query}' in the requested time range.", ctx=ctx, count=0)
         display = f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
-        return tool_output(display, count=len(events))
+        return tool_output(display, ctx=ctx, count=len(events))
     except ModelRetry:
         raise
     except Exception as e:

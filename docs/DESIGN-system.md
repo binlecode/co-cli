@@ -143,8 +143,8 @@ The filtered native toolset matters for approval resumes:
 
 - native tools are always registered once at startup
 - some domain tools are omitted entirely when the integration is absent
-- `_filter` uses per-tool `always_load`/`should_defer` flags from `deps.services.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
-- MCP tools in `tool_index` follow the same visibility rule; MCP tools not yet in `tool_index` pass through the filter
+- `_filter` uses per-tool `LoadPolicy` (`ALWAYS`/`DEFERRED`) from `deps.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
+- MCP tools in `tool_index` follow the same visibility rule; unknown tools not in `tool_index` are hidden (default-deny)
 
 Global instrumentation is enabled once in `main.py`:
 
@@ -233,7 +233,7 @@ There are three related capability surfaces:
 | --- | --- | --- |
 | static tool definitions | `build_agent()` | native filtered toolset plus MCP toolset definitions |
 | connected session capabilities | `create_deps()` | discovered MCP tool names plus loaded skills |
-| runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `always_load` tools + `discovered_tools`; resume turns: `resume_tool_names` + `always_load` tools) | owned by per-tool loading policy in `agent.py` |
+| runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `ALWAYS` tools + `discovered_tools`; resume turns: `resume_tool_names` + `ALWAYS` tools) | owned by per-tool `LoadPolicy` in `agent.py` |
 
 Key distinctions:
 

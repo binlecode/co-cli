@@ -18,7 +18,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli._model_factory import ResolvedModel
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.tools.tool_output import tool_output
+from co_cli.tools.tool_output import tool_output_raw
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ def overwrite_memory(
         except Exception as e:
             logger.warning(f"Failed to reindex memory {target_slug}: {e}")
 
-    return tool_output(
+    return tool_output_raw(
         f"✓ Updated memory {existing_fm.get('id', target_slug)} (upsert)\n"
         f"Location: {target_path}",
         path=str(target_path),

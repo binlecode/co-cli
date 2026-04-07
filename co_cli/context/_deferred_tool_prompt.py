@@ -1,6 +1,6 @@
 """Build the deferred-tool prompt fragment for model awareness."""
 
-from co_cli.deps import ToolInfo
+from co_cli.deps import ToolInfo, LoadPolicy
 
 
 def build_deferred_tool_prompt(
@@ -13,7 +13,7 @@ def build_deferred_tool_prompt(
     """
     undiscovered = [
         tc for tc in tool_index.values()
-        if tc.should_defer and tc.name not in discovered_tools
+        if tc.load == LoadPolicy.DEFERRED and tc.name not in discovered_tools
     ]
     if not undiscovered:
         return None
@@ -28,6 +28,8 @@ def build_deferred_tool_prompt(
         parts = [f"  - {tc.name}: {tc.description}"]
         if tc.integration:
             parts.append(f" ({tc.integration})")
+        if tc.search_hint:
+            parts.append(f" [hints: {tc.search_hint}]")
         lines.append("".join(parts))
 
     return "\n".join(lines)

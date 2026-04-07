@@ -253,7 +253,7 @@ async def web_search(
     ]
 
     if not results:
-        return tool_output(f"No results for '{query}'.", results=[], count=0)
+        return tool_output(f"No results for '{query}'.", ctx=ctx, results=[], count=0)
 
     lines = []
     for i, r in enumerate(results, 1):
