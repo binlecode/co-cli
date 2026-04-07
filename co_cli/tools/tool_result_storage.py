@@ -23,10 +23,12 @@ def persist_if_oversized(
     content: str,
     tool_results_dir: Path,
     tool_name: str,
+    *,
+    max_size: int = TOOL_RESULT_MAX_SIZE,
 ) -> str:
     """Persist content to disk if oversized, returning a preview placeholder.
 
-    If content length <= TOOL_RESULT_MAX_SIZE, returns content unchanged.
+    If content length <= max_size, returns content unchanged.
     Otherwise, writes content to a content-addressed file and returns an XML
     placeholder with tool name, file path, and a 2KB preview.
 
@@ -34,11 +36,12 @@ def persist_if_oversized(
         content: The full tool result text.
         tool_results_dir: Directory for persisted tool result files.
         tool_name: Name of the tool that produced the result.
+        max_size: Per-tool result size threshold (default: TOOL_RESULT_MAX_SIZE).
 
     Returns:
         The original content if under threshold, or a preview placeholder.
     """
-    if len(content) <= TOOL_RESULT_MAX_SIZE:
+    if len(content) <= max_size:
         return content
 
     try:

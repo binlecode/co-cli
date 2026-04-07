@@ -269,8 +269,8 @@ class CoConfig:
 
 
 @dataclass(frozen=True)
-class ToolConfig:
-    """Canonical metadata for one registered tool."""
+class ToolInfo:
+    """Canonical metadata for one registered tool — set once at registration, never mutated."""
 
     name: str
     description: str
@@ -281,11 +281,12 @@ class ToolConfig:
     always_load: bool = False
     should_defer: bool = False
     search_hint: str | None = None
+    max_result_size: int = 50_000
 
     def __post_init__(self) -> None:
         if self.always_load == self.should_defer:
             raise ValueError(
-                f"ToolConfig({self.name!r}): exactly one of always_load/should_defer must be True"
+                f"ToolInfo({self.name!r}): exactly one of always_load/should_defer must be True"
             )
 
 
@@ -382,7 +383,7 @@ class CoDeps:
     knowledge_store: "KnowledgeStore | None" = field(default=None, repr=False)
     model_registry: "ModelRegistry | None" = field(default=None, repr=False)
     # Bootstrap-set registries
-    tool_index: dict[str, "ToolConfig"] = field(default_factory=dict)
+    tool_index: dict[str, "ToolInfo"] = field(default_factory=dict)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)

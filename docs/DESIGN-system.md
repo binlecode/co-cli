@@ -187,7 +187,7 @@ Shared by reference with sub-agents. Service handles (shell, knowledge_store) an
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
-| `tool_index` | `create_deps()` builds native `ToolConfig` map via `build_tool_registry()` and merges MCP entries via `discover_mcp_tools()` | never | shared ref |
+| `tool_index` | `create_deps()` builds native `ToolInfo` map via `build_tool_registry()` and merges MCP entries via `discover_mcp_tools()` | never | shared ref |
 | `skill_commands` | `create_deps()` via `_load_skills()` | replaced on skill reload | shared ref |
 | `model_registry` | `_chat_loop()` via `ModelRegistry.from_config()` | never | shared ref |
 

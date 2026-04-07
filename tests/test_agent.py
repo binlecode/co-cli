@@ -109,7 +109,7 @@ def test_tool_index_loading_policy_metadata():
         assert tc.always_load != tc.should_defer, (
             f"{name}: exactly one of always_load/should_defer must be True"
         )
-        assert tc.name == name, f"index key {name!r} mismatches ToolConfig.name {tc.name!r}"
+        assert tc.name == name, f"index key {name!r} mismatches ToolInfo.name {tc.name!r}"
 
     # Spot-check always-loaded tools
     for name in ("check_capabilities", "search_tools", "read_file", "web_search",
@@ -130,6 +130,16 @@ def test_tool_index_loading_policy_metadata():
     # Search hints on deferred tools
     assert idx["edit_file"].search_hint is not None
     assert idx["save_memory"].search_hint is not None
+
+    # Per-tool max_result_size overrides
+    assert idx["run_shell_command"].max_result_size == 30_000
+    assert idx["read_file"].max_result_size == 80_000
+    # All others should have the default (50,000)
+    for name, tc in idx.items():
+        if name not in ("run_shell_command", "read_file"):
+            assert tc.max_result_size == 50_000, (
+                f"{name}: expected default max_result_size=50000, got {tc.max_result_size}"
+            )
 
 
 def test_tool_index_source_axis_native_only():

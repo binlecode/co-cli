@@ -2,7 +2,7 @@
 
 from pydantic_ai import RunContext
 
-from co_cli.deps import CoDeps, ToolConfig
+from co_cli.deps import CoDeps, ToolInfo
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.tools.tool_output import tool_output
@@ -22,7 +22,7 @@ async def search_tools(ctx: RunContext[CoDeps], query: str, max_results: int = 8
     # Exact-name lookup across all tools first
     exact_match = tool_index.get(query.strip())
 
-    scored: list[tuple[int, str, ToolConfig]] = []
+    scored: list[tuple[int, str, ToolInfo]] = []
     for name, tc in tool_index.items():
         search_text = f"{name} {tc.description}"
         if tc.integration:

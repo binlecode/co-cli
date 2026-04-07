@@ -1,10 +1,10 @@
 """Build the deferred-tool prompt fragment for model awareness."""
 
-from co_cli.deps import ToolConfig
+from co_cli.deps import ToolInfo
 
 
 def build_deferred_tool_prompt(
-    tool_index: dict[str, ToolConfig],
+    tool_index: dict[str, ToolInfo],
     discovered_tools: set[str],
 ) -> str | None:
     """Return a prompt fragment listing undiscovered deferred tools, or None if empty.

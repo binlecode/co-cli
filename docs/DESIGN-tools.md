@@ -35,7 +35,7 @@ Registration, filtering, and progressive disclosure form a single pipeline:
 build_agent()
   ├─ _build_filtered_toolset(config)
   │    ├─ FunctionToolset — register all tools via _reg()
-  │    │    each _reg() produces a ToolConfig(always_load | should_defer)
+  │    │    each _reg() produces a ToolInfo(always_load | should_defer)
   │    └─ inner.filtered(_filter) — per-API-call visibility gate
   │         _filter checks: always_load? OR name in discovered_tools? OR name in resume_tool_names?
   ├─ _build_mcp_toolsets(config) — one MCPServer* per mcp_servers entry

@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
-from co_cli.deps import CoDeps, CoConfig, ToolConfig
+from co_cli.deps import CoDeps, CoConfig, ToolInfo
 from co_cli._model_factory import ResolvedModel
 from co_cli.context._history import (
     inject_opening_context,
@@ -54,7 +54,7 @@ class ToolRegistry:
     """
     toolset: AbstractToolset[CoDeps]
     mcp_toolsets: list
-    tool_index: dict[str, ToolConfig]
+    tool_index: dict[str, ToolInfo]
 
 
 def _build_mcp_toolsets(config: CoConfig) -> list:
@@ -88,7 +88,7 @@ def _build_mcp_toolsets(config: CoConfig) -> list:
 
 def _build_filtered_toolset(
     config: CoConfig,
-) -> "tuple[AbstractToolset[CoDeps], dict[str, ToolConfig]]":
+) -> "tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]":
     """Build a FilteredToolset containing all tools for this config.
 
     Tools are registered into a FunctionToolset wrapped with a per-request filter.
@@ -100,10 +100,10 @@ def _build_filtered_toolset(
     point sending their schemas.
 
     Returns (filtered_toolset, native_index) where native_index maps each tool name
-    to its ToolConfig metadata.
+    to its ToolInfo metadata.
     """
     inner: FunctionToolset[CoDeps] = FunctionToolset()
-    native_index: dict[str, ToolConfig] = {}
+    native_index: dict[str, ToolInfo] = {}
 
     def _reg(
         fn: Any,
@@ -114,6 +114,7 @@ def _build_filtered_toolset(
         search_hint: str | None = None,
         integration: str | None = None,
         retries: int | None = None,
+        max_result_size: int = 50_000,
     ) -> None:
         name = fn.__name__
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
@@ -121,7 +122,7 @@ def _build_filtered_toolset(
         if retries is not None:
             kwargs["retries"] = retries
         inner.add_function(fn, **kwargs)
-        native_index[name] = ToolConfig(
+        native_index[name] = ToolInfo(
             name=name,
             description=description,
             approval=approval,
@@ -130,6 +131,7 @@ def _build_filtered_toolset(
             always_load=always_load,
             should_defer=should_defer,
             search_hint=search_hint,
+            max_result_size=max_result_size,
         )
 
     # --- Always-loaded tools ---
@@ -151,7 +153,7 @@ def _build_filtered_toolset(
 
     # Workspace reads
     _reg(list_directory, approval=False, always_load=True)
-    _reg(read_file, approval=False, always_load=True)
+    _reg(read_file, approval=False, always_load=True, max_result_size=80_000)
     _reg(find_in_files, approval=False, always_load=True)
 
     # Web
@@ -159,7 +161,7 @@ def _build_filtered_toolset(
     _reg(web_fetch, approval=False, always_load=True, retries=3)
 
     # Execution
-    _reg(run_shell_command, approval=False, always_load=True)
+    _reg(run_shell_command, approval=False, always_load=True, max_result_size=30_000)
 
     # --- Deferred tools ---
 
@@ -349,20 +351,20 @@ def build_agent(
 
 async def discover_mcp_tools(
     mcp_toolsets: list, exclude: set[str]
-) -> tuple[list[str], dict[str, str], dict[str, ToolConfig]]:
+) -> tuple[list[str], dict[str, str], dict[str, ToolInfo]]:
     """Discover MCP tool names by connecting to servers and listing tools.
 
     Each server self-connects on list_tools() (pydantic-ai lazy init).
     Returns (tool_names, errors, mcp_index) where errors maps server prefix to
     the error string for each server where list_tools() failed, and mcp_index maps
-    tool name to ToolConfig metadata. Tool names exclude any in ``exclude``.
+    tool name to ToolInfo metadata. Tool names exclude any in ``exclude``.
     MCP tools are deferred by default (should_defer=True).
     """
     from pydantic_ai.mcp import MCPServer
 
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
-    mcp_index: dict[str, ToolConfig] = {}
+    mcp_index: dict[str, ToolInfo] = {}
 
     for toolset in mcp_toolsets:
         inner = getattr(toolset, "wrapped", toolset)
@@ -376,7 +378,7 @@ async def discover_mcp_tools(
                 if name not in exclude:
                     mcp_tool_names.append(name)
                     approval = inner is not toolset
-                    mcp_index[name] = ToolConfig(
+                    mcp_index[name] = ToolInfo(
                         name=name,
                         description=t.description or "",
                         approval=approval,
