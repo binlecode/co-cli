@@ -16,9 +16,13 @@ settings.json
 co-cli-logs.db
 co-cli-search.db
 
-# Per-user ephemeral state (memory/ and skills/ are tracked)
+# Per-user ephemeral state (memory/, skills/, library/ are tracked)
 .co-cli/sessions/
 .co-cli/tool-results/
+.co-cli/settings.json
+.co-cli/session.json
+.co-cli/tasks/
+.co-cli/*.db
 
 # Test and tooling caches
 .pytest_cache/
