@@ -1,4 +1,4 @@
-# PROPOSAL: Multi-Agent Workroom & File Exchange Pattern
+# RESEARCH: Multi-Agent Workroom & File Exchange Pattern
 _Date: 2026-03-10_
 _Status: Proposed (Pending PO & TL Review)_
 

@@ -1,4 +1,4 @@
-# REVIEW: self-model and working-style quality
+# RESEARCH: self-model and working-style quality
 _Date: 2026-03-08_
 
 This document expands the brief `6.0 Self/personality model quality` note in `docs/reference/RESEARCH-peer-systems.md`.
