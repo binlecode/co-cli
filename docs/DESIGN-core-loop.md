@@ -237,8 +237,8 @@ Compaction behavior:
 - `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, always-on memories, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
-- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
-- when `model_registry` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: model's `context_window` from quirks (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 

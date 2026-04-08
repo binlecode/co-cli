@@ -11,7 +11,6 @@ import sys
 import pytest
 
 from co_cli.config._core import load_config
-from co_cli.config._llm import ROLE_REASONING
 
 
 def test_project_config_overrides_user(tmp_path):
@@ -98,67 +97,6 @@ def test_project_config_partially_overrides_mcp_server(tmp_path):
     assert github.approval == "auto"
 
 
-def test_project_config_partially_overrides_role_models(tmp_path):
-    """Project config can override one role_models entry without redefining all roles."""
-    user_settings = tmp_path / "user" / "settings.json"
-    user_settings.parent.mkdir(parents=True)
-    user_settings.write_text(json.dumps({
-        "llm": {
-            "role_models": {
-                ROLE_REASONING: {
-                    "model": "base-reasoning",
-                    "provider": "ollama-openai",
-                },
-                "coding": {
-                    "model": "base-coding",
-                    "provider": "ollama-openai",
-                },
-            }
-        }
-    }))
-
-    project_dir = tmp_path / "project"
-    (project_dir / ".co-cli").mkdir(parents=True)
-    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "llm": {
-            "role_models": {
-                "coding": {
-                    "model": "project-coding",
-                    "provider": "ollama-openai",
-                },
-            }
-        }
-    }))
-
-    settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
-    assert settings.llm.role_models[ROLE_REASONING].model == "base-reasoning"
-    assert settings.llm.role_models[ROLE_REASONING].provider == "ollama-openai"
-    assert settings.llm.role_models["coding"].model == "project-coding"
-    assert settings.llm.role_models["coding"].provider == "ollama-openai"
-
-
-def test_role_models_missing_provider_rejected(tmp_path):
-    """role_models entries must specify provider explicitly in config files."""
-    project_dir = tmp_path
-    (project_dir / ".co-cli").mkdir()
-    project_config_path = project_dir / ".co-cli" / "settings.json"
-    project_config_path.write_text(json.dumps({
-        "llm": {
-            "role_models": {
-                ROLE_REASONING: {
-                    "model": "base-reasoning",
-                }
-            }
-        }
-    }))
-
-    with pytest.raises(ValueError, match="provider"):
-        load_config(
-            _user_config_path=tmp_path / "nonexistent.json",
-            _project_dir=project_dir,
-        )
-
-
 def test_knowledge_llm_reranker_missing_provider_rejected(tmp_path):
     """knowledge_llm_reranker must specify provider explicitly in config files."""
     project_dir = tmp_path
@@ -228,7 +166,7 @@ def test_ollama_native_provider_rejected(tmp_path):
     (project_dir / ".co-cli" / "settings.json").write_text(
         json.dumps({"llm": {"provider": "ollama-native"}})
     )
-    with pytest.raises(Exception, match="Unsupported llm.provider"):
+    with pytest.raises(Exception, match="ollama-openai.*gemini|literal_error"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,
@@ -242,7 +180,7 @@ def test_old_ollama_provider_string_rejected(tmp_path):
     (project_dir / ".co-cli" / "settings.json").write_text(
         json.dumps({"llm": {"provider": "ollama"}})
     )
-    with pytest.raises(Exception, match="Unsupported llm.provider"):
+    with pytest.raises(Exception, match="ollama-openai.*gemini|literal_error"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,

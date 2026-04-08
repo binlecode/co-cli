@@ -8,24 +8,24 @@ from co_cli.bootstrap._check import (
     check_cross_encoder,
 )
 from co_cli.config._core import Settings
-from co_cli.config._llm import ModelConfig, ROLE_REASONING, LlmSettings
-from co_cli.config._knowledge import KnowledgeSettings
+from co_cli.config._llm import LlmSettings
+from co_cli.config._knowledge import ModelConfig, KnowledgeSettings
 
 
 # --- LlmSettings.validate_config() (config-shape gate, no IO) ---
 
 
-def test_validate_no_reasoning_model_returns_error() -> None:
-    error = LlmSettings.model_construct(role_models={}).validate_config()
+def test_validate_empty_model_returns_error() -> None:
+    error = LlmSettings.model_construct(model="").validate_config()
     assert error is not None
-    assert "reasoning" in error.lower()
+    assert "model" in error.lower()
 
 
 def test_validate_gemini_no_key_returns_error() -> None:
     llm = LlmSettings.model_construct(
+        model="test",
         provider="gemini",
         api_key=None,
-        role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
     )
     error = llm.validate_config()
     assert error is not None
@@ -34,18 +34,18 @@ def test_validate_gemini_no_key_returns_error() -> None:
 
 def test_validate_gemini_with_key_returns_ok() -> None:
     llm = LlmSettings.model_construct(
+        model="test",
         provider="gemini",
-        api_key="test-key",
-        role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
+        api_key="key",
     )
     assert llm.validate_config() is None
 
 
 def test_validate_ollama_returns_ok_without_io() -> None:
-    """Ollama config with reasoning model configured passes instantly — no HTTP probe."""
+    """Ollama config with model configured passes instantly — no HTTP probe."""
     llm = LlmSettings.model_construct(
+        model="test",
         provider="ollama-openai",
-        role_models={ROLE_REASONING: ModelConfig(provider="ollama-openai", model="qwen3:8b")},
     )
     assert llm.validate_config() is None
 

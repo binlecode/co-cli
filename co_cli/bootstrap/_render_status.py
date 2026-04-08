@@ -11,7 +11,6 @@ from rich.table import Table
 
 from co_cli.bootstrap._check import check_settings, check_agent_llm
 from co_cli.config._core import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, Settings
-from co_cli.config._llm import ROLE_REASONING
 from co_cli.display._core import console
 
 
@@ -60,23 +59,20 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
 
     # -- llm --
     provider = config.llm.provider.lower()
-    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
-    if not reasoning_entry:
-        llm_provider = f"{provider.title()} (no reasoning model configured)"
+    model = config.llm.model
+    if not model:
+        llm_provider = f"{provider.title()} (no model configured)"
         llm_status = "misconfigured"
     elif provider == "gemini":
-        active_model = reasoning_entry.model
-        llm_provider = f"Gemini ({active_model})"
+        llm_provider = f"Gemini ({model})"
         provider_check = check_agent_llm(config)
         llm_status = "configured" if provider_check.status == "ok" else "missing key"
     else:
-        active_model = reasoning_entry.model
-        llm_provider = f"Ollama ({active_model})"
+        llm_provider = f"Ollama ({model})"
         provider_check = check_agent_llm(config)
         if provider_check.status == "error":
             llm_status = "misconfigured"
         elif provider_check.status == "warn":
-            # "unreachable" reason means host is down; otherwise host is up but optional models degraded
             llm_status = "offline" if provider_check.extra.get("reason") == "unreachable" else "online"
         else:
             llm_status = "online"

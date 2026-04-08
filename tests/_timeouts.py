@@ -14,7 +14,7 @@ Usage::
 
 # LLM inference
 LLM_NON_REASONING_TIMEOUT_SECS: int = 10
-"""Non-thinking model calls (reasoning_effort=none, ROLE_SUMMARIZATION).
+"""Non-thinking model calls (noreason settings, reasoning_effort=none).
 
 >10s means the model is reasoning when it should not be — a bug in model
 config or api_params (e.g. missing reasoning_effort=none).
@@ -34,7 +34,7 @@ Use for tool-selection tests (test_tool_calling_functional) and approval-flow te
 """
 
 LLM_REASONING_TIMEOUT_SECS: int = 60
-"""Full chain-of-thought calls (ROLE_REASONING with thinking enabled).
+"""Full chain-of-thought calls (reasoning/thinking enabled).
 
 Thinking traces consume output budget before visible content; 60s gives the
 32K num_predict budget room to complete without false timeout failures.

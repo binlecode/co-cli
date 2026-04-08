@@ -234,8 +234,7 @@ def _ollama_models_to_test() -> list[str]:
     """
     raw = (os.getenv("EVAL_OLLAMA_MODELS") or "").strip()
     if not raw:
-        reasoning = settings.llm.role_models.get("reasoning")
-        return [reasoning.model if reasoning else "unknown"]
+        return [settings.llm.model or "unknown"]
     return [m.strip() for m in raw.split(",") if m.strip()]
 
 

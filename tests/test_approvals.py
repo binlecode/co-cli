@@ -135,3 +135,38 @@ def test_is_auto_approved_no_match_empty_rules():
     deps = _make_deps()
     subject = resolve_approval_subject("write_file", {"path": "src/foo.py", "content": "x"})
     assert not is_auto_approved(subject, deps)
+
+
+# --- subject kind/value/scope resolution ---
+
+
+def test_resolve_approval_subject_shell_scopes_to_utility():
+    """Shell subject resolves to the first token of the command."""
+    subject = resolve_approval_subject("run_shell_command", {"cmd": "git status --short"})
+    assert subject.kind == ApprovalKindEnum.SHELL
+    assert subject.value == "git"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_path_scopes_to_parent_dir():
+    """File-write subject resolves to the parent directory of the target path."""
+    subject = resolve_approval_subject("write_file", {"path": "/home/user/project/file.txt"})
+    assert subject.kind == ApprovalKindEnum.PATH
+    assert subject.value == "/home/user/project"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_domain_scopes_to_hostname():
+    """Web-fetch subject resolves to the hostname of the target URL."""
+    subject = resolve_approval_subject("web_fetch", {"url": "https://docs.python.org/3/library/asyncio.html"})
+    assert subject.kind == ApprovalKindEnum.DOMAIN
+    assert subject.value == "docs.python.org"
+    assert subject.can_remember is True
+
+
+def test_resolve_approval_subject_generic_tool_fallback():
+    """Unknown tools fall through to the generic-tool branch, keyed by tool name."""
+    subject = resolve_approval_subject("create_gmail_draft", {"to": "test@example.com", "subject": "hi"})
+    assert subject.kind == ApprovalKindEnum.TOOL
+    assert subject.value == "create_gmail_draft"
+    assert subject.can_remember is True

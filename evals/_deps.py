@@ -12,8 +12,7 @@ from co_cli.tools.shell_backend import ShellBackend
 def detect_model_tag() -> str:
     """Auto-detect a model tag from the current LLM config."""
     provider = settings.llm.provider.lower()
-    entry = settings.llm.role_models.get("reasoning")
-    model = entry.model if entry is not None else None
+    model = settings.llm.model
     if provider == "gemini":
         return f"gemini-{model}" if model else "gemini"
     if provider == "ollama-openai":
@@ -26,7 +25,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
 
     Pass keyword overrides to customise any CoDeps field, e.g.
     ``make_eval_deps(brave_search_api_key=None)``.
-    Service fields (shell, knowledge_store, model_registry) can
+    Service fields (shell, knowledge_store, model) can
     also be passed as overrides and are extracted before building CoDeps.
     session_id is routed to CoSessionState.
     """
@@ -35,7 +34,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     # Extract non-config fields before building CoDeps
     shell = overrides.pop("shell", ShellBackend())
     knowledge_store = overrides.pop("knowledge_store", None)
-    model_registry = overrides.pop("model_registry", None)
+    model = overrides.pop("model", None)
     session_id_override = overrides.pop("session_id", "eval")
     # Discard legacy overrides that no longer map to Settings fields
     overrides.pop("mcp_servers", None)
@@ -43,7 +42,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     return CoDeps(
         shell=shell,
         knowledge_store=knowledge_store,
-        model_registry=model_registry,
+        model=model,
         config=s,
         session=CoSessionState(session_id=session_id_override),
     )

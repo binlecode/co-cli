@@ -61,10 +61,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import build_model, LlmModel
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.config._llm import ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli.context._history import (
     COMPACTABLE_KEEP_RECENT,
     FILE_TOOLS,
@@ -109,9 +109,9 @@ log = logging.getLogger(__name__)
 # Config — pull from real settings, never override
 # ---------------------------------------------------------------------------
 
-_REGISTRY = ModelRegistry.from_config(settings)
+_LLM_MODEL = build_model(settings.llm)
 _EVAL_CONFIG = settings.model_copy(update={"mcp_servers": {}})
-_AGENT = build_agent(config=_EVAL_CONFIG, model_registry=_REGISTRY)
+_AGENT = build_agent(config=_EVAL_CONFIG, model=_LLM_MODEL)
 
 
 # ---------------------------------------------------------------------------
@@ -153,14 +153,14 @@ def _make_ctx(
     *,
     memory_dir: Path | None = None,
     session_todos: list[dict] | None = None,
-    model_registry: ModelRegistry | None = None,
+    model: LlmModel | None = None,
     llm_num_ctx: int = 30,
 ) -> RunContext:
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama-openai",
             num_ctx=llm_num_ctx,
-            role_models=settings.llm.role_models,
+            model=settings.llm.model,
             host=settings.llm.host,
         ),
     )
@@ -169,7 +169,7 @@ def _make_ctx(
         session.session_todos = session_todos
     deps = CoDeps(
         shell=ShellBackend(), config=config,
-        model_registry=model_registry, session=session,
+        model=model, session=session,
     )
     if memory_dir is not None:
         deps.memory_dir = memory_dir
@@ -958,7 +958,7 @@ async def step_6_full_chain() -> bool:
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama-openai", num_ctx=30,
-            role_models=settings.llm.role_models, host=settings.llm.host,
+            model=settings.llm.model, host=settings.llm.host,
         ),
     )
     session = CoSessionState(session_id="eval-chain-6")
@@ -967,7 +967,7 @@ async def step_6_full_chain() -> bool:
         {"content": "Add PyJWT to requirements", "status": "pending"},
         {"content": "Update middleware", "status": "completed"},
     ]
-    deps = CoDeps(shell=ShellBackend(), config=config, model_registry=_REGISTRY, session=session)
+    deps = CoDeps(shell=ShellBackend(), config=config, model=_LLM_MODEL, session=session)
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
     msgs = list(history)
@@ -1278,10 +1278,10 @@ async def step_7_multi_cycle() -> bool:
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama-openai", num_ctx=30,
-            role_models=settings.llm.role_models, host=settings.llm.host,
+            model=settings.llm.model, host=settings.llm.host,
         ),
     )
-    deps = CoDeps(shell=ShellBackend(), config=config, model_registry=_REGISTRY,
+    deps = CoDeps(shell=ShellBackend(), config=config, model=_LLM_MODEL,
                   session=CoSessionState(session_id="eval-chain-7"))
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -1576,12 +1576,12 @@ async def step_9_circuit_breaker() -> bool:
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
             provider="ollama-openai", num_ctx=30,
-            role_models=settings.llm.role_models, host=settings.llm.host,
+            model=settings.llm.model, host=settings.llm.host,
         ),
     )
     deps = CoDeps(
         shell=ShellBackend(), config=config,
-        model_registry=_REGISTRY,
+        model=_LLM_MODEL,
         session=CoSessionState(session_id="eval-breaker"),
     )
     deps.runtime.compaction_failure_count = 3
@@ -1669,14 +1669,11 @@ async def step_10_enrichment_ab() -> bool:
         "- [in_progress] Migrate token blacklist to Redis"
     )
 
-    _none_resolved = ResolvedModel(model=None, settings=None)
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, _none_resolved)
-
     # Run A: without enrichment
     print(f"  Running A (bare — no enrichment)...")
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_bare = await summarize_messages(dropped, resolved, context=None)
+            summary_bare = await summarize_messages(dropped, _LLM_MODEL.model, NOREASON_SETTINGS, context=None)
     except TimeoutError:
         print(f"  FAIL: bare summary timed out")
         return False
@@ -1685,7 +1682,7 @@ async def step_10_enrichment_ab() -> bool:
     print(f"  Running B (enriched — file paths + todos injected)...")
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-            summary_enriched = await summarize_messages(dropped, resolved, context=enrichment)
+            summary_enriched = await summarize_messages(dropped, _LLM_MODEL.model, NOREASON_SETTINGS, context=enrichment)
     except TimeoutError:
         print(f"  FAIL: enriched summary timed out")
         return False
@@ -2045,14 +2042,12 @@ async def step_12_prompt_composition() -> bool:
 
     # Run the summarizer and capture what it receives via the agent's message assembly
     # We validate indirectly: the output should reference content from dropped_msgs
-    _none_resolved = ResolvedModel(model=None, settings=None)
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, _none_resolved)
-
     try:
         async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
             summary = await summarize_messages(
                 dropped_msgs,
-                resolved,
+                _LLM_MODEL.model,
+                NOREASON_SETTINGS,
                 context="Files touched: /auth/views.py\n\nActive tasks:\n- [pending] Refactor middleware",
             )
     except TimeoutError:

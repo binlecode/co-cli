@@ -9,13 +9,9 @@ from pydantic_ai.messages import (
     TextPart,
     UserPromptPart,
 )
-from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage, RunUsage
-
-from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.config._llm import ROLE_REASONING
 from co_cli.context.summarization import (
     _DEFAULT_TOKEN_BUDGET,
     _PERSONALITY_COMPACTION_ADDENDUM,
@@ -134,58 +130,43 @@ async def test_compaction_triggers_on_ollama_budget():
 # ---------------------------------------------------------------------------
 
 
-def _make_registry_with_context_window(
-    context_window: int | None,
-    max_tokens: int | None = None,
-) -> ModelRegistry:
-    """Build a minimal ModelRegistry with a reasoning role that has the given context_window."""
-    registry = ModelRegistry()
-    settings = ModelSettings(max_tokens=max_tokens) if max_tokens else None
-    resolved = ResolvedModel(model=None, settings=settings, context_window=context_window)
-    registry._models[ROLE_REASONING] = resolved
-    return registry
-
-
 def test_budget_gemini_model_spec():
-    """Gemini model with context_window=1M, max_tokens=65536 → budget = 1M - 65536."""
-    registry = _make_registry_with_context_window(1_048_576, max_tokens=65_536)
+    """Gemini model with context_window=1M → budget = 1M - 16384 output reserve."""
     config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
-    budget = resolve_compaction_budget(config, registry)
-    assert budget == 1_048_576 - 65_536
+    budget = resolve_compaction_budget(config, 1_048_576)
+    # max(1_048_576 - 16384, 1_048_576 // 2) = 1_032_192
+    assert budget == 1_048_576 - 16_384
 
 
 def test_budget_ollama_llm_num_ctx_overrides_spec():
     """Ollama: llm_num_ctx overrides context_window from spec (Modelfile is truth)."""
-    registry = _make_registry_with_context_window(262_144, max_tokens=32_768)
     config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768}))
-    budget = resolve_compaction_budget(config, registry)
+    budget = resolve_compaction_budget(config, 262_144)
     # llm_num_ctx (32768) overrides spec (262144), so effective ctx_window = 32768
-    # 32768 - max_tokens(32768) = 0, but floor = effective_ctx_window // 2 = 16384
+    # max(32768 - 16384, 32768 // 2) = max(16384, 16384) = 16384
     assert budget == 32_768 // 2
 
 
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
     """Ollama with no context_window in quirks → falls back to llm_num_ctx."""
-    registry = _make_registry_with_context_window(None)
     config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768}))
-    budget = resolve_compaction_budget(config, registry)
+    budget = resolve_compaction_budget(config, None)
     assert budget == 32_768
 
 
-def test_budget_no_registry_returns_default():
-    """No registry (sub-agent/test path) → _DEFAULT_TOKEN_BUDGET."""
+def test_budget_no_context_window_returns_default():
+    """No context_window (sub-agent/test path) → _DEFAULT_TOKEN_BUDGET."""
     config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
     budget = resolve_compaction_budget(config, None)
     assert budget == _DEFAULT_TOKEN_BUDGET
 
 
 def test_budget_floor_prevents_negative():
-    """When max_tokens > context_window/2, floor kicks in at context_window//2."""
-    registry = _make_registry_with_context_window(100_000, max_tokens=80_000)
+    """Small context_window → floor at context_window//2."""
     config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
-    budget = resolve_compaction_budget(config, registry)
-    # max(100K - 80K, 100K // 2) = max(20K, 50K) = 50K
-    assert budget == 50_000
+    # context_window=20000: max(20000 - 16384, 10000) = max(3616, 10000) = 10000
+    budget = resolve_compaction_budget(config, 20_000)
+    assert budget == 10_000
 
 
 # ---------------------------------------------------------------------------

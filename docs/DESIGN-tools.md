@@ -56,16 +56,18 @@ approval-resume:  name in resume_tool_names OR entry.load == ALWAYS
                   (all other tools hidden — cuts token cost per hop)
 ```
 
+**State lifetime matters:**
+
+- `session.discovered_tools` is session-scoped discovery state. Once `search_tools()` unlocks a deferred tool, that tool remains visible on later normal turns for the rest of the session. `/new` clears those discoveries.
+- `runtime.resume_tool_names` is not discovery state. It is a one-shot per-resume allowlist used only while continuing an approval-gated segment.
+- `resume_tool_names` is populated from the currently approved tool calls just before the resume segment runs, then cleared when the approval loop exits. It does not grant visibility on future turns.
+
 **Conditional registration gates** — tools excluded at construction when config is absent:
 
 | Gate | Tools registered only when |
 |------|--------------------------|
 | `obsidian_vault_path` | `list_notes`, `search_notes`, `read_note` |
 | `google_credentials_path` | all Drive, Gmail, Calendar tools |
-| `ROLE_CODING` | `run_coding_subagent` |
-| `ROLE_RESEARCH` | `run_research_subagent` |
-| `ROLE_ANALYSIS` | `run_analysis_subagent` |
-| `ROLE_REASONING` | `run_reasoning_subagent` |
 
 **Retry tiers** — annotated at registration:
 
@@ -93,7 +95,7 @@ flowchart TD
     T -->|approval-required| PAUSE["Pause — DeferredToolRequests"]
 
     PAUSE --> COLLECT["_collect_deferred_tool_approvals:\n1. decode_tool_args → resolve_approval_subject\n2. is_auto_approved? → approve silently\n3. prompt user: y / n / a"]
-    COLLECT --> NARROW["resume_tool_names = approved names;\nonly those + ALWAYS visible"]
+    COLLECT --> NARROW["resume_tool_names = approved names;\none-shot allowlist:\nonly those + ALWAYS visible"]
     NARROW --> AP{approved?}
     AP -->|yes| RESUME["_execute_stream_segment\n(main agent)"]
     AP -->|no| DENY["ToolDenied → model notified"]
@@ -178,6 +180,8 @@ Approval subject scopes:
 
 User responds `y` (once) / `n` (deny) / `a` (always for this scope this session). Session rules clear when the session ends.
 
+`resume_tool_names` is separate from those remembered approval scopes. Remembered approval scopes decide whether a future approval prompt can be skipped. `resume_tool_names` only constrains the immediate post-approval execution segment and is cleared right after that segment finishes.
+
 ---
 
 ### Concurrency Safety — Resource Locks
@@ -240,10 +244,10 @@ Conditional tools excluded when gate is absent.
 | `check_task_status` | deferred | auto | — |
 | `cancel_background_task` | deferred | auto | — |
 | `list_background_tasks` | deferred | auto | — |
-| `run_coding_subagent` | deferred | auto | `ROLE_CODING` |
-| `run_research_subagent` | deferred | auto | `ROLE_RESEARCH` |
-| `run_analysis_subagent` | deferred | auto | `ROLE_ANALYSIS` |
-| `run_reasoning_subagent` | deferred | auto | `ROLE_REASONING` |
+| `run_coding_subagent` | deferred | auto | — |
+| `run_research_subagent` | deferred | auto | — |
+| `run_analysis_subagent` | deferred | auto | — |
+| `run_reasoning_subagent` | deferred | auto | — |
 | `list_notes` | deferred | auto | `obsidian_vault_path` |
 | `search_notes` | deferred | auto | `obsidian_vault_path` |
 | `read_note` | deferred | auto | `obsidian_vault_path` |
@@ -255,7 +259,7 @@ Conditional tools excluded when gate is absent.
 | `list_calendar_events` | deferred | auto | `google_credentials_path` |
 | `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 29 tools (15 always-loaded, 14 deferred).
+**Unconditional pool (no integration gates):** 33 tools (15 always-loaded, 18 deferred).
 **Full pool (all gates active):** 39 tools (15 always-loaded, 24 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
@@ -423,6 +427,7 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/tool_errors.py` | `tool_error()`, `handle_google_api_error()`, `http_status_code()` |
 | `co_cli/tools/_google_auth.py` | Google credential resolution |
 | `co_cli/tools/_subagent_builders.py` | `CoderOutput`, `make_coder_agent()`, `ResearchOutput`, `make_research_agent()`, `AnalysisOutput`, `make_analysis_agent()`, `ThinkingOutput`, `make_thinking_agent()` |
-| `co_cli/_model_factory.py` | `ModelRegistry`, `ResolvedModel`, `build_model()` |
+| `co_cli/_model_factory.py` | `LlmModel`, `build_model()` — single-model factory |
+| `co_cli/_model_settings.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
 | `co_cli/agent.py` | `build_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt()` — dynamic prompt fragment listing undiscovered deferred tools |

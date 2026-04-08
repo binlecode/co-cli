@@ -1,4 +1,4 @@
-"""Sub-agent scope and per-role request budgets."""
+"""Sub-agent scope and request budgets."""
 from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_SUBAGENT_SCOPE_CHARS = 120
@@ -9,7 +9,7 @@ DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING = 3
 
 
 class SubagentSettings(BaseModel):
-    """Sub-agent scope and per-role request budgets."""
+    """Sub-agent scope and request budgets."""
     model_config = ConfigDict(extra="ignore")
 
     scope_chars: int = Field(default=DEFAULT_SUBAGENT_SCOPE_CHARS, ge=10)

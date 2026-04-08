@@ -33,8 +33,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli._model_factory import ResolvedModel
-from co_cli.config._llm import ROLE_SUMMARIZATION
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -430,7 +429,7 @@ async def summarize_history_window(
         possible, else a static marker (circuit-breaker fallback)
 
     Summarisation runs inline via ``summarize_messages()`` when compaction
-    triggers. When ``model_registry`` is absent (sub-agents, tests) or the
+    triggers. When ``deps.model`` is absent (sub-agents, tests) or the
     circuit breaker is tripped (3+ consecutive failures), falls back to a
     static marker without attempting an LLM call.
 
@@ -439,7 +438,8 @@ async def summarize_history_window(
     token_count = latest_response_input_tokens(messages)
     if token_count == 0:
         token_count = estimate_message_tokens(messages)
-    budget = resolve_compaction_budget(ctx.deps.config, ctx.deps.model_registry)
+    ctx_window = ctx.deps.model.context_window if ctx.deps.model else None
+    budget = resolve_compaction_budget(ctx.deps.config, ctx_window)
     token_threshold = int(budget * 0.85)
 
     if token_count <= token_threshold:
@@ -454,12 +454,11 @@ async def summarize_history_window(
 
     # Inline summarisation — single code path, no pre-computation
     summary_text: str | None = None
-    registry = ctx.deps.model_registry
 
-    if registry is None:
-        # Configuration absence (sub-agents, tests, minimal bootstrap) —
+    if not ctx.deps.model:
+        # No model available (sub-agents, tests, minimal bootstrap) —
         # not a transient failure, do not increment compaction_failure_count.
-        log.info("Sliding window: model_registry absent, using static marker")
+        log.info("Sliding window: model absent, using static marker")
     elif ctx.deps.runtime.compaction_failure_count >= 3:
         log.warning("Sliding window: circuit breaker active (>= 3 consecutive failures), using static marker")
     else:
@@ -467,14 +466,13 @@ async def summarize_history_window(
         console.print("[dim]Compacting conversation...[/dim]")
         # Context enrichment — gather side-channel context only when the LLM
         # summarizer will actually run. Skipped on static-marker fallback paths
-        # (no registry, circuit breaker) to avoid wasted I/O.
+        # (no model, circuit breaker) to avoid wasted I/O.
         enrichment = _gather_compaction_context(ctx, messages, dropped)
-        _none_resolved = ResolvedModel(model=None, settings=None)
-        resolved = registry.get(ROLE_SUMMARIZATION, _none_resolved)
         try:
             summary_text = await summarize_messages(
                 dropped,
-                resolved,
+                model=ctx.deps.model.model,
+                model_settings=NOREASON_SETTINGS,
                 personality_active=bool(ctx.deps.config.personality),
                 context=enrichment,
             )

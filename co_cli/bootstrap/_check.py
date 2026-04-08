@@ -28,7 +28,6 @@ if TYPE_CHECKING:
     from co_cli.config._core import Settings
     from co_cli.deps import CoDeps
 
-from co_cli.config._llm import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
 
 
 @dataclass
@@ -203,10 +202,9 @@ def check_agent_llm(config: "Settings") -> CheckResult:
     """Check session agent LLM credentials and model availability in one pass.
 
     Gemini: validates API key presence (no HTTP call).
-    Ollama: one GET /api/tags call — checks reachability and all configured model names.
+    Ollama: one GET /api/tags call — checks reachability and configured model name.
       - Unreachable → warn (soft fail; session continues)
-      - Reasoning model missing → error (hard fail; session cannot start)
-      - Optional role model missing → warn (soft fail; those tools degrade silently)
+      - Model missing → error (hard fail; session cannot start)
     """
     if config.llm.uses_gemini():
         return _check_gemini_key(config.llm.api_key)
@@ -219,28 +217,14 @@ def check_agent_llm(config: "Settings") -> CheckResult:
     except Exception as err:
         return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}", extra={"reason": "unreachable"})
 
-    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
-    if reasoning_entry and reasoning_entry.model not in installed:
+    if config.llm.model not in installed:
         return CheckResult(
             ok=False,
             status="error",
-            detail=f"Reasoning model not available: {reasoning_entry.model}",
+            detail=f"Model not available: {config.llm.model}",
         )
 
-    missing_optional: list[str] = []
-    for role in (ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
-        entry = config.llm.role_models.get(role)
-        if entry and entry.model not in installed:
-            missing_optional.append(f"{role}: {entry.model}")
-
-    if missing_optional:
-        return CheckResult(
-            ok=True,
-            status="warn",
-            detail=f"Optional roles have unavailable models: {'; '.join(missing_optional)}",
-        )
-
-    return CheckResult(ok=True, status="ok", detail="Provider and models configured")
+    return CheckResult(ok=True, status="ok", detail="Provider and model configured")
 
 
 def check_reranker_llm(config: "Settings") -> CheckResult:
@@ -474,15 +458,14 @@ def check_runtime(
     ]
 
     # Build capabilities dict
-    reasoning_entry = deps.config.llm.role_models.get(ROLE_REASONING)
     capabilities: dict[str, Any] = {
         "provider": {
             "ok": provider_result.ok,
             "status": provider_result.status,
             "detail": provider_result.detail,
         },
-        "reasoning_model": reasoning_entry.model if reasoning_entry else None,
-        "reasoning_ready": reasoning_entry is not None,
+        "reasoning_model": deps.config.llm.model,
+        "reasoning_ready": bool(deps.config.llm.model),
         "google": google_result.status == "ok",
         "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",

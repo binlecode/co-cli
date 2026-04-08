@@ -18,7 +18,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli._model_factory import ModelRegistry
+from co_cli._model_factory import build_model
 from co_cli.agent import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
 from co_cli.config._core import settings
@@ -46,7 +46,7 @@ from co_cli.tools.shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 _CONFIG = settings
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_LLM_MODEL = build_model(_CONFIG.llm)
 # Cache agent model reference for RunContext construction — no LLM call made here.
 _AGENT = build_agent(config=_CONFIG)
 
@@ -65,9 +65,9 @@ def _make_processor_ctx() -> RunContext:
 
 
 def _make_compact_ctx(message_history: list | None = None) -> CommandContext:
-    """Real CommandContext with model registry for /compact dispatch tests."""
+    """Real CommandContext with model for /compact dispatch tests."""
     deps = CoDeps(
-        shell=ShellBackend(), model_registry=_REGISTRY,
+        shell=ShellBackend(), model=_LLM_MODEL,
         config=_CONFIG,
         session=CoSessionState(session_id="test-history"),
     )
@@ -110,11 +110,11 @@ def _make_messages(n: int) -> list:
 
 
 @pytest.mark.asyncio
-async def test_summarize_history_window_static_marker_when_no_model_registry():
-    """model_registry=None → static marker injected (guard path, no LLM call)."""
+async def test_summarize_history_window_static_marker_when_no_model():
+    """model=None → static marker injected (guard path, no LLM call)."""
     msgs = _make_messages(10)
     ctx = _make_processor_ctx()
-    # model_registry is None by default — guard skips LLM, uses static marker
+    # model is None by default — guard skips LLM, uses static marker
     result = await summarize_history_window(ctx, msgs)
     marker_texts = [
         p.content
@@ -139,7 +139,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     deps = CoDeps(
         shell=ShellBackend(),
         config=test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})),
-        model_registry=_REGISTRY,
+        model=_LLM_MODEL,
     )
     deps.runtime.compaction_failure_count = 3
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

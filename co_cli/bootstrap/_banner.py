@@ -5,7 +5,6 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.config._llm import ROLE_REASONING
 from co_cli.display._core import console
 
 if TYPE_CHECKING:
@@ -36,9 +35,8 @@ def display_welcome_banner(deps: "CoDeps") -> None:
 
     version = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
 
-    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
-    if reasoning_entry:
-        llm_provider = f"{config.llm.provider} / {reasoning_entry.model}"
+    if config.llm.model:
+        llm_provider = f"{config.llm.provider} / {config.llm.model}"
     else:
         llm_provider = config.llm.provider
 

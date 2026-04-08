@@ -1,7 +1,13 @@
 # RESEARCH: Peer Session Compaction — Five-Way Comparison
 
+Status: gap-closed
+Scope: session compaction pipeline, summarizer input quality, overflow recovery
+Implementation truth: `docs/DESIGN-context.md`, `docs/DESIGN-core-loop.md`
+
 Sources: `~/workspace_genai/fork-claude-code`, `~/workspace_genai/gemini-cli`, `~/workspace_genai/opencode`, `~/workspace_genai/codex`, co-cli codebase
-Scan date: 2026-04-03 (fork-cc, gemini-cli, co-cli) · 2026-04-04 (opencode, codex)
+Scan date: 2026-04-03 (fork-cc, gemini-cli) · 2026-04-04 (opencode, codex) · 2026-04-07 (co-cli refresh)
+
+This research originally identified compaction-quality gaps in co-cli's history pipeline. Those gaps are now closed in the shipped implementation. The remaining peer-only patterns below are intentional non-adoptions, not active TODOs.
 
 ---
 
@@ -150,13 +156,14 @@ POST-SAMPLING (mid-turn, after model response)
 
 **Key insight**: Inline mode sends **entire unmodified history** to the summarizer — no pre-trimming. Remote mode trims generated content but preserves user messages. Both ensure the summarizer has maximum context.
 
-### 1e. co-cli — Inline Processor Chain (Current)
+### 1e. co-cli — Inline Processor Chain (Current, Shipped)
 
 ```text
 BEFORE EVERY MODEL API CALL (history processor chain)
   ├─ 1. truncate_tool_results [sync, no LLM]
   │     Compactable tools: read_file, run_shell_command, find_in_files,
-  │                        list_directory, web_search, web_fetch
+  │                        list_directory, web_search, web_fetch,
+  │                        read_article, read_note
   │     Per-tool-type recency: keep 5 most recent per tool, clear rest
   │     Protected: last turn (from last UserPromptPart onward)
   │     DESTRUCTIVE: replaces content with placeholder in-place
@@ -189,7 +196,9 @@ BEFORE EVERY MODEL API CALL (history processor chain)
   │     LLM call: summarize_messages(dropped, resolved_model, context=enrichment)
   │       Structured template: Goal, Key Decisions, Working Set, Progress, Next Steps
   │       Prior-summary integration instruction in template
+  │       Personality addendum appended when personality is active
   │     Fallback: static marker after 3 consecutive failures
+  │               or when model_registry is absent
   │     Result: [head messages] + [summary marker] + [tail messages]
   │
   └─ MODEL API CALL with compacted history
@@ -203,9 +212,11 @@ OVERFLOW RECOVERY (in run_turn() error handler)
 
 ---
 
-## 2. The Input Quality Problem
+## 2. Summarizer Input Quality Comparison
 
-The critical difference between co-cli and all four peers:
+Historically, this was co-cli's main quality gap. That is no longer the case: co-cli now follows the same broad family as fork-cc by summarizing post-truncation history while enriching the summarizer prompt with side-channel context that reconstructs the lost working set.
+
+The critical difference across systems is what the summarizer sees and how each system preserves fidelity:
 
 | System | What the LLM summarizer sees | How it compensates for cleared tool outputs |
 |--------|----------------------------|--------------------------------------------|
@@ -270,7 +281,7 @@ co-cli uses **strategy C** (rich side-channel context via `_gather_compaction_co
 
 ## 6. Convergence Analysis
 
-### 6a. All Five Agree (5/5) — co-cli Implemented
+### 6a. All Five Agree (5/5) — Implemented in co-cli
 
 | Pattern | Status |
 |---------|--------|
@@ -280,32 +291,32 @@ co-cli uses **strategy C** (rich side-channel context via `_gather_compaction_co
 | ~4 chars/token heuristic | Implemented |
 | Threshold in 85–90% range | Implemented |
 
-### 6b. Gaps Ranked by Impact on Summarizer Quality
+### 6b. Historical Gaps Now Closed
 
 | # | Gap | Peer evidence | co-cli status |
 |---|-----|---------------|---------------|
 | 1 | **Summarizer sees degraded input** — tool results cleared before LLM summarization | 4/4 peers compensate: gemini-cli feeds originals, opencode marks non-destructively, fork-cc injects rich context, codex sends full history | **Implemented** — fork-cc strategy C: `_gather_compaction_context()` injects file working set, todos, always-on memories, prior-summary text |
-| 2 | **Structured summary template** | 4/5 use structured sections (gemini-cli XML, opencode Goal/Instructions/Discoveries/Accomplished/Files, codex handoff, fork-cc rich prompt) | **Implemented** — Goal, Key Decisions, Working Set, Progress, Next Steps |
+| 2 | **Structured summary template** | Strong peer convergence on structured summaries or strongly scaffolded prompts (gemini-cli XML, opencode Goal/Instructions/Discoveries/Accomplished/Files, fork-cc rich prompt scaffolding) | **Implemented** — Goal, Key Decisions, Working Set, Progress, Next Steps |
 | 3 | **Rich compaction prompt** (plan/tool/file context beyond bare history) | 3/5 inject side-channel context (fork-cc plan+memory+files+tools, gemini-cli plan path, opencode plugin hook) | **Implemented** — context enrichment via `_gather_compaction_context()` (4K cap) |
 | 4 | **Overflow/413 recovery** | 4/5 have recovery (fork-cc reactive compact, opencode overflow→compact, codex post-sampling compact, gemini-cli proactive prevention) | **Implemented** — `emergency_compact()` + one-shot retry (no LLM, static marker) |
-| 5 | **Protected/exempt tools in pruning** | 4/5 distinguish tools (fork-cc compactable set, gemini-cli exempt read_file, opencode `["skill"]`, codex preserve user over generated) | **Implemented** (commit 6191bfd — `COMPACTABLE_TOOLS` set) |
+| 5 | **Protected/exempt tools in pruning** | 4/5 distinguish tools (fork-cc compactable set, gemini-cli exempt read_file, opencode `["skill"]`, codex preserve user over generated) | **Implemented** — `COMPACTABLE_TOOLS` set with per-tool recency protection |
 | 6 | **Two-tier per-message normalization** | 3/5 (gemini-cli 12K/2.5K, opencode 40K/20K thresholds, fork-cc micro-compact) | **Implemented** — `compact_assistant_responses` caps older TextPart/ThinkingPart at 2.5K |
 | 7 | **Prior-snapshot explicit integration** | 2/5 explicit (gemini-cli integrates prior `<state_snapshot>`, codex `SUMMARY_PREFIX`) | **Implemented** — template instruction + prior-summary detection in context enrichment |
 
-### 6c. Strategy Choice for Gap #1 — Implemented
+### 6c. Strategy Choice for Former Gap #1 — Shipped
 
 Four peer strategies were evaluated. **Strategy C was chosen and shipped:**
 
 | Strategy | Complexity | Quality | Peer | co-cli |
 |----------|-----------|---------|------|--------|
-| **A. Feed originals to summarizer** — save pre-cleared content, pass originals to `summarize_messages()` | Low | Highest | gemini-cli A | Not chosen — selective truncation (6 tools, keep 5 recent) already preserves most content |
+| **A. Feed originals to summarizer** — save pre-cleared content, pass originals to `summarize_messages()` | Low | Highest | gemini-cli A | Not chosen — selective truncation (8 tools, keep 5 recent) already preserves most content |
 | **B. Non-destructive marking** — mark tool results as cleared for the model but keep full content in message list | Medium | High | opencode | Not chosen — adds architectural complexity |
 | **C. Rich side-channel context** — accept degraded input but inject file/todo/memory context into summarizer prompt | Medium | Medium-High | fork-cc | **Chosen** — `_gather_compaction_context()` |
 | **D. Don't trim before summarizing** — run tool output clearing only after summarization | Low | High | codex (inline) | Not chosen — processor ordering has other constraints (safety scanner needs full history) |
 
 Rationale: selective truncation already preserves tool call args (file paths, commands) and the 5 most recent results per tool type. Adding structured context enrichment addresses the quality gap without architectural changes to the processor pipeline.
 
-### 6d. Remaining Peer-Only Patterns (2/5 or lower — not planned)
+### 6d. Remaining Peer-Only Patterns (intentional non-adoptions, not open gaps)
 
 | Pattern | Who | Why not |
 |---------|-----|---------|
@@ -316,3 +327,17 @@ Rationale: selective truncation already preserves tool call args (file paths, co
 | Provider-delegated compaction | codex (OpenAI only) | Not available for non-OpenAI providers |
 | Two-tier per-message grace zone (12K recent / 2.5K older) | gemini-cli | co-cli uses single-tier 2.5K; grace zone adds complexity for marginal benefit in shorter contexts |
 | Token-based tail sizing | codex 20K, gemini-cli 30%/40K | Message-count heuristic (`max(4, len//2)`) is sufficient |
+
+---
+
+## 7. Bottom Line
+
+This research has served its purpose. co-cli now implements the high-value peer-converged compaction patterns this document identified:
+
+- token-budget-triggered auto-compaction
+- pre-pass tool/result trimming
+- structured handoff summaries
+- summarizer context enrichment
+- overflow recovery with one-shot retry
+
+What remains in peer systems are optional refinements, not missing foundations. For current behavior, defer to `docs/DESIGN-context.md` and `docs/DESIGN-core-loop.md`; this file should stay as historical research and strategy rationale.

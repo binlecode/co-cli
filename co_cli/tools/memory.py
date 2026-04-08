@@ -33,8 +33,7 @@ from co_cli.memory.recall import (
     load_memories,
     load_always_on_memories,
 )
-from co_cli._model_factory import ResolvedModel
-from co_cli.config._llm import ROLE_SUMMARIZATION
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps
 from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
@@ -231,14 +230,11 @@ async def save_memory(
 
     with _TRACER.start_as_current_span("co.memory.save") as span:
         span.set_attribute("memory.tags", ",".join(tags or []))
-        _fallback = ResolvedModel(model=None, settings=None)
-        _consolidation_resolved = (
-            ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _fallback)
-            if ctx.deps.model_registry else _fallback
-        )
+        _model = ctx.deps.model.model if ctx.deps.model else None
         result = await persist_memory(
             ctx.deps, content, tags, related,
-            on_failure="add", resolved=_consolidation_resolved, always_on=always_on,
+            on_failure="add", model=_model, model_settings=NOREASON_SETTINGS,
+            always_on=always_on,
         )
         meta = result.metadata or {}
         span.set_attribute("memory.action", meta.get("action", "unknown"))

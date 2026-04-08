@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.config._llm import ModelConfig
+from co_cli.config._knowledge import ModelConfig
 from tests._settings import test_settings
 from co_cli.bootstrap._bootstrap import _discover_knowledge_backend, _sync_knowledge_store, _resolve_reranker, restore_session
 from co_cli.context.types import SafetyState

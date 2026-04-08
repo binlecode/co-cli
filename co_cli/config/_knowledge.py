@@ -1,9 +1,7 @@
 """Knowledge search, embedding, and chunking settings."""
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
-from co_cli.config._llm import ModelConfig
 
 DEFAULT_KNOWLEDGE_SEARCH_BACKEND = "hybrid"
 DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER = "tei"
@@ -13,6 +11,14 @@ DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
+
+
+class ModelConfig(BaseModel):
+    """A model+provider bundle for auxiliary model references (e.g. LLM reranker)."""
+
+    model: str
+    api_params: dict[str, Any] = Field(default_factory=dict)
+    provider: Literal["ollama-openai", "gemini"]
 
 
 class KnowledgeSettings(BaseModel):

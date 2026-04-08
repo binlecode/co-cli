@@ -157,7 +157,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             raise SystemExit(1)
 
         completer.words = _build_completer_words(deps.skill_commands)
-        agent = build_agent(config=deps.config, model_registry=deps.model_registry)
+        agent = build_agent(config=deps.config, model=deps.model)
 
         session_data = restore_session(deps, frontend)
         from co_cli.commands._commands import get_skill_registry

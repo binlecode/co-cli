@@ -489,8 +489,8 @@ def build_index(
 ) -> KnowledgeStore:
     """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
     from co_cli.config._core import Settings
-    from co_cli.config._llm import LlmSettings, ModelConfig
-    from co_cli.config._knowledge import KnowledgeSettings
+    from co_cli.config._llm import LlmSettings
+    from co_cli.config._knowledge import KnowledgeSettings, ModelConfig
     llm_reranker = (
         ModelConfig(provider="ollama-openai", model=reranker_model)
         if reranker_model else None
@@ -499,7 +499,7 @@ def build_index(
         llm=LlmSettings.model_construct(
             provider="ollama-openai",
             host=ollama_host,
-            role_models={"reasoning": {"model": "dummy", "provider": "ollama-openai"}},
+            model="dummy",
         ),
         knowledge=KnowledgeSettings.model_construct(
             search_backend=backend,

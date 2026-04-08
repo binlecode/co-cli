@@ -19,9 +19,9 @@ _AGENT = build_agent(config=settings)
 
 
 def _make_ctx() -> RunContext:
-    """Return a real RunContext with no model_registry — triggers unavailable guard."""
+    """Return a real RunContext with no model — triggers unavailable guard."""
     deps = CoDeps(
-        shell=ShellBackend(), model_registry=None,
+        shell=ShellBackend(), model=None,
         config=test_settings(),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -29,10 +29,9 @@ def _make_ctx() -> RunContext:
 
 @pytest.mark.asyncio
 async def test_run_coding_subagent_no_model() -> None:
-    """Raises ModelRetry when model_registry is None (no registry configured).
+    """Raises ModelRetry when model is None (no model configured).
 
-    All four subagent tools (coding, research, analysis, reasoning) share the
-    same guard pattern: ``if not registry or not registry.is_configured(ROLE)``.
+    All four subagent tools share the same guard pattern: ``if not deps.model``.
     This test exercises the pattern via the coding tool; the others are identical.
     """
     from pydantic_ai import ModelRetry as _ModelRetry
@@ -95,7 +94,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     # Service handles shared (same objects)
     assert isolated.shell is base.shell
-    assert isolated.model_registry is base.model_registry
+    assert isolated.model is base.model
 
 
 def test_merge_turn_usage_alias_then_accumulate() -> None:

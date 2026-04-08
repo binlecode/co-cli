@@ -30,8 +30,8 @@ from typing import Any
 import yaml
 
 from co_cli.config._core import settings
-from co_cli.config._llm import ROLE_SUMMARIZATION
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import build_model, LlmModel
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps
 from co_cli.memory._extractor import (
     ExtractionResult,
@@ -57,13 +57,13 @@ from evals._tools import extract_tool_calls
 # ---------------------------------------------------------------------------
 
 
-_REGISTRY = ModelRegistry.from_config(settings)
+_LLM_MODEL = build_model(settings.llm)
 
 
 def _make_deps(memory_dir: Path) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
-        model_registry=_REGISTRY,
+        model=_LLM_MODEL,
         config=settings,
         memory_dir=memory_dir,
     )
@@ -238,11 +238,10 @@ async def run_dedup_case(case: DedupCase, tmp_dir: Path) -> dict[str, Any]:
     memories.sort(key=lambda m: m.updated or m.created, reverse=True)
     manifest = build_memory_manifest(memories)
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
-    if resolved.model is None:
-        return {"action": "SKIP", "reason": "no summarization model"}
+    if _LLM_MODEL.model is None:
+        return {"action": "SKIP", "reason": "no model configured"}
 
-    result = await check_and_save(case.new_content, manifest, resolved)
+    result = await check_and_save(case.new_content, manifest, _LLM_MODEL.model, NOREASON_SETTINGS)
     return {"action": result.action, "target_slug": result.target_slug}
 
 
@@ -259,16 +258,15 @@ async def run_slug_not_found_case(tmp_dir: Path) -> dict[str, Any]:
     # save agent path by seeding a second memory so manifest is non-empty
     seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"])
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
-    if resolved.model is None:
-        return {"result": "SKIP", "reason": "no summarization model"}
+    if _LLM_MODEL.model is None:
+        return {"result": "SKIP", "reason": "no model configured"}
 
     deps = _make_deps(memory_dir=memory_dir)
     before_count = len(list(memory_dir.glob("*.md")))
 
     result = await persist_memory(
         deps, "User prefers pytest for all testing purposes",
-        ["preference"], None, resolved=resolved,
+        ["preference"], None, model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
     )
 
     after_count = len(list(memory_dir.glob("*.md")))
@@ -549,7 +547,7 @@ async def main() -> int:
 
     deps = CoDeps(
         shell=ShellBackend(),
-        model_registry=_REGISTRY,
+        model=_LLM_MODEL,
         config=settings,
     )
 

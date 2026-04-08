@@ -17,7 +17,7 @@ from co_cli.config._core import (
 from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
-    from co_cli._model_factory import ModelRegistry
+    from co_cli._model_factory import LlmModel
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.background import BackgroundTaskState
@@ -156,7 +156,7 @@ class CoDeps:
     resource_locks: "ResourceLockStore" = field(default=None, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: "KnowledgeStore | None" = field(default=None, repr=False)
-    model_registry: "ModelRegistry | None" = field(default=None, repr=False)
+    model: "LlmModel | None" = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, "ToolInfo"] = field(default_factory=dict)
     skill_commands: dict[str, "SkillConfig"] = field(default_factory=dict)
@@ -215,7 +215,7 @@ def make_subagent_deps(base: "CoDeps") -> "CoDeps":
         config=base.config,
         resource_locks=base.resource_locks,
         knowledge_store=base.knowledge_store,
-        model_registry=base.model_registry,
+        model=base.model,
         tool_index=base.tool_index,
         skill_commands=base.skill_commands,
         session=inherited_session,

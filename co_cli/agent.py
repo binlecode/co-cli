@@ -5,16 +5,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from co_cli._model_factory import ModelRegistry
+    from co_cli._model_factory import LlmModel
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.tools import ToolDefinition
 
-from co_cli.config._llm import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
 from co_cli.config._core import Settings
 from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
-from co_cli._model_factory import ResolvedModel
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.context._history import (
     inject_opening_context,
@@ -183,15 +181,11 @@ def _build_filtered_toolset(
     _reg(cancel_background_task, load=_D, search_hint="cancel stop background task")
     _reg(list_background_tasks, load=_D, search_hint="list background tasks")
 
-    # Sub-agent tools — registered only when the role model is configured
-    if config.llm.role_models.get(ROLE_CODING):
-        _reg(run_coding_subagent, load=_D, search_hint="coding sub-agent delegate code")
-    if config.llm.role_models.get(ROLE_RESEARCH):
-        _reg(run_research_subagent, load=_D, search_hint="research sub-agent delegate search")
-    if config.llm.role_models.get(ROLE_ANALYSIS):
-        _reg(run_analysis_subagent, load=_D, search_hint="analysis sub-agent delegate analyze")
-    if config.llm.role_models.get(ROLE_REASONING):
-        _reg(run_reasoning_subagent, load=_D, search_hint="reasoning sub-agent delegate think")
+    # Sub-agent tools — always registered (single model serves all tasks)
+    _reg(run_coding_subagent, load=_D, search_hint="coding sub-agent delegate code")
+    _reg(run_research_subagent, load=_D, search_hint="research sub-agent delegate search")
+    _reg(run_analysis_subagent, load=_D, search_hint="analysis sub-agent delegate analyze")
+    _reg(run_reasoning_subagent, load=_D, search_hint="reasoning sub-agent delegate think")
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
@@ -250,25 +244,21 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
 def build_agent(
     *,
     config: Settings,
-    model_registry: "ModelRegistry | None" = None,
+    model: "LlmModel | None" = None,
     tool_registry: ToolRegistry | None = None,
 ) -> Agent[CoDeps, str | DeferredToolRequests]:
     """Build the main session Agent with model and settings baked in at construction.
 
     Args:
         config: Session config — static instructions, tool policy, MCP servers.
-        model_registry: Pre-built registry for role→model lookup. When omitted,
-            built from config internally (used by evals and tests that don't
-            construct a registry).
+        model: Pre-built LlmModel from build_model(). When omitted,
+            built from config internally (used by evals and tests).
         tool_registry: Pre-built tool registry. When omitted, built from config
             internally.
     """
-    if model_registry is None:
-        from co_cli._model_factory import ModelRegistry
-        model_registry = ModelRegistry.from_config(config)
-    reasoning_model = model_registry.get(
-        ROLE_REASONING, ResolvedModel(model=None, settings=None)
-    )
+    if model is None:
+        from co_cli._model_factory import build_model
+        model = build_model(config.llm)
 
     if tool_registry is None:
         tool_registry = build_tool_registry(config)
@@ -276,16 +266,15 @@ def build_agent(
     # Assemble static instructions (personality, rules, counter-steering) once at build time.
     from co_cli.prompts._assembly import build_static_instructions
     from co_cli.prompts.model_quirks._loader import normalize_model_name
-    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
-    normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
+    normalized_model = normalize_model_name(config.llm.model)
     static_instructions = build_static_instructions(config.llm.provider, normalized_model, config)
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
-        reasoning_model.model,
+        model.model,
         deps_type=CoDeps,
         instructions=static_instructions,
-        model_settings=reasoning_model.settings,
+        model_settings=model.settings,
         retries=config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=[

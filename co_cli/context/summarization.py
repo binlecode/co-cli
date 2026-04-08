@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
@@ -20,9 +21,8 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
 )
+from pydantic_ai.settings import ModelSettings
 
-from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config._llm import ROLE_REASONING
 from co_cli.config._core import Settings
 
 log = logging.getLogger(__name__)
@@ -72,35 +72,25 @@ _DEFAULT_TOKEN_BUDGET = 100_000
 
 def resolve_compaction_budget(
     config: Settings,
-    registry: ModelRegistry | None,
+    context_window: int | None,
 ) -> int:
     """Resolve the token budget used as the compaction trigger baseline.
 
     Resolution order (first match wins):
-    1. Model spec: reasoning role's context_window minus max_tokens (output reserve).
+    1. context_window (from LlmModel quirks) minus estimated output reserve.
        For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
     2. Ollama config: config.llm.num_ctx when provider is ollama-openai.
     3. Fallback: _DEFAULT_TOKEN_BUDGET (100K).
 
     The 85% multiplier is NOT applied here — callers apply their own trigger policy.
     """
-    if registry is not None:
-        _none_resolved = ResolvedModel(model=None, settings=None)
-        resolved = registry.get(ROLE_REASONING, _none_resolved)
-        ctx_window = resolved.context_window
-        if ctx_window is not None and ctx_window > 0:
-            # For Ollama: user-configured llm_num_ctx overrides spec
-            # (real limit is baked in the Modelfile, not the declared spec)
-            if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
-                ctx_window = config.llm.num_ctx
-            max_output = 0
-            if resolved.settings is not None:
-                mt = getattr(resolved.settings, "max_tokens", None)
-                if mt is None and isinstance(resolved.settings, dict):
-                    mt = resolved.settings.get("max_tokens")
-                if mt:
-                    max_output = mt
-            return max(ctx_window - max_output, ctx_window // 2)
+    if context_window is not None and context_window > 0:
+        # For Ollama: user-configured llm_num_ctx overrides spec
+        # (real limit is baked in the Modelfile, not the declared spec)
+        if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
+            context_window = config.llm.num_ctx
+        # Reserve ~16K for output (conservative estimate)
+        return max(context_window - 16384, context_window // 2)
 
     # Ollama config fallback (no model spec but llm_num_ctx configured)
     if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
@@ -172,15 +162,14 @@ def _build_summarizer_prompt(
 
 _summarizer_agent: Agent[None, str] = Agent(
     output_type=str,
-    # Use instructions (not system_prompt) so the guardrail is applied
-    # even when summarizing with non-empty message_history.
     instructions=_SUMMARIZER_SYSTEM_PROMPT,
 )
 
 
 async def summarize_messages(
     messages: list[ModelMessage],
-    resolved_model: ResolvedModel,
+    model: Any,
+    model_settings: ModelSettings | None = None,
     prompt: str = _SUMMARIZE_PROMPT,
     personality_active: bool = False,
     context: str | None = None,
@@ -194,15 +183,16 @@ async def summarize_messages(
     result = await _summarizer_agent.run(
         final_prompt,
         message_history=messages,
-        model=resolved_model.model,
-        model_settings=resolved_model.settings,
+        model=model,
+        model_settings=model_settings,
     )
     return result.output
 
 
 async def index_session_summary(
     messages: list[ModelMessage],
-    resolved_model: ResolvedModel,
+    model: Any,
+    model_settings: ModelSettings | None = None,
     *,
     personality_active: bool = False,
 ) -> str | None:
@@ -214,7 +204,8 @@ async def index_session_summary(
     try:
         return await summarize_messages(
             messages[-last_n:],
-            resolved_model,
+            model,
+            model_settings=model_settings,
             personality_active=personality_active,
         )
     except (ModelHTTPError, ModelAPIError) as e:

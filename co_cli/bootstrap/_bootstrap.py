@@ -205,7 +205,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     Raises ValueError on provider/model hard errors.
     """
-    from co_cli._model_factory import ModelRegistry
+    from co_cli._model_factory import build_model
     from co_cli.agent import build_tool_registry, discover_mcp_tools
 
     config = settings
@@ -220,23 +220,21 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 2b: Ollama context probe — fail-fast on undersized models,
     # override num_ctx with runtime Modelfile value when they differ.
     if config.llm.uses_ollama_openai():
-        reasoning_entry = config.llm.role_models.get("reasoning")
-        if reasoning_entry:
-            from co_cli.bootstrap._check import probe_ollama_context
-            ctx_probe = probe_ollama_context(config.llm.host, reasoning_entry.model)
-            if ctx_probe.status == "error":
-                raise ValueError(ctx_probe.detail)
-            runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
-            if runtime_num_ctx > 0 and runtime_num_ctx != config.llm.num_ctx:
-                logger.info(
-                    "Ollama runtime num_ctx=%d differs from config llm.num_ctx=%d — using runtime value",
-                    runtime_num_ctx, config.llm.num_ctx,
-                )
-                config.llm.num_ctx = runtime_num_ctx
+        from co_cli.bootstrap._check import probe_ollama_context
+        ctx_probe = probe_ollama_context(config.llm.host, config.llm.model)
+        if ctx_probe.status == "error":
+            raise ValueError(ctx_probe.detail)
+        runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
+        if runtime_num_ctx > 0 and runtime_num_ctx != config.llm.num_ctx:
+            logger.info(
+                "Ollama runtime num_ctx=%d differs from config llm.num_ctx=%d — using runtime value",
+                runtime_num_ctx, config.llm.num_ctx,
+            )
+            config.llm.num_ctx = runtime_num_ctx
 
     # Step 3: resolve MCP env tokens + build registries
     config.mcp_servers = _resolve_mcp_env_tokens(config)
-    model_registry = ModelRegistry.from_config(config)
+    llm_model = build_model(config.llm)
     tool_registry = build_tool_registry(config)
 
     # Step 4: MCP connect + discovery
@@ -277,7 +275,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     return CoDeps(
         shell=ShellBackend(),
         config=config,
-        model_registry=model_registry,
+        model=llm_model,
         knowledge_store=knowledge_store,
         tool_index=tool_registry.tool_index,
         skill_commands=skill_commands,

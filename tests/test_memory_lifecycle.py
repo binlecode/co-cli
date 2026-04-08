@@ -14,16 +14,16 @@ import pytest
 import yaml
 
 from co_cli.config._core import settings
-from co_cli.config._llm import ROLE_SUMMARIZATION
 from tests._settings import test_settings
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import build_model
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps
 from co_cli.memory._lifecycle import persist_memory
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
 
 _CONFIG = settings
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_LLM_MODEL = build_model(_CONFIG.llm)
 
 
 # ---------------------------------------------------------------------------
@@ -175,15 +175,12 @@ def test_retention_cap_excludes_articles(tmp_path: Path):
 def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
     """When target file lock is held and on_failure='add', persist_memory raises ResourceBusyError."""
     from co_cli.tools.resource_lock import ResourceBusyError
-    from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.config._llm import ROLE_SUMMARIZATION
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     # Seed an existing memory so the save agent can return UPDATE for it
     entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
     target_path = str(entry.path)
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
     deps = _make_deps(memory_dir=memory_dir)
 
     async def _run() -> None:
@@ -193,7 +190,8 @@ def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
                 await persist_memory(
                     deps, "User prefers pytest for all testing purposes",
                     ["preference"], None,
-                    on_failure="add", resolved=resolved,
+                    on_failure="add",
+                    model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
                 )
 
     asyncio.run(_run())
@@ -206,14 +204,10 @@ def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
 
 def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
     """When target file lock is held and on_failure='skip', returns action='skipped'."""
-    from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.config._llm import ROLE_SUMMARIZATION
-
     memory_dir = tmp_path / ".co-cli" / "memory"
     entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
     target_path = str(entry.path)
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
     deps = _make_deps(memory_dir=memory_dir)
 
     async def _run():
@@ -222,7 +216,8 @@ def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
             return await persist_memory(
                 deps, "User prefers pytest for all testing purposes",
                 ["preference"], None,
-                on_failure="skip", resolved=resolved,
+                on_failure="skip",
+                model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
             )
 
     result = asyncio.run(_run())
@@ -282,9 +277,8 @@ async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
     from co_cli.memory._save import build_memory_manifest, check_and_save
     from tests._ollama import ensure_ollama_warm
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
-    if resolved.model is None:
-        pytest.skip("No summarization model configured")
+    if _LLM_MODEL.model is None:
+        pytest.skip("No model configured")
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     entries = [
@@ -292,14 +286,13 @@ async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
         _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
     ]
 
-    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
 
     manifest = build_memory_manifest(entries)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await check_and_save(
             "User prefers dark mode for all terminal applications",
-            manifest, resolved,
+            manifest, _LLM_MODEL.model, NOREASON_SETTINGS,
         )
 
     assert result.action == "SAVE_NEW", (
@@ -318,9 +311,8 @@ async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path
     from co_cli.memory._save import build_memory_manifest, check_and_save
     from tests._ollama import ensure_ollama_warm
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
-    if resolved.model is None:
-        pytest.skip("No summarization model configured")
+    if _LLM_MODEL.model is None:
+        pytest.skip("No model configured")
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     entries = [
@@ -328,14 +320,13 @@ async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path
         _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
     ]
 
-    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
 
     manifest = build_memory_manifest(entries)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await check_and_save(
             "User prefers pytest for all testing purposes",
-            manifest, resolved,
+            manifest, _LLM_MODEL.model, NOREASON_SETTINGS,
         )
 
     assert result.action == "UPDATE", (
@@ -355,16 +346,14 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
     assert no new file + existing file updated + updated timestamp set."""
     from tests._ollama import ensure_ollama_warm
 
-    resolved = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
-    if resolved.model is None:
-        pytest.skip("No summarization model configured")
+    if _LLM_MODEL.model is None:
+        pytest.skip("No model configured")
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
     before_count = len(list(memory_dir.glob("*.md")))
 
-    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
+    await ensure_ollama_warm(_CONFIG.llm.model, _CONFIG.llm.host)
 
     deps = _make_deps(memory_dir=memory_dir)
 
@@ -373,7 +362,7 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
             deps,
             "User prefers pytest for all testing purposes",
             ["preference"], None,
-            resolved=resolved,
+            model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
         )
 
     after_count = len(list(memory_dir.glob("*.md")))

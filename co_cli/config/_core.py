@@ -7,20 +7,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 
-from co_cli.config._llm import (
-    LlmSettings,
-    ROLE_REASONING,
-    ROLE_SUMMARIZATION,
-    ROLE_CODING,
-    ROLE_RESEARCH,
-    ROLE_ANALYSIS,
-    DEFAULT_OLLAMA_REASONING_MODEL,
-    DEFAULT_OLLAMA_SUMMARIZATION_MODEL,
-    DEFAULT_OLLAMA_ANALYSIS_MODEL,
-    DEFAULT_OLLAMA_CODING_MODEL,
-    DEFAULT_OLLAMA_RESEARCH_MODEL,
-    DEFAULT_GEMINI_REASONING_MODEL,
-)
+from co_cli.config._llm import LlmSettings
 from co_cli.config._knowledge import KnowledgeSettings
 from co_cli.config._web import WebSettings
 from co_cli.config._memory import MemorySettings
@@ -169,7 +156,6 @@ class Settings(BaseModel):
         """Env vars override all file-based values (highest precedence layer).
 
         Flat env vars are mapped into the nested sub-model structure.
-        All env var names are unchanged from the flat era for backward compatibility.
         """
         env_source: dict = (info.context or {}).get("env") if info.context else None
         if env_source is None:
@@ -199,6 +185,7 @@ class Settings(BaseModel):
                 "api_key": "LLM_API_KEY",
                 "provider": "LLM_PROVIDER",
                 "host": "LLM_HOST",
+                "model": "CO_LLM_MODEL",
                 "num_ctx": "LLM_NUM_CTX",
                 "ctx_warn_threshold": "CO_CTX_WARN_THRESHOLD",
                 "ctx_overflow_threshold": "CO_CTX_OVERFLOW_THRESHOLD",
@@ -244,30 +231,6 @@ class Settings(BaseModel):
                 val = env_source.get(env_var)
                 if val:
                     data.setdefault(group, {})[field] = val
-
-        # Provider-dependent role_models defaults and env var overrides
-        llm_data = data.get("llm", {})
-        provider = str(llm_data.get("provider", "ollama-openai")).lower()
-        if provider == "gemini":
-            role_defaults: dict = {ROLE_REASONING: DEFAULT_GEMINI_REASONING_MODEL}
-        elif provider == "ollama-openai":
-            role_defaults = {
-                ROLE_REASONING: DEFAULT_OLLAMA_REASONING_MODEL,
-                ROLE_SUMMARIZATION: DEFAULT_OLLAMA_SUMMARIZATION_MODEL,
-                ROLE_ANALYSIS: DEFAULT_OLLAMA_ANALYSIS_MODEL,
-                ROLE_CODING: DEFAULT_OLLAMA_CODING_MODEL,
-                ROLE_RESEARCH: DEFAULT_OLLAMA_RESEARCH_MODEL,
-            }
-        else:
-            raise ValueError(f"Unsupported llm.provider: {provider!r}")
-        role_models_env: dict[str, dict[str, Any]] = {}
-        for role in (ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
-            env_var = f"CO_MODEL_ROLE_{role.upper()}"
-            val = env_source.get(env_var)
-            if val:
-                role_models_env[role] = {"model": val.strip(), "provider": provider}
-        existing_roles = llm_data.get("role_models", {})
-        data.setdefault("llm", {})["role_models"] = {**role_defaults, **existing_roles, **role_models_env}
 
         # MCP servers (flat — env override)
         mcp_env = env_source.get("CO_CLI_MCP_SERVERS")

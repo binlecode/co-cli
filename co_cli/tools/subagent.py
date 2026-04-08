@@ -8,10 +8,10 @@ from typing import Any, NamedTuple
 from opentelemetry import trace as otel_trace
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from co_cli._model_factory import ResolvedModel
-from co_cli.config._llm import ROLE_ANALYSIS, ROLE_CODING, ROLE_REASONING, ROLE_RESEARCH
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps, make_subagent_deps
 from co_cli.tools._subagent_builders import (
     make_analysis_agent,
@@ -28,8 +28,7 @@ _TRACER = otel_trace.get_tracer("co-cli.subagent")
 class SubagentRoleConfig:
     """Declarative config for a single subagent role."""
 
-    role: str
-    factory: Callable[[ResolvedModel], Agent[CoDeps, Any]]
+    factory: Callable[[Any], Agent[CoDeps, Any]]
     max_requests_key: str
     error_msg: str
     guard_msg: str
@@ -39,37 +38,43 @@ class SubagentRoleConfig:
 
 SUBAGENT_ROLES: dict[str, SubagentRoleConfig] = {
     "coding": SubagentRoleConfig(
-        role=ROLE_CODING, factory=make_coder_agent,
+        factory=make_coder_agent,
         max_requests_key="max_requests_coder",
         error_msg="Coding sub-agent failed — handle this task directly.",
         guard_msg="Coding sub-agent is unavailable — handle this task directly.",
     ),
     "research": SubagentRoleConfig(
-        role=ROLE_RESEARCH, factory=make_research_agent,
+        factory=make_research_agent,
         max_requests_key="max_requests_research",
         error_msg="Research sub-agent failed — handle this task directly.",
         guard_msg="Research sub-agent is unavailable — handle this task directly.",
         retry_on_empty=True,
     ),
     "analysis": SubagentRoleConfig(
-        role=ROLE_ANALYSIS, factory=make_analysis_agent,
+        factory=make_analysis_agent,
         max_requests_key="max_requests_analysis",
         error_msg="Analysis sub-agent failed — handle this task directly.",
         guard_msg="Analysis sub-agent is unavailable — handle this task directly.",
         input_prepend=True,
     ),
     "reasoning": SubagentRoleConfig(
-        role=ROLE_REASONING, factory=make_thinking_agent,
+        factory=make_thinking_agent,
         max_requests_key="max_requests_thinking",
         error_msg="Thinking sub-agent failed — handle this task directly.",
         guard_msg="Thinking sub-agent is unavailable — handle this task directly.",
     ),
 }
 
-_EXPECTED_ROLES = {"coding": ROLE_CODING, "research": ROLE_RESEARCH,
-                   "analysis": ROLE_ANALYSIS, "reasoning": ROLE_REASONING}
-for _key, _cfg in SUBAGENT_ROLES.items():
-    assert _cfg.role == _EXPECTED_ROLES[_key], f"SUBAGENT_ROLES[{_key!r}].role mismatch"
+
+def _get_task_settings(role_key: str, deps: CoDeps) -> ModelSettings | None:
+    """Return the ModelSettings for a subagent role.
+
+    Reasoning subagent uses the main model's base settings (quirks-derived).
+    All other subagents use NOREASON_SETTINGS.
+    """
+    if role_key == "reasoning":
+        return deps.model.settings if deps.model else None
+    return NOREASON_SETTINGS
 
 
 def _format_output(
@@ -136,8 +141,6 @@ async def _run_subagent_attempt(
     usage = result.usage()
     run_id = result.run_id
     _merge_turn_usage(ctx, usage)
-    # Snapshot usage AFTER merge — decouples attempt_1.usage from turn_usage
-    # so attempt_1.usage.requests stays stable during attempt_2.
     return SubagentAttempt(output=result.output, usage=copy(usage), run_id=run_id)
 
 
@@ -150,14 +153,14 @@ async def _run_subagent(
     if max_requests < 1:
         max_requests = getattr(ctx.deps.config.subagent, cfg.max_requests_key)
 
-    registry = ctx.deps.model_registry
-    if not registry or not registry.is_configured(cfg.role):
+    if not ctx.deps.model:
         raise ModelRetry(cfg.guard_msg)
 
-    rm = registry.get(cfg.role, ResolvedModel(model=ctx.model, settings=None))
-    model_name = str(rm.model)
+    model_obj = ctx.deps.model.model
+    model_name = str(model_obj)
+    task_settings = _get_task_settings(role_key, ctx.deps)
     request_limit = max_requests
-    agent = cfg.factory(rm)
+    agent = cfg.factory(model_obj)
 
     scoped_prompt = prompt
     if cfg.input_prepend and inputs:
@@ -165,12 +168,12 @@ async def _run_subagent(
     if domains:
         scoped_prompt = f"{scoped_prompt}\nRestrict searches to these domains: {', '.join(domains)}"
 
-    with _TRACER.start_as_current_span(f"subagent_{cfg.role}") as span:
-        span.set_attribute("subagent.role", cfg.role)
+    with _TRACER.start_as_current_span(f"subagent_{role_key}") as span:
+        span.set_attribute("subagent.role", role_key)
         span.set_attribute("subagent.model", model_name)
         span.set_attribute("subagent.request_limit", request_limit)
         attempt_1 = await _run_subagent_attempt(
-            agent, scoped_prompt, ctx, max_requests, rm.settings, cfg.error_msg,
+            agent, scoped_prompt, ctx, max_requests, task_settings, cfg.error_msg,
         )
         data = attempt_1.output
         requests_used = attempt_1.usage.requests
@@ -180,7 +183,7 @@ async def _run_subagent(
             if remaining > 0 and (not data.summary or not data.sources):
                 retry_query = f"The previous search returned no results. Try with different keywords: {prompt} (alternative framing)."
                 attempt_2 = await _run_subagent_attempt(
-                    agent, retry_query, ctx, remaining, rm.settings,
+                    agent, retry_query, ctx, remaining, task_settings,
                     cfg.error_msg.replace("failed", "retry failed"),
                 )
                 data = attempt_2.output
@@ -195,10 +198,10 @@ async def _run_subagent(
 
     scope = prompt[:ctx.deps.config.subagent.scope_chars]
     display, extra_meta = _format_output(
-        role_key, data, scope, cfg.role, model_name, requests_used, request_limit,
+        role_key, data, scope, role_key, model_name, requests_used, request_limit,
     )
     return tool_output(
-        display, ctx=ctx, **extra_meta, role=cfg.role, model_name=model_name,
+        display, ctx=ctx, **extra_meta, role=role_key, model_name=model_name,
         requests_used=requests_used, request_limit=request_limit,
         scope=scope, run_id=attempt_1.run_id,
     )

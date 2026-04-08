@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from co_cli.agent import build_agent, build_tool_registry
-from co_cli._model_factory import ModelRegistry
+from co_cli._model_factory import build_model
 from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from tests._settings import test_settings
@@ -19,7 +19,7 @@ _CONFIG_WITH_INTEGRATIONS = settings.model_copy(update={
 
 
 def test_build_agent_registers_all_tools():
-    """build_agent() registers core tools with no duplicates, and conditionally registers sub-agent tools."""
+    """build_agent() registers core tools with no duplicates."""
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
     tool_names = list(result.tool_index.keys())
     assert len(tool_names) == len(set(tool_names)), "Duplicate tool registration"
@@ -27,17 +27,6 @@ def test_build_agent_registers_all_tools():
     # Core tools always present
     for tool in ("run_shell_command", "check_capabilities", "web_search", "save_memory"):
         assert tool in result.tool_index, f"Expected core tool '{tool}' to be registered"
-
-    # Sub-agent conditional: run_coding_subagent present iff coding role model is set
-    if settings.llm.role_models.get("coding"):
-        assert "run_coding_subagent" in result.tool_index
-    else:
-        assert "run_coding_subagent" not in result.tool_index
-
-    # Verify with empty role_models: run_coding_subagent must be absent
-    bare_llm = test_settings().llm.model_copy(update={"role_models": {}})
-    bare_result = build_tool_registry(test_settings(llm=bare_llm))
-    assert "run_coding_subagent" not in bare_result.tool_index
 
 
 def test_approval_tools_flagged():
@@ -141,13 +130,6 @@ def test_tool_index_loading_policy_metadata():
             )
 
 
-def test_tool_index_source_axis_native_only():
-    """All entries in tool_index from build_agent() are native source (MCP not yet discovered)."""
-    result = build_tool_registry(test_settings())
-    for name, tc in result.tool_index.items():
-        assert tc.source == ToolSource.NATIVE, f"{name}: expected NATIVE source before MCP discovery"
-
-
 def test_toolinfo_enum_construction():
     """ToolInfo accepts LoadPolicy/ToolSource enums; old boolean kwargs raise TypeError."""
     from co_cli.deps import ToolInfo, LoadPolicy, ToolSource
@@ -177,7 +159,7 @@ def test_toolinfo_enum_construction():
 def test_build_agent_registers_tool_lifecycle_capability():
     """build_agent() registers CoToolLifecycle as a capability on the agent."""
     config = settings
-    agent = build_agent(config=config)
+    agent = build_agent(config=config, model=build_model(config.llm))
     # _root_capability.capabilities holds the user-provided capability list
     children = agent._root_capability.capabilities
     lifecycle_caps = [c for c in children if isinstance(c, CoToolLifecycle)]

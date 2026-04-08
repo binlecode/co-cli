@@ -26,7 +26,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ create_deps(frontend, stack)
 │  ├─ settings singleton used directly; resolve_workspace_paths(settings, cwd)
 │  ├─ config.llm.validate_config() → error: raise ValueError (config shape only)
-│  ├─ ModelRegistry.from_config(config) → model_registry
+│  ├─ build_model(config.llm) → LlmModel
 │  ├─ build_tool_registry(config) → ToolRegistry(toolset, mcp_toolsets, tool_index)
 │  ├─ [if mcp_toolsets]
 │  │      enter each MCP server on stack (stays alive for session)
@@ -45,10 +45,10 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      reconcile store with memory + library files on disk
 │  │      hash-based — skips unchanged files
 │  │      on fail → store closed, returns None
-│  └─ → CoDeps(shell, config=settings, paths, model_registry, knowledge_store, tool_index, skill_commands, runtime)
+│  └─ → CoDeps(shell, config=settings, paths, model, knowledge_store, tool_index, skill_commands, runtime)
 │
 ├─ completer.words updated with skills
-├─ build_agent(config=deps.config, model_registry=deps.model_registry) → Agent
+├─ build_agent(config=deps.config, model=deps.model) → Agent
 │
 ├─ restore_session(deps, frontend)
 │      fresh → restore session_id; stale → new session
@@ -76,13 +76,7 @@ Layer 3: env vars via fill_from_env model_validator
 
 `fill_from_env` runs as `model_validator(mode='before')`, so env vars override both config files before validation.
 
-`llm.role_models` defaults:
-- `gemini`: reasoning only → `gemini-3-flash-preview`; all other roles empty
-- `ollama-openai`: all six roles populated with hardcoded defaults in `config/_llm.py`
-
-Merge order is provider defaults for missing roles, then explicit config values, then env var overrides.
-
-The `reasoning` role is validated post-construction. Missing or empty raises `ValueError` at startup.
+`llm.model` defaults to a provider-specific model name when not configured. `CO_LLM_MODEL` env var overrides it. `fill_from_env` maps env vars into the nested structure before validation.
 
 Singleton access pattern:
 
@@ -94,7 +88,7 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It uses the `Settings` singleton directly (no `CoConfig` conversion), builds `ModelRegistry` and `ToolRegistry`, connects MCP servers and discovers their tools, and assembles `CoDeps` with resolved workspace paths. It calls `config.llm.validate_config()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
+`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It uses the `Settings` singleton directly (no `CoConfig` conversion), builds `LlmModel` and `ToolRegistry`, connects MCP servers and discovers their tools, and assembles `CoDeps` with resolved workspace paths. It calls `config.llm.validate_config()` as a config-shape gate: checks that a model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
 
 ```text
 create_deps(frontend, stack):
@@ -102,13 +96,13 @@ create_deps(frontend, stack):
     paths = resolve_workspace_paths(settings, cwd=Path.cwd())
     config.llm.validate_config() → error: raise ValueError
     [if ollama-openai] probe_ollama_context(host, model)  # Step 2b: fail-fast on undersized num_ctx; override config.llm.num_ctx with runtime value
-    model_registry = ModelRegistry.from_config(config)
+    llm_model = build_model(config.llm)  # single LlmModel for the session
     tool_registry = build_tool_registry(config)  # native toolset + mcp toolsets
     [if mcp_toolsets]
         enter each MCP server on stack  # stays alive for session
         discover_mcp_tools(mcp_toolsets) → mcp_index
         tool_index.update(mcp_index)
-    return CoDeps(config=settings, **paths, shell, model_registry, tool_index, runtime)
+    return CoDeps(config=settings, **paths, shell, model=llm_model, tool_index, runtime)
 ```
 
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeStore` construction) and file sync happen inside `create_deps()` as Steps 6-7, before CoDeps assembly.
@@ -135,11 +129,11 @@ Key points:
 
 ### `CoDeps` Structure
 
-`CoDeps` is flat — service handles (`shell`, `knowledge_store`), registries (`model_registry`, `tool_index`, `skill_commands`), workspace paths, degradations, and config are top-level fields. Two grouped sub-objects hold mutable state:
+`CoDeps` is flat — service handles (`shell`, `knowledge_store`), the model (`model`), registries (`tool_index`, `skill_commands`), workspace paths, degradations, and config are top-level fields. Two grouped sub-objects hold mutable state:
 
 | Field / Group | Lifetime | Sub-agent inheritance |
 |---------------|----------|-----------------------|
-| `shell`, `knowledge_store`, `model_registry` | Session | Copied by reference (shared) |
+| `shell`, `knowledge_store`, `model` | Session | Copied by reference (shared) |
 | `tool_index`, `skill_commands` | Session | Copied by reference (shared) |
 | `config` (`Settings`) | Session | Copied by reference (read-only by convention after bootstrap) |
 | workspace paths (`memory_dir`, `library_dir`, etc.) | Session | Copied by reference (shared) |
@@ -149,11 +143,11 @@ Key points:
 
 ## 2. Provider And Model Checks
 
-`config.llm.validate_config()` (on `LlmSettings` in `config/_llm.py`) runs inside `create_deps()` as the config-shape gate — no IO. It checks that minimum config is present (reasoning role configured, Gemini API key present). Provider connectivity is deferred to runtime; `run_turn()` handles connection and model errors with retries and clean REPL messages.
+`config.llm.validate_config()` (on `LlmSettings` in `config/_llm.py`) runs inside `create_deps()` as the config-shape gate — no IO. It checks that minimum config is present (model configured, Gemini API key present). Provider connectivity is deferred to runtime; `run_turn()` handles connection and model errors with retries and clean REPL messages.
 
 | Condition | Behavior |
 |-----------|----------|
-| No reasoning model in config | `ValueError`; session never starts |
+| No model in config | `ValueError`; session never starts |
 | Gemini provider with missing key | `ValueError`; session never starts |
 | Ollama unreachable | Startup succeeds; first LLM call gets `ModelAPIError`, user sees error in REPL |
 | Ollama model missing | Startup succeeds; first LLM call gets `ModelHTTPError`, user sees error in REPL |
@@ -342,7 +336,7 @@ The banner marks the boundary between startup and interactive use. All status me
 |-------|--------|-------|
 | `deps.knowledge_store` | `create_deps()` Step 6-7 | `KnowledgeStore` or `None` (sync failure disables FTS) — set at construction, never mutated |
 | `deps.session.session_id` | `restore_session()` (inline wakeup) | Single write: restored or new UUID hex |
-| `deps.model_registry` | `create_deps()` Step 3 | `ModelRegistry` built from resolved `Settings` |
+| `deps.model` | `create_deps()` Step 3 | `LlmModel` built via `build_model(config.llm)` |
 | `deps.tool_index` | Native + MCP entries set by `create_deps()` (native via `build_tool_registry()`, MCP via `discover_mcp_tools()`) | Full `dict[str, ToolInfo]` map with per-tool `LoadPolicy` enum (`ALWAYS`/`DEFERRED`) |
 | `deps.skill_commands` | `create_deps()` via `_load_skills()` | Full dict of all loaded skills; model-facing registry derived via `get_skill_registry()` |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |
@@ -351,7 +345,7 @@ The banner marks the boundary between startup and interactive use. All status me
 
 | Condition | Outcome |
 |-----------|---------|
-| `create_deps()` raises `ValueError` (provider error, missing reasoning model, or Ollama `num_ctx` below `MIN_AGENTIC_CONTEXT`) | `_chat_loop()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 via `SystemExit(1)` |
+| `create_deps()` raises `ValueError` (provider error, missing model, or Ollama `num_ctx` below `MIN_AGENTIC_CONTEXT`) | `_chat_loop()` catches `ValueError`, prints `"Startup error: …"` and exits with code 1 via `SystemExit(1)` |
 | `load_config()` schema validation fails (`ValidationError`) | re-raised as `ValueError` by `load_config()`; caught by `get_settings()`, which prints `"Configuration error: …"` to stderr and raises `SystemExit(1)` — never reaches `_chat_loop()` |
 | Knowledge sync raises | Index closed, `knowledge_store = None`, grep fallback, session continues |
 | Session file missing or unreadable | New session created |

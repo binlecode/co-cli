@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.config._llm import ROLE_SUMMARIZATION
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import ApprovalKindEnum, CoDeps
@@ -300,21 +300,16 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
         resolve_compaction_budget,
         estimate_message_tokens,
     )
-    from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to compact — history is empty.[/dim]")
         return None
 
     console.print("[dim]Compacting conversation...[/dim]")
-    _none = ResolvedModel(model=None, settings=None)
-    resolved = (
-        ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
-        if ctx.deps.model_registry else _none
-    )
+    _model = ctx.deps.model.model if ctx.deps.model else None
     pre_tokens = estimate_message_tokens(ctx.message_history)
     try:
-        summary = await summarize_messages(ctx.message_history, resolved)
+        summary = await summarize_messages(ctx.message_history, _model, NOREASON_SETTINGS)
     except (ModelHTTPError, ModelAPIError) as e:
         logger.warning("Compact summarization failed: %s", e)
         summary = None
@@ -334,7 +329,7 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     ]
     old_len = len(ctx.message_history)
     post_tokens = estimate_message_tokens(new_history)
-    budget = resolve_compaction_budget(ctx.deps.config, ctx.deps.model_registry)
+    budget = resolve_compaction_budget(ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None)
     console.print(
         f"[info]Compacted: {old_len} → {len(new_history)} messages "
         f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)[/info]"
@@ -412,20 +407,16 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     from co_cli.context.summarization import index_session_summary
     from co_cli.knowledge._frontmatter import ArtifactTypeEnum
     from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
-    from co_cli._model_factory import ResolvedModel
 
     if not ctx.message_history:
         console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
         return None
 
-    _none = ResolvedModel(model=None, settings=None)
-    resolved = (
-        ctx.deps.model_registry.get(ROLE_SUMMARIZATION, _none)
-        if ctx.deps.model_registry else _none
-    )
+    _model = ctx.deps.model.model if ctx.deps.model else None
     summary = await index_session_summary(
         ctx.message_history,
-        resolved,
+        _model,
+        NOREASON_SETTINGS,
         personality_active=bool(ctx.deps.config.personality),
     )
 

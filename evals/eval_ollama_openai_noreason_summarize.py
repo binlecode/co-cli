@@ -4,7 +4,7 @@ Goal:
 - validate that `qwen3.5:35b-a3b-think` with `reasoning_effort="none"` suppresses
   reasoning output and returns a direct final answer
 - contrast with the same model on its default think path
-- verify the production summarization pipeline (`ModelRegistry` → `ResolvedModel`
+- verify the production summarization pipeline (`build_model()` → `LlmModel`
   → `summarize_messages`) produces valid output over the same transport
 
 Method:
@@ -31,9 +31,9 @@ from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import build_model, LlmModel
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.config._core import settings as _settings
-from co_cli.config._llm import ROLE_SUMMARIZATION, ModelConfig
 from co_cli.context.summarization import summarize_messages
 
 from evals._ollama import ensure_ollama_warm
@@ -253,53 +253,32 @@ async def _run_noreason_case(case: Case) -> None:
 # Section 2: Production summarization pipeline integration
 # ---------------------------------------------------------------------------
 
-def _build_summarization_resolved() -> ResolvedModel:
-    """Build a ResolvedModel for the summarization role via the real registry."""
-    from co_cli.config._llm import LlmSettings
-    role_models = dict(_settings.llm.role_models)
-    role_models[ROLE_SUMMARIZATION] = ModelConfig(
-        model=_THINK_MODEL,
-        provider="ollama-openai",
-        api_params={
-            "temperature": 0.1,
-            "top_p": 0.9,
-            "max_tokens": 256,
-            "reasoning_effort": "none",
-        },
-    )
-    config = _settings.model_copy(update={
-        "llm": LlmSettings.model_construct(
-            provider="ollama-openai",
-            host=_settings.llm.host,
-            api_key=_settings.llm.api_key,
-            role_models=role_models,
-        ),
-    })
-    registry = ModelRegistry.from_config(config)
-    return registry.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+def _build_llm_model() -> LlmModel:
+    """Build an LlmModel from the real settings via build_model()."""
+    return build_model(_settings.llm)
 
 
-def _check_registry_builds_openai_model() -> None:
-    """ModelRegistry must produce an OpenAIChatModel for the summarization role."""
-    resolved = _build_summarization_resolved()
-    assert resolved.model is not None, "Registry returned no model for summarization role"
-    assert type(resolved.model).__name__ == "OpenAIChatModel", (
-        f"Expected OpenAIChatModel, got {type(resolved.model).__name__}"
+def _check_build_model_produces_openai_model() -> None:
+    """build_model() must produce an OpenAIChatModel for an ollama-openai provider."""
+    llm_model = _build_llm_model()
+    assert llm_model.model is not None, "build_model() returned no model"
+    assert type(llm_model.model).__name__ == "OpenAIChatModel", (
+        f"Expected OpenAIChatModel, got {type(llm_model.model).__name__}"
     )
 
 
 async def _check_summarization_pipeline() -> None:
     """Production summarization pipeline must return non-empty content."""
     await ensure_ollama_warm(_THINK_MODEL, _settings.llm.host)
-    resolved = _build_summarization_resolved()
-    assert resolved.model is not None
+    llm_model = _build_llm_model()
+    assert llm_model.model is not None
 
     messages: list[ModelMessage] = [
         ModelRequest(parts=[UserPromptPart(content="Docker is a container runtime and packaging tool.")]),
         ModelRequest(parts=[UserPromptPart(content="Summarize in one short sentence.")]),
     ]
     async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
-        summary = await summarize_messages(messages, resolved)
+        summary = await summarize_messages(messages, llm_model.model, NOREASON_SETTINGS)
 
     assert summary is not None, "Summarization pipeline returned None"
     assert summary.strip(), "Summarization pipeline returned empty content"
@@ -337,10 +316,10 @@ async def _main() -> int:
             await _run_noreason_case(case)
             print("PASS", flush=True)
 
-        # Part 3: registry + pipeline integration
+        # Part 3: build_model + pipeline integration
         pipe_idx = len(_CASES) + 2
-        print(f"\n[{pipe_idx}/{total}] registry builds OpenAI model...", flush=True)
-        _check_registry_builds_openai_model()
+        print(f"\n[{pipe_idx}/{total}] build_model produces OpenAI model...", flush=True)
+        _check_build_model_produces_openai_model()
         print("PASS", flush=True)
 
         print(f"\n[{total}/{total}] summarization pipeline returns content...", flush=True)

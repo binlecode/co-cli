@@ -15,8 +15,7 @@ if TYPE_CHECKING:
     from co_cli.deps import CoDeps
     from co_cli.display._core import Frontend
 
-from co_cli._model_factory import ResolvedModel
-from co_cli.config._llm import ROLE_ANALYSIS, ROLE_SUMMARIZATION
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.memory._lifecycle import persist_memory as _persist_memory
 
 from pydantic import BaseModel, Field
@@ -114,7 +113,7 @@ async def analyze_for_signals(
 
     Args:
         messages: Full message history after run_turn() completes.
-        deps: CoDeps for registry lookup (ROLE_ANALYSIS model).
+        deps: CoDeps for model access.
 
     Returns:
         ExtractionResult with a list of MemoryCandidate entries.
@@ -123,15 +122,9 @@ async def analyze_for_signals(
     if not window.strip():
         return ExtractionResult()
 
-    _none_resolved = ResolvedModel(model=None, settings=None)
-
     try:
-        rm = (
-            deps.model_registry.get(ROLE_ANALYSIS, _none_resolved)
-            if deps.model_registry else _none_resolved
-        )
-
-        result = await _extraction_agent.run(window, model=rm.model, model_settings=rm.settings)
+        _model = deps.model.model if deps.model else None
+        result = await _extraction_agent.run(window, model=_model, model_settings=NOREASON_SETTINGS)
         return result.output
     except Exception:
         logger.debug("Memory extractor failed", exc_info=True)
@@ -154,11 +147,7 @@ async def handle_extraction(
     if not candidates:
         return
 
-    _fallback = ResolvedModel(model=None, settings=None)
-    _consolidation_resolved = (
-        deps.model_registry.get(ROLE_SUMMARIZATION, _fallback)
-        if deps.model_registry else _fallback
-    )
+    _model = deps.model.model if deps.model else None
 
     for mem in candidates:
         tags = [mem.tag] + (["personality-context"] if mem.inject else [])
@@ -169,7 +158,7 @@ async def handle_extraction(
         if mem.confidence == "high" and auto_save_allowed:
             await _persist_memory(
                 deps, mem.candidate, tags, None,
-                on_failure="skip", resolved=_consolidation_resolved,
+                on_failure="skip", model=_model, model_settings=NOREASON_SETTINGS,
             )
             frontend.on_status(f"Learned: {mem.candidate[:80]}")
         else:
@@ -177,7 +166,7 @@ async def handle_extraction(
             if choice in ("y", "a"):
                 await _persist_memory(
                     deps, mem.candidate, tags, None,
-                    on_failure="add", resolved=_consolidation_resolved,
+                    on_failure="add", model=_model, model_settings=NOREASON_SETTINGS,
                 )
 
 
@@ -203,18 +192,14 @@ async def _run_extraction_async(
         if not extraction.memories:
             return
 
-        _fallback = ResolvedModel(model=None, settings=None)
-        _consolidation_resolved = (
-            deps.model_registry.get(ROLE_SUMMARIZATION, _fallback)
-            if deps.model_registry else _fallback
-        )
+        _model = deps.model.model if deps.model else None
 
         for mem in extraction.memories:
             auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
             if mem.confidence == "high" and auto_save_allowed:
                 await _persist_memory(
                     deps, mem.candidate, [mem.tag] + (["personality-context"] if mem.inject else []), None,
-                    on_failure="skip", resolved=_consolidation_resolved,
+                    on_failure="skip", model=_model, model_settings=NOREASON_SETTINGS,
                 )
                 frontend.on_status(f"Learned: {mem.candidate[:80]}")
             else:

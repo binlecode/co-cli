@@ -13,7 +13,7 @@ from typing import Any, Literal
 import yaml
 from opentelemetry import trace as otel_trace
 
-from co_cli._model_factory import ResolvedModel
+from pydantic_ai.settings import ModelSettings
 from co_cli.knowledge._frontmatter import ArtifactTypeEnum
 from co_cli.deps import CoDeps
 from co_cli.memory._retention import enforce_retention
@@ -32,14 +32,15 @@ async def persist_memory(
     provenance: str | None = None,
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
-    resolved: ResolvedModel | None = None,
+    model: Any = None,
+    model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
 ) -> ToolReturn:
     """Write a memory through the full lifecycle: upsert → write → retention.
 
     Entry point for all write paths (explicit save_memory tool and
-    auto-signal save). When a memory save agent is available (resolved model),
+    auto-signal save). When a memory save agent is available (model is not None),
     persist_memory acts as an upsert — checking existing memories and routing
     to create or update transparently.
 
@@ -53,8 +54,9 @@ async def persist_memory(
         on_failure: Behavior on resource conflict. "add" = raise ResourceBusyError
                     (explicit save path, model retries). "skip" = drop write silently
                     (auto-signal path).
-        resolved: Pre-built model + settings for the memory save agent. When None
-                  or model is None, upsert check is skipped (direct write).
+        model: pydantic-ai model object for the memory save agent. When None,
+               upsert check is skipped (direct write).
+        model_settings: ModelSettings for inference (e.g. NOREASON_SETTINGS).
 
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
@@ -62,7 +64,7 @@ async def persist_memory(
     """
     with _TRACER.start_as_current_span("co.memory.write") as span:
         span.set_attribute("memory.provenance", provenance or "auto")
-        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, resolved, artifact_type, always_on)
+        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, model, model_settings, artifact_type, always_on)
 
 
 async def _persist_memory_inner(
@@ -73,7 +75,8 @@ async def _persist_memory_inner(
     provenance: str | None = None,
     title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
-    resolved: ResolvedModel | None = None,
+    model: Any = None,
+    model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
 ) -> ToolReturn:
@@ -100,7 +103,7 @@ async def _persist_memory_inner(
 
     result = await _write_memory(
         deps, content, tags, related, provenance, title,
-        resolved, artifact_type, always_on,
+        model, model_settings, artifact_type, always_on,
         memory_dir, on_failure, slugify, _classify_certainty,
         _detect_provenance, _detect_category,
     )
@@ -143,7 +146,8 @@ async def _write_memory(
     related: list[str] | None,
     provenance: str | None,
     title: str | None,
-    resolved: ResolvedModel | None,
+    model: Any,
+    model_settings: ModelSettings | None,
     artifact_type: str | None,
     always_on: bool,
     memory_dir: Path,
@@ -159,7 +163,7 @@ async def _write_memory(
 
     # Upsert check: when a model is available and title is not preset,
     # consult the memory save agent to decide create vs update.
-    if title is None and resolved is not None and resolved.model is not None:
+    if title is None and model is not None:
         from co_cli.memory._save import build_memory_manifest, check_and_save, overwrite_memory
 
         memories = load_memories(memory_dir, kind="memory")
@@ -167,7 +171,7 @@ async def _write_memory(
         manifest = build_memory_manifest(memories)
 
         if manifest:
-            save_result = await check_and_save(content, manifest, resolved)
+            save_result = await check_and_save(content, manifest, model, model_settings)
             if save_result.action == "UPDATE" and save_result.target_slug:
                 target_path = str(memory_dir / f"{save_result.target_slug}.md")
                 try:

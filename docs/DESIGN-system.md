@@ -4,7 +4,7 @@ This doc covers the top-level runtime shape of `co-cli`. Startup checks and degr
 
 ## 1. What & How
 
-`co-cli` is a local-first REPL built around one foreground `pydantic_ai.Agent` plus one optional lightweight resume agent. The system is assembled in two phases: synchronous bootstrap builds `CoDeps` and resolved model state, then async session activation enters the main agent context, discovers remote MCP tools, loads skills, syncs knowledge, and restores the session before the prompt loop starts.
+`co-cli` is a local-first REPL built around one foreground `pydantic_ai.Agent` plus one optional lightweight resume agent. The system is assembled in two phases: synchronous bootstrap builds `CoDeps` and a single `LlmModel`, then async session activation enters the main agent context, discovers remote MCP tools, loads skills, syncs knowledge, and restores the session before the prompt loop starts.
 
 ```text
 bootstrap
@@ -91,21 +91,20 @@ Startup is intentionally split between synchronous bootstrap and async activatio
 
 1. `create_deps()` uses the `Settings` singleton directly and calls `resolve_workspace_paths(settings, cwd)` to resolve cwd-relative paths onto `CoDeps`.
 2. `config.llm.validate_config()` performs the config-shape gate (no IO):
-   - Missing reasoning role is a startup error.
+   - Missing model is a startup error.
    - Gemini without an API key is a startup error.
    - Ollama connectivity and model availability are deferred to runtime (`run_turn()` handles errors).
-3. (Step 2b) When provider is `ollama-openai`, `probe_ollama_context()` probes `/api/show` for the reasoning model's Modelfile `num_ctx`. Fail-fast if `num_ctx < MIN_AGENTIC_CONTEXT` (64K). Overrides `config.llm.num_ctx` with the runtime value via direct field assignment when they differ.
+3. (Step 2b) When provider is `ollama-openai`, `probe_ollama_context()` probes `/api/show` for the configured model's Modelfile `num_ctx`. Fail-fast if `num_ctx < MIN_AGENTIC_CONTEXT` (64K). Overrides `config.llm.num_ctx` with the runtime value via direct field assignment when they differ.
 4. `_discover_knowledge_backend()` resolves reranker and embedder availability, updates config fields directly to reflect the runtime backend, and constructs the store:
    - on grep: reranker and discovery skipped entirely (no index)
    - on hybrid/fts5: rerankers degrade independently to `None`
    - knowledge degrades through `hybrid -> fts5 -> grep`
    - `deps.degradations["knowledge"]` records what changed and why when degradation occurs
-5. `create_deps()` constructs the final `CoDeps` with `config=settings`, resolved workspace paths, service handles (shell, knowledge_store), registries (model_registry, tool_index, skill_commands), and runtime state.
-6. `main.py` looks up the resolved reasoning model from `deps.model_registry`.
-7. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent.
-8. `async with agent` activates the main agent context, which is required before MCP discovery.
-10. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See [DESIGN-context.md](DESIGN-context.md) §2.3 for session and transcript persistence.
-11. The REPL loop starts.
+5. `create_deps()` constructs the final `CoDeps` with `config=settings`, resolved workspace paths, service handles (shell, knowledge_store), model (`LlmModel` from `build_model(config.llm)`), registries (tool_index, skill_commands), and runtime state.
+6. `build_agent()` assembles static instructions (`build_static_instructions()`) and constructs the main foreground agent with `deps.model`.
+7. `async with agent` activates the main agent context, which is required before MCP discovery.
+8. `restore_session()` scans `.co-cli/sessions/` by mtime for the latest session, or creates a new one; copies `session_id` into `deps.session`. See [DESIGN-context.md](DESIGN-context.md) §2.3 for session and transcript persistence.
+9. The REPL loop starts.
 
 Teardown is owned by `main.py`:
 
@@ -166,7 +165,7 @@ Practical ownership rules:
 
 | Group | Holds | Mutation model |
 | --- | --- | --- |
-| `services` | shell backend, knowledge index, model registry, tool index, skill commands, resource lock store | built once; shared by reference |
+| `services` | shell backend, knowledge index, model (`LlmModel`), tool index, skill commands, resource lock store | built once; shared by reference |
 | `config` | `Settings` instance (Pydantic BaseModel); read-only after bootstrap | read-only after bootstrap |
 | `session` | creds cache, approval memory, todos, session-visible recall state | mutable across turns |
 | `runtime` | per-turn usage/safety/progress/filter state plus cross-turn compaction/skill state | reset or managed by orchestration |
@@ -182,13 +181,13 @@ Sub-agent isolation is explicit in `make_subagent_deps(base)`:
 
 #### Service handles and registries — top-level on `CoDeps`
 
-Shared by reference with sub-agents. Service handles (shell, knowledge_store) and bootstrap-set registries (tool_index, skill_commands, model_registry) are top-level fields on `CoDeps`.
+Shared by reference with sub-agents. Service handles (shell, knowledge_store), the model (`LlmModel`), and bootstrap-set registries (tool_index, skill_commands) are top-level fields on `CoDeps`.
 
 | Field | Set by | Reset by | Sub-agent |
 | --- | --- | --- | --- |
 | `tool_index` | `create_deps()` builds native `ToolInfo` map via `build_tool_registry()` and merges MCP entries via `discover_mcp_tools()` | never | shared ref |
 | `skill_commands` | `create_deps()` via `_load_skills()` | replaced on skill reload | shared ref |
-| `model_registry` | `_chat_loop()` via `ModelRegistry.from_config()` | never | shared ref |
+| `model` | `create_deps()` via `build_model(config.llm)` | never | shared ref |
 
 #### `CoSessionState` — `deps.session`
 
@@ -262,14 +261,13 @@ Bootstrap prefers graceful degradation over early failure, except where the fore
 Hard startup failures:
 
 - Gemini without API credentials
-- missing reasoning model
+- missing model configuration
 - invalid MCP server configuration during settings validation
 - empty or invalid prompt assembly inputs
 
 Graceful degradation:
 
 - Ollama host unreachable
-- missing optional role models
 - unavailable cross-encoder reranker
 - unavailable LLM reranker
 - hybrid knowledge unavailable, falling back to `fts5` or `grep`
@@ -285,14 +283,13 @@ These are the system-level settings that most directly shape runtime assembly.
 | `llm.provider` | `LLM_PROVIDER` | `ollama-openai` | Session-wide default provider unless a role overrides it |
 | `llm.host` | `LLM_HOST` | `http://localhost:11434` | Ollama OpenAI-compatible base host |
 | `llm.api_key` | `LLM_API_KEY` | unset | Required for Gemini and provider-specific auth flows |
-| `llm.role_models` | `CO_MODEL_ROLE_<ROLE>` | built-in role map | Per-role model selection for reasoning, summarization, coding, research, analysis, and task |
+| `llm.model` | `CO_LLM_MODEL` | provider default | Single model name used for all tasks (reasoning, subagents, compaction, memory) |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled GitHub + Context7 defaults | MCP transport definitions and approval mode |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality assets used during prompt assembly and instruction injection |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred knowledge backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Embedding provider used for hybrid search |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | Optional TEI reranker endpoint |
 | `library_path` | `CO_LIBRARY_PATH` | `~/.local/share/co-cli/library` | Global article store root; resolved to `deps.library_dir` |
-| _(removed)_ | | | Session TTL removed — sessions persist indefinitely; new session via `/new` |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode (`off`, `summary`, `full`) |
 
 ## 4. Files
@@ -303,7 +300,8 @@ These are the system-level settings that most directly shape runtime assembly.
 | `co_cli/bootstrap/_bootstrap.py` | bootstrap assembly, degradation, knowledge sync, session restore, and capability completion |
 | `co_cli/agent.py` | main agent factory, native filtered toolset construction, MCP toolset construction, and MCP discovery |
 | `co_cli/deps.py` | grouped dependency dataclasses, runtime/session/capability state, and sub-agent isolation |
-| `co_cli/_model_factory.py` | session-scoped resolved model registry by role |
+| `co_cli/_model_factory.py` | `LlmModel` dataclass and `build_model()` — single-model factory |
+| `co_cli/_model_settings.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
 | `co_cli/prompts/_assembly.py` | static system prompt assembly |
 | `co_cli/context/orchestrate.py` | one-turn orchestration, error handling, approvals, output-limit checks, and interrupts |
 | `co_cli/context/_history.py` | history processors: tool-output trim, safety detection, memory injection, and sliding-window compaction trigger |

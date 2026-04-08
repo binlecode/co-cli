@@ -1,4 +1,4 @@
-"""Provider-aware model factory — builds and caches LLM model objects by role."""
+"""Provider-aware model factory — builds an LLM model object from LlmSettings."""
 
 import logging
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config._llm import ModelConfig
+from co_cli.config._llm import LlmSettings
 from co_cli.prompts.model_quirks._loader import get_model_inference, normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -24,105 +24,52 @@ _HTTP_POOL_TIMEOUT = 10.0
 
 
 @dataclass
-class ResolvedModel:
-    """A pre-built model object paired with its inference settings."""
+class LlmModel:
+    """A pre-built model object paired with its inference settings.
+
+    Read-only container stored on ``CoDeps.model``. Not passed as a parameter
+    to functions — callers access ``.model`` and ``.settings`` separately.
+    """
 
     model: Any
     settings: ModelSettings | None
     context_window: int | None = None
 
 
-class ModelRegistry:
-    """Session-scoped registry of pre-built ResolvedModel objects keyed by role.
+def build_model(llm: LlmSettings) -> LlmModel:
+    """Build a pydantic-ai model object from LlmSettings.
 
-    Built once from config at session start, stored in and provides
-    a pre-built ResolvedModel for any in-session component by role lookup.
-    One model per role.
-    """
-
-    def __init__(self) -> None:
-        self._models: dict[str, ResolvedModel] = {}
-
-    @classmethod
-    def from_config(cls, config: Any) -> "ModelRegistry":
-        """Build the registry from a Settings-compatible object.
-
-        Accepts config as untyped to avoid importing Settings (no circular import
-        risk but keeps _model_factory.py dep-free of config package).
-        """
-        registry = cls()
-        for role, entry in config.llm.role_models.items():
-            if not entry:
-                continue
-            model, settings, ctx_window = build_model(entry, config.llm.provider, config.llm.host, api_key=config.llm.api_key)
-            registry._models[role] = ResolvedModel(model=model, settings=settings, context_window=ctx_window)
-        return registry
-
-    def get(self, role: str, fallback: ResolvedModel) -> ResolvedModel:
-        """Return the ResolvedModel for role, or fallback if unconfigured."""
-        return self._models.get(role, fallback)
-
-    def is_configured(self, role: str) -> bool:
-        """Return True if role has a registered ResolvedModel."""
-        return role in self._models
-
-
-def build_model(
-    model_entry: ModelConfig,
-    provider: str,
-    llm_host: str,
-    api_key: str | None = None,
-) -> tuple[OpenAIChatModel | GoogleModel, ModelSettings | None, int | None]:
-    """Construct a pydantic-ai model object, merged ModelSettings, and context_window.
-
-    `model_entry.provider` is required and determines which backend to build.
-
-    Merge precedence (low → high): quirks defaults → quirks extra_body → model_entry.api_params.
+    Reads model quirks for provider-specific inference defaults.
 
     ollama-openai  → OpenAIChatModel wrapping the Ollama OpenAI-compatible API
     gemini         → GoogleModel with GoogleProvider (api_key injected via constructor)
 
-    Returns (model, settings, context_window). context_window is None when not
-    declared in model quirks.
+    Returns an LlmModel with the model object, base ModelSettings from quirks,
+    and context_window from model quirks (None when not declared).
 
     Raises ValueError for unsupported providers.
     """
-    # Coerce plain string to ModelConfig (supports direct settings mutation in tests)
-    if isinstance(model_entry, str):
-        model_entry = ModelConfig(model=model_entry, provider=provider)
-    model_name = model_entry.model
+    model_name = llm.model
     normalized = normalize_model_name(model_name)
-    effective_provider = model_entry.provider
 
-    if effective_provider == "ollama-openai":
+    if llm.uses_ollama_openai():
         inf = get_model_inference("ollama-openai", normalized)
         extra: dict[str, Any] = {}
         num_ctx = inf.get("num_ctx")
         if num_ctx is not None:
             extra["num_ctx"] = num_ctx
         extra.update(inf.get("extra_body", {}))
-        # Split api_params: ModelSettings keys (temperature, top_p, max_tokens)
-        # override inference defaults; all other keys go into extra_body.
-        ms_overrides: dict[str, Any] = {}
-        _MS_KEYS = frozenset({"temperature", "top_p", "max_tokens"})
-        for k, v in (model_entry.api_params or {}).items():
-            if k in _MS_KEYS:
-                ms_overrides[k] = v
-            else:
-                extra[k] = v
         model_settings = ModelSettings(
-            temperature=ms_overrides.get("temperature", inf.get("temperature", 0.7)),
-            top_p=ms_overrides.get("top_p", inf.get("top_p", 1.0)),
-            max_tokens=ms_overrides.get("max_tokens", inf.get("max_tokens", 16384)),
+            temperature=inf.get("temperature", 0.7),
+            top_p=inf.get("top_p", 1.0),
+            max_tokens=inf.get("max_tokens", 16384),
             extra_body=extra,
         )
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT, write=_HTTP_WRITE_TIMEOUT, pool=_HTTP_POOL_TIMEOUT)
         )
-        # OpenAI SDK default max_retries=2 with exponential backoff + jitter.
-        # No override needed — matches peer CLI tools (aider, goose, letta, codex).
         _openai_client = AsyncOpenAI(
-            base_url=f"{llm_host}/v1",
+            base_url=f"{llm.host}/v1",
             api_key="ollama",
             http_client=_http_client,
         )
@@ -130,21 +77,16 @@ def build_model(
             model_name,
             provider=OpenAIProvider(openai_client=_openai_client),
         )
-        return model, model_settings, inf.get("context_window")
+        return LlmModel(model=model, settings=model_settings, context_window=inf.get("context_window"))
 
-    if effective_provider == "gemini":
+    if llm.uses_gemini():
         inf = get_model_inference("gemini", normalized)
-        if model_entry.api_params:
-            logger.warning(
-                "Gemini provider does not support extra_body; api_params ignored for model %r: %s",
-                model_name, model_entry.api_params,
-            )
         model_settings = ModelSettings(
             temperature=inf.get("temperature", 1.0),
             top_p=inf.get("top_p", 0.95),
             max_tokens=inf.get("max_tokens", 65536),
         )
-        google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
-        return google_model, model_settings, inf.get("context_window")
+        google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=llm.api_key))
+        return LlmModel(model=google_model, settings=model_settings, context_window=inf.get("context_window"))
 
-    raise ValueError(f"Unsupported provider: {effective_provider!r}")
+    raise ValueError(f"Unsupported provider: {llm.provider!r}")

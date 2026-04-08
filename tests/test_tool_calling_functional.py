@@ -21,9 +21,8 @@ from pydantic_ai import Agent
 from pydantic_ai.result import DeferredToolRequests
 
 from co_cli.agent import build_agent, build_tool_registry
-from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli._model_factory import build_model
 from co_cli.config._core import settings
-from co_cli.config._llm import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.context.orchestrate import run_turn
@@ -34,19 +33,17 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 _CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
 _CONFIG_NO_MCP = _CONFIG.model_copy(update={"mcp_servers": {}})
-_REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
-_SUMM_MODEL = _CONFIG_NO_MCP.llm.role_models[ROLE_SUMMARIZATION].model
+_LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
+_SUMM_MODEL = _CONFIG_NO_MCP.llm.model
 
-# Tool selection tests use ROLE_SUMMARIZATION (reasoning_effort=none) with a direct
-# Agent construction. This gives fast, non-reasoning tool selection without the full
-# main agent system prompt overhead.
-_SUMM_RESOLVED = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
+# Tool selection tests use noreason settings with a direct Agent construction.
+# This gives fast, non-reasoning tool selection without the full main agent system prompt overhead.
 # Tool registry and agents built once at module level to avoid per-test overhead.
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT_NOREASON = Agent(
-    _SUMM_RESOLVED.model,
+    _LLM_MODEL.model,
     deps_type=CoDeps,
-    model_settings=_SUMM_RESOLVED.settings,
+    model_settings=_LLM_MODEL.settings,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
     toolsets=[_TOOL_REG.toolset] + _TOOL_REG.mcp_toolsets,
@@ -56,7 +53,7 @@ _AGENT_NOREASON = Agent(
 def _make_deps(session_id: str) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
-        model_registry=_REGISTRY,
+        model=_LLM_MODEL,
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id=session_id),

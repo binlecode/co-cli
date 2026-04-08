@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ToolReturn
 
-from co_cli._model_factory import ResolvedModel
+from pydantic_ai.settings import ModelSettings
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.tools.tool_output import tool_output_raw
 
@@ -64,7 +64,8 @@ def build_memory_manifest(memories: list[Any]) -> str:
 async def check_and_save(
     content: str,
     manifest: str,
-    resolved: ResolvedModel,
+    model: Any,
+    model_settings: ModelSettings | None = None,
     timeout_seconds: float = 15.0,
 ) -> SaveResult:
     """Run the memory save agent to decide SAVE_NEW or UPDATE.
@@ -72,7 +73,8 @@ async def check_and_save(
     Args:
         content: Candidate memory content.
         manifest: Formatted manifest of existing memories.
-        resolved: Pre-built model + settings (ROLE_SUMMARIZATION).
+        model: pydantic-ai model object for inference.
+        model_settings: ModelSettings for inference (e.g. NOREASON_SETTINGS).
         timeout_seconds: Per-call timeout.
 
     Returns:
@@ -88,7 +90,7 @@ async def check_and_save(
 
     try:
         coro = _memory_save_agent.run(
-            user_prompt, model=resolved.model, model_settings=resolved.settings,
+            user_prompt, model=model, model_settings=model_settings,
         )
         result = await asyncio.wait_for(coro, timeout=timeout_seconds)
         return result.output

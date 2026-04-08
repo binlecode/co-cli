@@ -1,9 +1,10 @@
 """Sub-agent helpers — result types and agent factories for co_cli/tools/subagent.py."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
-from co_cli._model_factory import ResolvedModel
 from co_cli.deps import CoDeps
 from co_cli.tools.articles import search_knowledge
 from co_cli.tools.files import find_in_files, list_directory, read_file
@@ -11,8 +12,8 @@ from co_cli.tools.google_drive import search_drive_files
 from co_cli.tools.web import web_fetch, web_search
 
 
-def _make_base_agent(resolved_model: ResolvedModel, output_type: type, instructions: str) -> Agent:
-    return Agent(resolved_model.model, deps_type=CoDeps, output_type=output_type, instructions=instructions)
+def _make_base_agent(model: Any, output_type: type, instructions: str) -> Agent:
+    return Agent(model, deps_type=CoDeps, output_type=output_type, instructions=instructions)
 
 
 class CoderOutput(BaseModel):
@@ -24,17 +25,17 @@ class CoderOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_coder_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, CoderOutput]:
+def make_coder_agent(model: Any) -> Agent[CoDeps, CoderOutput]:
     """Create a read-only coder sub-agent with file tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps in the
     subagent tool) and only has access to read-only file tools — no writes,
     no shell, no network.
 
-    Caller passes model_settings=resolved_model.settings to agent.run().
+    Caller passes model_settings at agent.run() time.
     """
     agent: Agent[CoDeps, CoderOutput] = _make_base_agent(
-        resolved_model,
+        model,
         CoderOutput,
         (
             "You are a read-only code analysis agent. "
@@ -56,16 +57,16 @@ class ResearchOutput(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
-def make_research_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ResearchOutput]:
+def make_research_agent(model: Any) -> Agent[CoDeps, ResearchOutput]:
     """Create a read-only research sub-agent with web tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and only
     has access to web_search and web_fetch — no write tools, no shell, no memory.
 
-    Caller passes model_settings=resolved_model.settings to agent.run().
+    Caller passes model_settings at agent.run() time.
     """
     agent: Agent[CoDeps, ResearchOutput] = _make_base_agent(
-        resolved_model,
+        model,
         ResearchOutput,
         (
             "You are a read-only research agent. "
@@ -88,7 +89,7 @@ class AnalysisOutput(BaseModel):
     reasoning: str
 
 
-def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, AnalysisOutput]:
+def make_analysis_agent(model: Any) -> Agent[CoDeps, AnalysisOutput]:
     """Create a read-only analysis sub-agent with knowledge and Drive search tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and only
@@ -96,10 +97,10 @@ def make_analysis_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Analysis
     no shell, no network. Use this for synthesis, comparison, and evaluation
     tasks against internal knowledge.
 
-    Caller passes model_settings=resolved_model.settings to agent.run().
+    Caller passes model_settings at agent.run() time.
     """
     agent: Agent[CoDeps, AnalysisOutput] = _make_base_agent(
-        resolved_model,
+        model,
         AnalysisOutput,
         (
             "You are a read-only analysis agent. "
@@ -122,7 +123,7 @@ class ThinkingOutput(BaseModel):
     conclusion: str
 
 
-def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, ThinkingOutput]:
+def make_thinking_agent(model: Any) -> Agent[CoDeps, ThinkingOutput]:
     """Create a reasoning-only thinking sub-agent with no tools.
 
     The agent receives an isolated CoDeps (via make_subagent_deps) and has
@@ -131,11 +132,10 @@ def make_thinking_agent(resolved_model: ResolvedModel) -> Agent[CoDeps, Thinking
     structured problem decomposition, planning, and synthesis tasks that
     benefit from a dedicated reasoning pass.
 
-    Caller passes model_settings=resolved_model.settings to agent.run().
+    Caller passes model_settings at agent.run() time.
     """
-    # No tools registered — pure native reasoning, no external calls.
     return _make_base_agent(
-        resolved_model,
+        model,
         ThinkingOutput,
         (
             "You are a reasoning agent. "

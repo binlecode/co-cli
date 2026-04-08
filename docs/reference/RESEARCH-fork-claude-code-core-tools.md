@@ -38,92 +38,50 @@ This is a mature tool system rather than a thin function-call wrapper.
 
 ## 3. Core built-in tools
 
-The table below focuses on the built-in tools that shape the main coding and operator loop. Names are the real invocation names from the codebase, not folder names.
-
-| Tool name | Purpose | Typical use case |
-|---|---|---|
-| `Agent` | Spawn or fork a subagent, optionally isolated or backgrounded | Delegate review, research, implementation, or verification work |
-| `Bash` | Execute shell commands with validation, permission checks, sandboxing, and background-task support | Run `git`, tests, build commands, package managers, and repo inspection |
-| `Read` | Read files with offsets, limits, image/PDF handling, and read tracking | Inspect source files, configs, logs, screenshots, and selected file ranges |
-| `Edit` | Make in-place string edits with stale-file protection | Apply targeted edits to an existing file |
-| `Write` | Create or overwrite files with diff-aware output | Create a file or replace an existing file wholesale |
-| `Glob` | Find files by pathname pattern | Locate `*.ts`, `**/*.md`, or files under a subtree |
-| `Grep` | Search file contents with regex and ripgrep-like options | Find symbols, strings, patterns, or candidate edit sites |
-| `NotebookEdit` | Edit Jupyter notebook cells structurally | Replace, insert, or delete `.ipynb` cells |
-| `WebFetch` | Fetch a URL and run a prompt over the page content | Extract structured facts from a known page |
-| `WebSearch` | Search the live web for current information | Look up docs, release notes, or recent external facts |
-| `TodoWrite` | Maintain the legacy in-session todo list | Keep a lightweight task checklist during a turn |
-| `AskUserQuestion` | Ask structured multiple-choice questions | Resolve ambiguity with constrained user input |
-| `Skill` | Execute a skill/prompt-command, often via a forked agent | Reuse bundled, local, or marketplace workflows |
-| `EnterPlanMode` | Switch into read-only planning mode | Force exploration and design before editing |
-| `ExitPlanMode` | Present a plan for approval and resume implementation | Hand off the plan before coding starts |
-| `TaskStop` | Stop a running background task | Kill a long-running shell or agent task |
-| `SendUserMessage` | Deliver a user-facing message, optionally with attachments | Surface status, blockers, or completion messages |
-| `ListMcpResourcesTool` | List resources exposed by connected MCP servers | Discover remote documents, datasets, or handles |
-| `ReadMcpResourceTool` | Read a specific MCP resource by URI | Pull the contents of a discovered MCP resource |
-| `ToolSearch` | Search deferred tools by keywords or explicit selection | Discover tools whose schemas were not initially loaded |
+The parity table below focuses on the built-in tools that shape the main coding and operator loop. Names are the real invocation names from the codebase, not folder names.
 
 ### 3.1 `co` parity matrix
 
-| `fork-claude-code` tool | `co` status | Adoption | Notes |
-|---|---|---|---|
-| `Agent` | partial | `Adapt` | `co` has role-specific subagent tools (`run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent`) rather than a generic spawn/fork agent |
-| `Bash` | partial | `Adapt` | `co` has `run_shell_command`, but it is much thinner: no structured description field, no built-in progress UI semantics, no shell-level backgrounding integration, no PowerShell analogue |
-| `Read` | partial | `Adapt` | `co` has `read_file`, but only for UTF-8 text files with simple line slicing |
-| `Edit` | partial | `Adapt` | `co` has `edit_file`, but without read-before-write enforcement or stale-file protection |
-| `Write` | partial | `Adapt` | `co` has `write_file`, but without prior-read enforcement, patch/diff output, or overwrite-safety checks |
-| `Glob` | missing | `Adopt` | `co` has `list_directory` and shell access, but no dedicated pathname-pattern search tool |
-| `Grep` | partial | `Adapt` | `co` has `find_in_files`, but it is a narrower regex search without the richer result modes and context controls |
-| `NotebookEdit` | missing | `Defer` | no notebook-structural edit tool in `co` |
-| `WebFetch` | partial | `Adapt` | `co` fetches and converts pages, but does not support fork-style `URL + extraction prompt` behavior |
-| `WebSearch` | present | `N/A` | close conceptual parity |
-| `TodoWrite` | present | `N/A` | `co` has `write_todos` / `read_todos` |
-| `AskUserQuestion` | missing | `Adopt` | no structured multi-choice user-interaction tool in `co` |
-| `Skill` | partial | `Defer` | `co` has skills, but they are slash/prompt workflows rather than an agent-callable `Skill` tool surface |
-| `EnterPlanMode` / `ExitPlanMode` | missing | `Adopt` | `co` has todo tracking and approvals, but no explicit plan-mode state machine |
-| `TaskStop` | present-ish | `N/A` | `cancel_background_task` covers cancellation for shell background tasks |
-| `SendUserMessage` | not directly applicable | `Skip` | `co`'s foreground agent writes directly to the user; it does not need a dedicated outbound user-message tool in the same way |
-| `ListMcpResourcesTool` / `ReadMcpResourceTool` | missing | `Defer` | `co` discovers MCP callable tools, but does not expose MCP resources as first-class helper tools |
-| `ToolSearch` | present, narrower | `Adapt` | `co` has `search_tools`, but ranking and selection are simpler |
+| `fork-claude-code` tool | Purpose | Typical use case | `co` status | Adoption | Notes |
+|---|---|---|---|---|---|
+| `Agent` | Spawn or fork a subagent, optionally isolated or backgrounded | Delegate review, research, implementation, or verification work | partial | `Adapt` | `co` has role-specific subagent tools (`run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent`) rather than a generic spawn/fork agent |
+| `Bash` | Execute shell commands with validation, permission checks, sandboxing, and background-task support | Run `git`, tests, build commands, package managers, and repo inspection | partial | `Adapt` | `co` has `run_shell_command`, but it is much thinner: no structured description field, no built-in progress UI semantics, no shell-level backgrounding integration, no PowerShell analogue |
+| `Read` | Read files with offsets, limits, image/PDF handling, and read tracking | Inspect source files, configs, logs, screenshots, and selected file ranges | partial | `Adapt` | `co` has `read_file`, but only for UTF-8 text files with simple line slicing |
+| `Edit` | Make in-place string edits with stale-file protection | Apply targeted edits to an existing file | partial | `Adapt` | `co` has `edit_file`, but without read-before-write enforcement or stale-file protection |
+| `Write` | Create or overwrite files with diff-aware output | Create a file or replace an existing file wholesale | partial | `Adapt` | `co` has `write_file`, but without prior-read enforcement, patch/diff output, or overwrite-safety checks |
+| `Glob` | Find files by pathname pattern | Locate `*.ts`, `**/*.md`, or files under a subtree | missing | `Adopt` | `co` has `list_directory` and shell access, but no dedicated pathname-pattern search tool |
+| `Grep` | Search file contents with regex and ripgrep-like options | Find symbols, strings, patterns, or candidate edit sites | partial | `Adapt` | `co` has `find_in_files`, but it is a narrower regex search without the richer result modes and context controls |
+| `NotebookEdit` | Edit Jupyter notebook cells structurally | Replace, insert, or delete `.ipynb` cells | missing | `Defer` | no notebook-structural edit tool in `co` |
+| `WebFetch` | Fetch a URL and run a prompt over the page content | Extract structured facts from a known page | partial | `Adapt` | `co` fetches and converts pages, but does not support fork-style `URL + extraction prompt` behavior |
+| `WebSearch` | Search the live web for current information | Look up docs, release notes, or recent external facts | present | `N/A` | close conceptual parity |
+| `TodoWrite` | Maintain the legacy in-session todo list | Keep a lightweight task checklist during a turn | present | `N/A` | `co` has `write_todos` / `read_todos` |
+| `AskUserQuestion` | Ask structured multiple-choice questions | Resolve ambiguity with constrained user input | missing | `Adopt` | no structured multi-choice user-interaction tool in `co` |
+| `Skill` | Execute a skill/prompt-command, often via a forked agent | Reuse bundled, local, or marketplace workflows | partial | `Defer` | `co` has skills, but they are slash/prompt workflows rather than an agent-callable `Skill` tool surface |
+| `EnterPlanMode` / `ExitPlanMode` | Switch into read-only planning mode; present a plan for approval and resume implementation | Force exploration and design before editing; hand off the plan before coding starts | missing | `Adopt` | `co` has todo tracking and approvals, but no explicit plan-mode state machine |
+| `TaskStop` | Stop a running background task | Kill a long-running shell or agent task | present-ish | `N/A` | `cancel_background_task` covers cancellation for shell background tasks |
+| `SendUserMessage` | Deliver a user-facing message, optionally with attachments | Surface status, blockers, or completion messages | not directly applicable | `Skip` | `co`'s foreground agent writes directly to the user; it does not need a dedicated outbound user-message tool in the same way |
+| `ListMcpResourcesTool` / `ReadMcpResourceTool` | List resources exposed by connected MCP servers; read a specific MCP resource by URI | Discover remote documents, datasets, or handles; pull the contents of a discovered MCP resource | missing | `Defer` | `co` discovers MCP callable tools, but does not expose MCP resources as first-class helper tools |
+| `ToolSearch` | Search deferred tools by keywords or explicit selection | Discover tools whose schemas were not initially loaded | present, narrower | `Adapt` | `co` has `search_tools`, but ranking and selection are simpler |
 
 ## 4. Task and workflow tools
 
 These tools extend the core loop into structured task tracking and workflow control.
 
-| Tool name | Purpose | Typical use case |
-|---|---|---|
-| `TaskCreate` | Create a task in task-list mode | Add a tracked work item |
-| `TaskGet` | Retrieve one task by ID | Inspect status, description, and dependencies |
-| `TaskUpdate` | Update task fields and lifecycle state | Mark work pending, in progress, blocked, completed, or deleted |
-| `TaskList` | List all tasks in the current task list | Inspect the current work queue |
-| `TaskOutput` | Read output from a background task; marked deprecated in favor of direct file reads | Inspect task logs or results from async shells/agents |
-| `EnterWorktree` | Create and switch into an isolated git worktree | Perform work in a disposable or parallel checkout |
-| `ExitWorktree` | Leave or remove the active session worktree | Return to the main repo or clean up the isolated branch |
-| `SendMessage` | Send messages among agents, teammates, peers, or bridge sessions | Coordinate a swarm or continue a spawned agent |
-| `TeamCreate` | Create a multi-agent team/swarm context | Start a coordinated multi-agent workflow |
-| `TeamDelete` | Tear down a swarm team and its directories | Clean up after swarm work completes |
-| `LSP` | Run language-server code intelligence operations | Go to definition, find references, hover, symbols, call hierarchy |
-| `Config` | Read or set Claude Code configuration | Change model, theme, or permission defaults |
-
 ### 4.1 `co` parity matrix
 
-| `fork-claude-code` tool | `co` status | Adoption | Notes |
-|---|---|---|---|
-| `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` | missing | `Adapt` | `co` has session todos and background tasks, but no persistent task object model with IDs, owners, and dependency graph |
-| `TaskOutput` | partial | `Adapt` | `check_task_status` returns task output, but only for `co`'s in-memory shell tasks |
-| `EnterWorktree` / `ExitWorktree` | missing | `Defer` | no isolated worktree workflow tool pair |
-| `SendMessage` | missing | `Defer` | no inter-agent messaging or peer mailbox surface |
-| `TeamCreate` / `TeamDelete` | missing | `Defer` | no swarm/team abstraction |
-| `LSP` | missing | `Defer` | no code-intelligence tool for definitions, references, hover, or symbols |
-| `Config` | missing | `Defer` | no tool-visible runtime config get/set surface |
+| `fork-claude-code` tool | Purpose | Typical use case | `co` status | Adoption | Notes |
+|---|---|---|---|---|---|
+| `TaskCreate` / `TaskGet` / `TaskUpdate` / `TaskList` | Create, retrieve, update, and list tasks in task-list mode | Add tracked work items, inspect status and dependencies, mark lifecycle state, inspect the current queue | missing | `Adapt` | `co` has session todos and background tasks, but no persistent task object model with IDs, owners, and dependency graph |
+| `TaskOutput` | Read output from a background task; marked deprecated in favor of direct file reads | Inspect task logs or results from async shells/agents | partial | `Adapt` | `check_task_status` returns task output, but only for `co`'s in-memory shell tasks |
+| `EnterWorktree` / `ExitWorktree` | Create and switch into an isolated git worktree; leave or remove the active session worktree | Perform work in a disposable or parallel checkout; return to the main repo or clean up the isolated branch | missing | `Defer` | no isolated worktree workflow tool pair |
+| `SendMessage` | Send messages among agents, teammates, peers, or bridge sessions | Coordinate a swarm or continue a spawned agent | missing | `Defer` | no inter-agent messaging or peer mailbox surface |
+| `TeamCreate` / `TeamDelete` | Create or tear down a multi-agent team/swarm context | Start a coordinated multi-agent workflow; clean up after swarm work completes | missing | `Defer` | no swarm/team abstraction |
+| `LSP` | Run language-server code intelligence operations | Go to definition, find references, hover, symbols, call hierarchy | missing | `Defer` | no code-intelligence tool for definitions, references, hover, or symbols |
+| `Config` | Read or set Claude Code configuration | Change model, theme, or permission defaults | missing | `Defer` | no tool-visible runtime config get/set surface |
 
 ## 5. Dynamic MCP tool surface
 
 `fork-claude-code` also supports a dynamic tool surface through MCP:
-
-| Tool name | Purpose | Typical use case |
-|---|---|---|
-| `mcp__<server>__<tool>` via `MCPTool` | Generic wrapper for dynamically loaded MCP tools | Invoke connector tools from GitHub, Slack, browsers, docs systems, and other MCP servers |
 
 Important detail:
 
@@ -133,10 +91,10 @@ Important detail:
 
 ### 5.1 `co` parity matrix
 
-| `fork-claude-code` tool category | `co` status | Adoption | Notes |
-|---|---|---|---|
-| dynamic MCP callable tools via `MCPTool` | present | `N/A` | `co` builds MCP toolsets, discovers tool names into `tool_index`, and defers them by default |
-| MCP resource helper tools | missing | `Defer` | `co` has no equivalent to `ListMcpResourcesTool` or `ReadMcpResourceTool` |
+| `fork-claude-code` tool category | Purpose | Typical use case | `co` status | Adoption | Notes |
+|---|---|---|---|---|---|
+| dynamic MCP callable tools via `MCPTool` | Generic wrapper for dynamically loaded MCP tools | Invoke connector tools from GitHub, Slack, browsers, docs systems, and other MCP servers | present | `N/A` | `co` builds MCP toolsets, discovers tool names into `tool_index`, and defers them by default |
+| MCP resource helper tools | List MCP resources and read a specific MCP resource by URI | Discover remote documents, datasets, or handles; pull the contents of a discovered MCP resource | missing | `Defer` | `co` has no equivalent to `ListMcpResourcesTool` or `ReadMcpResourceTool` |
 
 ## 6. Optional and gated tools
 
