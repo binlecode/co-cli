@@ -21,7 +21,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli._model_factory import ModelRegistry
 from co_cli.agent import build_agent
 from co_cli.commands._commands import CommandContext, ReplaceTranscript, dispatch
-from co_cli.config import settings
+from co_cli.config._core import settings
 from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     _CONTEXT_MAX_CHARS,
@@ -40,11 +40,12 @@ from co_cli.context._history import (
     summarize_history_window,
 )
 from co_cli.context.orchestrate import _is_context_overflow
-from co_cli.deps import CoDeps, CoConfig, CoSessionState
+from co_cli.deps import CoDeps, CoSessionState
+from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 # Cache agent model reference for RunContext construction — no LLM call made here.
 _AGENT = build_agent(config=_CONFIG)
@@ -58,7 +59,7 @@ def _make_processor_ctx() -> RunContext:
     """
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(llm_provider="ollama-openai", llm_num_ctx=30),
+        config=test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -137,7 +138,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     msgs = _make_messages(10)
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(llm_provider="ollama-openai", llm_num_ctx=30),
+        config=test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})),
         model_registry=_REGISTRY,
     )
     deps.runtime.compaction_failure_count = 3
@@ -389,15 +390,14 @@ def _make_gather_ctx(
     session_todos: list[dict] | None = None,
 ) -> RunContext:
     """RunContext for _gather_compaction_context tests."""
-    config = CoConfig(
-        llm_provider="ollama-openai",
-        llm_num_ctx=30,
-        memory_dir=memory_dir or Path("/nonexistent-test-dir"),
-    )
+    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30}))
     session = CoSessionState(session_id="test-gather")
     if session_todos is not None:
         session.session_todos = session_todos
-    deps = CoDeps(shell=ShellBackend(), config=config, session=session)
+    deps = CoDeps(
+        shell=ShellBackend(), config=config, session=session,
+        memory_dir=memory_dir or Path("/nonexistent-test-dir"),
+    )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 

@@ -61,7 +61,8 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*State` | Mutable data with a lifecycle; persists/mutates across operations | One-shot return values, config, enums |
   | `*Result` | Immutable operation outcome with pass/fail or control-flow semantics (e.g. `TurnResult`, `CheckResult`); consumed, not stored. Do not add `Result` when the base name already conveys the type clearly (e.g. `ToolRegistry`, not `ToolRegistryResult`) | Agent data payloads (use `*Output`), config, state |
   | `*Output` | Structured data produced by an agent, subagent, or pipeline stage; payload consumed by callers | Operation outcomes with pass/fail semantics (use `*Result`), config, mutable state |
-  | `*Config` / `*Settings` / `*Policy` | Configuration dataclass; mutable during bootstrap (direct field assignment), read-only by convention after entering `CoDeps` (safe to share by reference with sub-agents). Do not use `frozen=True` — bootstrap mutates config fields directly. Do not use `dataclasses.replace()` — direct assignment is clearer and avoids unnecessary object allocation | Runtime state, return values |
+  | `*Config` / `*Settings` / `*Policy` | Configuration dataclass; mutable during bootstrap (direct field assignment), read-only by convention after entering `CoDeps` (safe to share by reference with sub-agents). Do not use `frozen=True` — bootstrap mutates config fields directly. Do not use `dataclasses.replace()` — direct assignment is clearer and avoids unnecessary object allocation | Runtime state, return values, intrinsic descriptors (use `*Info`) |
+  | `*Info` | Read-only descriptor of an entity; intrinsic properties set once at registration, never mutated. Frozen dataclass or plain dataclass treated as immutable | Configuration, mutable state, operation outcomes |
   | `*Registry` | Read-heavy lookup table; set at bootstrap, queried at runtime | Mutable accumulators, IO adapters, persistent stores |
   | `*Client` / `*Backend` | IO adapter wrapping an external system (HTTP, subprocess, database) | Pure data, registries, config |
   | `*Store` / `*Index` | Persistent storage with open/close/query lifecycle | In-memory lookup tables, config |
@@ -69,7 +70,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   | `*Context` | Input bag passed into a handler or function call | State that persists beyond the call |
   | `*Rule` | Authorization or behavioral rule value type | General config, state |
   | `*Enum` | Enumeration type; makes the type contract explicit at the callsite | Classes, dataclasses, results |
-  Prohibited: vague suffixes `*Info`, `*Data`, `*Decision`, `*Check`, `*Finding`, `*Entry`, `*Status`, `*Service`, `*Manager`, `*Helper` (as standalone class suffix) on public types — these are domain nouns, not type classifiers. Every public type must resolve to one of the suffixes above before merging.
+  Prohibited: vague suffixes `*Data`, `*Decision`, `*Check`, `*Finding`, `*Entry`, `*Status`, `*Service`, `*Manager`, `*Helper` (as standalone class suffix) on public types — too vague to convey a type contract. Every public type must resolve to one of the suffixes above before merging.
   Legacy exemption: `ToolResultPayload` type alias in `tool_output.py` retains the `*Result` name for backward compatibility with the frontend dispatch signature.
 - **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 - **Design philosophy**: when researching peer systems, focus on best practices (what 2+ top systems converge on), not volume or scale. Design from first principles: non-over-engineered, MVP-first but production-grade. Add abstractions only when a concrete need exists in the current scope — never speculatively.
@@ -86,8 +87,20 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
   - `config`: read-only scalars from `Settings`
   - `session`: per-session mutable state such as approvals, skill grants, todos
   - `runtime`: per-run transient state such as compaction, usage, processor state
-- Access grouped deps as `ctx.deps.config.memory_max_count`, `ctx.deps.services.shell`, etc. Tools never import or reference `Settings` directly.
-- **Sub-agent isolation**: use `make_subagent_deps(base)` to create isolated child-agent deps sharing services and config. Do not pass `Settings` objects into `CoDeps`; flatten scalar fields into `CoConfig`, and do not manually field-copy for sub-agent isolation.
+- Access grouped deps as `ctx.deps.config.memory.max_count`, `ctx.deps.services.shell`, etc. Tools never import or reference `Settings` directly.
+- **Sub-agent isolation**: use `make_subagent_deps(base)` to create isolated child-agent deps sharing services and config. Do not manually field-copy for sub-agent isolation.
+- **No CoConfig**: `CoDeps.config` is `Settings` directly — no intermediate config dataclass. Workspace paths (`memory_dir`, `skills_dir`, etc.) and runtime `degradations` live on `CoDeps`, not on config.
+- **Nested Config Sub-models**: `Settings` uses nested Pydantic sub-models (`co_cli/config/` package, one file per group). Groups with meaningful cohesion and enough fields get their own sub-model. Single-field groups stay flat.
+  | Group | Module | Class | Access pattern |
+  |-------|--------|-------|----------------|
+  | `llm` | `_llm.py` | `LlmSettings` | `config.llm.provider`, `config.llm.role_models` |
+  | `knowledge` | `_knowledge.py` | `KnowledgeSettings` | `config.knowledge.search_backend` |
+  | `web` | `_web.py` | `WebSettings` | `config.web.fetch_allowed_domains` |
+  | `subagent` | `_subagent.py` | `SubagentSettings` | `config.subagent.scope_chars` |
+  | `memory` | `_memory.py` | `MemorySettings` | `config.memory.max_count` |
+  | `shell` | `_shell.py` | `ShellSettings` | `config.shell.max_timeout` |
+  | *(flat)* | `_core.py` | — | `config.theme`, `config.personality`, `config.mcp_servers` |
+  When adding new config fields: if the field belongs to an existing group, add it to that sub-model. If creating a new group, only nest it when it has meaningful cohesion and enough fields to benefit from scoping. JSON config files use nested objects (`{"llm": {"provider": "gemini"}}`). Env var names stay flat and are mapped into nested structure by `fill_from_env`.
 - **Pydantic-ai idiomatic**: agents, deps, tools, and agentic flows must follow pydantic-ai conventions such as `RunContext[CoDeps]` for tools, `DeferredToolRequests` for approval, and history processors for memory. Do not wrap, abstract over, or deviate from the SDK's conventions.
 - **Config precedence**: env vars > `.co-cli/settings.json` (project) > `~/.config/co-cli/settings.json` (user) > built-in defaults.
 - **XDG paths**: config in `~/.config/co-cli/`; data in `~/.local/share/co-cli/`.

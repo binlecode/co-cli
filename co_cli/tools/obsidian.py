@@ -93,7 +93,7 @@ def search_notes(
         folder: Subfolder to restrict search (e.g. "Work/" or "Projects/2026").
         tag: Tag to filter by (e.g. "#project"). Checks YAML frontmatter tags.
     """
-    vault = ctx.deps.config.obsidian_vault_path
+    vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
             "Obsidian: vault not configured or not found. "
@@ -247,7 +247,7 @@ def list_notes(
                 first 20 notes.
         limit: Max notes per page (default 20).
     """
-    vault = ctx.deps.config.obsidian_vault_path
+    vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
             "Obsidian: vault not configured or not found. "
@@ -322,7 +322,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
         filename: Relative path within the vault (e.g. "Work/Project X.md").
                   Use exact paths from search_notes or list_notes.
     """
-    vault = ctx.deps.config.obsidian_vault_path
+    vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
             "Obsidian: vault not configured or not found. "

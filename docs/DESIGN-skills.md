@@ -57,7 +57,7 @@ The skill name is always the filename stem. Built-in slash commands are reserved
 Skills are loaded in three passes, lowest-priority first:
 
 1. **bundled** — package defaults from `co_cli/skills/*.md` (version-controlled; no runtime security scan)
-2. **user-global** — `~/.config/co-cli/skills/*.md` (XDG path from `CoConfig.user_skills_dir`; security scan applied)
+2. **user-global** — `~/.config/co-cli/skills/*.md` (XDG path from `deps.user_skills_dir`; security scan applied)
 3. **project-local** — `<cwd>/.co-cli/skills/*.md` (highest priority; security scan applied)
 
 Later passes win on name collision, so project-local overrides user-global, which overrides bundled.
@@ -114,10 +114,10 @@ There are two skill registries:
 
 | Registry | Purpose |
 | --- | --- |
-| `deps.services.skill_commands` | full loaded skill set used by slash-command dispatch |
-| `deps.services.skill_commands` | model-facing list of visible skills with name and description only |
+| `deps.skill_commands` | full loaded skill set used by slash-command dispatch |
+| `deps.skill_commands` | model-facing list of visible skills with name and description only |
 
-`set_skill_commands()` replaces `services.skill_commands`. The model-facing skill registry is derived on read via `get_skill_registry()`, which excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
+`set_skill_commands()` replaces `deps.skill_commands`. The model-facing skill registry is derived on read via `get_skill_registry()`, which excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
 
 ### Dispatch
 
@@ -126,7 +126,7 @@ Slash-command routing lives in `dispatch(raw_input, ctx)`.
 Dispatch order:
 
 1. built-in commands in `BUILTIN_COMMANDS`
-2. skills in `ctx.deps.services.skill_commands`
+2. skills in `ctx.deps.skill_commands`
 3. unknown command error
 
 When a skill matches:
@@ -183,13 +183,13 @@ Installed skills are written to `<cwd>/.co-cli/skills/`.
 
 ## 3. Config
 
-The skill system is lightly configured. The main runtime dependencies are the resolved skill paths in `CoConfig`.
+The skill system is lightly configured. The main runtime dependencies are the resolved skill paths on `CoDeps`.
 
 | Setting | Source | Purpose |
 | --- | --- | --- |
-| `skills_dir` | resolved in `CoConfig.from_settings()` as `<cwd>/.co-cli/skills` | project-local skill directory |
-| `user_skills_dir` | XDG path, defaults to `~/.config/co-cli/skills/` | user-global skill directory (middle tier) |
-| `settings` values referenced by `requires.settings` | `co_cli/config.py` | load gating only |
+| `deps.skills_dir` | resolved in `resolve_workspace_paths()` as `<cwd>/.co-cli/skills` | project-local skill directory |
+| `deps.user_skills_dir` | XDG path, defaults to `~/.config/co-cli/skills/` | user-global skill directory (middle tier) |
+| `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
 
 There is no separate skills config object today.
 
@@ -201,7 +201,7 @@ There is no separate skills config object today.
 | `co_cli/commands/_commands.py` | skill loader (`_load_skill_file`, `_is_safe_skill_path`), scanner, dispatch, and `/skills` commands |
 | `co_cli/bootstrap/_bootstrap.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
-| `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (config); `skill_commands`, `skill_registry` (session); `active_skill_name` (runtime) |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/skills/` | package-default shipped skills |
 | `<cwd>/.co-cli/skills/` | project-local skill files and overrides |

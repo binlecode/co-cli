@@ -215,9 +215,9 @@ async def search_knowledge(
             effective_kind = "article"
         # Grep fallback: route to correct directory by kind
         if effective_kind == "memory":
-            grep_dir = ctx.deps.config.memory_dir
+            grep_dir = ctx.deps.memory_dir
         else:
-            grep_dir = ctx.deps.config.library_dir
+            grep_dir = ctx.deps.library_dir
         memories = load_memories(grep_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
@@ -242,13 +242,13 @@ async def search_knowledge(
         return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
     # Sync Obsidian vault into index before searching
-    if ctx.deps.config.obsidian_vault_path and source in (None, "obsidian"):
+    if ctx.deps.obsidian_vault_path and source in (None, "obsidian"):
         try:
-            ctx.deps.knowledge_store.sync_dir("obsidian", ctx.deps.config.obsidian_vault_path)
+            ctx.deps.knowledge_store.sync_dir("obsidian", ctx.deps.obsidian_vault_path)
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
-    otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
+    otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge.search_backend)
     # Default scope excludes source="memory" — memories are searched via search_memories.
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
@@ -271,7 +271,7 @@ async def search_knowledge(
         return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
 
     # Compute confidence for each result (post-retrieval, tool layer)
-    half_life_days = ctx.deps.config.memory_recall_half_life_days or 0
+    half_life_days = ctx.deps.config.memory.recall_half_life_days or 0
     for r in results:
         r.confidence = _compute_confidence(r, half_life_days)
 
@@ -341,7 +341,7 @@ async def save_article(
         tags: Categorization tags (e.g. ["python", "async", "reference"]).
         related: Slugs of related memories/articles for knowledge linking.
     """
-    library_dir = ctx.deps.config.library_dir
+    library_dir = ctx.deps.library_dir
     library_dir.mkdir(parents=True, exist_ok=True)
 
     # Dedup by origin_url exact match
@@ -369,8 +369,8 @@ async def save_article(
                 from co_cli.knowledge._chunker import chunk_text
                 consolidated_chunks = chunk_text(
                     body2.strip(),
-                    chunk_size=ctx.deps.config.knowledge_chunk_size,
-                    overlap=ctx.deps.config.knowledge_chunk_overlap,
+                    chunk_size=ctx.deps.config.knowledge.chunk_size,
+                    overlap=ctx.deps.config.knowledge.chunk_overlap,
                 )
                 ctx.deps.knowledge_store.index_chunks(
                     "library", str(existing), consolidated_chunks
@@ -423,8 +423,8 @@ async def save_article(
             from co_cli.knowledge._chunker import chunk_text
             article_chunks = chunk_text(
                 content,
-                chunk_size=ctx.deps.config.knowledge_chunk_size,
-                overlap=ctx.deps.config.knowledge_chunk_overlap,
+                chunk_size=ctx.deps.config.knowledge.chunk_size,
+                overlap=ctx.deps.config.knowledge.chunk_overlap,
             )
             ctx.deps.knowledge_store.index_chunks(
                 "library", str(file_path), article_chunks
@@ -474,9 +474,9 @@ async def search_articles(
         created_after: ISO8601 date string; only return articles created on or after this date.
         created_before: ISO8601 date string; only return articles created on or before this date.
     """
-    library_dir = ctx.deps.config.library_dir
+    library_dir = ctx.deps.library_dir
 
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -626,7 +626,7 @@ async def read_article(
     Args:
         slug: File stem from search_articles result (e.g. "042-python-asyncio-guide").
     """
-    library_dir = ctx.deps.config.library_dir
+    library_dir = ctx.deps.library_dir
 
     # Find by slug (file stem)
     candidates = list(library_dir.glob(f"{slug}.md"))

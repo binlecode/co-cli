@@ -30,8 +30,8 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
     st = result.status
 
     # Reranker from config
-    _ce_url = ctx.deps.config.knowledge_cross_encoder_reranker_url
-    _llm_r = ctx.deps.config.knowledge_llm_reranker
+    _ce_url = ctx.deps.config.knowledge.cross_encoder_reranker_url
+    _llm_r = ctx.deps.config.knowledge.llm_reranker
     if _ce_url:
         reranker = f"tei ({_ce_url})"
     elif _llm_r:

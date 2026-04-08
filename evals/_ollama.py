@@ -6,7 +6,7 @@ import httpx
 from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS, EVAL_BENCHMARK_TIMEOUT_SECS
 
 
-from co_cli.config import DEFAULT_LLM_HOST
+from co_cli.config._llm import DEFAULT_LLM_HOST
 
 
 async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) -> None:

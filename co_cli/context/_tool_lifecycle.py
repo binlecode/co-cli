@@ -55,6 +55,6 @@ class CoToolLifecycle(AbstractCapability[CoDeps]):
         args: ValidatedToolArgs,
     ) -> ValidatedToolArgs:
         if call.tool_name in _FILE_TOOLS and "path" in args:
-            workspace_root = ctx.deps.config.workspace_root
+            workspace_root = ctx.deps.workspace_root
             args["path"] = str((workspace_root / args["path"]).resolve())
         return args

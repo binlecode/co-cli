@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 
@@ -32,15 +32,12 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import ROLE_SUMMARIZATION, ModelConfig, settings as _settings
+from co_cli.config._core import settings as _settings
+from co_cli.config._llm import ROLE_SUMMARIZATION, ModelConfig
 from co_cli.context.summarization import summarize_messages
-from co_cli.deps import CoConfig
 
 from evals._ollama import ensure_ollama_warm
 from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_SUMMARIZATION_TIMEOUT_SECS
-
-
-_CONFIG = CoConfig.from_settings(_settings, cwd=Path.cwd())
 _THINK_MODEL = "qwen3.5:35b-a3b-think"
 _SYSTEM = (
     "You are a direct and helpful assistant. "
@@ -136,7 +133,7 @@ async def _call_model(
     extra_body: dict | None = None,
 ) -> tuple[str, list[str]]:
     provider = OpenAIProvider(
-        base_url=f"{_CONFIG.llm_host}/v1",
+        base_url=f"{_settings.llm.host}/v1",
         api_key="ollama",
         http_client=httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10, read=180, write=30, pool=10)
@@ -207,7 +204,7 @@ async def _run_think_baseline() -> None:
     async with asyncio.timeout(_OLLAMA_WARM_TIMEOUT_S):
         await _timed_await(
             f"warm {_THINK_MODEL}",
-            ensure_ollama_warm(_THINK_MODEL, _CONFIG.llm_host),
+            ensure_ollama_warm(_THINK_MODEL, _settings.llm.host),
         )
 
     async with asyncio.timeout(_THINK_CALL_TIMEOUT_S):
@@ -258,7 +255,8 @@ async def _run_noreason_case(case: Case) -> None:
 
 def _build_summarization_resolved() -> ResolvedModel:
     """Build a ResolvedModel for the summarization role via the real registry."""
-    role_models = dict(_CONFIG.role_models)
+    from co_cli.config._llm import LlmSettings
+    role_models = dict(_settings.llm.role_models)
     role_models[ROLE_SUMMARIZATION] = ModelConfig(
         model=_THINK_MODEL,
         provider="ollama-openai",
@@ -269,7 +267,14 @@ def _build_summarization_resolved() -> ResolvedModel:
             "reasoning_effort": "none",
         },
     )
-    config = replace(_CONFIG, llm_provider="ollama-openai", role_models=role_models)
+    config = _settings.model_copy(update={
+        "llm": LlmSettings.model_construct(
+            provider="ollama-openai",
+            host=_settings.llm.host,
+            api_key=_settings.llm.api_key,
+            role_models=role_models,
+        ),
+    })
     registry = ModelRegistry.from_config(config)
     return registry.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
 
@@ -285,7 +290,7 @@ def _check_registry_builds_openai_model() -> None:
 
 async def _check_summarization_pipeline() -> None:
     """Production summarization pipeline must return non-empty content."""
-    await ensure_ollama_warm(_THINK_MODEL, _CONFIG.llm_host)
+    await ensure_ollama_warm(_THINK_MODEL, _settings.llm.host)
     resolved = _build_summarization_resolved()
     assert resolved.model is not None
 
@@ -305,7 +310,7 @@ async def _check_summarization_pipeline() -> None:
 # ---------------------------------------------------------------------------
 
 def _require_ollama_provider() -> bool:
-    if _CONFIG.llm_provider != "ollama-openai":
+    if _settings.llm.provider != "ollama-openai":
         print("SKIP: Ollama not configured")
         return False
     return True

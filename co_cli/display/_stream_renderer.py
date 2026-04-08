@@ -20,7 +20,7 @@ Reasoning display modes:
 import time
 from typing import TYPE_CHECKING
 
-from co_cli.config import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_OFF, REASONING_DISPLAY_SUMMARY, REASONING_DISPLAY_FULL
+from co_cli.config._core import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_OFF, REASONING_DISPLAY_SUMMARY, REASONING_DISPLAY_FULL
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps

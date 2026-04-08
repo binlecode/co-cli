@@ -4,19 +4,19 @@ from typing import Any
 
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import settings, get_settings
-from co_cli.deps import CoDeps, CoConfig, CoSessionState
+from co_cli.config._core import settings, get_settings, Settings
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 
 
 def detect_model_tag() -> str:
     """Auto-detect a model tag from the current LLM config."""
-    provider = settings.llm_provider.lower()
-    entry = settings.role_models.get("reasoning")
+    provider = settings.llm.provider.lower()
+    entry = settings.llm.role_models.get("reasoning")
     model = entry.model if entry is not None else None
     if provider == "gemini":
         return f"gemini-{model}" if model else "gemini"
-    if provider == "ollama":
+    if provider == "ollama-openai":
         return f"ollama-{model}" if model else "ollama"
     return provider
 
@@ -24,47 +24,27 @@ def detect_model_tag() -> str:
 def make_eval_deps(**overrides: Any) -> CoDeps:
     """Build a CoDeps suitable for evals, pulling defaults from settings.
 
-    Pass keyword overrides to customise any CoConfig field, e.g.
+    Pass keyword overrides to customise any CoDeps field, e.g.
     ``make_eval_deps(brave_search_api_key=None)``.
     Service fields (shell, knowledge_store, model_registry) can
-    also be passed as overrides and are extracted before building CoConfig.
+    also be passed as overrides and are extracted before building CoDeps.
     session_id is routed to CoSessionState.
     """
     s = get_settings()
 
-    # Extract non-config fields before building CoConfig
+    # Extract non-config fields before building CoDeps
     shell = overrides.pop("shell", ShellBackend())
     knowledge_store = overrides.pop("knowledge_store", None)
     model_registry = overrides.pop("model_registry", None)
     session_id_override = overrides.pop("session_id", "eval")
-
-    config_defaults: dict[str, Any] = {
-        "obsidian_vault_path": None,
-        "google_credentials_path": None,
-        "shell_safe_commands": [],
-        "llm_api_key": s.llm_api_key,
-        "brave_search_api_key": s.brave_search_api_key,
-        "web_http_max_retries": s.web_http_max_retries,
-        "web_http_backoff_base_seconds": s.web_http_backoff_base_seconds,
-        "web_http_backoff_max_seconds": s.web_http_backoff_max_seconds,
-        "web_http_jitter_ratio": s.web_http_jitter_ratio,
-        "doom_loop_threshold": s.doom_loop_threshold,
-        "max_reflections": s.max_reflections,
-        "memory_max_count": s.memory_max_count,
-        "knowledge_cross_encoder_reranker_url": s.knowledge_cross_encoder_reranker_url,
-        "knowledge_llm_reranker": s.knowledge_llm_reranker,
-        "role_models": dict(s.role_models),
-        "llm_provider": s.llm_provider,
-        "llm_host": s.llm_host,
-        "llm_num_ctx": s.llm_num_ctx,
-    }
-    config_defaults.update(overrides)
+    # Discard legacy overrides that no longer map to Settings fields
+    overrides.pop("mcp_servers", None)
 
     return CoDeps(
         shell=shell,
         knowledge_store=knowledge_store,
         model_registry=model_registry,
-        config=CoConfig(**config_defaults),
+        config=s,
         session=CoSessionState(session_id=session_id_override),
     )
 

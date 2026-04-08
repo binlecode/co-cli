@@ -153,8 +153,8 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
                 from co_cli.knowledge._chunker import chunk_text
                 drive_chunks = chunk_text(
                     text,
-                    chunk_size=ctx.deps.config.knowledge_chunk_size,
-                    overlap=ctx.deps.config.knowledge_chunk_overlap,
+                    chunk_size=ctx.deps.config.knowledge.chunk_size,
+                    overlap=ctx.deps.config.knowledge.chunk_overlap,
                 )
                 ctx.deps.knowledge_store.index_chunks("drive", file_id, drive_chunks)
             except Exception:

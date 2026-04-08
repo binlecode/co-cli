@@ -64,7 +64,7 @@ async def list_directory(
         max_entries: Maximum number of entries to return (default: 200).
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -74,7 +74,7 @@ async def list_directory(
     if not resolved.is_dir():
         return tool_error(f"Not a directory: {path}")
 
-    workspace_root = ctx.deps.config.workspace_root
+    workspace_root = ctx.deps.workspace_root
     truncated = False
 
     if _is_recursive_pattern(pattern):
@@ -139,7 +139,7 @@ async def read_file(
         end_line: Last line to include (1-indexed, inclusive). Optional.
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -197,7 +197,7 @@ async def find_in_files(
     except re.error:
         return tool_error(f"Invalid regex: {pattern}")
 
-    workspace_root = ctx.deps.config.workspace_root
+    workspace_root = ctx.deps.workspace_root
     matches: list[dict[str, Any]] = []
     lines_output: list[str] = []
 
@@ -245,7 +245,7 @@ async def write_file(
         content: Text content to write.
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 
@@ -287,7 +287,7 @@ async def edit_file(
         replace_all: If True, replace all occurrences; otherwise requires exactly one.
     """
     try:
-        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.config.workspace_root)
+        resolved = _enforce_workspace_boundary(Path(path), ctx.deps.workspace_root)
     except ValueError as e:
         return tool_error(str(e))
 

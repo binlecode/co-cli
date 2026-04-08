@@ -231,10 +231,10 @@ async def web_search(
                 "X-Subscription-Token": api_key,
             },
             params={"q": effective_query, "count": capped},
-            max_retries=ctx.deps.config.web_http_max_retries,
-            backoff_base_seconds=ctx.deps.config.web_http_backoff_base_seconds,
-            backoff_max_seconds=ctx.deps.config.web_http_backoff_max_seconds,
-            backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
+            max_retries=ctx.deps.config.web.http_max_retries,
+            backoff_base_seconds=ctx.deps.config.web.http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.config.web.http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.config.web.http_jitter_ratio,
         )
     if not isinstance(resp_or_error, httpx.Response):
         return resp_or_error
@@ -301,8 +301,8 @@ async def web_fetch(
     hostname = urlparse(url).hostname
     if hostname and not _is_domain_allowed(
         hostname,
-        ctx.deps.config.web_fetch_allowed_domains,
-        ctx.deps.config.web_fetch_blocked_domains,
+        ctx.deps.config.web.fetch_allowed_domains,
+        ctx.deps.config.web.fetch_blocked_domains,
     ):
         raise ModelRetry(f"web_fetch blocked: domain '{hostname}' not allowed by policy.")
 
@@ -321,10 +321,10 @@ async def web_fetch(
             url=url,
             headers=_build_fetch_headers(hostname),
             params=None,
-            max_retries=ctx.deps.config.web_http_max_retries,
-            backoff_base_seconds=ctx.deps.config.web_http_backoff_base_seconds,
-            backoff_max_seconds=ctx.deps.config.web_http_backoff_max_seconds,
-            backoff_jitter_ratio=ctx.deps.config.web_http_jitter_ratio,
+            max_retries=ctx.deps.config.web.http_max_retries,
+            backoff_base_seconds=ctx.deps.config.web.http_backoff_base_seconds,
+            backoff_max_seconds=ctx.deps.config.web.http_backoff_max_seconds,
+            backoff_jitter_ratio=ctx.deps.config.web.http_jitter_ratio,
             cf_fallback_headers=_CF_FALLBACK_HEADERS,
         )
     if not isinstance(resp_or_error, httpx.Response):

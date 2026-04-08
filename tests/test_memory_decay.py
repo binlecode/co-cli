@@ -12,13 +12,15 @@ from pydantic_ai.usage import RunUsage
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.config._core import settings
+from co_cli.config._memory import MemorySettings
+from tests._settings import test_settings
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _seed_memory(
@@ -51,11 +53,10 @@ def _seed_memory(
 def _make_ctx(memory_dir: Path, max_count: int = 10) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(
-            
-            memory_max_count=max_count,
-            memory_dir=memory_dir,
+        config=test_settings(
+            memory=test_settings().memory.model_copy(update={"max_count": max_count}),
         ),
+        memory_dir=memory_dir,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 

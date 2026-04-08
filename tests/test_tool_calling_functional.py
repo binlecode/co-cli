@@ -9,7 +9,6 @@ Covers:
 """
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 import pytest
 from pydantic_ai import RunContext
@@ -23,19 +22,20 @@ from pydantic_ai.result import DeferredToolRequests
 
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_SUMMARIZATION
-from co_cli.deps import CoDeps, CoConfig, CoSessionState
+from co_cli.config._core import settings
+from co_cli.config._llm import ROLE_SUMMARIZATION
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.context.orchestrate import run_turn
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
-_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
+_CONFIG_NO_MCP = _CONFIG.model_copy(update={"mcp_servers": {}})
 _REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
-_SUMM_MODEL = _CONFIG_NO_MCP.role_models[ROLE_SUMMARIZATION].model
+_SUMM_MODEL = _CONFIG_NO_MCP.llm.role_models[ROLE_SUMMARIZATION].model
 
 # Tool selection tests use ROLE_SUMMARIZATION (reasoning_effort=none) with a direct
 # Agent construction. This gives fast, non-reasoning tool selection without the full
@@ -98,7 +98,7 @@ async def test_tool_selection_and_arg_extraction(
     deps = _make_deps(f"test-tool-{expected_tool}")
     frontend = SilentFrontend(approval_response="y")
 
-    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     last_details = "no run executed"
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -224,12 +224,13 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     import asyncio
     from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import check_task_status
-    from co_cli.deps import CoDeps, CoConfig
+    from co_cli.deps import CoDeps
+    from tests._settings import test_settings
     from co_cli.tools.shell_backend import ShellBackend
     from datetime import datetime, timezone
 
-    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    deps = CoDeps(shell=ShellBackend(), config=test_settings())
+    agent = build_agent(config=settings)
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "test-background-task-description"
@@ -257,12 +258,13 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
     from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.task_control import list_background_tasks
-    from co_cli.deps import CoDeps, CoConfig
+    from co_cli.deps import CoDeps
+    from tests._settings import test_settings
     from co_cli.tools.shell_backend import ShellBackend
     from datetime import datetime, timezone
 
-    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+    deps = CoDeps(shell=ShellBackend(), config=test_settings())
+    agent = build_agent(config=settings)
     ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
 
     task_description = "background task list description"

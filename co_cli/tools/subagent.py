@@ -11,7 +11,7 @@ from pydantic_ai.messages import ToolReturn
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import ROLE_ANALYSIS, ROLE_CODING, ROLE_REASONING, ROLE_RESEARCH
+from co_cli.config._llm import ROLE_ANALYSIS, ROLE_CODING, ROLE_REASONING, ROLE_RESEARCH
 from co_cli.deps import CoDeps, make_subagent_deps
 from co_cli.tools._subagent_builders import (
     make_analysis_agent,
@@ -40,27 +40,27 @@ class SubagentRoleConfig:
 SUBAGENT_ROLES: dict[str, SubagentRoleConfig] = {
     "coding": SubagentRoleConfig(
         role=ROLE_CODING, factory=make_coder_agent,
-        max_requests_key="subagent_max_requests_coder",
+        max_requests_key="max_requests_coder",
         error_msg="Coding sub-agent failed — handle this task directly.",
         guard_msg="Coding sub-agent is unavailable — handle this task directly.",
     ),
     "research": SubagentRoleConfig(
         role=ROLE_RESEARCH, factory=make_research_agent,
-        max_requests_key="subagent_max_requests_research",
+        max_requests_key="max_requests_research",
         error_msg="Research sub-agent failed — handle this task directly.",
         guard_msg="Research sub-agent is unavailable — handle this task directly.",
         retry_on_empty=True,
     ),
     "analysis": SubagentRoleConfig(
         role=ROLE_ANALYSIS, factory=make_analysis_agent,
-        max_requests_key="subagent_max_requests_analysis",
+        max_requests_key="max_requests_analysis",
         error_msg="Analysis sub-agent failed — handle this task directly.",
         guard_msg="Analysis sub-agent is unavailable — handle this task directly.",
         input_prepend=True,
     ),
     "reasoning": SubagentRoleConfig(
         role=ROLE_REASONING, factory=make_thinking_agent,
-        max_requests_key="subagent_max_requests_thinking",
+        max_requests_key="max_requests_thinking",
         error_msg="Thinking sub-agent failed — handle this task directly.",
         guard_msg="Thinking sub-agent is unavailable — handle this task directly.",
     ),
@@ -148,7 +148,7 @@ async def _run_subagent(
     """Common dispatch function for all tool subagents."""
     cfg = SUBAGENT_ROLES[role_key]
     if max_requests < 1:
-        max_requests = getattr(ctx.deps.config, cfg.max_requests_key)
+        max_requests = getattr(ctx.deps.config.subagent, cfg.max_requests_key)
 
     registry = ctx.deps.model_registry
     if not registry or not registry.is_configured(cfg.role):
@@ -193,7 +193,7 @@ async def _run_subagent(
 
         span.set_attribute("subagent.requests_used", requests_used)
 
-    scope = prompt[:ctx.deps.config.subagent_scope_chars]
+    scope = prompt[:ctx.deps.config.subagent.scope_chars]
     display, extra_meta = _format_output(
         role_key, data, scope, cfg.role, model_name, requests_used, request_limit,
     )

@@ -237,7 +237,7 @@ Compaction behavior:
 - `summarize_history_window()` gathers side-channel context via `_gather_compaction_context()` (file working set, todos, always-on memories, prior summaries — capped at 4K chars), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds 85% of the budget
 - token count is the real provider-reported `input_tokens` from the latest `ModelResponse`; when no usage is available it falls back to a character-count estimate (`total_chars // 4`)
-- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm_num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: reasoning role's `context_window` from model quirks (Ollama config overrides the spec), then `llm.num_ctx` when Ollama OpenAI-compat is active, then `100,000` tokens
 - when `model_registry` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_failure_count`) skips the LLM call after 3 consecutive failures; on success the counter resets to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
@@ -268,7 +268,7 @@ Error matrix:
 Output-limit diagnostics happen only after a successful final segment:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
-2. if the provider supports context-ratio tracking, compare `deps.runtime.turn_usage.input_tokens / deps.config.llm_num_ctx`
+2. if the provider supports context-ratio tracking, compare `deps.runtime.turn_usage.input_tokens / deps.config.llm.num_ctx`
 3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
 
 Interrupt handling is conservative:

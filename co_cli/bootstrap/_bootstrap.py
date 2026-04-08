@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -10,10 +11,10 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
-from co_cli.config import settings
+from co_cli.config._core import Settings, MCPServerConfig, settings
 from co_cli.context.types import SafetyState
 from co_cli.context.session import find_latest_session, new_session, save_session
-from co_cli.deps import CoDeps, CoConfig, CoRuntimeState
+from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -26,7 +27,24 @@ def _summarize_backend_error(exc: Exception) -> str:
     return detail.splitlines()[0]
 
 
-def _resolve_reranker(config: CoConfig, statuses: list[str]) -> None:
+def _resolve_mcp_env_tokens(config: Settings) -> dict[str, MCPServerConfig]:
+    """Resolve env-based tokens for MCP servers. Returns resolved server dict."""
+    resolved_servers: dict[str, MCPServerConfig] = {}
+    for name, srv_cfg in (config.mcp_servers or {}).items():
+        if name == "github":
+            env = dict(srv_cfg.env) if srv_cfg.env else {}
+            if "GITHUB_PERSONAL_ACCESS_TOKEN" not in env:
+                token = os.getenv("GITHUB_TOKEN_BINLECODE", "")
+                if token:
+                    env["GITHUB_PERSONAL_ACCESS_TOKEN"] = token
+                srv_cfg = srv_cfg.model_copy(update={"env": env})
+        resolved_servers[name] = srv_cfg
+    return resolved_servers
+
+
+def _resolve_reranker(
+    config: Settings, statuses: list[str],
+) -> None:
     """Resolve reranker availability, mutating config and appending degradation messages.
 
     Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
@@ -39,7 +57,7 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> None:
             "  Reranker degraded — TEI cross-encoder unavailable; search results will be unranked"
         )
         logger.warning("TEI cross-encoder unavailable; degrading to none")
-        config.knowledge_cross_encoder_reranker_url = None
+        config.knowledge.cross_encoder_reranker_url = None
 
     reranker_result = check_reranker_llm(config)
     if reranker_result.status not in ("ok", "skipped"):
@@ -47,12 +65,14 @@ def _resolve_reranker(config: CoConfig, statuses: list[str]) -> None:
             "  Reranker degraded — LLM reranker unavailable; search results will be unranked"
         )
         logger.warning("LLM reranker unavailable; degrading to none")
-        config.knowledge_llm_reranker = None
+        config.knowledge.llm_reranker = None
 
 
 def _discover_knowledge_backend(
-    config: CoConfig, frontend: TerminalFrontend,
-) -> tuple[CoConfig, KnowledgeStore | None]:
+    config: Settings,
+    frontend: TerminalFrontend,
+    degradations: dict[str, str],
+) -> "KnowledgeStore | None":
     """Discover which knowledge backend is available and construct the store.
 
     Three-tier fallback with graceful degradation:
@@ -61,22 +81,21 @@ def _discover_knowledge_backend(
       3. grep    — pure file search, no store required
 
     Probes embedder/reranker availability, mutates config fields directly, constructs
-    the store, and reports degradation to frontend. Returns (config, store).
+    the store, and reports degradation to frontend.
     Config reflects the runtime backend; degradations dict records what changed and why.
     """
-    if config.knowledge_search_backend == "grep":
-        return config, None
+    if config.knowledge.search_backend == "grep":
+        return None
 
-    configured = config.knowledge_search_backend
+    configured = config.knowledge.search_backend
     statuses: list[str] = []
 
     # Resolve reranker — config fields must reflect actual availability
-    # so the store and query pipeline see correct values.
     _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
-    resolved_backend = "fts5"  # default fallback
-    if config.knowledge_embedding_provider == "none":
+    resolved_backend = "fts5"
+    if config.knowledge.embedding_provider == "none":
         logger.info("Hybrid skipped: embedding provider is 'none'")
     else:
         from co_cli.bootstrap._check import check_embedder
@@ -94,19 +113,18 @@ def _discover_knowledge_backend(
         frontend.on_status(status)
 
     if resolved_backend != configured:
-        config.degradations = {**config.degradations, "knowledge": f"{configured} → {resolved_backend} (embedder unavailable)"}
-    config.knowledge_search_backend = resolved_backend
+        degradations["knowledge"] = f"{configured} → {resolved_backend} (embedder unavailable)"
+    config.knowledge.search_backend = resolved_backend
 
     # --- Construct store with resolved config ---
     from co_cli.knowledge._store import KnowledgeStore as _KS
 
     def _degrade_to(backend: str, reason: str) -> None:
-        """Mutate config to reflect degraded backend."""
-        config.knowledge_search_backend = backend
-        config.degradations = {**config.degradations, "knowledge": f"{configured} → {backend} ({reason})"}
+        config.knowledge.search_backend = backend
+        degradations["knowledge"] = f"{configured} → {backend} ({reason})"
 
     try:
-        return config, _KS(config=config)
+        return _KS(config=config)
     except Exception as exc:
         if resolved_backend == "hybrid":
             logger.warning("Hybrid backend unavailable: %s", exc)
@@ -116,7 +134,7 @@ def _discover_knowledge_backend(
             )
             _degrade_to("fts5", _summarize_backend_error(exc))
             try:
-                return config, _KS(config=config)
+                return _KS(config=config)
             except Exception as exc2:
                 logger.warning("FTS5 backend unavailable: %s", exc2)
                 frontend.on_status(
@@ -124,7 +142,7 @@ def _discover_knowledge_backend(
                     f"({_summarize_backend_error(exc2)}); using grep"
                 )
                 _degrade_to("grep", _summarize_backend_error(exc2))
-                return config, None
+                return None
         else:
             logger.warning("FTS5 backend unavailable: %s", exc)
             frontend.on_status(
@@ -132,14 +150,16 @@ def _discover_knowledge_backend(
                 f"({_summarize_backend_error(exc)}); using grep"
             )
             _degrade_to("grep", _summarize_backend_error(exc))
-            return config, None
+            return None
 
 
 def _sync_knowledge_store(
-    store: KnowledgeStore | None,
-    config: CoConfig,
+    store: "KnowledgeStore | None",
+    config: Settings,
     frontend: TerminalFrontend,
-) -> KnowledgeStore | None:
+    memory_dir: Path,
+    library_dir: Path,
+) -> "KnowledgeStore | None":
     """Reconcile the knowledge store with current memory + library files on disk.
 
     Hash-based — skips unchanged files. On sync failure, closes the store and
@@ -151,11 +171,11 @@ def _sync_knowledge_store(
 
     with _TRACER.start_as_current_span("sync_knowledge") as span:
         try:
-            if config.memory_dir.exists() or config.library_dir.exists():
-                mem_count = store.sync_dir("memory", config.memory_dir, kind_filter="memory")
-                art_count = store.sync_dir("library", config.library_dir, kind_filter="article")
+            if memory_dir.exists() or library_dir.exists():
+                mem_count = store.sync_dir("memory", memory_dir, kind_filter="memory")
+                art_count = store.sync_dir("library", library_dir, kind_filter="article")
                 count = mem_count + art_count
-                backend = config.knowledge_search_backend
+                backend = config.knowledge.search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)
                 span.set_attribute("status", "ok")
@@ -188,38 +208,38 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     from co_cli._model_factory import ModelRegistry
     from co_cli.agent import build_tool_registry, discover_mcp_tools
 
-    # Step 1: build config (single call, fully resolved)
-    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    config = settings
+    cwd = Path.cwd()
+    paths = resolve_workspace_paths(config, cwd)
 
     # Step 2: fail-fast gate (config shape only — no IO)
-    error = config.validate()
+    error = config.llm.validate_config()
     if error:
         raise ValueError(error)
 
     # Step 2b: Ollama context probe — fail-fast on undersized models,
-    # override llm_num_ctx with runtime Modelfile value when they differ.
-    if config.uses_ollama_openai():
-        reasoning_entry = config.role_models.get("reasoning")
+    # override num_ctx with runtime Modelfile value when they differ.
+    if config.llm.uses_ollama_openai():
+        reasoning_entry = config.llm.role_models.get("reasoning")
         if reasoning_entry:
             from co_cli.bootstrap._check import probe_ollama_context
-            ctx_probe = probe_ollama_context(config.llm_host, reasoning_entry.model)
+            ctx_probe = probe_ollama_context(config.llm.host, reasoning_entry.model)
             if ctx_probe.status == "error":
                 raise ValueError(ctx_probe.detail)
             runtime_num_ctx = ctx_probe.extra.get("num_ctx", 0)
-            if runtime_num_ctx > 0 and runtime_num_ctx != config.llm_num_ctx:
+            if runtime_num_ctx > 0 and runtime_num_ctx != config.llm.num_ctx:
                 logger.info(
-                    "Ollama runtime num_ctx=%d differs from config llm_num_ctx=%d — using runtime value",
-                    runtime_num_ctx, config.llm_num_ctx,
+                    "Ollama runtime num_ctx=%d differs from config llm.num_ctx=%d — using runtime value",
+                    runtime_num_ctx, config.llm.num_ctx,
                 )
-                config.llm_num_ctx = runtime_num_ctx
+                config.llm.num_ctx = runtime_num_ctx
 
-    # Step 3: build registries (pure config — no IO)
+    # Step 3: resolve MCP env tokens + build registries
+    config.mcp_servers = _resolve_mcp_env_tokens(config)
     model_registry = ModelRegistry.from_config(config)
     tool_registry = build_tool_registry(config)
 
     # Step 4: MCP connect + discovery
-    # Enter each server on the caller's stack so connections stay alive for the session.
-    # Only connected servers are passed to discovery (failed ones are skipped).
     if tool_registry.mcp_toolsets:
         connected: list = []
         for ts in tool_registry.mcp_toolsets:
@@ -238,13 +258,19 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
     from co_cli.commands._commands import _load_skills
-    skill_commands = _load_skills(config.skills_dir, settings=settings, user_skills_dir=config.user_skills_dir)
+    skill_commands = _load_skills(
+        paths["skills_dir"], settings=config, user_skills_dir=paths["user_skills_dir"],
+    )
 
     # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
-    config, knowledge_store = _discover_knowledge_backend(config, frontend)
+    degradations: dict[str, str] = {}
+    knowledge_store = _discover_knowledge_backend(config, frontend, degradations)
 
     # Step 7: sync knowledge store with current files on disk
-    knowledge_store = _sync_knowledge_store(knowledge_store, config, frontend)
+    knowledge_store = _sync_knowledge_store(
+        knowledge_store, config, frontend,
+        memory_dir=paths["memory_dir"], library_dir=paths["library_dir"],
+    )
 
     # Step 8: assemble deps
     runtime = CoRuntimeState(safety_state=SafetyState())
@@ -256,13 +282,15 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         tool_index=tool_registry.tool_index,
         skill_commands=skill_commands,
         runtime=runtime,
+        degradations=degradations,
+        **paths,
     )
 
 
 def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
     """Restore the most recent session from sessions/ dir, or create a new one."""
     with _TRACER.start_as_current_span("restore_session") as span:
-        session_data = find_latest_session(deps.config.sessions_dir)
+        session_data = find_latest_session(deps.sessions_dir)
         if session_data is not None:
             deps.session.session_id = session_data["session_id"]
             short_id = deps.session.session_id[:8]
@@ -276,11 +304,8 @@ def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
             span.set_attribute("status", "new")
             span.set_attribute("session_id", short_id)
             try:
-                save_session(deps.config.sessions_dir, session_data)
+                save_session(deps.sessions_dir, session_data)
             except OSError as e:
                 frontend.on_status(f"  Session save failed — {e}; session will not persist")
             frontend.on_status(f"  Session new — {short_id}...")
         return session_data
-
-
-

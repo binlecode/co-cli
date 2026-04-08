@@ -15,7 +15,7 @@ Bootstrap callers (direct, not via entry points):
   check_cross_encoder     — bootstrap/_bootstrap.py (_resolve_reranker, inside _discover_knowledge_backend)
   check_embedder          — bootstrap/_bootstrap.py (_discover_knowledge_backend)
 
-Config-shape validation lives on CoConfig.validate() (deps.py), not here.
+Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py), not here.
 """
 
 import os
@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
-    from co_cli.deps import CoDeps, CoConfig
+    from co_cli.config._core import Settings
+    from co_cli.deps import CoDeps
 
-from co_cli.config import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
+from co_cli.config._llm import ROLE_REASONING, ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS
 
 
 @dataclass
@@ -198,7 +199,7 @@ def _check_gemini_key(api_key: str | None) -> CheckResult:
     )
 
 
-def check_agent_llm(config: "CoConfig") -> CheckResult:
+def check_agent_llm(config: "Settings") -> CheckResult:
     """Check session agent LLM credentials and model availability in one pass.
 
     Gemini: validates API key presence (no HTTP call).
@@ -207,18 +208,18 @@ def check_agent_llm(config: "CoConfig") -> CheckResult:
       - Reasoning model missing → error (hard fail; session cannot start)
       - Optional role model missing → warn (soft fail; those tools degrade silently)
     """
-    if config.uses_gemini():
-        return _check_gemini_key(config.llm_api_key)
+    if config.llm.uses_gemini():
+        return _check_gemini_key(config.llm.api_key)
 
     try:
         import httpx
-        resp = httpx.get(f"{config.llm_host}/api/tags", timeout=5)
+        resp = httpx.get(f"{config.llm.host}/api/tags", timeout=5)
         resp.raise_for_status()
         installed = {m["name"] for m in resp.json().get("models", [])}
     except Exception as err:
         return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}", extra={"reason": "unreachable"})
 
-    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
     if reasoning_entry and reasoning_entry.model not in installed:
         return CheckResult(
             ok=False,
@@ -228,7 +229,7 @@ def check_agent_llm(config: "CoConfig") -> CheckResult:
 
     missing_optional: list[str] = []
     for role in (ROLE_SUMMARIZATION, ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS):
-        entry = config.role_models.get(role)
+        entry = config.llm.role_models.get(role)
         if entry and entry.model not in installed:
             missing_optional.append(f"{role}: {entry.model}")
 
@@ -242,24 +243,24 @@ def check_agent_llm(config: "CoConfig") -> CheckResult:
     return CheckResult(ok=True, status="ok", detail="Provider and models configured")
 
 
-def check_reranker_llm(config: "CoConfig") -> CheckResult:
+def check_reranker_llm(config: "Settings") -> CheckResult:
     """Check LLM reranker availability.
 
     Skipped if no LLM reranker is configured.
     Gemini: validates API key presence.
     Ollama: probes the reranker model specifically (not the agent reasoning model).
     """
-    if config.knowledge_llm_reranker is None:
+    if config.knowledge.llm_reranker is None:
         return CheckResult(ok=True, status="skipped", detail="LLM reranker not configured")
 
-    reranker = config.knowledge_llm_reranker
+    reranker = config.knowledge.llm_reranker
     if reranker.provider == "gemini":
-        return _check_gemini_key(config.llm_api_key)
+        return _check_gemini_key(config.llm.api_key)
 
-    return check_ollama_model(config.llm_host, reranker.model)
+    return check_ollama_model(config.llm.host, reranker.model)
 
 
-def check_embedder(config: "CoConfig") -> CheckResult:
+def check_embedder(config: "Settings") -> CheckResult:
     """Check embedding provider availability.
 
     Skipped if provider is "none".
@@ -267,26 +268,26 @@ def check_embedder(config: "CoConfig") -> CheckResult:
     Ollama: probes the configured embedding model.
     Gemini: validates API key presence.
     """
-    provider = config.knowledge_embedding_provider
+    provider = config.knowledge.embedding_provider
     if provider == "none":
         return CheckResult(ok=True, status="skipped", detail="Embedding provider is 'none'")
     if provider == "tei":
-        return check_tei(config.knowledge_embed_api_url)
+        return check_tei(config.knowledge.embed_api_url)
     if provider == "ollama":
-        return check_ollama_model(config.llm_host, config.knowledge_embedding_model)
+        return check_ollama_model(config.llm.host, config.knowledge.embedding_model)
     if provider == "gemini":
-        return _check_gemini_key(config.llm_api_key)
+        return _check_gemini_key(config.llm.api_key)
     return CheckResult(ok=True, status="skipped", detail=f"Unknown provider: {provider}")
 
 
-def check_cross_encoder(config: "CoConfig") -> CheckResult:
+def check_cross_encoder(config: "Settings") -> CheckResult:
     """Check TEI cross-encoder reranker availability.
 
     Skipped if no cross-encoder URL is configured.
     """
-    if config.knowledge_cross_encoder_reranker_url is None:
+    if config.knowledge.cross_encoder_reranker_url is None:
         return CheckResult(ok=True, status="skipped", detail="Cross-encoder not configured")
-    return check_tei(config.knowledge_cross_encoder_reranker_url)
+    return check_tei(config.knowledge.cross_encoder_reranker_url)
 
 
 def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
@@ -368,13 +369,13 @@ def _check_skills(skill_registry: list[dict]) -> CheckResult:
     )
 
 
-def check_settings(config: "CoConfig") -> DoctorResult:
+def check_settings(config: "Settings") -> DoctorResult:
     """Run settings-level integration health checks.
 
     Checks google, obsidian, brave, and MCP servers using values from config.
     No runtime services — callers that need knowledge/skills checks use check_runtime(deps).
     """
-    from co_cli.config import GOOGLE_TOKEN_PATH, ADC_PATH
+    from co_cli.config._core import GOOGLE_TOKEN_PATH, ADC_PATH
 
     checks: list[CheckItem] = []
 
@@ -430,7 +431,7 @@ def check_runtime(
     config and integration state with session state from deps. No startup policy —
     failures are recorded as findings, not raised as exceptions.
     """
-    from co_cli.config import ADC_PATH, GOOGLE_TOKEN_PATH
+    from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
 
     # IO checks
     _emit_progress(progress, "Doctor: checking provider and model availability...")
@@ -443,7 +444,7 @@ def check_runtime(
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
     _emit_progress(progress, "Doctor: checking knowledge backend...")
-    knowledge_result = _check_knowledge(deps.knowledge_store, deps.config.knowledge_search_backend)
+    knowledge_result = _check_knowledge(deps.knowledge_store, deps.config.knowledge.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands._commands import get_skill_registry
@@ -473,7 +474,7 @@ def check_runtime(
     ]
 
     # Build capabilities dict
-    reasoning_entry = deps.config.role_models.get(ROLE_REASONING)
+    reasoning_entry = deps.config.llm.role_models.get(ROLE_REASONING)
     capabilities: dict[str, Any] = {
         "provider": {
             "ok": provider_result.ok,
@@ -486,7 +487,7 @@ def check_runtime(
         "obsidian": obsidian_result.status == "ok",
         "brave": brave_result.status == "ok",
         "mcp_count": mcp_count,
-        "knowledge_backend": deps.config.knowledge_search_backend,
+        "knowledge_backend": deps.config.knowledge.search_backend,
         "checks": checks,
     }
 
@@ -505,7 +506,7 @@ def check_runtime(
         "tool_count": len(tool_index),
         "skill_count": len(get_skill_registry(deps.skill_commands)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
-        "knowledge_mode": deps.config.knowledge_search_backend,
+        "knowledge_mode": deps.config.knowledge.search_backend,
         "source_counts": source_counts,
     }
 

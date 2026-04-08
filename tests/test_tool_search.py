@@ -7,12 +7,12 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent, build_tool_registry
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_search import search_tools
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 _TOOL_REG = build_tool_registry(_CONFIG)
 _AGENT = build_agent(config=_CONFIG)
 

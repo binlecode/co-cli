@@ -23,8 +23,7 @@ import time
 from co_cli.context.types import SafetyState  # noqa: E402
 from co_cli.context.orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config import settings  # noqa: E402
-from co_cli.deps import CoConfig  # noqa: E402
+from co_cli.config._core import settings  # noqa: E402
 
 from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._frontend import CapturingFrontend  # noqa: E402
@@ -35,7 +34,7 @@ async def main() -> int:
     print("  E2E: Grace Turn on Usage Limit")
     print("=" * 60)
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
+    agent = build_agent(config=settings)
     deps = make_eval_deps(session_id="e2e-grace-turn")
     deps.runtime.safety_state = SafetyState()
     frontend = CapturingFrontend(verbose=True)

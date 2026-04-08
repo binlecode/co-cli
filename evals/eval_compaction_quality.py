@@ -63,7 +63,8 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
 from co_cli.agent import build_agent
-from co_cli.config import ROLE_REASONING, ROLE_SUMMARIZATION, settings
+from co_cli.config._core import settings
+from co_cli.config._llm import ROLE_REASONING, ROLE_SUMMARIZATION
 from co_cli.context._history import (
     COMPACTABLE_KEEP_RECENT,
     FILE_TOOLS,
@@ -96,7 +97,9 @@ from co_cli.tools.tool_result_storage import (
     TOOL_RESULT_PREVIEW_SIZE,
     persist_if_oversized,
 )
-from co_cli.deps import CoDeps, CoConfig, CoSessionState
+from co_cli.config._core import Settings
+from co_cli.config._llm import LlmSettings
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from evals._timeouts import EVAL_SUMMARIZATION_TIMEOUT_SECS
 
@@ -106,10 +109,8 @@ log = logging.getLogger(__name__)
 # Config — pull from real settings, never override
 # ---------------------------------------------------------------------------
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
-_EVAL_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_EVAL_CONFIG.mcp_servers = {}
+_REGISTRY = ModelRegistry.from_config(settings)
+_EVAL_CONFIG = settings.model_copy(update={"mcp_servers": {}})
 _AGENT = build_agent(config=_EVAL_CONFIG, model_registry=_REGISTRY)
 
 
@@ -155,10 +156,14 @@ def _make_ctx(
     model_registry: ModelRegistry | None = None,
     llm_num_ctx: int = 30,
 ) -> RunContext:
-    config_kwargs: dict = {"llm_provider": "ollama-openai", "llm_num_ctx": llm_num_ctx}
-    if memory_dir is not None:
-        config_kwargs["memory_dir"] = memory_dir
-    config = CoConfig(**config_kwargs)
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(
+            provider="ollama-openai",
+            num_ctx=llm_num_ctx,
+            role_models=settings.llm.role_models,
+            host=settings.llm.host,
+        ),
+    )
     session = CoSessionState(session_id="eval-compaction")
     if session_todos:
         session.session_todos = session_todos
@@ -166,6 +171,8 @@ def _make_ctx(
         shell=ShellBackend(), config=config,
         model_registry=model_registry, session=session,
     )
+    if memory_dir is not None:
+        deps.memory_dir = memory_dir
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
@@ -948,7 +955,12 @@ async def step_6_full_chain() -> bool:
     print(f"  Expected: P1 clears {N_READ - COMPACTABLE_KEEP_RECENT}, P2 caps {expected_p2_truncated}")
 
     # Build ctx with todos for enrichment
-    config = CoConfig(llm_provider="ollama-openai", llm_num_ctx=30)
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(
+            provider="ollama-openai", num_ctx=30,
+            role_models=settings.llm.role_models, host=settings.llm.host,
+        ),
+    )
     session = CoSessionState(session_id="eval-chain-6")
     session.session_todos = [
         {"content": "Update api/urls.py for JWT", "status": "pending"},
@@ -1263,7 +1275,12 @@ async def step_7_multi_cycle() -> bool:
                       for p in m.parts if isinstance(p, TextPart) and len(p.content) > OLDER_MSG_MAX_CHARS)
     print(f"  Expected: P1 clears {expected_p1} (of {n_read} read_file), P2 caps {expected_p2}")
 
-    config = CoConfig(llm_provider="ollama-openai", llm_num_ctx=30)
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(
+            provider="ollama-openai", num_ctx=30,
+            role_models=settings.llm.role_models, host=settings.llm.host,
+        ),
+    )
     deps = CoDeps(shell=ShellBackend(), config=config, model_registry=_REGISTRY,
                   session=CoSessionState(session_id="eval-chain-7"))
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -1556,7 +1573,12 @@ async def step_9_circuit_breaker() -> bool:
         msgs += [_user(f"turn {i}"), _assistant(f"response {i} " + "x" * 200)]
 
     # Set compaction_failure_count = 3 → circuit breaker active
-    config = CoConfig(llm_provider="ollama-openai", llm_num_ctx=30)
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(
+            provider="ollama-openai", num_ctx=30,
+            role_models=settings.llm.role_models, host=settings.llm.host,
+        ),
+    )
     deps = CoDeps(
         shell=ShellBackend(), config=config,
         model_registry=_REGISTRY,

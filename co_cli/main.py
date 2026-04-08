@@ -22,7 +22,7 @@ from co_cli.deps import CoDeps
 from co_cli.context.orchestrate import run_turn, TurnResult
 from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
-from co_cli.config import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
+from co_cli.config._core import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
 from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
@@ -93,11 +93,11 @@ async def _finalize_turn(
 
     # Touch session and persist
     next_session = touch_session(session_data)
-    save_session(deps.config.sessions_dir, next_session)
+    save_session(deps.sessions_dir, next_session)
 
     # Append new messages to transcript (positional tail slice)
     new_messages = turn_result.messages[len(message_history):]
-    append_transcript(deps.config.sessions_dir, deps.session.session_id, new_messages)
+    append_transcript(deps.sessions_dir, deps.session.session_id, new_messages)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
@@ -164,7 +164,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
         # Resume hint: check if a transcript exists for the current session
-        transcript_path = deps.config.sessions_dir / f"{deps.session.session_id}.jsonl"
+        transcript_path = deps.sessions_dir / f"{deps.session.session_id}.jsonl"
         if transcript_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
@@ -197,14 +197,14 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                         # Sync session_data if session ID rotated (/new, /resume)
                         if deps.session.session_id != session_data.get("session_id"):
                             rotated = load_session(
-                                deps.config.sessions_dir / f"{deps.session.session_id}.json"
+                                deps.sessions_dir / f"{deps.session.session_id}.json"
                             )
                             if rotated:
                                 session_data = rotated
                         if outcome.compaction_applied:
-                            write_compact_boundary(deps.config.sessions_dir, deps.session.session_id)
+                            write_compact_boundary(deps.sessions_dir, deps.session.session_id)
                             session_data = increment_compaction(session_data)
-                            save_session(deps.config.sessions_dir, session_data)
+                            save_session(deps.sessions_dir, session_data)
                         continue
                     elif isinstance(outcome, DelegateToAgent):
                         # Skill dispatched — fall through to LLM turn with delegated input
@@ -282,9 +282,7 @@ def chat(
 @app.command()
 def config():
     """Show system configuration and integration health (pre-agent check)."""
-    from pathlib import Path
-    from co_cli.deps import CoConfig
-    sys_status = get_status(CoConfig.from_settings(settings, cwd=Path.cwd()))
+    sys_status = get_status(settings)
     console.print(render_status_table(sys_status))
     findings = check_security()
     render_security_findings(findings)

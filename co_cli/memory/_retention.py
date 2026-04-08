@@ -30,7 +30,7 @@ async def enforce_retention(
         dict with keys: decayed (count deleted), strategy ("cut").
     """
     total_count = len(all_memories)
-    excess = total_count - deps.config.memory_max_count
+    excess = total_count - deps.config.memory.max_count
 
     if excess <= 0:
         return {"decayed": 0, "strategy": "cut"}

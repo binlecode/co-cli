@@ -7,8 +7,7 @@ from co_cli.bootstrap._render_status import (
     check_security,
     get_status,
 )
-from co_cli.config import settings
-from co_cli.deps import CoConfig
+from co_cli.config._core import settings
 
 
 def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
@@ -20,8 +19,7 @@ def _make_config(tmp_path: Path, name: str = "settings.json") -> Path:
 
 def test_get_status_reads_repo_root_pyproject():
     """get_status() must read version from repo-root pyproject.toml, not co_cli/."""
-    config = CoConfig.from_settings(settings, cwd=Path.cwd())
-    info = get_status(config)
+    info = get_status(settings)
 
     assert info.version
 
@@ -60,9 +58,9 @@ def test_check_security_project_config_wrong_mode(tmp_path):
 
 
 def test_check_security_user_config_shell_wildcard(tmp_path):
-    """User settings.json with shell_safe_commands containing '*' → WARN wildcard finding."""
+    """User settings.json with shell.safe_commands containing '*' → WARN wildcard finding."""
     p = tmp_path / "settings.json"
-    p.write_text(json.dumps({"shell_safe_commands": ["ls", "*", "cat"]}), encoding="utf-8")
+    p.write_text(json.dumps({"shell": {"safe_commands": ["ls", "*", "cat"]}}), encoding="utf-8")
     findings = check_security(_user_config_path=p, _project_config_path=None)
     wildcard_findings = [f for f in findings if f.check_id == "user-config-shell-wildcard"]
     assert len(wildcard_findings) == 1
@@ -71,9 +69,9 @@ def test_check_security_user_config_shell_wildcard(tmp_path):
 
 
 def test_check_security_project_config_shell_wildcard(tmp_path):
-    """Project settings.json with shell_safe_commands containing '*' → WARN wildcard finding."""
+    """Project settings.json with shell.safe_commands containing '*' → WARN wildcard finding."""
     p = tmp_path / "project-settings.json"
-    p.write_text(json.dumps({"shell_safe_commands": ["*"]}), encoding="utf-8")
+    p.write_text(json.dumps({"shell": {"safe_commands": ["*"]}}), encoding="utf-8")
     findings = check_security(_user_config_path=None, _project_config_path=p)
     wildcard_findings = [f for f in findings if f.check_id == "project-config-shell-wildcard"]
     assert len(wildcard_findings) == 1
@@ -81,11 +79,9 @@ def test_check_security_project_config_shell_wildcard(tmp_path):
 
 
 def test_check_security_no_wildcard_when_safe_commands_normal(tmp_path):
-    """shell_safe_commands without '*' → no wildcard finding."""
+    """shell.safe_commands without '*' → no wildcard finding."""
     p = tmp_path / "settings.json"
-    p.write_text(json.dumps({"shell_safe_commands": ["ls", "cat", "git status"]}), encoding="utf-8")
+    p.write_text(json.dumps({"shell": {"safe_commands": ["ls", "cat", "git status"]}}), encoding="utf-8")
     findings = check_security(_user_config_path=p, _project_config_path=None)
     wildcard_findings = [f for f in findings if "wildcard" in f.check_id]
     assert wildcard_findings == []
-
-

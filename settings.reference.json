@@ -1,85 +1,128 @@
 {
-  "llm_provider": "gemini",
-  "gemini_api_key": "",
-  "gemini_model": "gemini-2.0-flash",
-  "ollama_host": "http://localhost:11434",
-  "role_models": {
-    "reasoning": [
-      {
+  "llm": {
+    "provider": "ollama-openai",
+    "host": "http://localhost:11434",
+    "num_ctx": 262144,
+    "role_models": {
+      "reasoning": {
         "model": "qwen3.5:35b-a3b-think",
+        "provider": "ollama-openai",
         "api_params": {
           "temperature": 1.0,
           "top_p": 0.95,
+          "max_tokens": 32768,
+          "num_ctx": 131072,
+          "num_predict": 32768
+        }
+      },
+      "summarization": {
+        "model": "qwen3.5:35b-a3b-think",
+        "provider": "ollama-openai",
+        "api_params": {
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "max_tokens": 16384,
+          "reasoning_effort": "none",
           "top_k": 20,
+          "min_p": 0.0,
           "presence_penalty": 1.5,
           "repeat_penalty": 1.0,
-          "num_predict": 32768
+          "num_ctx": 131072,
+          "num_predict": 16384
         }
-      }
-    ],
-    "summarization": [
-      "qwen3.5:35b-a3b-q4_k_m-nothink"
-    ],
-    "coding": [
-      {
+      },
+      "coding": {
         "model": "qwen3.5:35b-a3b-code",
+        "provider": "ollama-openai"
+      },
+      "research": {
+        "model": "qwen3.5:35b-a3b-think",
+        "provider": "ollama-openai",
         "api_params": {
-          "temperature": 0.6,
-          "top_p": 0.95,
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "max_tokens": 16384,
+          "reasoning_effort": "none",
           "top_k": 20,
-          "presence_penalty": 0.0,
+          "min_p": 0.0,
+          "presence_penalty": 1.5,
           "repeat_penalty": 1.0,
-          "num_predict": 32768
+          "num_ctx": 131072,
+          "num_predict": 16384
         }
-      }
-    ],
-    "research": [
-      {
-        "model": "qwen3.5:35b-a3b-q4_k_m-research",
+      },
+      "analysis": {
+        "model": "qwen3.5:35b-a3b-think",
+        "provider": "ollama-openai",
         "api_params": {
-          "think": false
+          "temperature": 0.7,
+          "top_p": 0.8,
+          "max_tokens": 16384,
+          "reasoning_effort": "none",
+          "top_k": 20,
+          "min_p": 0.0,
+          "presence_penalty": 1.5,
+          "repeat_penalty": 1.0,
+          "num_ctx": 131072,
+          "num_predict": 16384
         }
       }
-    ],
-    "analysis": [
-      "qwen3.5:35b-a3b-q4_k_m-nothink"
+    }
+  },
+  "knowledge": {
+    "search_backend": "hybrid",
+    "embedding_provider": "tei",
+    "embedding_model": "embeddinggemma",
+    "embedding_dims": 1024,
+    "embed_api_url": "http://127.0.0.1:8283",
+    "cross_encoder_reranker_url": "http://127.0.0.1:8282",
+    "chunk_size": 600,
+    "chunk_overlap": 80
+  },
+  "memory": {
+    "max_count": 200,
+    "recall_half_life_days": 30,
+    "auto_save_tags": ["user", "feedback", "project", "reference"],
+    "injection_max_chars": 2000
+  },
+  "web": {
+    "fetch_allowed_domains": [],
+    "fetch_blocked_domains": [],
+    "http_max_retries": 2,
+    "http_backoff_base_seconds": 1.0,
+    "http_backoff_max_seconds": 8.0,
+    "http_jitter_ratio": 0.2
+  },
+  "subagent": {
+    "scope_chars": 120,
+    "max_requests_coder": 10,
+    "max_requests_research": 10,
+    "max_requests_analysis": 8,
+    "max_requests_thinking": 3
+  },
+  "shell": {
+    "max_timeout": 600,
+    "safe_commands": [
+      "ls", "tree", "find", "fd",
+      "cat", "head", "tail",
+      "grep", "rg", "ag",
+      "wc", "sort", "uniq", "cut", "tr", "jq",
+      "echo", "printf",
+      "pwd", "whoami", "hostname", "uname", "date",
+      "env", "which", "file", "stat", "id", "du", "df",
+      "git status", "git diff", "git log", "git show",
+      "git branch", "git tag", "git blame"
     ]
   },
 
   "obsidian_vault_path": "",
   "google_credentials_path": "",
   "brave_search_api_key": "",
-  "web_fetch_allowed_domains": [],
-  "web_fetch_blocked_domains": [],
-  "web_http_max_retries": 2,
-  "web_http_backoff_base_seconds": 1.0,
-  "web_http_backoff_max_seconds": 8.0,
-  "web_http_jitter_ratio": 0.2,
-  "web_policy": {
-    "search": "allow",
-    "fetch": "allow"
-  },
 
-  "docker_image": "co-cli-sandbox",
   "theme": "light",
+  "personality": "tars",
   "tool_retries": 3,
-  "max_request_limit": 25,
+  "reasoning_display": "summary",
 
-  "sandbox_backend": "auto",
-  "sandbox_max_timeout": 600,
-  "sandbox_network": "none",
-  "sandbox_mem_limit": "1g",
-  "sandbox_cpus": 1,
-
-  "shell_safe_commands": [
-    "ls", "tree", "find", "fd",
-    "cat", "head", "tail",
-    "grep", "rg", "ag",
-    "wc", "sort", "uniq", "cut", "jq",
-    "echo", "printf",
-    "pwd", "whoami", "hostname", "uname", "date",
-    "env", "which", "file", "id", "du", "df",
-    "git status", "git diff", "git log", "git show",
-    "git branch", "git tag", "git blame"
-  ]
+  "mcp_servers": {}
 }

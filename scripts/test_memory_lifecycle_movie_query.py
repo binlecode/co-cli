@@ -53,7 +53,9 @@ from pydantic_ai.messages import (  # noqa: E402
 from pydantic_ai.usage import UsageLimits  # noqa: E402
 
 from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config import get_settings, WebPolicy, ROLE_REASONING  # noqa: E402
+from co_cli.config._core import get_settings  # noqa: E402
+from co_cli.config._llm import ROLE_REASONING  # noqa: E402
+from co_cli.config._web import WebSettings as WebPolicy  # noqa: E402
 from co_cli._model_factory import ModelRegistry, ResolvedModel  # noqa: E402
 from co_cli.deps import CoDeps, CoConfig  # noqa: E402
 from co_cli.tools.shell_backend import ShellBackend  # noqa: E402

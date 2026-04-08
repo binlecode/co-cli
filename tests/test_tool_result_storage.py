@@ -8,17 +8,18 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
+from co_cli.config._core import settings
 from co_cli.tools.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     persist_if_oversized,
 )
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_output import tool_output, tool_output_raw
+from tests._settings import test_settings
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 _AGENT = build_agent(config=_CONFIG)
 
 
@@ -26,7 +27,8 @@ def _make_ctx(tmp_path: Path, tool_name: str = "read_file") -> RunContext[CoDeps
     """Build a real RunContext with tool_results_dir pointing at tmp_path."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(tool_results_dir=tmp_path / "tool-results"),
+        config=test_settings(),
+        tool_results_dir=tmp_path / "tool-results",
     )
     return RunContext(
         deps=deps,

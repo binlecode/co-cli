@@ -35,8 +35,8 @@ from co_cli.context.types import SafetyState  # noqa: E402
 from co_cli.knowledge._store import KnowledgeStore  # noqa: E402
 from co_cli.context.orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config import settings  # noqa: E402
-from co_cli.deps import CoConfig  # noqa: E402
+from co_cli.config._core import settings, Settings  # noqa: E402
+from co_cli.config._knowledge import KnowledgeSettings  # noqa: E402
 
 from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._frontend import SilentFrontend  # noqa: E402
@@ -149,16 +149,15 @@ async def main() -> int:
     print("  Eval: Knowledge Pipeline (search → save → retrieve)")
     print("=" * 60)
 
-    # Rebuild settings completely bypassing global mcp config
-    agent_config = CoConfig.from_settings(settings, cwd=Path.cwd())
-    import dataclasses
-    agent_config = dataclasses.replace(agent_config, mcp_servers={})
+    # Build agent with real settings (mcp_servers stripped to avoid network noise)
+    agent_config = settings.model_copy(update={"mcp_servers": {}})
     agent = build_agent(config=agent_config)
 
     knowledge_store = KnowledgeStore(
-        config=CoConfig(knowledge_db_path=Path(".co-cli/search.db"))
+        config=settings,
+        knowledge_db_path=Path(".co-cli/search.db"),
     )
-    deps = make_eval_deps(mcp_servers={}, 
+    deps = make_eval_deps(
         session_id="eval-knowledge-pipeline",
         knowledge_store=knowledge_store,
     )
@@ -169,7 +168,7 @@ async def main() -> int:
         return 0
 
     print(f"\n  Topic:   {TOPIC}")
-    print(f"  Library: {deps.config.library_dir}")
+    print(f"  Library: {deps.library_dir}")
     print()
 
     result: dict[str, Any] = {}

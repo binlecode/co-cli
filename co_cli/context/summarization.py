@@ -22,8 +22,8 @@ from pydantic_ai.messages import (
 )
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import ROLE_REASONING
-from co_cli.deps import CoConfig
+from co_cli.config._llm import ROLE_REASONING
+from co_cli.config._core import Settings
 
 log = logging.getLogger(__name__)
 
@@ -71,15 +71,15 @@ _DEFAULT_TOKEN_BUDGET = 100_000
 
 
 def resolve_compaction_budget(
-    config: CoConfig,
+    config: Settings,
     registry: ModelRegistry | None,
 ) -> int:
     """Resolve the token budget used as the compaction trigger baseline.
 
     Resolution order (first match wins):
     1. Model spec: reasoning role's context_window minus max_tokens (output reserve).
-       For Ollama, config.llm_num_ctx overrides the spec (user's Modelfile is truth).
-    2. Ollama config: config.llm_num_ctx when provider is ollama-openai.
+       For Ollama, config.llm.num_ctx overrides the spec (user's Modelfile is truth).
+    2. Ollama config: config.llm.num_ctx when provider is ollama-openai.
     3. Fallback: _DEFAULT_TOKEN_BUDGET (100K).
 
     The 85% multiplier is NOT applied here — callers apply their own trigger policy.
@@ -91,8 +91,8 @@ def resolve_compaction_budget(
         if ctx_window is not None and ctx_window > 0:
             # For Ollama: user-configured llm_num_ctx overrides spec
             # (real limit is baked in the Modelfile, not the declared spec)
-            if config.uses_ollama_openai() and config.llm_num_ctx > 0:
-                ctx_window = config.llm_num_ctx
+            if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
+                ctx_window = config.llm.num_ctx
             max_output = 0
             if resolved.settings is not None:
                 mt = getattr(resolved.settings, "max_tokens", None)
@@ -103,8 +103,8 @@ def resolve_compaction_budget(
             return max(ctx_window - max_output, ctx_window // 2)
 
     # Ollama config fallback (no model spec but llm_num_ctx configured)
-    if config.uses_ollama_openai() and config.llm_num_ctx > 0:
-        return config.llm_num_ctx
+    if config.llm.uses_ollama_openai() and config.llm.num_ctx > 0:
+        return config.llm.num_ctx
 
     return _DEFAULT_TOKEN_BUDGET
 

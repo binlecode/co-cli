@@ -1,15 +1,13 @@
 """Section-order gate for static instruction assembly."""
 
-import dataclasses
 from pathlib import Path
 
 from co_cli.prompts._assembly import build_static_instructions
-from co_cli.config import settings
-from co_cli.deps import CoConfig
+from co_cli.config._core import settings
 
 
-# Base config — personality overridden per test, memory_dir pointed at a temp path.
-_BASE_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+# Base config — personality overridden per test.
+_BASE_CONFIG = settings
 
 
 def test_section_order_finch(tmp_path: Path) -> None:
@@ -18,11 +16,7 @@ def test_section_order_finch(tmp_path: Path) -> None:
     Required order: soul seed < first rule < soul examples < critique.
     Counter-steering is verified when present (no current model quirk file defines it).
     """
-    config = dataclasses.replace(
-        _BASE_CONFIG,
-        personality="finch",
-        memory_dir=tmp_path,
-    )
+    config = _BASE_CONFIG.model_copy(update={"personality": "finch"})
     prompt = build_static_instructions(provider="gemini", model_name="", config=config)
 
     # Anchor texts from the finch personality assets and rule files
@@ -59,11 +53,7 @@ def test_section_order_finch(tmp_path: Path) -> None:
 
 def test_section_order_no_personality(tmp_path: Path) -> None:
     """Assembly without personality still produces a non-empty prompt (rules only)."""
-    config = dataclasses.replace(
-        _BASE_CONFIG,
-        personality=None,
-        memory_dir=tmp_path,
-    )
+    config = _BASE_CONFIG.model_copy(update={"personality": None})
     prompt = build_static_instructions(provider="gemini", model_name="", config=config)
 
     rule_anchor = "## Relationship"

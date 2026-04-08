@@ -1,22 +1,21 @@
 """Functional tests for agent factory — tool registration, approval wiring, and loading policy."""
 
-import dataclasses
 from pathlib import Path
 
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import ModelRegistry
-from co_cli.config import settings
+from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
-from co_cli.deps import CoConfig, LoadPolicy, ToolSource
+from tests._settings import test_settings
+from co_cli.deps import LoadPolicy, ToolSource
 
 
 # Config with fake integration paths so domain tools are always registered in tests,
 # regardless of whether the developer's local settings have these paths configured.
-_CONFIG_WITH_INTEGRATIONS = dataclasses.replace(
-    CoConfig.from_settings(settings, cwd=Path.cwd()),
-    obsidian_vault_path=Path("/fake/vault"),
-    google_credentials_path="/fake/creds.json",
-)
+_CONFIG_WITH_INTEGRATIONS = settings.model_copy(update={
+    "obsidian_vault_path": "/fake/vault",
+    "google_credentials_path": "/fake/creds.json",
+})
 
 
 def test_build_agent_registers_all_tools():
@@ -30,13 +29,14 @@ def test_build_agent_registers_all_tools():
         assert tool in result.tool_index, f"Expected core tool '{tool}' to be registered"
 
     # Sub-agent conditional: run_coding_subagent present iff coding role model is set
-    if settings.role_models.get("coding"):
+    if settings.llm.role_models.get("coding"):
         assert "run_coding_subagent" in result.tool_index
     else:
         assert "run_coding_subagent" not in result.tool_index
 
-    # Verify with CoConfig() (no role models): run_coding_subagent must be absent
-    bare_result = build_tool_registry(CoConfig())
+    # Verify with empty role_models: run_coding_subagent must be absent
+    bare_llm = test_settings().llm.model_copy(update={"role_models": {}})
+    bare_result = build_tool_registry(test_settings(llm=bare_llm))
     assert "run_coding_subagent" not in bare_result.tool_index
 
 
@@ -64,7 +64,7 @@ def test_approval_tools_flagged():
 
 def test_web_tools_do_not_require_approval():
     """web_search and web_fetch follow the common read-only approval path."""
-    result = build_tool_registry(CoConfig.from_settings(settings, cwd=Path.cwd()))
+    result = build_tool_registry(settings)
     assert result.tool_index["web_search"].approval is False
     assert result.tool_index["web_fetch"].approval is False
 
@@ -80,7 +80,7 @@ def test_tool_registry_is_shared_across_agent_types():
 
 def test_build_agent_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set."""
-    result = build_tool_registry(CoConfig())
+    result = build_tool_registry(test_settings(obsidian_vault_path=None, google_credentials_path=None))
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
     assert "search_drive_files" not in result.tool_index
@@ -92,7 +92,7 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
 
 def test_tool_registry_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set (any agent type)."""
-    result = build_tool_registry(CoConfig())
+    result = build_tool_registry(test_settings(obsidian_vault_path=None, google_credentials_path=None))
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
 
@@ -143,7 +143,7 @@ def test_tool_index_loading_policy_metadata():
 
 def test_tool_index_source_axis_native_only():
     """All entries in tool_index from build_agent() are native source (MCP not yet discovered)."""
-    result = build_tool_registry(CoConfig())
+    result = build_tool_registry(test_settings())
     for name, tc in result.tool_index.items():
         assert tc.source == ToolSource.NATIVE, f"{name}: expected NATIVE source before MCP discovery"
 
@@ -176,7 +176,7 @@ def test_toolinfo_enum_construction():
 
 def test_build_agent_registers_tool_lifecycle_capability():
     """build_agent() registers CoToolLifecycle as a capability on the agent."""
-    config = CoConfig.from_settings(settings, cwd=Path.cwd())
+    config = settings
     agent = build_agent(config=config)
     # _root_capability.capabilities holds the user-provided capability list
     children = agent._root_capability.capabilities

@@ -10,8 +10,8 @@ from pathlib import Path
 from rich.table import Table
 
 from co_cli.bootstrap._check import check_settings, check_agent_llm
-from co_cli.config import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, ROLE_REASONING
-from co_cli.deps import CoConfig
+from co_cli.config._core import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, Settings
+from co_cli.config._llm import ROLE_REASONING
 from co_cli.display._core import console
 
 
@@ -37,7 +37,7 @@ class StatusResult:
     obsidian_vault_path: str | None = None
 
 
-def get_status(config: CoConfig, tool_count: int = 0) -> StatusResult:
+def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
     """Gather system status into a plain dataclass (no display side-effects)."""
 
     # -- version --
@@ -59,8 +59,8 @@ def get_status(config: CoConfig, tool_count: int = 0) -> StatusResult:
     shell = "subprocess (approval-gated)"
 
     # -- llm --
-    provider = config.llm_provider.lower()
-    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    provider = config.llm.provider.lower()
+    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
     if not reasoning_entry:
         llm_provider = f"{provider.title()} (no reasoning model configured)"
         llm_status = "misconfigured"
@@ -198,16 +198,17 @@ def check_security(
             data = json.loads(Path(cfg_path).read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        safe_cmds = data.get("shell_safe_commands", [])
+        shell_data = data.get("shell", {})
+        safe_cmds = shell_data.get("safe_commands", []) if isinstance(shell_data, dict) else []
         if isinstance(safe_cmds, list) and "*" in safe_cmds:
             findings.append(SecurityCheckResult(
                 severity="warn",
                 check_id=f"{label}-config-shell-wildcard",
                 detail=(
-                    f"shell_safe_commands contains '*' in {cfg_path} — "
+                    f"shell.safe_commands contains '*' in {cfg_path} — "
                     "all shell commands are auto-approved without prompting"
                 ),
-                remediation=f"Remove '*' from shell_safe_commands in {cfg_path}",
+                remediation=f"Remove '*' from shell.safe_commands in {cfg_path}",
             ))
 
     return findings

@@ -7,74 +7,87 @@ from co_cli.bootstrap._check import (
     check_embedder,
     check_cross_encoder,
 )
-from co_cli.config import ModelConfig, ROLE_REASONING
-from co_cli.deps import CoConfig
+from co_cli.config._core import Settings
+from co_cli.config._llm import ModelConfig, ROLE_REASONING, LlmSettings
+from co_cli.config._knowledge import KnowledgeSettings
 
 
-# --- CoConfig.validate() (config-shape gate, no IO) ---
+# --- LlmSettings.validate_config() (config-shape gate, no IO) ---
 
 
 def test_validate_no_reasoning_model_returns_error() -> None:
-    error = CoConfig(role_models={}).validate()
+    error = LlmSettings.model_construct(role_models={}).validate_config()
     assert error is not None
     assert "reasoning" in error.lower()
 
 
 def test_validate_gemini_no_key_returns_error() -> None:
-    config = CoConfig(
-        llm_provider="gemini",
-        llm_api_key=None,
+    llm = LlmSettings.model_construct(
+        provider="gemini",
+        api_key=None,
         role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
     )
-    error = config.validate()
+    error = llm.validate_config()
     assert error is not None
     assert "LLM_API_KEY" in error
 
 
 def test_validate_gemini_with_key_returns_ok() -> None:
-    config = CoConfig(
-        llm_provider="gemini",
-        llm_api_key="test-key",
+    llm = LlmSettings.model_construct(
+        provider="gemini",
+        api_key="test-key",
         role_models={ROLE_REASONING: ModelConfig(provider="gemini", model="gemini-2.5-flash")},
     )
-    assert config.validate() is None
+    assert llm.validate_config() is None
 
 
 def test_validate_ollama_returns_ok_without_io() -> None:
     """Ollama config with reasoning model configured passes instantly — no HTTP probe."""
-    config = CoConfig(
-        llm_provider="ollama-openai",
+    llm = LlmSettings.model_construct(
+        provider="ollama-openai",
         role_models={ROLE_REASONING: ModelConfig(provider="ollama-openai", model="qwen3:8b")},
     )
-    assert config.validate() is None
+    assert llm.validate_config() is None
 
 
 # --- check_agent_llm (IO probe, runtime diagnostics) ---
 
 
 def test_check_agent_llm_gemini_key_missing_returns_error() -> None:
-    result = check_agent_llm(CoConfig(llm_provider="gemini", llm_api_key=None))
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(provider="gemini", api_key=None),
+    )
+    result = check_agent_llm(config)
     assert result.status == "error"
     assert not result.ok
     assert "LLM_API_KEY" in result.detail
 
 
 def test_check_agent_llm_gemini_key_present_returns_ok() -> None:
-    result = check_agent_llm(CoConfig(llm_provider="gemini", llm_api_key="test-key"))
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(provider="gemini", api_key="test-key"),
+    )
+    result = check_agent_llm(config)
     assert result.status == "ok"
     assert result.ok
 
 
 def test_check_agent_llm_ollama_unreachable_returns_warn() -> None:
     # Port 1 is reserved/unreachable — connection refused immediately.
-    result = check_agent_llm(CoConfig(llm_provider="ollama-openai", llm_host="http://localhost:1"))
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(provider="ollama-openai", host="http://localhost:1"),
+    )
+    result = check_agent_llm(config)
     assert result.status == "warn"
     assert result.ok
 
 
 def test_check_agent_llm_ollama_unreachable_stamps_reason_unreachable() -> None:
     """Unreachable host must set extra['reason']='unreachable' so get_status maps it to 'offline', not 'online'."""
-    result = check_agent_llm(CoConfig(llm_provider="ollama-openai", llm_host="http://localhost:1"))
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(provider="ollama-openai", host="http://localhost:1"),
+    )
+    result = check_agent_llm(config)
     assert result.extra.get("reason") == "unreachable"
 
 
@@ -89,16 +102,19 @@ def test_check_ollama_model_unreachable_returns_warn() -> None:
 # --- check_reranker_llm ---
 
 def test_check_reranker_llm_not_configured_returns_skipped() -> None:
-    config = CoConfig(knowledge_llm_reranker=None)
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(llm_reranker=None),
+    )
     result = check_reranker_llm(config)
     assert result.status == "skipped"
 
 
 def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
-    config = CoConfig(
-        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
-        llm_provider="gemini",
-        llm_api_key=None,
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(
+            llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+        ),
+        llm=LlmSettings.model_construct(provider="gemini", api_key=None),
     )
     result = check_reranker_llm(config)
     assert result.status == "error"
@@ -106,10 +122,11 @@ def test_check_reranker_llm_gemini_no_key_returns_error() -> None:
 
 
 def test_check_reranker_llm_gemini_with_key_returns_ok() -> None:
-    config = CoConfig(
-        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
-        llm_provider="gemini",
-        llm_api_key="test-key",
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(
+            llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+        ),
+        llm=LlmSettings.model_construct(provider="gemini", api_key="test-key"),
     )
     result = check_reranker_llm(config)
     assert result.status == "ok"
@@ -117,10 +134,11 @@ def test_check_reranker_llm_gemini_with_key_returns_ok() -> None:
 
 
 def test_check_reranker_llm_ollama_unreachable_returns_warn() -> None:
-    config = CoConfig(
-        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
-        llm_provider="ollama-openai",
-        llm_host="http://localhost:1",
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(
+            llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
+        ),
+        llm=LlmSettings.model_construct(provider="ollama-openai", host="http://localhost:1"),
     )
     result = check_reranker_llm(config)
     # unreachable host → warn (ok=True), caller must degrade because status != "ok"
@@ -131,15 +149,19 @@ def test_check_reranker_llm_ollama_unreachable_returns_warn() -> None:
 # --- check_embedder ---
 
 def test_check_embedder_provider_none_returns_skipped() -> None:
-    config = CoConfig(knowledge_embedding_provider="none")
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(embedding_provider="none"),
+    )
     result = check_embedder(config)
     assert result.status == "skipped"
 
 
 def test_check_embedder_tei_unreachable_returns_error() -> None:
-    config = CoConfig(
-        knowledge_embedding_provider="tei",
-        knowledge_embed_api_url="http://localhost:1/embed",
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(
+            embedding_provider="tei",
+            embed_api_url="http://localhost:1/embed",
+        ),
     )
     result = check_embedder(config)
     assert result.status == "error"
@@ -147,10 +169,12 @@ def test_check_embedder_tei_unreachable_returns_error() -> None:
 
 
 def test_check_embedder_ollama_unreachable_returns_warn() -> None:
-    config = CoConfig(
-        knowledge_embedding_provider="ollama",
-        knowledge_embedding_model="nomic-embed-text",
-        llm_host="http://localhost:1",
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(
+            embedding_provider="ollama",
+            embedding_model="nomic-embed-text",
+        ),
+        llm=LlmSettings.model_construct(host="http://localhost:1"),
     )
     result = check_embedder(config)
     assert result.status == "warn"
@@ -158,9 +182,9 @@ def test_check_embedder_ollama_unreachable_returns_warn() -> None:
 
 
 def test_check_embedder_gemini_no_key_returns_error() -> None:
-    config = CoConfig(
-        knowledge_embedding_provider="gemini",
-        llm_api_key=None,
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(embedding_provider="gemini"),
+        llm=LlmSettings.model_construct(api_key=None),
     )
     result = check_embedder(config)
     assert result.status == "error"
@@ -170,13 +194,17 @@ def test_check_embedder_gemini_no_key_returns_error() -> None:
 # --- check_cross_encoder ---
 
 def test_check_cross_encoder_not_configured_returns_skipped() -> None:
-    config = CoConfig(knowledge_cross_encoder_reranker_url=None)
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(cross_encoder_reranker_url=None),
+    )
     result = check_cross_encoder(config)
     assert result.status == "skipped"
 
 
 def test_check_cross_encoder_unreachable_returns_error() -> None:
-    config = CoConfig(knowledge_cross_encoder_reranker_url="http://localhost:1/rerank")
+    config = Settings.model_construct(
+        knowledge=KnowledgeSettings.model_construct(cross_encoder_reranker_url="http://localhost:1/rerank"),
+    )
     result = check_cross_encoder(config)
     assert result.status == "error"
     assert not result.ok

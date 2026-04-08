@@ -34,7 +34,7 @@ from co_cli.memory.recall import (
     load_always_on_memories,
 )
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import ROLE_SUMMARIZATION
+from co_cli.config._llm import ROLE_SUMMARIZATION
 from co_cli.deps import CoDeps
 from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
@@ -295,10 +295,10 @@ async def recall_memory(
         created_after: ISO8601 date string; only return memories created on or after this date.
         created_before: ISO8601 date string; only return memories created on or before this date.
     """
-    memory_dir = ctx.deps.config.memory_dir
+    memory_dir = ctx.deps.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -348,7 +348,7 @@ async def recall_memory(
             # Composite relevance + decay scoring — preserves lexical signal alongside recency.
             # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
             # so higher relevance = better match before combining with decay.
-            half_life = ctx.deps.config.memory_recall_half_life_days
+            half_life = ctx.deps.config.memory.recall_half_life_days
             scored: list[tuple[float, MemoryEntry]] = []
             for entry in raw_matches:
                 relevance = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
@@ -504,10 +504,10 @@ async def search_memories(
     if limit < 1:
         return tool_output("limit must be >= 1.", ctx=ctx, count=0, results=[])
 
-    memory_dir = ctx.deps.config.memory_dir
+    memory_dir = ctx.deps.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge_search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
         try:
             results = ctx.deps.knowledge_store.search(
                 query,
@@ -519,7 +519,7 @@ async def search_memories(
                 created_before=created_before,
                 limit=limit,
             )
-            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge_search_backend)
+            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge.search_backend)
             if not results:
                 return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
@@ -632,7 +632,7 @@ async def list_memories(
               Passing kind="article" returns only saved articles.
               Passing kind="memory" returns only conversation memories.
     """
-    memory_dir = ctx.deps.config.memory_dir
+    memory_dir = ctx.deps.memory_dir
     memories = load_memories(memory_dir, kind=kind)
 
     if not memories:
@@ -647,7 +647,7 @@ async def list_memories(
             offset=offset,
             limit=limit,
             has_more=False,
-            capacity=ctx.deps.config.memory_max_count,
+            capacity=ctx.deps.config.memory.max_count,
             memories=[],
         )
 
@@ -683,7 +683,7 @@ async def list_memories(
     has_more = offset + limit < total
 
     # Format as markdown list with lifecycle indicators
-    lines = [f"Total memories: {total}/{ctx.deps.config.memory_max_count}\n"]
+    lines = [f"Total memories: {total}/{ctx.deps.config.memory.max_count}\n"]
 
     for md in memory_dicts:
         # Format dates
@@ -724,7 +724,7 @@ async def list_memories(
         offset=offset,
         limit=limit,
         has_more=has_more,
-        capacity=ctx.deps.config.memory_max_count,
+        capacity=ctx.deps.config.memory.max_count,
         memories=memory_dicts,
     )
 
@@ -756,7 +756,7 @@ async def update_memory(
         old_content: Exact passage to replace (must appear exactly once).
         new_content: Replacement text.
     """
-    knowledge_dir = ctx.deps.config.memory_dir
+    knowledge_dir = ctx.deps.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")
@@ -867,7 +867,7 @@ async def append_memory(
     from co_cli.tools.resource_lock import ResourceBusyError
     from co_cli.tools.tool_errors import tool_error
 
-    knowledge_dir = ctx.deps.config.memory_dir
+    knowledge_dir = ctx.deps.memory_dir
     match = next((p for p in knowledge_dir.glob("*.md") if p.stem == slug), None)
     if match is None:
         raise FileNotFoundError(f"Memory '{slug}' not found")

@@ -6,8 +6,9 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
+from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 from co_cli.tools.tool_result_storage import (
@@ -16,7 +17,7 @@ from co_cli.tools.tool_result_storage import (
     persist_if_oversized,
 )
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 _AGENT = build_agent(config=_CONFIG)
 
 
@@ -36,7 +37,8 @@ def _make_ctx_with_index(
     )
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(tool_results_dir=tmp_path / "tool-results"),
+        config=test_settings(),
+        tool_results_dir=tmp_path / "tool-results",
         tool_index={tool_name: info},
     )
     return RunContext(
@@ -74,7 +76,8 @@ def test_tool_output_falls_back_when_tool_not_in_index(tmp_path: Path) -> None:
     """tool_output() falls back to global threshold when tool_name is not in tool_index."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(tool_results_dir=tmp_path / "tool-results"),
+        config=test_settings(),
+        tool_results_dir=tmp_path / "tool-results",
         tool_index={},
     )
     ctx = RunContext(

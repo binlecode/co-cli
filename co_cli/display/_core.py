@@ -11,7 +11,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 from rich.theme import Theme
 
-from co_cli.config import settings
+from co_cli.config._core import settings
 
 if TYPE_CHECKING:
     from co_cli.tools.tool_output import ToolResultPayload

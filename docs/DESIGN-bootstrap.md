@@ -12,7 +12,7 @@ co_cli.main  (module load)
 │          Layer 1: ~/.config/co-cli/settings.json
 │          Layer 2: <cwd>/.co-cli/settings.json → _deep_merge_settings()
 │          Layer 3: fill_from_env (CO_CLI_* env vars)
-│          → Settings singleton cached
+│          → Settings singleton cached (nested sub-models: llm, knowledge, web, memory, subagent, shell)
 │
 ├─ SQLiteSpanExporter() → TracerProvider → Agent.instrument_all()
 │
@@ -24,8 +24,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ AsyncExitStack()
 │
 ├─ create_deps(frontend, stack)
-│  ├─ CoConfig.from_settings(settings, cwd=Path.cwd())
-│  ├─ config.validate() → error: raise ValueError (config shape only)
+│  ├─ settings singleton used directly; resolve_workspace_paths(settings, cwd)
+│  ├─ config.llm.validate_config() → error: raise ValueError (config shape only)
 │  ├─ ModelRegistry.from_config(config) → model_registry
 │  ├─ build_tool_registry(config) → ToolRegistry(toolset, mcp_toolsets, tool_index)
 │  ├─ [if mcp_toolsets]
@@ -38,14 +38,14 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  │      grep → return (config, None)
 │  │      _resolve_reranker() → probe embedder → resolve backend
 │  │      config fields mutated directly to reflect runtime backend
-│  │      degradation recorded in config.degradations dict
+│  │      degradation recorded in deps.degradations dict
 │  │      construct KnowledgeStore with resolved config
 │  │      on fail → hybrid falls back to fts5, then grep (returns None)
 │  ├─ _sync_knowledge_store(store, config, frontend)
 │  │      reconcile store with memory + library files on disk
 │  │      hash-based — skips unchanged files
 │  │      on fail → store closed, returns None
-│  └─ → CoDeps(shell, config, model_registry, knowledge_store, tool_index, skill_commands, runtime)
+│  └─ → CoDeps(shell, config=settings, paths, model_registry, knowledge_store, tool_index, skill_commands, runtime)
 │
 ├─ completer.words updated with skills
 ├─ build_agent(config=deps.config, model_registry=deps.model_registry) → Agent
@@ -62,9 +62,9 @@ REPL loop begins
 
 ## 1. Settings Loading And Deps Initialization
 
-### Settings Loading (`config.py`)
+### Settings Loading (`config/`)
 
-`Settings` is a Pydantic `BaseModel` built by `load_config()` and accessed via a lazy module-level singleton (`settings`). First access triggers `_ensure_dirs()` to create `~/.config/co-cli/` and `~/.local/share/co-cli/` if missing, then `load_config()`.
+`Settings` is a Pydantic `BaseModel` with nested sub-models (`LlmSettings`, `KnowledgeSettings`, `WebSettings`, `MemorySettings`, `SubagentSettings`, `ShellSettings`), built by `load_config()` in `co_cli/config/_core.py` and accessed via a lazy module-level singleton (`settings`). First access triggers `_ensure_dirs()` to create `~/.config/co-cli/` and `~/.local/share/co-cli/` if missing, then `load_config()`.
 
 Three-layer merge, later layers win:
 
@@ -76,9 +76,9 @@ Layer 3: env vars via fill_from_env model_validator
 
 `fill_from_env` runs as `model_validator(mode='before')`, so env vars override both config files before validation.
 
-`role_models` defaults:
+`llm.role_models` defaults:
 - `gemini`: reasoning only → `gemini-3-flash-preview`; all other roles empty
-- `ollama-openai`: all six roles populated with hardcoded defaults in `config.py`
+- `ollama-openai`: all six roles populated with hardcoded defaults in `config/_llm.py`
 
 Merge order is provider defaults for missing roles, then explicit config values, then env var overrides.
 
@@ -94,58 +94,62 @@ First access resolves and caches `_settings`; later accesses reuse the singleton
 
 ### Deps Initialization (`create_deps()` In `bootstrap/_bootstrap.py`)
 
-`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It converts the `Settings` singleton into `CoConfig`, builds `ModelRegistry` and `ToolRegistry`, connects MCP servers and discovers their tools, and assembles `CoDeps`. It calls `config.validate()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
+`create_deps()` (in `bootstrap/_bootstrap.py`) is async. It uses the `Settings` singleton directly (no `CoConfig` conversion), builds `ModelRegistry` and `ToolRegistry`, connects MCP servers and discovers their tools, and assembles `CoDeps` with resolved workspace paths. It calls `config.llm.validate_config()` as a config-shape gate: checks that a reasoning model is configured and (for Gemini) that the API key is present — no HTTP probes. Provider connectivity is deferred to runtime; `run_turn()` handles `ModelHTTPError`/`ModelAPIError` with retries and clean error messages.
 
 ```text
 create_deps(frontend, stack):
-    config = CoConfig.from_settings(settings, cwd=Path.cwd())
-    config.validate() → error: raise ValueError
-    [if ollama-openai] probe_ollama_context(host, model)  # Step 2b: fail-fast on undersized num_ctx; override config.llm_num_ctx with runtime value
+    config = settings  # Settings singleton used directly
+    paths = resolve_workspace_paths(settings, cwd=Path.cwd())
+    config.llm.validate_config() → error: raise ValueError
+    [if ollama-openai] probe_ollama_context(host, model)  # Step 2b: fail-fast on undersized num_ctx; override config.llm.num_ctx with runtime value
     model_registry = ModelRegistry.from_config(config)
     tool_registry = build_tool_registry(config)  # native toolset + mcp toolsets
     [if mcp_toolsets]
         enter each MCP server on stack  # stays alive for session
         discover_mcp_tools(mcp_toolsets) → mcp_index
         tool_index.update(mcp_index)
-    return CoDeps(shell, config, model_registry, tool_index, runtime)
+    return CoDeps(config=settings, **paths, shell, model_registry, tool_index, runtime)
 ```
 
 Knowledge backend resolution (IO probes to embedder/reranker, `KnowledgeStore` construction) and file sync happen inside `create_deps()` as Steps 6-7, before CoDeps assembly.
 
-### `CoConfig` Mutation Model
+### Settings And Path Resolution
 
-`CoConfig` is a plain `@dataclass` (not frozen). During bootstrap, `create_deps()` assigns fields directly on the same instance as degradation resolves runtime values:
+`Settings` is a Pydantic `BaseModel` with nested sub-models. `CoDeps.config` holds the `Settings` instance directly — there is no intermediate `CoConfig` dataclass. During bootstrap, `create_deps()` may mutate Settings fields in-place as degradation resolves runtime values:
 
 ```text
-config = CoConfig.from_settings(settings, cwd)   # initial from user settings
-_discover_knowledge_backend(config, ...)          # mutates config fields in-place (backend, reranker, degradations)
-→ CoDeps(config=config)                           # final instance shared by reference
+config = settings                                 # Settings singleton used directly
+paths = resolve_workspace_paths(settings, cwd)    # cwd-relative paths for CoDeps
+_discover_knowledge_backend(config, ...)          # mutates config fields in-place (backend, reranker)
+→ CoDeps(config=settings, **paths, degradations)  # final instance; paths and degradations on CoDeps
 ```
 
-After entering `CoDeps`, config is read-only by convention — sub-agents share the same instance by reference and nothing mutates it once bootstrap completes. Any service that degrades during bootstrap records the event in `config.degradations` (a `dict[str, str]` keyed by service name), keeping config fields as runtime truth without per-service degradation fields.
+After entering `CoDeps`, config is read-only by convention — sub-agents share the same instance by reference and nothing mutates it once bootstrap completes. Degradation records live on `deps.degradations` (a `dict[str, str]` keyed by service name on `CoDeps`, not on Settings), and workspace paths live on `CoDeps` fields (`deps.memory_dir`, `deps.library_dir`, etc.).
 
 Key points:
-- Config reflects runtime reality — `deps.config.knowledge_search_backend` is the actual backend after degradation, not the user's original setting
-- `deps.config.degradations` records what changed and why (e.g. `{"knowledge": "hybrid → fts5 (embedder unavailable)"}`) — generic, any service can use it
-- `CoConfig.from_settings(settings, cwd)` resolves all fields in a single call
-- `deps.config.llm_num_ctx` may be overridden during Step 2b with the runtime Modelfile value probed from Ollama — it reflects the actual allocated context window, not just the settings value
+- Config reflects runtime reality — `deps.config.knowledge.search_backend` is the actual backend after degradation, not the user's original setting
+- `deps.degradations` records what changed and why (e.g. `{"knowledge": "hybrid → fts5 (embedder unavailable)"}`) — generic, any service can use it
+- Path fields (`memory_dir`, `library_dir`, `skills_dir`, `sessions_dir`, `workspace_root`, `tool_results_dir`, `knowledge_db_path`, `obsidian_vault_path`) live on `CoDeps`, resolved via `resolve_workspace_paths()`
+- `deps.config.llm.num_ctx` may be overridden during Step 2b with the runtime Modelfile value probed from Ollama — it reflects the actual allocated context window, not just the settings value
 - Static instructions (personality, rules, counter-steering) are assembled inside `build_agent()`, not here — they are an agent concern
 
 ### `CoDeps` Structure
 
-`CoDeps` is flat — service handles (`shell`, `knowledge_store`), registries (`model_registry`, `tool_index`, `skill_commands`), and config are top-level fields. Three grouped sub-objects hold mutable state:
+`CoDeps` is flat — service handles (`shell`, `knowledge_store`), registries (`model_registry`, `tool_index`, `skill_commands`), workspace paths, degradations, and config are top-level fields. Two grouped sub-objects hold mutable state:
 
 | Field / Group | Lifetime | Sub-agent inheritance |
 |---------------|----------|-----------------------|
 | `shell`, `knowledge_store`, `model_registry` | Session | Copied by reference (shared) |
 | `tool_index`, `skill_commands` | Session | Copied by reference (shared) |
-| `config` (`CoConfig`) | Session | Copied by reference (read-only by convention after bootstrap) |
+| `config` (`Settings`) | Session | Copied by reference (read-only by convention after bootstrap) |
+| workspace paths (`memory_dir`, `library_dir`, etc.) | Session | Copied by reference (shared) |
+| `degradations` | Session | Copied by reference (shared) |
 | `session` (`CoSessionState`) | Session, partially inherited | Credentials and approval rules inherited; per-session fields reset |
 | `runtime` (`CoRuntimeState`) | Per-turn transient | Reset for sub-agents |
 
 ## 2. Provider And Model Checks
 
-`config.validate()` (on `CoConfig` in `deps.py`) runs inside `create_deps()` as the config-shape gate — no IO. It checks that minimum config is present (reasoning role configured, Gemini API key present). Provider connectivity is deferred to runtime; `run_turn()` handles connection and model errors with retries and clean REPL messages.
+`config.llm.validate_config()` (on `LlmSettings` in `config/_llm.py`) runs inside `create_deps()` as the config-shape gate — no IO. It checks that minimum config is present (reasoning role configured, Gemini API key present). Provider connectivity is deferred to runtime; `run_turn()` handles connection and model errors with retries and clean REPL messages.
 
 | Condition | Behavior |
 |-----------|----------|
@@ -158,7 +162,7 @@ On-demand diagnostics: `check_agent_llm` (IO probe) is available via `co config`
 
 ### Step 2b — Ollama Context Probe
 
-Immediately after `config.validate()`, when the provider is `ollama-openai`, `create_deps()` calls `probe_ollama_context(llm_host, reasoning_model)` from `_check.py`. This probes `/api/show` and extracts `num_ctx` from the Modelfile `parameters` string — the actual runtime allocation, not the model's theoretical maximum from `model_info`.
+Immediately after `config.llm.validate_config()`, when the provider is `ollama-openai`, `create_deps()` calls `probe_ollama_context(llm_host, reasoning_model)` from `_check.py`. This probes `/api/show` and extracts `num_ctx` from the Modelfile `parameters` string — the actual runtime allocation, not the model's theoretical maximum from `model_info`.
 
 ```text
 probe_ollama_context(host, model):
@@ -167,19 +171,19 @@ probe_ollama_context(host, model):
     num_ctx < 65536  → error: raise ValueError (fail-fast; session never starts)
     num_ctx >= 65536 → ok; return extra={"num_ctx": num_ctx}
 
-if ok and runtime num_ctx != config.llm_num_ctx:
-    config.llm_num_ctx = runtime_num_ctx   # direct field assignment; no replace()
+if ok and runtime num_ctx != config.llm.num_ctx:
+    config.llm.num_ctx = runtime_num_ctx   # direct field assignment
 ```
 
 `MIN_AGENTIC_CONTEXT = 65_536` (64K) is the hard floor defined in `_check.py`. Below this, system prompt + tools + working history + one tool result + compaction headroom + output reserve + safety margin cannot fit. The agent would compact every turn, and the summarizer call itself would consume most of the remaining context.
 
 | Condition | Behavior |
 |-----------|----------|
-| Ollama unreachable (probe fails) | `warn`; probe skipped; startup continues with settings `llm_num_ctx` |
+| Ollama unreachable (probe fails) | `warn`; probe skipped; startup continues with settings `llm.num_ctx` |
 | Model not found in `/api/show` | `warn`; probe skipped; startup continues |
 | `num_ctx` absent from Modelfile | `warn`; no override; startup continues |
 | `num_ctx < MIN_AGENTIC_CONTEXT` | `error`; `ValueError` raised; session never starts |
-| `num_ctx >= MIN_AGENTIC_CONTEXT` and differs from config | `config.llm_num_ctx` overridden with runtime value |
+| `num_ctx >= MIN_AGENTIC_CONTEXT` and differs from config | `config.llm.num_ctx` overridden with runtime value |
 | `num_ctx` matches config exactly | no override; startup continues |
 
 ## 3. Entry Conditions
@@ -239,7 +243,7 @@ Details:
 ### Step 2 - Session Restore (see [DESIGN-context.md](DESIGN-context.md) §2.3)
 
 ```text
-session_data = find_latest_session(deps.config.sessions_dir)  # mtime scan
+session_data = find_latest_session(deps.sessions_dir)  # mtime scan
 
 if session_data is not None:
     deps.session.session_id = session_data["session_id"]
@@ -248,7 +252,7 @@ else:
     session_data = new_session()   # standard UUID with dashes
     deps.session.session_id = session_data["session_id"]
     try:
-        save_session(deps.config.sessions_dir, session_data)
+        save_session(deps.sessions_dir, session_data)
     except OSError:
         frontend.on_status("Session save failed — session will not persist")
     frontend.on_status("Session new ...")
@@ -285,7 +289,7 @@ Skills load inside `create_deps()` as part of deps assembly:
 
 ```text
 create_deps() step 5:
-    skill_commands = _load_skills(config.skills_dir, settings, user_skills_dir=config.user_skills_dir)
+    skill_commands = _load_skills(deps.skills_dir, settings, user_skills_dir=deps.user_skills_dir)
         pass 1: co_cli/skills/*.md (built-in, lowest precedence)
         pass 2: user_skills_dir/*.md (user-global)
         pass 3: skills_dir/*.md (project-local, highest precedence)
@@ -309,14 +313,14 @@ Live skill reloading happens after startup in the main loop: before each REPL pr
 ```text
 "grep" in config → return (config, None)
 otherwise        → resolve reranker, probe embedder
-                   update config: knowledge_search_backend = resolved backend
-                   record degradation in config.degradations dict
+                   update config: knowledge.search_backend = resolved backend
+                   record degradation in deps.degradations dict
                    construct KnowledgeStore with resolved config
                    on construction failure: hybrid falls back to fts5, then grep (None)
                    degradation statuses reported via frontend.on_status()
 ```
 
-Config reflects runtime reality: `deps.config.knowledge_search_backend` is the actual backend. `deps.config.degradations["knowledge"]` records what changed and why when degradation occurred. Tools and status read the backend from config.
+Config reflects runtime reality: `deps.config.knowledge.search_backend` is the actual backend. `deps.degradations["knowledge"]` records what changed and why when degradation occurred. Tools and status read the backend from config.
 
 ## 7. Boundary, State Mutations, And Failure Paths
 
@@ -330,7 +334,7 @@ display_welcome_banner(deps)
 begin REPL loop
 ```
 
-The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tool_index)`), skill count (`len(deps.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The knowledge line shows the current runtime backend from config; when `config.degradations` has a `"knowledge"` entry, it appends the degradation detail. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when `config.degradations` is non-empty. Reranker-only degradation is already reported by individual status lines before the banner.
+The banner marks the boundary between startup and interactive use. All status messages from knowledge resolution, wakeup steps, and skills loading appear above it. The banner reads version, model, cwd, tool count (`len(deps.tool_index)`), skill count (`len(deps.skill_commands)`), and MCP server count (`len(deps.config.mcp_servers or {})`) directly from `deps` — no health probe needed. The knowledge line shows the current runtime backend from config; when `deps.degradations` has a `"knowledge"` entry, it appends the degradation detail. The readiness headline shows `✓ Ready` normally, or `✓ Ready  (degraded)` when `deps.degradations` is non-empty. Reranker-only degradation is already reported by individual status lines before the banner.
 
 ### State Mutations Summary
 
@@ -338,7 +342,7 @@ The banner marks the boundary between startup and interactive use. All status me
 |-------|--------|-------|
 | `deps.knowledge_store` | `create_deps()` Step 6-7 | `KnowledgeStore` or `None` (sync failure disables FTS) — set at construction, never mutated |
 | `deps.session.session_id` | `restore_session()` (inline wakeup) | Single write: restored or new UUID hex |
-| `deps.model_registry` | `create_deps()` Step 3 | `ModelRegistry` built from resolved `CoConfig` |
+| `deps.model_registry` | `create_deps()` Step 3 | `ModelRegistry` built from resolved `Settings` |
 | `deps.tool_index` | Native + MCP entries set by `create_deps()` (native via `build_tool_registry()`, MCP via `discover_mcp_tools()`) | Full `dict[str, ToolInfo]` map with per-tool `LoadPolicy` enum (`ALWAYS`/`DEFERRED`) |
 | `deps.skill_commands` | `create_deps()` via `_load_skills()` | Full dict of all loaded skills; model-facing registry derived via `get_skill_registry()` |
 | `completer.words` | Before `create_deps()`: COMMANDS-only; after skills load: updated by `_build_completer_words()` | COMMANDS-only at startup; COMMANDS + skills after skills load |

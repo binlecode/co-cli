@@ -29,8 +29,10 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from co_cli.knowledge._frontmatter import parse_frontmatter
 
+from co_cli.config._core import SEARCH_DB
+
 if TYPE_CHECKING:
-    from co_cli.deps import CoConfig
+    from co_cli.config._core import Settings
 
 try:
     import pysqlite3 as sqlite3
@@ -218,28 +220,29 @@ class KnowledgeStore:
       - 'hybrid': FTS5 + sqlite-vec cosine vector search, RRF merge.
 
     Usage:
-        idx = KnowledgeStore(config=CoConfig())
+        idx = KnowledgeStore(config=Settings())
         idx.sync_dir("memory", knowledge_dir)
         results = idx.search("pytest testing")
         idx.close()
     """
 
-    def __init__(self, *, config: "CoConfig") -> None:
-        config.knowledge_db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db_path = config.knowledge_db_path
-        self._backend = config.knowledge_search_backend
-        self._embedding_provider = config.knowledge_embedding_provider
-        self._embedding_model = config.knowledge_embedding_model
-        self._embedding_dims = config.knowledge_embedding_dims
+    def __init__(self, *, config: "Settings", knowledge_db_path: Path | None = None) -> None:
+        db_path = knowledge_db_path if knowledge_db_path is not None else SEARCH_DB
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_path = db_path
+        self._backend = config.knowledge.search_backend
+        self._embedding_provider = config.knowledge.embedding_provider
+        self._embedding_model = config.knowledge.embedding_model
+        self._embedding_dims = config.knowledge.embedding_dims
         self._docs_vec_table = f"docs_vec_{self._embedding_dims}"
         self._chunks_vec_table = f"chunks_vec_{self._embedding_dims}"
-        self._llm_host = config.llm_host
-        self._llm_api_key = config.llm_api_key
-        self._embed_api_url = config.knowledge_embed_api_url
-        self._cross_encoder_url = config.knowledge_cross_encoder_reranker_url
-        self._llm_reranker = config.knowledge_llm_reranker
-        self._chunk_size = config.knowledge_chunk_size
-        self._chunk_overlap = max(0, min(config.knowledge_chunk_overlap, config.knowledge_chunk_size - 1)) if config.knowledge_chunk_size > 0 else 0
+        self._llm_host = config.llm.host
+        self._llm_api_key = config.llm.api_key
+        self._embed_api_url = config.knowledge.embed_api_url
+        self._cross_encoder_url = config.knowledge.cross_encoder_reranker_url
+        self._llm_reranker = config.knowledge.llm_reranker
+        self._chunk_size = config.knowledge.chunk_size
+        self._chunk_overlap = max(0, min(config.knowledge.chunk_overlap, config.knowledge.chunk_size - 1)) if config.knowledge.chunk_size > 0 else 0
 
         # Determine effective reranker provider from new config fields:
         # cross-encoder (TEI) takes priority; LLM listwise as fallback; none if neither configured.

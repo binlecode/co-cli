@@ -9,20 +9,31 @@ from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoConfig, CoDeps
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.shell import run_shell_command
+from tests._settings import test_settings
 from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx(*, tool_call_approved: bool = True, **config_overrides) -> RunContext:
     shell = config_overrides.pop("shell", ShellBackend())
+    # Map old flat config fields to nested sub-models
+    shell_fields = {}
+    settings_fields = {}
+    for key in list(config_overrides):
+        if key in ("shell_safe_commands", "shell_max_timeout"):
+            mapped = key.replace("shell_", "")
+            shell_fields[mapped] = config_overrides.pop(key)
+    if shell_fields:
+        settings_fields["shell"] = test_settings().shell.model_copy(update=shell_fields)
+    config = test_settings(**settings_fields)
     deps = CoDeps(
         shell=shell,
-        config=CoConfig(**config_overrides),
+        config=config,
     )
     return RunContext(
         deps=deps,

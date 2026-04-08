@@ -99,7 +99,7 @@ Five history processors run in this exact order:
 | `inject_opening_context` | once per new user turn, recalls top-3 memories matching user message as trailing `SystemPromptPart` |
 | `summarize_history_window` | when history exceeds compaction threshold, keeps head + summary marker + tail; summarizer uses structured template (Goal, Key Decisions, Working Set, Progress, Next Steps) |
 
-**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm_num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, always-on memories, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
+**Compaction** is budget-driven: `resolve_compaction_budget()` uses reasoning model context window, `llm.num_ctx` override, or 100K fallback. Triggers at 85% of budget. `_gather_compaction_context()` enriches the summarizer with file paths from `ToolCallPart.args`, pending todos, always-on memories, and prior summary text detected by the `[Summary of` prefix (capped at 4K chars). `_build_summarizer_prompt()` assembles the final prompt as: template → context addendum → personality addendum (personality always last).
 
 LLM summarization falls back to a static marker when model registry is absent, failure count ≥ 3, or the summarizer call fails.
 
@@ -153,8 +153,8 @@ Persistent knowledge is flat Markdown files with YAML frontmatter.
 
 | Store | Path | Contents |
 | --- | --- | --- |
-| memory | `config.memory_dir` (`.co-cli/memory/`) | conversation-derived memories and session-summary artifacts |
-| articles | `config.library_dir` | saved external references and fetched docs |
+| memory | `deps.memory_dir` (`.co-cli/memory/`) | conversation-derived memories and session-summary artifacts |
+| articles | `deps.library_dir` | saved external references and fetched docs |
 
 **Frontmatter schema** — `validate_memory_frontmatter()` enforces:
 
@@ -265,22 +265,22 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | personality for static prompt assembly and memory injection |
 | `doom_loop_threshold` | `CO_CLI_DOOM_LOOP_THRESHOLD` | `3` | identical-tool-call streak for warning injection |
 | `max_reflections` | `CO_CLI_MAX_REFLECTIONS` | `3` | shell-error streak for reflection-cap injection |
-| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama context budget for compaction |
+| `llm.num_ctx` | `LLM_NUM_CTX` | `262144` | Ollama context budget for compaction |
 
 ### Session
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `sessions_dir` | n/a | `<cwd>/.co-cli/sessions` | workspace-relative; not configurable via settings |
+| `deps.sessions_dir` | n/a | `<cwd>/.co-cli/sessions` | workspace-relative; resolved onto `CoDeps`, not configurable via settings |
 
 ### Memory
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `memory_max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | memory-only retention cap |
-| `memory_recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
-| `memory_auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["correction", "preference"]` | tags for auto-signal saving |
-| `memory_injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
+| `memory.max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | memory-only retention cap |
+| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
+| `memory.auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["correction", "preference"]` | tags for auto-signal saving |
+| `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
 
 ### Knowledge
 
@@ -288,25 +288,25 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | --- | --- | --- | --- |
 | `obsidian_vault_path` | `OBSIDIAN_VAULT_PATH` | `None` | optional Obsidian vault |
 | `library_path` | `CO_LIBRARY_PATH` | `None` | override for `library_dir` |
-| `knowledge_search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | `grep`, `fts5`, or `hybrid` |
-| `knowledge_embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding provider |
-| `knowledge_embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | embedding model |
-| `knowledge_embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | embedding dimension |
-| `knowledge_embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
-| `knowledge_cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
-| `knowledge_llm_reranker` | — | `None` | optional LLM reranker |
-| `knowledge_chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size for non-memory sources |
-| `knowledge_chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | overlap between chunks |
+| `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | `grep`, `fts5`, or `hybrid` |
+| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | embedding provider |
+| `knowledge.embedding_model` | `CO_KNOWLEDGE_EMBEDDING_MODEL` | `embeddinggemma` | embedding model |
+| `knowledge.embedding_dims` | `CO_KNOWLEDGE_EMBEDDING_DIMS` | `1024` | embedding dimension |
+| `knowledge.embed_api_url` | `CO_KNOWLEDGE_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
+| `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI reranker URL |
+| `knowledge.llm_reranker` | — | `None` | optional LLM reranker |
+| `knowledge.chunk_size` | `CO_CLI_KNOWLEDGE_CHUNK_SIZE` | `600` | chunk size for non-memory sources |
+| `knowledge.chunk_overlap` | `CO_CLI_KNOWLEDGE_CHUNK_OVERLAP` | `80` | overlap between chunks |
 
 ### Delegation
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `subagent_scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | scope prefix length in sub-agent outputs |
-| `subagent_max_requests_coder` | `CO_CLI_SUBAGENT_MAX_REQUESTS_CODER` | `10` | coding sub-agent budget |
-| `subagent_max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | research sub-agent budget |
-| `subagent_max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | analysis sub-agent budget |
-| `subagent_max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | reasoning sub-agent budget |
+| `subagent.scope_chars` | `CO_CLI_SUBAGENT_SCOPE_CHARS` | `120` | scope prefix length in sub-agent outputs |
+| `subagent.max_requests_coder` | `CO_CLI_SUBAGENT_MAX_REQUESTS_CODER` | `10` | coding sub-agent budget |
+| `subagent.max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | research sub-agent budget |
+| `subagent.max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | analysis sub-agent budget |
+| `subagent.max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | reasoning sub-agent budget |
 
 ## 4. Files
 

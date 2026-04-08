@@ -8,20 +8,21 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig, CoSessionState, CoRuntimeState, make_subagent_deps
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps, CoSessionState, CoRuntimeState, make_subagent_deps
+from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.subagent import run_coding_subagent, _merge_turn_usage
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx() -> RunContext:
     """Return a real RunContext with no model_registry — triggers unavailable guard."""
     deps = CoDeps(
         shell=ShellBackend(), model_registry=None,
-        config=CoConfig(),
+        config=test_settings(),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -50,9 +51,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
     base = CoDeps(
         shell=ShellBackend(),
         skill_commands={"my-skill": skill},
-        config=CoConfig(
+        config=test_settings(
             brave_search_api_key="test-key",
-            memory_max_count=500,
+            memory=test_settings().memory.model_copy(update={"max_count": 500}),
         ),
         session=CoSessionState(
             session_id="parent-session",
@@ -90,7 +91,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     # Config inherited from parent
     assert isolated.config.brave_search_api_key == "test-key"
-    assert isolated.config.memory_max_count == 500
+    assert isolated.config.memory.max_count == 500
 
     # Service handles shared (same objects)
     assert isolated.shell is base.shell
@@ -101,7 +102,7 @@ def test_merge_turn_usage_alias_then_accumulate() -> None:
     """_merge_turn_usage aliases on first call (None) and accumulates on second call."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 

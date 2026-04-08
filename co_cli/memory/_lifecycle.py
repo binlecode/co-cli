@@ -86,7 +86,7 @@ async def _persist_memory_inner(
         _detect_category,
     )
 
-    memory_dir = deps.config.memory_dir
+    memory_dir = deps.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     # Write-strict: reject unknown artifact_type values before writing
@@ -109,9 +109,9 @@ async def _persist_memory_inner(
     all_memories = load_memories(memory_dir, kind="memory")
     total_count = len(all_memories)
 
-    if total_count > deps.config.memory_max_count:
+    if total_count > deps.config.memory.max_count:
         logger.info(
-            f"Memory limit exceeded ({total_count}/{deps.config.memory_max_count}) "
+            f"Memory limit exceeded ({total_count}/{deps.config.memory.max_count}) "
             f"- triggering retention cut"
         )
         decay_result = await enforce_retention(deps, all_memories)
@@ -175,7 +175,7 @@ async def _write_memory(
                         norm_tags = [t.lower() for t in tags] if tags else []
                         update_result = overwrite_memory(
                             memory_dir, save_result.target_slug, content,
-                            norm_tags, deps.config.memory_auto_save_tags,
+                            norm_tags, deps.config.memory.auto_save_tags,
                             knowledge_store=deps.knowledge_store,
                         )
                 except ResourceBusyError:
@@ -202,7 +202,7 @@ async def _write_memory(
         "kind": "memory",
         "created": datetime.now(timezone.utc).isoformat(),
         "tags": tags,
-        "provenance": provenance if provenance is not None else _detect_provenance(tags, deps.config.memory_auto_save_tags),
+        "provenance": provenance if provenance is not None else _detect_provenance(tags, deps.config.memory.auto_save_tags),
         "auto_category": _detect_category(tags),
         "certainty": _classify_certainty(content),
     }

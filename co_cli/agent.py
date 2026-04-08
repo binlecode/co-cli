@@ -11,8 +11,9 @@ from pydantic_ai import Agent, DeferredToolRequests, RunContext
 from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
 from pydantic_ai.tools import ToolDefinition
 
-from co_cli.config import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
-from co_cli.deps import CoDeps, CoConfig, ToolInfo, LoadPolicy, ToolSource
+from co_cli.config._llm import ROLE_CODING, ROLE_RESEARCH, ROLE_ANALYSIS, ROLE_REASONING
+from co_cli.config._core import Settings
+from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
 from co_cli._model_factory import ResolvedModel
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.context._history import (
@@ -58,7 +59,7 @@ class ToolRegistry:
     tool_index: dict[str, ToolInfo]
 
 
-def _build_mcp_toolsets(config: CoConfig) -> list:
+def _build_mcp_toolsets(config: Settings) -> list:
     """Build pydantic-ai MCP toolset objects from config.mcp_servers."""
     if not config.mcp_servers:
         return []
@@ -88,7 +89,7 @@ def _build_mcp_toolsets(config: CoConfig) -> list:
 
 
 def _build_filtered_toolset(
-    config: CoConfig,
+    config: Settings,
 ) -> "tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]":
     """Build a FilteredToolset containing all tools for this config.
 
@@ -183,13 +184,13 @@ def _build_filtered_toolset(
     _reg(list_background_tasks, load=_D, search_hint="list background tasks")
 
     # Sub-agent tools — registered only when the role model is configured
-    if config.role_models.get(ROLE_CODING):
+    if config.llm.role_models.get(ROLE_CODING):
         _reg(run_coding_subagent, load=_D, search_hint="coding sub-agent delegate code")
-    if config.role_models.get(ROLE_RESEARCH):
+    if config.llm.role_models.get(ROLE_RESEARCH):
         _reg(run_research_subagent, load=_D, search_hint="research sub-agent delegate search")
-    if config.role_models.get(ROLE_ANALYSIS):
+    if config.llm.role_models.get(ROLE_ANALYSIS):
         _reg(run_analysis_subagent, load=_D, search_hint="analysis sub-agent delegate analyze")
-    if config.role_models.get(ROLE_REASONING):
+    if config.llm.role_models.get(ROLE_REASONING):
         _reg(run_reasoning_subagent, load=_D, search_hint="reasoning sub-agent delegate think")
 
     # Domain tools — conditional on config presence; excluded when integration absent
@@ -230,7 +231,7 @@ def _build_filtered_toolset(
     return inner.filtered(_filter), native_index
 
 
-def build_tool_registry(config: CoConfig) -> ToolRegistry:
+def build_tool_registry(config: Settings) -> ToolRegistry:
     """Build the tool registry from config.
 
     Pure config — no IO. Called once in create_deps().
@@ -248,7 +249,7 @@ def build_tool_registry(config: CoConfig) -> ToolRegistry:
 
 def build_agent(
     *,
-    config: CoConfig,
+    config: Settings,
     model_registry: "ModelRegistry | None" = None,
     tool_registry: ToolRegistry | None = None,
 ) -> Agent[CoDeps, str | DeferredToolRequests]:
@@ -275,9 +276,9 @@ def build_agent(
     # Assemble static instructions (personality, rules, counter-steering) once at build time.
     from co_cli.prompts._assembly import build_static_instructions
     from co_cli.prompts.model_quirks._loader import normalize_model_name
-    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
     normalized_model = normalize_model_name(reasoning_entry.model) if reasoning_entry else ""
-    static_instructions = build_static_instructions(config.llm_provider, normalized_model, config)
+    static_instructions = build_static_instructions(config.llm.provider, normalized_model, config)
 
     # Static layer — set once at agent construction; does not change between turns.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
@@ -324,11 +325,10 @@ def build_agent(
     @agent.instructions
     def add_always_on_memories(ctx: RunContext[CoDeps]) -> str:
         """Inject always_on memories as standing context every turn."""
-        memory_dir = ctx.deps.config.memory_dir
-        entries = load_always_on_memories(memory_dir)
+        entries = load_always_on_memories(ctx.deps.memory_dir)
         if not entries:
             return ""
-        max_chars = ctx.deps.config.memory_injection_max_chars
+        max_chars = ctx.deps.config.memory.injection_max_chars
         text = "\n\n".join(e.content for e in entries)[:max_chars]
         return f"Standing context:\n{text}"
 

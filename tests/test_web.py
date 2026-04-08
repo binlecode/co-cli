@@ -8,19 +8,20 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoConfig, CoDeps
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
+from tests._settings import test_settings
 from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
 from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx(brave_search_api_key: str | None = None) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(brave_search_api_key=brave_search_api_key),
+        config=test_settings(brave_search_api_key=brave_search_api_key),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -33,10 +34,12 @@ def _make_policy_ctx(
 ) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(
+        config=test_settings(
             brave_search_api_key=brave_search_api_key,
-            web_fetch_allowed_domains=allowed_domains or [],
-            web_fetch_blocked_domains=blocked_domains or [],
+            web=test_settings().web.model_copy(update={
+                "fetch_allowed_domains": allowed_domains or [],
+                "fetch_blocked_domains": blocked_domains or [],
+            }),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

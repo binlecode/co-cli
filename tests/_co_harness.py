@@ -23,7 +23,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from pydantic_ai import Agent
 from pydantic_ai.agent import InstrumentationSettings
 
-from co_cli.config import LOGS_DB
+from co_cli.config._core import LOGS_DB
 from co_cli.observability._telemetry import SQLiteSpanExporter
 
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"

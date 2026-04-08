@@ -8,19 +8,21 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps
+from tests._settings import test_settings
 from co_cli.tools.resource_lock import ResourceBusyError, ResourceLockStore
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.files import edit_file
 
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx(tmp_path: Path) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(workspace_root=tmp_path),
+        config=test_settings(),
+        workspace_root=tmp_path,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 

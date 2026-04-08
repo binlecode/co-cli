@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from co_cli.config import ModelConfig
+from co_cli.config._llm import ModelConfig
+from tests._settings import test_settings
 from co_cli.bootstrap._bootstrap import _discover_knowledge_backend, _sync_knowledge_store, _resolve_reranker, restore_session
 from co_cli.context.types import SafetyState
 from co_cli.context.session import new_session, save_session, find_latest_session
-from co_cli.deps import CoDeps, CoConfig, CoRuntimeState, CoSessionState
+from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
 from co_cli.knowledge._store import KnowledgeStore
 from co_cli.tools.shell_backend import ShellBackend
@@ -26,14 +27,17 @@ def _make_deps(
     library_dir: Path | None = None,
     mcp_servers: dict | None = None,
 ) -> CoDeps:
-    config = CoConfig(
-        sessions_dir=tmp_path / "sessions",
-        memory_dir=memory_dir or tmp_path / "memory",
-        library_dir=library_dir or tmp_path / "library",
+    config = test_settings(
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
     runtime = CoRuntimeState(safety_state=SafetyState())
-    return CoDeps(shell=ShellBackend(), knowledge_store=knowledge_store, config=config, session=CoSessionState(), runtime=runtime)
+    return CoDeps(
+        shell=ShellBackend(), knowledge_store=knowledge_store, config=config,
+        session=CoSessionState(), runtime=runtime,
+        sessions_dir=tmp_path / "sessions",
+        memory_dir=memory_dir or tmp_path / "memory",
+        library_dir=library_dir or tmp_path / "library",
+    )
 
 
 def _write_memory_file(path: Path, *, mem_id: int, body: str) -> None:
@@ -92,18 +96,17 @@ def test_sync_knowledge_store_indexes_memory_and_article(tmp_path: Path) -> None
         ),
     )
 
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="fts5",
-        knowledge_cross_encoder_reranker_url=None,
-        memory_dir=memory_dir,
-        library_dir=library_dir,
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "search_backend": "fts5",
+            "cross_encoder_reranker_url": None,
+        }),
     )
-    config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     assert store is not None, "_discover_knowledge_backend must return a store for fts5"
     try:
-        store = _sync_knowledge_store(store, config, TerminalFrontend())
+        store = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, library_dir)
         assert store is not None, "_sync_knowledge_store must not disable the store on success"
 
         mem_results = store.search("robotics engineer solar flare", source="memory", limit=5)
@@ -168,22 +171,18 @@ def test_discover_hybrid_happy_path_real_embedder(tmp_path: Path) -> None:
         ),
     )
 
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="hybrid",
-        memory_dir=memory_dir,
-        library_dir=library_dir,
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={"search_backend": "hybrid"}),
     )
-
-    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     try:
         assert store is not None, "Hybrid with real embedder must construct a store"
-        assert resolved_config.knowledge_search_backend == "hybrid", \
+        assert config.knowledge.search_backend == "hybrid", \
             "Backend must stay hybrid when embedder is available"
-        assert not resolved_config.degradations, "No degradation when hybrid succeeds"
+        assert not degradations, "No degradation when hybrid succeeds"
 
-        store = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+        store = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, library_dir)
         assert store is not None, "Sync must succeed on hybrid store"
 
         # Semantic search — "robot learning to care for animals" should find the
@@ -209,31 +208,31 @@ def test_discover_hybrid_happy_path_real_embedder(tmp_path: Path) -> None:
 
 def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None:
     """_discover_knowledge_backend returns None when backend is grep — no store needed."""
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="grep",
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={"search_backend": "grep"}),
     )
-    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     assert store is None, "_discover_knowledge_backend must return None store for grep backend"
-    assert resolved_config.knowledge_search_backend == "grep"
-    assert not resolved_config.degradations, "grep config must have no degradations"
+    assert config.knowledge.search_backend == "grep"
+    assert not degradations, "grep config must have no degradations"
 
 
 def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
     """FTS5 configured with embedding disabled → store constructed, no degradation recorded."""
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="fts5",
-        knowledge_embedding_provider="none",
-        knowledge_cross_encoder_reranker_url=None,
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "search_backend": "fts5",
+            "embedding_provider": "none",
+            "cross_encoder_reranker_url": None,
+        }),
     )
-    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     try:
         assert store is not None, "FTS5 must construct a store"
-        assert resolved_config.knowledge_search_backend == "fts5"
-        assert not resolved_config.degradations, "FTS5 happy path must have no degradations"
+        assert config.knowledge.search_backend == "fts5"
+        assert not degradations, "FTS5 happy path must have no degradations"
     finally:
         if store is not None:
             store.close()
@@ -252,27 +251,25 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
         ),
     )
 
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="hybrid",
-        knowledge_embedding_provider="tei",
-        knowledge_embed_api_url="http://127.0.0.1:1/embed",
-        knowledge_cross_encoder_reranker_url=None,
-        memory_dir=memory_dir,
-        library_dir=tmp_path / "library",
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "search_backend": "hybrid",
+            "embedding_provider": "tei",
+            "embed_api_url": "http://127.0.0.1:1/embed",
+            "cross_encoder_reranker_url": None,
+        }),
     )
-
-    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     try:
         assert store is not None, "Discovery must return a store (degraded to fts5), not None"
-        assert resolved_config.knowledge_search_backend == "fts5", \
+        assert config.knowledge.search_backend == "fts5", \
             "Discovery must degrade hybrid to fts5 when embedder is unavailable"
-        assert "knowledge" in resolved_config.degradations, \
+        assert "knowledge" in degradations, \
             "Discovery must record degradation in degradations dict"
 
         # Degraded FTS5 store must still sync and search via keyword matching
-        store = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+        store = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, tmp_path / "library")
         assert store is not None, "Sync must succeed on the degraded fts5 store"
         results = store.search("Jeff directives protect Goodyear", source="memory", limit=5)
         assert any("001-test-degraded.md" in r.path for r in results), \
@@ -290,19 +287,18 @@ def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
         memory_dir / "001-test-mem.md", mem_id=1,
         body="Finch's bunker contained decades of canned food and a working power grid.",
     )
-    config = CoConfig(
-        knowledge_db_path=tmp_path / "search.db",
-        knowledge_search_backend="fts5",
-        knowledge_cross_encoder_reranker_url=None,
-        memory_dir=memory_dir,
-        library_dir=tmp_path / "library",
-        sessions_dir=tmp_path / "sessions",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "search_backend": "fts5",
+            "cross_encoder_reranker_url": None,
+        }),
     )
-    resolved_config, store = _discover_knowledge_backend(config, TerminalFrontend())
+    degradations: dict[str, str] = {}
+    store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
     assert store is not None
     # Close the store to make sync_dir raise on the dead connection
     store.close()
-    result = _sync_knowledge_store(store, resolved_config, TerminalFrontend())
+    result = _sync_knowledge_store(store, config, TerminalFrontend(), memory_dir, tmp_path / "library")
     assert result is None, "_sync_knowledge_store must return None when sync fails"
 
 
@@ -355,73 +351,83 @@ def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
 
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     """No reranker configured → config unchanged, no status messages."""
-    config = CoConfig(knowledge_cross_encoder_reranker_url=None, knowledge_llm_reranker=None)
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "cross_encoder_reranker_url": None,
+            "llm_reranker": None,
+        }),
+    )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge_cross_encoder_reranker_url is None
-    assert config.knowledge_llm_reranker is None
+    assert config.knowledge.cross_encoder_reranker_url is None
+    assert config.knowledge.llm_reranker is None
     assert statuses == []
 
 
 def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
     """TEI cross-encoder at a dead port → URL nulled, degradation status emitted."""
-    config = CoConfig(
-        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
-        knowledge_llm_reranker=None,
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "cross_encoder_reranker_url": "http://127.0.0.1:19999",
+            "llm_reranker": None,
+        }),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge_cross_encoder_reranker_url is None
+    assert config.knowledge.cross_encoder_reranker_url is None
     assert any("cross-encoder" in s.lower() or "tei" in s.lower() for s in statuses)
 
 
 def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
     """LLM reranker with gemini provider but no API key → check_reranker_llm returns error → reranker nulled."""
-    config = CoConfig(
-        knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
-        llm_provider="gemini",
-        llm_api_key=None,
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "cross_encoder_reranker_url": None,
+            "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+        }),
+        llm=test_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge_llm_reranker is None
+    assert config.knowledge.llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
 
 def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
     """LLM reranker with Ollama provider but unreachable host → reranker nulled (warn != ok)."""
-    config = CoConfig(
-        knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=ModelConfig(provider="ollama-openai", model="reranker-model"),
-        llm_provider="ollama-openai",
-        llm_host="http://localhost:1",
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "cross_encoder_reranker_url": None,
+            "llm_reranker": ModelConfig(provider="ollama-openai", model="reranker-model"),
+        }),
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "host": "http://localhost:1"}),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge_llm_reranker is None
+    assert config.knowledge.llm_reranker is None
     assert any("llm" in s.lower() or "reranker" in s.lower() for s in statuses)
 
 
 def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
     """TEI dead + LLM reranker with no API key → both nulled, two separate status messages."""
-    config = CoConfig(
-        knowledge_cross_encoder_reranker_url="http://127.0.0.1:19999",
-        knowledge_llm_reranker=ModelConfig(provider="gemini", model="gemini-2.0-flash"),
-        llm_provider="gemini",
-        llm_api_key=None,
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(update={
+            "cross_encoder_reranker_url": "http://127.0.0.1:19999",
+            "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
+        }),
+        llm=test_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
-    assert config.knowledge_cross_encoder_reranker_url is None
-    assert config.knowledge_llm_reranker is None
+    assert config.knowledge.cross_encoder_reranker_url is None
+    assert config.knowledge.llm_reranker is None
     assert len(statuses) == 2
 
 
 def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     """Project skill directory with one valid skill: skill appears in loaded commands."""
     from co_cli.commands._commands import _load_skills, get_skill_registry
-    from co_cli.config import settings
+    from co_cli.config._core import settings
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
@@ -462,14 +468,15 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
     readonly_dir.mkdir()
     os.chmod(readonly_dir, 0o555)
     try:
-        config = CoConfig(
+        config = test_settings(mcp_servers={})
+        runtime = CoRuntimeState(safety_state=SafetyState())
+        deps = CoDeps(
+            shell=ShellBackend(), knowledge_store=None, config=config,
+            session=CoSessionState(), runtime=runtime,
             sessions_dir=readonly_dir,
             memory_dir=tmp_path / "memory",
             library_dir=tmp_path / "library",
-            mcp_servers={},
         )
-        runtime = CoRuntimeState(safety_state=SafetyState())
-        deps = CoDeps(shell=ShellBackend(), knowledge_store=None, config=config, session=CoSessionState(), runtime=runtime)
         result = restore_session(deps, TerminalFrontend())
         assert isinstance(result, dict), "restore_session() must return a session dict even when save fails"
         assert deps.session.session_id != "", "session_id must be set in deps even when save fails"

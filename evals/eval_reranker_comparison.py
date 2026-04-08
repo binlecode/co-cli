@@ -488,24 +488,30 @@ def build_index(
     ollama_host: str = "http://localhost:11434",
 ) -> KnowledgeStore:
     """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
-    from co_cli.deps import CoConfig
-    from co_cli.config import ModelConfig
+    from co_cli.config._core import Settings
+    from co_cli.config._llm import LlmSettings, ModelConfig
+    from co_cli.config._knowledge import KnowledgeSettings
     llm_reranker = (
         ModelConfig(provider="ollama-openai", model=reranker_model)
         if reranker_model else None
     )
-    config = CoConfig(
-        knowledge_db_path=db_path,
-        knowledge_search_backend=backend,
-        # Explicitly disable TEI cross-encoder so the correct reranker branch is
-        # reached: None → LLM listwise (if set) or none. Without this, the
-        # default "http://127.0.0.1:8282" always activates TEI regardless of
-        # whether llm_reranker is set.
-        knowledge_cross_encoder_reranker_url=None,
-        knowledge_llm_reranker=llm_reranker,
-        llm_host=ollama_host,
+    config = Settings.model_construct(
+        llm=LlmSettings.model_construct(
+            provider="ollama-openai",
+            host=ollama_host,
+            role_models={"reasoning": {"model": "dummy", "provider": "ollama-openai"}},
+        ),
+        knowledge=KnowledgeSettings.model_construct(
+            search_backend=backend,
+            # Explicitly disable TEI cross-encoder so the correct reranker branch is
+            # reached: None → LLM listwise (if set) or none. Without this, the
+            # default "http://127.0.0.1:8282" always activates TEI regardless of
+            # whether llm_reranker is set.
+            cross_encoder_reranker_url=None,
+            llm_reranker=llm_reranker,
+        ),
     )
-    idx = KnowledgeStore(config=config)
+    idx = KnowledgeStore(config=config, knowledge_db_path=db_path)
     for doc in CORPUS:
         idx.index(
             source="memory",

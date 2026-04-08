@@ -252,6 +252,6 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
 | `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel bootstrap |
-| `co_cli/config.py` | `DATA_DIR` — shared XDG data path |
+| `co_cli/config/` | `DATA_DIR` — shared XDG data path (in `_core.py`) |
 | `~/.local/share/co-cli/co-cli-logs.db` | SQLite span storage |
 | `~/.local/share/co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |

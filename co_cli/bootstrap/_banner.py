@@ -5,7 +5,7 @@ import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.config import ROLE_REASONING
+from co_cli.config._llm import ROLE_REASONING
 from co_cli.display._core import console
 
 if TYPE_CHECKING:
@@ -36,11 +36,11 @@ def display_welcome_banner(deps: "CoDeps") -> None:
 
     version = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
 
-    reasoning_entry = config.role_models.get(ROLE_REASONING)
+    reasoning_entry = config.llm.role_models.get(ROLE_REASONING)
     if reasoning_entry:
-        llm_provider = f"{config.llm_provider} / {reasoning_entry.model}"
+        llm_provider = f"{config.llm.provider} / {reasoning_entry.model}"
     else:
-        llm_provider = config.llm_provider
+        llm_provider = config.llm.provider
 
     from co_cli.commands._commands import BUILTIN_COMMANDS, get_skill_registry
     tool_count = len(deps.tool_index)
@@ -57,13 +57,13 @@ def display_welcome_banner(deps: "CoDeps") -> None:
     except Exception:
         git_branch = ""
 
-    backend = deps.config.knowledge_search_backend
-    knowledge_degradation = deps.config.degradations.get("knowledge")
+    backend = deps.config.knowledge.search_backend
+    knowledge_degradation = deps.degradations.get("knowledge")
 
     if backend == "hybrid":
         knowledge_info = (
-            f"hybrid · {deps.config.knowledge_embedding_provider}/"
-            f"{deps.config.knowledge_embedding_model} {deps.config.knowledge_embedding_dims}d"
+            f"hybrid · {deps.config.knowledge.embedding_provider}/"
+            f"{deps.config.knowledge.embedding_model} {deps.config.knowledge.embedding_dims}d"
         )
     elif backend == "fts5":
         knowledge_info = "fts5"
@@ -82,7 +82,7 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         f"    Tools: {tool_count}  Skills: {skill_count}  MCP: {mcp_count}  Commands: {cmd_count}",
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",
-        f"    [success]✓ Ready{'  (degraded)' if deps.config.degradations else ''}[/success]",
+        f"    [success]✓ Ready{'  (degraded)' if deps.degradations else ''}[/success]",
         f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from co_cli.display._core import Frontend
 
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import ROLE_ANALYSIS, ROLE_SUMMARIZATION
+from co_cli.config._llm import ROLE_ANALYSIS, ROLE_SUMMARIZATION
 from co_cli.memory._lifecycle import persist_memory as _persist_memory
 
 from pydantic import BaseModel, Field
@@ -164,7 +164,7 @@ async def handle_extraction(
         tags = [mem.tag] + (["personality-context"] if mem.inject else [])
 
         # Admission gate: auto-save only if type is in the allowlist
-        auto_save_allowed = mem.tag in deps.config.memory_auto_save_tags
+        auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
 
         if mem.confidence == "high" and auto_save_allowed:
             await _persist_memory(
@@ -210,7 +210,7 @@ async def _run_extraction_async(
         )
 
         for mem in extraction.memories:
-            auto_save_allowed = mem.tag in deps.config.memory_auto_save_tags
+            auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
             if mem.confidence == "high" and auto_save_allowed:
                 await _persist_memory(
                     deps, mem.candidate, [mem.tag] + (["personality-context"] if mem.inject else []), None,

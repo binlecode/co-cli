@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from rich.console import Console
 from rich.text import Text
 
-from co_cli.config import LOGS_DB
+from co_cli.config._core import LOGS_DB
 from co_cli.observability._viewer import format_duration, get_span_type
 
 TYPE_STYLES = {

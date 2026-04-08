@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.44] - 2026-04-07
+
+### Changed
+- **Config restructured into nested package**: `co_cli/config.py` → `co_cli/config/` package with one module per domain group (`_llm.py`, `_knowledge.py`, `_web.py`, `_memory.py`, `_subagent.py`, `_shell.py`, `_core.py`). Settings fields use nested Pydantic sub-models (`config.llm.provider`, `config.memory.max_count`). JSON config files use nested objects for surgical project-level overrides.
+- **CoConfig eliminated**: `CoDeps.config` is `Settings` directly — no intermediate dataclass. Path fields and degradations moved to `CoDeps`. Helper methods (`uses_ollama_openai`, `validate_config`) moved to `LlmSettings`.
+- **All imports use sub-modules directly**: `from co_cli.config._core import Settings` instead of `from co_cli.config import Settings`. `__init__.py` is docstring-only — no re-exports, no circular import risk.
+
+### Added
+- **`test_settings()` helper**: `tests/_settings.py` provides real production config (via `load_config()`) with surgical overrides for test isolation. Replaces `model_construct()` across all test files.
+
 ## [0.7.42] - 2026-04-07
 
 ### Fixed

@@ -5,8 +5,6 @@ concurrency, overflow cut, and on_failure behavior.
 """
 
 import asyncio
-from dataclasses import replace
-
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,14 +13,16 @@ from typing import Any
 import pytest
 import yaml
 
-from co_cli.config import settings, ROLE_SUMMARIZATION
+from co_cli.config._core import settings
+from co_cli.config._llm import ROLE_SUMMARIZATION
+from tests._settings import test_settings
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.deps import CoDeps
 from co_cli.memory._lifecycle import persist_memory
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 _REGISTRY = ModelRegistry.from_config(_CONFIG)
 
 
@@ -72,13 +72,13 @@ def _make_deps(
     memory_dir: Path | None = None,
     max_count: int = 200,
 ) -> CoDeps:
-    cfg = replace(
-        _CONFIG,
-        memory_max_count=max_count,
-    )
+    cfg = _CONFIG.model_copy(update={
+        "memory": _CONFIG.memory.model_copy(update={"max_count": max_count}),
+    })
+    deps_kwargs = {"shell": ShellBackend(), "config": cfg}
     if memory_dir is not None:
-        cfg = replace(cfg, memory_dir=memory_dir)
-    return CoDeps(shell=ShellBackend(), config=cfg)
+        deps_kwargs["memory_dir"] = memory_dir
+    return CoDeps(**deps_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
     """When target file lock is held and on_failure='add', persist_memory raises ResourceBusyError."""
     from co_cli.tools.resource_lock import ResourceBusyError
     from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.config import ROLE_SUMMARIZATION
+    from co_cli.config._llm import ROLE_SUMMARIZATION
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     # Seed an existing memory so the save agent can return UPDATE for it
@@ -207,7 +207,7 @@ def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
 def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
     """When target file lock is held and on_failure='skip', returns action='skipped'."""
     from co_cli._model_factory import ModelRegistry, ResolvedModel
-    from co_cli.config import ROLE_SUMMARIZATION
+    from co_cli.config._llm import ROLE_SUMMARIZATION
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
@@ -292,8 +292,8 @@ async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
         _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
     ]
 
-    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
 
     manifest = build_memory_manifest(entries)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
@@ -328,8 +328,8 @@ async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path
         _seed_memory(memory_dir, 2, "User uses 4-space indentation", tags=["preference"]),
     ]
 
-    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
 
     manifest = build_memory_manifest(entries)
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
@@ -363,8 +363,8 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
     _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
     before_count = len(list(memory_dir.glob("*.md")))
 
-    summarization_model_name = _CONFIG.role_models[ROLE_SUMMARIZATION].model
-    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm_host)
+    summarization_model_name = _CONFIG.llm.role_models[ROLE_SUMMARIZATION].model
+    await ensure_ollama_warm(summarization_model_name, _CONFIG.llm.host)
 
     deps = _make_deps(memory_dir=memory_dir)
 

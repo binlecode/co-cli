@@ -36,8 +36,7 @@ from pydantic_ai.usage import UsageLimits  # noqa: E402
 
 from co_cli.context.orchestrate import run_turn  # noqa: E402
 from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config import settings  # noqa: E402
-from co_cli.deps import CoConfig  # noqa: E402
+from co_cli.config._core import settings  # noqa: E402
 
 from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
 from evals._fixtures import seed_memory  # noqa: E402
@@ -136,7 +135,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
                 )
 
             # Build agent and deps
-            agent = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+            agent = build_agent(config=settings)
             deps = make_eval_deps(session_id=f"eval-recall-{case.id}")
 
             frontend = SilentFrontend()

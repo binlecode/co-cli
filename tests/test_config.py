@@ -10,7 +10,8 @@ import subprocess
 import sys
 import pytest
 
-from co_cli.config import load_config, ROLE_REASONING
+from co_cli.config._core import load_config
+from co_cli.config._llm import ROLE_REASONING
 
 
 def test_project_config_overrides_user(tmp_path):
@@ -102,34 +103,38 @@ def test_project_config_partially_overrides_role_models(tmp_path):
     user_settings = tmp_path / "user" / "settings.json"
     user_settings.parent.mkdir(parents=True)
     user_settings.write_text(json.dumps({
-        "role_models": {
-            ROLE_REASONING: {
-                "model": "base-reasoning",
-                "provider": "ollama-openai",
-            },
-            "coding": {
-                "model": "base-coding",
-                "provider": "ollama-openai",
-            },
+        "llm": {
+            "role_models": {
+                ROLE_REASONING: {
+                    "model": "base-reasoning",
+                    "provider": "ollama-openai",
+                },
+                "coding": {
+                    "model": "base-coding",
+                    "provider": "ollama-openai",
+                },
+            }
         }
     }))
 
     project_dir = tmp_path / "project"
     (project_dir / ".co-cli").mkdir(parents=True)
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "role_models": {
-            "coding": {
-                "model": "project-coding",
-                "provider": "ollama-openai",
-            },
+        "llm": {
+            "role_models": {
+                "coding": {
+                    "model": "project-coding",
+                    "provider": "ollama-openai",
+                },
+            }
         }
     }))
 
     settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
-    assert settings.role_models[ROLE_REASONING].model == "base-reasoning"
-    assert settings.role_models[ROLE_REASONING].provider == "ollama-openai"
-    assert settings.role_models["coding"].model == "project-coding"
-    assert settings.role_models["coding"].provider == "ollama-openai"
+    assert settings.llm.role_models[ROLE_REASONING].model == "base-reasoning"
+    assert settings.llm.role_models[ROLE_REASONING].provider == "ollama-openai"
+    assert settings.llm.role_models["coding"].model == "project-coding"
+    assert settings.llm.role_models["coding"].provider == "ollama-openai"
 
 
 def test_role_models_missing_provider_rejected(tmp_path):
@@ -138,9 +143,11 @@ def test_role_models_missing_provider_rejected(tmp_path):
     (project_dir / ".co-cli").mkdir()
     project_config_path = project_dir / ".co-cli" / "settings.json"
     project_config_path.write_text(json.dumps({
-        "role_models": {
-            ROLE_REASONING: {
-                "model": "base-reasoning",
+        "llm": {
+            "role_models": {
+                ROLE_REASONING: {
+                    "model": "base-reasoning",
+                }
             }
         }
     }))
@@ -158,8 +165,10 @@ def test_knowledge_llm_reranker_missing_provider_rejected(tmp_path):
     (project_dir / ".co-cli").mkdir()
     project_config_path = project_dir / ".co-cli" / "settings.json"
     project_config_path.write_text(json.dumps({
-        "knowledge_llm_reranker": {
-            "model": "gemini-2.0-flash",
+        "knowledge": {
+            "llm_reranker": {
+                "model": "gemini-2.0-flash",
+            }
         }
     }))
 
@@ -176,8 +185,10 @@ def test_invalid_web_retry_bounds_in_project_config_raise_value_error(tmp_path):
     (project_dir / ".co-cli").mkdir()
     project_config_path = project_dir / ".co-cli" / "settings.json"
     project_config_path.write_text(json.dumps({
-        "web_http_backoff_base_seconds": 10.0,
-        "web_http_backoff_max_seconds": 1.0,
+        "web": {
+            "http_backoff_base_seconds": 10.0,
+            "http_backoff_max_seconds": 1.0,
+        }
     }))
 
     with pytest.raises(ValueError, match=str(project_config_path)):
@@ -207,7 +218,7 @@ def test_default_provider_is_ollama_openai(tmp_path):
         _user_config_path=tmp_path / "nonexistent.json",
         _project_dir=tmp_path / "empty",
     )
-    assert settings.llm_provider == "ollama-openai"
+    assert settings.llm.provider == "ollama-openai"
 
 
 def test_ollama_native_provider_rejected(tmp_path):
@@ -215,9 +226,9 @@ def test_ollama_native_provider_rejected(tmp_path):
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     (project_dir / ".co-cli" / "settings.json").write_text(
-        json.dumps({"llm_provider": "ollama-native"})
+        json.dumps({"llm": {"provider": "ollama-native"}})
     )
-    with pytest.raises(Exception, match="Unsupported llm_provider"):
+    with pytest.raises(Exception, match="Unsupported llm.provider"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,
@@ -229,9 +240,9 @@ def test_old_ollama_provider_string_rejected(tmp_path):
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     (project_dir / ".co-cli" / "settings.json").write_text(
-        json.dumps({"llm_provider": "ollama"})
+        json.dumps({"llm": {"provider": "ollama"}})
     )
-    with pytest.raises(Exception, match="Unsupported llm_provider"):
+    with pytest.raises(Exception, match="Unsupported llm.provider"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,
@@ -256,8 +267,10 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "llm_provider": "gemini",
-        "llm_api_key": "settings-key-wins",
+        "llm": {
+            "provider": "gemini",
+            "api_key": "settings-key-wins",
+        }
     }))
 
     env = os.environ.copy()
@@ -271,11 +284,10 @@ def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
             (
                 "from pathlib import Path; "
                 "from co_cli.agent import build_agent; "
-                "from co_cli.config import load_config; "
-                "from co_cli.deps import CoConfig; "
+                "from co_cli.config._core import load_config; "
                 "import os; "
                 "loaded = load_config(_user_config_path=Path('missing.json'), _project_dir=Path.cwd()); "
-                "build_agent(config=CoConfig.from_settings(loaded, cwd=Path.cwd())); "
+                "build_agent(config=loaded); "
                 "print(os.environ['GEMINI_API_KEY'])"
             ),
         ],

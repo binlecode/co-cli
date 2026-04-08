@@ -41,8 +41,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 from co_cli.agent import CoDeps, build_agent
-from co_cli.config import settings
-from co_cli.deps import CoConfig
+from co_cli.config._core import settings
 
 from evals._common import build_message_history, make_eval_deps, make_eval_settings, patch_dangling_tool_calls
 
@@ -230,12 +229,13 @@ CASES = [
 def _ollama_models_to_test() -> list[str]:
     """Return Ollama models for this eval.
 
-    Default: single configured model (settings.ollama_model).
+    Default: single configured reasoning model.
     Override: set EVAL_OLLAMA_MODELS as comma-separated tags.
     """
     raw = (os.getenv("EVAL_OLLAMA_MODELS") or "").strip()
     if not raw:
-        return [settings.ollama_model]
+        reasoning = settings.llm.role_models.get("reasoning")
+        return [reasoning.model if reasoning else "unknown"]
     return [m.strip() for m in raw.split(",") if m.strip()]
 
 
@@ -365,13 +365,13 @@ def _switch_model(agent, model_name: str):
     from pydantic_ai.providers.openai import OpenAIProvider
     from co_cli.prompts.model_quirks._loader import normalize_model_name, get_model_inference
 
-    ollama_host = settings.ollama_host
+    ollama_host = settings.llm.host
     provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
     agent.model = OpenAIChatModel(model_name=model_name, provider=provider)
 
     normalized = normalize_model_name(model_name)
     inf = get_model_inference("ollama", normalized)
-    num_ctx = inf.get("num_ctx", settings.llm_num_ctx)
+    num_ctx = inf.get("num_ctx", settings.llm.num_ctx)
     extra: dict = {"num_ctx": num_ctx}
     extra.update(inf.get("extra_body", {}))
 
@@ -399,8 +399,8 @@ def _dump_case_detail(result: dict):
 async def main():
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
-    provider = settings.llm_provider.lower()
-    is_ollama = provider == "ollama"
+    provider = settings.llm.provider.lower()
+    is_ollama = provider == "ollama-openai"
 
     # For Ollama: default to configured model, optional matrix via env var.
     # For other providers: single configured model.
@@ -422,7 +422,7 @@ async def main():
           + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items())))
     print("=" * 70)
 
-    agent = build_agent(config=CoConfig.from_settings(settings, cwd=pathlib.Path.cwd()))
+    agent = build_agent(config=settings)
     deps = make_eval_deps(session_id="eval-conversation-history")
 
     all_results: list[dict] = []

@@ -37,7 +37,7 @@ def tool_output(
     threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
     if len(display) > threshold:
         display = persist_if_oversized(
-            display, ctx.deps.config.tool_results_dir, ctx.tool_name,
+            display, ctx.deps.tool_results_dir, ctx.tool_name,
             max_size=threshold,
         )
     return ToolReturn(return_value=display, metadata=metadata or None)

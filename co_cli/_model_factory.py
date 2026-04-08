@@ -12,7 +12,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.config import ModelConfig
+from co_cli.config._llm import ModelConfig
 from co_cli.prompts.model_quirks._loader import get_model_inference, normalize_model_name
 
 logger = logging.getLogger(__name__)
@@ -45,16 +45,16 @@ class ModelRegistry:
 
     @classmethod
     def from_config(cls, config: Any) -> "ModelRegistry":
-        """Build the registry from a CoConfig-compatible object.
+        """Build the registry from a Settings-compatible object.
 
-        Accepts config as untyped to avoid importing CoConfig (no circular import
-        risk but keeps _model_factory.py dep-free of deps.py).
+        Accepts config as untyped to avoid importing Settings (no circular import
+        risk but keeps _model_factory.py dep-free of config package).
         """
         registry = cls()
-        for role, entry in config.role_models.items():
+        for role, entry in config.llm.role_models.items():
             if not entry:
                 continue
-            model, settings, ctx_window = build_model(entry, config.llm_provider, config.llm_host, api_key=config.llm_api_key)
+            model, settings, ctx_window = build_model(entry, config.llm.provider, config.llm.host, api_key=config.llm.api_key)
             registry._models[role] = ResolvedModel(model=model, settings=settings, context_window=ctx_window)
         return registry
 

@@ -38,7 +38,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
                  long scripts (e.g. 300). Capped by shell_max_timeout.
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
-    policy = evaluate_shell_command(cmd, ctx.deps.config.shell_safe_commands)
+    policy = evaluate_shell_command(cmd, ctx.deps.config.shell.safe_commands)
     if policy.decision == ShellDecisionEnum.DENY:
         return tool_error(policy.reason, ctx=ctx)
     if policy.decision == ShellDecisionEnum.REQUIRE_APPROVAL:
@@ -46,7 +46,7 @@ async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 12
             raise ApprovalRequired(metadata={"cmd": cmd})
     # ALLOW or tool_call_approved: fall through to execution
 
-    effective = min(timeout, ctx.deps.config.shell_max_timeout)
+    effective = min(timeout, ctx.deps.config.shell.max_timeout)
     try:
         output = await ctx.deps.shell.run_command(cmd, timeout=effective)
         return tool_output(output, ctx=ctx)

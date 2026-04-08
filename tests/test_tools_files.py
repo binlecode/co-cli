@@ -7,9 +7,10 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
+from tests._settings import test_settings
 from co_cli.tools.files import (
     _enforce_workspace_boundary,
     _is_recursive_pattern,
@@ -21,14 +22,15 @@ from co_cli.tools.files import (
 )
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx(workspace: Path) -> RunContext:
     """Return a real RunContext scoped to a workspace directory."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(workspace_root=workspace),
+        config=test_settings(),
+        workspace_root=workspace,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 

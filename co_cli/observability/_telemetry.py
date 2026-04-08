@@ -4,7 +4,7 @@ import json
 import time
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace import ReadableSpan
-from co_cli.config import LOGS_DB
+from co_cli.config._core import LOGS_DB
 
 logger = logging.getLogger(__name__)
 

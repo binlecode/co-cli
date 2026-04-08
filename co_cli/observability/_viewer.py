@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from co_cli.config import LOGS_DB
+from co_cli.config._core import LOGS_DB
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>

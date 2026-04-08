@@ -17,7 +17,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest
 
 from co_cli.commands._skill_types import SkillConfig
-from co_cli.config import ROLE_SUMMARIZATION
+from co_cli.config._llm import ROLE_SUMMARIZATION
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.deps import ApprovalKindEnum, CoDeps
@@ -354,7 +354,7 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         return None
 
     arg = args.strip()
-    memory_dir = ctx.deps.config.memory_dir
+    memory_dir = ctx.deps.memory_dir
     if not memory_dir.exists():
         console.print("[dim]No memory directory found.[/dim]")
         return None
@@ -450,7 +450,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     session_data = new_session()
     ctx.deps.session.session_id = session_data["session_id"]
     try:
-        save_session(ctx.deps.config.sessions_dir, session_data)
+        save_session(ctx.deps.sessions_dir, session_data)
     except OSError as e:
         logger.warning("New session save failed: %s", e)
 
@@ -486,11 +486,11 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         console.print(table)
 
     elif subcmd == "check":
-        from co_cli.config import settings as _settings
+        from co_cli.config._core import settings as _settings
 
         default_dir = Path(__file__).parent.parent / "skills"
-        user_dir = ctx.deps.config.user_skills_dir
-        project_dir = ctx.deps.config.skills_dir
+        user_dir = ctx.deps.user_skills_dir
+        project_dir = ctx.deps.skills_dir
 
         all_paths: list[Path] = []
         if default_dir.exists():
@@ -530,12 +530,12 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         await _install_skill(ctx, subargs)
 
     elif subcmd == "reload":
-        from co_cli.config import settings as _settings
+        from co_cli.config._core import settings as _settings
         # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
-        user_skills_dir = ctx.deps.config.user_skills_dir
-        new_skills = _load_skills(ctx.deps.config.skills_dir, _settings, user_skills_dir=user_skills_dir)
+        user_skills_dir = ctx.deps.user_skills_dir
+        new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir)
         # Scan user-global and project-local files only — bundled skills are version-controlled
-        project_dir = ctx.deps.config.skills_dir
+        project_dir = ctx.deps.skills_dir
         all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + \
                     (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
         for p in all_paths:
@@ -576,7 +576,7 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
 async def _install_skill(ctx: CommandContext, target: str, force: bool = False) -> None:
     """Copy a skill .md file from a local path or URL into skills_dir and reload."""
-    from co_cli.config import settings as _settings
+    from co_cli.config._core import settings as _settings
 
     target = target.strip()
     if not target:
@@ -625,7 +625,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
             return
 
     # Confirm overwrite if file already exists (skip when force=True)
-    dest = ctx.deps.config.skills_dir / filename
+    dest = ctx.deps.skills_dir / filename
     if dest.exists() and not force:
         answer = console.input(f"Overwrite existing skill '{filename}'? [y/N] ")
         if answer.strip().lower() != "y":
@@ -633,11 +633,11 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
             return
 
     # Write to skills_dir
-    ctx.deps.config.skills_dir.mkdir(parents=True, exist_ok=True)
+    ctx.deps.skills_dir.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
 
     # Reload in-session: package-default + user-global + updated project dir
-    new_skills = _load_skills(ctx.deps.config.skills_dir, _settings, user_skills_dir=ctx.deps.config.user_skills_dir)
+    new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir)
     set_skill_commands(new_skills, ctx.deps)
     _refresh_completer(ctx)
 
@@ -653,7 +653,7 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     if name not in ctx.deps.skill_commands:
         console.print(f"[bold red]Skill '{name}' not found.[/bold red]")
         return
-    skill_file = ctx.deps.config.skills_dir / f"{name}.md"
+    skill_file = ctx.deps.skills_dir / f"{name}.md"
     if not skill_file.exists():
         console.print(f"[bold red]Skill '{name}' not found in project skills dir.[/bold red]")
         return
@@ -815,7 +815,7 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
     from co_cli.context.session_browser import list_sessions, format_file_size
     from co_cli.display._core import prompt_selection
 
-    sessions = list_sessions(ctx.deps.config.sessions_dir)
+    sessions = list_sessions(ctx.deps.sessions_dir)
     if not sessions:
         console.print("[dim]No past sessions found.[/dim]")
         return None
@@ -834,7 +834,7 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
     selected_idx = items.index(selection)
     selected = sessions[selected_idx]
 
-    messages = load_transcript(ctx.deps.config.sessions_dir, selected.session_id)
+    messages = load_transcript(ctx.deps.sessions_dir, selected.session_id)
     if not messages:
         console.print("[dim]Could not load transcript (empty or too large).[/dim]")
         return None
@@ -1032,7 +1032,7 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
 
     from co_cli.context.session_browser import list_sessions, format_file_size
 
-    summaries = list_sessions(ctx.deps.config.sessions_dir)
+    summaries = list_sessions(ctx.deps.sessions_dir)
     if args:
         keyword = args.lower()
         summaries = [s for s in summaries if keyword in s.title.lower()]

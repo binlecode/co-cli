@@ -12,9 +12,10 @@ from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
-from co_cli.config import settings
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
+from tests._settings import test_settings
 from co_cli.tools.memory import (
     recall_memory,
     list_memories,
@@ -29,7 +30,7 @@ from co_cli.tools.memory import (
 # ---------------------------------------------------------------------------
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
-_AGENT = build_agent(config=CoConfig.from_settings(settings, cwd=Path.cwd()))
+_AGENT = build_agent(config=settings)
 
 
 def _make_ctx(
@@ -39,14 +40,15 @@ def _make_ctx(
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
-    config = CoConfig(knowledge_search_backend=knowledge_search_backend)
+    config = test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": knowledge_search_backend}))
+    deps_kwargs: dict[str, Any] = {
+        "shell": ShellBackend(),
+        "knowledge_store": knowledge_store,
+        "config": config,
+    }
     if memory_dir is not None:
-        from dataclasses import replace
-        config = replace(config, memory_dir=memory_dir)
-    deps = CoDeps(
-        shell=ShellBackend(), knowledge_store=knowledge_store,
-        config=config,
-    )
+        deps_kwargs["memory_dir"] = memory_dir
+    deps = CoDeps(**deps_kwargs)
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
@@ -293,7 +295,7 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
         created=new_time,
     )
 
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db", knowledge_search_backend="fts5"))
+    idx = KnowledgeStore(config=test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
 
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
@@ -319,7 +321,7 @@ def test_forget_evicts_from_fts(tmp_path: Path):
     path = _write_memory(memory_dir, 1, "xyloquartz memory for forget eviction test")
 
     # Index it
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
 
     # Verify it's searchable
@@ -353,7 +355,7 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
     _write_memory(memory_dir, 2, "User uses xyloquartz-search-test for all tests",
                   tags=["context"])
 
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
 
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
@@ -466,17 +468,16 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
     tmp_path: Path, caplog: Any
 ):
     """persist_memory rejects unknown artifact_type on write; load_memories tolerates it on read."""
-    from dataclasses import replace as dc_replace
     from co_cli.memory._lifecycle import persist_memory
     from co_cli.tools.memory import load_memories
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
-    config = dc_replace(CoConfig(), memory_dir=memory_dir)
     deps = CoDeps(
         shell=ShellBackend(), knowledge_store=None,
-        config=config,
+        config=test_settings(),
+        memory_dir=memory_dir,
     )
 
     # Write-strict: persist_memory must reject an unknown artifact_type
@@ -513,8 +514,6 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
 
 def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
     """search_memories and search_knowledge stamp rag.backend on the active OTel span."""
-    from dataclasses import replace
-
     from opentelemetry import trace as otel_trace
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -534,7 +533,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         encoding="utf-8",
     )
 
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
         idx.sync_dir("memory", memory_dir)
         idx.sync_dir("library", library_dir)
@@ -544,7 +543,8 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         fts_know_ctx = RunContext(
             deps=CoDeps(
                 shell=ShellBackend(), knowledge_store=idx,
-                config=replace(CoConfig(), library_dir=library_dir, knowledge_search_backend="fts5"),
+                config=test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})),
+                library_dir=library_dir,
             ),
             model=_AGENT.model,
             usage=RunUsage(),
@@ -552,7 +552,8 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         grep_know_ctx = RunContext(
             deps=CoDeps(
                 shell=ShellBackend(), knowledge_store=None,
-                config=replace(CoConfig(), library_dir=library_dir),
+                config=test_settings(),
+                library_dir=library_dir,
             ),
             model=_AGENT.model,
             usage=RunUsage(),
@@ -617,7 +618,7 @@ def test_forget_refuses_read_only(tmp_path: Path):
     import asyncio
     import yaml
     from co_cli.commands._commands import _cmd_forget
-    from co_cli.deps import CoDeps, CoConfig
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
     # Seed a read_only file
@@ -634,7 +635,7 @@ def test_forget_refuses_read_only(tmp_path: Path):
     normal_file = memory_dir / "100-user-memory.md"
     normal_file.write_text(md_normal, encoding="utf-8")
 
-    deps = CoDeps(shell=ShellBackend(), config=CoConfig(memory_dir=memory_dir))
+    deps = CoDeps(shell=ShellBackend(), config=test_settings(), memory_dir=memory_dir)
 
     class FakeCommandContext:
         def __init__(self, deps: CoDeps):

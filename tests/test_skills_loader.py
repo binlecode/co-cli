@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,8 +15,8 @@ from co_cli.commands._commands import (
     _load_skills,
     dispatch,
 )
-from co_cli.config import settings
-from co_cli.deps import CoConfig, CoDeps, CoSessionState
+from co_cli.config._core import settings
+from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._core import console
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -30,15 +29,12 @@ def _write_skill(skills_dir: Path, name: str, content: str) -> Path:
 
 
 def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir: Path | None = None) -> CommandContext:
-    config = replace(
-        CoConfig.from_settings(settings, cwd=Path.cwd()),
-        skills_dir=skills_dir or (tmp_path / ".co-cli" / "skills"),
-        user_skills_dir=user_skills_dir or (tmp_path / "user-skills"),
-    )
-    agent = build_agent(config=config)
+    agent = build_agent(config=settings)
     deps = CoDeps(
         shell=ShellBackend(),
-        config=config,
+        config=settings,
+        skills_dir=skills_dir or (tmp_path / ".co-cli" / "skills"),
+        user_skills_dir=user_skills_dir or (tmp_path / "user-skills"),
         session=CoSessionState(session_id="test-skills"),
     )
     return CommandContext(

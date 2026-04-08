@@ -4,7 +4,6 @@ All tests use real agent/deps — no mocks, no stubs.
 """
 
 import asyncio
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,8 +15,10 @@ from pydantic_ai import Agent
 from pydantic_ai.result import DeferredToolRequests
 
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.config import settings, ROLE_SUMMARIZATION
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoConfig, CoSessionState, SessionApprovalRule
+from co_cli.config._core import settings
+from co_cli.config._llm import ROLE_SUMMARIZATION
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
+from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.context.tool_approvals import (
     is_auto_approved,
@@ -37,11 +38,11 @@ from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
+_CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
-_CONFIG_NO_MCP = replace(_CONFIG, mcp_servers={})
+_CONFIG_NO_MCP = _CONFIG.model_copy(update={"mcp_servers": {}})
 _REGISTRY = ModelRegistry.from_config(_CONFIG_NO_MCP)
-_SUMM_MODEL = _CONFIG_NO_MCP.role_models[ROLE_SUMMARIZATION].model
+_SUMM_MODEL = _CONFIG_NO_MCP.llm.role_models[ROLE_SUMMARIZATION].model
 _SUMM_RESOLVED = _REGISTRY.get(ROLE_SUMMARIZATION, ResolvedModel(model=None, settings=None))
 
 # Tool registry and agent built once at module level.
@@ -64,15 +65,13 @@ def _make_ctx(
     memory_dir: "Path | None" = None,
 ) -> CommandContext:
     """Build a real CommandContext with live agent and deps."""
-    config = _CONFIG_NO_MCP
-    if memory_dir is not None:
-        config = replace(config, memory_dir=memory_dir)
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
         tool_index=dict(_TOOL_REG.tool_index),
-        config=config,
+        config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-commands"),
+        **({"memory_dir": memory_dir} if memory_dir is not None else {}),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -112,7 +111,7 @@ async def test_cmd_clear():
 async def test_skills_install_url_error(tmp_path):
     """/skills install with unreachable URL returns None (graceful failure)."""
     ctx = _make_ctx()
-    ctx.deps.config = replace(ctx.deps.config, skills_dir=tmp_path / ".co-cli" / "skills")
+    ctx.deps.skills_dir = tmp_path / ".co-cli" / "skills"
     result = await dispatch("/skills install http://127.0.0.1:1/skill.md", ctx)
     assert isinstance(result, LocalOnly)
 
@@ -155,7 +154,7 @@ async def test_approval_approve():
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-approval"),
     )
-    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
@@ -193,7 +192,7 @@ async def test_approval_deny():
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_id="test-denial"),
     )
-    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm_host)
+    await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     try:
         async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
             turn = await run_turn(
@@ -229,7 +228,7 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     memory_file = memory_dir / "001-test-forget.md"
     memory_file.write_text(content, encoding="utf-8")
 
-    idx = KnowledgeStore(config=CoConfig(knowledge_db_path=tmp_path / "search.db"))
+    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
     assert len(idx.search("xyloquartz-forget-fts")) == 1
 
@@ -237,7 +236,8 @@ async def test_forget_command_evicts_fts_row(tmp_path):
         message_history=[],
         deps=CoDeps(
             shell=ShellBackend(), knowledge_store=idx,
-            config=CoConfig(memory_dir=memory_dir),
+            config=test_settings(),
+            memory_dir=memory_dir,
             session=CoSessionState(session_id="test-forget-fts"),
         ),
         agent=_AGENT,
@@ -347,7 +347,7 @@ def test_is_auto_approved_false_before_remember():
     """Subject is not auto-approved when no session rule has been stored."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
         session=CoSessionState(session_id="test-autoapprove"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
@@ -358,7 +358,7 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
     """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
         session=CoSessionState(session_id="test-remember"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
@@ -371,7 +371,7 @@ def test_remember_tool_approval_is_idempotent():
     """Calling remember_tool_approval twice does not duplicate the session rule."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
         session=CoSessionState(session_id="test-idem"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
@@ -385,7 +385,7 @@ def test_record_approval_choice_with_remember_stores_rule():
     """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
         session=CoSessionState(session_id="test-record"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
@@ -406,7 +406,7 @@ def test_record_approval_choice_deny_does_not_store_rule():
     """Denied approvals must not persist a session rule."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=CoConfig(),
+        config=test_settings(),
         session=CoSessionState(session_id="test-deny-record"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
@@ -483,7 +483,7 @@ def test_cleanup_skill_restores_set_env_var():
     os.environ[key] = original
     try:
         os.environ[key] = "skill-injected-value"
-        deps = CoDeps(shell=ShellBackend(), config=CoConfig())
+        deps = CoDeps(shell=ShellBackend(), config=test_settings())
         cleanup_skill_run_state({key: original}, deps)
         assert os.environ[key] == original
     finally:
@@ -497,7 +497,7 @@ def test_cleanup_skill_removes_absent_env_var():
     os.environ.pop(key, None)
     os.environ[key] = "skill-injected-value"
     try:
-        deps = CoDeps(shell=ShellBackend(), config=CoConfig())
+        deps = CoDeps(shell=ShellBackend(), config=test_settings())
         cleanup_skill_run_state({key: None}, deps)
         assert key not in os.environ
     finally:
@@ -506,7 +506,7 @@ def test_cleanup_skill_removes_absent_env_var():
 
 def test_cleanup_skill_clears_active_skill_name():
     """active_skill_name is cleared to None after cleanup."""
-    deps = CoDeps(shell=ShellBackend(), config=CoConfig())
+    deps = CoDeps(shell=ShellBackend(), config=test_settings())
     deps.runtime.active_skill_name = "my-skill"
     cleanup_skill_run_state({}, deps)
     assert deps.runtime.active_skill_name is None

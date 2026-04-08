@@ -3,15 +3,15 @@
 ## 1. What & How
 
 Co CLI supports two providers (`ollama-openai`, `gemini`) and one model-selection contract:
-`role_models` — one `ModelConfig` per role. `create_deps()` builds a session-scoped
-`ModelRegistry` from `CoConfig`, then `build_agent()` resolves the main `reasoning`
+`llm.role_models` — one `ModelConfig` per role. `create_deps()` builds a session-scoped
+`ModelRegistry` from `Settings`, then `build_agent()` resolves the main `reasoning`
 model from that registry once at startup. `run_turn()` executes turns against that
 pre-built agent. Sub-agent tools use pre-built `ResolvedModel` objects looked up from
 `ModelRegistry` by role.
 
 ```
 ModelRegistry.from_config(config) → session-scoped registry
-  for each role in config.role_models:
+  for each role in config.llm.role_models:
     build_model(role_models[role], provider, llm_host)
       ├── provider == "ollama-openai"
       │   └── OpenAIProvider(base_url="{llm_host}/v1", api_key="ollama") + OpenAIChatModel
@@ -30,7 +30,7 @@ There is no separate primary/fallback settings tier.
 
 ### Role Models
 
-`role_models` is `dict[str, ModelConfig]` — one model per role:
+`llm.role_models` is `dict[str, ModelConfig]` — one model per role:
 
 - Mandatory role: `reasoning` (a single `ModelConfig` required — raises `ValueError` at startup if absent).
 - Optional roles: `summarization`, `coding`, `research`, `analysis`, `task` (absent/missing disables that role).
@@ -57,7 +57,7 @@ When `role_models` is not configured, provider defaults are injected for all rol
 
 ### ModelRegistry and ResolvedModel
 
-`ModelRegistry` is a session-scoped registry of pre-built `ResolvedModel` objects keyed by role. It is built once from `CoConfig` at session start via `ModelRegistry.from_config(config)` and stored on `CoServices.model_registry`. All components look up models by role using `registry.get(role, fallback)` at runtime.
+`ModelRegistry` is a session-scoped registry of pre-built `ResolvedModel` objects keyed by role. It is built once from `Settings` at session start via `ModelRegistry.from_config(config)` and stored on `deps.model_registry`. All components look up models by role using `registry.get(role, fallback)` at runtime.
 
 `ResolvedModel` is a dataclass pairing a pre-built model object (`Any`) with its `ModelSettings | None` and an optional `context_window: int | None` from model quirks. Agent factories and summarization functions receive a `ResolvedModel` directly. `resolve_compaction_budget()` reads `context_window` from the reasoning role's `ResolvedModel` to set the compaction token budget.
 
@@ -67,7 +67,7 @@ Sub-agent model construction is provider-aware via `build_model()` in `co_cli/_m
 - `gemini` → `GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))` — key injected directly, no env mutation
 - Any other provider → `ValueError` raised.
 
-Roles are resolved at registry build time by iterating `role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Idle-time summary pre-computation passes the main agent's model as the `fallback` argument so it degrades gracefully. The `/compact` and `/new` commands use `None` as fallback — if ROLE_SUMMARIZATION is unconfigured they fail explicitly rather than silently inheriting the reasoning model.
+Roles are resolved at registry build time by iterating `config.llm.role_models`. Empty or absent roles are skipped (not registered). Delegation tools guard with `registry.is_configured(role)` before calling `registry.get(role, fallback)`. Idle-time summary pre-computation passes the main agent's model as the `fallback` argument so it degrades gracefully. The `/compact` and `/new` commands use `None` as fallback — if ROLE_SUMMARIZATION is unconfigured they fail explicitly rather than silently inheriting the reasoning model.
 
 ### Model Dependency Checks
 
@@ -87,17 +87,17 @@ Settings load order is `env > .co-cli/settings.json > ~/.config/co-cli/settings.
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `llm_provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai` or `gemini` |
-| `llm_host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL for Ollama OpenAI-compatible requests |
-| `llm_num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
-| `ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
-| `ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
-| `llm_api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm_provider=gemini`) |
-| `role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model entry; config files must specify both `model` and `provider`, while the env var model name is wrapped with the session provider before validation |
-| `role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model entry for `/compact` and history compaction |
-| `role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model entry |
-| `role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model entry |
-| `role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model entry |
+| `llm.provider` | `LLM_PROVIDER` | `"ollama-openai"` | Provider selection: `ollama-openai` or `gemini` |
+| `llm.host` | `LLM_HOST` | `"http://localhost:11434"` | LLM server base URL for Ollama OpenAI-compatible requests |
+| `llm.num_ctx` | `LLM_NUM_CTX` | `262144` | Context size hint (ignored by Ollama API — set in Modelfile) |
+| `llm.ctx_warn_threshold` | `CO_CTX_WARN_THRESHOLD` | `0.85` | Warn threshold for context ratio |
+| `llm.ctx_overflow_threshold` | `CO_CTX_OVERFLOW_THRESHOLD` | `1.0` | Overflow threshold for context ratio |
+| `llm.api_key` | `LLM_API_KEY` | `None` | LLM API key (required when `llm.provider=gemini`) |
+| `llm.role_models["reasoning"]` | `CO_MODEL_ROLE_REASONING` | provider default injected when absent | Mandatory main-agent model entry; config files must specify both `model` and `provider`, while the env var model name is wrapped with the session provider before validation |
+| `llm.role_models["summarization"]` | `CO_MODEL_ROLE_SUMMARIZATION` | provider default when absent | Optional dedicated summarization model entry for `/compact` and history compaction |
+| `llm.role_models["coding"]` | `CO_MODEL_ROLE_CODING` | provider default when absent | Optional coder sub-agent model entry |
+| `llm.role_models["research"]` | `CO_MODEL_ROLE_RESEARCH` | provider default when absent | Optional research sub-agent model entry |
+| `llm.role_models["analysis"]` | `CO_MODEL_ROLE_ANALYSIS` | provider default when absent | Optional analysis sub-agent model entry |
 
 ## 4. Provider Quirks
 
@@ -136,7 +136,7 @@ role_models:
 Application flow:
 
 ```text
-Settings/config.py
+Settings/config/_llm.py
   default summarization/analysis/research entry
     -> ModelConfig(model="qwen3.5:35b-a3b-think", api_params={... reasoning_effort="none" ...})
 
@@ -206,7 +206,7 @@ issue ollama/ollama#5356). Base model tags default to 4096 tokens and silently t
 conversation history.
 
 For models requiring a larger context window, `num_ctx` must be set via `PARAMETER num_ctx` in the
-Modelfile. All custom Modelfiles in `ollama/` bake this parameter via `PARAMETER num_ctx`. The `llm_num_ctx` setting is
+Modelfile. All custom Modelfiles in `ollama/` bake this parameter via `PARAMETER num_ctx`. The `llm.num_ctx` setting is
 forwarded as a client-side hint for future-proofing but is not enforced by Ollama today.
 
 ### Modelfile Parameters Reference
@@ -236,8 +236,8 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 
 | File | Purpose |
 |------|---------|
-| `co_cli/config.py` | `role_models` setting, `ModelConfig` class, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings |
-| `co_cli/deps.py` | `role_models`, `llm_host`, `llm_provider` in `CoConfig`; `model_registry` in `CoServices` |
+| `co_cli/config/` | Settings package: `_llm.py` owns `LlmSettings`, `ModelConfig`, `VALID_ROLE_NAMES`, provider selection, Ollama/Gemini env var mappings; `_core.py` owns `Settings` with nested sub-models |
+| `co_cli/deps.py` | `CoDeps` with `config: Settings`; `model_registry` as top-level field |
 | `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `registry.get(ROLE_SUMMARIZATION, fallback)` for `/compact` and `/new` |
@@ -256,9 +256,8 @@ Model validation and config-role validation are intentionally split:
   Ollama tags exist and that their baked parameters and baked `/no_think` directives match the
   corresponding Modelfiles.
 - pytest covers application behavior. Tests validate config parsing, default role injection,
-  `Settings -> CoConfig` transfer, role resolution, summarization fallback,
-  and delegation role selection.
+  role resolution, summarization fallback, and delegation role selection.
 - pytest is not the primary mechanism for checking whether a local Ollama tag is installed or whether
   a Modelfile was built with the expected parameters.
 - Conversely, the validator script is not the source of truth for `role_models` defaults or role
-  resolution logic. That contract belongs to `co_cli/config.py` and the pytest suite.
+  resolution logic. That contract belongs to `co_cli/config/_llm.py` and the pytest suite.

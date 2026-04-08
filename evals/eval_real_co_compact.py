@@ -24,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from co_cli.config import LOGS_DB
+from co_cli.config._core import LOGS_DB
 from evals._timeouts import EVAL_API_TIMEOUT_SECS, EVAL_PROBE_TIMEOUT_SECS
 
 PROMPT = "Co ❯"

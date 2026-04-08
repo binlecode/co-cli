@@ -34,7 +34,7 @@ from pydantic_ai.messages import (
 )
 
 from co_cli._model_factory import ResolvedModel
-from co_cli.config import ROLE_SUMMARIZATION
+from co_cli.config._llm import ROLE_SUMMARIZATION
 from co_cli.context.summarization import (
     estimate_message_tokens,
     latest_response_input_tokens,
@@ -371,7 +371,7 @@ def _gather_compaction_context(
 
     # 3. Always-on memories — standing context the model always sees
     from co_cli.memory.recall import load_always_on_memories
-    memories = load_always_on_memories(ctx.deps.config.memory_dir)
+    memories = load_always_on_memories(ctx.deps.memory_dir)
     if memories:
         mem_lines = [m.content[:200] for m in memories[:5]]
         context_parts.append("Standing memories:\n" + "\n".join(mem_lines))
@@ -573,7 +573,7 @@ async def inject_opening_context(
 
     # Inject as a system message at the end of the message list
     memory_content = result.return_value
-    max_chars = ctx.deps.config.memory_injection_max_chars
+    max_chars = ctx.deps.config.memory.injection_max_chars
     if len(memory_content) > max_chars:
         memory_content = memory_content[:max_chars]
     injection = ModelRequest(parts=[

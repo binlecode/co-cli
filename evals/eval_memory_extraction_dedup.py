@@ -23,15 +23,16 @@ import pathlib
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from co_cli.config import settings, ROLE_SUMMARIZATION
+from co_cli.config._core import settings
+from co_cli.config._llm import ROLE_SUMMARIZATION
 from co_cli._model_factory import ModelRegistry, ResolvedModel
-from co_cli.deps import CoDeps, CoConfig
+from co_cli.deps import CoDeps
 from co_cli.memory._extractor import (
     ExtractionResult,
     MemoryCandidate,
@@ -56,16 +57,15 @@ from evals._tools import extract_tool_calls
 # ---------------------------------------------------------------------------
 
 
-_CONFIG = CoConfig.from_settings(settings, cwd=Path.cwd())
-_REGISTRY = ModelRegistry.from_config(_CONFIG)
+_REGISTRY = ModelRegistry.from_config(settings)
 
 
 def _make_deps(memory_dir: Path) -> CoDeps:
-    cfg = replace(_CONFIG, memory_dir=memory_dir)
     return CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        config=cfg,
+        config=settings,
+        memory_dir=memory_dir,
     )
 
 
@@ -488,8 +488,7 @@ async def run_inline_case(case: InlineSaveCase) -> dict[str, Any]:
 
             before_count = len(list(memory_dir.glob("*.md")))
 
-            config = CoConfig.from_settings(settings, cwd=Path(tmpdir))
-            agent = build_agent(config=config)
+            agent = build_agent(config=settings)
             deps = make_eval_deps(session_id=f"eval-inline-{case.id}")
             frontend = SilentFrontend()
 
@@ -548,11 +547,10 @@ async def main() -> int:
     print("\n  Phase 1: Extraction Classification")
     print("  " + "-" * 50)
 
-    config = CoConfig.from_settings(settings, cwd=pathlib.Path.cwd())
     deps = CoDeps(
         shell=ShellBackend(),
         model_registry=_REGISTRY,
-        config=config,
+        config=settings,
     )
 
     for case in EXTRACTION_CASES:

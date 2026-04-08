@@ -67,7 +67,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
 def build_static_instructions(
     provider: str,
     model_name: str,
-    config: "CoConfig",
+    config: "Settings",
 ) -> str:
     """Build the static instructions string for the given model and personality.
 
