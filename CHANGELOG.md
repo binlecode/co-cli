@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.46] - 2026-04-08
+
+### Changed
+- **Single model, per-call settings**: Eliminated 5-role `role_models` dict, `ModelRegistry`, `ModelConfig` (in LLM context), and role constants. One model configured in `llm.model`, per-task behavior controlled via `NOREASON_SETTINGS` dict passed at `agent.run()` time. Net -374 lines.
+- **Simplified model factory**: `build_model(LlmSettings) → LlmModel` — no registry, no role lookup. `CoDeps.model` replaces `CoDeps.model_registry`.
+- **Subagent tools always registered**: No conditional gating on role model availability — single model serves all tasks.
+
+### Removed
+- `ModelRegistry` class, `ROLE_*` constants, `VALID_ROLE_NAMES`, `DEFAULT_OLLAMA_*_MODEL` dicts (6), `DEFAULT_GEMINI_REASONING_MODEL`, `CO_MODEL_ROLE_*` env vars
+
 ## [0.7.44] - 2026-04-07
 
 ### Changed
