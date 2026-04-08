@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -8,11 +8,12 @@ if TYPE_CHECKING:
     from co_cli._model_factory import LlmModel
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
-from pydantic_ai.toolsets import AbstractToolset, FunctionToolset
+from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, DeferredLoadingToolset
+from pydantic_ai.toolsets.combined import CombinedToolset
 from pydantic_ai.tools import ToolDefinition
 
 from co_cli.config._core import Settings
-from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
+from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicy, ToolSource
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.context._history import (
     inject_opening_context,
@@ -32,7 +33,6 @@ from co_cli.memory.recall import load_always_on_memories
 from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
 from co_cli.tools.todo import write_todos, read_todos
 from co_cli.tools.capabilities import check_capabilities
-from co_cli.tools.tool_search import search_tools
 from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
 from co_cli.tools.subagent import run_coding_subagent, run_research_subagent, run_analysis_subagent, run_reasoning_subagent
 from co_cli.tools.task_control import (
@@ -49,16 +49,36 @@ logger = logging.getLogger(__name__)
 class ToolRegistry:
     """Immutable return value of build_tool_registry().
 
-    Holds the native toolset, MCP toolsets (pre-built, not yet connected),
-    and the combined tool_index (native + MCP after discovery).
+    Holds the combined filtered toolset (native + MCP, approval-resume filter applied),
+    the raw MCP toolsets (for bootstrap lifecycle management), and the tool_index
+    (native entries; MCP entries added later by discover_mcp_tools()).
     """
     toolset: AbstractToolset[CoDeps]
     mcp_toolsets: list
     tool_index: dict[str, ToolInfo]
 
 
+def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
+    """Filter for approval-resume narrowing only.
+
+    Normal turns: pass all unconditionally — SDK ToolSearchToolset handles
+    deferred visibility via defer_loading.
+    Resume turns: narrow to approved tools + always-visible tools.
+    Applies uniformly to native and MCP tools.
+    """
+    resume = ctx.deps.runtime.resume_tool_names
+    if resume is None:
+        return True
+    if tool_def.name in resume:
+        return True
+    entry = ctx.deps.tool_index.get(tool_def.name)
+    if entry is not None and entry.visibility == VisibilityPolicy.ALWAYS:
+        return True
+    return False
+
+
 def _build_mcp_toolsets(config: Settings) -> list:
-    """Build pydantic-ai MCP toolset objects from config.mcp_servers."""
+    """Build MCP toolsets wrapped with DeferredLoadingToolset for SDK-native discovery."""
     if not config.mcp_servers:
         return []
     from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
@@ -82,24 +102,22 @@ def _build_mcp_toolsets(config: Settings) -> list:
             )
         if cfg.approval == "ask":
             server = server.approval_required()
-        mcp_toolsets.append(server)
+        mcp_toolsets.append(DeferredLoadingToolset(server))
     return mcp_toolsets
 
 
-def _build_filtered_toolset(
+def _build_native_toolset(
     config: Settings,
-) -> "tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]":
-    """Build a FilteredToolset containing all tools for this config.
+) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
+    """Build an unfiltered FunctionToolset with per-tool defer_loading.
 
-    Tools are registered into a FunctionToolset wrapped with a per-request filter.
-    The filter uses per-tool LoadPolicy plus session.discovered_tools
-    and runtime.resume_tool_names to decide visibility per API call.
+    Tools are registered with defer_loading derived from VisibilityPolicy. The SDK's
+    ToolSearchToolset (auto-added by Agent) handles deferred visibility.
 
     Domain tools (obsidian, google) are conditionally excluded when the relevant
-    config paths are absent — they would fail at runtime regardless, so there is no
-    point sending their schemas.
+    config paths are absent — they would fail at runtime regardless.
 
-    Returns (filtered_toolset, native_index) where native_index maps each tool name
+    Returns (native_toolset, native_index) where native_index maps each tool name
     to its ToolInfo metadata.
     """
     inner: FunctionToolset[CoDeps] = FunctionToolset()
@@ -109,15 +127,17 @@ def _build_filtered_toolset(
         fn: Any,
         *,
         approval: bool = False,
-        load: LoadPolicy,
-        search_hint: str | None = None,
+        visibility: VisibilityPolicy,
         integration: str | None = None,
         retries: int | None = None,
         max_result_size: int = 50_000,
     ) -> None:
         name = fn.__name__
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
-        kwargs: dict[str, Any] = {"requires_approval": approval}
+        kwargs: dict[str, Any] = {
+            "requires_approval": approval,
+            "defer_loading": visibility == VisibilityPolicy.DEFERRED,
+        }
         if retries is not None:
             kwargs["retries"] = retries
         inner.add_function(fn, **kwargs)
@@ -126,116 +146,100 @@ def _build_filtered_toolset(
             description=description,
             approval=approval,
             source=ToolSource.NATIVE,
-            load=load,
+            visibility=visibility,
             integration=integration,
-            search_hint=search_hint,
             max_result_size=max_result_size,
         )
 
-    # --- Always-loaded tools ---
-    _A = LoadPolicy.ALWAYS
+    # --- Always-visible tools (defer_loading=False) ---
+    _A = VisibilityPolicy.ALWAYS
 
-    # Capability introspection and tool discovery
-    _reg(check_capabilities, load=_A)
-    _reg(search_tools, load=_A)
+    # Capability introspection
+    _reg(check_capabilities, visibility=_A)
 
     # Session task tracking
-    _reg(write_todos, load=_A)
-    _reg(read_todos, load=_A)
+    _reg(write_todos, visibility=_A)
+    _reg(read_todos, visibility=_A)
 
     # Knowledge reads
-    _reg(search_memories, load=_A)
-    _reg(search_knowledge, load=_A)
-    _reg(search_articles, load=_A)
-    _reg(read_article, load=_A)
-    _reg(list_memories, load=_A)
+    _reg(search_memories, visibility=_A)
+    _reg(search_knowledge, visibility=_A)
+    _reg(search_articles, visibility=_A)
+    _reg(read_article, visibility=_A)
+    _reg(list_memories, visibility=_A)
 
     # Workspace reads
-    _reg(list_directory, load=_A)
-    _reg(read_file, load=_A, max_result_size=80_000)
-    _reg(find_in_files, load=_A)
+    _reg(list_directory, visibility=_A)
+    _reg(read_file, visibility=_A, max_result_size=80_000)
+    _reg(find_in_files, visibility=_A)
 
     # Web
-    _reg(web_search, load=_A, retries=3)
-    _reg(web_fetch, load=_A, retries=3)
+    _reg(web_search, visibility=_A, retries=3)
+    _reg(web_fetch, visibility=_A, retries=3)
 
     # Execution
-    _reg(run_shell_command, load=_A, max_result_size=30_000)
+    _reg(run_shell_command, visibility=_A, max_result_size=30_000)
 
-    # --- Deferred tools ---
-    _D = LoadPolicy.DEFERRED
+    # --- Deferred tools (defer_loading=True, discovered via SDK search_tools) ---
+    _D = VisibilityPolicy.DEFERRED
 
     # File write tools
-    _reg(write_file, approval=True, load=_D, search_hint="create write new file", retries=1)
-    _reg(edit_file, approval=True, load=_D, search_hint="modify patch update file", retries=1)
+    _reg(write_file, approval=True, visibility=_D, retries=1)
+    _reg(edit_file, approval=True, visibility=_D, retries=1)
 
     # Knowledge write tools
-    _reg(save_memory, approval=True, load=_D, search_hint="remember save note memory", retries=1)
-    _reg(save_article, approval=True, load=_D, search_hint="save article knowledge", retries=1)
-    _reg(update_memory, approval=True, load=_D, search_hint="update edit memory", retries=1)
-    _reg(append_memory, approval=True, load=_D, search_hint="append add memory", retries=1)
+    _reg(save_memory, approval=True, visibility=_D, retries=1)
+    _reg(save_article, approval=True, visibility=_D, retries=1)
+    _reg(update_memory, approval=True, visibility=_D, retries=1)
+    _reg(append_memory, approval=True, visibility=_D, retries=1)
 
     # Background task tools
-    _reg(start_background_task, approval=True, load=_D, search_hint="background async long running task")
-    _reg(check_task_status, load=_D, search_hint="background task status check")
-    _reg(cancel_background_task, load=_D, search_hint="cancel stop background task")
-    _reg(list_background_tasks, load=_D, search_hint="list background tasks")
+    _reg(start_background_task, approval=True, visibility=_D)
+    _reg(check_task_status, visibility=_D)
+    _reg(cancel_background_task, visibility=_D)
+    _reg(list_background_tasks, visibility=_D)
 
-    # Sub-agent tools — always registered (single model serves all tasks)
-    _reg(run_coding_subagent, load=_D, search_hint="coding sub-agent delegate code")
-    _reg(run_research_subagent, load=_D, search_hint="research sub-agent delegate search")
-    _reg(run_analysis_subagent, load=_D, search_hint="analysis sub-agent delegate analyze")
-    _reg(run_reasoning_subagent, load=_D, search_hint="reasoning sub-agent delegate think")
+    # Sub-agent tools
+    _reg(run_coding_subagent, visibility=_D)
+    _reg(run_research_subagent, visibility=_D)
+    _reg(run_analysis_subagent, visibility=_D)
+    _reg(run_reasoning_subagent, visibility=_D)
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
-        _reg(list_notes, load=_D, integration="obsidian", search_hint="obsidian notes list")
-        _reg(search_notes, load=_D, integration="obsidian", search_hint="obsidian notes search")
-        _reg(read_note, load=_D, integration="obsidian", search_hint="obsidian note read")
+        _reg(list_notes, visibility=_D, integration="obsidian")
+        _reg(search_notes, visibility=_D, integration="obsidian")
+        _reg(read_note, visibility=_D, integration="obsidian")
 
     if config.google_credentials_path:
-        _reg(search_drive_files, load=_D, integration="google_drive", search_hint="google drive search files", retries=3)
-        _reg(read_drive_file, load=_D, integration="google_drive", search_hint="google drive read file", retries=3)
-        _reg(list_gmail_emails, load=_D, integration="google_gmail", search_hint="gmail email list inbox", retries=3)
-        _reg(search_gmail_emails, load=_D, integration="google_gmail", search_hint="gmail email search", retries=3)
-        _reg(list_calendar_events, load=_D, integration="google_calendar", search_hint="google calendar events list", retries=3)
-        _reg(search_calendar_events, load=_D, integration="google_calendar", search_hint="google calendar events search", retries=3)
-        _reg(create_gmail_draft, approval=True, load=_D, integration="google_gmail", search_hint="gmail email draft compose", retries=1)
+        _reg(search_drive_files, visibility=_D, integration="google_drive", retries=3)
+        _reg(read_drive_file, visibility=_D, integration="google_drive", retries=3)
+        _reg(list_gmail_emails, visibility=_D, integration="google_gmail", retries=3)
+        _reg(search_gmail_emails, visibility=_D, integration="google_gmail", retries=3)
+        _reg(list_calendar_events, visibility=_D, integration="google_calendar", retries=3)
+        _reg(search_calendar_events, visibility=_D, integration="google_calendar", retries=3)
+        _reg(create_gmail_draft, approval=True, visibility=_D, integration="google_gmail", retries=1)
 
-    def _filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
-        entry = ctx.deps.tool_index.get(tool_def.name)
-        resume = ctx.deps.runtime.resume_tool_names
-
-        if resume is not None:
-            if tool_def.name in resume:
-                return True
-            if entry is not None and entry.load == LoadPolicy.ALWAYS:
-                return True
-            return False
-
-        # Normal turn — unknown tools (not in tool_index) are hidden.
-        # MCP tools are added to tool_index during bootstrap before the first agent.run().
-        if entry is None:
-            logger.warning("_filter: tool %r not in tool_index — hidden", tool_def.name)
-            return False
-        if entry.load == LoadPolicy.ALWAYS:
-            return True
-        return tool_def.name in ctx.deps.session.discovered_tools
-
-    return inner.filtered(_filter), native_index
+    return inner, native_index
 
 
 def build_tool_registry(config: Settings) -> ToolRegistry:
     """Build the tool registry from config.
 
     Pure config — no IO. Called once in create_deps().
-    Returns native toolset, MCP toolsets (not yet connected), and native tool_index.
+    Combines native and MCP toolsets under a single approval-resume filter.
     MCP tool_index entries are added later by discover_mcp_tools().
     """
-    filtered_toolset, native_index = _build_filtered_toolset(config)
+    native_toolset, native_index = _build_native_toolset(config)
     mcp_toolsets = _build_mcp_toolsets(config)
+
+    # Combine all toolsets under one filter so approval-resume narrowing
+    # applies uniformly to native and MCP tools.
+    combined = CombinedToolset([native_toolset] + mcp_toolsets)
+    filtered = combined.filtered(_approval_resume_filter)
+
     return ToolRegistry(
-        toolset=filtered_toolset,
+        toolset=filtered,
         mcp_toolsets=mcp_toolsets,
         tool_index=native_index,
     )
@@ -270,6 +274,7 @@ def build_agent(
     static_instructions = build_static_instructions(config.llm.provider, normalized_model, config)
 
     # Static layer — set once at agent construction; does not change between turns.
+    # Single filtered toolset (native + MCP combined); SDK adds ToolSearchToolset automatically.
     agent: Agent[CoDeps, str | DeferredToolRequests] = Agent(
         model.model,
         deps_type=CoDeps,
@@ -284,7 +289,7 @@ def build_agent(
             inject_opening_context,
             summarize_history_window,
         ],
-        toolsets=[tool_registry.toolset] + tool_registry.mcp_toolsets,
+        toolsets=[tool_registry.toolset],
         capabilities=[CoToolLifecycle()],
     )
 
@@ -330,14 +335,10 @@ def build_agent(
         return _load_personality_memories()
 
     @agent.instructions
-    def add_deferred_tool_prompt(ctx: RunContext[CoDeps]) -> str:
-        """Inject deferred-tool awareness so the model knows to call search_tools."""
-        from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
-        prompt = build_deferred_tool_prompt(
-            ctx.deps.tool_index,
-            ctx.deps.session.discovered_tools,
-        )
-        return prompt or ""
+    def add_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
+        """Inject category-level awareness so the model discovers deferred tools via search_tools."""
+        from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
+        return build_category_awareness_prompt(ctx.deps.tool_index)
 
     return agent
 
@@ -348,10 +349,12 @@ async def discover_mcp_tools(
     """Discover MCP tool names by connecting to servers and listing tools.
 
     Each server self-connects on list_tools() (pydantic-ai lazy init).
+    Walks the .wrapped chain recursively to find MCPServer instances
+    (handles DeferredLoadingToolset and ApprovalRequiredToolset wrappers).
     Returns (tool_names, errors, mcp_index) where errors maps server prefix to
     the error string for each server where list_tools() failed, and mcp_index maps
     tool name to ToolInfo metadata. Tool names exclude any in ``exclude``.
-    MCP tools are deferred by default (load=LoadPolicy.DEFERRED).
+    MCP tools are deferred by default (visibility=VisibilityPolicy.DEFERRED).
     """
     from pydantic_ai.mcp import MCPServer
 
@@ -360,7 +363,12 @@ async def discover_mcp_tools(
     mcp_index: dict[str, ToolInfo] = {}
 
     for toolset in mcp_toolsets:
-        inner = getattr(toolset, "wrapped", toolset)
+        # Walk .wrapped chain recursively to find MCPServer
+        inner = toolset
+        wrapper_count = 0
+        while hasattr(inner, 'wrapped'):
+            inner = inner.wrapped
+            wrapper_count += 1
         if not isinstance(inner, MCPServer):
             continue
         prefix = inner.tool_prefix or ""
@@ -370,15 +378,16 @@ async def discover_mcp_tools(
                 name = f"{prefix}_{t.name}" if prefix else t.name
                 if name not in exclude:
                     mcp_tool_names.append(name)
-                    approval = inner is not toolset
+                    # DeferredLoadingToolset adds 1 wrapper level;
+                    # extra levels indicate an approval wrapper
+                    approval = wrapper_count > 1
                     mcp_index[name] = ToolInfo(
                         name=name,
                         description=t.description or "",
                         approval=approval,
                         source=ToolSource.MCP,
-                        load=LoadPolicy.DEFERRED,
+                        visibility=VisibilityPolicy.DEFERRED,
                         integration=prefix or None,
-                        search_hint=prefix or None,
                     )
         except Exception as e:
             logger.warning(

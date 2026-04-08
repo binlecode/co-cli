@@ -493,7 +493,18 @@ async def summarize_history_window(
     else:
         summary_marker = _static_marker(dropped_count)
 
-    return messages[:head_end] + [summary_marker] + messages[tail_start:]
+    # Preserve SDK discovery breadcrumbs: ModelRequest messages containing
+    # search_tools ToolReturnParts must survive compaction so the SDK's
+    # ToolSearchToolset can reconstruct discovery state from message history.
+    preserved_discovery = [
+        msg for msg in dropped
+        if isinstance(msg, ModelRequest) and any(
+            isinstance(p, ToolReturnPart) and p.tool_name == "search_tools"
+            for p in msg.parts
+        )
+    ]
+
+    return messages[:head_end] + [summary_marker] + preserved_discovery + messages[tail_start:]
 
 
 # ---------------------------------------------------------------------------

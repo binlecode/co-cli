@@ -1,35 +1,60 @@
-"""Build the deferred-tool prompt fragment for model awareness."""
+"""Build a category-level awareness prompt for deferred tool discovery.
 
-from co_cli.deps import ToolInfo, LoadPolicy
+The SDK's ToolSearchToolset handles per-tool deferred visibility. This module
+provides a lightweight category-level prompt (~100 tokens) so the model knows
+which capability domains are available via search_tools without listing every
+individual tool name.
+"""
+
+from co_cli.deps import ToolInfo, VisibilityPolicy
+
+# Native deferred tool → category label
+_NATIVE_CATEGORIES: dict[str, str] = {
+    "write_file": "file editing",
+    "edit_file": "file editing",
+    "save_memory": "memory management",
+    "update_memory": "memory management",
+    "append_memory": "memory management",
+    "save_article": "memory management",
+    "start_background_task": "background tasks",
+    "check_task_status": "background tasks",
+    "cancel_background_task": "background tasks",
+    "list_background_tasks": "background tasks",
+    "run_coding_subagent": "sub-agents",
+    "run_research_subagent": "sub-agents",
+    "run_analysis_subagent": "sub-agents",
+    "run_reasoning_subagent": "sub-agents",
+}
+
+# Integration field → display label
+_INTEGRATION_CATEGORIES: dict[str, str] = {
+    "obsidian": "Obsidian notes",
+    "google_gmail": "Gmail",
+    "google_calendar": "Google Calendar",
+    "google_drive": "Google Drive",
+}
 
 
-def build_deferred_tool_prompt(
+def build_category_awareness_prompt(
     tool_index: dict[str, ToolInfo],
-    discovered_tools: set[str],
-) -> str | None:
-    """Return a prompt fragment listing undiscovered deferred tools, or None if empty.
+) -> str:
+    """Return a category-level prompt listing available deferred tool categories.
 
-    Pure function: reads tool_index and discovered_tools, returns formatted text.
+    Config-gated tools only appear when their integration is registered in tool_index.
+    MCP tools use their integration (server prefix) as the category name.
+    Returns empty string when no deferred tools exist.
     """
-    undiscovered = [
-        tc for tc in tool_index.values()
-        if tc.load == LoadPolicy.DEFERRED and tc.name not in discovered_tools
-    ]
-    if not undiscovered:
-        return None
-
-    lines = [
-        "Additional tools are available but not yet loaded. "
-        "Call search_tools(query) to discover and unlock them.",
-        "",
-        "Deferred tools:",
-    ]
-    for tc in sorted(undiscovered, key=lambda t: t.name):
-        parts = [f"  - {tc.name}: {tc.description}"]
-        if tc.integration:
-            parts.append(f" ({tc.integration})")
-        if tc.search_hint:
-            parts.append(f" [hints: {tc.search_hint}]")
-        lines.append("".join(parts))
-
-    return "\n".join(lines)
+    categories: set[str] = set()
+    for info in tool_index.values():
+        if info.visibility != VisibilityPolicy.DEFERRED:
+            continue
+        if info.integration and info.integration in _INTEGRATION_CATEGORIES:
+            categories.add(_INTEGRATION_CATEGORIES[info.integration])
+        elif info.name in _NATIVE_CATEGORIES:
+            categories.add(_NATIVE_CATEGORIES[info.name])
+        elif info.integration:
+            # MCP/domain tools: use integration name as category
+            categories.add(info.integration)
+    if not categories:
+        return ""
+    return f"Additional capabilities available via search_tools: {', '.join(sorted(categories))}."

@@ -81,7 +81,7 @@ Each personality role is fully self-contained under `souls/{role}/`. Adding a ro
 | `add_project_instructions` | `.co-cli/instructions.md` exists | full file contents |
 | `add_always_on_memories` | `always_on=True` entries exist | `Standing context:` block, capped by `memory_injection_max_chars` |
 | `add_personality_memories` | `config.personality` is set | top 5 `personality-context` memories as `## Learned Context` |
-| `add_deferred_tool_prompt` | undiscovered deferred tools exist | prompt to call `search_tools()` |
+| `add_category_awareness_prompt` | deferred tools registered in tool_index | category-level prompt listing available capabilities via `search_tools` (~100 tokens) |
 
 These layers are not persisted into `message_history`.
 
@@ -321,7 +321,7 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `co_cli/context/summarization.py` | summarizer agent, compaction budget, token estimation |
 | `co_cli/context/session.py` | session metadata: create, load, save, find latest, touch, UUID validation |
 | `co_cli/context/transcript.py` | JSONL transcript: append, load, list sessions, title extraction |
-| `co_cli/context/_deferred_tool_prompt.py` | deferred-tool awareness prompt builder |
+| `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |

@@ -127,22 +127,22 @@ The foreground runtime uses a single main agent for all turns, including approva
    - `inject_opening_context`
    - `summarize_history_window`
 4. `CoToolLifecycle` capability — `before_tool_execute` (path normalization for file tools), `after_tool_execute` (OTel span enrichment + audit logging)
-5. a native `FunctionToolset` wrapped by `filtered(...)`
-6. optional MCP toolsets built from `config.mcp_servers`
+5. a combined filtered toolset (native `FunctionToolset` + MCP `DeferredLoadingToolset`s, unified under `_approval_resume_filter`)
+6. the SDK auto-adds `ToolSearchToolset` for deferred tool discovery
 7. per-turn dynamic instruction layers:
    - current date
    - shell guidance
    - project instructions from `.co-cli/instructions.md`
    - always-on memories
    - personality memories
-   - deferred tool prompt (dynamic list of undiscovered deferred tools via `build_deferred_tool_prompt`; instructs model to call `search_tools`)
+   - category awareness prompt (lists deferred tool categories available via `search_tools`)
 
-The filtered native toolset matters for approval resumes:
+The combined filtered toolset matters for approval resumes:
 
-- native tools are always registered once at startup
+- native tools are always registered once at startup with per-tool `defer_loading`
 - some domain tools are omitted entirely when the integration is absent
-- `_filter` uses per-tool `LoadPolicy` (`ALWAYS`/`DEFERRED`) from `deps.tool_index`, plus `deps.session.discovered_tools` and `deps.runtime.resume_tool_names`, to decide visibility per API call
-- MCP tools in `tool_index` follow the same visibility rule; unknown tools not in `tool_index` are hidden (default-deny)
+- `_approval_resume_filter` passes all during normal turns (SDK handles deferred visibility); narrows to `resume_tool_names` + `ALWAYS` tools during approval-resume
+- applies uniformly to native and MCP tools (combined under one filter)
 
 Global instrumentation is enabled once in `main.py`:
 
@@ -203,7 +203,6 @@ Visible to tools and slash commands.
 | `session_id` | `restore_session()` | session restart | fresh empty |
 | `memory_recall_state` | `inject_opening_context()` | new REPL session | fresh default |
 | `background_tasks` | `start_background_task` tool | never (in-memory only) | fresh empty dict |
-| `discovered_tools` | `search_tools()` discovers deferred tools | `/new` (session reset) | fresh empty set |
 
 #### `CoRuntimeState` — `deps.runtime`
 
@@ -229,16 +228,16 @@ There are three related capability surfaces:
 
 | Surface | Completed by | Includes |
 | --- | --- | --- |
-| static tool definitions | `build_agent()` | native filtered toolset plus MCP toolset definitions |
+| static tool definitions | `build_tool_registry()` | combined filtered toolset (native + MCP, under `_approval_resume_filter`) |
 | connected session capabilities | `create_deps()` | discovered MCP tool names plus loaded skills |
-| runtime-visible native schema subset | `_filter` in `_build_filtered_toolset()` (main turns: `ALWAYS` tools + `discovered_tools`; resume turns: `resume_tool_names` + `ALWAYS` tools) | owned by per-tool `LoadPolicy` in `agent.py` |
+| runtime-visible schema subset | SDK `ToolSearchToolset` (deferred visibility) + `_approval_resume_filter` (resume narrowing) | owned by per-tool `VisibilityPolicy` in `agent.py` |
 
 Key distinctions:
 
 - skills are not tools; they rewrite user input into delegated agent input
 - MCP toolsets are attached during agent construction but only discovered after entering the main agent context
 - `deps.tool_index` is the single source of truth for tool capability state; tool names and approvals are derived from it
-- the `_filter` function in `_build_filtered_toolset()` uses per-tool loading policy to narrow the native `FunctionToolset`
+- `_approval_resume_filter` applies uniformly to native and MCP tools; the SDK's `ToolSearchToolset` handles deferred visibility
 
 ### 2.7 Persistent Stores And External State
 

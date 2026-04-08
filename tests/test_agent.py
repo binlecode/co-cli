@@ -1,13 +1,11 @@
-"""Functional tests for agent factory — tool registration, approval wiring, and loading policy."""
-
-from pathlib import Path
+"""Functional tests for agent factory — tool registration, approval wiring, and visibility policy."""
 
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli._model_factory import build_model
 from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
 from tests._settings import test_settings
-from co_cli.deps import LoadPolicy, ToolSource
+from co_cli.deps import VisibilityPolicy, ToolSource
 
 
 # Config with fake integration paths so domain tools are always registered in tests,
@@ -86,38 +84,35 @@ def test_tool_registry_excludes_domain_tools_when_config_absent():
     assert "list_gmail_emails" not in result.tool_index
 
 
-def test_tool_index_loading_policy_metadata():
-    """Native tools carry loading-policy flags and source metadata in tool_index."""
+def test_tool_index_visibility_policy_metadata():
+    """Native tools carry visibility-policy flags and source metadata in tool_index."""
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
 
     idx = result.tool_index
     assert len(idx) > 0, "tool_index must be populated"
 
-    # Every entry must be native source with valid loading policy
+    # Every entry must be native source with valid visibility policy
     for name, tc in idx.items():
         assert tc.source == ToolSource.NATIVE, f"{name}: source must be NATIVE, got {tc.source!r}"
-        assert tc.load in (LoadPolicy.ALWAYS, LoadPolicy.DEFERRED), (
-            f"{name}: load must be a LoadPolicy enum value"
+        assert tc.visibility in (VisibilityPolicy.ALWAYS, VisibilityPolicy.DEFERRED), (
+            f"{name}: visibility must be a VisibilityPolicy enum value"
         )
         assert tc.name == name, f"index key {name!r} mismatches ToolInfo.name {tc.name!r}"
 
-    # Spot-check always-loaded tools
-    for name in ("check_capabilities", "search_tools", "read_file", "web_search",
+    # Spot-check always-visible tools
+    # search_tools is not in tool_index — it is the SDK's built-in ToolSearchToolset (BC-6)
+    for name in ("check_capabilities", "read_file", "web_search",
                   "run_shell_command", "list_memories", "search_knowledge"):
-        assert idx[name].load == LoadPolicy.ALWAYS, f"{name} should be ALWAYS"
+        assert idx[name].visibility == VisibilityPolicy.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
     for name in ("edit_file", "write_file", "save_memory", "start_background_task"):
-        assert idx[name].load == LoadPolicy.DEFERRED, f"{name} should be DEFERRED"
+        assert idx[name].visibility == VisibilityPolicy.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata
     assert idx["list_notes"].integration == "obsidian"
     assert idx["list_gmail_emails"].integration == "google_gmail"
     assert idx["search_drive_files"].integration == "google_drive"
-
-    # Search hints on deferred tools
-    assert idx["edit_file"].search_hint is not None
-    assert idx["save_memory"].search_hint is not None
 
     # Per-tool max_result_size overrides
     assert idx["run_shell_command"].max_result_size == 30_000
@@ -131,15 +126,15 @@ def test_tool_index_loading_policy_metadata():
 
 
 def test_toolinfo_enum_construction():
-    """ToolInfo accepts LoadPolicy/ToolSource enums; old boolean kwargs raise TypeError."""
-    from co_cli.deps import ToolInfo, LoadPolicy, ToolSource
+    """ToolInfo accepts VisibilityPolicy/ToolSource enums."""
+    from co_cli.deps import ToolInfo, VisibilityPolicy, ToolSource
 
     # New enum API works
     info = ToolInfo(
         name="x", description="x", approval=False,
-        source=ToolSource.NATIVE, load=LoadPolicy.ALWAYS,
+        source=ToolSource.NATIVE, visibility=VisibilityPolicy.ALWAYS,
     )
-    assert info.load == LoadPolicy.ALWAYS
+    assert info.visibility == VisibilityPolicy.ALWAYS
     assert info.source == ToolSource.NATIVE
 
     # Old boolean kwargs are rejected
@@ -147,7 +142,7 @@ def test_toolinfo_enum_construction():
     with pytest.raises(TypeError):
         ToolInfo(
             name="x", description="x", approval=False,
-            source=ToolSource.NATIVE, always_load=True,
+            source=ToolSource.NATIVE, always_visibility=True,
         )
     with pytest.raises(TypeError):
         ToolInfo(

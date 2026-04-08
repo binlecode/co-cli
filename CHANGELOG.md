@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.48] - 2026-04-08
+
+### Changed
+- **SDK-native deferred tool loading**: Replaced custom `tool_search.py` + `session.discovered_tools` + per-tool deferred prompt with pydantic-ai's built-in `defer_loading` + `ToolSearchToolset`. Deferred visibility is now handled entirely by the SDK; co-cli only adds a category-level awareness prompt (~100 tokens) so the model knows what domains to search for.
+- **Unified toolset filter**: All toolsets (native + MCP) combined under a single `_approval_resume_filter` via `CombinedToolset`, fixing a bug where MCP tools bypassed approval-resume narrowing.
+- **Renamed LoadPolicy → VisibilityPolicy**: `ToolInfo.load` → `ToolInfo.visibility` throughout code, tests, and DESIGN docs to reflect that tools are always registered eagerly — only model-visible schema exposure changes across turns.
+
+### Removed
+- `co_cli/tools/tool_search.py` — custom search_tools implementation (SDK built-in replaces it)
+- `CoSessionState.discovered_tools` — SDK reconstructs discovery state from message history
+- `ToolInfo.search_hint` field — no remaining consumer after custom search deletion
+
 ## [0.7.46] - 2026-04-08
 
 ### Changed

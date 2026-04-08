@@ -1,28 +1,37 @@
-"""Functional tests for the search_tools progressive discovery tool."""
-
-from pathlib import Path
+"""Functional tests for SDK-native deferred tool loading and discovery."""
 
 import pytest
 from pydantic_ai import RunContext
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent import build_agent, build_tool_registry
+from co_cli.agent import build_agent, build_tool_registry, _approval_resume_filter
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
+from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
+from co_cli.deps import CoDeps, CoRuntimeState, VisibilityPolicy, ToolInfo, ToolSource
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_search import search_tools
+
 
 _CONFIG = settings
+
+# Config with integrations so domain tools are registered in tests
+_CONFIG_WITH_INTEGRATIONS = settings.model_copy(update={
+    "obsidian_vault_path": "/fake/vault",
+    "google_credentials_path": "/fake/creds.json",
+})
+
 _TOOL_REG = build_tool_registry(_CONFIG)
 _AGENT = build_agent(config=_CONFIG)
 
 
-def _make_deps() -> CoDeps:
-    """Build real CoDeps with tool_index populated from build_tool_registry()."""
+def _make_deps(**runtime_overrides) -> CoDeps:
+    """Build real CoDeps with tool_index from build_tool_registry()."""
+    runtime = CoRuntimeState(**runtime_overrides)
     return CoDeps(
         shell=ShellBackend(),
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG,
+        runtime=runtime,
     )
 
 
@@ -31,145 +40,162 @@ def _make_ctx(deps: CoDeps) -> RunContext:
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-@pytest.mark.asyncio
-async def test_search_tools_discovers_deferred_tool() -> None:
-    """search_tools('edit file') unlocks edit_file and adds it to discovered_tools."""
-    deps = _make_deps()
-    ctx = _make_ctx(deps)
+# ---------------------------------------------------------------------------
+# BC-6: search_tools name reservation
+# ---------------------------------------------------------------------------
 
-    result = await search_tools(ctx, "edit file")
 
-    assert "edit_file" in deps.session.discovered_tools, (
-        "edit_file must be added to discovered_tools after search"
+def test_search_tools_not_in_tool_index() -> None:
+    """co-cli must not register search_tools — the SDK reserves that name (BC-6)."""
+    result = build_tool_registry(_CONFIG)
+    assert "search_tools" not in result.tool_index
+
+
+# ---------------------------------------------------------------------------
+# Tool registry: deferred and always-visible
+# ---------------------------------------------------------------------------
+
+
+def test_deferred_tools_have_defer_loading_flag() -> None:
+    """Deferred tools are registered with VisibilityPolicy.DEFERRED in tool_index."""
+    result = build_tool_registry(_CONFIG)
+    deferred_names = [
+        name for name, info in result.tool_index.items()
+        if info.visibility == VisibilityPolicy.DEFERRED
+    ]
+    assert len(deferred_names) > 0, "Must have at least one deferred tool"
+
+
+def test_always_tools_present_in_registry() -> None:
+    """Always-visible tools are present in tool_index with VisibilityPolicy.ALWAYS."""
+    result = build_tool_registry(_CONFIG)
+    for name in ("check_capabilities", "read_file", "web_search", "run_shell_command"):
+        assert name in result.tool_index
+        assert result.tool_index[name].visibility == VisibilityPolicy.ALWAYS
+
+
+# ---------------------------------------------------------------------------
+# Category awareness prompt
+# ---------------------------------------------------------------------------
+
+
+def test_category_awareness_prompt_includes_native_categories() -> None:
+    """Category awareness prompt lists native deferred groups."""
+    result = build_tool_registry(_CONFIG)
+    prompt = build_category_awareness_prompt(result.tool_index)
+    assert "file editing" in prompt
+    assert "memory management" in prompt
+    assert "background tasks" in prompt
+    assert "sub-agents" in prompt
+
+
+def test_category_awareness_prompt_includes_integration_categories() -> None:
+    """Category awareness prompt lists integration categories when config is present."""
+    result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)
+    prompt = build_category_awareness_prompt(result.tool_index)
+    assert "Gmail" in prompt
+    assert "Google Calendar" in prompt
+    assert "Google Drive" in prompt
+    assert "Obsidian notes" in prompt
+
+
+def test_category_awareness_prompt_excludes_absent_integrations() -> None:
+    """Category awareness prompt omits integrations when their config is absent."""
+    from tests._settings import test_settings
+    config_no_integrations = test_settings(
+        obsidian_vault_path=None,
+        google_credentials_path=None,
     )
-    granted = (result.metadata or {}).get("granted", [])
-    assert "edit_file" in granted, f"edit_file missing from granted list: {granted}"
-    assert "unlocked" in result.return_value, "display must mention 'unlocked'"
+    result = build_tool_registry(config_no_integrations)
+    prompt = build_category_awareness_prompt(result.tool_index)
+    assert "Gmail" not in prompt
+    assert "Obsidian" not in prompt
 
 
-@pytest.mark.asyncio
-async def test_search_tools_no_match_returns_hint() -> None:
-    """search_tools with no matching query returns the fallback hint text."""
-    deps = _make_deps()
-    ctx = _make_ctx(deps)
-
-    result = await search_tools(ctx, "zzznomatch_xyzzy_unlikely_token")
-
-    assert "Try:" in result.return_value, (
-        f"Fallback hint expected in display: {result.return_value!r}"
-    )
-    assert (result.metadata or {}).get("granted", []) == []
-
-
-@pytest.mark.asyncio
-async def test_search_tools_always_loaded_tool_already_available() -> None:
-    """search_tools for an always-loaded tool shows 'already available' and does not discover it."""
-    deps = _make_deps()
-    ctx = _make_ctx(deps)
-
-    result = await search_tools(ctx, "web search")
-
-    assert "web_search" not in deps.session.discovered_tools, (
-        "web_search is always-loaded — must not be added to discovered_tools"
-    )
-    assert "already available" in result.return_value, (
-        f"'already available' expected in display: {result.return_value!r}"
-    )
-    granted = (result.metadata or {}).get("granted", [])
-    assert "web_search" not in granted, "web_search must not appear in granted list"
-
-
-@pytest.mark.asyncio
-async def test_search_tools_no_false_positive_substring() -> None:
-    """'create' must not match 'recreate_session' — word-boundary scoring."""
-    deps = _make_deps()
-    # Inject a test tool whose name/description only contain "recreate", not "create"
-    deps.tool_index["recreate_session"] = ToolInfo(
-        name="recreate_session",
-        description="Recreate session state",
-        approval=False,
-        source=ToolSource.NATIVE,
-        load=LoadPolicy.DEFERRED,
-    )
-    ctx = _make_ctx(deps)
-
-    result = await search_tools(ctx, "create")
-
-    assert "recreate_session" not in result.return_value, (
-        "'create' must not match 'recreate_session' via substring"
-    )
-
-
-@pytest.mark.asyncio
-async def test_search_tools_no_false_negatives() -> None:
-    """Word-boundary scoring must not break exact token matches (BC-2)."""
-    deps = _make_deps()
-    ctx = _make_ctx(deps)
-
-    # "edit" should match "edit_file"
-    result = await search_tools(ctx, "edit")
-    assert "edit_file" in result.return_value, (
-        f"'edit' must match 'edit_file': {result.return_value!r}"
-    )
-
-    # "file" should match both "read_file" and "write_file"
-    deps2 = _make_deps()
-    ctx2 = _make_ctx(deps2)
-    result2 = await search_tools(ctx2, "file")
-    assert "read_file" in result2.return_value, (
-        f"'file' must match 'read_file': {result2.return_value!r}"
-    )
-    assert "write_file" in result2.return_value, (
-        f"'file' must match 'write_file': {result2.return_value!r}"
-    )
-
-    # "search" should match tools with "search" as a word token
-    deps3 = _make_deps()
-    ctx3 = _make_ctx(deps3)
-    result3 = await search_tools(ctx3, "search")
-    assert "search_memories" in result3.return_value, (
-        f"'search' must match 'search_memories': {result3.return_value!r}"
-    )
-
-
-def test_deferred_prompt_includes_search_hint() -> None:
-    """Deferred prompt shows [hints: ...] when search_hint is present."""
-    from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
-
+def test_category_awareness_prompt_empty_when_no_deferred() -> None:
+    """Category awareness prompt returns empty string when no deferred tools exist."""
     idx = {
         "tool_a": ToolInfo(
             name="tool_a", description="does stuff", approval=False,
-            source=ToolSource.NATIVE, load=LoadPolicy.DEFERRED,
-            search_hint="kw1 kw2",
+            source=ToolSource.NATIVE, visibility=VisibilityPolicy.ALWAYS,
         ),
     }
-    prompt = build_deferred_tool_prompt(idx, set())
-    assert prompt is not None
-    assert "[hints: kw1 kw2]" in prompt
+    prompt = build_category_awareness_prompt(idx)
+    assert prompt == ""
 
 
-def test_filter_returns_false_for_unknown_tool() -> None:
-    """_filter returns False for tools not in tool_index (default-deny)."""
-    from pydantic_ai.tools import ToolDefinition
+# ---------------------------------------------------------------------------
+# ToolInfo field removal
+# ---------------------------------------------------------------------------
 
+
+def test_toolinfo_no_search_hint_field() -> None:
+    """ToolInfo no longer accepts search_hint — field was removed."""
+    with pytest.raises(TypeError):
+        ToolInfo(
+            name="x", description="x", approval=False,
+            source=ToolSource.NATIVE, visibility=VisibilityPolicy.ALWAYS,
+            search_hint="should fail",
+        )
+
+
+# ---------------------------------------------------------------------------
+# BC-4: Approval-resume narrowing (native and MCP)
+# ---------------------------------------------------------------------------
+
+
+def test_approval_resume_filter_normal_turn_passes_all() -> None:
+    """During normal turns (resume_tool_names=None), filter passes all tools."""
     deps = _make_deps()
     ctx = _make_ctx(deps)
-    # Use the filter_func from the FilteredToolset
-    filter_fn = _TOOL_REG.toolset.filter_func
-    unknown_tool = ToolDefinition(name="totally_unknown_tool_xyz", description="test")
-    assert filter_fn(ctx, unknown_tool) is False
+    # Always tool
+    assert _approval_resume_filter(ctx, ToolDefinition(name="read_file", description="")) is True
+    # Deferred tool
+    assert _approval_resume_filter(ctx, ToolDefinition(name="edit_file", description="")) is True
+    # Unknown tool
+    assert _approval_resume_filter(ctx, ToolDefinition(name="unknown_xyz", description="")) is True
 
 
-def test_deferred_prompt_omits_hints_when_none() -> None:
-    """Deferred prompt omits [hints: ...] when search_hint is None."""
-    from co_cli.context._deferred_tool_prompt import build_deferred_tool_prompt
+def test_approval_resume_filter_narrows_to_approved_plus_always() -> None:
+    """During resume, only resume_tool_names + ALWAYS tools are visible (BC-4)."""
+    deps = _make_deps(resume_tool_names=frozenset({"edit_file"}))
+    ctx = _make_ctx(deps)
+    # Approved deferred tool — visible
+    assert _approval_resume_filter(ctx, ToolDefinition(name="edit_file", description="")) is True
+    # Always tool — visible even without being in resume set
+    assert _approval_resume_filter(ctx, ToolDefinition(name="read_file", description="")) is True
+    # Deferred tool NOT in resume set — hidden
+    assert _approval_resume_filter(ctx, ToolDefinition(name="write_file", description="")) is False
+    # Another deferred tool NOT in resume set — hidden
+    assert _approval_resume_filter(ctx, ToolDefinition(name="save_memory", description="")) is False
 
-    idx = {
-        "tool_b": ToolInfo(
-            name="tool_b", description="does stuff", approval=False,
-            source=ToolSource.NATIVE, load=LoadPolicy.DEFERRED,
-        ),
-    }
-    prompt = build_deferred_tool_prompt(idx, set())
-    assert prompt is not None
-    assert "[hints:" not in prompt
+
+def test_approval_resume_filter_applies_to_mcp_tools() -> None:
+    """Approval-resume narrowing applies uniformly to MCP tools (BC-4)."""
+    deps = _make_deps(resume_tool_names=frozenset({"mcp_approved_tool"}))
+    # Add MCP tool entries to tool_index
+    deps.tool_index["mcp_approved_tool"] = ToolInfo(
+        name="mcp_approved_tool", description="mcp tool", approval=True,
+        source=ToolSource.MCP, visibility=VisibilityPolicy.DEFERRED,
+        integration="test_mcp",
+    )
+    deps.tool_index["mcp_other_tool"] = ToolInfo(
+        name="mcp_other_tool", description="other mcp tool", approval=False,
+        source=ToolSource.MCP, visibility=VisibilityPolicy.DEFERRED,
+        integration="test_mcp",
+    )
+    ctx = _make_ctx(deps)
+    # MCP tool in resume set — visible
+    assert _approval_resume_filter(ctx, ToolDefinition(name="mcp_approved_tool", description="")) is True
+    # MCP tool NOT in resume set — hidden
+    assert _approval_resume_filter(ctx, ToolDefinition(name="mcp_other_tool", description="")) is False
+
+
+def test_approval_resume_filter_hides_previously_discovered_deferred() -> None:
+    """During resume, deferred tools not in resume_tool_names are hidden even if previously discovered."""
+    # This validates BC-4: discovery state doesn't grant resume visibility
+    deps = _make_deps(resume_tool_names=frozenset({"edit_file"}))
+    ctx = _make_ctx(deps)
+    # save_memory is deferred, not in resume set — must be hidden
+    # regardless of whether it was previously discovered via search_tools
+    assert _approval_resume_filter(ctx, ToolDefinition(name="save_memory", description="")) is False

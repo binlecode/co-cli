@@ -100,7 +100,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `turn_usage` | authoritative per-turn accumulator shared across foreground and sub-agent tool calls |
 | `safety_state` | owned by history processors, not by the orchestrator |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
-| `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by the native filtered toolset `_filter` |
+| `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_failure_count` | cross-turn circuit breaker for inline compaction (>= 3 consecutive failures skips LLM) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
 
@@ -177,8 +177,8 @@ Resume-loop behavior:
 
 ```text
 # run_turn() — before first segment
-# No explicit filter setup needed — _filter reads per-tool LoadPolicy
-# plus session.discovered_tools on every API call.
+# No explicit filter setup needed — _approval_resume_filter passes all
+# during normal turns; SDK ToolSearchToolset handles deferred visibility.
 
 # _run_approval_loop() — each resume hop
 while latest_result.output is DeferredToolRequests:
@@ -195,8 +195,8 @@ clear deps.runtime.resume_tool_names
 
 Important precision:
 
-- `_filter` uses per-tool `LoadPolicy` (`ALWAYS`/`DEFERRED`) from `tool_index` plus `session.discovered_tools` and `runtime.resume_tool_names`
-- MCP tools in `tool_index` follow the same visibility rule; unknown tools not in `tool_index` are hidden (default-deny)
+- `_approval_resume_filter` passes all during normal turns; narrows to `resume_tool_names` + `ALWAYS` tools during resume
+- applies uniformly to native and MCP tools (all combined under one filter)
 - approval resumes happen inside the same user turn; they are not a new REPL iteration
 
 Shell approval remains split correctly:

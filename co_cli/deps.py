@@ -52,8 +52,8 @@ class SessionApprovalRule:
     value: str
 
 
-class LoadPolicy(Enum):
-    """Whether a tool is always visible or requires discovery via search_tools."""
+class VisibilityPolicy(Enum):
+    """Whether a tool is visible to the model immediately or requires discovery via search_tools."""
     ALWAYS = "always"
     DEFERRED = "deferred"
 
@@ -72,9 +72,8 @@ class ToolInfo:
     description: str
     approval: bool
     source: ToolSource
-    load: LoadPolicy
+    visibility: VisibilityPolicy
     integration: str | None = None
-    search_hint: str | None = None
     max_result_size: int = 50_000
 
 
@@ -94,10 +93,6 @@ class CoSessionState:
     session_id: str = ""
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
-    # discovered_tools: session-scoped names of deferred tools already exposed to the model.
-    # Persists across turns; cleared by /new (full session reset via CoSessionState reset).
-    # Sub-agents receive a fresh CoSessionState — they do not inherit parent grants.
-    discovered_tools: set[str] = field(default_factory=set)
 
 
 @dataclass

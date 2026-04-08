@@ -7,7 +7,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps, ToolInfo, LoadPolicy, ToolSource
+from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicy, ToolSource
 from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_output import tool_output, tool_output_raw
@@ -32,7 +32,7 @@ def _make_ctx_with_index(
         description="test tool",
         approval=False,
         source=ToolSource.NATIVE,
-        load=LoadPolicy.ALWAYS,
+        visibility=VisibilityPolicy.ALWAYS,
         max_result_size=max_result_size,
     )
     deps = CoDeps(

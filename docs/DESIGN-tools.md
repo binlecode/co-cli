@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time; a `_filter` closure controls which schemas reach the LLM per API call. Each tool carries a `LoadPolicy` enum (`ALWAYS` or `DEFERRED`) and a `ToolSource` enum (`NATIVE` or `MCP`). Always-loaded tools (15) are visible on turn one; deferred tools become callable only after the model calls `search_tools()` to discover them into `deps.session.discovered_tools`. MCP tools are normalized into `tool_index` with `load=LoadPolicy.DEFERRED` by default and follow the same visibility rule.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time with per-tool `defer_loading` derived from `VisibilityPolicy`. Each tool carries a `VisibilityPolicy` enum (`ALWAYS` or `DEFERRED`) and a `ToolSource` enum (`NATIVE` or `MCP`). Always-visible tools (15) are visible on turn one; deferred tools become callable only after the SDK's built-in `search_tools` discovers them. MCP tools are wrapped with `DeferredLoadingToolset` and normalized into `tool_index` with `visibility=VisibilityPolicy.DEFERRED` by default. All toolsets (native + MCP) are combined under a single `_approval_resume_filter` so approval-resume narrowing applies uniformly.
 
 ```
 tools/
@@ -20,7 +20,6 @@ tools/
   task_control.py    — background task lifecycle
   todo.py            — session-scoped task list
   capabilities.py    — integration health introspection
-  tool_search.py     — progressive tool discovery and session grants
   subagent.py        — sub-agent delegation tools
   _subagent_builders.py — output types + agent factories for delegation
 ```
@@ -32,33 +31,48 @@ tools/
 Registration, filtering, and progressive disclosure form a single pipeline:
 
 ```
-build_agent()
-  ├─ _build_filtered_toolset(config)
+build_tool_registry(config)
+  ├─ _build_native_toolset(config)
   │    ├─ FunctionToolset — register all tools via _reg()
-  │    │    each _reg() produces a ToolInfo(load=ALWAYS | DEFERRED)
-  │    └─ inner.filtered(_filter) — per-API-call visibility gate
-  │         _filter checks: load==ALWAYS? OR name in discovered_tools? OR name in resume_tool_names?
-  ├─ _build_mcp_toolsets(config) — one MCPServer* per mcp_servers entry
-  └─ Agent(toolsets=[filtered] + mcp_toolsets)
+  │    │    each _reg() produces a ToolInfo(visibility=ALWAYS | DEFERRED)
+  │    │    and passes defer_loading=(visibility==DEFERRED) to SDK
+  │    └─ returns unfiltered FunctionToolset
+  ├─ _build_mcp_toolsets(config) — one DeferredLoadingToolset(MCPServer*) per entry
+  ├─ CombinedToolset([native] + mcp_toolsets)
+  └─ combined.filtered(_approval_resume_filter)
+
+build_agent()
+  └─ Agent(toolsets=[tool_registry.toolset])
+       SDK auto-adds ToolSearchToolset — deferred visibility handled natively
 
 create_deps()
-  └─ discover_mcp_tools() — list_tools() per server → tool_index.update(mcp_index)
+  └─ discover_mcp_tools() — walks .wrapped chain to MCPServer → tool_index.update(mcp_index)
 ```
 
-**Surface split:** 15 always-loaded (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced by name via `build_deferred_tool_prompt` but schemas are not callable until the model calls `search_tools()`.
+**Surface split:** 15 always-visible (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced at category level via `build_category_awareness_prompt` (~100 tokens); schemas become callable after the SDK's built-in `search_tools` discovers them.
 
-**Filter policy per segment type:**
+**Runtime toolset wrapper chain** — each layer serves one purpose:
 
 ```
-normal turn:      entry.load == ALWAYS OR name in session.discovered_tools
-                  (MCP tools not in tool_index pass through)
-approval-resume:  name in resume_tool_names OR entry.load == ALWAYS
-                  (all other tools hidden — cuts token cost per hop)
+ToolSearchToolset                    ← SDK auto-adds outermost; owns deferred visibility
+  └─ FilteredToolset                 ← _approval_resume_filter; resume-only narrowing
+       └─ CombinedToolset            ← merges native + MCP into one toolset
+            ├─ FunctionToolset       ← native tools; per-tool defer_loading flag
+            ├─ DeferredLoadingToolset ← MCP server 1 (all tools deferred)
+            └─ DeferredLoadingToolset ← MCP server 2 (all tools deferred)
 ```
+
+SDK idioms that drive the design:
+
+- **One MCP server = one toolset.** Each `MCPServerStdio`/`MCPServerSSE` has its own transport and connection lifecycle. Cannot be merged.
+- **`DeferredLoadingToolset`** is a thin `PreparedToolset` wrapper that sets `defer_loading=True` on each `ToolDefinition` via `dataclasses.replace()`. This is the only way to make MCP tools deferred — `MCPServer` does not support per-tool `defer_loading` natively.
+- **`FunctionToolset`** supports per-tool `defer_loading` directly via `add_function(fn, defer_loading=True)`. Native tools use this instead of a wrapper.
+- **`ToolSearchToolset`** is auto-added by `Agent` as the outermost wrapper. It reads `tool_def.defer_loading` to split tools into visible vs deferred. It injects the SDK's `search_tools` tool and reconstructs discovery state from prior `search_tools` `ToolReturnPart` messages in history.
+- **`FilteredToolset`** applies `_approval_resume_filter` to the combined toolset. During normal turns: passes all (returns `True`). During approval-resume: narrows to `resume_tool_names` + `ALWAYS` tools. Applied at `CombinedToolset` level so it gates both native and MCP tools uniformly — this fixes the pre-migration bug where MCP tools bypassed filtering.
 
 **State lifetime matters:**
 
-- `session.discovered_tools` is session-scoped discovery state. Once `search_tools()` unlocks a deferred tool, that tool remains visible on later normal turns for the rest of the session. `/new` clears those discoveries.
+- Discovery state is managed by the SDK via message history — `ToolSearchToolset` scans for prior `search_tools` results in `ToolReturnPart` messages. No session-level discovery cache. History compaction preserves these breadcrumbs (see DESIGN-context.md).
 - `runtime.resume_tool_names` is not discovery state. It is a one-shot per-resume allowlist used only while continuing an approval-gated segment.
 - `resume_tool_names` is populated from the currently approved tool calls just before the resume segment runs, then cleared when the approval loop exits. It does not grant visibility on future turns.
 
@@ -87,7 +101,7 @@ flowchart TD
     REG --> POOL[/"Static pool for session lifetime"/]
 
     POOL --> TURN([Per Turn])
-    TURN --> FILTER["_filter: ALWAYS visible;\nDEFERRED visible only if in discovered_tools"]
+    TURN --> FILTER["_approval_resume_filter:\nnormal turns: pass all (SDK handles deferred)\nresume: resume_tool_names + ALWAYS only"]
     FILTER --> SEG[_execute_stream_segment]
     SEG --> T{tool called?}
 
@@ -202,7 +216,7 @@ Tools that do NOT need locking: `write_file` (blind overwrite, no read step), `s
 
 ### MCP Tool Servers
 
-Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP tools are normalized into `tool_index` with `load=LoadPolicy.DEFERRED` after discovery and participate in the same visibility policy as native tools. MCP tools derive `integration` and `search_hint` from the server prefix.
+Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP toolsets are wrapped with `DeferredLoadingToolset` for SDK-native deferred visibility, then combined with native tools under a single `_approval_resume_filter`. MCP tools are normalized into `tool_index` with `visibility=VisibilityPolicy.DEFERRED` after discovery and participate in the same visibility policy as native tools. MCP tools derive `integration` from the server prefix.
 
 **Default servers** (gracefully skipped when `npx` is absent):
 
@@ -220,7 +234,6 @@ Conditional tools excluded when gate is absent.
 | Tool | Loading | Approval | Gate |
 |------|---------|----------|------|
 | `check_capabilities` | always | auto | — |
-| `search_tools` | always | auto | — |
 | `write_todos` | always | auto | — |
 | `read_todos` | always | auto | — |
 | `search_memories` | always | auto | — |
@@ -259,8 +272,8 @@ Conditional tools excluded when gate is absent.
 | `list_calendar_events` | deferred | auto | `google_credentials_path` |
 | `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 33 tools (15 always-loaded, 18 deferred).
-**Full pool (all gates active):** 39 tools (15 always-loaded, 24 deferred).
+**Unconditional pool (no integration gates):** 32 tools (14 always-visible, 18 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
+**Full pool (all gates active):** 38 tools (14 always-visible, 24 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
 
@@ -364,14 +377,13 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `write_todos` | `todos: list[dict]` | Replaces full session todo list in `session.session_todos`; validates `status` and `priority` |
 | `read_todos` | — | Returns current todo list |
 
-#### System (`tools/capabilities.py`, `tools/tool_search.py`)
+#### System (`tools/capabilities.py`)
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
 | `check_capabilities` | — | Runs `check_runtime(deps)`; returns integration health, tool count, MCP server probes, reasoning model status. Emits staged progress via `tool_progress_callback`. Backing tool for `/doctor`. |
-| `search_tools` | `query`, `max_results=8` | Keyword search over deferred tools in `tool_index` (name + description + integration + search_hint). Discovers matched tools into `session.discovered_tools`; always-loaded tools report as `"already available"`. Returns match list with per-tool status. |
 
-`search_tools` is the progressive-disclosure entry point: start with 15 always-loaded tools, call `search_tools("edit file")` to unlock `edit_file` for the session, call `search_tools("gmail")` to unlock Gmail tools, etc. Discoveries accumulate for the session; `/new` resets them.
+`search_tools` is the SDK's built-in `ToolSearchToolset` (auto-added by Agent). It uses tool name + description keyword matching to discover deferred tools. A category-level awareness prompt (~100 tokens, rebuilt per turn) tells the model which capability domains are available via `search_tools`: file editing, memory management, background tasks, sub-agents, plus any configured integrations (Gmail, Drive, Calendar, Obsidian). Discovery state is reconstructed from message history by the SDK — no session-level cache.
 
 ---
 
@@ -415,7 +427,6 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/task_control.py` | `start_background_task`, `check_task_status`, `cancel_background_task`, `list_background_tasks` |
 | `co_cli/tools/todo.py` | `write_todos`, `read_todos` |
 | `co_cli/tools/capabilities.py` | `check_capabilities` |
-| `co_cli/tools/tool_search.py` | `search_tools` — progressive tool discovery and session-discovery mechanism |
 | `co_cli/tools/subagent.py` | `SubagentRoleConfig`, `SUBAGENT_ROLES`, `_run_subagent()`, `_format_output()`, thin wrappers: `run_coding_subagent`, `run_research_subagent`, `run_analysis_subagent`, `run_reasoning_subagent` |
 | `co_cli/tools/_shell_policy.py` | `evaluate_shell_command()`, `_is_safe_command()` — DENY / ALLOW / REQUIRE_APPROVAL classification |
 | `co_cli/tools/shell_backend.py` | `ShellBackend` — subprocess execution with process-group cleanup |
@@ -429,5 +440,5 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 | `co_cli/tools/_subagent_builders.py` | `CoderOutput`, `make_coder_agent()`, `ResearchOutput`, `make_research_agent()`, `AnalysisOutput`, `make_analysis_agent()`, `ThinkingOutput`, `make_thinking_agent()` |
 | `co_cli/_model_factory.py` | `LlmModel`, `build_model()` — single-model factory |
 | `co_cli/_model_settings.py` | `NOREASON_SETTINGS` — static `ModelSettings` for non-reasoning calls |
-| `co_cli/agent.py` | `build_agent()`, `_build_filtered_toolset()`, `_build_mcp_toolsets()`, `discover_mcp_tools()`, `AgentCapabilityResult` |
-| `co_cli/context/_deferred_tool_prompt.py` | `build_deferred_tool_prompt()` — dynamic prompt fragment listing undiscovered deferred tools |
+| `co_cli/agent.py` | `build_agent()`, `_build_native_toolset()`, `_build_mcp_toolsets()`, `build_tool_registry()`, `_approval_resume_filter()`, `discover_mcp_tools()` |
+| `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — dynamic category-level prompt for deferred tool discovery |
