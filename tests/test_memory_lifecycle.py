@@ -5,22 +5,21 @@ concurrency, overflow cut, and on_failure behavior.
 """
 
 import asyncio
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
-from co_cli.config._core import settings
-from tests._settings import test_settings
 from co_cli._model_factory import build_model
 from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.memory._lifecycle import persist_memory
-from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import MemoryEntry
+from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings
 _LLM_MODEL = build_model(_CONFIG.llm)
@@ -42,7 +41,7 @@ def _seed_memory(
 ) -> MemoryEntry:
     """Write a test memory file and return a MemoryEntry."""
     memory_dir.mkdir(parents=True, exist_ok=True)
-    created = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    created = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
     slug = content[:40].lower().replace(" ", "-").replace(",", "")
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict[str, Any] = {
@@ -72,9 +71,11 @@ def _make_deps(
     memory_dir: Path | None = None,
     max_count: int = 200,
 ) -> CoDeps:
-    cfg = _CONFIG.model_copy(update={
-        "memory": _CONFIG.memory.model_copy(update={"max_count": max_count}),
-    })
+    cfg = _CONFIG.model_copy(
+        update={
+            "memory": _CONFIG.memory.model_copy(update={"max_count": max_count}),
+        }
+    )
     deps_kwargs = {"shell": ShellBackend(), "config": cfg}
     if memory_dir is not None:
         deps_kwargs["memory_dir"] = memory_dir
@@ -113,13 +114,16 @@ def test_overflow_cut_oldest_unprotected(tmp_path: Path):
 
     max_count = 5
     for i in range(1, max_count + 1):
-        _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10,
-                     decay_protected=(i == 1))
+        _seed_memory(
+            memory_dir,
+            i,
+            f"Old memory number {i}",
+            days_ago=max_count - i + 10,
+            decay_protected=(i == 1),
+        )
 
     deps = _make_deps(memory_dir=memory_dir, max_count=max_count)
-    asyncio.run(
-        persist_memory(deps, "Brand new important memory", ["test"], None)
-    )
+    asyncio.run(persist_memory(deps, "Brand new important memory", ["test"], None))
 
     after = list(memory_dir.glob("*.md"))
     assert len(after) <= max_count, f"Total {len(after)} should be <= {max_count}"
@@ -150,8 +154,12 @@ def test_retention_cap_excludes_articles(tmp_path: Path):
     # Seed article as a regular md file with kind:article frontmatter
     article_path = memory_dir / "100-my-article.md"
     article_fm = {
-        "id": 100, "kind": "article", "created": "2026-01-01T00:00:00+00:00",
-        "tags": [], "decay_protected": True, "origin_url": "https://example.com",
+        "id": 100,
+        "kind": "article",
+        "created": "2026-01-01T00:00:00+00:00",
+        "tags": [],
+        "decay_protected": True,
+        "origin_url": "https://example.com",
     }
     article_path.write_text(
         f"---\n{yaml.dump(article_fm, default_flow_style=False)}---\n\nArticle body.\n",
@@ -188,10 +196,13 @@ def test_explicit_save_raises_on_lock_conflict(tmp_path: Path):
         async with deps.resource_locks.try_acquire(target_path):
             with pytest.raises(ResourceBusyError):
                 await persist_memory(
-                    deps, "User prefers pytest for all testing purposes",
-                    ["preference"], None,
+                    deps,
+                    "User prefers pytest for all testing purposes",
+                    ["preference"],
+                    None,
                     on_failure="add",
-                    model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
+                    model=_LLM_MODEL.model,
+                    model_settings=NOREASON_SETTINGS,
                 )
 
     asyncio.run(_run())
@@ -214,10 +225,13 @@ def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
         # Hold the lock on the target file, then try to persist a near-dup
         async with deps.resource_locks.try_acquire(target_path):
             return await persist_memory(
-                deps, "User prefers pytest for all testing purposes",
-                ["preference"], None,
+                deps,
+                "User prefers pytest for all testing purposes",
+                ["preference"],
+                None,
                 on_failure="skip",
-                model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
+                model=_LLM_MODEL.model,
+                model_settings=NOREASON_SETTINGS,
             )
 
     result = asyncio.run(_run())
@@ -238,7 +252,7 @@ def test_auto_signal_skip_on_lock_conflict(tmp_path: Path):
 
 def test_build_memory_manifest_format(tmp_path: Path):
     """Manifest builder returns one-line-per-entry format, respects PAGE_SIZE cap."""
-    from co_cli.memory._save import build_memory_manifest, PAGE_SIZE
+    from co_cli.memory._save import PAGE_SIZE, build_memory_manifest
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     entries = []
@@ -274,8 +288,9 @@ def test_build_memory_manifest_format(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
     """Memory save agent returns SAVE_NEW when candidate is genuinely new."""
-    from co_cli.memory._save import build_memory_manifest, check_and_save
     from tests._ollama import ensure_ollama_warm
+
+    from co_cli.memory._save import build_memory_manifest, check_and_save
 
     if _LLM_MODEL.model is None:
         pytest.skip("No model configured")
@@ -292,7 +307,9 @@ async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await check_and_save(
             "User prefers dark mode for all terminal applications",
-            manifest, _LLM_MODEL.model, NOREASON_SETTINGS,
+            manifest,
+            _LLM_MODEL.model,
+            NOREASON_SETTINGS,
         )
 
     assert result.action == "SAVE_NEW", (
@@ -308,8 +325,9 @@ async def test_memory_save_agent_returns_save_new_on_novel(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path):
     """Memory save agent returns UPDATE(slug) when candidate near-duplicates existing."""
-    from co_cli.memory._save import build_memory_manifest, check_and_save
     from tests._ollama import ensure_ollama_warm
+
+    from co_cli.memory._save import build_memory_manifest, check_and_save
 
     if _LLM_MODEL.model is None:
         pytest.skip("No model configured")
@@ -326,12 +344,12 @@ async def test_memory_save_agent_returns_update_on_near_duplicate(tmp_path: Path
     async with asyncio.timeout(LLM_NON_REASONING_TIMEOUT_SECS):
         result = await check_and_save(
             "User prefers pytest for all testing purposes",
-            manifest, _LLM_MODEL.model, NOREASON_SETTINGS,
+            manifest,
+            _LLM_MODEL.model,
+            NOREASON_SETTINGS,
         )
 
-    assert result.action == "UPDATE", (
-        f"Near-duplicate should produce UPDATE, got {result.action}"
-    )
+    assert result.action == "UPDATE", f"Near-duplicate should produce UPDATE, got {result.action}"
     assert result.target_slug is not None, "UPDATE must include target_slug"
 
 
@@ -361,8 +379,10 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
         result = await persist_memory(
             deps,
             "User prefers pytest for all testing purposes",
-            ["preference"], None,
-            model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
+            ["preference"],
+            None,
+            model=_LLM_MODEL.model,
+            model_settings=NOREASON_SETTINGS,
         )
 
     after_count = len(list(memory_dir.glob("*.md")))
@@ -371,14 +391,10 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
     # but when it returns UPDATE the file count should stay the same and the
     # existing file should have an updated timestamp.
     if result.metadata.get("action") == "consolidated":
-        assert after_count == before_count, (
-            "Upsert UPDATE should not create a new file"
-        )
+        assert after_count == before_count, "Upsert UPDATE should not create a new file"
         existing_file = next(memory_dir.glob("001-*.md"))
         fm_raw = yaml.safe_load(existing_file.read_text(encoding="utf-8").split("---")[1])
-        assert fm_raw.get("updated") is not None, (
-            "Upsert UPDATE must set the updated timestamp"
-        )
+        assert fm_raw.get("updated") is not None, "Upsert UPDATE must set the updated timestamp"
     else:
         # SAVE_NEW fallback is acceptable (model non-determinism)
         assert after_count == before_count + 1

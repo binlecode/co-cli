@@ -129,7 +129,9 @@ CUSTOM_MODELS: list[dict[str, Any]] = [
 def _installed_models(host: str) -> set[str]:
     resp = httpx.get(f"{host.rstrip('/')}/api/tags", timeout=10)
     resp.raise_for_status()
-    return {m["name"] for m in resp.json().get("models", []) if isinstance(m, dict) and "name" in m}
+    return {
+        m["name"] for m in resp.json().get("models", []) if isinstance(m, dict) and "name" in m
+    }
 
 
 def _show_params(host: str, model: str) -> dict[str, Any]:
@@ -161,9 +163,7 @@ def _show_system(host: str, model: str) -> str:
     return resp.json().get("system", "") or ""
 
 
-def _check_params(
-    actual: dict[str, Any], expected: dict[str, Any]
-) -> list[str]:
+def _check_params(actual: dict[str, Any], expected: dict[str, Any]) -> list[str]:
     """Return a list of mismatch descriptions, empty if all match."""
     mismatches: list[str] = []
     for key, exp_val in expected.items():
@@ -212,7 +212,9 @@ def main() -> int:
         role: str = spec["role"]
 
         if name not in installed:
-            print(f"{name:<{col_name}} {role:<{col_role}} MISSING — run: ollama create {name} -f {spec['modelfile']}")
+            print(
+                f"{name:<{col_name}} {role:<{col_role}} MISSING — run: ollama create {name} -f {spec['modelfile']}"
+            )
             exit_code = 1
             continue
 

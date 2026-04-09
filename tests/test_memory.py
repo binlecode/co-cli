@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,20 +10,19 @@ import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.shell_backend import ShellBackend
-from tests._settings import test_settings
 from co_cli.tools.memory import (
-    recall_memory,
-    list_memories,
-    update_memory,
     append_memory,
+    list_memories,
+    recall_memory,
     search_memories,
+    update_memory,
 )
-
+from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,7 +39,11 @@ def _make_ctx(
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
-    config = test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": knowledge_search_backend}))
+    config = test_settings(
+        knowledge=test_settings().knowledge.model_copy(
+            update={"search_backend": knowledge_search_backend}
+        )
+    )
     deps_kwargs: dict[str, Any] = {
         "shell": ShellBackend(),
         "knowledge_store": knowledge_store,
@@ -52,15 +55,18 @@ def _make_ctx(
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-
-def _write_memory(memory_dir: Path, memory_id: int, content: str,
-                   tags: list[str] | None = None,
-                   created: str | None = None,
-                   updated: str | None = None) -> Path:
+def _write_memory(
+    memory_dir: Path,
+    memory_id: int,
+    content: str,
+    tags: list[str] | None = None,
+    created: str | None = None,
+    updated: str | None = None,
+) -> Path:
     """Write a memory file for testing."""
     memory_dir.mkdir(parents=True, exist_ok=True)
     if created is None:
-        created = datetime.now(timezone.utc).isoformat()
+        created = datetime.now(UTC).isoformat()
     slug = content[:30].lower().replace(" ", "-")
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict[str, Any] = {
@@ -88,9 +94,7 @@ def test_recall_does_not_mutate_files(tmp_path: Path):
     _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
 
     before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-    result = asyncio.run(
-        recall_memory(_make_ctx(memory_dir=memory_dir), "dark theme")
-    )
+    result = asyncio.run(recall_memory(_make_ctx(memory_dir=memory_dir), "dark theme"))
     assert result.metadata["count"] >= 1
     after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
     assert before == after, "recall_memory must not modify any file's mtime"
@@ -105,15 +109,12 @@ def test_list_memories_pagination(tmp_path: Path):
     """list_memories returns correct pages with offset/limit."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     for i in range(1, 6):
-        _write_memory(memory_dir, i, f"Memory content number {i}",
-                      tags=["test"])
+        _write_memory(memory_dir, i, f"Memory content number {i}", tags=["test"])
 
     ctx = _make_ctx(memory_dir=memory_dir)
 
     # Page 1: offset=0, limit=2
-    r1 = asyncio.run(
-        list_memories(ctx, offset=0, limit=2)
-    )
+    r1 = asyncio.run(list_memories(ctx, offset=0, limit=2))
     assert r1.metadata["count"] == 2
     assert r1.metadata["total"] == 5
     assert r1.metadata["offset"] == 0
@@ -124,17 +125,13 @@ def test_list_memories_pagination(tmp_path: Path):
     assert r1.metadata["memories"][1]["id"] == 2
 
     # Page 2: offset=2, limit=2
-    r2 = asyncio.run(
-        list_memories(ctx, offset=2, limit=2)
-    )
+    r2 = asyncio.run(list_memories(ctx, offset=2, limit=2))
     assert r2.metadata["count"] == 2
     assert r2.metadata["total"] == 5
     assert r2.metadata["has_more"] is True
 
     # Page 3: offset=4, limit=2 — partial last page
-    r3 = asyncio.run(
-        list_memories(ctx, offset=4, limit=2)
-    )
+    r3 = asyncio.run(list_memories(ctx, offset=4, limit=2))
     assert r3.metadata["count"] == 1
     assert r3.metadata["total"] == 5
     assert r3.metadata["has_more"] is False
@@ -166,6 +163,7 @@ def test_update_memory_raises_not_found(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
 
     import pytest
+
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(update_memory(ctx, "999-nonexistent", "old", "new"))
 
@@ -178,6 +176,7 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
 
     slug = path.stem
     import pytest
+
     with pytest.raises(ValueError, match="not found"):
         asyncio.run(update_memory(ctx, slug, "unittest", "mocha"))
 
@@ -190,6 +189,7 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
 
     slug = path.stem
     import pytest
+
     with pytest.raises(ValueError, match="2 times"):
         asyncio.run(update_memory(ctx, slug, "pytest", "mocha"))
 
@@ -202,6 +202,7 @@ def test_update_memory_rejects_line_prefix(tmp_path: Path):
 
     slug = path.stem
     import pytest
+
     # Simulate Read tool artifact: "1→ User prefers pytest"
     with pytest.raises(ValueError, match="line-number prefixes"):
         asyncio.run(update_memory(ctx, slug, "1\u2192 User prefers pytest", "new"))
@@ -253,9 +254,9 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
 
     import pytest
+
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
-
 
 
 def test_composite_bm25_decay_scoring(tmp_path: Path):
@@ -274,28 +275,36 @@ def test_composite_bm25_decay_scoring(tmp_path: Path):
     # Background corpus — no query term; makes IDF positive so TF differences matter
     for i in range(3, 13):
         _write_memory(
-            memory_dir, i,
+            memory_dir,
+            i,
             f"Background note about software development entry number {i}",
         )
 
     # Memory 1: 1 day old, high BM25 — query term repeated 15 times
-    old_time = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    old_time = (datetime.now(UTC) - timedelta(days=1)).isoformat()
     _write_memory(
-        memory_dir, 1,
+        memory_dir,
+        1,
         "xylobm25score " * 15 + "development",
         tags=["preference"],
         created=old_time,
     )
     # Memory 2: created today, low BM25 — query term appears once
-    new_time = datetime.now(timezone.utc).isoformat()
+    new_time = datetime.now(UTC).isoformat()
     _write_memory(
-        memory_dir, 2,
+        memory_dir,
+        2,
         "User occasionally uses xylobm25score for reference",
         tags=["context"],
         created=new_time,
     )
 
-    idx = KnowledgeStore(config=test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(
+        config=test_settings(
+            knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})
+        ),
+        knowledge_db_path=tmp_path / "search.db",
+    )
     idx.sync_dir("memory", memory_dir)
 
     ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
@@ -334,7 +343,9 @@ def test_forget_evicts_from_fts(tmp_path: Path):
 
     # Must no longer appear
     results_after = idx.search("xyloquartz")
-    assert not any(str(path) in r.path for r in results_after), "Memory should be evicted after remove()"
+    assert not any(str(path) in r.path for r in results_after), (
+        "Memory should be evicted after remove()"
+    )
 
     idx.close()
 
@@ -350,10 +361,12 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
 
     memory_dir = tmp_path / ".co-cli" / "memory"
 
-    _write_memory(memory_dir, 1, "User prefers xyloquartz-search-test framework",
-                  tags=["preference"])
-    _write_memory(memory_dir, 2, "User uses xyloquartz-search-test for all tests",
-                  tags=["context"])
+    _write_memory(
+        memory_dir, 1, "User prefers xyloquartz-search-test framework", tags=["preference"]
+    )
+    _write_memory(
+        memory_dir, 2, "User uses xyloquartz-search-test for all tests", tags=["context"]
+    )
 
     idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("memory", memory_dir)
@@ -404,7 +417,7 @@ def _write_memory_with_artifact_type(
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict[str, Any] = {
         "id": memory_id,
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": datetime.now(UTC).isoformat(),
         "tags": tags or [],
     }
     if artifact_type is not None:
@@ -420,8 +433,12 @@ def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
     memory_dir = tmp_path / ".co-cli" / "memory"
     keyword = "artifact-exclusion-test-recall"
 
-    _write_memory_with_artifact_type(memory_dir, 1, f"{keyword} durable memory", artifact_type=None)
-    _write_memory_with_artifact_type(memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary")
+    _write_memory_with_artifact_type(
+        memory_dir, 1, f"{keyword} durable memory", artifact_type=None
+    )
+    _write_memory_with_artifact_type(
+        memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary"
+    )
 
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(recall_memory(ctx, keyword))
@@ -436,14 +453,20 @@ def test_search_memories_excludes_session_summary_artifacts(tmp_path: Path):
     memory_dir = tmp_path / ".co-cli" / "memory"
     keyword = "artifact-exclusion-test-search"
 
-    _write_memory_with_artifact_type(memory_dir, 1, f"{keyword} durable memory", artifact_type=None)
-    _write_memory_with_artifact_type(memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary")
+    _write_memory_with_artifact_type(
+        memory_dir, 1, f"{keyword} durable memory", artifact_type=None
+    )
+    _write_memory_with_artifact_type(
+        memory_dir, 2, f"{keyword} session checkpoint", artifact_type="session_summary"
+    )
 
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(search_memories(ctx, keyword))
 
     paths_returned = [r["path"] for r in result.metadata["results"]]
-    assert not any("002-" in p for p in paths_returned), "session_summary artifact must be excluded"
+    assert not any("002-" in p for p in paths_returned), (
+        "session_summary artifact must be excluded"
+    )
     assert any("001-" in p for p in paths_returned), "durable memory must be returned"
 
 
@@ -451,7 +474,9 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
     """list_memories display contains artifact_type value when present."""
     memory_dir = tmp_path / ".co-cli" / "memory"
 
-    _write_memory_with_artifact_type(memory_dir, 1, "Session summary content", artifact_type="session_summary")
+    _write_memory_with_artifact_type(
+        memory_dir, 1, "Session summary content", artifact_type="session_summary"
+    )
 
     ctx = _make_ctx(memory_dir=memory_dir)
     result = asyncio.run(list_memories(ctx))
@@ -464,9 +489,7 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
-    tmp_path: Path, caplog: Any
-):
+def test_validate_memory_frontmatter_rejects_unknown_artifact_type(tmp_path: Path, caplog: Any):
     """persist_memory rejects unknown artifact_type on write; load_memories tolerates it on read."""
     from co_cli.memory._lifecycle import persist_memory
     from co_cli.tools.memory import load_memories
@@ -475,7 +498,8 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(
     memory_dir.mkdir(parents=True, exist_ok=True)
 
     deps = CoDeps(
-        shell=ShellBackend(), knowledge_store=None,
+        shell=ShellBackend(),
+        knowledge_store=None,
         config=test_settings(),
         memory_dir=memory_dir,
     )
@@ -538,12 +562,19 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.sync_dir("memory", memory_dir)
         idx.sync_dir("library", library_dir)
 
-        fts_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
+        fts_mem_ctx = _make_ctx(
+            memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5"
+        )
         grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=None)
         fts_know_ctx = RunContext(
             deps=CoDeps(
-                shell=ShellBackend(), knowledge_store=idx,
-                config=test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})),
+                shell=ShellBackend(),
+                knowledge_store=idx,
+                config=test_settings(
+                    knowledge=test_settings().knowledge.model_copy(
+                        update={"search_backend": "fts5"}
+                    )
+                ),
                 library_dir=library_dir,
             ),
             model=_AGENT.model,
@@ -551,7 +582,8 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         )
         grep_know_ctx = RunContext(
             deps=CoDeps(
-                shell=ShellBackend(), knowledge_store=None,
+                shell=ShellBackend(),
+                knowledge_store=None,
                 config=test_settings(),
                 library_dir=library_dir,
             ),
@@ -612,11 +644,12 @@ def test_load_soul_mindsets_from_role_path():
     assert len(result) > 100
 
 
-
 def test_forget_refuses_read_only(tmp_path: Path):
     """'/forget' refuses to delete files with read_only: true."""
     import asyncio
+
     import yaml
+
     from co_cli.commands._commands import _cmd_forget
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend

@@ -28,7 +28,9 @@ def _write_skill(skills_dir: Path, name: str, content: str) -> Path:
     return path
 
 
-def _make_ctx(tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir: Path | None = None) -> CommandContext:
+def _make_ctx(
+    tmp_path: Path, *, skills_dir: Path | None = None, user_skills_dir: Path | None = None
+) -> CommandContext:
     agent = build_agent(config=settings)
     deps = CoDeps(
         shell=ShellBackend(),
@@ -136,7 +138,9 @@ def test_load_skills_project_overrides_user_global(tmp_path: Path):
     user_skills_dir = tmp_path / "user-skills"
     project_skills_dir = tmp_path / ".co-cli" / "skills"
     _write_skill(user_skills_dir, "shared-skill", "---\ndescription: User\n---\nUser body")
-    _write_skill(project_skills_dir, "shared-skill", "---\ndescription: Project\n---\nProject body")
+    _write_skill(
+        project_skills_dir, "shared-skill", "---\ndescription: Project\n---\nProject body"
+    )
 
     loaded = _load_skills(project_skills_dir, settings, user_skills_dir=user_skills_dir)
 

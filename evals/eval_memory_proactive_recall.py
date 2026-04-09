@@ -18,8 +18,6 @@ Usage:
 """
 
 import asyncio
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-
 import os
 import sys
 import tempfile
@@ -28,20 +26,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai.messages import (  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings
+from evals._fixtures import seed_memory
+from evals._frontend import SilentFrontend
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+from pydantic_ai.messages import (
     ModelRequest,
     SystemPromptPart,
 )
-from pydantic_ai.usage import UsageLimits  # noqa: E402
 
-from co_cli.context.orchestrate import run_turn  # noqa: E402
-from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config._core import settings  # noqa: E402
-
-from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
-from evals._fixtures import seed_memory  # noqa: E402
-from evals._frontend import SilentFrontend  # noqa: E402
-
+from co_cli.agent import build_agent
+from co_cli.config._core import settings
+from co_cli.context.orchestrate import run_turn
 
 # ---------------------------------------------------------------------------
 # Cases
@@ -62,7 +58,11 @@ CASES: list[RecallCase] = [
         id="recall-topic-match",
         memories=[
             {"content": "User prefers pytest for testing", "tags": ["preference"], "days_ago": 3},
-            {"content": "Project uses PostgreSQL for the database", "tags": ["decision"], "days_ago": 5},
+            {
+                "content": "Project uses PostgreSQL for the database",
+                "tags": ["decision"],
+                "days_ago": 5,
+            },
         ],
         prompt="Set up testing for my Python project",
         expect_injection=True,
@@ -71,7 +71,11 @@ CASES: list[RecallCase] = [
     RecallCase(
         id="recall-partial-kw",
         memories=[
-            {"content": "User prefers vim keybindings in all editors", "tags": ["preference"], "days_ago": 2},
+            {
+                "content": "User prefers vim keybindings in all editors",
+                "tags": ["preference"],
+                "days_ago": 2,
+            },
         ],
         prompt="Configure my editor settings",
         expect_injection=True,
@@ -80,7 +84,11 @@ CASES: list[RecallCase] = [
     RecallCase(
         id="recall-no-match",
         memories=[
-            {"content": "User prefers dark mode in all applications", "tags": ["preference"], "days_ago": 1},
+            {
+                "content": "User prefers dark mode in all applications",
+                "tags": ["preference"],
+                "days_ago": 1,
+            },
         ],
         prompt="What is 2 + 2?",
         expect_injection=False,
@@ -106,9 +114,8 @@ def _find_memory_injection(messages: list[Any]) -> str | None:
     for msg in messages:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, SystemPromptPart):
-                    if "Relevant memories:" in part.content:
-                        return part.content
+                if isinstance(part, SystemPromptPart) and "Relevant memories:" in part.content:
+                    return part.content
     return None
 
 
@@ -129,7 +136,9 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
             # Seed memories
             for i, mem in enumerate(case.memories, 1):
                 seed_memory(
-                    memory_dir, i, mem["content"],
+                    memory_dir,
+                    i,
+                    mem["content"],
                     days_ago=mem.get("days_ago", 0),
                     tags=mem.get("tags"),
                 )
@@ -159,9 +168,7 @@ async def run_case(case: RecallCase) -> dict[str, Any]:
             # Score: content influence
             content_influenced = False
             if case.expect_keyword and injection:
-                content_influenced = (
-                    case.expect_keyword.lower() in injection.lower()
-                )
+                content_influenced = case.expect_keyword.lower() in injection.lower()
 
             return {
                 "injection_present": injection_present,
@@ -222,7 +229,6 @@ async def main() -> int:
                 print(f"    Injection: {scores['injection_text']}")
 
     elapsed = time.monotonic() - t0
-    total = len(CASES)
     print(f"\n{'=' * 60}")
     verdict = "PASS" if all_pass else "FAIL"
     print(f"  Verdict: {verdict} ({elapsed:.1f}s)")

@@ -2,14 +2,14 @@
 """Benchmark to compare Qwen 30b think vs Qwen 3.5 35b think models."""
 
 import argparse
-from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS, EVAL_BENCHMARK_TIMEOUT_SECS
-
+import datetime
 import json
+import logging
+import os
 import sys
 import time
-import logging
-import datetime
-import os
+
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_PROBE_TIMEOUT_SECS
 
 try:
     import httpx
@@ -47,7 +47,9 @@ def run_benchmark(host: str, model: str, task_name: str, prompt: str) -> dict | 
     ttft = None
 
     try:
-        with httpx.stream("POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS) as response:
+        with httpx.stream(
+            "POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS
+        ) as response:
             response.raise_for_status()
 
             for line in response.iter_lines():
@@ -105,18 +107,10 @@ def get_vram_usage(host: str, model: str) -> float:
 
 def main():
     parser = argparse.ArgumentParser(description="Benchmark Ollama thinking models.")
-    parser.add_argument(
-        "--host", default="http://localhost:11434", help="Ollama host URL"
-    )
-    parser.add_argument(
-        "--model1", default="qwen3:30b-a3b-think", help="First model to test"
-    )
-    parser.add_argument(
-        "--model2", default="qwen3.5:35b-a3b-think", help="Second model to test"
-    )
-    parser.add_argument(
-        "--debug", action="store_true", help="Enable debug tracelogging"
-    )
+    parser.add_argument("--host", default="http://localhost:11434", help="Ollama host URL")
+    parser.add_argument("--model1", default="qwen3:30b-a3b-think", help="First model to test")
+    parser.add_argument("--model2", default="qwen3.5:35b-a3b-think", help="Second model to test")
+    parser.add_argument("--debug", action="store_true", help="Enable debug tracelogging")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -126,7 +120,9 @@ def main():
     )
 
     try:
-        httpx.get(f"{args.host.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS).raise_for_status()
+        httpx.get(
+            f"{args.host.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS
+        ).raise_for_status()
     except Exception as e:
         print(f"SKIP: Ollama unavailable at {args.host} - {e}")
         sys.exit(0)
@@ -167,27 +163,25 @@ def main():
     report_path = "docs/REPORT-benchmark-think-30b-vs-35b.md"
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    report_content = f"# REPORT: benchmark-think-30b-vs-35b\n\n"
-    report_content += f"**Models tested**:\n"
+    report_content = "# REPORT: benchmark-think-30b-vs-35b\n\n"
+    report_content += "**Models tested**:\n"
     report_content += f"1. `{args.model1}` (Baseline - Qwen3 30B Thinker)\n"
     report_content += f"2. `{args.model2}` (New - Qwen3.5 35B Thinker)\n"
     report_content += f"**Date**: {date_str}\n\n"
-    report_content += f"## Objective\n\n"
+    report_content += "## Objective\n\n"
     report_content += "Evaluate the generation performance, reasoning quality, and memory footprint between the previous Qwen3 30B Thinker model and the newly released Qwen3.5 35B Thinker model on complex agentic planning and architectural tasks. Both models use the `131072` Context Window and follow Unsloth's official thinking-mode parameter tunings.\n\n"
-    report_content += f"## 1. Quantitative Performance (Hardware Inference)\n\n"
-    report_content += f"### Results Summary\n\n"
-    report_content += f"| Model | VRAM Usage (GB) | Task | Throughput (tok/s) | Total Time (s) | TTFT (s) | Tokens |\n"
-    report_content += f"|-------|-----------------|------|--------------------|----------------|----------|--------|\n"
+    report_content += "## 1. Quantitative Performance (Hardware Inference)\n\n"
+    report_content += "### Results Summary\n\n"
+    report_content += "| Model | VRAM Usage (GB) | Task | Throughput (tok/s) | Total Time (s) | TTFT (s) | Tokens |\n"
+    report_content += "|-------|-----------------|------|--------------------|----------------|----------|--------|\n"
 
     for r in results:
         # short name for table
         short_name = "30B" if "30b" in r["model"] else "35B"
         report_content += f"| {short_name} | {r.get('vram_gb', 0):.2f} GB | {r['task']} | {r['tps']:.2f} | {r['total_time']:.2f} | {r['ttft']:.2f} | {r['eval_count']} |\n"
 
-    report_content += (
-        f"\n## 2. Qualitative Findings\n\n(To be analyzed based on evals)\n\n"
-    )
-    report_content += f"\n## Final Recommendations\n\n(To be analyzed based on evals)\n"
+    report_content += "\n## 2. Qualitative Findings\n\n(To be analyzed based on evals)\n\n"
+    report_content += "\n## Final Recommendations\n\n(To be analyzed based on evals)\n"
 
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
     with open(report_path, "w") as f:

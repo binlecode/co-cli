@@ -10,29 +10,27 @@ from co_cli.tools.tool_output import tool_output
 async def run_shell_command(ctx: RunContext[CoDeps], cmd: str, timeout: int = 120) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 
-    Use for any terminal operation: file listing (ls, find), file reading
-    (cat, head), git commands, package managers (pip, npm), builds, scripts,
-    or system info (whoami, df, uname).
+    Use for git commands, package managers, builds, scripts, and system info.
+
+    Do not use shell for file reads or content search — use the dedicated tools:
+    - read_file instead of cat/head/tail
+    - find_in_files instead of grep/rg
+    - list_directory instead of ls/find
+    - web_fetch instead of curl for web pages
+    - search_notes / read_note instead of grep/cat on the Obsidian vault
+    - search_drive_files / read_drive_file instead of manual API calls
 
     Commands run in the project working directory. DENY-pattern commands are
-    blocked immediately inside the tool. Safe-prefix commands execute directly.
-    All other commands require user approval before execution.
+    blocked. Safe-prefix commands execute directly. All others require user
+    approval.
 
-    Returns the combined stdout and stderr output as a tool result.
-
-    Caveats:
-    - Long-running commands are killed after timeout seconds
-    - timeout is capped by the configured shell_max_timeout (cannot exceed it)
-    - No interactive input — commands that prompt for stdin will hang and timeout
-
-    Prefer dedicated tools over shell equivalents when available:
-    - Use web_fetch instead of curl for web pages
-    - Use search_notes / read_note instead of grep / cat on the Obsidian vault
-    - Use search_drive_files / read_drive_file instead of manual API calls
+    No interactive input — commands that prompt for stdin will hang and timeout.
+    Long-running commands are killed after timeout seconds (capped by
+    shell_max_timeout).
 
     Args:
-        cmd: Shell command string (e.g. "ls -la", "git log --oneline -10",
-             "python scripts/run.py").
+        cmd: Shell command string (e.g. "git log --oneline -10",
+             "python scripts/run.py", "uv run pytest").
         timeout: Max seconds to wait (default 120). Increase for builds or
                  long scripts (e.g. 300). Capped by shell_max_timeout.
     """

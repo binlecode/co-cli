@@ -1,4 +1,5 @@
 """Shared Ollama test utilities — not a pytest file."""
+
 import time
 
 import httpx
@@ -24,7 +25,10 @@ async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) 
         resp = await client.get(f"{llm_host}/api/ps", timeout=5)
         loaded = {m["name"] for m in resp.json().get("models", [])}
         if model_name not in loaded:
-            print(f"\n[ollama] loading {model_name} into VRAM (this may take several minutes)...", flush=True)
+            print(
+                f"\n[ollama] loading {model_name} into VRAM (this may take several minutes)...",
+                flush=True,
+            )
         else:
             print(f"\n[ollama] {model_name} loaded — priming inference path...", flush=True)
         # Generate exactly 1 token to fully prime GPU compute paths and flush stale KV cache.
@@ -33,7 +37,13 @@ async def ensure_ollama_warm(model_name: str, llm_host: str = DEFAULT_LLM_HOST) 
         # are not delayed by first-call GPU state initialization.
         await client.post(
             f"{llm_host}/api/generate",
-            json={"model": model_name, "prompt": "hi", "stream": False, "keep_alive": -1, "options": {"num_predict": 1}},
+            json={
+                "model": model_name,
+                "prompt": "hi",
+                "stream": False,
+                "keep_alive": -1,
+                "options": {"num_predict": 1},
+            },
             timeout=300,
         )
     elapsed = time.monotonic() - t0

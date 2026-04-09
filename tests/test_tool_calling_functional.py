@@ -9,26 +9,24 @@ Covers:
 """
 
 import asyncio
-from pathlib import Path
+from datetime import UTC
+
 import pytest
-from pydantic_ai import RunContext
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.usage import RunUsage
-
-
-from pydantic_ai import Agent
 from pydantic_ai.result import DeferredToolRequests
-
-from co_cli.agent import build_agent, build_tool_registry
-from co_cli._model_factory import build_model
-from co_cli.config._core import settings
-from co_cli.deps import CoDeps, CoSessionState
-from co_cli.tools.shell_backend import ShellBackend
-from co_cli.context.orchestrate import run_turn
+from pydantic_ai.usage import RunUsage
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
+from tests._timeouts import FILE_DB_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
+
+from co_cli._model_factory import build_model
+from co_cli.agent import build_agent, build_tool_registry
+from co_cli.config._core import settings
+from co_cli.context.orchestrate import run_turn
+from co_cli.deps import CoDeps, CoSessionState
+from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
@@ -98,7 +96,7 @@ async def test_tool_selection_and_arg_extraction(
     await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     last_details = "no run executed"
     max_attempts = 3
-    for attempt in range(max_attempts):
+    for _attempt in range(max_attempts):
         tool_name = None
         args = None
         try:
@@ -219,12 +217,14 @@ async def test_intent_routing_observation_no_tool():
 async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
     """check_task_status result includes description and started_at from task metadata."""
     import asyncio
-    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
-    from co_cli.tools.task_control import check_task_status
-    from co_cli.deps import CoDeps
+    from datetime import datetime
+
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.shell_backend import ShellBackend
-    from datetime import datetime, timezone
+    from co_cli.tools.task_control import check_task_status
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     agent = build_agent(config=settings)
@@ -237,7 +237,7 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
         cwd=str(tmp_path),
         description=task_description,
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     deps.session.background_tasks[state.task_id] = state
 
@@ -253,12 +253,14 @@ async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
 @pytest.mark.asyncio
 async def test_list_background_tasks_surfaces_description(tmp_path):
     """list_background_tasks includes task descriptions in both metadata and display output."""
-    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
-    from co_cli.tools.task_control import list_background_tasks
-    from co_cli.deps import CoDeps
+    from datetime import datetime
+
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
+    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
     from co_cli.tools.shell_backend import ShellBackend
-    from datetime import datetime, timezone
+    from co_cli.tools.task_control import list_background_tasks
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     agent = build_agent(config=settings)
@@ -271,7 +273,7 @@ async def test_list_background_tasks_surfaces_description(tmp_path):
         cwd=str(tmp_path),
         description=task_description,
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     deps.session.background_tasks[state.task_id] = state
 

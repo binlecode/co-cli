@@ -16,17 +16,16 @@ Usage:
 """
 
 import asyncio
-import pathlib
 import sys
 import time
 
-from co_cli.context.types import SafetyState  # noqa: E402
-from co_cli.context.orchestrate import run_turn  # noqa: E402
-from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config._core import settings  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings
+from evals._frontend import CapturingFrontend
 
-from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
-from evals._frontend import CapturingFrontend  # noqa: E402
+from co_cli.agent import build_agent
+from co_cli.config._core import settings
+from co_cli.context.orchestrate import run_turn
+from co_cli.context.types import SafetyState
 
 
 async def main() -> int:
@@ -75,9 +74,9 @@ async def main() -> int:
     print("\n[3] Checking grace turn behavior...")
 
     has_limit_status = any("Turn limit reached" in s for s in frontend.statuses)
-    has_resume_hint = any(
-        "/continue" in s for s in frontend.statuses
-    ) or (isinstance(result.output, str) and "/continue" in result.output)
+    has_resume_hint = any("/continue" in s for s in frontend.statuses) or (
+        isinstance(result.output, str) and "/continue" in result.output
+    )
     did_not_crash = result.outcome in ("continue", "error")
     has_output = result.output is not None
 

@@ -1,15 +1,15 @@
 import re
 
-with open('docs/TODO-mlx-provider.md', 'r') as f:
+with open("docs/TODO-mlx-provider.md") as f:
     content = f.read()
 
 # Find the start of the Audit Log section
-match = re.search(r'\n---\n+^# Audit Log$', content, flags=re.MULTILINE)
+match = re.search(r"\n---\n+^# Audit Log$", content, flags=re.MULTILINE)
 
 if match:
     # Keep everything up to the separator
-    new_content = content[:match.start()]
-    
+    new_content = content[: match.start()]
+
     # Append the Final Team Lead section
     new_content += """
 
@@ -21,7 +21,7 @@ Plan approved.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev mlx-provider`
 """
-    with open('docs/TODO-mlx-provider.md', 'w') as f:
+    with open("docs/TODO-mlx-provider.md", "w") as f:
         f.write(new_content)
     print("Audit log stripped and final section added.")
 else:

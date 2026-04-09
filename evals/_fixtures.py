@@ -1,6 +1,6 @@
 """Eval test data fixtures: memory seeding, message history builders."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,7 @@ def seed_memory(
         days_ago: How many days in the past to set the ``created`` timestamp.
         tags: Optional list of tags to embed in frontmatter.
     """
-    created = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    created = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
     slug = content[:40].lower().replace(" ", "-").replace(",", "")
     filename = f"{memory_id:03d}-{slug}.md"
 
@@ -85,14 +85,22 @@ def build_message_history(entries: list[tuple]) -> list[Any]:
             messages.append(ModelResponse(parts=[TextPart(content=entry[1])]))
         elif kind == "tool_call":
             _, tool_name, args, call_id = entry
-            messages.append(ModelResponse(parts=[
-                ToolCallPart(tool_name=tool_name, args=args, tool_call_id=call_id),
-            ]))
+            messages.append(
+                ModelResponse(
+                    parts=[
+                        ToolCallPart(tool_name=tool_name, args=args, tool_call_id=call_id),
+                    ]
+                )
+            )
         elif kind == "tool_return":
             _, tool_name, content, call_id = entry
-            messages.append(ModelRequest(parts=[
-                ToolReturnPart(tool_name=tool_name, content=content, tool_call_id=call_id),
-            ]))
+            messages.append(
+                ModelRequest(
+                    parts=[
+                        ToolReturnPart(tool_name=tool_name, content=content, tool_call_id=call_id),
+                    ]
+                )
+            )
     return messages
 
 
@@ -126,4 +134,4 @@ def patch_dangling_tool_calls(messages: list[Any]) -> list[Any]:
         )
         for tc in tool_calls
     ]
-    return messages + [ModelRequest(parts=return_parts)]
+    return [*messages, ModelRequest(parts=return_parts)]

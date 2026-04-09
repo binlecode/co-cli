@@ -1,16 +1,16 @@
 """Benchmark eval: FTS5 baseline vs LLM listwise vs fastembed cross-encoder reranker.
 
-Harder corpus: 30 documents, 5 topics × 6 docs each.
+Harder corpus: 30 documents, 5 topics x 6 docs each.
 Each topic has:
   - 2 rel_para docs: all query keywords present once each (AND-join FTS5 retrieves them),
-    but surrounded by rich semantic paraphrase content → low BM25, low FTS5 rank
-  - 2 trap docs: query keywords repeated 3-4× and in title → high BM25, high FTS5 rank,
+    but surrounded by rich semantic paraphrase content -> low BM25, low FTS5 rank
+  - 2 trap docs: query keywords repeated 3-4x and in title -> high BM25, high FTS5 rank,
     but the content discusses a peripheral/wrong angle (debugging, scope docs, etc.)
-  - 2 noise docs: completely off-topic, zero keyword overlap → FTS5 never retrieves
+  - 2 noise docs: completely off-topic, zero keyword overlap -> FTS5 never retrieves
 
 NOTE: _build_fts_query uses AND-join, so all query tokens must be present for retrieval.
 rel_para docs have all tokens once; traps have them many times. BM25 naturally ranks
-traps above rel_para → FTS5 NDCG is reduced. A semantic reranker that understands the
+traps above rel_para -> FTS5 NDCG is reduced. A semantic reranker that understands the
 traps are peripheral should demote traps and promote the paraphrase-rich rel_para docs.
 
 Usage:
@@ -20,8 +20,6 @@ Usage:
 """
 
 import argparse
-from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
-
 import math
 import os
 import statistics
@@ -29,13 +27,14 @@ import tempfile
 import time
 from pathlib import Path
 
+from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS
+
 from co_cli.knowledge._store import KnowledgeStore, SearchResult
 
-
 # ---------------------------------------------------------------------------
-# Harder synthetic corpus — 5 topics × 6 docs
-# rel_para: relevant, each query keyword present 1× (sparse BM25, low rank)
-# trap: query keywords repeated 4-6× + in title (high BM25, wrong angle)
+# Harder synthetic corpus -- 5 topics x 6 docs
+# rel_para: relevant, each query keyword present 1x (sparse BM25, low rank)
+# trap: query keywords repeated 4-6x + in title (high BM25, wrong angle)
 # noise: completely off-topic, zero keyword overlap (FTS5 never retrieves)
 # ---------------------------------------------------------------------------
 
@@ -115,7 +114,6 @@ CORPUS: list[dict] = [
         ),
         "relevant_to": None,
     },
-
     # -------------------------------------------------------------------------
     # Topic B — query: "pytest fixture design"
     # rel_para: all 3 query keywords once each; traps: full phrase repeated 3-4x + in title
@@ -191,7 +189,6 @@ CORPUS: list[dict] = [
         ),
         "relevant_to": None,
     },
-
     # -------------------------------------------------------------------------
     # Topic C — query: "sqlite fts5 ranking"
     # rel_para: all 3 query keywords once each; traps: full phrase repeated 3-4x + in title
@@ -266,7 +263,6 @@ CORPUS: list[dict] = [
         ),
         "relevant_to": None,
     },
-
     # -------------------------------------------------------------------------
     # Topic D — query: "kubernetes pod scheduling"
     # rel_para: all 3 query keywords once each; traps: full phrase repeated 3-4x + in title
@@ -341,7 +337,6 @@ CORPUS: list[dict] = [
         ),
         "relevant_to": None,
     },
-
     # -------------------------------------------------------------------------
     # Topic E — query: "llm prompt engineering"
     # rel_para: all 3 query keywords once each; traps: full phrase repeated 3-4x + in title
@@ -489,11 +484,11 @@ def build_index(
 ) -> KnowledgeStore:
     """Create a fresh KnowledgeStore with the full synthetic corpus loaded."""
     from co_cli.config._core import Settings
-    from co_cli.config._llm import LlmSettings
     from co_cli.config._knowledge import KnowledgeSettings, ModelConfig
+    from co_cli.config._llm import LlmSettings
+
     llm_reranker = (
-        ModelConfig(provider="ollama-openai", model=reranker_model)
-        if reranker_model else None
+        ModelConfig(provider="ollama-openai", model=reranker_model) if reranker_model else None
     )
     config = Settings.model_construct(
         llm=LlmSettings.model_construct(
@@ -543,15 +538,17 @@ def run_benchmark(idx: KnowledgeStore, label: str, notes: str = "", runs: int = 
             results = idx.search(query, limit=5)
             elapsed_ms = (time.perf_counter() - start) * 1000
 
-            records.append((
-                run_idx,
-                topic_idx,
-                elapsed_ms,
-                ndcg_at_k(results, relevant, k=5),
-                precision_at_k(results, relevant, k=3),
-                mrr(results, relevant),
-                recall_at_k(results, relevant, k=5),
-            ))
+            records.append(
+                (
+                    run_idx,
+                    topic_idx,
+                    elapsed_ms,
+                    ndcg_at_k(results, relevant, k=5),
+                    precision_at_k(results, relevant, k=3),
+                    mrr(results, relevant),
+                    recall_at_k(results, relevant, k=5),
+                )
+            )
 
     cold_ms = records[0][2]  # first query, first run
 
@@ -645,6 +642,7 @@ def main() -> None:
 
         # Config 2: LLM listwise via Ollama
         import httpx
+
         ollama_ok = False
         try:
             httpx.get(args.ollama_host, timeout=EVAL_PROBE_TIMEOUT_SECS)
@@ -660,17 +658,22 @@ def main() -> None:
                 reranker_model=args.ollama_model,
                 ollama_host=args.ollama_host,
             )
-            rows.append(run_benchmark(
-                idx, "LLM listwise",
-                notes=f"{args.ollama_model} via Ollama",
-                runs=args.runs,
-            ))
+            rows.append(
+                run_benchmark(
+                    idx,
+                    "LLM listwise",
+                    notes=f"{args.ollama_model} via Ollama",
+                    runs=args.runs,
+                )
+            )
             idx.close()
         else:
-            rows.append({
-                "label": "LLM listwise",
-                "skip_reason": f"Ollama not reachable at {args.ollama_host}",
-            })
+            rows.append(
+                {
+                    "label": "LLM listwise",
+                    "skip_reason": f"Ollama not reachable at {args.ollama_host}",
+                }
+            )
 
     print()
     print_table(rows)

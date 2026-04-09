@@ -1,7 +1,6 @@
 """Tests for compaction budget resolution and token-triggered compaction."""
 
 import pytest
-
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelRequest,
@@ -10,8 +9,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
+from tests._settings import test_settings
+
 from co_cli.agent import build_agent
-from co_cli.config._core import settings
+from co_cli.config._core import Settings, settings
+from co_cli.context._history import summarize_history_window
 from co_cli.context.summarization import (
     _DEFAULT_TOKEN_BUDGET,
     _PERSONALITY_COMPACTION_ADDENDUM,
@@ -20,10 +22,7 @@ from co_cli.context.summarization import (
     latest_response_input_tokens,
     resolve_compaction_budget,
 )
-from co_cli.context._history import summarize_history_window
-from co_cli.config._core import Settings
 from co_cli.deps import CoDeps
-from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings
@@ -99,7 +98,9 @@ async def test_compaction_fallback_when_no_usage_data():
     assert latest_response_input_tokens(msgs_no_usage) == 0
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30}))
+    config = test_settings(
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+    )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
     assert len(result) < len(msgs_no_usage)
@@ -118,7 +119,9 @@ async def test_compaction_triggers_on_ollama_budget():
     Compaction must trigger against llm_num_ctx, not _DEFAULT_TOKEN_BUDGET.
     """
     msgs = _make_messages(10, last_input_tokens=7_200)
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192}))
+    config = test_settings(
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192})
+    )
     assert config.llm.uses_ollama_openai()
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs)
@@ -140,7 +143,9 @@ def test_budget_gemini_model_spec():
 
 def test_budget_ollama_llm_num_ctx_overrides_spec():
     """Ollama: llm_num_ctx overrides context_window from spec (Modelfile is truth)."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768}))
+    config = test_settings(
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+    )
     budget = resolve_compaction_budget(config, 262_144)
     # llm_num_ctx (32768) overrides spec (262144), so effective ctx_window = 32768
     # max(32768 - 16384, 32768 // 2) = max(16384, 16384) = 16384
@@ -149,7 +154,9 @@ def test_budget_ollama_llm_num_ctx_overrides_spec():
 
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
     """Ollama with no context_window in quirks → falls back to llm_num_ctx."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768}))
+    config = test_settings(
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+    )
     budget = resolve_compaction_budget(config, None)
     assert budget == 32_768
 
@@ -183,7 +190,9 @@ def test_build_summarizer_prompt_no_context_no_personality():
 def test_build_summarizer_prompt_with_context_no_personality():
     """(b) context present, personality_active=False → template + Additional Context."""
     ctx_text = "Files touched: /foo/bar.py"
-    result = _build_summarizer_prompt(_SUMMARIZE_PROMPT, context=ctx_text, personality_active=False)
+    result = _build_summarizer_prompt(
+        _SUMMARIZE_PROMPT, context=ctx_text, personality_active=False
+    )
     assert result.startswith(_SUMMARIZE_PROMPT)
     assert "## Additional Context" in result
     assert ctx_text in result

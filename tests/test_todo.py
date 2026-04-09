@@ -1,17 +1,14 @@
 """Functional tests for session-scoped todo tools (write_todos, read_todos)."""
 
-from pathlib import Path
-
-import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.todo import write_todos, read_todos
-from tests._settings import test_settings
+from co_cli.tools.todo import read_todos, write_todos
 
 _AGENT = build_agent(config=settings)
 
@@ -31,11 +28,14 @@ def _make_ctx(session_id: str = "test-todo") -> RunContext:
 def test_write_todos_stores_and_returns_counts():
     """write_todos stores items in session and returns correct counts."""
     ctx = _make_ctx()
-    result = write_todos(ctx, [
-        {"content": "Step 1", "status": "pending"},
-        {"content": "Step 2", "status": "in_progress", "priority": "high"},
-        {"content": "Step 3", "status": "completed"},
-    ])
+    result = write_todos(
+        ctx,
+        [
+            {"content": "Step 1", "status": "pending"},
+            {"content": "Step 2", "status": "in_progress", "priority": "high"},
+            {"content": "Step 3", "status": "completed"},
+        ],
+    )
 
     assert result.metadata["count"] == 3
     assert result.metadata["pending"] == 1
@@ -114,10 +114,13 @@ def test_read_todos_empty_session():
 def test_read_todos_reflects_written_state():
     """read_todos returns what write_todos stored."""
     ctx = _make_ctx()
-    write_todos(ctx, [
-        {"content": "Task A", "status": "pending", "priority": "high"},
-        {"content": "Task B", "status": "completed"},
-    ])
+    write_todos(
+        ctx,
+        [
+            {"content": "Task A", "status": "pending", "priority": "high"},
+            {"content": "Task B", "status": "completed"},
+        ],
+    )
 
     result = read_todos(ctx)
 

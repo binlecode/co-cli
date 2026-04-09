@@ -174,14 +174,16 @@ async def web_search(
     max_results: int = 5,
     domains: list[str] | None = None,
 ) -> ToolReturn:
-    """Search the web via Brave Search. Returns ranked result snippets with
-    titles and URLs. Each result includes a short text preview.
+    """Search the web for current or external information via Brave Search.
 
-    For full page content, pass a result URL to web_fetch. Do not guess or
-    fabricate URLs — always use URLs from these search results.
+    Use for up-to-date external information: documentation, release notes,
+    API references, news, or anything not available in the local workspace.
+    Returns ranked snippets with titles and URLs. For full page content,
+    pass a result URL to web_fetch.
 
+    Do not guess or fabricate URLs — always use URLs from these results.
     Scope searches to specific sites with the domains parameter (e.g.
-    domains=["docs.python.org"] to search only Python docs).
+    domains=["docs.python.org"]).
 
     Returns a dict with:
     - display: numbered results with title, snippet, and URL — show directly
@@ -260,13 +262,18 @@ async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
 ) -> ToolReturn:
-    """Fetch a web page and return its content converted to readable markdown.
-    HTML pages are converted to markdown; JSON and XML are returned as-is.
+    """Fetch a web page and return its content as readable markdown text.
+
+    Returns the fetched page content directly — HTML is converted to markdown,
+    JSON and XML are returned as-is. This is a direct HTTP fetch, not an
+    extraction or summarization step.
 
     Accepts any URL — from the user's message, from web_search results, or
     from tool output. Never guess or fabricate URLs yourself.
-    If fetch returns 403 or is blocked by Cloudflare, retry the same URL
-    with run_shell_command: curl -sL <url>.
+
+    Shell fallback: if fetch returns 403 or is blocked by Cloudflare, retry
+    with run_shell_command: curl -sL <url>. Use the shell fallback only for
+    fetch failures or site-specific blocking, not as the default path.
 
     Returns a dict with:
     - display: page content as markdown text — show directly to the user
@@ -278,7 +285,6 @@ async def web_fetch(
     - Only fetches text-based content (HTML, JSON, XML, plain text). Binary
       formats (images, PDFs, zip) are rejected
     - Content is truncated at ~100K characters
-    - Some sites block automated fetches — use curl fallback via shell if needed
     - Domain allow/block lists from settings are enforced
 
     Args:

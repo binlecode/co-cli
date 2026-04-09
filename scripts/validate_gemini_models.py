@@ -84,9 +84,7 @@ def _print_specs(specs: list[dict[str, Any]]) -> None:
 def main() -> int:
     settings = get_settings()
 
-    parser = argparse.ArgumentParser(
-        description="Validate Gemini API key and model availability."
-    )
+    parser = argparse.ArgumentParser(description="Validate Gemini API key and model availability.")
     parser.add_argument(
         "--api-key",
         default=os.getenv("GEMINI_API_KEY") or settings.gemini_api_key or "",
@@ -127,7 +125,7 @@ def main() -> int:
         return 0
     else:
         print(f"error: model not available to this key: {args.model}")
-        print(f"hint: run with --list-models to see available models")
+        print("hint: run with --list-models to see available models")
         return 1
 
 

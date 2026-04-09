@@ -257,7 +257,18 @@ async def run_coding_subagent(
     task: str,
     max_requests: int = 0,
 ) -> ToolReturn:
-    """Delegate a coding analysis task to a read-only coder sub-agent.
+    """Delegate codebase analysis to a read-only coder sub-agent with file tools.
+
+    When to use: multi-file code investigation, architecture tracing, impact
+    analysis, or any task that requires reading and cross-referencing several
+    files to produce a conclusion. Give a complete, concrete task description
+    so the subagent can work autonomously.
+
+    When NOT to use: reading a single file, listing a directory, or grepping
+    for a pattern — use the primitive file tools directly instead.
+
+    Returns a CoderOutput with summary, diff_preview, files_touched, and
+    confidence (0.0-1.0). Trust the result unless the confidence is low.
 
     Args:
         task: The analysis task to investigate.
@@ -272,7 +283,19 @@ async def run_research_subagent(
     domains: list[str] | None = None,
     max_requests: int = 0,
 ) -> ToolReturn:
-    """Delegate a research task to a web-search sub-agent.
+    """Delegate web research to a search-and-fetch sub-agent with web tools.
+
+    When to use: questions that require searching the web, reading external
+    pages, and synthesizing findings — e.g. "what are the latest changes in
+    library X?" or "compare pricing of service A vs B". Give a specific,
+    self-contained research question.
+
+    When NOT to use: a single URL fetch or a factual question you can answer
+    from memory or the knowledge base — use web_fetch or search_knowledge
+    directly instead.
+
+    Returns a ResearchOutput with summary, sources (URLs), and confidence
+    (0.0-1.0). Automatically retries once if the first search returns empty.
 
     Args:
         query: Research question or topic.
@@ -288,7 +311,18 @@ async def run_analysis_subagent(
     inputs: list[str] | None = None,
     max_requests: int = 0,
 ) -> ToolReturn:
-    """Delegate a knowledge-base analysis task to a read-only sub-agent.
+    """Delegate knowledge-base analysis to a sub-agent with memory and Drive search.
+
+    When to use: synthesis, comparison, or evaluation tasks that require
+    searching the knowledge base and/or Google Drive — e.g. "compare our
+    auth design to the spec" or "what do our notes say about X?". Pass
+    context via inputs when the subagent needs prior results to reason over.
+
+    When NOT to use: a single keyword search against the knowledge base —
+    use search_knowledge directly instead.
+
+    Returns an AnalysisOutput with conclusion, evidence (list of supporting
+    points), and reasoning (the chain of thought behind the conclusion).
 
     Args:
         question: The analysis question to investigate.
@@ -303,7 +337,19 @@ async def run_reasoning_subagent(
     problem: str,
     max_requests: int = 0,
 ) -> ToolReturn:
-    """Delegate a structured reasoning task to a thinking sub-agent (no tools).
+    """Delegate structured reasoning to a tool-free thinking sub-agent.
+
+    When to use: problems that benefit from dedicated step-by-step reasoning
+    — planning, trade-off analysis, problem decomposition, or multi-constraint
+    decisions. The subagent has no tools; it reasons purely via the model's
+    native thinking capability. Give a complete problem statement.
+
+    When NOT to use: tasks that require reading files, searching the web, or
+    querying the knowledge base — those need the coder, research, or analysis
+    subagents respectively.
+
+    Returns a ThinkingOutput with plan (high-level approach), steps (ordered
+    action items), and conclusion (synthesized answer or recommendation).
 
     Args:
         problem: The problem or question to reason about.

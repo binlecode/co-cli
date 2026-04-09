@@ -7,35 +7,35 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
-from pydantic_ai import DeferredToolResults
+from pydantic_ai import Agent, DeferredToolResults
 from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
-
-from pydantic_ai import Agent
 from pydantic_ai.result import DeferredToolRequests
+from tests._frontend import SilentFrontend
+from tests._ollama import ensure_ollama_warm
+from tests._settings import test_settings
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
+from co_cli.commands._commands import (
+    CommandContext,
+    DelegateToAgent,
+    LocalOnly,
+    ReplaceTranscript,
+    SkillConfig,
+    dispatch,
+)
 from co_cli.config._core import settings
-from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
-from tests._settings import test_settings
-from co_cli.tools.shell_backend import ShellBackend
+from co_cli.context.orchestrate import _build_interrupted_turn_result, _TurnState, run_turn
+from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.context.tool_approvals import (
     is_auto_approved,
     record_approval_choice,
     remember_tool_approval,
     resolve_approval_subject,
 )
-from co_cli.commands._commands import (
-    dispatch, CommandContext,
-    SkillConfig,
-    LocalOnly, ReplaceTranscript, DelegateToAgent,
-)
-from co_cli.context.orchestrate import _TurnState, _build_interrupted_turn_result, run_turn
-from co_cli.context.skill_env import cleanup_skill_run_state
+from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display._core import console
-from tests._frontend import SilentFrontend
-from tests._ollama import ensure_ollama_warm
-from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings
 # Exclude MCP servers: agent.run() spawns their processes inline per call; these tests cover built-in tools only.
@@ -46,6 +46,7 @@ _SUMM_MODEL = _CONFIG_NO_MCP.llm.model
 # Tool registry and agent built once at module level.
 # Uses noreason settings for fast, non-reasoning tool-calling tests.
 from co_cli.agent import build_tool_registry
+
 _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT = Agent(
     _LLM_MODEL.model,
@@ -53,7 +54,7 @@ _AGENT = Agent(
     model_settings=_LLM_MODEL.settings,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
-    toolsets=[_TOOL_REG.toolset] + _TOOL_REG.mcp_toolsets,
+    toolsets=[_TOOL_REG.toolset, *_TOOL_REG.mcp_toolsets],
 )
 
 
@@ -120,8 +121,12 @@ async def test_cmd_approvals_routing_and_clear(tmp_path):
     from co_cli.deps import ApprovalKindEnum, SessionApprovalRule
 
     ctx = _make_ctx()
-    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git"))
-    ctx.deps.session.session_approval_rules.append(SessionApprovalRule(kind=ApprovalKindEnum.DOMAIN, value="docs.python.org"))
+    ctx.deps.session.session_approval_rules.append(
+        SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
+    )
+    ctx.deps.session.session_approval_rules.append(
+        SessionApprovalRule(kind=ApprovalKindEnum.DOMAIN, value="docs.python.org")
+    )
 
     result = await dispatch("/approvals list", ctx)
     assert isinstance(result, LocalOnly)
@@ -233,7 +238,8 @@ async def test_forget_command_evicts_fts_row(tmp_path):
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
-            shell=ShellBackend(), knowledge_store=idx,
+            shell=ShellBackend(),
+            knowledge_store=idx,
             config=test_settings(),
             memory_dir=memory_dir,
             session=CoSessionState(session_id="test-forget-fts"),
@@ -329,7 +335,10 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
     remember_tool_approval(subject, deps)
-    assert SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git") in deps.session.session_approval_rules
+    assert (
+        SessionApprovalRule(kind=ApprovalKindEnum.SHELL, value="git")
+        in deps.session.session_approval_rules
+    )
     assert is_auto_approved(subject, deps) is True
 
 
@@ -400,7 +409,11 @@ def test_build_interrupted_turn_result_drops_dangling_tool_call():
     """
     clean_request = ModelRequest(parts=[UserPromptPart(content="run ls")])
     dangling_response = ModelResponse(
-        parts=[ToolCallPart(tool_name="run_shell_command", args='{"cmd": "ls"}', tool_call_id="call-x")]
+        parts=[
+            ToolCallPart(
+                tool_name="run_shell_command", args='{"cmd": "ls"}', tool_call_id="call-x"
+            )
+        ]
     )
     turn_state = _TurnState(
         current_input=None,
@@ -415,7 +428,11 @@ def test_build_interrupted_turn_result_drops_dangling_tool_call():
     # Abort marker must be the last message
     last = result.messages[-1]
     assert isinstance(last, ModelRequest)
-    assert any("interrupted" in part.content.lower() for part in last.parts if isinstance(part, UserPromptPart))
+    assert any(
+        "interrupted" in part.content.lower()
+        for part in last.parts
+        if isinstance(part, UserPromptPart)
+    )
 
 
 def test_build_interrupted_turn_result_keeps_clean_history():
@@ -435,7 +452,6 @@ def test_build_interrupted_turn_result_keeps_clean_history():
     assert clean_response in result.messages
 
 
-
 # ---------------------------------------------------------------------------
 # cleanup_skill_run_state — env var restore and skill name clear
 # ---------------------------------------------------------------------------
@@ -444,6 +460,7 @@ def test_build_interrupted_turn_result_keeps_clean_history():
 def test_cleanup_skill_restores_set_env_var():
     """Key that was set before skill run is restored to its original value."""
     import os
+
     key = "TEST_CO_SKILL_RESTORE_KEY"
     original = "original-value"
     os.environ[key] = original
@@ -459,6 +476,7 @@ def test_cleanup_skill_restores_set_env_var():
 def test_cleanup_skill_removes_absent_env_var():
     """Key that was absent before skill run is removed after cleanup."""
     import os
+
     key = "TEST_CO_SKILL_ABSENT_KEY"
     os.environ.pop(key, None)
     os.environ[key] = "skill-injected-value"

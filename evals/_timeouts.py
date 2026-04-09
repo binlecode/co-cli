@@ -10,7 +10,7 @@ a firm fail-fast upper bound for debugging.
 EVAL_TURN_TIMEOUT_SECS: int = 120
 """Standard upper bound for a single complex reasoning turn with tool executions.
 Used in knowledge pipeline, tool chains, and history boundary evals.
-Calculated as: 4 sequential LLM reasoning calls (~80s total for a 35B model) 
+Calculated as: 4 sequential LLM reasoning calls (~80s total for a 35B model)
 + 3 API/Tool operations (e.g. search, fetch, save) (~15s) + ~25s buffer for HTTP jitter.
 This guarantees enough time for complex RAG loops but prevents infinite ModelRetry loops.
 """
@@ -29,8 +29,8 @@ Strictly bounds pre-flight checks so broken test infrastructure fails instantly.
 
 EVAL_BENCHMARK_TIMEOUT_SECS: int = 300
 """Timeout for long-running benchmark streams evaluating TTFT and throughput.
-Local hardware processing massive 128,000 token context windows can take 60-90s 
-just for the Time-To-First-Token (TTFT), plus another 50-100s for sustained 
+Local hardware processing massive 128,000 token context windows can take 60-90s
+just for the Time-To-First-Token (TTFT), plus another 50-100s for sustained
 generation. 300s (5 minutes) provides the necessary endurance margin.
 """
 

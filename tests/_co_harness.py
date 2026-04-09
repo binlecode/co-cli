@@ -44,9 +44,7 @@ def _harness_enabled(config: pytest.Config) -> bool:
     # Evals must not couple to the pytest harness. If the invocation explicitly
     # targets eval files or directories, skip all harness behavior.
     args = [str(a) for a in config.args]
-    if args and all(_is_eval_path(a) for a in args if not a.startswith("-")):
-        return False
-    return True
+    return not (args and all(_is_eval_path(a) for a in args if not a.startswith("-")))
 
 
 @dataclass
@@ -116,7 +114,7 @@ def _extract_tool(row: _SpanRow) -> str | None:
     if not isinstance(tool, str) or not tool:
         return None
     # Exclude deferred-approval resolution spans: pydantic-ai fires execute_tool
-    # spans for both deferred approval bookkeeping (~1–4ms) and actual tool
+    # spans for both deferred approval bookkeeping (~1-4ms) and actual tool
     # execution (always >10ms for real I/O). Only count real execution in the
     # tools= summary so denied tools are not reported as having run.
     if row.duration_ms is not None and row.duration_ms < 5:
@@ -254,13 +252,11 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         duration_s = time.perf_counter() - start
         outcome = getattr(item, "_co_harness_outcome", "passed")
         terminal = item.config.pluginmanager.get_plugin("terminalreporter")
-        if terminal is None:
-            return
-
-        terminal.write_line(_summary_line(item.nodeid, duration_s, outcome, spans))
-        if outcome != "passed" or duration_s * 1000 >= _SLOW_MS:
-            for row in spans[:_DETAIL_LIMIT]:
-                terminal.write_line(f"[pytest-harness]   {_span_detail(row)}")
-            hidden = len(spans) - _DETAIL_LIMIT
-            if hidden > 0:
-                terminal.write_line(f"[pytest-harness]   ... {hidden} more spans omitted")
+        if terminal is not None:
+            terminal.write_line(_summary_line(item.nodeid, duration_s, outcome, spans))
+            if outcome != "passed" or duration_s * 1000 >= _SLOW_MS:
+                for row in spans[:_DETAIL_LIMIT]:
+                    terminal.write_line(f"[pytest-harness]   {_span_detail(row)}")
+                hidden = len(spans) - _DETAIL_LIMIT
+                if hidden > 0:
+                    terminal.write_line(f"[pytest-harness]   ... {hidden} more spans omitted")

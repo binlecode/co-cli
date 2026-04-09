@@ -6,7 +6,7 @@ small conversation, invokes `/compact`, and inspects new trace rows written to
 the shared OTel SQLite DB.
 
 Success criteria:
-1. The real CLI reaches the `Co ❯ ` prompt.
+1. The real CLI reaches the `Co > ` prompt.
 2. `/compact` succeeds and reports a compaction result.
 3. New summarizer spans are written after the eval starts.
 4. Those summarizer spans use the configured think model over the OpenAI-
@@ -24,8 +24,9 @@ import sys
 import time
 from pathlib import Path
 
-from co_cli.config._core import LOGS_DB
 from evals._timeouts import EVAL_API_TIMEOUT_SECS, EVAL_PROBE_TIMEOUT_SECS
+
+from co_cli.config._core import LOGS_DB
 
 PROMPT = "Co ❯"
 SESSION_TIMEOUT_S = 180
@@ -168,7 +169,10 @@ def main() -> int:
         for name, attrs in spans:
             if "qwen3.5:35b-a3b-think" in name or "qwen3.5:35b-a3b-think" in attrs:
                 found_model = True
-            if '"gen_ai.provider.name": "openai"' in attrs and '"server.address": "localhost"' in attrs:
+            if (
+                '"gen_ai.provider.name": "openai"' in attrs
+                and '"server.address": "localhost"' in attrs
+            ):
                 found_openai = True
 
         if not found_model or not found_openai:

@@ -40,8 +40,8 @@ for _k, _v in _ENV_DEFAULTS.items():
     if _k not in os.environ:
         os.environ[_k] = _v
 
-from pydantic_ai import DeferredToolRequests, DeferredToolResults  # noqa: E402
-from pydantic_ai.messages import (  # noqa: E402
+from pydantic_ai import DeferredToolRequests, DeferredToolResults
+from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -50,16 +50,15 @@ from pydantic_ai.messages import (  # noqa: E402
     ToolCallPart,
     ToolReturnPart,
 )
-from pydantic_ai.usage import UsageLimits  # noqa: E402
+from pydantic_ai.usage import UsageLimits
 
-from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config._core import get_settings  # noqa: E402
-from co_cli.config._llm import ROLE_REASONING  # noqa: E402
-from co_cli.config._web import WebSettings as WebPolicy  # noqa: E402
-from co_cli._model_factory import ModelRegistry, ResolvedModel  # noqa: E402
-from co_cli.deps import CoDeps, CoConfig  # noqa: E402
-from co_cli.tools.shell_backend import ShellBackend  # noqa: E402
-
+from co_cli._model_factory import ModelRegistry, ResolvedModel
+from co_cli.agent import build_agent
+from co_cli.config._core import get_settings
+from co_cli.config._llm import ROLE_REASONING
+from co_cli.config._web import WebSettings as WebPolicy
+from co_cli.deps import CoConfig, CoDeps
+from co_cli.tools.shell_backend import ShellBackend
 
 # ---------------------------------------------------------------------------
 # Trace printer / collector
@@ -68,6 +67,7 @@ from co_cli.tools.shell_backend import ShellBackend  # noqa: E402
 
 def print_trace(messages: list, lines: list[str] | None = None) -> None:
     """Print a human-readable conversation trace and optionally collect lines."""
+
     def _out(text: str) -> None:
         print(text)
         if lines is not None:
@@ -154,8 +154,7 @@ def write_report(
     error: str | None = None,
 ) -> Path:
     """Write a markdown report to scripts/."""
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    path = _REPORT_DIR / f"test_memory_lifecycle_movie_query-report.md"
+    path = _REPORT_DIR / "test_memory_lifecycle_movie_query-report.md"
 
     lines: list[str] = []
     w = lines.append
@@ -318,8 +317,7 @@ async def main():
     )
 
     prompt = (
-        "Go online and learn about the movie Finch, "
-        "then tell me about it — make it interesting."
+        "Go online and learn about the movie Finch, then tell me about it — make it interesting."
     )
 
     print("=" * 70)
@@ -393,7 +391,9 @@ async def main():
                 # Show memory file on disk
                 memory_dir = Path.cwd() / ".co-cli" / "knowledge" / "memories"
                 if memory_dir.exists():
-                    files = sorted(memory_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+                    files = sorted(
+                        memory_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True
+                    )
                     if files:
                         newest = files[0]
                         memory_file = str(newest)

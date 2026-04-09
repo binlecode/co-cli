@@ -1,18 +1,17 @@
 """Functional tests for subagent tool wiring and deps isolation."""
 
-import pytest
 from copy import copy
-from pathlib import Path
 
+import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.deps import CoDeps, CoSessionState, CoRuntimeState, make_subagent_deps
-from tests._settings import test_settings
+from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, make_subagent_deps
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.subagent import run_coding_subagent, _merge_turn_usage
+from co_cli.tools.subagent import _merge_turn_usage, run_coding_subagent
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -21,7 +20,8 @@ _AGENT = build_agent(config=settings)
 def _make_ctx() -> RunContext:
     """Return a real RunContext with no model — triggers unavailable guard."""
     deps = CoDeps(
-        shell=ShellBackend(), model=None,
+        shell=ShellBackend(),
+        model=None,
         config=test_settings(),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -72,7 +72,9 @@ def test_make_subagent_deps_resets_session_state() -> None:
 
     # Session: inherited fields carry over
     assert isolated.session.google_creds_resolved is True
-    assert isolated.session.session_approval_rules == [SessionApprovalRule(ApprovalKindEnum.SHELL, "git")]
+    assert isolated.session.session_approval_rules == [
+        SessionApprovalRule(ApprovalKindEnum.SHELL, "git")
+    ]
 
     # CoSessionState no longer carries skill fields — they are on capabilities
     assert not hasattr(CoSessionState(), "skill_commands")

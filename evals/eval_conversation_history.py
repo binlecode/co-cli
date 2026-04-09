@@ -20,14 +20,18 @@ Usage:
 """
 
 import asyncio
-import pathlib
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-
 import logging
 import os
 import sys
 import time
 
+from evals._common import (
+    build_message_history,
+    make_eval_deps,
+    make_eval_settings,
+    patch_dangling_tool_calls,
+)
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import (
     ModelRequest,
@@ -43,9 +47,6 @@ from pydantic_ai.usage import UsageLimits
 from co_cli.agent import CoDeps, build_agent
 from co_cli.config._core import settings
 
-from evals._common import build_message_history, make_eval_deps, make_eval_settings, patch_dangling_tool_calls
-
-
 # ---------------------------------------------------------------------------
 # Case definitions
 # ---------------------------------------------------------------------------
@@ -59,7 +60,6 @@ from evals._common import build_message_history, make_eval_deps, make_eval_setti
 
 CASES = [
     # ── Tier 1: Basic back-reference (2 turns, text only) ────────────
-
     {
         "id": "t1-numbered-ref",
         "tier": 1,
@@ -68,7 +68,13 @@ CASES = [
             "the first one",
         ],
         "pass_keywords": ["ci/cd", "ci cd", "continuous integration", "continuous delivery"],
-        "fail_keywords": ["no context", "clarify", "what do you mean", "not sure what", "previous context"],
+        "fail_keywords": [
+            "no context",
+            "clarify",
+            "what do you mean",
+            "not sure what",
+            "previous context",
+        ],
     },
     {
         "id": "t1-yes-continue",
@@ -80,9 +86,7 @@ CASES = [
         "pass_keywords": ["docker", "container"],
         "fail_keywords": ["what would you like", "not sure what", "no context", "clarify what"],
     },
-
     # ── Tier 2: Deep history (3+ turns, distraction, corrections) ────
-
     {
         "id": "t2-ref-across-distraction",
         "tier": 2,
@@ -92,7 +96,13 @@ CASES = [
             "OK back to my project — which testing framework did I say I wanted?",
         ],
         "pass_keywords": ["pytest"],
-        "fail_keywords": ["no context", "don't know", "not sure", "didn't mention", "haven't mentioned"],
+        "fail_keywords": [
+            "no context",
+            "don't know",
+            "not sure",
+            "didn't mention",
+            "haven't mentioned",
+        ],
     },
     {
         "id": "t2-correction-chain",
@@ -115,7 +125,13 @@ CASES = [
             "Remind me, what port is my server on?",
         ],
         "pass_keywords": ["8443"],
-        "fail_keywords": ["don't know", "not sure", "no context", "didn't mention", "haven't specified"],
+        "fail_keywords": [
+            "don't know",
+            "not sure",
+            "no context",
+            "didn't mention",
+            "haven't specified",
+        ],
     },
     {
         "id": "t2-accumulation",
@@ -129,9 +145,7 @@ CASES = [
         "pass_keywords": ["3002"],
         "fail_keywords": ["don't know", "not sure", "no context", "not mentioned"],
     },
-
     # ── Tier 3: Tool output in history (synthetic messages) ──────────
-
     {
         "id": "t3-tool-output-ref",
         "tier": 3,
@@ -141,24 +155,38 @@ CASES = [
             # Model called a tool
             ("tool_call", "search_notes", '{"query": "deployment"}', "call_001"),
             # Tool returned results
-            ("tool_return", "search_notes", (
-                "Found 3 notes:\n"
-                "1. deploy-kubernetes.md — K8s deployment playbook\n"
-                "2. deploy-cloudrun.md — Cloud Run setup guide\n"
-                "3. ci-cd-pipeline.md — GitHub Actions CI/CD"
-            ), "call_001"),
+            (
+                "tool_return",
+                "search_notes",
+                (
+                    "Found 3 notes:\n"
+                    "1. deploy-kubernetes.md — K8s deployment playbook\n"
+                    "2. deploy-cloudrun.md — Cloud Run setup guide\n"
+                    "3. ci-cd-pipeline.md — GitHub Actions CI/CD"
+                ),
+                "call_001",
+            ),
             # Model presented results
-            ("assistant", (
-                "I found 3 deployment-related notes:\n"
-                "1. deploy-kubernetes.md — K8s deployment playbook\n"
-                "2. deploy-cloudrun.md — Cloud Run setup guide\n"
-                "3. ci-cd-pipeline.md — GitHub Actions CI/CD\n\n"
-                "Would you like me to open any of these?"
-            )),
+            (
+                "assistant",
+                (
+                    "I found 3 deployment-related notes:\n"
+                    "1. deploy-kubernetes.md — K8s deployment playbook\n"
+                    "2. deploy-cloudrun.md — Cloud Run setup guide\n"
+                    "3. ci-cd-pipeline.md — GitHub Actions CI/CD\n\n"
+                    "Would you like me to open any of these?"
+                ),
+            ),
         ],
         "turns": ["which note was the second result?"],
         "pass_keywords": ["deploy-cloudrun", "cloud run", "cloudrun"],
-        "fail_keywords": ["no context", "don't see", "which notes", "what second", "previous context"],
+        "fail_keywords": [
+            "no context",
+            "don't see",
+            "which notes",
+            "what second",
+            "previous context",
+        ],
     },
     {
         "id": "t3-shell-output-ref",
@@ -169,25 +197,39 @@ CASES = [
             # Model called shell tool
             ("tool_call", "run_shell_command", '{"cmd": "ls -la /app/config/"}', "call_002"),
             # Shell returned file listing
-            ("tool_return", "run_shell_command", (
-                "total 24\n"
-                "drwxr-xr-x 2 root root 4096 Jan 15 10:00 .\n"
-                "-rw-r--r-- 1 root root  842 Jan 15 09:30 database.yml\n"
-                "-rw-r--r-- 1 root root 1205 Jan 15 09:30 redis.conf\n"
-                "-rw-r--r-- 1 root root  376 Jan 15 09:30 secrets.env"
-            ), "call_002"),
+            (
+                "tool_return",
+                "run_shell_command",
+                (
+                    "total 24\n"
+                    "drwxr-xr-x 2 root root 4096 Jan 15 10:00 .\n"
+                    "-rw-r--r-- 1 root root  842 Jan 15 09:30 database.yml\n"
+                    "-rw-r--r-- 1 root root 1205 Jan 15 09:30 redis.conf\n"
+                    "-rw-r--r-- 1 root root  376 Jan 15 09:30 secrets.env"
+                ),
+                "call_002",
+            ),
             # Model presented results
-            ("assistant", (
-                "Here are the files in /app/config/:\n"
-                "- database.yml (842 bytes)\n"
-                "- redis.conf (1205 bytes)\n"
-                "- secrets.env (376 bytes)\n\n"
-                "Would you like me to read any of these?"
-            )),
+            (
+                "assistant",
+                (
+                    "Here are the files in /app/config/:\n"
+                    "- database.yml (842 bytes)\n"
+                    "- redis.conf (1205 bytes)\n"
+                    "- secrets.env (376 bytes)\n\n"
+                    "Would you like me to read any of these?"
+                ),
+            ),
         ],
         "turns": ["what's the biggest file in there?"],
         "pass_keywords": ["redis", "redis.conf", "1205"],
-        "fail_keywords": ["no context", "don't know", "which directory", "haven't seen", "previous context"],
+        "fail_keywords": [
+            "no context",
+            "don't know",
+            "which directory",
+            "haven't seen",
+            "previous context",
+        ],
     },
     {
         "id": "t3-interleaved-tool-chat",
@@ -199,29 +241,46 @@ CASES = [
             # Turn 2: tool call
             ("user", "Search my drive for the API spec document"),
             ("tool_call", "search_drive_files", '{"query": "invoice API spec"}', "call_003"),
-            ("tool_return", "search_drive_files", (
-                '{"display": "1. Invoice API Spec v2.pdf (shared Jan 10)\\n'
-                '2. Old API Design.docx (archived)", "count": 2}'
-            ), "call_003"),
-            ("assistant", (
-                "Found 2 files:\n"
-                "1. Invoice API Spec v2.pdf (shared Jan 10)\n"
-                "2. Old API Design.docx (archived)\n\n"
-                "Want me to open either?"
-            )),
+            (
+                "tool_return",
+                "search_drive_files",
+                (
+                    '{"display": "1. Invoice API Spec v2.pdf (shared Jan 10)\\n'
+                    '2. Old API Design.docx (archived)", "count": 2}'
+                ),
+                "call_003",
+            ),
+            (
+                "assistant",
+                (
+                    "Found 2 files:\n"
+                    "1. Invoice API Spec v2.pdf (shared Jan 10)\n"
+                    "2. Old API Design.docx (archived)\n\n"
+                    "Want me to open either?"
+                ),
+            ),
             # Turn 3: more chat
             ("user", "Not yet. What's a good way to structure FastAPI routes?"),
-            ("assistant", (
-                "For FastAPI, I'd recommend organizing routes with APIRouter:\n"
-                "- routers/invoices.py — CRUD endpoints\n"
-                "- routers/payments.py — payment processing\n"
-                "- routers/health.py — health checks\n\n"
-                "Each router handles one domain concern."
-            )),
+            (
+                "assistant",
+                (
+                    "For FastAPI, I'd recommend organizing routes with APIRouter:\n"
+                    "- routers/invoices.py — CRUD endpoints\n"
+                    "- routers/payments.py — payment processing\n"
+                    "- routers/health.py — health checks\n\n"
+                    "Each router handles one domain concern."
+                ),
+            ),
         ],
         "turns": ["what was my project called again?"],
         "pass_keywords": ["invoice-api", "invoice api"],
-        "fail_keywords": ["no context", "don't know", "not sure", "haven't mentioned", "previous context"],
+        "fail_keywords": [
+            "no context",
+            "don't know",
+            "not sure",
+            "haven't mentioned",
+            "previous context",
+        ],
     },
 ]
 
@@ -362,7 +421,8 @@ def _switch_model(agent, model_name: str):
     """Switch the agent to a different Ollama model and return updated model settings."""
     from pydantic_ai.models.openai import OpenAIChatModel
     from pydantic_ai.providers.openai import OpenAIProvider
-    from co_cli.prompts.model_quirks._loader import normalize_model_name, get_model_inference
+
+    from co_cli.prompts.model_quirks._loader import get_model_inference, normalize_model_name
 
     ollama_host = settings.llm.host
     provider = OpenAIProvider(base_url=f"{ollama_host}/v1", api_key="ollama")
@@ -417,8 +477,10 @@ async def main():
     print("Cross-Model Conversation History Stress Test")
     print(f"Provider: {provider}")
     print(f"Models:   {len(models_to_test)}")
-    print(f"Cases:    {len(CASES)} total — "
-          + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items())))
+    print(
+        f"Cases:    {len(CASES)} total — "
+        + ", ".join(f"tier {t}: {n}" for t, n in sorted(tier_counts.items()))
+    )
     print("=" * 70)
 
     agent = build_agent(config=settings)
@@ -432,10 +494,7 @@ async def main():
         print(f"{'─' * 60}")
 
         # Ollama: switch model via _switch_model; others: use the base settings
-        if is_ollama:
-            model_settings = _switch_model(agent, model_name)
-        else:
-            model_settings = make_eval_settings()
+        model_settings = _switch_model(agent, model_name) if is_ollama else make_eval_settings()
 
         t0 = time.monotonic()
 
@@ -451,14 +510,17 @@ async def main():
                 print(f"    Response: {result['followup_response'][:200]}")
 
                 if not result["passed"]:
-                    print(f"    Pass kw: {result['has_pass_keyword']}, "
-                          f"Fail kw: {result['has_fail_keyword']}")
+                    print(
+                        f"    Pass kw: {result['has_pass_keyword']}, "
+                        f"Fail kw: {result['has_fail_keyword']}"
+                    )
 
                 _dump_case_detail(result)
 
             except Exception as e:
                 print(f"ERROR: {e}")
                 import traceback
+
                 traceback.print_exc()
 
         elapsed = time.monotonic() - t0

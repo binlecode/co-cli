@@ -1,11 +1,9 @@
 """Tests for approval subject resolution — display format and session-rule matching."""
 
-from pathlib import Path
-
 from co_cli.config._core import settings
+from co_cli.context.tool_approvals import is_auto_approved, resolve_approval_subject
 from co_cli.deps import ApprovalKindEnum, CoDeps, SessionApprovalRule
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.context.tool_approvals import is_auto_approved, resolve_approval_subject
 
 
 def _make_deps() -> CoDeps:
@@ -41,7 +39,12 @@ def test_edit_file_display_includes_path_and_snippets():
     """edit_file approval shows path, search snippet, and replacement snippet."""
     subject = resolve_approval_subject(
         "edit_file",
-        {"path": "src/bar.py", "search": "old text", "replacement": "new text", "replace_all": False},
+        {
+            "path": "src/bar.py",
+            "search": "old text",
+            "replacement": "new text",
+            "replace_all": False,
+        },
     )
     assert "src/bar.py" in subject.display
     assert "old text" in subject.display
@@ -158,7 +161,9 @@ def test_resolve_approval_subject_path_scopes_to_parent_dir():
 
 def test_resolve_approval_subject_domain_scopes_to_hostname():
     """Web-fetch subject resolves to the hostname of the target URL."""
-    subject = resolve_approval_subject("web_fetch", {"url": "https://docs.python.org/3/library/asyncio.html"})
+    subject = resolve_approval_subject(
+        "web_fetch", {"url": "https://docs.python.org/3/library/asyncio.html"}
+    )
     assert subject.kind == ApprovalKindEnum.DOMAIN
     assert subject.value == "docs.python.org"
     assert subject.can_remember is True
@@ -166,7 +171,9 @@ def test_resolve_approval_subject_domain_scopes_to_hostname():
 
 def test_resolve_approval_subject_generic_tool_fallback():
     """Unknown tools fall through to the generic-tool branch, keyed by tool name."""
-    subject = resolve_approval_subject("create_gmail_draft", {"to": "test@example.com", "subject": "hi"})
+    subject = resolve_approval_subject(
+        "create_gmail_draft", {"to": "test@example.com", "subject": "hi"}
+    )
     assert subject.kind == ApprovalKindEnum.TOOL
     assert subject.value == "create_gmail_draft"
     assert subject.can_remember is True

@@ -16,20 +16,18 @@ Usage:
 """
 
 import asyncio
-import pathlib
 import sys
 
-from pydantic_ai.messages import (  # noqa: E402
+from evals._common import SilentFrontend, make_eval_deps, make_eval_settings
+from pydantic_ai.messages import (
     ModelRequest,
     UserPromptPart,
 )
 
-from co_cli.context.types import SafetyState  # noqa: E402
-from co_cli.context.orchestrate import run_turn  # noqa: E402
-from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config._core import settings  # noqa: E402
-
-from evals._common import SilentFrontend, make_eval_deps, make_eval_settings  # noqa: E402
+from co_cli.agent import build_agent
+from co_cli.config._core import settings
+from co_cli.context.orchestrate import run_turn
+from co_cli.context.types import SafetyState
 
 
 async def main() -> int:
@@ -46,16 +44,18 @@ async def main() -> int:
     print("\n[1] Starting agent turn (will cancel after 2s)...")
 
     async def _run_and_cancel():
-        task = asyncio.create_task(run_turn(
-            agent=agent,
-            user_input="Write a detailed essay about the history of computing from the 1940s to present day",
-            deps=deps,
-            message_history=[],
-            model_settings=make_eval_settings(),
-            max_request_limit=50,
-            verbose=False,
-            frontend=frontend,
-        ))
+        task = asyncio.create_task(
+            run_turn(
+                agent=agent,
+                user_input="Write a detailed essay about the history of computing from the 1940s to present day",
+                deps=deps,
+                message_history=[],
+                model_settings=make_eval_settings(),
+                max_request_limit=50,
+                verbose=False,
+                frontend=frontend,
+            )
+        )
         # Let it stream for a bit, then cancel
         await asyncio.sleep(2.0)
         task.cancel()
@@ -89,10 +89,12 @@ async def main() -> int:
     for msg in result.messages:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, UserPromptPart):
-                    if "interrupted the previous turn" in part.content:
-                        found_abort = True
-                        print(f"    Found: '{part.content[:80]}...'")
+                if (
+                    isinstance(part, UserPromptPart)
+                    and "interrupted the previous turn" in part.content
+                ):
+                    found_abort = True
+                    print(f"    Found: '{part.content[:80]}...'")
 
     checks = {
         "interrupted flag": result.interrupted,

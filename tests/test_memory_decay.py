@@ -1,23 +1,20 @@
 """Functional tests for memory decay mechanics. Requires a running LLM provider."""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-
+from tests._settings import test_settings
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.config._memory import MemorySettings
-from tests._settings import test_settings
 from co_cli.deps import CoDeps
-from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.memory import save_memory
+from co_cli.tools.shell_backend import ShellBackend
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -32,7 +29,7 @@ def _seed_memory(
     tags: list[str] | None = None,
     decay_protected: bool = False,
 ) -> Path:
-    created = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    created = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
     slug = content[:40].lower().replace(" ", "-").replace(",", "")
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict = {
@@ -71,9 +68,11 @@ def test_decay_cut_triggers(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Old memory number {i}", days_ago=max_count - i + 10)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
+
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await save_memory(ctx, "Brand new important memory", tags=["test"])
+
     asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
@@ -91,16 +90,19 @@ def test_decay_protected_survives(tmp_path: Path):
     for i in range(1, max_count + 1):
         protected = i <= 2
         _seed_memory(
-            memory_dir, i,
+            memory_dir,
+            i,
             f"Memory {i} {'PROTECTED' if protected else 'normal'}",
             days_ago=max_count - i + 10,
             decay_protected=protected,
         )
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
+
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await save_memory(ctx, "New memory triggering decay", tags=["test"])
+
     asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
@@ -127,15 +129,15 @@ def test_decay_below_limit_no_trigger(tmp_path: Path):
         _seed_memory(memory_dir, i, f"Memory number {i}", days_ago=10 - i)
 
     ctx = _make_ctx(memory_dir, max_count=max_count)
+
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await save_memory(ctx, "New memory within budget", tags=["test"])
+
     asyncio.run(_run())
 
     after = list(memory_dir.glob("*.md"))
-    assert len(after) == seed_count + 1, (
-        f"Expected {seed_count + 1} memories, got {len(after)}"
-    )
+    assert len(after) == seed_count + 1, f"Expected {seed_count + 1} memories, got {len(after)}"
     has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
     assert not has_consolidated, "Decay triggered below capacity limit"
 
@@ -150,6 +152,7 @@ def test_save_memory_writes_low_certainty(tmp_path: Path):
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await save_memory(ctx, "I think I prefer dark mode", tags=["preference"])
+
     asyncio.run(_run())
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1
@@ -167,6 +170,7 @@ def test_save_memory_writes_high_certainty(tmp_path: Path):
     async def _run() -> None:
         async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
             await save_memory(ctx, "I always use dark mode", tags=["preference"])
+
     asyncio.run(_run())
     files = list(memory_dir.glob("*.md"))
     assert len(files) == 1

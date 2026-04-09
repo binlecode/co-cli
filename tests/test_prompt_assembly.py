@@ -2,9 +2,8 @@
 
 from pathlib import Path
 
-from co_cli.prompts._assembly import build_static_instructions
 from co_cli.config._core import settings
-
+from co_cli.prompts._assembly import build_static_instructions
 
 # Base config — personality overridden per test.
 _BASE_CONFIG = settings

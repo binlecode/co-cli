@@ -47,14 +47,13 @@ async def list_directory(
     pattern: str = "*",
     max_entries: int = 200,
 ) -> ToolReturn:
-    """List directory contents, optionally filtered by a glob pattern.
+    """List directory contents or find files by name pattern (glob).
 
-    Returns files and subdirectories matching the pattern up to max_entries.
-    Each entry is prefixed with [dir] or [file] to indicate type.
+    Use for file-name and path discovery — when you need to know what files
+    exist or find files by extension/name pattern. Use "**/*.ext" for recursive
+    search by name (results sorted by modification time, newest first).
 
-    Supports recursive glob patterns: use "**" to match across directory
-    levels (e.g. "**/*.py" finds all Python files in the tree). Results
-    for recursive patterns are sorted by modification time (newest first).
+    When NOT to use: for content search inside files — use find_in_files instead.
 
     Args:
         path: Directory path relative to the workspace root (default: current directory).
@@ -127,7 +126,13 @@ async def read_file(
     start_line: int | None = None,
     end_line: int | None = None,
 ) -> ToolReturn:
-    """Read a file's contents, optionally restricted to a line range.
+    """Read a file's contents for targeted inspection, with optional line range.
+
+    Use for reading known files. Specify start_line/end_line when the relevant
+    region is already known to avoid loading the entire file.
+
+    When NOT to use: when the file location is unknown — use list_directory or
+    find_in_files first to locate the file.
 
     Line numbers are 1-indexed and inclusive. If start_line/end_line are omitted,
     the full file is returned.
@@ -181,10 +186,15 @@ async def find_in_files(
     glob: str = "**/*",
     max_matches: int = 50,
 ) -> ToolReturn:
-    """Search for a regex pattern across files in the workspace.
+    """Search file contents by regex pattern across the workspace.
 
-    Skips binary files. Returns up to max_matches results formatted as
-    file:line: text.
+    Use for content search — finding text, symbols, or patterns inside files.
+    Prefer this over shell grep/rg for workspace content search.
+
+    When NOT to use: for file-name discovery — use list_directory with a glob
+    pattern instead.
+
+    Skips binary files. Returns up to max_matches results as file:line: text.
 
     Args:
         pattern: Regular expression to search for.
@@ -235,9 +245,14 @@ async def write_file(
     path: str,
     content: str,
 ) -> ToolReturn:
-    """Write content to a file, creating parent directories as needed.
+    """Write content to a new file or completely rewrite an existing file.
 
-    Overwrites the file if it already exists.
+    Prefer edit_file for modifying existing files — it targets a specific
+    section and avoids accidentally dropping content. Use write_file only for
+    creating new files or intentional full rewrites. Read the file first before
+    rewriting to confirm you are not losing content.
+
+    Creates parent directories as needed. Overwrites the file if it already exists.
 
     Args:
         path: File path relative to the workspace root.
@@ -272,7 +287,15 @@ async def edit_file(
     replacement: str,
     replace_all: bool = False,
 ) -> ToolReturn:
-    """Edit a file by replacing a search string with a replacement.
+    """Edit a file by replacing a specific search string with a replacement.
+
+    Use for targeted modifications to existing files. Read the file first to
+    understand its content. Use the smallest unique search string that
+    unambiguously identifies the edit location. Set replace_all=True only
+    when every occurrence should be replaced.
+
+    When NOT to use: for creating new files or complete rewrites — use
+    write_file instead.
 
     Raises ValueError if the search string is not found or if there are multiple
     occurrences and replace_all is False.

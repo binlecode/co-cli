@@ -1,20 +1,19 @@
 """Functional tests for article tools (save_article, search_articles, read_article)."""
 
-import asyncio
 from pathlib import Path
 
 import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.knowledge._store import KnowledgeStore
+from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
-from tests._settings import test_settings
 
 _AGENT = build_agent(config=settings)
 
@@ -26,8 +25,13 @@ def _make_ctx(
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     deps = CoDeps(
-        shell=ShellBackend(), knowledge_store=knowledge_store,
-        config=test_settings(knowledge=test_settings().knowledge.model_copy(update={"search_backend": knowledge_search_backend})),
+        shell=ShellBackend(),
+        knowledge_store=knowledge_store,
+        config=test_settings(
+            knowledge=test_settings().knowledge.model_copy(
+                update={"search_backend": knowledge_search_backend}
+            )
+        ),
         library_dir=tmp_path / "library",
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -71,7 +75,9 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
     url = "https://example.com/unique-article"
 
     await save_article(ctx, content="Version 1", title="Article", origin_url=url, tags=["v1"])
-    result = await save_article(ctx, content="Version 2", title="Article Updated", origin_url=url, tags=["v2"])
+    result = await save_article(
+        ctx, content="Version 2", title="Article Updated", origin_url=url, tags=["v2"]
+    )
 
     assert result.metadata["action"] == "consolidated"
     library_dir = tmp_path / "library"
@@ -139,7 +145,7 @@ async def test_search_articles_no_match(tmp_path: Path):
 async def test_read_article_returns_full_body(tmp_path: Path):
     """read_article returns the full markdown body and metadata."""
     ctx = _make_ctx(tmp_path)
-    save_result = await save_article(
+    await save_article(
         ctx,
         content="Full body content for read test.\n\nSecond paragraph.",
         title="Read Test Article",
@@ -147,7 +153,7 @@ async def test_read_article_returns_full_body(tmp_path: Path):
     )
 
     library_dir = tmp_path / "library"
-    slug = list(library_dir.glob("*.md"))[0].stem
+    slug = next(iter(library_dir.glob("*.md"))).stem
 
     result = await read_article(ctx, slug)
     assert result.metadata["title"] == "Read Test Article"

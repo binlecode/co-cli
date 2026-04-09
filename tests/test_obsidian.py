@@ -1,18 +1,16 @@
 """Functional tests for Obsidian tools."""
 
-from pathlib import Path
-
 import pytest
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.knowledge._store import KnowledgeStore
-from tests._settings import test_settings
-from co_cli.tools.obsidian import search_notes, list_notes, read_note
-from co_cli.tools.shell_backend import ShellBackend
 from co_cli.deps import CoDeps
+from co_cli.knowledge._store import KnowledgeStore
+from co_cli.tools.obsidian import list_notes, read_note, search_notes
+from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
 
@@ -29,11 +27,13 @@ def test_search_notes(tmp_path):
     (tmp_path / "todo.md").write_text("# Todo\n- Review project proposal\n- Send timeline")
     (tmp_path / "projector.md").write_text("# Equipment\nThe projector needs repair.")
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
 
     # Single keyword - word boundary (should NOT match "projector")
     result = search_notes(ctx, "project")
@@ -68,11 +68,13 @@ def test_search_notes_folder_filter(tmp_path):
     (work / "standup.md").write_text("# Standup\nDiscussed project status.")
     (personal / "journal.md").write_text("# Journal\nWorking on project at home.")
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
 
     # Without folder — finds both
     result = search_notes(ctx, "project")
@@ -93,18 +95,16 @@ def test_search_notes_tag_filter(tmp_path):
     (tmp_path / "archived.md").write_text(
         "---\ntags: [archived]\n---\n# Archived\nProject beta was cancelled."
     )
-    (tmp_path / "inline.md").write_text(
-        "# Inline\nProject gamma #active is in progress."
-    )
-    (tmp_path / "untagged.md").write_text(
-        "# Untagged\nProject delta has no tags."
-    )
+    (tmp_path / "inline.md").write_text("# Inline\nProject gamma #active is in progress.")
+    (tmp_path / "untagged.md").write_text("# Untagged\nProject delta has no tags.")
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
 
     # Filter by frontmatter tag
     result = search_notes(ctx, "project", tag="#active")
@@ -120,17 +120,18 @@ def test_search_notes_tag_filter(tmp_path):
     assert "archived.md" in result.return_value
 
 
-
 def test_list_notes_pagination(tmp_path):
     """list_notes returns correct pages with offset/limit."""
     for i in range(1, 6):
         (tmp_path / f"note-{i:02d}.md").write_text(f"# Note {i}\nContent {i}")
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
 
     # Page 1: offset=0, limit=2
     r1 = list_notes(ctx, offset=0, limit=2)
@@ -162,11 +163,13 @@ def test_obsidian_list_and_read(tmp_path):
     subdir.mkdir()
     (subdir / "Old.md").write_text("Archived content")
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
 
     # Test list_notes
     notes = list_notes(ctx)
@@ -207,15 +210,20 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
     idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(), knowledge_store=idx,
-        config=test_settings(),
-        obsidian_vault_path=vault,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            knowledge_store=idx,
+            config=test_settings(),
+            obsidian_vault_path=vault,
+        )
+    )
 
     result = search_notes(ctx, keyword, folder="Work")
 
-    assert result.metadata["count"] == 1, f"Expected 1 result (Work only), got {result.metadata['count']}"
+    assert result.metadata["count"] == 1, (
+        f"Expected 1 result (Work only), got {result.metadata['count']}"
+    )
     assert "Work" in result.return_value
     assert "Personal" not in result.return_value
 
@@ -238,15 +246,20 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
     idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(), knowledge_store=idx,
-        config=test_settings(),
-        obsidian_vault_path=vault,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            knowledge_store=idx,
+            config=test_settings(),
+            obsidian_vault_path=vault,
+        )
+    )
 
     result = search_notes(ctx, keyword, folder="Work")
 
-    assert result.metadata["count"] == 1, f"Expected 1 result (Work only), got {result.metadata['count']}: {result.return_value}"
+    assert result.metadata["count"] == 1, (
+        f"Expected 1 result (Work only), got {result.metadata['count']}: {result.return_value}"
+    )
     assert "Work/standup.md" in result.return_value
     assert "Workbench" not in result.return_value
 
@@ -267,15 +280,20 @@ def test_fts_tag_filter_works_with_index(tmp_path):
     idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(), knowledge_store=idx,
-        config=test_settings(),
-        obsidian_vault_path=vault,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            knowledge_store=idx,
+            config=test_settings(),
+            obsidian_vault_path=vault,
+        )
+    )
 
     result = search_notes(ctx, "xylofts-tag-test", tag="#active")
 
-    assert result.metadata["count"] == 1, f"Expected 1 result (active tag only), got {result.metadata['count']}: {result.return_value}"
+    assert result.metadata["count"] == 1, (
+        f"Expected 1 result (active tag only), got {result.metadata['count']}: {result.return_value}"
+    )
     assert "active.md" in result.return_value
     assert "archived.md" not in result.return_value
 
@@ -288,21 +306,25 @@ def test_fts_tag_filter_works_with_index(tmp_path):
 def test_read_note_missing_file_raises_model_retry(tmp_path):
     """read_note raises ModelRetry when the note file does not exist."""
     (tmp_path / "exists.md").write_text("# Exists")
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
     with pytest.raises(ModelRetry, match="not found"):
         read_note(ctx, "nonexistent.md")
 
 
 def test_read_note_path_traversal_blocked(tmp_path):
     """read_note blocks path traversal outside the vault."""
-    ctx = _ctx(CoDeps(
-        shell=ShellBackend(),
-        config=test_settings(),
-        obsidian_vault_path=tmp_path,
-    ))
+    ctx = _ctx(
+        CoDeps(
+            shell=ShellBackend(),
+            config=test_settings(),
+            obsidian_vault_path=tmp_path,
+        )
+    )
     with pytest.raises(ModelRetry, match="outside the vault"):
         read_note(ctx, "../../etc/passwd")

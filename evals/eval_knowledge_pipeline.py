@@ -23,25 +23,20 @@ Usage:
 """
 
 import asyncio
-import asyncio
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from co_cli.context.types import SafetyState  # noqa: E402
-from co_cli.knowledge._store import KnowledgeStore  # noqa: E402
-from co_cli.context.orchestrate import run_turn  # noqa: E402
-from co_cli.agent import build_agent  # noqa: E402
-from co_cli.config._core import settings, Settings  # noqa: E402
-from co_cli.config._knowledge import KnowledgeSettings  # noqa: E402
+from evals._common import make_eval_deps, make_eval_settings
+from evals._frontend import SilentFrontend
+from evals._tools import is_ordered_subsequence, tool_names
 
-from evals._common import make_eval_deps, make_eval_settings  # noqa: E402
-from evals._frontend import SilentFrontend  # noqa: E402
-from evals._tools import is_ordered_subsequence, tool_names  # noqa: E402
-
+from co_cli.agent import build_agent
+from co_cli.config._core import settings
+from co_cli.context.orchestrate import run_turn
+from co_cli.context.types import SafetyState
+from co_cli.knowledge._store import KnowledgeStore
 
 # ---------------------------------------------------------------------------
 # Pipeline spec
@@ -55,9 +50,7 @@ TURN1_PROMPT = (
     "and save it as an article in my knowledge base with tag 'python'."
 )
 
-TURN2_PROMPT = (
-    f"Search my knowledge base for {TOPIC_KEYWORD} and summarise what you find there."
-)
+TURN2_PROMPT = f"Search my knowledge base for {TOPIC_KEYWORD} and summarise what you find there."
 
 TURN1_EXPECTED_CHAIN = ["web_search", "web_fetch", "save_article"]
 TURN2_EXPECTED_TOOLS = {"search_knowledge", "recall_article"}
@@ -197,7 +190,6 @@ async def main() -> int:
         print(f"    answer:       {t2['answer_preview']!r}")
 
     except Exception as exc:
-
         import traceback
 
         print(f"ERROR: {exc}")

@@ -1,25 +1,25 @@
 """Functional tests for native file tools."""
 
-import pytest
 from pathlib import Path
 
+import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
-from co_cli.tools.shell_backend import ShellBackend
-from tests._settings import test_settings
 from co_cli.tools.files import (
     _enforce_workspace_boundary,
     _is_recursive_pattern,
+    edit_file,
+    find_in_files,
     list_directory,
     read_file,
-    find_in_files,
     write_file,
-    edit_file,
 )
+from co_cli.tools.shell_backend import ShellBackend
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -78,6 +78,7 @@ async def test_list_directory_recursive_glob(tmp_path):
     sub.mkdir(parents=True)
     # Create files with controlled mtime ordering
     import time
+
     (tmp_path / "root.py").write_text("r")
     time.sleep(0.05)
     (sub / "deep.py").write_text("d")
@@ -332,7 +333,9 @@ async def test_find_in_files_recursive_subdirectory(tmp_path):
 @pytest.mark.asyncio
 async def test_write_file_creates_dirs(tmp_path):
     """Creates parent directories automatically when writing to nested path."""
-    result = await write_file(_make_ctx(tmp_path), path="deep/nested/dir/file.txt", content="test content")
+    result = await write_file(
+        _make_ctx(tmp_path), path="deep/nested/dir/file.txt", content="test content"
+    )
 
     assert not result.metadata.get("error")
     written = tmp_path / "deep" / "nested" / "dir" / "file.txt"
@@ -377,7 +380,9 @@ async def test_edit_file_single(tmp_path):
     """Replaces a unique search string in a file."""
     (tmp_path / "config.txt").write_text("host=localhost\nport=8080\n")
 
-    result = await edit_file(_make_ctx(tmp_path), path="config.txt", search="localhost", replacement="example.com")
+    result = await edit_file(
+        _make_ctx(tmp_path), path="config.txt", search="localhost", replacement="example.com"
+    )
 
     assert not result.metadata.get("error")
     assert result.metadata["replacements"] == 1
@@ -390,7 +395,9 @@ async def test_edit_file_not_found(tmp_path):
     (tmp_path / "notes.txt").write_text("some content here\n")
 
     with pytest.raises(ValueError, match="Search string not found"):
-        await edit_file(_make_ctx(tmp_path), path="notes.txt", search="absent_string", replacement="x")
+        await edit_file(
+            _make_ctx(tmp_path), path="notes.txt", search="absent_string", replacement="x"
+        )
 
 
 @pytest.mark.asyncio
@@ -467,6 +474,7 @@ async def test_lifecycle_normalizes_relative_path(tmp_path):
     from pydantic_ai.capabilities import ValidatedToolArgs
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
+
     from co_cli.context._tool_lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
@@ -476,7 +484,10 @@ async def test_lifecycle_normalizes_relative_path(tmp_path):
     args: ValidatedToolArgs = {"path": "subdir/file.txt"}
 
     result_args = await lifecycle.before_tool_execute(
-        ctx, call=call, tool_def=tool_def, args=args,
+        ctx,
+        call=call,
+        tool_def=tool_def,
+        args=args,
     )
 
     expected = str((tmp_path / "subdir" / "file.txt").resolve())
@@ -489,6 +500,7 @@ async def test_lifecycle_skips_non_file_tools(tmp_path):
     from pydantic_ai.capabilities import ValidatedToolArgs
     from pydantic_ai.messages import ToolCallPart
     from pydantic_ai.tools import ToolDefinition
+
     from co_cli.context._tool_lifecycle import CoToolLifecycle
 
     lifecycle = CoToolLifecycle()
@@ -498,7 +510,10 @@ async def test_lifecycle_skips_non_file_tools(tmp_path):
     args: ValidatedToolArgs = {"query": "hello"}
 
     result_args = await lifecycle.before_tool_execute(
-        ctx, call=call, tool_def=tool_def, args=args,
+        ctx,
+        call=call,
+        tool_def=tool_def,
+        args=args,
     )
 
     assert result_args == {"query": "hello"}

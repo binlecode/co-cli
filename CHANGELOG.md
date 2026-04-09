@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.52] - 2026-04-09
+
+### Changed
+- **Tool prompt alignment**: Added explicit when-to-use / when-not-to-use routing guidance to 18 tool docstrings across file, shell, web, todo, subagent, and background-task tools — reducing model misrouting without changing runtime behavior
+- **Test rename**: `test_tool_search.py` → `test_tool_registry.py` to match actual test scope
+
+### Added
+- **Deferred tool discovery tests**: `test_tool_prompt_discovery.py` verifies keyword discoverability of all deferred tools against their SDK-visible first-line descriptions
+
 ## [0.7.50] - 2026-04-08
 
 ### Changed

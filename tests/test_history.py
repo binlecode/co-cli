@@ -4,19 +4,19 @@ import asyncio
 from pathlib import Path
 
 import pytest
-
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
-    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
+from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
 from co_cli.agent import build_agent
@@ -26,24 +26,21 @@ from co_cli.context._history import (
     _CLEARED_PLACEHOLDER,
     _CONTEXT_MAX_CHARS,
     _SUMMARY_MARKER_PREFIX,
-    _find_last_turn_start,
-    FILE_TOOLS,
     OLDER_MSG_MAX_CHARS,
     _compute_compaction_boundaries,
+    _find_last_turn_start,
     _gather_compaction_context,
     _truncate_proportional,
     compact_assistant_responses,
     emergency_compact,
     group_by_turn,
     groups_to_messages,
-    truncate_tool_results,
     summarize_history_window,
+    truncate_tool_results,
 )
 from co_cli.context.orchestrate import _is_context_overflow
 from co_cli.deps import CoDeps, CoSessionState
-from tests._settings import test_settings
 from co_cli.tools.shell_backend import ShellBackend
-from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 _CONFIG = settings
 _LLM_MODEL = build_model(_CONFIG.llm)
@@ -59,7 +56,9 @@ def _make_processor_ctx() -> RunContext:
     """
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})),
+        config=test_settings(
+            llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -67,7 +66,8 @@ def _make_processor_ctx() -> RunContext:
 def _make_compact_ctx(message_history: list | None = None) -> CommandContext:
     """Real CommandContext with model for /compact dispatch tests."""
     deps = CoDeps(
-        shell=ShellBackend(), model=_LLM_MODEL,
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
         config=_CONFIG,
         session=CoSessionState(session_id="test-history"),
     )
@@ -138,7 +138,9 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     msgs = _make_messages(10)
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})),
+        config=test_settings(
+            llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        ),
         model=_LLM_MODEL,
     )
     deps.runtime.compaction_failure_count = 3
@@ -185,7 +187,9 @@ def _tool_call(name: str, call_id: str = "c1") -> ModelResponse:
 
 
 def _tool_return(name: str, content: str = "ok", call_id: str = "c1") -> ModelRequest:
-    return ModelRequest(parts=[ToolReturnPart(tool_name=name, content=content, tool_call_id=call_id)])
+    return ModelRequest(
+        parts=[ToolReturnPart(tool_name=name, content=content, tool_call_id=call_id)]
+    )
 
 
 def test_group_by_turn_single_turn():
@@ -200,9 +204,12 @@ def test_group_by_turn_single_turn():
 def test_group_by_turn_multi_turn():
     """N user turns = N groups."""
     msgs = [
-        _user("turn 1"), _assistant("resp 1"),
-        _user("turn 2"), _assistant("resp 2"),
-        _user("turn 3"), _assistant("resp 3"),
+        _user("turn 1"),
+        _assistant("resp 1"),
+        _user("turn 2"),
+        _assistant("resp 2"),
+        _user("turn 3"),
+        _assistant("resp 3"),
     ]
     groups = group_by_turn(msgs)
     assert len(groups) == 3
@@ -241,12 +248,14 @@ def test_group_by_turn_orphan_prevention():
     # Group 0 has both ToolCallPart and ToolReturnPart for read_file
     g0_has_call = any(
         isinstance(p, ToolCallPart)
-        for m in groups[0].messages if isinstance(m, ModelResponse)
+        for m in groups[0].messages
+        if isinstance(m, ModelResponse)
         for p in m.parts
     )
     g0_has_return = any(
         isinstance(p, ToolReturnPart)
-        for m in groups[0].messages if isinstance(m, ModelRequest)
+        for m in groups[0].messages
+        if isinstance(m, ModelRequest)
         for p in m.parts
     )
     assert g0_has_call and g0_has_return
@@ -288,15 +297,31 @@ def _make_tool_conversation(n_read_file: int, n_save_memory: int = 0) -> list:
     for i in range(n_read_file):
         cid = f"rf{call_id}"
         msgs.append(_user(f"read file {i}"))
-        msgs.append(ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)]))
-        msgs.append(ModelRequest(parts=[ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)]))
+        msgs.append(
+            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+        )
+        msgs.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)
+                ]
+            )
+        )
         msgs.append(_assistant(f"got file {i}"))
         call_id += 1
     for i in range(n_save_memory):
         cid = f"sm{call_id}"
         msgs.append(_user(f"save memory {i}"))
-        msgs.append(ModelResponse(parts=[ToolCallPart(tool_name="save_memory", args={}, tool_call_id=cid)]))
-        msgs.append(ModelRequest(parts=[ToolReturnPart(tool_name="save_memory", content=f"saved {i}", tool_call_id=cid)]))
+        msgs.append(
+            ModelResponse(parts=[ToolCallPart(tool_name="save_memory", args={}, tool_call_id=cid)])
+        )
+        msgs.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(tool_name="save_memory", content=f"saved {i}", tool_call_id=cid)
+                ]
+            )
+        )
         msgs.append(_assistant(f"saved {i}"))
         call_id += 1
     # Final user turn (becomes the protected tail group)
@@ -349,20 +374,36 @@ def test_current_turn_protection_multi_tool():
     """Compactable tool results in the last turn group are never cleared."""
     # Build: 7 read_file turns + 1 multi-tool final turn with 3 read_files
     msgs = []
-    call_id = 0
     for i in range(7):
-        cid = f"rf{call_id}"
+        cid = f"rf{i}"
         msgs.append(_user(f"read file {i}"))
-        msgs.append(ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)]))
-        msgs.append(ModelRequest(parts=[ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)]))
+        msgs.append(
+            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+        )
+        msgs.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(tool_name="read_file", content=f"content {i}", tool_call_id=cid)
+                ]
+            )
+        )
         msgs.append(_assistant(f"got file {i}"))
-        call_id += 1
     # Final turn with multiple tool calls (should all be protected)
     msgs.append(_user("read three files"))
     for i in range(3):
         cid = f"final{i}"
-        msgs.append(ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)]))
-        msgs.append(ModelRequest(parts=[ToolReturnPart(tool_name="read_file", content=f"final content {i}", tool_call_id=cid)]))
+        msgs.append(
+            ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id=cid)])
+        )
+        msgs.append(
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="read_file", content=f"final content {i}", tool_call_id=cid
+                    )
+                ]
+            )
+        )
     msgs.append(_assistant("done with all three"))
 
     ctx = _make_processor_ctx()
@@ -371,7 +412,8 @@ def test_current_turn_protection_multi_tool():
     # The 3 read_file returns in the last turn must be intact
     boundary = _find_last_turn_start(result)
     tail_returns = [
-        part for msg in result[boundary:]
+        part
+        for msg in result[boundary:]
         if isinstance(msg, ModelRequest)
         for part in msg.parts
         if isinstance(part, ToolReturnPart)
@@ -390,12 +432,16 @@ def _make_gather_ctx(
     session_todos: list[dict] | None = None,
 ) -> RunContext:
     """RunContext for _gather_compaction_context tests."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30}))
+    config = test_settings(
+        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+    )
     session = CoSessionState(session_id="test-gather")
     if session_todos is not None:
         session.session_todos = session_todos
     deps = CoDeps(
-        shell=ShellBackend(), config=config, session=session,
+        shell=ShellBackend(),
+        config=config,
+        session=session,
         memory_dir=memory_dir or Path("/nonexistent-test-dir"),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -405,10 +451,16 @@ def test_gather_context_extracts_file_paths():
     """_gather_compaction_context extracts file paths from ToolCallPart.args_as_dict()."""
     msgs = [
         _user("read some files"),
-        ModelResponse(parts=[
-            ToolCallPart(tool_name="read_file", args={"file_path": "/src/main.py"}, tool_call_id="c1"),
-            ToolCallPart(tool_name="edit_file", args={"path": "/src/utils.py"}, tool_call_id="c2"),
-        ]),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="read_file", args={"file_path": "/src/main.py"}, tool_call_id="c1"
+                ),
+                ToolCallPart(
+                    tool_name="edit_file", args={"path": "/src/utils.py"}, tool_call_id="c2"
+                ),
+            ]
+        ),
         _tool_return("read_file", "content", "c1"),
     ]
     ctx = _make_gather_ctx()
@@ -529,7 +581,8 @@ def test_emergency_compact_5_groups():
         for m in result
         if isinstance(m, ModelRequest)
         for p in m.parts
-        if isinstance(p, UserPromptPart) and isinstance(p.content, str)
+        if isinstance(p, UserPromptPart)
+        and isinstance(p.content, str)
         and "Earlier conversation trimmed" in p.content
     ]
     assert len(marker_texts) == 1
@@ -538,8 +591,10 @@ def test_emergency_compact_5_groups():
 def test_emergency_compact_two_groups_returns_none():
     """emergency_compact with <=2 groups → returns None."""
     msgs = [
-        _user("turn 1"), _assistant("response 1"),
-        _user("turn 2"), _assistant("response 2"),
+        _user("turn 1"),
+        _assistant("response 1"),
+        _user("turn 2"),
+        _assistant("response 2"),
     ]
     groups = group_by_turn(msgs)
     assert len(groups) == 2
@@ -560,13 +615,17 @@ def test_is_context_overflow_413():
 
 def test_is_context_overflow_400_context_length():
     """400 with context_length_exceeded in body → True."""
-    e = ModelHTTPError(status_code=400, model_name="test", body={"error": {"code": "context_length_exceeded"}})
+    e = ModelHTTPError(
+        status_code=400, model_name="test", body={"error": {"code": "context_length_exceeded"}}
+    )
     assert _is_context_overflow(e) is True
 
 
 def test_is_context_overflow_str_body():
     """400 with string body containing 'maximum context length' → True."""
-    e = ModelHTTPError(status_code=400, model_name="test", body="Error: maximum context length exceeded")
+    e = ModelHTTPError(
+        status_code=400, model_name="test", body="Error: maximum context length exceeded"
+    )
     assert _is_context_overflow(e) is True
 
 
@@ -626,7 +685,7 @@ def test_compact_assistant_responses_large_text_truncated():
     ctx = _make_processor_ctx()
     result = compact_assistant_responses(ctx, msgs)
     # Find the old response (first ModelResponse)
-    old_response = [m for m in result if isinstance(m, ModelResponse)][0]
+    old_response = next(m for m in result if isinstance(m, ModelResponse))
     old_text = old_response.parts[0].content
     assert len(old_text) <= OLDER_MSG_MAX_CHARS
     assert "[...truncated...]" in old_text
@@ -642,7 +701,11 @@ def test_compact_assistant_responses_tool_return_untouched():
     msgs = [
         ModelRequest(parts=[UserPromptPart(content=big_user_text)]),
         ModelResponse(parts=[ToolCallPart(tool_name="read_file", args={}, tool_call_id="c1")]),
-        ModelRequest(parts=[ToolReturnPart(tool_name="read_file", content=big_tool_return, tool_call_id="c1")]),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(tool_name="read_file", content=big_tool_return, tool_call_id="c1")
+            ]
+        ),
         ModelResponse(parts=[TextPart(content="done")]),
         _user("turn 2"),
         _assistant("ok"),
@@ -651,8 +714,11 @@ def test_compact_assistant_responses_tool_return_untouched():
     result = compact_assistant_responses(ctx, msgs)
     # Find the ToolReturnPart — should be untouched
     tool_returns = [
-        part for msg in result if isinstance(msg, ModelRequest)
-        for part in msg.parts if isinstance(part, ToolReturnPart)
+        part
+        for msg in result
+        if isinstance(msg, ModelRequest)
+        for part in msg.parts
+        if isinstance(part, ToolReturnPart)
     ]
     assert len(tool_returns) == 1
     assert tool_returns[0].content == big_tool_return

@@ -1,19 +1,18 @@
 """Functional tests for web intelligence tools."""
 
 import asyncio
-from pathlib import Path
 
 import pytest
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
+from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.shell_backend import ShellBackend
-from tests._settings import test_settings
 from co_cli.tools.web import _html_to_markdown, _is_content_type_allowed, web_fetch, web_search
-from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
 _AGENT = build_agent(config=settings)
 
@@ -36,10 +35,12 @@ def _make_policy_ctx(
         shell=ShellBackend(),
         config=test_settings(
             brave_search_api_key=brave_search_api_key,
-            web=test_settings().web.model_copy(update={
-                "fetch_allowed_domains": allowed_domains or [],
-                "fetch_blocked_domains": blocked_domains or [],
-            }),
+            web=test_settings().web.model_copy(
+                update={
+                    "fetch_allowed_domains": allowed_domains or [],
+                    "fetch_blocked_domains": blocked_domains or [],
+                }
+            ),
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -157,7 +158,9 @@ async def test_web_fetch_html_to_markdown():
     """
     ctx = _make_ctx()
     async with asyncio.timeout(HTTP_EXTERNAL_TIMEOUT_SECS):
-        result = await web_fetch(ctx, "https://en.wikipedia.org/wiki/Python_(programming_language)")
+        result = await web_fetch(
+            ctx, "https://en.wikipedia.org/wiki/Python_(programming_language)"
+        )
     assert not (result.metadata or {}).get("error"), f"Unexpected error: {result.return_value}"
     assert result.return_value
     assert "url" in result.metadata

@@ -1,20 +1,19 @@
 """Functional tests for check_capabilities tool."""
+
 import asyncio
-from pathlib import Path
 
 import pytest
-from pydantic_ai.usage import RunUsage
 from pydantic_ai import RunContext
-
+from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.display._core import TerminalFrontend
 from co_cli.deps import CoDeps
-from tests._settings import test_settings
-from co_cli.tools.shell_backend import ShellBackend
+from co_cli.display._core import TerminalFrontend
 from co_cli.tools.capabilities import check_capabilities
+from co_cli.tools.shell_backend import ShellBackend
 
 _AGENT = build_agent(config=settings)
 
@@ -66,8 +65,8 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     frontend = TerminalFrontend()
     tool_id = "cap1"
     deps = CoDeps(shell=ShellBackend(), config=test_settings(mcp_servers={}))
-    deps.runtime.tool_progress_callback = (
-        lambda msg, _tid=tool_id: frontend.on_tool_progress(_tid, msg)
+    deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: frontend.on_tool_progress(
+        _tid, msg
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -77,6 +76,8 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
         assert frontend.active_surface() == "tool"
         assert frontend.active_tool_messages(), "Expected tool progress to be rendered"
         assert frontend.active_tool_messages()[0] == "Doctor: checking loaded skills..."
-        assert result.return_value, "return_value missing or empty in check_capabilities ToolReturn"
+        assert result.return_value, (
+            "return_value missing or empty in check_capabilities ToolReturn"
+        )
     finally:
         frontend.cleanup()

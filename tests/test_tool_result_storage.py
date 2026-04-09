@@ -2,22 +2,20 @@
 
 from pathlib import Path
 
-import pytest
-
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
+from tests._settings import test_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
+from co_cli.deps import CoDeps
+from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_output import tool_output, tool_output_raw
 from co_cli.tools.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     TOOL_RESULT_MAX_SIZE,
     persist_if_oversized,
 )
-from co_cli.deps import CoDeps
-from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_output import tool_output, tool_output_raw
-from tests._settings import test_settings
 
 _CONFIG = settings
 _AGENT = build_agent(config=_CONFIG)

@@ -2,15 +2,14 @@
 
 from co_cli.bootstrap._check import (
     check_agent_llm,
+    check_cross_encoder,
+    check_embedder,
     check_ollama_model,
     check_reranker_llm,
-    check_embedder,
-    check_cross_encoder,
 )
 from co_cli.config._core import Settings
+from co_cli.config._knowledge import KnowledgeSettings, ModelConfig
 from co_cli.config._llm import LlmSettings
-from co_cli.config._knowledge import ModelConfig, KnowledgeSettings
-
 
 # --- LlmSettings.validate_config() (config-shape gate, no IO) ---
 
@@ -93,6 +92,7 @@ def test_check_agent_llm_ollama_unreachable_stamps_reason_unreachable() -> None:
 
 # --- check_ollama_model ---
 
+
 def test_check_ollama_model_unreachable_returns_warn() -> None:
     result = check_ollama_model("http://localhost:1", "any-model")
     assert result.status == "warn"
@@ -100,6 +100,7 @@ def test_check_ollama_model_unreachable_returns_warn() -> None:
 
 
 # --- check_reranker_llm ---
+
 
 def test_check_reranker_llm_not_configured_returns_skipped() -> None:
     config = Settings.model_construct(
@@ -148,6 +149,7 @@ def test_check_reranker_llm_ollama_unreachable_returns_warn() -> None:
 
 # --- check_embedder ---
 
+
 def test_check_embedder_provider_none_returns_skipped() -> None:
     config = Settings.model_construct(
         knowledge=KnowledgeSettings.model_construct(embedding_provider="none"),
@@ -193,6 +195,7 @@ def test_check_embedder_gemini_no_key_returns_error() -> None:
 
 # --- check_cross_encoder ---
 
+
 def test_check_cross_encoder_not_configured_returns_skipped() -> None:
     config = Settings.model_construct(
         knowledge=KnowledgeSettings.model_construct(cross_encoder_reranker_url=None),
@@ -203,7 +206,9 @@ def test_check_cross_encoder_not_configured_returns_skipped() -> None:
 
 def test_check_cross_encoder_unreachable_returns_error() -> None:
     config = Settings.model_construct(
-        knowledge=KnowledgeSettings.model_construct(cross_encoder_reranker_url="http://localhost:1/rerank"),
+        knowledge=KnowledgeSettings.model_construct(
+            cross_encoder_reranker_url="http://localhost:1/rerank"
+        ),
     )
     result = check_cross_encoder(config)
     assert result.status == "error"

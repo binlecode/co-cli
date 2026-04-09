@@ -5,19 +5,19 @@ from pathlib import Path
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    UserPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 
 from co_cli.context.session_browser import format_file_size, list_sessions
 from co_cli.context.transcript import (
+    MAX_TRANSCRIPT_READ_BYTES,
+    SKIP_PRECOMPACT_THRESHOLD,
     append_messages,
     load_transcript,
     write_compact_boundary,
-    SKIP_PRECOMPACT_THRESHOLD,
-    MAX_TRANSCRIPT_READ_BYTES,
 )
 
 
@@ -58,10 +58,10 @@ def test_round_trip_various_part_types(tmp_path: Path) -> None:
     loaded = load_transcript(sessions_dir, session_id)
 
     assert len(loaded) == len(original_messages)
-    for orig, back in zip(original_messages, loaded):
+    for orig, back in zip(original_messages, loaded, strict=False):
         assert type(orig) is type(back)
         assert len(orig.parts) == len(back.parts)
-        for op, bp in zip(orig.parts, back.parts):
+        for op, bp in zip(orig.parts, back.parts, strict=False):
             assert type(op) is type(bp)
             if hasattr(op, "content"):
                 assert op.content == bp.content
@@ -121,6 +121,7 @@ def test_append_empty_list_is_noop(tmp_path: Path) -> None:
 def test_list_sessions_sorted_by_mtime(tmp_path: Path) -> None:
     """list_sessions returns entries sorted by mtime descending with titles and file sizes."""
     import time
+
     sessions_dir = tmp_path / "sessions"
 
     msgs_a = [ModelRequest(parts=[UserPromptPart(content="fix the auth bug")])]

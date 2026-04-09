@@ -26,15 +26,17 @@ def write_todos(
     ctx: RunContext[CoDeps],
     todos: list[dict[str, Any]],
 ) -> ToolReturn:
-    """Replace the session todo list with the provided items.
+    """Replace the session todo list for tracking multi-step work.
 
-    Call this to create or update the task list for a multi-step directive.
+    When to use: proactively for any directive requiring 3+ steps or non-trivial
+    planning. Create the list before starting work, update status as each
+    sub-goal completes, and keep at most one item "in_progress" at a time.
+
+    When NOT to use: trivial single-step tasks where tracking adds no value.
+
     Rewrite the full list to update any item's status or content — this is
-    idempotent and safe to call multiple times as work progresses.
-
-    Use before starting a multi-step task, then update status fields as each
-    sub-goal completes. Before ending a turn, call read_todos to verify no
-    pending or in_progress items remain.
+    idempotent and safe to call multiple times. Before ending a turn, call
+    read_todos to verify no pending or in_progress items remain.
 
     Each item must have:
     - content (str): task description
@@ -132,11 +134,13 @@ def write_todos(
 def read_todos(
     ctx: RunContext[CoDeps],
 ) -> ToolReturn:
-    """Read the current session todo list.
+    """Read the current session todo list to verify progress and completeness.
 
-    Call before ending a turn to verify completeness — if any items are
-    still 'pending' or 'in_progress', continue working rather than responding
-    as done.
+    When to use: before ending a turn — if any items are still "pending" or
+    "in_progress", continue working rather than responding as done. Also useful
+    mid-task to check what remains.
+
+    When NOT to use: when no todo list has been created for this session.
 
     Returns a dict with:
     - display: formatted todo list — show directly to user

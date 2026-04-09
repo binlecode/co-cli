@@ -10,6 +10,7 @@ test-suite models stay loaded for the duration of the run.
 
 import asyncio
 import sys
+
 import httpx
 
 OLLAMA_HOST = "http://localhost:11434"

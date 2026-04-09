@@ -5,9 +5,10 @@ Tests exercise real load_config() — no mocks.
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
+
 import pytest
 
 from co_cli.config._core import load_config
@@ -70,25 +71,33 @@ def test_project_config_partially_overrides_mcp_server(tmp_path):
     """Project config can override one MCP server field without redefining the whole server."""
     user_settings = tmp_path / "user" / "settings.json"
     user_settings.parent.mkdir(parents=True)
-    user_settings.write_text(json.dumps({
-        "mcp_servers": {
-            "github": {
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-github"],
-                "approval": "ask",
+    user_settings.write_text(
+        json.dumps(
+            {
+                "mcp_servers": {
+                    "github": {
+                        "command": "npx",
+                        "args": ["-y", "@modelcontextprotocol/server-github"],
+                        "approval": "ask",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     project_dir = tmp_path / "project"
     (project_dir / ".co-cli").mkdir(parents=True)
-    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "mcp_servers": {
-            "github": {
-                "approval": "auto",
+    (project_dir / ".co-cli" / "settings.json").write_text(
+        json.dumps(
+            {
+                "mcp_servers": {
+                    "github": {
+                        "approval": "auto",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     settings = load_config(_user_config_path=user_settings, _project_dir=project_dir)
     github = settings.mcp_servers["github"]
@@ -102,13 +111,17 @@ def test_knowledge_llm_reranker_missing_provider_rejected(tmp_path):
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     project_config_path = project_dir / ".co-cli" / "settings.json"
-    project_config_path.write_text(json.dumps({
-        "knowledge": {
-            "llm_reranker": {
-                "model": "gemini-2.0-flash",
+    project_config_path.write_text(
+        json.dumps(
+            {
+                "knowledge": {
+                    "llm_reranker": {
+                        "model": "gemini-2.0-flash",
+                    }
+                }
             }
-        }
-    }))
+        )
+    )
 
     with pytest.raises(ValueError, match="provider"):
         load_config(
@@ -122,12 +135,16 @@ def test_invalid_web_retry_bounds_in_project_config_raise_value_error(tmp_path):
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
     project_config_path = project_dir / ".co-cli" / "settings.json"
-    project_config_path.write_text(json.dumps({
-        "web": {
-            "http_backoff_base_seconds": 10.0,
-            "http_backoff_max_seconds": 1.0,
-        }
-    }))
+    project_config_path.write_text(
+        json.dumps(
+            {
+                "web": {
+                    "http_backoff_base_seconds": 10.0,
+                    "http_backoff_max_seconds": 1.0,
+                }
+            }
+        )
+    )
 
     with pytest.raises(ValueError, match=str(project_config_path)):
         load_config(
@@ -166,7 +183,7 @@ def test_ollama_native_provider_rejected(tmp_path):
     (project_dir / ".co-cli" / "settings.json").write_text(
         json.dumps({"llm": {"provider": "ollama-native"}})
     )
-    with pytest.raises(Exception, match="ollama-openai.*gemini|literal_error"):
+    with pytest.raises(Exception, match=r"ollama-openai.*gemini|literal_error"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,
@@ -180,7 +197,7 @@ def test_old_ollama_provider_string_rejected(tmp_path):
     (project_dir / ".co-cli" / "settings.json").write_text(
         json.dumps({"llm": {"provider": "ollama"}})
     )
-    with pytest.raises(Exception, match="ollama-openai.*gemini|literal_error"):
+    with pytest.raises(Exception, match=r"ollama-openai.*gemini|literal_error"):
         load_config(
             _user_config_path=tmp_path / "nonexistent.json",
             _project_dir=project_dir,
@@ -200,16 +217,21 @@ def test_invalid_project_config_schema_names_file(tmp_path):
             _project_dir=project_dir,
         )
 
+
 def test_build_agent_does_not_mutate_gemini_api_key_env(tmp_path):
     """build_agent() must not rewrite GEMINI_API_KEY when config provides llm_api_key."""
     project_dir = tmp_path
     (project_dir / ".co-cli").mkdir()
-    (project_dir / ".co-cli" / "settings.json").write_text(json.dumps({
-        "llm": {
-            "provider": "gemini",
-            "api_key": "settings-key-wins",
-        }
-    }))
+    (project_dir / ".co-cli" / "settings.json").write_text(
+        json.dumps(
+            {
+                "llm": {
+                    "provider": "gemini",
+                    "api_key": "settings-key-wins",
+                }
+            }
+        )
+    )
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path.cwd())

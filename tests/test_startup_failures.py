@@ -38,6 +38,6 @@ def test_chat_startup_failure_exits_cleanly_without_traceback(tmp_path: Path) ->
     combined = proc.stdout + proc.stderr
     assert proc.returncode != 0, "Startup with missing Gemini key must fail"
     assert "Traceback" not in combined, "Startup failure must be rendered cleanly"
-    assert "LLM_API_KEY" in combined or "gemini" in combined.lower(), \
+    assert "LLM_API_KEY" in combined or "gemini" in combined.lower(), (
         "Startup failure must explain the missing provider credential"
-
+    )

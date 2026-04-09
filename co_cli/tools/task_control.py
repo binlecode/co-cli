@@ -30,13 +30,18 @@ async def start_background_task(
     description: str,
     working_directory: str | None = None,
 ) -> ToolReturn:
-    """Start a shell command in the background without blocking the chat session.
+    """Start a long-running background shell command without blocking the chat.
 
-    Use for long-running operations: test suites, batch processing, research scripts,
-    bulk file modifications. Returns immediately with a task_id to track progress.
+    Use background execution for genuinely long-running or parallelizable work
+    (test suites, batch processing, research scripts, bulk file modifications)
+    where the result is not needed immediately for the next step.
 
-    The command runs in a subprocess with stdout+stderr captured in memory (last 500 lines).
-    No interactive input is possible — commands that prompt for stdin will stall.
+    Prefer foreground shell execution when the very next action depends on the
+    command's output — background tasks add overhead and delay for short commands.
+
+    The command runs in a subprocess with stdout+stderr captured in memory
+    (last 500 lines). No interactive input is possible — commands that prompt
+    for stdin will stall; always use foreground execution for interactive commands.
 
     Args:
         command: Shell command to run (e.g. "uv run pytest", "grep -r foo src/").
@@ -74,9 +79,15 @@ async def check_task_status(
     task_id: str,
     tail_lines: int = 20,
 ) -> ToolReturn:
-    """Check the status and recent output of a background task.
+    """Check status and recent output of a specific background task by ID.
 
-    Returns status, duration, exit code, and the last N lines of output.
+    Use for targeted inspection of a known task — returns status, duration,
+    exit code, and the last N lines of output. Prefer this over
+    list_background_tasks when the task ID is already known.
+
+    Do not poll repeatedly without reason; the surrounding workflow notifies
+    on task completion. Check only when you need to inspect progress or
+    retrieve output for a decision.
 
     Args:
         task_id: The task ID returned by start_background_task.
@@ -131,7 +142,11 @@ async def cancel_background_task(
     ctx: RunContext[CoDeps],
     task_id: str,
 ) -> ToolReturn:
-    """Cancel a running background task (sends SIGTERM, then SIGKILL after 200ms).
+    """Cancel a running background task to stop wasted work (SIGTERM, then SIGKILL).
+
+    Use when the task is no longer needed, is clearly stuck, or should be
+    stopped to free resources. Do not cancel merely because a task is still
+    running normally — let it finish if the result is still wanted.
 
     No-op if the task has already completed, failed, or been cancelled.
 
@@ -170,7 +185,11 @@ async def list_background_tasks(
     ctx: RunContext[CoDeps],
     status_filter: str | None = None,
 ) -> ToolReturn:
-    """List background tasks, optionally filtered by status.
+    """List all background tasks to discover active work or recover a task ID.
+
+    Use to find task IDs or get a quick overview of running and completed work.
+    Prefer check_task_status for detailed inspection of one known task —
+    listing is for discovery, not deep status checks.
 
     Args:
         status_filter: Optional status to filter by: "running", "completed",

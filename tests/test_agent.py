@@ -1,19 +1,21 @@
 """Functional tests for agent factory — tool registration, approval wiring, and visibility policy."""
 
-from co_cli.agent import build_agent, build_tool_registry
+from tests._settings import test_settings
+
 from co_cli._model_factory import build_model
+from co_cli.agent import build_agent, build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
-from tests._settings import test_settings
-from co_cli.deps import VisibilityPolicy, ToolSource
-
+from co_cli.deps import ToolSource, VisibilityPolicy
 
 # Config with fake integration paths so domain tools are always registered in tests,
 # regardless of whether the developer's local settings have these paths configured.
-_CONFIG_WITH_INTEGRATIONS = settings.model_copy(update={
-    "obsidian_vault_path": "/fake/vault",
-    "google_credentials_path": "/fake/creds.json",
-})
+_CONFIG_WITH_INTEGRATIONS = settings.model_copy(
+    update={
+        "obsidian_vault_path": "/fake/vault",
+        "google_credentials_path": "/fake/creds.json",
+    }
+)
 
 
 def test_build_agent_registers_all_tools():
@@ -67,7 +69,9 @@ def test_tool_registry_is_shared_across_agent_types():
 
 def test_build_agent_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set."""
-    result = build_tool_registry(test_settings(obsidian_vault_path=None, google_credentials_path=None))
+    result = build_tool_registry(
+        test_settings(obsidian_vault_path=None, google_credentials_path=None)
+    )
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
     assert "search_drive_files" not in result.tool_index
@@ -79,7 +83,9 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
 
 def test_tool_registry_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set (any agent type)."""
-    result = build_tool_registry(test_settings(obsidian_vault_path=None, google_credentials_path=None))
+    result = build_tool_registry(
+        test_settings(obsidian_vault_path=None, google_credentials_path=None)
+    )
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
 
@@ -101,8 +107,14 @@ def test_tool_index_visibility_policy_metadata():
 
     # Spot-check always-visible tools
     # search_tools is not in tool_index — it is the SDK's built-in ToolSearchToolset (BC-6)
-    for name in ("check_capabilities", "read_file", "web_search",
-                  "run_shell_command", "list_memories", "search_knowledge"):
+    for name in (
+        "check_capabilities",
+        "read_file",
+        "web_search",
+        "run_shell_command",
+        "list_memories",
+        "search_knowledge",
+    ):
         assert idx[name].visibility == VisibilityPolicy.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
@@ -127,27 +139,37 @@ def test_tool_index_visibility_policy_metadata():
 
 def test_toolinfo_enum_construction():
     """ToolInfo accepts VisibilityPolicy/ToolSource enums."""
-    from co_cli.deps import ToolInfo, VisibilityPolicy, ToolSource
+    from co_cli.deps import ToolInfo, ToolSource, VisibilityPolicy
 
     # New enum API works
     info = ToolInfo(
-        name="x", description="x", approval=False,
-        source=ToolSource.NATIVE, visibility=VisibilityPolicy.ALWAYS,
+        name="x",
+        description="x",
+        approval=False,
+        source=ToolSource.NATIVE,
+        visibility=VisibilityPolicy.ALWAYS,
     )
     assert info.visibility == VisibilityPolicy.ALWAYS
     assert info.source == ToolSource.NATIVE
 
     # Old boolean kwargs are rejected
     import pytest
+
     with pytest.raises(TypeError):
         ToolInfo(
-            name="x", description="x", approval=False,
-            source=ToolSource.NATIVE, always_visibility=True,
+            name="x",
+            description="x",
+            approval=False,
+            source=ToolSource.NATIVE,
+            always_visibility=True,
         )
     with pytest.raises(TypeError):
         ToolInfo(
-            name="x", description="x", approval=False,
-            source=ToolSource.NATIVE, should_defer=True,
+            name="x",
+            description="x",
+            approval=False,
+            source=ToolSource.NATIVE,
+            should_defer=True,
         )
 
 

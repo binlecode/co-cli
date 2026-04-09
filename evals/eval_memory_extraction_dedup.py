@@ -19,7 +19,6 @@ Usage:
 
 import asyncio
 import os
-import pathlib
 import sys
 import tempfile
 import time
@@ -28,29 +27,24 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from evals._common import make_eval_deps, make_eval_settings
+from evals._fixtures import seed_memory, single_user_turn
+from evals._frontend import CapturingFrontend, SilentFrontend
+from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
+from evals._tools import extract_tool_calls
 
-from co_cli.config._core import settings
-from co_cli._model_factory import build_model, LlmModel
+from co_cli._model_factory import build_model
 from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.memory._extractor import (
-    ExtractionResult,
-    MemoryCandidate,
     analyze_for_signals,
-    fire_and_forget_extraction,
     drain_pending_extraction,
+    fire_and_forget_extraction,
 )
 from co_cli.memory._lifecycle import persist_memory
 from co_cli.memory._save import build_memory_manifest, check_and_save
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.memory import MemoryEntry
-
-from evals._fixtures import seed_memory, single_user_turn
-from evals._frontend import CapturingFrontend, SilentFrontend
-from evals._timeouts import EVAL_TURN_TIMEOUT_SECS
-from evals._common import make_eval_deps, make_eval_settings
-from evals._tools import extract_tool_calls
-
 
 # ---------------------------------------------------------------------------
 # Setup
@@ -94,47 +88,61 @@ EXTRACTION_CASES: list[ExtractionCase] = [
     ExtractionCase(
         id="feedback-high-correction",
         user_message="don't use trailing comments in the code",
-        expect_found=True, expect_tag="feedback", expect_confidence="high",
+        expect_found=True,
+        expect_tag="feedback",
+        expect_confidence="high",
         description="Explicit correction → feedback, high",
     ),
     ExtractionCase(
         id="feedback-high-confirmed",
         user_message="yeah the single bundled PR was the right call here",
-        expect_found=True, expect_tag="feedback", expect_confidence="high",
+        expect_found=True,
+        expect_tag="feedback",
+        expect_confidence="high",
         description="Confirmed approach → feedback, high",
     ),
     # --- feedback: preferences (low) ---
     ExtractionCase(
         id="feedback-low-preference",
         user_message="I kind of prefer shorter responses",
-        expect_found=True, expect_tag="user|feedback", expect_confidence="low",
+        expect_found=True,
+        expect_tag="user|feedback",
+        expect_confidence="low",
         description="Hedged preference → user or feedback, low",
     ),
     # --- user: facts (high) ---
     ExtractionCase(
         id="user-high-role",
         user_message="I'm a data scientist investigating what logging we have in place",
-        expect_found=True, expect_tag="user", expect_confidence="high",
+        expect_found=True,
+        expect_tag="user",
+        expect_confidence="high",
         description="Stated role → user, high",
     ),
     # --- project: decisions (high) ---
     ExtractionCase(
         id="project-high-decision",
         user_message="we decided to use PostgreSQL from now on",
-        expect_found=True, expect_tag="project", expect_confidence="high",
+        expect_found=True,
+        expect_tag="project",
+        expect_confidence="high",
         description="Team decision → project, high",
     ),
     ExtractionCase(
         id="project-high-migration",
         user_message="we switched from REST to GraphQL last month",
-        expect_found=True, expect_tag="project", expect_confidence="high",
+        expect_found=True,
+        expect_tag="project",
+        expect_confidence="high",
         description="Migration → project, high",
     ),
     # --- reference: pointers (high) ---
     ExtractionCase(
         id="reference-high-tracker",
         user_message="check the Linear project INGEST if you want context on pipeline bugs",
-        expect_found=True, expect_tag="reference", expect_confidence="high",
+        expect_found=True,
+        expect_tag="reference",
+        expect_confidence="high",
         description="External system pointer → reference, high",
     ),
     # --- multi-candidate: rich conversation with multiple signals ---
@@ -144,26 +152,34 @@ EXTRACTION_CASES: list[ExtractionCase] = [
             "I'm a backend engineer. We just switched from MySQL to PostgreSQL last week. "
             "Oh and bugs are tracked in the Linear project PLATFORM."
         ),
-        expect_found=True, expect_tag="multi", expect_confidence=None,
+        expect_found=True,
+        expect_tag="multi",
+        expect_confidence=None,
         description="Rich message with 3 signals → multiple candidates",
     ),
     # --- guardrails: no signal ---
     ExtractionCase(
         id="none-capability",
         user_message="does Python support pattern matching syntax?",
-        expect_found=False, expect_tag=None, expect_confidence=None,
+        expect_found=False,
+        expect_tag=None,
+        expect_confidence=None,
         description="Capability question → no signal",
     ),
     ExtractionCase(
         id="none-sensitive",
         user_message="my API key is sk-1234, please don't save that anywhere",
-        expect_found=False, expect_tag=None, expect_confidence=None,
+        expect_found=False,
+        expect_tag=None,
+        expect_confidence=None,
         description="Sensitive content → no signal",
     ),
     ExtractionCase(
         id="none-neutral",
         user_message="what does this error mean?",
-        expect_found=False, expect_tag=None, expect_confidence=None,
+        expect_found=False,
+        expect_tag=None,
+        expect_confidence=None,
         description="General question → no signal",
     ),
 ]
@@ -182,7 +198,14 @@ async def run_extraction_case(case: ExtractionCase, deps: CoDeps) -> dict[str, A
             "count": len(extraction.memories),
             "all_tags": sorted({m.tag for m in extraction.memories}),
         }
-    return {"found": False, "tag": None, "confidence": None, "candidate": None, "count": 0, "all_tags": []}
+    return {
+        "found": False,
+        "tag": None,
+        "confidence": None,
+        "candidate": None,
+        "count": 0,
+        "all_tags": [],
+    }
 
 
 # =========================================================================
@@ -265,8 +288,12 @@ async def run_slug_not_found_case(tmp_dir: Path) -> dict[str, Any]:
     before_count = len(list(memory_dir.glob("*.md")))
 
     result = await persist_memory(
-        deps, "User prefers pytest for all testing purposes",
-        ["preference"], None, model=_LLM_MODEL.model, model_settings=NOREASON_SETTINGS,
+        deps,
+        "User prefers pytest for all testing purposes",
+        ["preference"],
+        None,
+        model=_LLM_MODEL.model,
+        model_settings=NOREASON_SETTINGS,
     )
 
     after_count = len(list(memory_dir.glob("*.md")))
@@ -400,7 +427,9 @@ async def run_fire_and_forget_low_confidence(tmp_dir: Path) -> dict[str, Any]:
     return {
         "files_written": len(files),
         "status_messages": list(frontend.statuses),
-        "approval_calls": list(frontend.approval_calls) if hasattr(frontend, "approval_calls") else [],
+        "approval_calls": list(frontend.approval_calls)
+        if hasattr(frontend, "approval_calls")
+        else [],
     }
 
 
@@ -448,7 +477,11 @@ INLINE_CASES: list[InlineSaveCase] = [
         id="inline-contradiction",
         prompt="We've moved everything to PostgreSQL now, that's our standard",
         seeded_memories=[
-            {"content": "User prefers MySQL for all database work", "tags": ["preference"], "days_ago": 5},
+            {
+                "content": "User prefers MySQL for all database work",
+                "tags": ["preference"],
+                "days_ago": 5,
+            },
         ],
         expect_save=True,
         expected_keywords=("postgresql", "postgres"),
@@ -458,7 +491,11 @@ INLINE_CASES: list[InlineSaveCase] = [
         id="inline-dedup-no-duplicate",
         prompt="We use PostgreSQL for everything, that's our standard database",
         seeded_memories=[
-            {"content": "User's team uses PostgreSQL as their standard database", "tags": ["project"], "days_ago": 1},
+            {
+                "content": "User's team uses PostgreSQL as their standard database",
+                "tags": ["project"],
+                "days_ago": 1,
+            },
         ],
         expect_save=True,
         expected_keywords=("postgresql", "postgres"),
@@ -481,8 +518,13 @@ async def run_inline_case(case: InlineSaveCase) -> dict[str, Any]:
 
             if case.seeded_memories:
                 for idx, mem in enumerate(case.seeded_memories, start=1):
-                    seed_memory(memory_dir, idx, mem["content"],
-                                days_ago=mem.get("days_ago", 0), tags=mem.get("tags"))
+                    seed_memory(
+                        memory_dir,
+                        idx,
+                        mem["content"],
+                        days_ago=mem.get("days_ago", 0),
+                        tags=mem.get("tags"),
+                    )
 
             before_count = len(list(memory_dir.glob("*.md")))
 
@@ -571,7 +613,9 @@ async def main() -> int:
                 print(f"PASS (count={count} tags={all_tags})")
                 passed += 1
             else:
-                print(f"FAIL (count={count} tags={all_tags}, expected ≥2 candidates with ≥2 distinct types)")
+                print(
+                    f"FAIL (count={count} tags={all_tags}, expected ≥2 candidates with ≥2 distinct types)"
+                )
             continue
 
         found_ok = scores["found"] == case.expect_found
@@ -580,11 +624,17 @@ async def main() -> int:
             tag_ok = scores["tag"] in case.expect_tag.split("|")
         else:
             tag_ok = scores["tag"] is None
-        conf_ok = scores["confidence"] == case.expect_confidence if case.expect_found else scores["confidence"] is None
+        conf_ok = (
+            scores["confidence"] == case.expect_confidence
+            if case.expect_found
+            else scores["confidence"] is None
+        )
         ok = found_ok and tag_ok and conf_ok
 
         if ok:
-            detail = f" tag={scores['tag']} conf={scores['confidence']}" if case.expect_found else ""
+            detail = (
+                f" tag={scores['tag']} conf={scores['confidence']}" if case.expect_found else ""
+            )
             print(f"PASS{detail}")
             passed += 1
         else:
@@ -594,7 +644,9 @@ async def main() -> int:
             if not tag_ok:
                 failures.append(f"tag={scores['tag']} (expect {case.expect_tag})")
             if not conf_ok:
-                failures.append(f"confidence={scores['confidence']} (expect {case.expect_confidence})")
+                failures.append(
+                    f"confidence={scores['confidence']} (expect {case.expect_confidence})"
+                )
             print(f"FAIL ({', '.join(failures)})")
             if scores.get("candidate"):
                 print(f"      Candidate: {scores['candidate']}")
@@ -630,7 +682,11 @@ async def main() -> int:
 
         # 2b: Slug not found — save agent returns UPDATE but file is gone
         total += 1
-        print("    [dedup-slug-gone] UPDATE target deleted → falls through to SAVE_NEW", end=" ", flush=True)
+        print(
+            "    [dedup-slug-gone] UPDATE target deleted → falls through to SAVE_NEW",
+            end=" ",
+            flush=True,
+        )
         try:
             scores = await run_slug_not_found_case(tmp_path)
         except Exception as exc:
@@ -639,10 +695,14 @@ async def main() -> int:
             if scores["result"] == "SKIP":
                 print(f"SKIP ({scores['reason']})")
             elif scores["new_file_created"]:
-                print(f"PASS (files: {scores['before_count']}→{scores['after_count']}, action={scores['action']})")
+                print(
+                    f"PASS (files: {scores['before_count']}→{scores['after_count']}, action={scores['action']})"
+                )
                 passed += 1
             else:
-                print(f"FAIL (files: {scores['before_count']}→{scores['after_count']}, expected new file)")
+                print(
+                    f"FAIL (files: {scores['before_count']}→{scores['after_count']}, expected new file)"
+                )
 
         # --- Phase 3: Fire-and-forget ---
         print("\n  Phase 3: Fire-and-Forget Async Lifecycle")
@@ -650,7 +710,11 @@ async def main() -> int:
 
         # 3a: Novel save
         total += 1
-        print("    [ff-novel] background extraction → new file with correct content", end=" ", flush=True)
+        print(
+            "    [ff-novel] background extraction → new file with correct content",
+            end=" ",
+            flush=True,
+        )
         try:
             scores = await run_fire_and_forget_novel(tmp_path)
         except Exception as exc:
@@ -692,13 +756,16 @@ async def main() -> int:
                 passed += 1
             else:
                 print(
-                    f"FAIL (files={scores['files_written']}, "
-                    f"statuses={scores['status_messages']})"
+                    f"FAIL (files={scores['files_written']}, statuses={scores['status_messages']})"
                 )
 
         # 3c: Collision — update existing instead of duplicate
         total += 1
-        print("    [ff-collision] background extraction → updates existing, no duplicate", end=" ", flush=True)
+        print(
+            "    [ff-collision] background extraction → updates existing, no duplicate",
+            end=" ",
+            flush=True,
+        )
         try:
             scores = await run_fire_and_forget_collision(tmp_path)
         except Exception as exc:
@@ -745,8 +812,7 @@ async def main() -> int:
                 passed += 1
             else:
                 print(
-                    f"FAIL (files={scores['files_written']}, "
-                    f"statuses={scores['status_messages']})"
+                    f"FAIL (files={scores['files_written']}, statuses={scores['status_messages']})"
                 )
 
     # --- Phase 4: Inline saves via run_turn ---
@@ -770,11 +836,15 @@ async def main() -> int:
             keyword_ok = scores["keyword_found"]
             no_dup = scores["after_count"] <= scores["before_count"]
             if save_ok and keyword_ok and no_dup:
-                print(f"PASS (save called, files: {scores['before_count']}→{scores['after_count']}, deduped)")
+                print(
+                    f"PASS (save called, files: {scores['before_count']}→{scores['after_count']}, deduped)"
+                )
                 passed += 1
             elif save_ok and keyword_ok and not no_dup:
                 # Model saved as new — acceptable miss per PO-R-2
-                print(f"SOFT PASS (files: {scores['before_count']}→{scores['after_count']}, model missed dedup)")
+                print(
+                    f"SOFT PASS (files: {scores['before_count']}→{scores['after_count']}, model missed dedup)"
+                )
                 passed += 1
             else:
                 failures = []
@@ -795,7 +865,11 @@ async def main() -> int:
             failures.append("expected keyword not found in saved content")
 
         if not failures:
-            detail = f" (save_memory x{scores['save_count']})" if scores["save_called"] else " (no save — correct)"
+            detail = (
+                f" (save_memory x{scores['save_count']})"
+                if scores["save_called"]
+                else " (no save — correct)"
+            )
             print(f"PASS{detail}")
             passed += 1
         else:

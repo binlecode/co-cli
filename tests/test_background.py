@@ -7,22 +7,19 @@ and the four tool function signatures. All tests spawn real subprocesses (no moc
 from __future__ import annotations
 
 import asyncio
-from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 
-from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task, kill_task
-from co_cli.deps import CoSessionState
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+from tests._timeouts import SUBPROCESS_START_TIMEOUT_SECS, SUBPROCESS_TIMEOUT_SECS
 
-from tests._timeouts import SUBPROCESS_TIMEOUT_SECS, SUBPROCESS_START_TIMEOUT_SECS
+from co_cli.deps import CoSessionState
+from co_cli.tools.background import BackgroundTaskState, _make_task_id, kill_task, spawn_task
 
 
 def _fresh_session() -> CoSessionState:
@@ -36,13 +33,14 @@ def _make_state(command: str, cwd: str = "/tmp", description: str = "") -> Backg
         cwd=cwd,
         description=description,
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
 
 
 # ---------------------------------------------------------------------------
 # BackgroundTaskState defaults
 # ---------------------------------------------------------------------------
+
 
 def test_task_state_defaults():
     state = BackgroundTaskState(
@@ -51,7 +49,7 @@ def test_task_state_defaults():
         cwd="/tmp",
         description="test",
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     assert state.output_lines.maxlen == 500
     assert state.process is None
@@ -71,6 +69,7 @@ def test_make_task_id_unique():
 # ---------------------------------------------------------------------------
 # spawn_task — process spawning and output capture
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_spawn_and_complete():
@@ -127,7 +126,7 @@ async def test_spawn_invalid_command():
         cwd="/nonexistent_dir_xyz",
         description="",
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     session.background_tasks[state.task_id] = state
 
@@ -164,6 +163,7 @@ async def test_output_captured_in_deque():
 # ---------------------------------------------------------------------------
 # kill_task — cancellation
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_kill_running_task():
@@ -224,12 +224,13 @@ async def test_kill_already_completed_task():
 # Tool function signatures (contract preservation)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_tool_start_background_task_signature():
     """start_background_task returns ToolReturn with task_id and status keys."""
-    from pydantic_ai import RunContext
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import start_background_task
 
@@ -259,11 +260,11 @@ async def test_tool_start_background_task_signature():
 @pytest.mark.asyncio
 async def test_tool_check_task_status_signature():
     """check_task_status returns ToolReturn with expected keys."""
-    from pydantic_ai import RunContext
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import start_background_task, check_task_status
+    from co_cli.tools.task_control import check_task_status, start_background_task
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
@@ -294,9 +295,9 @@ async def test_tool_check_task_status_signature():
 @pytest.mark.asyncio
 async def test_tool_check_task_status_not_found():
     """check_task_status returns not_found for unknown task_id."""
-    from pydantic_ai import RunContext
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
     from co_cli.tools.task_control import check_task_status
 
@@ -312,11 +313,11 @@ async def test_tool_check_task_status_not_found():
 @pytest.mark.asyncio
 async def test_tool_cancel_background_task_signature():
     """cancel_background_task returns ToolReturn with cancelled status."""
-    from pydantic_ai import RunContext
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import start_background_task, cancel_background_task
+    from co_cli.tools.task_control import cancel_background_task, start_background_task
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
@@ -348,11 +349,11 @@ async def test_tool_cancel_background_task_signature():
 @pytest.mark.asyncio
 async def test_tool_list_background_tasks_signature():
     """list_background_tasks returns ToolReturn with tasks and count keys."""
-    from pydantic_ai import RunContext
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import start_background_task, list_background_tasks
+    from co_cli.tools.task_control import list_background_tasks, start_background_task
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
@@ -377,6 +378,7 @@ async def test_tool_list_background_tasks_signature():
 
     # Cleanup
     from co_cli.tools.background import kill_task
+
     for s in deps.session.background_tasks.values():
         if s.status == "running":
             await kill_task(s)
@@ -385,6 +387,7 @@ async def test_tool_list_background_tasks_signature():
 # ---------------------------------------------------------------------------
 # Session-scoped: no files written
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_no_file_io(tmp_path):
@@ -414,12 +417,14 @@ async def test_no_file_io(tmp_path):
 # Slash command integration
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_slash_background_command():
     """Slash /background spawns a task and stores it in session state."""
-    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.commands._commands import BUILTIN_COMMANDS, CommandContext
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):
@@ -434,6 +439,7 @@ async def test_slash_background_command():
 
         # Cleanup
         from co_cli.tools.background import kill_task
+
         for s in deps.session.background_tasks.values():
             if s.process is not None:
                 await kill_task(s)
@@ -445,12 +451,14 @@ async def test_slash_background_command():
 @pytest.mark.asyncio
 async def test_slash_tasks_command():
     """Slash /tasks lists tasks from session state."""
-    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
-    from co_cli.deps import CoDeps
+    from datetime import datetime
+
     from tests._settings import test_settings
-    from co_cli.tools.shell_backend import ShellBackend
-    from datetime import datetime, timezone
+
+    from co_cli.commands._commands import BUILTIN_COMMANDS, CommandContext
+    from co_cli.deps import CoDeps
     from co_cli.tools.background import BackgroundTaskState, _make_task_id
+    from co_cli.tools.shell_backend import ShellBackend
 
     deps = CoDeps(shell=ShellBackend(), config=test_settings())
     state = BackgroundTaskState(
@@ -459,7 +467,7 @@ async def test_slash_tasks_command():
         cwd="/tmp",
         description="",
         status="completed",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     deps.session.background_tasks[state.task_id] = state
 
@@ -473,9 +481,10 @@ async def test_slash_tasks_command():
 @pytest.mark.asyncio
 async def test_slash_cancel_command():
     """Slash /cancel cancels a running task in session state."""
-    from co_cli.commands._commands import CommandContext, BUILTIN_COMMANDS
-    from co_cli.deps import CoDeps
     from tests._settings import test_settings
+
+    from co_cli.commands._commands import BUILTIN_COMMANDS, CommandContext
+    from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend
 
     async with asyncio.timeout(SUBPROCESS_TIMEOUT_SECS):

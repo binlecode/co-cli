@@ -19,25 +19,23 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from difflib import SequenceMatcher
 from time import perf_counter
 
 import httpx
-from difflib import SequenceMatcher
-
+from evals._ollama import ensure_ollama_warm
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_SUMMARIZATION_TIMEOUT_SECS
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from co_cli._model_factory import build_model, LlmModel
+from co_cli._model_factory import LlmModel, build_model
 from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.config._core import settings as _settings
 from co_cli.context.summarization import summarize_messages
 
-from evals._ollama import ensure_ollama_warm
-from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_SUMMARIZATION_TIMEOUT_SECS
 _THINK_MODEL = "qwen3.5:35b-a3b-think"
 _SYSTEM = (
     "You are a direct and helpful assistant. "
@@ -68,6 +66,7 @@ _NOREASON_CALL_TIMEOUT_S = 60
 # ---------------------------------------------------------------------------
 # Section 1: Think vs noreason contrast cases
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Case:
@@ -156,7 +155,9 @@ async def _call_model(
             for part in response.parts
             if type(part).__name__ == "TextPart"
         ).strip()
-        thinking_parts = [type(part).__name__ for part in response.parts if "Thinking" in type(part).__name__]
+        thinking_parts = [
+            type(part).__name__ for part in response.parts if "Thinking" in type(part).__name__
+        ]
         assert text, f"{model_name} returned empty final content"
         return text, thinking_parts
     finally:
@@ -166,16 +167,14 @@ async def _call_model(
 def _assert_case(case: Case, baseline_text: str, noreason_text: str) -> None:
     if case.check == "exact":
         assert _normalize(noreason_text) == "HELLO", (
-            f"{case.id}: expected exact HELLO\n"
-            f"noreason={noreason_text!r}"
+            f"{case.id}: expected exact HELLO\nnoreason={noreason_text!r}"
         )
         return
 
     if case.check == "json":
         noreason_obj = json.loads(noreason_text)
         assert set(noreason_obj.keys()) == {"city", "country"}, (
-            f"{case.id}: wrong json keys\n"
-            f"noreason={noreason_obj!r}"
+            f"{case.id}: wrong json keys\nnoreason={noreason_obj!r}"
         )
         return
 
@@ -190,8 +189,7 @@ def _assert_case(case: Case, baseline_text: str, noreason_text: str) -> None:
         )
     else:
         assert "<think>" not in noreason_text.lower(), (
-            f"{case.id}: noreason output leaked think tags\n"
-            f"noreason={noreason_text!r}"
+            f"{case.id}: noreason output leaked think tags\nnoreason={noreason_text!r}"
         )
 
 
@@ -253,6 +251,7 @@ async def _run_noreason_case(case: Case) -> None:
 # Section 2: Production summarization pipeline integration
 # ---------------------------------------------------------------------------
 
+
 def _build_llm_model() -> LlmModel:
     """Build an LlmModel from the real settings via build_model()."""
     return build_model(_settings.llm)
@@ -274,7 +273,9 @@ async def _check_summarization_pipeline() -> None:
     assert llm_model.model is not None
 
     messages: list[ModelMessage] = [
-        ModelRequest(parts=[UserPromptPart(content="Docker is a container runtime and packaging tool.")]),
+        ModelRequest(
+            parts=[UserPromptPart(content="Docker is a container runtime and packaging tool.")]
+        ),
         ModelRequest(parts=[UserPromptPart(content="Summarize in one short sentence.")]),
     ]
     async with asyncio.timeout(EVAL_SUMMARIZATION_TIMEOUT_SECS):
@@ -287,6 +288,7 @@ async def _check_summarization_pipeline() -> None:
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
+
 
 def _require_ollama_provider() -> bool:
     if _settings.llm.provider != "ollama-openai":

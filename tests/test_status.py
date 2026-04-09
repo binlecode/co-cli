@@ -81,7 +81,9 @@ def test_check_security_project_config_shell_wildcard(tmp_path):
 def test_check_security_no_wildcard_when_safe_commands_normal(tmp_path):
     """shell.safe_commands without '*' → no wildcard finding."""
     p = tmp_path / "settings.json"
-    p.write_text(json.dumps({"shell": {"safe_commands": ["ls", "cat", "git status"]}}), encoding="utf-8")
+    p.write_text(
+        json.dumps({"shell": {"safe_commands": ["ls", "cat", "git status"]}}), encoding="utf-8"
+    )
     findings = check_security(_user_config_path=p, _project_config_path=None)
     wildcard_findings = [f for f in findings if "wildcard" in f.check_id]
     assert wildcard_findings == []

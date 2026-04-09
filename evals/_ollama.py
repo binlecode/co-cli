@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import httpx
-from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS, EVAL_BENCHMARK_TIMEOUT_SECS
-
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_PROBE_TIMEOUT_SECS
 
 from co_cli.config._llm import DEFAULT_LLM_HOST
 

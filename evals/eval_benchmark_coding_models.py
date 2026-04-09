@@ -2,14 +2,14 @@
 """Benchmark custom Ollama coding models across context sizes."""
 
 import argparse
-from evals._timeouts import EVAL_PROBE_TIMEOUT_SECS, EVAL_BENCHMARK_TIMEOUT_SECS
-
+import datetime
 import json
+import logging
+import os
 import sys
 import time
-import logging
-import datetime
-import os
+
+from evals._timeouts import EVAL_BENCHMARK_TIMEOUT_SECS, EVAL_PROBE_TIMEOUT_SECS
 
 try:
     import httpx
@@ -48,7 +48,9 @@ def run_benchmark(
     ttft = None
 
     try:
-        with httpx.stream("POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS) as response:
+        with httpx.stream(
+            "POST", url, json=payload, timeout=EVAL_BENCHMARK_TIMEOUT_SECS
+        ) as response:
             response.raise_for_status()
 
             for line in response.iter_lines():
@@ -110,13 +112,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Benchmark Ollama coding models with different ctx sizes."
     )
-    parser.add_argument(
-        "--host", default="http://localhost:11434", help="Ollama host URL"
-    )
+    parser.add_argument("--host", default="http://localhost:11434", help="Ollama host URL")
     parser.add_argument("--model", default="qwen3.5:35b-a3b-code", help="Model to test")
-    parser.add_argument(
-        "--debug", action="store_true", help="Enable debug tracelogging"
-    )
+    parser.add_argument("--debug", action="store_true", help="Enable debug tracelogging")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -126,7 +124,9 @@ def main():
     )
 
     try:
-        httpx.get(f"{args.host.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS).raise_for_status()
+        httpx.get(
+            f"{args.host.rstrip('/')}/api/tags", timeout=EVAL_PROBE_TIMEOUT_SECS
+        ).raise_for_status()
     except Exception as e:
         print(f"SKIP: Ollama unavailable at {args.host} - {e}")
         sys.exit(0)
@@ -170,25 +170,23 @@ def main():
     report_path = "docs/REPORT-benchmark-qwen35-ctx-sizes.md"
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    report_content = f"# REPORT: benchmark-qwen35-ctx-sizes\n\n"
+    report_content = "# REPORT: benchmark-qwen35-ctx-sizes\n\n"
     report_content += f"**Model tested**: `{model}`\n"
-    report_content += f"**Context Sizes**: 64k (65536) vs 128k (131072)\n"
+    report_content += "**Context Sizes**: 64k (65536) vs 128k (131072)\n"
     report_content += f"**Date**: {date_str}\n\n"
-    report_content += f"## Objective\n\n"
+    report_content += "## Objective\n\n"
     report_content += "Evaluate the memory efficiency and generation performance (TTFT, throughput) of the `qwen3.5:35b-a3b-code` model under different context window sizes (64k vs 128k). Given the constraint of sharing 128GB unified RAM between a coder, a thinker, and a non-thinker (instruct) model, we must find the optimal context window tuning to maximize performance while preventing out-of-memory overhead during KV cache allocation.\n\n"
-    report_content += f"## 1. Quantitative Performance (Hardware Inference)\n\n"
-    report_content += f"### Results Summary\n\n"
-    report_content += f"| Context Size | VRAM Usage (GB) | Task | Throughput (tok/s) | Total Time (s) | TTFT (s) | Tokens |\n"
-    report_content += f"|--------------|-----------------|------|--------------------|----------------|----------|--------|\n"
+    report_content += "## 1. Quantitative Performance (Hardware Inference)\n\n"
+    report_content += "### Results Summary\n\n"
+    report_content += "| Context Size | VRAM Usage (GB) | Task | Throughput (tok/s) | Total Time (s) | TTFT (s) | Tokens |\n"
+    report_content += "|--------------|-----------------|------|--------------------|----------------|----------|--------|\n"
 
     for r in results:
         ctx_label = "64k" if r["ctx_size"] == 65536 else "128k"
         report_content += f"| {ctx_label} | {r.get('vram_gb', 0):.2f} GB | {r['task']} | {r['tps']:.2f} | {r['total_time']:.2f} | {r['ttft']:.2f} | {r['eval_count']} |\n"
 
-    report_content += (
-        f"\n## 2. Qualitative Findings\n\n(To be analyzed based on evals)\n\n"
-    )
-    report_content += f"\n## Final Recommendations\n\n(To be analyzed based on evals)\n"
+    report_content += "\n## 2. Qualitative Findings\n\n(To be analyzed based on evals)\n\n"
+    report_content += "\n## Final Recommendations\n\n(To be analyzed based on evals)\n"
 
     # Make docs dir if not exists
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
