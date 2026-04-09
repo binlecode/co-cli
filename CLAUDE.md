@@ -26,7 +26,7 @@ See `docs/DESIGN-system.md` for architecture, `CoDeps`, capability surface, and 
 
 ### Knowledge System
 
-All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs via `KnowledgeIndex` in `search.db`. See `docs/DESIGN-context.md` for the full schema, tool API, lifecycle, and work record provenance model.
+All knowledge is dynamic, loaded on-demand via tools, and never baked into the system prompt. Flat `.co-cli/memory/*.md` files with YAML frontmatter store both memories (`kind: memory`) and articles (`kind: article`). FTS5 (BM25) search runs in `search.db`. See `docs/DESIGN-context.md` for the full schema, tool API, lifecycle, and work record provenance model.
 
 ## Engineering Rules
 
@@ -39,15 +39,15 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
 - **Class naming conventions** (enforced — violations block merge): every public type must use one of these suffixes: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config`/`*Settings`/`*Policy` (configuration), `*Info` (read-only descriptor), `*Registry` (read-heavy lookup), `*Client`/`*Backend` (IO adapter), `*Store`/`*Index` (persistent storage), `*Command` (callable handler), `*Context` (input bag for a call), `*Rule` (auth/behavioral rule), `*Enum` (enumeration).
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
-- **Display**: use `co_cli.display._core.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
+- **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
 
 ### Agents, Tools, and Config
 
-- **Tool pattern**: tools use `agent.tool()` with `RunContext[CoDeps]`, follow pydantic-ai conventions (`DeferredToolRequests` for approval, history processors for memory). All runtime resources come from `ctx.deps` — never import `settings` directly, never hold module-level state, and never put approval prompts inside tools.
+- **Tool pattern**: tools use `agent.tool()` with `RunContext[CoDeps]`, following pydantic-ai conventions (deferred approval, history processors). All runtime resources come from `ctx.deps` — never import settings directly, never hold module-level state, and never put approval prompts inside tools.
 - **Tool approval**: tools that mutate system state (filesystem writes, shell execution, external service writes, process spawning) use `requires_approval=True`. Read-only operations do not. Approval UX lives in the chat loop.
-- **Tool return type**: tools returning user-facing data must return `ToolReturn` via `tool_output()` from `co_cli.tools.tool_output`. Metadata fields go in `ToolReturn.metadata`. Never return a raw `str`, bare `dict`, or `list[dict]`.
-- **CoDeps**: flat dataclass — access service handles, config, and paths via `ctx.deps.*` (e.g. `ctx.deps.shell`, `ctx.deps.config.memory.max_count`). See `co_cli/deps.py` for the full field list.
-- **Sub-agent isolation**: use `make_subagent_deps(base)`. Do not manually field-copy.
+- **Tool return type**: tools returning user-facing data must use the project's `tool_output()` helper for structured returns. Never return a raw `str`, bare `dict`, or `list[dict]`.
+- **CoDeps**: flat dataclass — access service handles, config, and paths via `ctx.deps.*` (e.g. `ctx.deps.shell`, `ctx.deps.config.memory.max_count`).
+- **Sub-agent isolation**: use the subagent deps factory in `deps.py`. Do not manually field-copy.
 - **Config**: `Settings` uses nested Pydantic sub-models in `co_cli/config/` (one file per group). Add new fields to an existing group if it fits; only create a new nested group when it has meaningful cohesion. Config precedence: env vars > `.co-cli/settings.json` (project) > `~/.co-cli/settings.json` (user) > defaults.
 - **User-global paths**: `~/.co-cli/` (overridable via `CO_CLI_HOME`). Project-local: `.co-cli/`.
 - **Versioning**: `MAJOR.MINOR.PATCH`; patch odd = bugfix, even = feature. Bump only in `pyproject.toml`.
@@ -66,12 +66,12 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 #### Tests (`tests/`)
 
 - **Only pytest files in `tests/`**: `test_*.py` or `*_test.py`, using `pytest` + `pytest-asyncio`. Non-test scripts go in `scripts/`, evaluations in `evals/`.
-- **Real dependencies only — no fakes**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or hand-assembled domain objects that bypass production code paths. Use real `CoDeps(shell=ShellBackend(), config=Settings(...), knowledge_store=idx)` with real `RunContext`, real SQLite, real filesystem, real FTS5. If a behavior cannot be tested without fakes, the production API is wrong — fix the API. `conftest.py` must be limited to neutral pytest plumbing (e.g. session-scoped markers, asyncio mode) — never shadow config or inject substitutes.
-- **IO-bound timeouts**: wrap each individual `await` to external services (LLMs, network, subprocess) with `asyncio.timeout(N)` — including warmup and preflight awaits. Never wrap multiple sequential awaits in one block. Import constants from `tests/_timeouts.py` (`LLM_NON_REASONING_TIMEOUT_SECS`, etc.) — never hardcode inline. Never increase a timeout to make a test pass — a timeout violation means wrong role, wrong agent context, or wrong model config. Diagnose the root cause, fix the test or config.
+- **Real dependencies only — no fakes**: never use `monkeypatch`, `unittest.mock`, `pytest-mock`, or hand-assembled domain objects that bypass production code paths. Use real `CoDeps` with real services, real SQLite, real filesystem, real FTS5. If a behavior cannot be tested without fakes, the production API is wrong — fix the API. `conftest.py` must be limited to neutral pytest plumbing (e.g. session-scoped markers, asyncio mode) — never shadow config or inject substitutes.
+- **IO-bound timeouts**: wrap each individual `await` to external services (LLMs, network, subprocess) with `asyncio.timeout(N)` — including warmup and preflight awaits. Never wrap multiple sequential awaits in one block. Import constants from the test timeouts module — never hardcode inline. Never increase a timeout to make a test pass — a timeout violation means wrong role, wrong agent context, or wrong model config. Diagnose the root cause, fix the test or config.
 - **Suite hygiene**: every test must target a real failure mode — ask "if deleted, would a regression go undetected?" Tests must pass or fail (no skips except credential-gated external integrations via `pytest.mark.skipif`). Remove or update stale tests when changing public APIs — do not skip them. Any policy violation blocks the full run. `pyproject.toml` enforces `-x --durations=0`.
 - **Test data isolation**: use `tmp_path` for all filesystem writes. For shared stores, use `test-` prefix identifiers and delete in `try/finally` — cleanup failure must fail the test.
 - **Scope pytest during implementation**: run only affected test files during dev (`uv run pytest tests/test_foo.py`). Full suite before shipping only. Never dismiss a failure as flaky — stop, diagnose, then fix.
-- **Production config only — no overrides**: do not pass `model=` or `model_settings=` to `agent.run()` — use `run_turn()` or invoke the agent with no override. Do not strip personality in tests. Use `ROLE_SUMMARIZATION` (`reasoning_effort: none`) for tool-calling, signal-detection, and orchestration tests. Cache module-level agents rather than rebuilding per call.
+- **Production config only — no overrides**: do not pass `model=` or `model_settings=` to `agent.run()` — use the production orchestration path or invoke the agent with no override. Do not strip personality in tests. Use non-thinking model settings for tool-calling, signal-detection, and orchestration tests. Cache module-level agents rather than rebuilding per call.
 - **Never copy inline logic into tests**: do not replicate display formatting or string construction in assertions.
 - **Google credentials**: never configure or inject — they resolve automatically via settings, `~/.co-cli/google_token.json`, or ADC.
 

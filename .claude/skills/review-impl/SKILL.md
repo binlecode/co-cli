@@ -55,22 +55,14 @@ Record for each requirement: file:line evidence, or a finding if absent.
 
 ### C — Convention checklist
 
-Check every changed file against these items explicitly. Each is a potential blocking finding:
+Check every changed file against CLAUDE.md's Engineering Rules section. Each violation is a potential blocking finding. Key areas:
 
-| Check | What to look for |
-|-------|-----------------|
-| **No mocks or fakes** | Any new test file or test function that uses mocks, patches, `monkeypatch`, or tests an isolated helper without real services — blocking, repo policy |
-| **Tool pattern** | New tools must use `agent.tool()` with `RunContext[CoDeps]` — not `tool_plain()`, not bare functions |
-| **Tool return type** | Tools must return `ToolReturn` via `tool_output()` — not raw `str`, `dict`, or `list` |
-| **No global state** | Tools must not hold or mutate module-level state |
-| **No direct settings import** | Tools must not import `settings` directly — use `ctx.deps` |
-| **Dead code** | Unreachable branches, unused variables, functions defined but never called after this change |
-| **Stale imports** | Imports that are unused after the change |
-| **Misplaced lazy imports** | Lazy imports added outside patterns already present in the file |
-| **Scope creep** | Changes in files not listed in `files:` that were not announced as `⚠ Extra file:` |
-| **Over-engineering** | Abstractions, utilities, or helpers not required by the spec; anything you would push back on if a junior wrote it |
-| **Display** | Terminal output via `co_cli.display._core.console` — not `print()` or hardcoded color names |
-| **Security** | Command injection (user input to shell), path traversal (unvalidated paths), SQL injection, missing input validation at system boundaries |
+- **Tool conventions**: correct registration pattern, structured return type, deps from `ctx.deps`, no global state
+- **Test policy**: no mocks, fakes, or patching — real services only
+- **Code hygiene**: dead code, stale imports, misplaced lazy imports, scope creep (files outside `files:` not announced as `⚠ Extra file:`)
+- **Over-engineering**: abstractions or helpers not required by the spec
+- **Display**: terminal output via the project's shared `console` — not `print()` or hardcoded color names
+- **Security**: command injection, path traversal, SQL injection, missing input validation at system boundaries
 
 ---
 

@@ -228,15 +228,12 @@ Spawn a reviewer subagent. Pass it exactly:
 
 The reviewer has no access to the implementation conversation — cold read only.
 
-**Reviewer checks:**
-- Anti-patterns from CLAUDE.md not caught by self-review (blind spots from implementation context)
+**Reviewer checks** (apply CLAUDE.md Engineering Rules to every changed file):
 - Spec fidelity: does the diff implement exactly the task spec, no more, no less
+- Cross-task coherence: do the combined changes form a consistent whole
+- Code hygiene: dead code, stale imports, over-engineering — simplify before integration
+- Test policy: no mocks or fakes — blocking regardless of other quality
 - Security: command injection, path traversal, SQL injection, missing input validation
-- Cross-task coherence: do the combined changes from all tasks form a consistent whole
-- **Dead code:** any function, variable, or import in the diff that is unreachable or unused after the change
-- **Stale imports:** anything imported but not used in the post-change file
-- **No mocks or fakes:** any test in the diff using mocks, patches, `monkeypatch`, or isolated helpers without real services — blocking regardless of other quality
-- **Over-engineering:** any abstraction, utility, or helper in the diff not required by the task spec — if found, simplify it before integration, do not just flag it
 
 **Reviewer output** (append to `docs/TODO-<slug>.md` under `## Independent Review`):
 
