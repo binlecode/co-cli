@@ -53,6 +53,9 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` 
      The shortlist below is the minimum floor — the full Engineering Rules section
      contains additional constraints (tool patterns, display conventions, security) that apply.
 
+     Before writing any code, echo back the files you will modify and confirm you will
+     not touch anything else.
+
      Constraints (non-negotiable):
      - No mocks, fakes, or patching in tests (repo policy — real dependencies only)
      - No over-engineering — implement the minimal change that satisfies the spec
@@ -317,6 +320,8 @@ Run only after `/review-impl` returns PASS. Do not ship a DELIVERED-only deliver
 ```
 rm docs/TODO-<slug>.md
 ```
+
+Grep the repo for the slug to confirm no stale references remain.
 
 ### Step 2 — Bump version
 

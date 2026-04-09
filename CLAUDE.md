@@ -91,6 +91,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 
 ### Working with Claude Code
 
+- When interrupted or redirected, immediately stop the current approach and follow the new direction — do not continue previous work or expand scope.
 - When asked to analyze or review, confirm the approach before searching, fetching, or writing.
 - When asked to append to an existing doc, never create a new file instead.
 - Never add unsolicited notes, reminders, or meta-commentary to outputs unless explicitly asked.
