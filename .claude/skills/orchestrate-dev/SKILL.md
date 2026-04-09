@@ -132,7 +132,11 @@ Write or edit only the files listed in `files:`. Do not touch files outside that
 
 ### Step 4 — Self-review (inline Dev QA)
 
-After implementing, read every changed file and check:
+After implementing, run the linter on changed files first:
+```bash
+uv run ruff check co_cli/ --fix && uv run ruff format co_cli/
+```
+Fix any remaining violations that `--fix` cannot auto-resolve. Then read every changed file and check:
 
 **Project coding rules:** Apply every item from the Engineering Rules loaded at pre-flight.
 
@@ -201,7 +205,15 @@ or
 
 Run after all tasks have been attempted (or after the first blocked task if stopping early).
 
-### Step 1 — Run tests
+### Step 1 — Lint gate
+
+Run the linter across the full source tree before tests:
+```bash
+uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+```
+Any violation = stop and fix before proceeding. Auto-fix with `ruff check --fix` + `ruff format` where safe; manually fix the rest.
+
+### Step 2 — Run tests
 
 **Full delivery (all tasks passed):** Run the full test suite to catch cross-module regressions.
 A task can pass its own `done_when` while silently breaking an unrelated module that imports the
@@ -222,7 +234,7 @@ Collect touched test files from completed tasks only. If none were touched, skip
 
 Record: command run, number passed, number failed, any failure output.
 
-### Step 2 — Independent code review
+### Step 3 — Independent code review
 
 Spawn a reviewer subagent. Pass it exactly:
 - The output of `git diff HEAD` scoped to files changed by completed tasks
@@ -255,7 +267,7 @@ record and proceed — TL decides at Gate 2.
 
 Record result: clean / N blocking / N minor.
 
-### Step 3 — Sync docs
+### Step 4 — Sync docs
 
 Determine scope before running:
 
@@ -266,7 +278,7 @@ State the scope decision and rationale before running (e.g., "narrow — all tas
 
 Record result: clean / fixed (what was fixed).
 
-### Step 4 — TODO lifecycle
+### Step 5 — TODO lifecycle
 
 For every task that reached ✓ pass, mark it done in `docs/TODO-<slug>.md` — do not delete or remove it. The task record is preserved as a track log for debugging, troubleshooting, and potential revert.
 

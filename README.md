@@ -38,9 +38,10 @@ Before you begin, ensure you have the following installed:
     cd co-cli
     ```
 
-2.  **Install dependencies**:
+2.  **Install dependencies and git hooks**:
     ```bash
     uv sync
+    bash scripts/install-hooks.sh
     ```
 
 3.  **Configure Co**:
@@ -290,5 +291,7 @@ Design docs are published as a GitHub Pages book: **https://binlecode.github.io/
 ## Contributing
 
 1.  Run `uv sync` to install dev dependencies.
-2.  Follow the style in `docs/DESIGN-00-co-cli.md`.
-3.  Ensure type hints are used everywhere.
+2.  Run `bash scripts/install-hooks.sh` to install the pre-commit lint hook.
+3.  Code must pass `uv run ruff check co_cli/` and `uv run ruff format --check co_cli/` before commit (enforced by the hook).
+4.  Follow the style in `CLAUDE.md` Engineering Rules.
+5.  Ensure type hints are used everywhere.

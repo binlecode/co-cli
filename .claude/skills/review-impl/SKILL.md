@@ -53,7 +53,15 @@ For every requirement in the task description and `done_when`:
 
 Record for each requirement: file:line evidence, or a finding if absent.
 
-### C — Convention checklist
+### C — Lint check
+
+Run the linter before the manual convention scan:
+```bash
+uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+```
+Any violation is a blocking finding. Auto-fix with `ruff check --fix` + `ruff format` in Phase 4.
+
+### D — Convention checklist
 
 Check every changed file against CLAUDE.md's Engineering Rules section. Each violation is a potential blocking finding. Key areas:
 
@@ -144,7 +152,11 @@ Run sync-doc. Record: clean / fixed (what was fixed).
 
 ## Phase 7 — Final Re-scan
 
-After all fixes and tests are green, re-scan every changed file one more time:
+After all fixes and tests are green, run the linter one final time:
+```bash
+uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+```
+Then re-scan every changed file one more time:
 
 - Dead code introduced during fixes
 - Stale imports left by fix edits
