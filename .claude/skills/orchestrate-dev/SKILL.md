@@ -132,11 +132,11 @@ Write or edit only the files listed in `files:`. Do not touch files outside that
 
 ### Step 4 — Self-review (inline Dev QA)
 
-After implementing, run the linter on changed files first:
+After implementing, run the quality gate in fix mode:
 ```bash
-uv run ruff check co_cli/ --fix && uv run ruff format co_cli/
+scripts/quality-gate.sh lint --fix
 ```
-Fix any remaining violations that `--fix` cannot auto-resolve. Then read every changed file and check:
+Fix any remaining violations that auto-fix cannot resolve. Then read every changed file and check:
 
 **Project coding rules:** Apply every item from the Engineering Rules loaded at pre-flight.
 
@@ -205,15 +205,18 @@ or
 
 Run after all tasks have been attempted (or after the first blocked task if stopping early).
 
-### Step 1 — Lint gate
+### Step 1 — Quality gate
 
-Run the linter across the full source tree before tests:
+Run the full quality gate (lint + types + tests) across the source tree:
 ```bash
-uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+scripts/quality-gate.sh full
 ```
-Any violation = stop and fix before proceeding. Auto-fix with `ruff check --fix` + `ruff format` where safe; manually fix the rest.
+Any failure = stop and fix before proceeding. Use `scripts/quality-gate.sh lint --fix` to auto-fix ruff violations; pyright and test failures require manual fixes.
 
 ### Step 2 — Run tests
+
+> **Note:** `scripts/quality-gate.sh full` already ran the test suite. This step only applies when running tests with different scope (partial delivery).
+
 
 **Full delivery (all tasks passed):** Run the full test suite to catch cross-module regressions.
 A task can pass its own `done_when` while silently breaking an unrelated module that imports the

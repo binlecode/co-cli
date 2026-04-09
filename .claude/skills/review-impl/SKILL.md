@@ -53,13 +53,12 @@ For every requirement in the task description and `done_when`:
 
 Record for each requirement: file:line evidence, or a finding if absent.
 
-### C — Lint check
+### C — Quality gate (lint + types)
 
-Run the linter before the manual convention scan:
 ```bash
-uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+scripts/quality-gate.sh types
 ```
-Any violation is a blocking finding. Auto-fix with `ruff check --fix` + `ruff format` in Phase 4.
+Any violation is a blocking finding. Auto-fix ruff with `scripts/quality-gate.sh lint --fix` in Phase 4. Pyright errors require manual fixes.
 
 ### D — Convention checklist
 
@@ -152,9 +151,9 @@ Run sync-doc. Record: clean / fixed (what was fixed).
 
 ## Phase 7 — Final Re-scan
 
-After all fixes and tests are green, run the linter one final time:
+After all fixes and tests are green, run the quality gate one final time:
 ```bash
-uv run ruff check co_cli/ && uv run ruff format --check co_cli/
+scripts/quality-gate.sh types
 ```
 Then re-scan every changed file one more time:
 

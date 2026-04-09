@@ -11,11 +11,11 @@ uv run co status                 # System health check
 uv run co logs                   # Datasette trace viewer (table)
 uv run co traces                 # Nested HTML trace viewer
 
-# Lint (must pass before commit — enforced by pre-commit hook)
-uv run ruff check co_cli/         # Lint
-uv run ruff format --check co_cli/ # Format check (no writes)
-uv run ruff check --fix co_cli/   # Auto-fix safe violations
-uv run ruff format co_cli/        # Auto-format
+# Quality gates (scripts/quality-gate.sh — single source of truth for all checks)
+scripts/quality-gate.sh lint              # ruff check + format (pre-commit hook runs this)
+scripts/quality-gate.sh lint --fix        # ruff auto-fix + format
+scripts/quality-gate.sh types             # lint + pyright
+scripts/quality-gate.sh full              # lint + pyright + pytest (ship gate)
 
 # ALL pytest runs MUST pipe to a timestamped log under .pytest-logs/ (mkdir -p first).
 # Never truncate output before the log file (no | head, | tail, | grep before tee).
@@ -46,7 +46,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **Class naming conventions** (enforced — violations block merge): every public type must use one of these suffixes: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config`/`*Settings`/`*Policy` (configuration), `*Info` (read-only descriptor), `*Registry` (read-heavy lookup), `*Client`/`*Backend` (IO adapter), `*Store`/`*Index` (persistent storage), `*Command` (callable handler), `*Context` (input bag for a call), `*Rule` (auth/behavioral rule), `*Enum` (enumeration).
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
 - **Display**: use the project's shared `console` object for all terminal output. Use semantic style names; never hardcode color names at callsites.
-- **Lint**: all code must pass `ruff check` and `ruff format --check` before commit. Config lives in `pyproject.toml` under `[tool.ruff]`. Run `ruff check --fix` + `ruff format` to auto-fix. Never add `# noqa` without a comment explaining why the rule is wrong for that line.
+- **Quality gates**: `scripts/quality-gate.sh` is the single source of truth for all automated checks. `lint` = ruff (pre-commit enforced), `types` = lint + pyright, `full` = lint + pyright + pytest. Tool configs live in `pyproject.toml`. Never add `# noqa` or `# type: ignore` without a comment explaining why the tool is wrong for that line.
 
 ### Agents, Tools, and Config
 

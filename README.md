@@ -240,6 +240,27 @@ Two `history_processors` prevent context overflow:
 
 ---
 
+## Code Quality
+
+Dev tooling is included in `uv sync` — no extra installs needed. All checks run through `scripts/quality-gate.sh`:
+
+```bash
+scripts/quality-gate.sh lint          # ruff lint + format (pre-commit hook runs this)
+scripts/quality-gate.sh lint --fix    # ruff auto-fix + format
+scripts/quality-gate.sh types         # lint + pyright type checking
+scripts/quality-gate.sh full          # lint + pyright + pytest (ship gate)
+```
+
+| Tool | Purpose | When it runs |
+|------|---------|--------------|
+| **[ruff](https://docs.astral.sh/ruff/)** | Linter + formatter (replaces flake8, isort, black) | Pre-commit hook (`quality-gate.sh lint`) |
+| **[pyright](https://github.com/microsoft/pyright)** | Static type checker (replaces mypy) | CI + delivery skills (`quality-gate.sh types`) — warn-only while pre-existing errors are worked down |
+| **[pytest](https://docs.pytest.org/)** | Test runner (functional tests, no mocks) | CI + delivery skills (`quality-gate.sh full`) |
+
+Configuration for all three tools lives in `pyproject.toml`.
+
+---
+
 ## Testing
 
 Co uses **functional tests only** — no mocks or stubs. Tests hit real services and fail (not skip) when a service is unavailable.
@@ -290,8 +311,8 @@ Design docs are published as a GitHub Pages book: **https://binlecode.github.io/
 
 ## Contributing
 
-1.  Run `uv sync` to install dev dependencies.
-2.  Run `bash scripts/install-hooks.sh` to install the pre-commit lint hook.
-3.  Code must pass `uv run ruff check co_cli/` and `uv run ruff format --check co_cli/` before commit (enforced by the hook).
-4.  Follow the style in `CLAUDE.md` Engineering Rules.
-5.  Ensure type hints are used everywhere.
+1.  `uv sync` — install all dependencies (includes ruff, pyright, pytest).
+2.  `bash scripts/install-hooks.sh` — install the pre-commit hook.
+3.  `scripts/quality-gate.sh full` must pass before shipping. The pre-commit hook enforces `lint`; CI enforces `full`.
+4.  Follow the coding rules in `CLAUDE.md` Engineering Rules section.
+5.  Type hints required on all public functions.
