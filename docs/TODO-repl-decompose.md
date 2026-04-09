@@ -66,11 +66,11 @@ files: `co_cli/commands/_commands.py`
 files: `co_cli/main.py`, `co_cli/bootstrap/_bootstrap.py`, `tests/test_bootstrap.py`
 
 ### 6. Update DESIGN docs
-- `DESIGN-bootstrap.md` — skill loading file reference
+- `DESIGN-flow-bootstrap.md` — skill loading file reference
 - `DESIGN-skills.md` — skill loader file reference
 - `DESIGN-core-loop.md` — command dispatch file reference
 
-files: `docs/DESIGN-bootstrap.md`, `docs/DESIGN-skills.md`, `docs/DESIGN-core-loop.md`
+files: `docs/DESIGN-flow-bootstrap.md`, `docs/DESIGN-skills.md`, `docs/DESIGN-core-loop.md`
 
 ## Out of Scope
 

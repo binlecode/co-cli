@@ -152,6 +152,8 @@ Never paste source code into DESIGN docs. Use pseudocode to explain processing l
 
 Start at `docs/DESIGN-system.md` for top-level system architecture, `CoDeps`, capability surface, and security boundaries. `docs/DESIGN-core-loop.md` covers the agent loop, orchestration, and approval flow. All component docs live in `docs/` and are named `DESIGN-<component>.md` and `DESIGN-flow-<component>.md`.
 
+`DESIGN-flow-*.md` docs are sequence-owning documents. Their `Core Logic` section must follow execution order strictly from start to finish, introduce data structures at the step where they first matter, attach failure/degradation behavior to the relevant step, and avoid separate taxonomy sections that duplicate the flow.
+
 `docs/reference/` is for research, proposals, and background material (`RESEARCH-*`, `ROADMAP-*`) and is not linked from DESIGN docs.
 
 ### Artifact Lifecycle
