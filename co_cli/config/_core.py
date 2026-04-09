@@ -118,11 +118,6 @@ class MCPServerConfig(BaseModel):
 
 # Default MCP servers — shipped out-of-the-box, skip gracefully when npx absent.
 _DEFAULT_MCP_SERVERS: dict[str, MCPServerConfig] = {
-    "github": MCPServerConfig(
-        command="npx",
-        args=["-y", "@modelcontextprotocol/server-github"],
-        approval="ask",
-    ),
     "context7": MCPServerConfig(
         command="npx",
         args=["-y", "@upstash/context7-mcp@latest"],
