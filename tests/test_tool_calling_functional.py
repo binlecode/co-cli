@@ -22,6 +22,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._timeouts import FILE_DB_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
@@ -41,7 +42,7 @@ _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT_NOREASON = Agent(
     _LLM_MODEL.model,
     deps_type=CoDeps,
-    model_settings=_LLM_MODEL.settings,
+    model_settings=NOREASON_SETTINGS,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
     toolsets=[_TOOL_REG.toolset],

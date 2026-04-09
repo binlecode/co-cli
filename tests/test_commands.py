@@ -16,6 +16,7 @@ from tests._settings import test_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
+from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.commands._commands import (
     CommandContext,
     DelegateToAgent,
@@ -51,7 +52,7 @@ _TOOL_REG = build_tool_registry(_CONFIG_NO_MCP)
 _AGENT = Agent(
     _LLM_MODEL.model,
     deps_type=CoDeps,
-    model_settings=_LLM_MODEL.settings,
+    model_settings=NOREASON_SETTINGS,
     retries=_CONFIG_NO_MCP.tool_retries,
     output_type=[str, DeferredToolRequests],
     toolsets=[_TOOL_REG.toolset, *_TOOL_REG.mcp_toolsets],
