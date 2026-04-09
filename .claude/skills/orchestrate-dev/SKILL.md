@@ -54,7 +54,7 @@ Reads `docs/TODO-<slug>.md`. Executes each task. Marks shipped tasks `✓ DONE` 
      contains additional constraints (tool patterns, display conventions, security) that apply.
 
      Constraints (non-negotiable):
-     - No unit tests under any circumstances (repo policy)
+     - No mocks, fakes, or patching in tests (repo policy — real dependencies only)
      - No over-engineering — implement the minimal change that satisfies the spec
      - No dead code — remove any unreachable code your change leaves behind
      - No stale imports — remove any import unused after your edit
@@ -140,7 +140,7 @@ After implementing, read every changed file and check:
 | **Dead code** | Any function, variable, or import defined but unreachable after this change — including renamed leftovers (e.g. `_OLD_NAME`, `_AGENT_FOR_RETRY`) |
 | **Stale imports** | Anything imported but unused after the edit |
 | **Misplaced lazy imports** | Lazy imports added outside patterns already present in the file |
-| **Unit tests** | Any test using mocks, patches, `monkeypatch`, or isolated helpers with no real services — blocking, remove it |
+| **No mocks or fakes** | Any test using mocks, patches, `monkeypatch`, or isolated helpers with no real services — blocking, remove it |
 | **Scope creep** | Changes outside `files:` not announced as `⚠ Extra file:` |
 | **Over-engineering** | Abstractions, utilities, or helpers not required by the task spec — if a junior wrote it and you'd push back, remove it |
 
@@ -235,7 +235,7 @@ The reviewer has no access to the implementation conversation — cold read only
 - Cross-task coherence: do the combined changes from all tasks form a consistent whole
 - **Dead code:** any function, variable, or import in the diff that is unreachable or unused after the change
 - **Stale imports:** anything imported but not used in the post-change file
-- **Unit tests:** any test in the diff using mocks, patches, or isolated helpers — blocking regardless of other quality
+- **No mocks or fakes:** any test in the diff using mocks, patches, `monkeypatch`, or isolated helpers without real services — blocking regardless of other quality
 - **Over-engineering:** any abstraction, utility, or helper in the diff not required by the task spec — if found, simplify it before integration, do not just flag it
 
 **Reviewer output** (append to `docs/TODO-<slug>.md` under `## Independent Review`):
@@ -364,4 +364,4 @@ Stage all delivery files plus `pyproject.toml` and `CHANGELOG.md`. Commit with a
 - Starts with `refactor:`, `feat:`, or `fix:` as appropriate
 - One-line subject summarising the delivery
 - Body bullets for the most significant changes (3–6 lines max)
-- Ends with `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`
+- Ends with `Co-Authored-By: Claude <noreply@anthropic.com>`

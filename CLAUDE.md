@@ -39,7 +39,7 @@ All knowledge is dynamic, loaded on-demand via tools, and never baked into the s
 - **`_prefix.py` helpers**: leading-underscore modules are package-private. If imported outside the package, drop the underscore.
 - **Class naming conventions** (enforced — violations block merge): every public type must use one of these suffixes: `*State` (mutable lifecycle data), `*Result` (immutable pass/fail outcome), `*Output` (agent/pipeline payload), `*Config`/`*Settings`/`*Policy` (configuration), `*Info` (read-only descriptor), `*Registry` (read-heavy lookup), `*Client`/`*Backend` (IO adapter), `*Store`/`*Index` (persistent storage), `*Command` (callable handler), `*Context` (input bag for a call), `*Rule` (auth/behavioral rule), `*Enum` (enumeration).
 - **Variable and function naming**: use descriptive names that reveal intent — including loop variables (e.g. `idx`, `key`, `val` over `i`, `k`, `v`). Well-known conventions (`fd`, `db`) are fine as-is.
-- **Display**: use `co_cli.display.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
+- **Display**: use `co_cli.display._core.console` for all terminal output. Use semantic style names; never hardcode color names at callsites.
 
 ### Agents, Tools, and Config
 

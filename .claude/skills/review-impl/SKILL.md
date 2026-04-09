@@ -59,9 +59,9 @@ Check every changed file against these items explicitly. Each is a potential blo
 
 | Check | What to look for |
 |-------|-----------------|
-| **No unit tests** | Any new test file or test function that uses mocks, patches, or tests an isolated helper without real services — blocking, repo policy |
+| **No mocks or fakes** | Any new test file or test function that uses mocks, patches, `monkeypatch`, or tests an isolated helper without real services — blocking, repo policy |
 | **Tool pattern** | New tools must use `agent.tool()` with `RunContext[CoDeps]` — not `tool_plain()`, not bare functions |
-| **Tool return type** | Tools must return `ToolResult` via `make_result()` — not raw `str`, `dict`, or `list` |
+| **Tool return type** | Tools must return `ToolReturn` via `tool_output()` — not raw `str`, `dict`, or `list` |
 | **No global state** | Tools must not hold or mutate module-level state |
 | **No direct settings import** | Tools must not import `settings` directly — use `ctx.deps` |
 | **Dead code** | Unreachable branches, unused variables, functions defined but never called after this change |
@@ -69,7 +69,7 @@ Check every changed file against these items explicitly. Each is a potential blo
 | **Misplaced lazy imports** | Lazy imports added outside patterns already present in the file |
 | **Scope creep** | Changes in files not listed in `files:` that were not announced as `⚠ Extra file:` |
 | **Over-engineering** | Abstractions, utilities, or helpers not required by the spec; anything you would push back on if a junior wrote it |
-| **Display** | Terminal output via `co_cli.display.console` — not `print()` or hardcoded color names |
+| **Display** | Terminal output via `co_cli.display._core.console` — not `print()` or hardcoded color names |
 | **Security** | Command injection (user input to shell), path traversal (unvalidated paths), SQL injection, missing input validation at system boundaries |
 
 ---
@@ -157,7 +157,7 @@ After all fixes and tests are green, re-scan every changed file one more time:
 - Dead code introduced during fixes
 - Stale imports left by fix edits
 - Misplaced lazy imports
-- Any unit test introduced during fix (blocking — remove it)
+- Any test using mocks or fakes introduced during fix (blocking — remove it)
 - Doc-code mismatches in changed file docstrings or inline comments
 
 Fix anything found. This catches what sub-agents and fix loops leave behind.
@@ -239,6 +239,6 @@ _(or: "No user-facing changes — skipped.")_
 - **Adversarial default**: do not look for reasons to pass. Look for reasons to fail — and verify each one survives the self-review challenge.
 - **Auto-fix, don't report**: blocking findings are fixed here, not handed back to the TL as a to-do list. The verdict is clean or escalated — never "here are issues for you to fix."
 - **Architectural decisions escalate**: if fixing correctly requires a decision beyond "change this line," stop and surface it. Never apply a workaround to avoid escalation.
-- **No unit tests under any circumstances**: if a fix tempts you to write a unit test, the production API is wrong — fix the API.
+- **No mocks or fakes under any circumstances**: if a fix tempts you to mock a dependency, the production API is wrong — fix the API.
 - **RCA is not optional**: a failing test that is "probably flaky" is a failing test. Stop, investigate, fix root cause.
 - **PASS means ship-ready**: after PASS, the TL can commit and ship. No further review gate is required.
