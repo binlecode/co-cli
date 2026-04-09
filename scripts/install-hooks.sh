@@ -13,6 +13,12 @@ cat > "$HOOKS_DIR/pre-commit" << 'HOOK'
 
 set -euo pipefail
 
+# Skip if no Python files are staged
+if ! git diff --cached --name-only | grep -q '\.py$'; then
+    echo "pre-commit: no Python files staged, skipping lint"
+    exit 0
+fi
+
 echo "pre-commit: running ruff check..."
 uv run ruff check co_cli/
 
