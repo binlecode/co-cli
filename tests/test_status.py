@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from co_cli.bootstrap._render_status import (
+from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
 )

@@ -14,14 +14,14 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
 from co_cli.agent import build_agent
-from co_cli.bootstrap._banner import display_welcome_banner
-from co_cli.bootstrap._bootstrap import create_deps, restore_session
-from co_cli.bootstrap._render_status import (
+from co_cli.bootstrap.banner import display_welcome_banner
+from co_cli.bootstrap.core import create_deps, restore_session
+from co_cli.bootstrap.render_status import (
     check_security,
     get_status,
     render_security_findings,
@@ -133,7 +133,7 @@ async def _run_foreground_turn(
     *,
     message_history: list[ModelMessage],
     session_data: dict,
-    agent: Agent,
+    agent: Agent[CoDeps, str | DeferredToolRequests],
     user_input: str,
     saved_env: dict[str, str | None],
     deps: CoDeps,

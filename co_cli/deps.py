@@ -51,14 +51,14 @@ class SessionApprovalRule:
     value: str
 
 
-class VisibilityPolicy(Enum):
-    """Whether a tool is visible to the model immediately or requires discovery via search_tools."""
+class VisibilityPolicyEnum(Enum):
+    """Whether a tool is visible by default or hidden behind search_tools."""
 
     ALWAYS = "always"
     DEFERRED = "deferred"
 
 
-class ToolSource(Enum):
+class ToolSourceEnum(Enum):
     """Origin of a registered tool."""
 
     NATIVE = "native"
@@ -72,8 +72,8 @@ class ToolInfo:
     name: str
     description: str
     approval: bool
-    source: ToolSource
-    visibility: VisibilityPolicy
+    source: ToolSourceEnum
+    visibility: VisibilityPolicyEnum
     integration: str | None = None
     max_result_size: int = 50_000
 

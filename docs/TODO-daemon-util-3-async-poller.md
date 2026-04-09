@@ -39,7 +39,7 @@ In the `co daemon` polling loop (`co_cli/daemon/_worker.py`), select jobs where 
 
 ### 2.3 User Notification
 When the condition is met, the user needs an alert.
-- **Status Integration:** Update `co_cli/bootstrap/_render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `type='watchdog'` and `acknowledged=0`.
+- **Status Integration:** Update `co_cli/bootstrap/render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `type='watchdog'` and `acknowledged=0`.
 - **Banner Display:** The interactive terminal banner will display a green alert:
   `[Daemon] Watchdog met condition: "localhost:8080 returns 200"`
 - **Acknowledge Tool:** Use `/daemon clear` to mark `acknowledged=1`.

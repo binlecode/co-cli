@@ -337,5 +337,5 @@ Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
 | `co_cli/commands/_commands.py` | `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
-| `co_cli/bootstrap/_bootstrap.py` | knowledge backend discovery, store sync, session restore |
+| `co_cli/bootstrap/core.py` | knowledge backend discovery, store sync, session restore |
 | `co_cli/main.py` | `_finalize_turn()` persistence, `_chat_loop()` session-data sync |

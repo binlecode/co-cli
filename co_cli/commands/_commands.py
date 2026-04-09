@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import ModelRequest
 
 from co_cli._model_settings import NOREASON_SETTINGS
@@ -34,7 +34,7 @@ class CommandContext:
 
     message_history: list[Any]
     deps: CoDeps
-    agent: Agent
+    agent: Agent[CoDeps, str | DeferredToolRequests]
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
@@ -246,7 +246,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
                 console.print(line)
         return None
 
-    from co_cli.bootstrap._render_status import (
+    from co_cli.bootstrap.render_status import (
         check_security,
         get_status,
         render_security_findings,

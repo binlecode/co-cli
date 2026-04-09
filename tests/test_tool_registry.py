@@ -8,7 +8,7 @@ from pydantic_ai.usage import RunUsage
 from co_cli.agent import _approval_resume_filter, build_agent, build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
-from co_cli.deps import CoDeps, CoRuntimeState, ToolInfo, ToolSource, VisibilityPolicy
+from co_cli.deps import CoDeps, CoRuntimeState, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.shell_backend import ShellBackend
 
 _CONFIG = settings
@@ -58,22 +58,22 @@ def test_search_tools_not_in_tool_index() -> None:
 
 
 def test_deferred_tools_have_defer_loading_flag() -> None:
-    """Deferred tools are registered with VisibilityPolicy.DEFERRED in tool_index."""
+    """Deferred tools are registered with VisibilityPolicyEnum.DEFERRED in tool_index."""
     result = build_tool_registry(_CONFIG)
     deferred_names = [
         name
         for name, info in result.tool_index.items()
-        if info.visibility == VisibilityPolicy.DEFERRED
+        if info.visibility == VisibilityPolicyEnum.DEFERRED
     ]
     assert len(deferred_names) > 0, "Must have at least one deferred tool"
 
 
 def test_always_tools_present_in_registry() -> None:
-    """Always-visible tools are present in tool_index with VisibilityPolicy.ALWAYS."""
+    """Always-visible tools are present in tool_index with VisibilityPolicyEnum.ALWAYS."""
     result = build_tool_registry(_CONFIG)
     for name in ("check_capabilities", "read_file", "web_search", "run_shell_command"):
         assert name in result.tool_index
-        assert result.tool_index[name].visibility == VisibilityPolicy.ALWAYS
+        assert result.tool_index[name].visibility == VisibilityPolicyEnum.ALWAYS
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +122,8 @@ def test_category_awareness_prompt_empty_when_no_deferred() -> None:
             name="tool_a",
             description="does stuff",
             approval=False,
-            source=ToolSource.NATIVE,
-            visibility=VisibilityPolicy.ALWAYS,
+            source=ToolSourceEnum.NATIVE,
+            visibility=VisibilityPolicyEnum.ALWAYS,
         ),
     }
     prompt = build_category_awareness_prompt(idx)
@@ -142,8 +142,8 @@ def test_toolinfo_no_search_hint_field() -> None:
             name="x",
             description="x",
             approval=False,
-            source=ToolSource.NATIVE,
-            visibility=VisibilityPolicy.ALWAYS,
+            source=ToolSourceEnum.NATIVE,
+            visibility=VisibilityPolicyEnum.ALWAYS,
             search_hint="should fail",
         )
 
@@ -189,16 +189,16 @@ def test_approval_resume_filter_applies_to_mcp_tools() -> None:
         name="mcp_approved_tool",
         description="mcp tool",
         approval=True,
-        source=ToolSource.MCP,
-        visibility=VisibilityPolicy.DEFERRED,
+        source=ToolSourceEnum.MCP,
+        visibility=VisibilityPolicyEnum.DEFERRED,
         integration="test_mcp",
     )
     deps.tool_index["mcp_other_tool"] = ToolInfo(
         name="mcp_other_tool",
         description="other mcp tool",
         approval=False,
-        source=ToolSource.MCP,
-        visibility=VisibilityPolicy.DEFERRED,
+        source=ToolSourceEnum.MCP,
+        visibility=VisibilityPolicyEnum.DEFERRED,
         integration="test_mcp",
     )
     ctx = _make_ctx(deps)

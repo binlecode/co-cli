@@ -207,7 +207,7 @@ All custom Ollama model tags in `ollama/` and their baked parameters:
 |------|---------|
 | `co_cli/config/` | Settings package: `_llm.py` owns `LlmSettings` (provider, model, host, context settings); `_core.py` owns `Settings` with nested sub-models |
 | `co_cli/deps.py` | `CoDeps` with `config: Settings`; `model: LlmModel \| None` as top-level field |
-| `co_cli/bootstrap/_check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
+| `co_cli/bootstrap/check.py` | `check_agent_llm` (provider credentials + model availability) and other integration probes — shared factual probe layer |
 | `co_cli/agent.py` | `build_agent()` factory — model selection, tool registration, system prompt assembly |
 | `co_cli/commands/_commands.py` | Uses `deps.model.model` + `NOREASON_SETTINGS` for `/compact` and `/new` |
 | `co_cli/context/summarization.py` | `summarize_messages(messages, model, model_settings, ...)` — bare Agent summariser; `resolve_compaction_budget(config, context_window)` — reads `context_window` from `LlmModel` to set compaction token budget |

@@ -7,7 +7,7 @@ agent can report system state to the user in personality voice.
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.bootstrap._check import check_runtime
+from co_cli.bootstrap.check import check_runtime
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_output import tool_output
 

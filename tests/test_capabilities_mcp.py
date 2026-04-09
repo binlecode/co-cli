@@ -6,7 +6,7 @@ path for MCP server checks.
 
 from tests._settings import test_settings
 
-from co_cli.bootstrap._check import check_runtime
+from co_cli.bootstrap.check import check_runtime
 from co_cli.config._core import MCPServerConfig
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend

@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time with per-tool `defer_loading` derived from `VisibilityPolicy`. Each tool carries a `VisibilityPolicy` enum (`ALWAYS` or `DEFERRED`) and a `ToolSource` enum (`NATIVE` or `MCP`). Always-visible tools (15) are visible on turn one; deferred tools become callable only after the SDK's built-in `search_tools` discovers them. MCP tools are wrapped with `DeferredLoadingToolset` and normalized into `tool_index` with `visibility=VisibilityPolicy.DEFERRED` by default. All toolsets (native + MCP) are combined under a single `_approval_resume_filter` so approval-resume narrowing applies uniformly.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time with per-tool `defer_loading` derived from `VisibilityPolicyEnum`. Each tool carries a `VisibilityPolicyEnum` enum (`ALWAYS` or `DEFERRED`) and a `ToolSourceEnum` enum (`NATIVE` or `MCP`). Always-visible tools (15) are visible on turn one; deferred tools become callable only after the SDK's built-in `search_tools` discovers them. MCP tools are wrapped with `DeferredLoadingToolset` and normalized into `tool_index` with `visibility=VisibilityPolicyEnum.DEFERRED` by default. All toolsets (native + MCP) are combined under a single `_approval_resume_filter` so approval-resume narrowing applies uniformly.
 
 ```
 tools/
@@ -216,7 +216,7 @@ Tools that do NOT need locking: `write_file` (blind overwrite, no read step), `s
 
 ### MCP Tool Servers
 
-Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP toolsets are wrapped with `DeferredLoadingToolset` for SDK-native deferred visibility, then combined with native tools under a single `_approval_resume_filter`. MCP tools are normalized into `tool_index` with `visibility=VisibilityPolicy.DEFERRED` after discovery and participate in the same visibility policy as native tools. MCP tools derive `integration` from the server prefix.
+Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subprocess; `url` = remote HTTP (SSE or StreamableHTTP). `approval="ask"` defers all calls; `approval="auto"` executes immediately. MCP toolsets are wrapped with `DeferredLoadingToolset` for SDK-native deferred visibility, then combined with native tools under a single `_approval_resume_filter`. MCP tools are normalized into `tool_index` with `visibility=VisibilityPolicyEnum.DEFERRED` after discovery and participate in the same visibility policy as native tools. MCP tools derive `integration` from the server prefix.
 
 **Default servers** (gracefully skipped when `npx` is absent):
 

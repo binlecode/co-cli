@@ -139,7 +139,7 @@ These settings most directly affect top-level system assembly.
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | Top-level CLI lifecycle, REPL loop, and teardown |
-| `co_cli/bootstrap/_bootstrap.py` | Runtime assembly and startup flow |
+| `co_cli/bootstrap/core.py` | Runtime assembly and startup flow |
 | `co_cli/agent.py` | Foreground agent, instruction layers, and tool registry construction |
 | `co_cli/commands/_commands.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | Shared runtime contract and workspace path resolution |

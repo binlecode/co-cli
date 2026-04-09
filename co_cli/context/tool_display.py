@@ -6,6 +6,8 @@ require touching core-loop code for cosmetic reasons.
 
 from typing import TYPE_CHECKING, Any
 
+from co_cli.tools.tool_output import ToolResultPayload
+
 if TYPE_CHECKING:
     from pydantic_ai.messages import ToolCallPart
 
@@ -47,7 +49,7 @@ def get_tool_start_args_display(tool_name: str, part: "ToolCallPart") -> str:
     return str(val)[:120]
 
 
-def format_for_display(content: Any) -> str | dict | None:
+def format_for_display(content: Any) -> ToolResultPayload:
     """Format a tool result for the on_tool_complete frontend call.
 
     Return contract:

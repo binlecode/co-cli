@@ -22,7 +22,10 @@ _FETCH_TIMEOUT = 15
 _MAX_FETCH_CHARS = 100_000
 _MAX_FETCH_BYTES = 1_048_576  # 1 MB pre-decode limit
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-_FETCH_USER_AGENT = "co-cli/0.3 (+https://github.com/binlecode/co-cli)"
+
+from importlib.metadata import version as _pkg_version
+
+_FETCH_USER_AGENT = f"co-cli/{_pkg_version('co-cli')} (+https://github.com/binlecode/co-cli)"
 
 _ALLOWED_CONTENT_TYPES = (
     "text/",

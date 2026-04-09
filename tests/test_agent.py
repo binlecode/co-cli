@@ -6,7 +6,7 @@ from co_cli._model_factory import build_model
 from co_cli.agent import build_agent, build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context._tool_lifecycle import CoToolLifecycle
-from co_cli.deps import ToolSource, VisibilityPolicy
+from co_cli.deps import ToolSourceEnum, VisibilityPolicyEnum
 
 # Config with fake integration paths so domain tools are always registered in tests,
 # regardless of whether the developer's local settings have these paths configured.
@@ -99,9 +99,11 @@ def test_tool_index_visibility_policy_metadata():
 
     # Every entry must be native source with valid visibility policy
     for name, tc in idx.items():
-        assert tc.source == ToolSource.NATIVE, f"{name}: source must be NATIVE, got {tc.source!r}"
-        assert tc.visibility in (VisibilityPolicy.ALWAYS, VisibilityPolicy.DEFERRED), (
-            f"{name}: visibility must be a VisibilityPolicy enum value"
+        assert tc.source == ToolSourceEnum.NATIVE, (
+            f"{name}: source must be NATIVE, got {tc.source!r}"
+        )
+        assert tc.visibility in (VisibilityPolicyEnum.ALWAYS, VisibilityPolicyEnum.DEFERRED), (
+            f"{name}: visibility must be a VisibilityPolicyEnum enum value"
         )
         assert tc.name == name, f"index key {name!r} mismatches ToolInfo.name {tc.name!r}"
 
@@ -115,11 +117,11 @@ def test_tool_index_visibility_policy_metadata():
         "list_memories",
         "search_knowledge",
     ):
-        assert idx[name].visibility == VisibilityPolicy.ALWAYS, f"{name} should be ALWAYS"
+        assert idx[name].visibility == VisibilityPolicyEnum.ALWAYS, f"{name} should be ALWAYS"
 
     # Spot-check deferred tools
     for name in ("edit_file", "write_file", "save_memory", "start_background_task"):
-        assert idx[name].visibility == VisibilityPolicy.DEFERRED, f"{name} should be DEFERRED"
+        assert idx[name].visibility == VisibilityPolicyEnum.DEFERRED, f"{name} should be DEFERRED"
 
     # Connector integration metadata
     assert idx["list_notes"].integration == "obsidian"
@@ -138,19 +140,19 @@ def test_tool_index_visibility_policy_metadata():
 
 
 def test_toolinfo_enum_construction():
-    """ToolInfo accepts VisibilityPolicy/ToolSource enums."""
-    from co_cli.deps import ToolInfo, ToolSource, VisibilityPolicy
+    """ToolInfo accepts VisibilityPolicyEnum/ToolSourceEnum enums."""
+    from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 
     # New enum API works
     info = ToolInfo(
         name="x",
         description="x",
         approval=False,
-        source=ToolSource.NATIVE,
-        visibility=VisibilityPolicy.ALWAYS,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
     )
-    assert info.visibility == VisibilityPolicy.ALWAYS
-    assert info.source == ToolSource.NATIVE
+    assert info.visibility == VisibilityPolicyEnum.ALWAYS
+    assert info.source == ToolSourceEnum.NATIVE
 
     # Old boolean kwargs are rejected
     import pytest
@@ -160,7 +162,7 @@ def test_toolinfo_enum_construction():
             name="x",
             description="x",
             approval=False,
-            source=ToolSource.NATIVE,
+            source=ToolSourceEnum.NATIVE,
             always_visibility=True,
         )
     with pytest.raises(TypeError):
@@ -168,7 +170,7 @@ def test_toolinfo_enum_construction():
             name="x",
             description="x",
             approval=False,
-            source=ToolSource.NATIVE,
+            source=ToolSourceEnum.NATIVE,
             should_defer=True,
         )
 

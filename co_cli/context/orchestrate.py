@@ -19,6 +19,7 @@ from pydantic_ai import (
     DeferredToolRequests,
     DeferredToolResults,
 )
+from pydantic_ai.settings import ModelSettings
 
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
@@ -66,6 +67,9 @@ from co_cli.context.tool_display import format_for_display, get_tool_start_args_
 from co_cli.deps import CoDeps
 from co_cli.display._core import Frontend
 from co_cli.display._stream_renderer import StreamRenderer
+
+type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
+type SessionRunResult = AgentRunResult[str | DeferredToolRequests]
 
 # ---------------------------------------------------------------------------
 # TurnResult — returned by run_turn()
@@ -122,7 +126,7 @@ class _TurnState:
     # Overflow recovery: one-shot flag — emergency compact attempted at most once per turn.
     overflow_recovery_attempted: bool = False
     # in-turn (updated after each segment)
-    latest_result: AgentRunResult | None = None
+    latest_result: SessionRunResult | None = None
     latest_streamed_text: bool = False
     # latest_usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely to
     # _merge_turn_usage and span attributes; callers never inspect fields directly.
@@ -162,7 +166,7 @@ def _merge_turn_usage(
 
 
 async def _collect_deferred_tool_approvals(
-    result: AgentRunResult,
+    result: SessionRunResult,
     deps: CoDeps,
     frontend: Frontend | None,
 ) -> DeferredToolResults:
@@ -178,9 +182,15 @@ async def _collect_deferred_tool_approvals(
     Important: this payload carries approval decisions only. Actual tool execution
     and ToolReturnPart output happen after the resumed segment completes.
     """
+    output = result.output
+    if not isinstance(output, DeferredToolRequests):
+        raise RuntimeError(
+            "_collect_deferred_tool_approvals called without DeferredToolRequests output"
+        )
+
     approvals = DeferredToolResults()
 
-    for call in result.output.approvals:
+    for call in output.approvals:
         args = decode_tool_args(call.args)
         subject = resolve_approval_subject(call.tool_name, args)
 
@@ -219,9 +229,9 @@ async def _collect_deferred_tool_approvals(
 
 async def _execute_stream_segment(
     turn_state: _TurnState,
-    agent: Agent,
+    agent: SessionAgent,
     deps: CoDeps,
-    model_settings: dict | None,
+    model_settings: ModelSettings | None,
     reasoning_display: str,
     frontend: Frontend,
 ) -> None:
@@ -237,7 +247,7 @@ async def _execute_stream_segment(
     Stream rendering policy (buffering, flush, thinking gating) is owned by
     StreamRenderer. Tool display metadata is owned by tool_display.
     """
-    result = None
+    result: SessionRunResult | None = None
     renderer = StreamRenderer(frontend, reasoning_display=reasoning_display)
 
     try:
@@ -318,9 +328,9 @@ async def _execute_stream_segment(
 
 async def _run_approval_loop(
     turn_state: _TurnState,
-    agent: Agent,
+    agent: SessionAgent,
     deps: CoDeps,
-    model_settings: dict | None,
+    model_settings: ModelSettings | None,
     reasoning_display: str,
     frontend: Frontend,
 ) -> None:
@@ -332,15 +342,17 @@ async def _run_approval_loop(
     tokens are sent to the model regardless of which agent runs.
     Exits when latest_result.output is no longer DeferredToolRequests.
     """
-    while isinstance(turn_state.latest_result.output, DeferredToolRequests):
-        deps.runtime.resume_tool_names = frozenset(
-            call.tool_name for call in turn_state.latest_result.output.approvals
-        )
-        approvals = await _collect_deferred_tool_approvals(
-            turn_state.latest_result, deps, frontend
-        )
+    assert turn_state.latest_result is not None
+
+    while True:
+        latest_result = turn_state.latest_result
+        output = latest_result.output
+        if not isinstance(output, DeferredToolRequests):
+            break
+        deps.runtime.resume_tool_names = frozenset(call.tool_name for call in output.approvals)
+        approvals = await _collect_deferred_tool_approvals(latest_result, deps, frontend)
         turn_state.current_input = None
-        turn_state.current_history = turn_state.latest_result.all_messages()
+        turn_state.current_history = latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
         await _execute_stream_segment(
             turn_state, agent, deps, model_settings, reasoning_display, frontend
@@ -419,7 +431,10 @@ def _check_output_limits(
 
     Precondition: turn_state.latest_result is non-None (called only on success path).
     """
-    if turn_state.latest_result.response.finish_reason == "length":
+    latest_result = turn_state.latest_result
+    assert latest_result is not None
+
+    if latest_result.response.finish_reason == "length":
         frontend.on_status(
             "Response may be truncated (hit output token limit). Use /continue to extend."
         )
@@ -472,11 +487,11 @@ def _is_context_overflow(e: ModelHTTPError) -> bool:
 
 async def run_turn(
     *,
-    agent: Agent,
+    agent: SessionAgent,
     user_input: str,
     deps: CoDeps,
     message_history: list[ModelMessage],
-    model_settings: dict | None = None,
+    model_settings: ModelSettings | None = None,
     reasoning_display: str = DEFAULT_REASONING_DISPLAY,
     frontend: Frontend,
 ) -> TurnResult:
@@ -511,17 +526,19 @@ async def run_turn(
                     await _run_approval_loop(
                         turn_state, agent, deps, model_settings, reasoning_display, frontend
                     )
-                    turn_state.current_history = turn_state.latest_result.all_messages()
+                    latest_result = turn_state.latest_result
+                    assert latest_result is not None
+                    turn_state.current_history = latest_result.all_messages()
                     if not turn_state.latest_streamed_text and isinstance(
-                        turn_state.latest_result.output, str
+                        latest_result.output, str
                     ):
-                        frontend.on_final_output(turn_state.latest_result.output)
+                        frontend.on_final_output(latest_result.output)
 
                     _check_output_limits(turn_state, deps, frontend)
 
                     return TurnResult(
                         messages=turn_state.current_history,
-                        output=turn_state.latest_result.output,
+                        output=latest_result.output,
                         usage=turn_state.latest_usage,
                         interrupted=False,
                         streamed_text=turn_state.latest_streamed_text,

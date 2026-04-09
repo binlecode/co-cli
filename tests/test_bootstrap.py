@@ -8,7 +8,7 @@ import yaml
 from tests._settings import test_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
-from co_cli.bootstrap._bootstrap import (
+from co_cli.bootstrap.core import (
     _discover_knowledge_backend,
     _resolve_reranker,
     _sync_knowledge_store,

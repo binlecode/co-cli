@@ -64,7 +64,7 @@ Later passes win on name collision, so project-local overrides user-global, whic
 
 `_load_skill_file(path, root, scan)` is the per-file loader. The `root` parameter is the load root used for containment checking. `scan=False` is passed for the bundled pass (version-controlled, no runtime scan needed); `scan=True` is passed for user-global and project-local passes.
 
-Loading happens at startup inside `create_deps()` (in `bootstrap/_bootstrap.py`) as part of deps assembly:
+Loading happens at startup inside `create_deps()` (in `bootstrap/core.py`) as part of deps assembly:
 
 1. load bundled, then user-global, then project-local skills
 2. `skill_commands` passed into `CoDeps` constructor
@@ -199,7 +199,7 @@ There is no separate skills config object today.
 | --- | --- |
 | `co_cli/commands/_skill_types.py` | `SkillConfig` frozen dataclass |
 | `co_cli/commands/_commands.py` | skill loader (`_load_skill_file`, `_is_safe_skill_path`), scanner, dispatch, and `/skills` commands |
-| `co_cli/bootstrap/_bootstrap.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
+| `co_cli/bootstrap/core.py` | `create_deps()` — MCP discovery, skill loading, and knowledge store init at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle and live skill reload |
 | `co_cli/deps.py` | `skills_dir`, `user_skills_dir` (workspace paths on CoDeps); `skill_commands` (top-level); `active_skill_name` (runtime) |
 | `co_cli/knowledge/_frontmatter.py` | markdown frontmatter parsing used by skill loader |

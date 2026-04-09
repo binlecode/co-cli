@@ -41,7 +41,7 @@ In the `co daemon` polling loop (`co_cli/daemon/_worker.py`):
 
 ### 2.3 User Notification
 When the deferred task completes, the user needs to see the result next time they open their terminal.
-- **Status Integration:** Update `co_cli/bootstrap/_render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `acknowledged=0`.
+- **Status Integration:** Update `co_cli/bootstrap/render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `acknowledged=0`.
 - **Banner Display:** The interactive terminal banner will display:
   `[Daemon] Task completed: "Draft a reply to Alice's email"`
   `<result_summary excerpt>`

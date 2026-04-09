@@ -63,7 +63,7 @@ The implementation adds `"mlx"` to the shared provider surface in `co_cli/config
 
 In `co_cli/_model_factory.py`, the `build_model()` path branches for `"mlx"` identically to `"ollama-openai"`, generating an `OpenAIChatModel` with `api_key="mlx"`. The context tracking is bypassed by returning `False` in `supports_context_ratio_tracking()`, and we refactor `_history.py` to decouple it from Ollama-specific logic.
 
-A new quirks folder `co_cli/prompts/model_quirks/mlx/` stores the inference parameters. The startup checks in `co_cli/bootstrap/_check.py` are updated with a new `_check_mlx_models` that hits `GET {config.llm_host}/v1/models` for model validation, and `check_reranker_llm()` treats MLX as explicitly unsupported so bootstrap can degrade it deterministically. `co_cli/bootstrap/_render_status.py` is updated so the user-facing provider label matches the active backend.
+A new quirks folder `co_cli/prompts/model_quirks/mlx/` stores the inference parameters. The startup checks in `co_cli/bootstrap/check.py` are updated with a new `_check_mlx_models` that hits `GET {config.llm_host}/v1/models` for model validation, and `check_reranker_llm()` treats MLX as explicitly unsupported so bootstrap can degrade it deterministically. `co_cli/bootstrap/render_status.py` is updated so the user-facing provider label matches the active backend.
 
 ---
 
@@ -108,7 +108,7 @@ A new quirks folder `co_cli/prompts/model_quirks/mlx/` stores the inference para
 
 ### TASK-4: Add MLX health checks, reranker degradation, and status rendering
 **prerequisites:** [TASK-1, TASK-2]
-**files:** `co_cli/bootstrap/_check.py`, `co_cli/bootstrap/_render_status.py`, `tests/test_model_check.py`, `tests/test_status.py`, `tests/test_bootstrap.py`
+**files:** `co_cli/bootstrap/check.py`, `co_cli/bootstrap/render_status.py`, `tests/test_model_check.py`, `tests/test_status.py`, `tests/test_bootstrap.py`
 **success_signal:** `co status` identifies the backend as MLX and reports an unreachable MLX host as offline, while bootstrap degrades unsupported MLX rerankers with a visible status.
 **done_when:** `mkdir -p .pytest-logs && uv run pytest tests/test_model_check.py tests/test_status.py tests/test_bootstrap.py -k "mlx" -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-mlx-bootstrap-status.log` passes.
 **What to do:**
@@ -116,7 +116,7 @@ A new quirks folder `co_cli/prompts/model_quirks/mlx/` stores the inference para
 - Extract Ollama block to `_check_ollama_models(config)`.
 - Update `check_agent_llm()` to route to `_check_gemini_key`, `_check_mlx_models`, or `_check_ollama_models`.
 - Update `check_reranker_llm()` so MLX rerankers return a non-`ok` result with an explicit unsupported detail, allowing `resolve_reranker()` to degrade them to `None`.
-- Update `co_cli/bootstrap/_render_status.py` so MLX is rendered as `MLX (<model>)` instead of falling into the Ollama label path.
+- Update `co_cli/bootstrap/render_status.py` so MLX is rendered as `MLX (<model>)` instead of falling into the Ollama label path.
 - Add tests for MLX-unreachable agent checks, MLX reranker degradation, and MLX status labeling.
 
 ---

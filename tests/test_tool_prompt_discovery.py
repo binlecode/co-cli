@@ -9,7 +9,7 @@ accidentally removes a keyword the SDK needs for discovery.
 
 from co_cli.agent import _build_native_toolset
 from co_cli.config._core import settings
-from co_cli.deps import VisibilityPolicy
+from co_cli.deps import VisibilityPolicyEnum
 
 _NATIVE_TOOLSET, _NATIVE_INDEX = _build_native_toolset(settings)
 
@@ -19,7 +19,7 @@ def _deferred_descriptions() -> dict[str, str]:
     return {
         name: info.description.lower()
         for name, info in _NATIVE_INDEX.items()
-        if info.visibility == VisibilityPolicy.DEFERRED
+        if info.visibility == VisibilityPolicyEnum.DEFERRED
     }
 
 

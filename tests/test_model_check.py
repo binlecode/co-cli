@@ -1,6 +1,6 @@
 """Functional tests for provider and model availability checks."""
 
-from co_cli.bootstrap._check import (
+from co_cli.bootstrap.check import (
     check_agent_llm,
     check_cross_encoder,
     check_embedder,

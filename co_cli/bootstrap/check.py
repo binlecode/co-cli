@@ -7,13 +7,13 @@ IO check functions (called on-demand by runtime diagnostics and status display):
   check_cross_encoder, check_ollama_model, check_mcp_server, check_tei.
 
 Public entry points:
-  check_settings(config)  — bootstrap/_render_status.py (settings-level check)
+  check_settings(config)  — bootstrap/render_status.py (settings-level check)
   check_runtime(deps)     — tools/capabilities.py (full runtime diagnostic)
 
 Bootstrap callers (direct, not via entry points):
-  check_reranker_llm      — bootstrap/_bootstrap.py (_resolve_reranker, inside _discover_knowledge_backend)
-  check_cross_encoder     — bootstrap/_bootstrap.py (_resolve_reranker, inside _discover_knowledge_backend)
-  check_embedder          — bootstrap/_bootstrap.py (_discover_knowledge_backend)
+  check_reranker_llm      — bootstrap/core.py (_resolve_reranker, inside _discover_knowledge_backend)
+  check_cross_encoder     — bootstrap/core.py (_resolve_reranker, inside _discover_knowledge_backend)
+  check_embedder          — bootstrap/core.py (_discover_knowledge_backend)
 
 Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py), not here.
 """
@@ -503,7 +503,8 @@ def check_runtime(
     tool_index = deps.tool_index
     source_counts: dict[str, int] = {}
     for tc in tool_index.values():
-        source_counts[tc.source] = source_counts.get(tc.source, 0) + 1
+        source_name = tc.source.value
+        source_counts[source_name] = source_counts.get(source_name, 0) + 1
 
     # Build status dict from session state
     status: dict[str, Any] = {

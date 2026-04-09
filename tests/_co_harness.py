@@ -26,6 +26,9 @@ from pydantic_ai.agent import InstrumentationSettings
 from co_cli.config._core import LOGS_DB
 from co_cli.observability._telemetry import SQLiteSpanExporter
 
+# Per-test outcome tracking — avoids monkey-patching pytest Item objects.
+_test_outcomes: dict[str, str] = {}
+
 _PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 _VERSION = tomllib.loads(_PYPROJECT.read_text())["project"]["version"]
 _SLOW_MS = int(os.getenv("CO_PYTEST_TRACE_SLOW_MS", "2000"))
@@ -228,9 +231,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> 
         return
     report = pytest.TestReport.from_item_and_call(item, call)
     if report.failed:
-        item._co_harness_outcome = "failed"
-    elif report.when == "call" and not hasattr(item, "_co_harness_outcome"):
-        item._co_harness_outcome = report.outcome
+        _test_outcomes[item.nodeid] = "failed"
+    elif report.when == "call" and item.nodeid not in _test_outcomes:
+        _test_outcomes[item.nodeid] = report.outcome
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -244,13 +247,13 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
     try:
         yield
     except BaseException:
-        item._co_harness_outcome = "failed"
+        _test_outcomes[item.nodeid] = "failed"
         raise
     finally:
         provider.force_flush()
         spans = _load_spans_after(before_rowid)
         duration_s = time.perf_counter() - start
-        outcome = getattr(item, "_co_harness_outcome", "passed")
+        outcome = _test_outcomes.pop(item.nodeid, "passed")
         terminal = item.config.pluginmanager.get_plugin("terminalreporter")
         if terminal is not None:
             terminal.write_line(_summary_line(item.nodeid, duration_s, outcome, spans))

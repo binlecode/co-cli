@@ -21,7 +21,7 @@ from co_cli.context._history import (
     truncate_tool_results,
 )
 from co_cli.context._tool_lifecycle import CoToolLifecycle
-from co_cli.deps import CoDeps, ToolInfo, ToolSource, VisibilityPolicy
+from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.memory.recall import load_always_on_memories
 from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.capabilities import check_capabilities
@@ -84,7 +84,7 @@ def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     if tool_def.name in resume:
         return True
     entry = ctx.deps.tool_index.get(tool_def.name)
-    return entry is not None and entry.visibility == VisibilityPolicy.ALWAYS
+    return entry is not None and entry.visibility == VisibilityPolicyEnum.ALWAYS
 
 
 def _build_mcp_toolsets(config: Settings) -> list:
@@ -123,7 +123,7 @@ def _build_native_toolset(
 ) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
     """Build an unfiltered FunctionToolset with per-tool defer_loading.
 
-    Tools are registered with defer_loading derived from VisibilityPolicy. The SDK's
+    Tools are registered with defer_loading derived from VisibilityPolicyEnum. The SDK's
     ToolSearchToolset (auto-added by Agent) handles deferred visibility.
 
     Domain tools (obsidian, google) are conditionally excluded when the relevant
@@ -139,7 +139,7 @@ def _build_native_toolset(
         fn: Any,
         *,
         approval: bool = False,
-        visibility: VisibilityPolicy,
+        visibility: VisibilityPolicyEnum,
         integration: str | None = None,
         retries: int | None = None,
         max_result_size: int = 50_000,
@@ -148,7 +148,7 @@ def _build_native_toolset(
         description = fn.__doc__.split("\n")[0].strip() if fn.__doc__ else fn.__name__
         kwargs: dict[str, Any] = {
             "requires_approval": approval,
-            "defer_loading": visibility == VisibilityPolicy.DEFERRED,
+            "defer_loading": visibility == VisibilityPolicyEnum.DEFERRED,
         }
         if retries is not None:
             kwargs["retries"] = retries
@@ -157,14 +157,14 @@ def _build_native_toolset(
             name=name,
             description=description,
             approval=approval,
-            source=ToolSource.NATIVE,
+            source=ToolSourceEnum.NATIVE,
             visibility=visibility,
             integration=integration,
             max_result_size=max_result_size,
         )
 
     # --- Always-visible tools (defer_loading=False) ---
-    _always_visible = VisibilityPolicy.ALWAYS
+    _always_visible = VisibilityPolicyEnum.ALWAYS
 
     # Capability introspection
     _register_tool(check_capabilities, visibility=_always_visible)
@@ -193,7 +193,7 @@ def _build_native_toolset(
     _register_tool(run_shell_command, visibility=_always_visible, max_result_size=30_000)
 
     # --- Deferred tools (defer_loading=True, discovered via SDK search_tools) ---
-    _deferred_visible = VisibilityPolicy.DEFERRED
+    _deferred_visible = VisibilityPolicyEnum.DEFERRED
 
     # File write tools
     _register_tool(write_file, approval=True, visibility=_deferred_visible, retries=1)
@@ -397,7 +397,7 @@ async def discover_mcp_tools(
     Returns (tool_names, errors, mcp_index) where errors maps server prefix to
     the error string for each server where list_tools() failed, and mcp_index maps
     tool name to ToolInfo metadata. Tool names exclude any in ``exclude``.
-    MCP tools are deferred by default (visibility=VisibilityPolicy.DEFERRED).
+    MCP tools are deferred by default (visibility=VisibilityPolicyEnum.DEFERRED).
     """
     from pydantic_ai.mcp import MCPServer
 
@@ -428,8 +428,8 @@ async def discover_mcp_tools(
                         name=name,
                         description=t.description or "",
                         approval=approval,
-                        source=ToolSource.MCP,
-                        visibility=VisibilityPolicy.DEFERRED,
+                        source=ToolSourceEnum.MCP,
+                        visibility=VisibilityPolicyEnum.DEFERRED,
                         integration=prefix or None,
                     )
         except Exception as e:

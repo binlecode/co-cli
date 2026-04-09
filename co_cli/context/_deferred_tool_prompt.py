@@ -6,7 +6,7 @@ which capability domains are available via search_tools without listing every
 individual tool name.
 """
 
-from co_cli.deps import ToolInfo, VisibilityPolicy
+from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 
 # Native deferred tool → category label
 _NATIVE_CATEGORIES: dict[str, str] = {
@@ -46,7 +46,7 @@ def build_category_awareness_prompt(
     """
     categories: set[str] = set()
     for info in tool_index.values():
-        if info.visibility != VisibilityPolicy.DEFERRED:
+        if info.visibility != VisibilityPolicyEnum.DEFERRED:
             continue
         if info.integration and info.integration in _INTEGRATION_CATEGORIES:
             categories.add(_INTEGRATION_CATEGORIES[info.integration])

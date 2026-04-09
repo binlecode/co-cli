@@ -19,26 +19,24 @@ if [[ "${2:-}" == "--fix" ]]; then
 fi
 
 # --- Lint (ruff) ---
-# Scope to co_cli/ only. tests/ and evals/ are linted separately when touched.
+# Use repo-root Ruff config discovery.
 if [[ -n "$FIX" ]]; then
     echo "==> ruff check --fix"
-    uv run ruff check co_cli/ --fix
+    uv run ruff check --fix
     echo "==> ruff format"
-    uv run ruff format co_cli/
+    uv run ruff format
 else
     echo "==> ruff check"
-    uv run ruff check co_cli/
+    uv run ruff check
     echo "==> ruff format --check"
-    uv run ruff format --check co_cli/
+    uv run ruff format --check
 fi
 
 [[ "$LEVEL" == "lint" ]] && { echo "==> lint OK"; exit 0; }
 
 # --- Types (pyright) ---
-# Pyright runs in warn mode (||true) while pre-existing errors are worked down.
-# Remove ||true once error count reaches 0.
 echo "==> pyright"
-uv run pyright || true
+uv run pyright
 
 [[ "$LEVEL" == "types" ]] && { echo "==> types OK"; exit 0; }
 

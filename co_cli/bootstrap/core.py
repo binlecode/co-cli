@@ -4,7 +4,7 @@ import logging
 import os
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from opentelemetry import trace
 
@@ -20,6 +20,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
 _TRACER = trace.get_tracer("co-cli.bootstrap")
+KnowledgeBackendLiteral = Literal["grep", "fts5", "hybrid"]
 
 
 def _summarize_backend_error(exc: Exception) -> str:
@@ -51,7 +52,7 @@ def _resolve_reranker(
     Called inside _discover_knowledge_backend only when an index is active (hybrid/fts5).
     Skipped on grep — no index means no reranking.
     """
-    from co_cli.bootstrap._check import check_cross_encoder, check_reranker_llm
+    from co_cli.bootstrap.check import check_cross_encoder, check_reranker_llm
 
     cross_result = check_cross_encoder(config)
     if cross_result.status not in ("ok", "skipped"):
@@ -89,18 +90,18 @@ def _discover_knowledge_backend(
     if config.knowledge.search_backend == "grep":
         return None
 
-    configured = config.knowledge.search_backend
+    configured: KnowledgeBackendLiteral = config.knowledge.search_backend
     statuses: list[str] = []
 
     # Resolve reranker — config fields must reflect actual availability
     _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
-    resolved_backend = "fts5"
+    resolved_backend: KnowledgeBackendLiteral = "fts5"
     if config.knowledge.embedding_provider == "none":
         logger.info("Hybrid skipped: embedding provider is 'none'")
     else:
-        from co_cli.bootstrap._check import check_embedder
+        from co_cli.bootstrap.check import check_embedder
 
         embedder_check = check_embedder(config)
         if embedder_check.status not in ("ok", "skipped"):
@@ -122,7 +123,7 @@ def _discover_knowledge_backend(
     # --- Construct store with resolved config ---
     from co_cli.knowledge._store import KnowledgeStore as _KS
 
-    def _degrade_to(backend: str, reason: str) -> None:
+    def _degrade_to(backend: KnowledgeBackendLiteral, reason: str) -> None:
         config.knowledge.search_backend = backend
         degradations["knowledge"] = f"{configured} → {backend} ({reason})"
 
@@ -223,7 +224,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # Step 2b: Ollama context probe — fail-fast on undersized models,
     # override num_ctx with runtime Modelfile value when they differ.
     if config.llm.uses_ollama_openai():
-        from co_cli.bootstrap._check import probe_ollama_context
+        from co_cli.bootstrap.check import probe_ollama_context
 
         ctx_probe = probe_ollama_context(config.llm.host, config.llm.model)
         if ctx_probe.status == "error":

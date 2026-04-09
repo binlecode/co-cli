@@ -4,7 +4,7 @@
 
 Canonical startup flow for co-cli. This doc is the sole owner for the sequence from settings loading through `display_welcome_banner()`: layered config load, deps initialization (`create_deps()`), model and tool registry construction, MCP connection, skill loading, knowledge backend resolution and sync, session restore, startup status reporting, and the final boundary into the REPL. Skill file format, load gates, and dispatch semantics live in [DESIGN-skills.md](DESIGN-skills.md).
 
-Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/_check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
+Bootstrap owns sequencing. Integration health checks (`check_runtime()` in `co_cli/bootstrap/check.py`) are not called during bootstrap; they are invoked on-demand by the `/status` tool in `co_cli/tools/capabilities.py`.
 
 ```
 co_cli.main  (module load)
@@ -94,9 +94,9 @@ This is the only startup config object. Bootstrap passes `Settings` directly int
 
 `chat_loop()` creates the terminal frontend, a `PromptSession`, and an `AsyncExitStack`. The completer starts with built-in slash commands only. Skill names are not added until after `create_deps()` loads them.
 
-### Step 3. Run `create_deps()`
+### Step 3. Start `create_deps()` and resolve paths
 
-`create_deps()` assembles the runtime contract used by the agent and tools. It resolves workspace-relative paths first, then performs the rest of bootstrap against the shared `Settings` instance.
+`create_deps()` assembles the runtime contract used by the agent and tools. This function owns the entire sequence from Step 3 through Step 10. It resolves workspace-relative paths first, then performs the rest of bootstrap against the shared `Settings` instance.
 
 ```text
 config = settings
@@ -242,10 +242,10 @@ These settings most directly affect bootstrap behavior.
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | Owns `_chat_loop()` startup orchestration and the REPL boundary |
-| `co_cli/bootstrap/_bootstrap.py` | Owns `create_deps()` and `restore_session()` |
-| `co_cli/bootstrap/_check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
-| `co_cli/bootstrap/_banner.py` | Renders the welcome banner that marks bootstrap completion |
-| `co_cli/bootstrap/_render_status.py` | On-demand status and security reporting, not inline bootstrap |
+| `co_cli/bootstrap/core.py` | Owns `create_deps()` and `restore_session()` |
+| `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama `num_ctx` checks |
+| `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
+| `co_cli/bootstrap/render_status.py` | On-demand status and security reporting, not inline bootstrap |
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/_core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |

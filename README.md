@@ -254,7 +254,7 @@ scripts/quality-gate.sh full          # lint + pyright + pytest (ship gate)
 | Tool | Purpose | When it runs |
 |------|---------|--------------|
 | **[ruff](https://docs.astral.sh/ruff/)** | Linter + formatter (replaces flake8, isort, black) | Pre-commit hook (`quality-gate.sh lint`) |
-| **[pyright](https://github.com/microsoft/pyright)** | Static type checker (replaces mypy) | CI + delivery skills (`quality-gate.sh types`) — warn-only while pre-existing errors are worked down |
+| **[pyright](https://github.com/microsoft/pyright)** | Static type checker (replaces mypy) | CI + delivery skills (`quality-gate.sh types`) |
 | **[pytest](https://docs.pytest.org/)** | Test runner (functional tests, no mocks) | CI + delivery skills (`quality-gate.sh full`) |
 
 Configuration for all three tools lives in `pyproject.toml`.
@@ -263,12 +263,12 @@ Configuration for all three tools lives in `pyproject.toml`.
 
 ## Testing
 
-Co uses **functional tests only** — no mocks or stubs. Tests hit real services and fail (not skip) when a service is unavailable.
+Co uses **functional tests only** — no mocks or stubs. Tests hit real services and fail (not skip) when a service is unavailable. All pytest runs should be logged to `.pytest-logs/`.
 
 ```bash
-uv run pytest              # Run all tests
-uv run pytest -v           # Verbose output
-uv run pytest tests/test_history.py  # Single test file
+mkdir -p .pytest-logs
+uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-full.log
+uv run pytest tests/test_history.py -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-history.log
 ```
 
 ### Test Requirements
@@ -287,7 +287,8 @@ uv run pytest tests/test_history.py  # Single test file
 export GEMINI_API_KEY="your-key"
 export LLM_PROVIDER="gemini"
 export CO_CLI_AUTO_CONFIRM="true"
-uv run pytest -v
+mkdir -p .pytest-logs
+uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-ci.log
 ```
 
 ---

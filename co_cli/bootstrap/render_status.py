@@ -9,7 +9,7 @@ from pathlib import Path
 
 from rich.table import Table
 
-from co_cli.bootstrap._check import check_agent_llm, check_settings
+from co_cli.bootstrap.check import check_agent_llm, check_settings
 from co_cli.config._core import LOGS_DB, USER_DIR, Settings, project_config_path
 from co_cli.display._core import console
 

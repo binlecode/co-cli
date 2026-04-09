@@ -40,7 +40,7 @@ In the `co daemon` polling loop (`co_cli/daemon/_worker.py`), select rows where 
 
 ### 2.3 User Notification
 When the heavy batch job completes, the user needs to know.
-- **Status Integration:** Update `co_cli/bootstrap/_render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `type='heavy_batch'` and `acknowledged=0`.
+- **Status Integration:** Update `co_cli/bootstrap/render_status.py`. In `get_status()`, query `daemon_jobs` for any row where `status='completed'` and `type='heavy_batch'` and `acknowledged=0`.
 - **Banner Display:** The interactive terminal banner will display:
   `[Daemon] Heavy batch completed: "Summarize 50 PDFs in Drive"`
   `"Summary output saved to KnowledgeIndex."`

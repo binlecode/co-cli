@@ -63,7 +63,7 @@ files: `co_cli/commands/_commands.py`
 - Handlers import from `_types.py` and `_skill_loader.py` as needed
 - Grep for all `from co_cli.commands._commands import` and update
 
-files: `co_cli/main.py`, `co_cli/bootstrap/_bootstrap.py`, `tests/test_bootstrap.py`
+files: `co_cli/main.py`, `co_cli/bootstrap/core.py`, `tests/test_bootstrap.py`
 
 ### 6. Update DESIGN docs
 - `DESIGN-flow-bootstrap.md` — skill loading file reference

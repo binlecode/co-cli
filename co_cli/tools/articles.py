@@ -344,9 +344,10 @@ async def save_article(
     tags: list[str] | None = None,
     related: list[str] | None = None,
 ) -> ToolReturn:
-    """Save external reference material (web page, documentation, research) as
-    a knowledge article for future retrieval. Articles are decay-protected and
-    persist indefinitely unlike memories.
+    """Save an article from external reference material for long-term retrieval.
+
+    Use for web pages, documentation, or research worth keeping permanently.
+    Articles are decay-protected and persist indefinitely unlike memories.
 
     Use save_article for externally-fetched content — web docs, API references,
     research papers, guides. Use save_memory for conversation-derived facts
