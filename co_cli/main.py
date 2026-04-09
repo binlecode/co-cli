@@ -5,63 +5,86 @@ import time
 import tomllib
 from contextlib import AsyncExitStack
 from pathlib import Path
+
 import typer
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
-from prompt_toolkit.history import FileHistory
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
-
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import FileHistory
 from pydantic_ai import Agent
 from pydantic_ai.agent import InstrumentationSettings
 from pydantic_ai.messages import ModelMessage
 
-from co_cli.deps import CoDeps
-from co_cli.context.orchestrate import run_turn, TurnResult
 from co_cli.agent import build_agent
-from co_cli.observability._telemetry import SQLiteSpanExporter
-from co_cli.config._core import settings, USER_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
-from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
-from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
+from co_cli.bootstrap._bootstrap import create_deps, restore_session
+from co_cli.bootstrap._render_status import (
+    check_security,
+    get_status,
+    render_security_findings,
+    render_status_table,
+)
 from co_cli.commands._commands import (
-    dispatch as dispatch_command, CommandContext, BUILTIN_COMMANDS,
-    LocalOnly, ReplaceTranscript, DelegateToAgent,
+    BUILTIN_COMMANDS,
+    CommandContext,
+    DelegateToAgent,
+    ReplaceTranscript,
     _build_completer_words,
 )
-from co_cli.context.session import touch_session, increment_compaction, save_session, load_session
-from co_cli.context.transcript import append_messages as append_transcript, write_compact_boundary
+from co_cli.commands._commands import (
+    dispatch as dispatch_command,
+)
+from co_cli.config._core import (
+    DEFAULT_REASONING_DISPLAY,
+    LOGS_DB,
+    REASONING_DISPLAY_FULL,
+    USER_DIR,
+    VALID_REASONING_DISPLAY_MODES,
+    settings,
+)
+from co_cli.context.orchestrate import TurnResult, run_turn
+from co_cli.context.session import increment_compaction, load_session, save_session, touch_session
 from co_cli.context.skill_env import cleanup_skill_run_state
-from co_cli.bootstrap._bootstrap import create_deps, restore_session
+from co_cli.context.transcript import append_messages as append_transcript
+from co_cli.context.transcript import write_compact_boundary
+from co_cli.deps import CoDeps
+from co_cli.display._core import PROMPT_CHAR, Frontend, TerminalFrontend, console, set_theme
+from co_cli.observability._telemetry import SQLiteSpanExporter
 
 exporter = SQLiteSpanExporter()
 
-_VERSION = tomllib.loads(
-    (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
-)["project"]["version"]
+_VERSION = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())[
+    "project"
+]["version"]
 
-resource = Resource.create({
-    "service.name": "co-cli",
-    "service.version": _VERSION,
-})
+resource = Resource.create(
+    {
+        "service.name": "co-cli",
+        "service.version": _VERSION,
+    }
+)
 tracer_provider = TracerProvider(resource=resource)
 tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
 trace.set_tracer_provider(tracer_provider)
 
 # Enable pydantic-ai instrumentation for all agents
 # Using version=3 for latest OTel GenAI semantic conventions (spec compliant)
-Agent.instrument_all(InstrumentationSettings(
-    tracer_provider=tracer_provider,
-    version=3,
-))
+Agent.instrument_all(
+    InstrumentationSettings(
+        tracer_provider=tracer_provider,
+        version=3,
+    )
+)
 
 app = typer.Typer(
     help="Co — personal AI operator · local-first · approval-first",
     context_settings={"help_option_names": ["--help", "-h"]},
     invoke_without_command=True,
 )
+
 
 @app.callback()
 def _default(ctx: typer.Context):
@@ -96,7 +119,7 @@ async def _finalize_turn(
     save_session(deps.sessions_dir, next_session)
 
     # Append new messages to transcript (positional tail slice)
-    new_messages = turn_result.messages[len(message_history):]
+    new_messages = turn_result.messages[len(message_history) :]
     append_transcript(deps.sessions_dir, deps.session.session_id, new_messages)
 
     # Emit error banner when outcome is error
@@ -133,9 +156,7 @@ async def _run_foreground_turn(
         )
     finally:
         cleanup_skill_run_state(saved_env, deps)
-    return await _finalize_turn(
-        turn_result, message_history, session_data, deps, frontend
-    )
+    return await _finalize_turn(turn_result, message_history, session_data, deps, frontend)
 
 
 async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
@@ -154,13 +175,14 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             deps = await create_deps(frontend, stack)
         except ValueError as e:
             console.print(f"[bold red]Startup error:[/bold red] {e}")
-            raise SystemExit(1)
+            raise SystemExit(1) from e
 
         completer.words = _build_completer_words(deps.skill_commands)
         agent = build_agent(config=deps.config, model=deps.model)
 
         session_data = restore_session(deps, frontend)
         from co_cli.commands._commands import get_skill_registry
+
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
         # Resume hint: check if a transcript exists for the current session
@@ -239,10 +261,12 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
     finally:
         # Drain pending memory extraction before exit
         from co_cli.memory._extractor import drain_pending_extraction
+
         await drain_pending_extraction()
 
         if deps is not None:
             from co_cli.tools.background import kill_task
+
             for task_state in deps.session.background_tasks.values():
                 if task_state.status == "running":
                     try:
@@ -256,8 +280,12 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 @app.command()
 def chat(
     theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Alias for --reasoning-display full"),
-    reasoning_display: str = typer.Option(None, "--reasoning-display", help="Reasoning display mode: off, summary, full"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Alias for --reasoning-display full"
+    ),
+    reasoning_display: str = typer.Option(
+        None, "--reasoning-display", help="Reasoning display mode: off, summary, full"
+    ),
 ):
     """Start an interactive chat session with Co."""
     if theme:
@@ -266,7 +294,9 @@ def chat(
     # Resolve effective mode: explicit flag > --verbose alias > persistent config default
     if reasoning_display is not None:
         if reasoning_display not in VALID_REASONING_DISPLAY_MODES:
-            console.print(f"[bold red]Error:[/bold red] --reasoning-display must be one of: {', '.join(sorted(VALID_REASONING_DISPLAY_MODES))}")
+            console.print(
+                f"[bold red]Error:[/bold red] --reasoning-display must be one of: {', '.join(sorted(VALID_REASONING_DISPLAY_MODES))}"
+            )
             raise SystemExit(1)
         effective_mode = reasoning_display
     elif verbose:
@@ -302,12 +332,13 @@ def logs():
     metadata_path = Path(__file__).parent / "datasette_metadata.json"
 
     url = "http://127.0.0.1:8001"
-    console.print(f"[bold green]Opening Datasette dashboard...[/bold green]")
+    console.print("[bold green]Opening Datasette dashboard...[/bold green]")
     console.print(f"[cyan]URL: {url}[/cyan]")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
 
     # Auto-open browser after a short delay
     import threading
+
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     cmd = ["datasette", str(db_path), "--port", "8001"]
@@ -324,6 +355,7 @@ def logs():
 def traces():
     """Open a visual trace viewer with nested spans (like Logfire)."""
     import webbrowser
+
     from co_cli.observability._viewer import write_trace_html
 
     db_path = LOGS_DB
@@ -336,16 +368,19 @@ def traces():
     webbrowser.open(f"file://{html_path}")
 
 
-
 @app.command()
 def tail(
     trace_id: str = typer.Option(None, "--trace", "-i", help="Filter to a specific trace ID"),
     tools_only: bool = typer.Option(False, "--tools-only", "-T", help="Only show tool spans"),
-    models_only: bool = typer.Option(False, "--models-only", "-m", help="Only show model/chat spans"),
+    models_only: bool = typer.Option(
+        False, "--models-only", "-m", help="Only show model/chat spans"
+    ),
     poll: float = typer.Option(1.0, "--poll", "-p", help="Poll interval in seconds"),
     no_follow: bool = typer.Option(False, "--no-follow", "-n", help="Print recent spans and exit"),
     last: int = typer.Option(20, "--last", "-l", help="Number of recent spans to show on startup"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show LLM input/output content for model spans"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show LLM input/output content for model spans"
+    ),
 ):
     """Tail agent spans in real time (like tail -f for OTel traces)."""
     from co_cli.observability._tail import run_tail

@@ -22,7 +22,9 @@ class ShellBackend:
         Raises RuntimeError on non-zero exit code or timeout.
         """
         proc = await asyncio.create_subprocess_exec(
-            "sh", "-c", cmd,
+            "sh",
+            "-c",
+            cmd,
             cwd=self.workspace_dir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
@@ -31,20 +33,20 @@ class ShellBackend:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             await kill_process_tree(proc)
             # Read any buffered output before raising
             partial = b""
             if proc.stdout:
                 try:
                     partial = await asyncio.wait_for(proc.stdout.read(), timeout=1.0)
-                except (asyncio.TimeoutError, Exception):
+                except (TimeoutError, Exception):
                     pass
             partial_str = partial.decode("utf-8", errors="replace").strip()
             msg = f"Command timed out after {timeout}s: {cmd}"
             if partial_str:
                 msg += f"\nPartial output:\n{partial_str}"
-            raise RuntimeError(msg)
+            raise RuntimeError(msg) from None
         decoded = stdout.decode("utf-8")
         if proc.returncode != 0:
             raise RuntimeError(f"exit code {proc.returncode}: {decoded.strip()}")

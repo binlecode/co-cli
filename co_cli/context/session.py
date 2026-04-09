@@ -8,7 +8,7 @@ Sessions persist indefinitely — a new session is created only via /new.
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ def _is_valid_uuid(value: str) -> bool:
 
 def new_session() -> dict:
     """Create a new session dict with a fresh UUID and current timestamps."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return {
         "session_id": str(uuid.uuid4()),
         "created_at": now,
@@ -76,7 +76,7 @@ def touch_session(session: dict) -> dict:
 
     Does not mutate the input dict.
     """
-    return {**session, "last_used_at": datetime.now(timezone.utc).isoformat()}
+    return {**session, "last_used_at": datetime.now(UTC).isoformat()}
 
 
 def increment_compaction(session: dict) -> dict:
@@ -85,5 +85,3 @@ def increment_compaction(session: dict) -> dict:
     Does not mutate the input dict.
     """
     return {**session, "compaction_count": session.get("compaction_count", 0) + 1}
-
-

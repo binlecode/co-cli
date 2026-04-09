@@ -20,9 +20,7 @@ def _load_personality_memories() -> str:
     Called by ``add_personality_memories()`` in ``agent.py`` on every turn.
     """
     memory_dir = Path.cwd() / ".co-cli" / "memory"
-    personality_memories = load_memories(
-        memory_dir, tags=["personality-context"]
-    )
+    personality_memories = load_memories(memory_dir, tags=["personality-context"])
     if not personality_memories:
         return ""
 

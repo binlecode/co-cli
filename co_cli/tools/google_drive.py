@@ -3,14 +3,13 @@
 from typing import Any
 
 from googleapiclient.discovery import build
-from pydantic_ai import RunContext, ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_errors import handle_google_api_error, tool_error
 from co_cli.tools.tool_output import tool_output
-
 
 _DRIVE_NOT_CONFIGURED = (
     "Drive: not configured. "
@@ -143,6 +142,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
         if ctx.deps.knowledge_store is not None:
             try:
                 import hashlib as _hashlib
+
                 ctx.deps.knowledge_store.index(
                     source="drive",
                     path=file_id,
@@ -151,6 +151,7 @@ def read_drive_file(ctx: RunContext[CoDeps], file_id: str) -> ToolReturn:
                     hash=_hashlib.sha256(text.encode()).hexdigest(),
                 )
                 from co_cli.knowledge._chunker import chunk_text
+
                 drive_chunks = chunk_text(
                     text,
                     chunk_size=ctx.deps.config.knowledge.chunk_size,

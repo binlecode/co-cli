@@ -2,13 +2,11 @@
 
 import re
 from pathlib import Path
-from typing import Any
 
-from pydantic_ai import RunContext, ModelRetry
-
-from co_cli.deps import CoDeps
+from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
+from co_cli.deps import CoDeps
 from co_cli.tools.tool_output import tool_output
 
 
@@ -96,8 +94,7 @@ def search_notes(
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian: vault not configured or not found. "
-            "Set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. Set obsidian_vault_path in settings."
         )
 
     # Parse keywords (split on whitespace, filter empty)
@@ -126,7 +123,8 @@ def search_notes(
             if folder:
                 search_root_str = str(search_root)
                 fts_results = [
-                    r for r in fts_results
+                    r
+                    for r in fts_results
                     if r.path == search_root_str or r.path.startswith(search_root_str + "/")
                 ]
             has_more = len(fts_results) > limit
@@ -184,10 +182,12 @@ def search_notes(
             if not all(matches):
                 continue
 
-            results.append({
-                "file": str(note.relative_to(vault)),
-                "snippet": _snippet_around(content, matches[0]),
-            })
+            results.append(
+                {
+                    "file": str(note.relative_to(vault)),
+                    "snippet": _snippet_around(content, matches[0]),
+                }
+            )
         except Exception:
             continue
 
@@ -250,8 +250,7 @@ def list_notes(
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian: vault not configured or not found. "
-            "Set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. Set obsidian_vault_path in settings."
         )
 
     notes = list(vault.rglob("*.md"))
@@ -285,7 +284,7 @@ def list_notes(
     total = len(note_paths)
 
     # Paginate
-    page = note_paths[offset:offset + limit]
+    page = note_paths[offset : offset + limit]
     has_more = offset + limit < total
 
     lines = [f"- {p}" for p in page]
@@ -325,8 +324,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     vault = ctx.deps.obsidian_vault_path
     if not vault or not vault.exists():
         raise ModelRetry(
-            "Obsidian: vault not configured or not found. "
-            "Set obsidian_vault_path in settings."
+            "Obsidian: vault not configured or not found. Set obsidian_vault_path in settings."
         )
 
     # Sanitize path to prevent directory traversal
@@ -345,7 +343,7 @@ def read_note(ctx: RunContext[CoDeps], filename: str) -> ToolReturn:
     try:
         text = safe_path.read_text(encoding="utf-8")
     except Exception as e:
-        raise ModelRetry(f"Obsidian: error reading note ({e}).")
+        raise ModelRetry(f"Obsidian: error reading note ({e}).") from e
 
     return tool_output(
         text,

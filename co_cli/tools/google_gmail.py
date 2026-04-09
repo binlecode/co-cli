@@ -4,14 +4,13 @@ import base64
 from email.mime.text import MIMEText
 
 from googleapiclient.discovery import build
-from pydantic_ai import RunContext, ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_errors import tool_error, handle_google_api_error
 from co_cli.tools._google_auth import get_cached_google_creds
-from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_errors import handle_google_api_error, tool_error
 from co_cli.tools.tool_output import tool_output
-
 
 _GMAIL_NOT_CONFIGURED = (
     "Gmail: not configured. "
@@ -79,12 +78,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
         return err
 
     try:
-        response = (
-            service.users()
-            .messages()
-            .list(userId="me", maxResults=max_results)
-            .execute()
-        )
+        response = service.users().messages().list(userId="me", maxResults=max_results).execute()
         messages = response.get("messages", [])
         if not messages:
             return tool_output("No emails found.", ctx=ctx, count=0)
@@ -123,15 +117,14 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
 
     try:
         response = (
-            service.users()
-            .messages()
-            .list(userId="me", q=query, maxResults=max_results)
-            .execute()
+            service.users().messages().list(userId="me", q=query, maxResults=max_results).execute()
         )
         messages = response.get("messages", [])
         if not messages:
             return tool_output(f"No emails found for query: {query}", ctx=ctx, count=0)
-        display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(service, messages)
+        display = f"Search results for '{query}' ({len(messages)}):\n" + _format_messages(
+            service, messages
+        )
         return tool_output(display, ctx=ctx, count=len(messages))
     except ModelRetry:
         raise

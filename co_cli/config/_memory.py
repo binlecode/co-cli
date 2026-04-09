@@ -1,4 +1,5 @@
 """Memory lifecycle settings (notes with gravity)."""
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DEFAULT_MEMORY_MAX_COUNT = 200
@@ -9,6 +10,7 @@ DEFAULT_MEMORY_AUTO_SAVE_TAGS: list[str] = ["user", "feedback", "project", "refe
 
 class MemorySettings(BaseModel):
     """Memory lifecycle settings (notes with gravity)."""
+
     model_config = ConfigDict(extra="ignore")
 
     max_count: int = Field(default=DEFAULT_MEMORY_MAX_COUNT, ge=10)

@@ -59,7 +59,9 @@ def resolve_approval_subject(
             tool_name=tool_name,
             kind=ApprovalKindEnum.SHELL,
             value=utility,
-            display=f"run_shell_command(cmd={cmd!r})\n  {hint}" if hint else f"run_shell_command(cmd={cmd!r})",
+            display=f"run_shell_command(cmd={cmd!r})\n  {hint}"
+            if hint
+            else f"run_shell_command(cmd={cmd!r})",
             can_remember=bool(utility),
         )
 

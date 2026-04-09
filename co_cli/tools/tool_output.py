@@ -15,14 +15,15 @@ For call sites without RunContext (helper functions, lifecycle modules):
     return tool_output_raw("formatted display text", action="saved")
 """
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.tools.tool_result_storage import persist_if_oversized, TOOL_RESULT_MAX_SIZE
+from co_cli.tools.tool_result_storage import TOOL_RESULT_MAX_SIZE, persist_if_oversized
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
+
     from co_cli.deps import CoDeps
 
 
@@ -37,7 +38,9 @@ def tool_output(
     threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
     if len(display) > threshold:
         display = persist_if_oversized(
-            display, ctx.deps.tool_results_dir, ctx.tool_name,
+            display,
+            ctx.deps.tool_results_dir,
+            ctx.tool_name,
             max_size=threshold,
         )
     return ToolReturn(return_value=display, metadata=metadata or None)

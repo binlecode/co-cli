@@ -3,13 +3,13 @@
 from typing import TYPE_CHECKING
 
 from pydantic_ai import ModelRetry
-
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 if TYPE_CHECKING:
     from pydantic_ai import RunContext
+
     from co_cli.deps import CoDeps
 
 

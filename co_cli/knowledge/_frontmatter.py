@@ -141,70 +141,57 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
         )
 
     # Validate optional fields if present
-    if "kind" in fm:
-        if fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
-            raise ValueError(
-                "memory frontmatter field 'kind' must be 'memory' or 'article'"
-            )
+    if "kind" in fm and fm["kind"] not in (MemoryKindEnum.MEMORY, MemoryKindEnum.ARTICLE):
+        raise ValueError("memory frontmatter field 'kind' must be 'memory' or 'article'")
 
-    if "origin_url" in fm:
-        if fm["origin_url"] is not None and not isinstance(fm["origin_url"], str):
-            raise ValueError(
-                "memory frontmatter field 'origin_url' must be a string or null"
-            )
+    if (
+        "origin_url" in fm
+        and fm["origin_url"] is not None
+        and not isinstance(fm["origin_url"], str)
+    ):
+        raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
 
-    if "provenance" in fm:
-        if fm["provenance"] is not None:
-            if not isinstance(fm["provenance"], str):
-                raise ValueError(
-                    "memory frontmatter field 'provenance' must be a string or null"
-                )
-            if fm["provenance"] not in _VALID_PROVENANCE:
-                raise ValueError(
-                    f"memory frontmatter field 'provenance' must be one of "
-                    f"{sorted(_VALID_PROVENANCE)}, got {fm['provenance']!r}"
-                )
+    if "provenance" in fm and fm["provenance"] is not None:
+        if not isinstance(fm["provenance"], str):
+            raise ValueError("memory frontmatter field 'provenance' must be a string or null")
+        if fm["provenance"] not in _VALID_PROVENANCE:
+            raise ValueError(
+                f"memory frontmatter field 'provenance' must be one of "
+                f"{sorted(_VALID_PROVENANCE)}, got {fm['provenance']!r}"
+            )
 
     if "tags" in fm:
         if not isinstance(fm["tags"], list):
             raise ValueError("memory frontmatter field 'tags' must be a list")
         if not all(isinstance(tag, str) for tag in fm["tags"]):
-            raise ValueError(
-                "memory frontmatter field 'tags' must contain only strings"
+            raise ValueError("memory frontmatter field 'tags' must contain only strings")
+
+    if "auto_category" in fm and fm["auto_category"] is not None:
+        if not isinstance(fm["auto_category"], str):
+            raise ValueError("memory frontmatter field 'auto_category' must be a string or null")
+        valid_categories = {
+            "preference",
+            "correction",
+            "decision",
+            "context",
+            "pattern",
+            "character",
+        }
+        if fm["auto_category"] not in valid_categories:
+            logger.warning(
+                "memory frontmatter field 'auto_category' has unknown value %r — ignoring",
+                fm["auto_category"],
             )
 
-    if "auto_category" in fm:
-        if fm["auto_category"] is not None:
-            if not isinstance(fm["auto_category"], str):
-                raise ValueError(
-                    "memory frontmatter field 'auto_category' must be a string or null"
-                )
-            valid_categories = {
-                "preference",
-                "correction",
-                "decision",
-                "context",
-                "pattern",
-                "character",
-            }
-            if fm["auto_category"] not in valid_categories:
-                logger.warning(
-                    "memory frontmatter field 'auto_category' has unknown value %r — ignoring",
-                    fm["auto_category"],
-                )
-
-    if "certainty" in fm:
-        if fm["certainty"] is not None:
-            if not isinstance(fm["certainty"], str):
-                raise ValueError(
-                    "memory frontmatter field 'certainty' must be a string or null"
-                )
-            valid_certainties = {"high", "medium", "low"}
-            if fm["certainty"] not in valid_certainties:
-                logger.warning(
-                    "memory frontmatter field 'certainty' has unknown value %r — ignoring",
-                    fm["certainty"],
-                )
+    if "certainty" in fm and fm["certainty"] is not None:
+        if not isinstance(fm["certainty"], str):
+            raise ValueError("memory frontmatter field 'certainty' must be a string or null")
+        valid_certainties = {"high", "medium", "low"}
+        if fm["certainty"] not in valid_certainties:
+            logger.warning(
+                "memory frontmatter field 'certainty' has unknown value %r — ignoring",
+                fm["certainty"],
+            )
 
     if "updated" in fm:
         if not isinstance(fm["updated"], str):
@@ -215,42 +202,27 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
                 "memory frontmatter field 'updated' must be ISO8601 format (YYYY-MM-DDTHH:MM:SS)"
             )
 
-    if "decay_protected" in fm:
-        if not isinstance(fm["decay_protected"], bool):
-            raise ValueError(
-                "memory frontmatter field 'decay_protected' must be a boolean"
+    if "decay_protected" in fm and not isinstance(fm["decay_protected"], bool):
+        raise ValueError("memory frontmatter field 'decay_protected' must be a boolean")
+
+    if "title" in fm and fm["title"] is not None and not isinstance(fm["title"], str):
+        raise ValueError("memory frontmatter field 'title' must be a string or null")
+
+    if "related" in fm and fm["related"] is not None:
+        if not isinstance(fm["related"], list):
+            raise ValueError("memory frontmatter field 'related' must be a list or null")
+        if not all(isinstance(s, str) for s in fm["related"]):
+            raise ValueError("memory frontmatter field 'related' must contain only strings")
+
+    if "artifact_type" in fm and fm["artifact_type"] is not None:
+        if not isinstance(fm["artifact_type"], str):
+            raise ValueError("memory frontmatter field 'artifact_type' must be a string or null")
+        valid_artifact_types = {e.value for e in ArtifactTypeEnum}
+        if fm["artifact_type"] not in valid_artifact_types:
+            logger.warning(
+                "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
+                fm["artifact_type"],
             )
 
-    if "title" in fm:
-        if fm["title"] is not None and not isinstance(fm["title"], str):
-            raise ValueError(
-                "memory frontmatter field 'title' must be a string or null"
-            )
-
-    if "related" in fm:
-        if fm["related"] is not None:
-            if not isinstance(fm["related"], list):
-                raise ValueError(
-                    "memory frontmatter field 'related' must be a list or null"
-                )
-            if not all(isinstance(s, str) for s in fm["related"]):
-                raise ValueError(
-                    "memory frontmatter field 'related' must contain only strings"
-                )
-
-    if "artifact_type" in fm:
-        if fm["artifact_type"] is not None:
-            if not isinstance(fm["artifact_type"], str):
-                raise ValueError(
-                    "memory frontmatter field 'artifact_type' must be a string or null"
-                )
-            valid_artifact_types = {e.value for e in ArtifactTypeEnum}
-            if fm["artifact_type"] not in valid_artifact_types:
-                logger.warning(
-                    "memory frontmatter field 'artifact_type' has unknown value %r — ignoring",
-                    fm["artifact_type"],
-                )
-
-    if "always_on" in fm:
-        if not isinstance(fm["always_on"], bool):
-            raise ValueError("memory frontmatter field 'always_on' must be a boolean")
+    if "always_on" in fm and not isinstance(fm["always_on"], bool):
+        raise ValueError("memory frontmatter field 'always_on' must be a boolean")

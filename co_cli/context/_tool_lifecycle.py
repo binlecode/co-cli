@@ -14,9 +14,14 @@ from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
 
-_FILE_TOOLS = frozenset({
-    "read_file", "write_file", "edit_file", "list_directory",
-})
+_FILE_TOOLS = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "list_directory",
+    }
+)
 
 
 @dataclass

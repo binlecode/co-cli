@@ -8,9 +8,23 @@ from enum import Enum
 # Single-letter flags (-f, -v) and --word-flags contain none of these.
 # "$" blocks env-var expansion ($HOME, $PATH) and command substitution ($(...) is
 # already caught by the chaining check, but bare $ is an additional guard).
-_FORBIDDEN_ARG_PATTERNS = frozenset({
-    "*", "?", "[", "]", "{", "}", "/", "\\", "./", "~/", "..", "\x00", "$",
-})
+_FORBIDDEN_ARG_PATTERNS = frozenset(
+    {
+        "*",
+        "?",
+        "[",
+        "]",
+        "{",
+        "}",
+        "/",
+        "\\",
+        "./",
+        "~/",
+        "..",
+        "\x00",
+        "$",
+    }
+)
 
 
 def _validate_args(args_str: str) -> bool:
@@ -42,7 +56,7 @@ def _is_safe_command(cmd: str, safe_commands: list[str]) -> bool:
         if cmd == prefix:
             return True
         if cmd.startswith(prefix + " "):
-            args_str = cmd[len(prefix) + 1:]
+            args_str = cmd[len(prefix) + 1 :]
             return _validate_args(args_str)
     return False
 
@@ -70,7 +84,7 @@ def evaluate_shell_command(cmd: str, safe_prefixes: list[str]) -> ShellPolicyRes
 
     # 1. Control characters (except tab \x09 and newline \x0a)
     for ch in cmd:
-        if ord(ch) < 0x20 and ch not in ('\t', '\n'):
+        if ord(ch) < 0x20 and ch not in ("\t", "\n"):
             return ShellPolicyResult(ShellDecisionEnum.DENY, "control character in command")
 
     # 2. Heredoc injection
@@ -78,13 +92,16 @@ def evaluate_shell_command(cmd: str, safe_prefixes: list[str]) -> ShellPolicyRes
         return ShellPolicyResult(ShellDecisionEnum.DENY, "heredoc injection pattern (<<)")
 
     # 3. Env-injection via command substitution: VAR=$(...)
-    if re.search(r'\w+=\$\(', cmd):
+    if re.search(r"\w+=\$\(", cmd):
         return ShellPolicyResult(ShellDecisionEnum.DENY, "env-injection pattern (VAR=$(...))")
 
     # 4. Absolute-path destruction: rm -rf / or rm -rf ~
-    if re.search(r'\brm\b.*-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+[/~]', cmd) or \
-       re.search(r'\brm\b.*-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+[/~]', cmd):
-        return ShellPolicyResult(ShellDecisionEnum.DENY, "absolute-path destruction pattern (rm -rf /~)")
+    if re.search(r"\brm\b.*-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+[/~]", cmd) or re.search(
+        r"\brm\b.*-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+[/~]", cmd
+    ):
+        return ShellPolicyResult(
+            ShellDecisionEnum.DENY, "absolute-path destruction pattern (rm -rf /~)"
+        )
 
     # ALLOW tier — safe prefix match with arg validation
     if _is_safe_command(cmd, safe_prefixes):

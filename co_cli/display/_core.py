@@ -19,8 +19,28 @@ if TYPE_CHECKING:
 # -- Theme palettes (keyed by theme name) ------------------------------------
 
 _THEMES: dict[str, dict[str, str]] = {
-    "dark":  {"status": "yellow",      "info": "cyan", "accent": "bold cyan",  "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
-    "light": {"status": "dark_orange", "info": "blue", "accent": "bold blue",  "shell": "dim", "error": "bold red", "success": "green", "warning": "orange3", "hint": "dim", "thinking": "dim italic"},
+    "dark": {
+        "status": "yellow",
+        "info": "cyan",
+        "accent": "bold cyan",
+        "shell": "dim",
+        "error": "bold red",
+        "success": "green",
+        "warning": "orange3",
+        "hint": "dim",
+        "thinking": "dim italic",
+    },
+    "light": {
+        "status": "dark_orange",
+        "info": "blue",
+        "accent": "bold blue",
+        "shell": "dim",
+        "error": "bold red",
+        "success": "green",
+        "warning": "orange3",
+        "hint": "dim",
+        "thinking": "dim italic",
+    },
 }
 
 # -- Console (single instance, themed) --------------------------------------
@@ -30,10 +50,10 @@ console = Console(theme=Theme(_THEMES.get(settings.theme, _THEMES["light"])))
 # -- Indicators ------------------------------------------------------------
 
 PROMPT_CHAR = "❯"
-BULLET      = "▸"
-SUCCESS     = "✦"
-ERROR       = "✖"
-INFO        = "◈"
+BULLET = "▸"
+SUCCESS = "✦"
+ERROR = "✖"
+INFO = "◈"
 
 # -- Theme switching -------------------------------------------------------
 
@@ -77,8 +97,8 @@ def prompt_selection(
     Returns the selected item string, or None if cancelled.
     """
     import sys
-    import tty
     import termios
+    import tty
 
     if not items:
         return None
@@ -252,7 +272,9 @@ class TerminalFrontend:
         self._clear_status_live()
         if self._live is None:
             self._live = Live(
-                Markdown(accumulated), console=console, auto_refresh=False,
+                Markdown(accumulated),
+                console=console,
+                auto_refresh=False,
             )
             self._live.start()
         else:
@@ -272,7 +294,10 @@ class TerminalFrontend:
         renderable = Text(accumulated or "...", style="thinking")
         if self._thinking_live is None:
             self._thinking_live = Live(
-                renderable, console=console, auto_refresh=False, transient=True,
+                renderable,
+                console=console,
+                auto_refresh=False,
+                transient=True,
             )
             self._thinking_live.start()
         else:
@@ -301,7 +326,10 @@ class TerminalFrontend:
         renderable = Text(lines, style="dim")
         if self._tool_live is None:
             self._tool_live = Live(
-                renderable, console=console, auto_refresh=False, transient=False,
+                renderable,
+                console=console,
+                auto_refresh=False,
+                transient=False,
             )
             self._tool_live.start()
         else:
@@ -350,7 +378,10 @@ class TerminalFrontend:
         renderable = Text(message, style="dim")
         if self._status_live is None:
             self._status_live = Live(
-                renderable, console=console, auto_refresh=False, transient=False,
+                renderable,
+                console=console,
+                auto_refresh=False,
+                transient=False,
             )
             self._status_live.start()
         else:
@@ -364,7 +395,10 @@ class TerminalFrontend:
         renderable = Text(text, style="status")
         if self._status_live is None:
             self._status_live = Live(
-                renderable, console=console, auto_refresh=False, transient=False,
+                renderable,
+                console=console,
+                auto_refresh=False,
+                transient=False,
             )
             self._status_live.start()
         else:
@@ -384,8 +418,12 @@ class TerminalFrontend:
         signal.signal(signal.SIGINT, signal.default_int_handler)
         try:
             choice = Prompt.ask(
-                "", choices=["y", "n", "a"], default="n",
-                show_choices=False, show_default=False, console=console,
+                "",
+                choices=["y", "n", "a"],
+                default="n",
+                show_choices=False,
+                show_default=False,
+                console=console,
             )
         finally:
             signal.signal(signal.SIGINT, prev_handler)

@@ -16,7 +16,7 @@ import logging
 from typing import Any
 
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,

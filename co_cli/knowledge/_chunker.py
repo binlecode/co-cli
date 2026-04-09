@@ -64,12 +64,14 @@ def chunk_text(
 
     def emit_chunk(content: str, start_line: int, end_line: int) -> None:
         nonlocal overlap_prefix
-        chunks.append(Chunk(
-            index=len(chunks),
-            content=content,
-            start_line=start_line,
-            end_line=end_line,
-        ))
+        chunks.append(
+            Chunk(
+                index=len(chunks),
+                content=content,
+                start_line=start_line,
+                end_line=end_line,
+            )
+        )
         # Compute overlap prefix from this chunk's content; empty when overlap_chars is zero
         if overlap_chars <= 0:
             overlap_prefix = ""
@@ -99,7 +101,7 @@ def chunk_text(
                 step = chunk_size * 4
                 pos = 0
                 while pos < len(line):
-                    seg = line[pos: pos + step]
+                    seg = line[pos : pos + step]
                     full = overlap_prefix + seg
                     emit_chunk(full, abs_line, abs_line)
                     pos += step

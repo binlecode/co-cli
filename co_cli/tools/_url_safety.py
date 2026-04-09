@@ -17,10 +17,12 @@ _BLOCKED_NETWORKS: tuple[IPv4Network | IPv6Network, ...] = (
     IPv6Network("fc00::/7"),
 )
 
-_BLOCKED_HOSTNAMES: frozenset[str] = frozenset({
-    "metadata.google.internal",
-    "metadata.internal",
-})
+_BLOCKED_HOSTNAMES: frozenset[str] = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata.internal",
+    }
+)
 
 
 def is_url_safe(url: str) -> bool:

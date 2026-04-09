@@ -20,7 +20,12 @@ Reasoning display modes:
 import time
 from typing import TYPE_CHECKING
 
-from co_cli.config._core import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_OFF, REASONING_DISPLAY_SUMMARY, REASONING_DISPLAY_FULL
+from co_cli.config._core import (
+    DEFAULT_REASONING_DISPLAY,
+    REASONING_DISPLAY_FULL,
+    REASONING_DISPLAY_OFF,
+    REASONING_DISPLAY_SUMMARY,
+)
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
@@ -38,7 +43,9 @@ class StreamRenderer:
     the orchestrator uses to decide whether on_final_output is needed.
     """
 
-    def __init__(self, frontend: "Frontend", *, reasoning_display: str = DEFAULT_REASONING_DISPLAY) -> None:
+    def __init__(
+        self, frontend: "Frontend", *, reasoning_display: str = DEFAULT_REASONING_DISPLAY
+    ) -> None:
         self._frontend = frontend
         self._reasoning_display = reasoning_display
         self._text_buffer: str = ""
@@ -105,8 +112,8 @@ class StreamRenderer:
         Called when a FunctionToolCallEvent arrives. The callback routes progress
         messages to the frontend for the specific tool_id.
         """
-        deps.runtime.tool_progress_callback = (
-            lambda msg, _tid=tool_id: self._frontend.on_tool_progress(_tid, msg)
+        deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: (
+            self._frontend.on_tool_progress(_tid, msg)
         )
 
     def clear_progress(self, deps: "CoDeps") -> None:
@@ -117,9 +124,8 @@ class StreamRenderer:
         deps.runtime.tool_progress_callback = None
 
     def _flush_thinking(self) -> None:
-        if self._reasoning_display == REASONING_DISPLAY_FULL:
-            if self._thinking_buffer:
-                self._frontend.on_thinking_commit(self._thinking_buffer.rstrip())
+        if self._reasoning_display == REASONING_DISPLAY_FULL and self._thinking_buffer:
+            self._frontend.on_thinking_commit(self._thinking_buffer.rstrip())
         # summary: buffer discarded; _status_live cleared automatically by on_text_delta
         # off: buffer never filled (early return in append_thinking), nothing to discard
         self._thinking_buffer = ""
@@ -147,7 +153,7 @@ def _reduce_thinking(buffer: str) -> str:
     # Find the last sentence boundary
     last_end = -1
     for i in range(len(buf) - 1, -1, -1):
-        if buf[i] in '.?!\n':
+        if buf[i] in ".?!\n":
             last_end = i
             break
     if last_end < 0:
@@ -156,12 +162,12 @@ def _reduce_thinking(buffer: str) -> str:
         # Extract just the last sentence
         prev_end = -1
         for i in range(last_end - 1, -1, -1):
-            if buf[i] in '.?!\n':
+            if buf[i] in ".?!\n":
                 prev_end = i
                 break
-        sentence = buf[prev_end + 1:last_end + 1].strip()
+        sentence = buf[prev_end + 1 : last_end + 1].strip()
     if not sentence:
         return ""
     if len(sentence) > _PROGRESS_MAX_CHARS:
-        return sentence[:_PROGRESS_MAX_CHARS - 3] + "..."
+        return sentence[: _PROGRESS_MAX_CHARS - 3] + "..."
     return sentence

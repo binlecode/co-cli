@@ -7,25 +7,26 @@ import os
 import re
 import shutil
 import sys
-from collections.abc import Callable, Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest
 
-from co_cli.commands._skill_types import SkillConfig
 from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.commands._skill_types import SkillConfig
+from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.deps import ApprovalKindEnum, CoDeps
 
 logger = logging.getLogger(__name__)
 
 
 # -- Types -----------------------------------------------------------------
+
 
 @dataclass
 class CommandContext:
@@ -61,7 +62,7 @@ class DelegateToAgent:
     skill_name: str | None
 
 
-SlashOutcome: TypeAlias = LocalOnly | ReplaceTranscript | DelegateToAgent
+type SlashOutcome = LocalOnly | ReplaceTranscript | DelegateToAgent
 
 
 @dataclass(frozen=True)
@@ -88,26 +89,45 @@ def get_skill_registry(skill_commands: dict[str, SkillConfig]) -> list[dict]:
 
 
 # Env vars that skill-env may never override — security boundary.
-_SKILL_ENV_BLOCKED: frozenset[str] = frozenset({
-    "PATH", "PYTHONPATH", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH",
-    "DYLD_INSERT_LIBRARIES", "HOME", "USER", "SHELL", "SUDO_UID",
-})
+_SKILL_ENV_BLOCKED: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "HOME",
+        "USER",
+        "SHELL",
+        "SUDO_UID",
+    }
+)
 
 # Static security patterns for skill content scanning (TASK-4).
 _SKILL_SCAN_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("credential_exfil", re.compile(
-        r'(curl|wget|nc)\s[^\n]*\$\{?[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD|API)[A-Z_]*\}?',
-        re.IGNORECASE,
-    )),
-    ("pipe_to_shell", re.compile(r'(curl|wget)\s[^|\n]+\|\s*(ba)?sh', re.IGNORECASE)),
-    ("destructive_shell", re.compile(
-        r'rm\s+-rf\s*/|dd\s+if=/dev/(zero|random|urandom)|:\(\)\s*\{',
-        re.IGNORECASE,
-    )),
-    ("prompt_injection", re.compile(
-        r'ignore\s+(all\s+)?previous\s+instructions|you\s+are\s+now\s+(a|an)\s',
-        re.IGNORECASE,
-    )),
+    (
+        "credential_exfil",
+        re.compile(
+            r"(curl|wget|nc)\s[^\n]*\$\{?[A-Z_]*(KEY|TOKEN|SECRET|PASSWORD|API)[A-Z_]*\}?",
+            re.IGNORECASE,
+        ),
+    ),
+    ("pipe_to_shell", re.compile(r"(curl|wget)\s[^|\n]+\|\s*(ba)?sh", re.IGNORECASE)),
+    (
+        "destructive_shell",
+        re.compile(
+            r"rm\s+-rf\s*/|dd\s+if=/dev/(zero|random|urandom)|:\(\)\s*\{",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "prompt_injection",
+        re.compile(
+            r"ignore\s+(all\s+)?previous\s+instructions|you\s+are\s+now\s+(a|an)\s",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 
@@ -139,18 +159,17 @@ def _refresh_completer(ctx: CommandContext) -> None:
     ctx.completer.words = _build_completer_words(ctx.deps.skill_commands)
 
 
-
 def _inject_source_url(content: str, url: str) -> str:
     """Inject or update source-url field in skill frontmatter."""
     if not content.startswith("---\n"):
         return f"---\nsource-url: {url}\n---\n{content}"
     rest = content[4:]
-    close_match = re.search(r'\n---(\n|$)', rest)
+    close_match = re.search(r"\n---(\n|$)", rest)
     if close_match is None:
         return f"---\nsource-url: {url}\n---\n{content}"
     close_start = close_match.start()
     fm_block = rest[:close_start]
-    after_close = rest[close_match.end():]
+    after_close = rest[close_match.end() :]
     lines = fm_block.splitlines()
     new_lines = []
     replaced = False
@@ -184,7 +203,9 @@ async def _cmd_help(ctx: CommandContext, args: str) -> None:
                 hint = f"  [{skill.argument_hint}]" if skill.argument_hint else ""
                 table.add_row(f"/{skill.name}{hint}", skill.description or "(skill)")
     console.print(table)
-    console.print("[dim]Usage: /status shows system health; /status <task-id> shows a background task.[/dim]")
+    console.print(
+        "[dim]Usage: /status shows system health; /status <task-id> shows a background task.[/dim]"
+    )
     return None
 
 
@@ -203,6 +224,7 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
             console.print(f"[bold red]Task not found:[/bold red] {task_id}")
             return None
         from rich.table import Table
+
         table = Table(title=f"Task: {task_id}", border_style="accent", expand=False)
         table.add_column("Field", style="accent")
         table.add_column("Value")
@@ -224,7 +246,12 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
                 console.print(line)
         return None
 
-    from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
+    from co_cli.bootstrap._render_status import (
+        check_security,
+        get_status,
+        render_security_findings,
+        render_status_table,
+    )
 
     info = get_status(ctx.deps.config, tool_count=len(ctx.deps.tool_index))
     console.print(render_status_table(info))
@@ -246,11 +273,15 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
     """Show conversation delegation history (run_id, role, requests, scope)."""
     from pydantic_ai.messages import ToolReturnPart
 
-    _DELEGATION_TOOLS = frozenset({
-        "run_coding_subagent", "run_research_subagent",
-        "run_analysis_subagent", "run_reasoning_subagent",
-        "start_background_task",
-    })
+    _DELEGATION_TOOLS = frozenset(
+        {
+            "run_coding_subagent",
+            "run_research_subagent",
+            "run_analysis_subagent",
+            "run_reasoning_subagent",
+            "start_background_task",
+        }
+    )
 
     rows = []
     for msg in ctx.message_history:
@@ -265,19 +296,22 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
             if not isinstance(content, dict):
                 continue
             run_id = content.get("run_id") or content.get("task_id") or ""
-            rows.append({
-                "tool": part.tool_name,
-                "run_id": str(run_id)[:20],
-                "role": str(content.get("role", "")),
-                "requests": f"{content.get('requests_used', '')} / {content.get('request_limit', '')}",
-                "scope": str(content.get("scope", ""))[:50],
-            })
+            rows.append(
+                {
+                    "tool": part.tool_name,
+                    "run_id": str(run_id)[:20],
+                    "role": str(content.get("role", "")),
+                    "requests": f"{content.get('requests_used', '')} / {content.get('request_limit', '')}",
+                    "scope": str(content.get("scope", ""))[:50],
+                }
+            )
 
     if not rows:
         console.print("[dim]No delegations this session.[/dim]")
         return None
 
     from rich.table import Table
+
     table = Table(title="Delegation History", border_style="accent", expand=False)
     table.add_column("Tool", style="accent")
     table.add_column("Run ID")
@@ -292,13 +326,14 @@ async def _cmd_history(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Summarize conversation via LLM to reduce context."""
-    from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
-    from pydantic_ai.messages import ModelResponse, TextPart as _TextPart, UserPromptPart
+    from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+    from pydantic_ai.messages import ModelResponse, UserPromptPart
+    from pydantic_ai.messages import TextPart as _TextPart
 
     from co_cli.context.summarization import (
-        summarize_messages,
-        resolve_compaction_budget,
         estimate_message_tokens,
+        resolve_compaction_budget,
+        summarize_messages,
     )
 
     if not ctx.message_history:
@@ -320,16 +355,22 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
     # Build a minimal 2-message history: summary request + ack response
     new_history: list[Any] = [
-        ModelRequest(parts=[
-            UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
-        ]),
-        ModelResponse(parts=[
-            _TextPart(content="Understood. I have the conversation context."),
-        ]),
+        ModelRequest(
+            parts=[
+                UserPromptPart(content=f"[Compacted conversation summary]\n{summary}"),
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                _TextPart(content="Understood. I have the conversation context."),
+            ]
+        ),
     ]
     old_len = len(ctx.message_history)
     post_tokens = estimate_message_tokens(new_history)
-    budget = resolve_compaction_budget(ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None)
+    budget = resolve_compaction_budget(
+        ctx.deps.config, ctx.deps.model.context_window if ctx.deps.model else None
+    )
     console.print(
         f"[info]Compacted: {old_len} → {len(new_history)} messages "
         f"(est. {pre_tokens // 1000}K → {post_tokens // 1000}K of {budget // 1000}K budget)[/info]"
@@ -339,7 +380,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
     """Delete a memory by ID."""
-    from pathlib import Path
 
     from co_cli.knowledge._frontmatter import parse_frontmatter
 
@@ -424,7 +464,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         console.print("[yellow]Could not summarize session — history not cleared.[/yellow]")
         return None
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     await _save_memory_impl(
         ctx.deps,
         content=summary,
@@ -438,6 +478,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     # Rotate session ID — transcript writer is stateless (derives path from
     # deps.session.session_id), so the next write goes to a new file.
     from co_cli.context.session import new_session, save_session
+
     session_data = new_session()
     ctx.deps.session.session_id = session_data["session_id"]
     try:
@@ -508,7 +549,9 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
                 try:
                     text = path.read_text(encoding="utf-8")
                     meta, _ = parse_frontmatter(text)
-                    requires = meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+                    requires = (
+                        meta.get("requires", {}) if isinstance(meta.get("requires"), dict) else {}
+                    )
                     failures = _diagnose_requires_failures(requires, _settings)
                     reason = "; ".join(failures) if failures else "name conflict with built-in"
                     table.add_row(path.name, "[bold red]✗ Skipped[/bold red]", reason)
@@ -522,13 +565,15 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
     elif subcmd == "reload":
         from co_cli.config._core import settings as _settings
+
         # handler (not a tool) — direct settings import acceptable, matches _install_skill pattern
         user_skills_dir = ctx.deps.user_skills_dir
         new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=user_skills_dir)
         # Scan user-global and project-local files only — bundled skills are version-controlled
         project_dir = ctx.deps.skills_dir
-        all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + \
-                    (sorted(project_dir.glob("*.md")) if project_dir.exists() else [])
+        all_paths = (sorted(user_skills_dir.glob("*.md")) if user_skills_dir.exists() else []) + (
+            sorted(project_dir.glob("*.md")) if project_dir.exists() else []
+        )
         for p in all_paths:
             if p.stem in new_skills:
                 try:
@@ -543,12 +588,16 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
         removed = old_names - set(new_skills.keys())
         if added:
             if len(added) <= 5:
-                console.print(f"[success]+ Added ({len(added)}): {', '.join(sorted(added))}[/success]")
+                console.print(
+                    f"[success]+ Added ({len(added)}): {', '.join(sorted(added))}[/success]"
+                )
             else:
                 console.print(f"[success]+ Added: {len(added)} skill(s)[/success]")
         if removed:
             if len(removed) <= 5:
-                console.print(f"[dim]- Removed ({len(removed)}): {', '.join(sorted(removed))}[/dim]")
+                console.print(
+                    f"[dim]- Removed ({len(removed)}): {', '.join(sorted(removed))}[/dim]"
+                )
             else:
                 console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
         if not added and not removed:
@@ -560,7 +609,9 @@ async def _cmd_skills(ctx: CommandContext, args: str) -> None:
 
     else:
         console.print(f"[bold red]Unknown /skills subcommand:[/bold red] {subcmd}")
-        console.print("[dim]Usage: /skills [list|check|install <path|url>|reload|upgrade <name>][/dim]")
+        console.print(
+            "[dim]Usage: /skills [list|check|install <path|url>|reload|upgrade <name>][/dim]"
+        )
 
     return None
 
@@ -577,8 +628,10 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     # Fetch content
     if target.startswith("http://") or target.startswith("https://"):
         try:
-            import httpx
             import urllib.parse
+
+            import httpx
+
             resp = httpx.get(target, timeout=10)
             resp.raise_for_status()
         except Exception as e:
@@ -586,7 +639,9 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
             return
         content_type = resp.headers.get("content-type", "")
         if not content_type.startswith("text/"):
-            console.print(f"[bold red]Unexpected content-type (expected text/*):[/bold red] {content_type}")
+            console.print(
+                f"[bold red]Unexpected content-type (expected text/*):[/bold red] {content_type}"
+            )
             return
         content = resp.text
         content = _inject_source_url(content, target)
@@ -628,7 +683,9 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     dest.write_text(content, encoding="utf-8")
 
     # Reload in-session: package-default + user-global + updated project dir
-    new_skills = _load_skills(ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir)
+    new_skills = _load_skills(
+        ctx.deps.skills_dir, _settings, user_skills_dir=ctx.deps.user_skills_dir
+    )
     set_skill_commands(new_skills, ctx.deps)
     _refresh_completer(ctx)
 
@@ -652,7 +709,9 @@ async def _upgrade_skill(ctx: CommandContext, args: str) -> None:
     meta, _ = parse_frontmatter(text)
     source_url = meta.get("source-url", "").strip() if isinstance(meta, dict) else ""
     if not source_url:
-        console.print(f"[bold red]Skill '{name}' has no source-url — not installed from a URL.[/bold red]")
+        console.print(
+            f"[bold red]Skill '{name}' has no source-url — not installed from a URL.[/bold red]"
+        )
         return
     await _install_skill(ctx, source_url, force=True)
 
@@ -717,7 +776,8 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_background(ctx: CommandContext, args: str) -> None:
     """Run a command in the background. Usage: /background <cmd>"""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
 
     cmd = args.strip()
@@ -733,7 +793,7 @@ async def _cmd_background(ctx: CommandContext, args: str) -> None:
         cwd=str(Path.cwd()),
         description=cmd,
         status="running",
-        started_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(UTC).isoformat(),
     )
     ctx.deps.session.background_tasks[task_id] = state
     try:
@@ -760,6 +820,7 @@ async def _cmd_tasks(ctx: CommandContext, args: str) -> None:
         return None
 
     from rich.table import Table
+
     label = f"Background Tasks ({status_filter or 'all'})"
     table = Table(title=label, border_style="accent", expand=False)
     table.add_column("Task ID", style="accent")
@@ -802,8 +863,8 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
+    from co_cli.context.session_browser import format_file_size, list_sessions
     from co_cli.context.transcript import load_transcript
-    from co_cli.context.session_browser import list_sessions, format_file_size
     from co_cli.display._core import prompt_selection
 
     sessions = list_sessions(ctx.deps.sessions_dir)
@@ -904,10 +965,11 @@ def _check_requires(name: str, requires: dict, settings: Any = None) -> bool:
     # settings: named Settings fields must be non-None and non-empty.
     # Fail closed: if settings gate is required but settings object is unavailable, skip the skill.
     settings_fields = requires.get("settings", [])
-    if settings_fields:
-        if settings is None or not all(getattr(settings, f, None) for f in settings_fields):
-            logger.info(f"Skipping skill {name}: requires settings not satisfied: {settings_fields}")
-            return False
+    if settings_fields and (
+        settings is None or not all(getattr(settings, f, None) for f in settings_fields)
+    ):
+        logger.info(f"Skipping skill {name}: requires settings not satisfied: {settings_fields}")
+        return False
 
     return True
 
@@ -933,7 +995,9 @@ def _load_skill_file(
 ) -> None:
     """Parse a single skill .md file and add to result dict if valid."""
     if not _is_safe_skill_path(path, root):
-        logger.warning(f"Skill path containment violation — skipping {path} (expected root: {root})")
+        logger.warning(
+            f"Skill path containment violation — skipping {path} (expected root: {root})"
+        )
         return
     name = path.stem
     try:
@@ -1021,7 +1085,7 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
     """List past sessions, optionally filtered by keyword."""
     from rich.table import Table
 
-    from co_cli.context.session_browser import list_sessions, format_file_size
+    from co_cli.context.session_browser import format_file_size, list_sessions
 
     summaries = list_sessions(ctx.deps.sessions_dir)
     if args:
@@ -1054,8 +1118,12 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "new": SlashCommand("new", "Checkpoint session to memory and start fresh", _cmd_new),
     "status": SlashCommand("status", "Show system health or /status <task-id>", _cmd_status),
     "tools": SlashCommand("tools", "List registered agent tools", _cmd_tools),
-    "history": SlashCommand("history", "Show delegation history (subagents + background tasks)", _cmd_history),
-    "compact": SlashCommand("compact", "Summarize conversation via LLM to reduce context", _cmd_compact),
+    "history": SlashCommand(
+        "history", "Show delegation history (subagents + background tasks)", _cmd_history
+    ),
+    "compact": SlashCommand(
+        "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
+    ),
     "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
     "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),
     "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),

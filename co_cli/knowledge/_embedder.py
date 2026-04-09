@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +20,12 @@ def build_embedder(
     Returns None on provider failure — callers should handle None gracefully.
     provider: 'ollama', 'gemini', 'tei', or 'none'
     """
+
     def _embed(text: str) -> list[float] | None:
         try:
             if provider == "ollama":
                 import httpx
+
                 resp = httpx.post(
                     f"{ollama_host}/api/embed",
                     json={"model": model, "input": text},
@@ -34,6 +36,7 @@ def build_embedder(
 
             if provider == "gemini":
                 from google import genai
+
                 client = genai.Client(api_key=api_key)
                 result = client.models.embed_content(
                     model=model,
@@ -43,6 +46,7 @@ def build_embedder(
 
             if provider == "tei":
                 import httpx
+
                 resp = httpx.post(
                     f"{embed_api_url}/embed",
                     json={"inputs": text},

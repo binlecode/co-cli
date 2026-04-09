@@ -3,6 +3,7 @@
 Extracted from _history.py to break the circular import between deps.py and
 context/_history.py. These dataclasses have no dependency on deps.py.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

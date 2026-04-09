@@ -1,5 +1,6 @@
 """LLM provider, model, and context window settings."""
-from typing import Literal, Optional
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,9 +23,10 @@ DEFAULT_CTX_OVERFLOW_THRESHOLD = 1.0
 
 class LlmSettings(BaseModel):
     """LLM provider, model, and context window settings."""
+
     model_config = ConfigDict(extra="ignore")
 
-    api_key: Optional[str] = Field(default=None)
+    api_key: str | None = Field(default=None)
     provider: Literal["ollama-openai", "gemini"] = Field(default=DEFAULT_LLM_PROVIDER)
     host: str = Field(default=DEFAULT_LLM_HOST)
     model: str = Field(default=DEFAULT_LLM_MODEL)

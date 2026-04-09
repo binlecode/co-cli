@@ -97,7 +97,9 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
     if file_size > MAX_TRANSCRIPT_READ_BYTES:
         logger.warning(
             "Transcript too large to load (%d bytes, limit %d): %s",
-            file_size, MAX_TRANSCRIPT_READ_BYTES, path.name,
+            file_size,
+            MAX_TRANSCRIPT_READ_BYTES,
+            path.name,
         )
         return []
 
@@ -124,7 +126,8 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
                 except Exception:
                     logger.warning(
                         "Skipping malformed line %d in %s",
-                        line_num, path.name,
+                        line_num,
+                        path.name,
                     )
     except OSError as e:
         logger.warning("Transcript read failed for session %s: %s", session_id[:8], e)
@@ -132,7 +135,8 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
     if skip_precompact and boundary_found:
         logger.info(
             "Transcript loaded with compact-boundary skip: %d post-boundary messages from %s",
-            len(all_messages), path.name,
+            len(all_messages),
+            path.name,
         )
 
     return all_messages

@@ -17,28 +17,38 @@ Use search_articles for summary-level lookup; use read_article for full body.
 
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
-
-from co_cli.knowledge._frontmatter import parse_frontmatter
-from co_cli.deps import CoDeps
-from co_cli.knowledge._store import SearchResult
-from co_cli.tools.memory import slugify, load_memories, grep_recall
 from pydantic_ai.messages import ToolReturn
+
+from co_cli.deps import CoDeps
+from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.knowledge._store import SearchResult
+from co_cli.tools.memory import grep_recall, load_memories, slugify
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
 
 
-_NEGATION_MARKERS: frozenset[str] = frozenset({
-    "not", "no", "never", "don't", "do not", "stopped", "changed",
-    "no longer", "don't use", "avoid",
-})
+_NEGATION_MARKERS: frozenset[str] = frozenset(
+    {
+        "not",
+        "no",
+        "never",
+        "don't",
+        "do not",
+        "stopped",
+        "changed",
+        "no longer",
+        "don't use",
+        "avoid",
+    }
+)
 
 
 def _detect_contradictions(results: list[SearchResult]) -> set[str]:
@@ -119,11 +129,8 @@ def _has_negation_conflict(content_a: str, content_b: str) -> bool:
                 window_start = max(0, idx - 5)
                 window_end = min(len(tokens), idx + 6)
                 window = set(tokens[window_start:window_end])
-                if window & _NEGATION_MARKERS:
-                    # Also confirm the other content has the shared word without negation
-                    # or with negation (either direction counts as conflict)
-                    if token in other_tokens:
-                        return True
+                if window & _NEGATION_MARKERS and token in other_tokens:
+                    return True
 
     return False
 
@@ -139,7 +146,7 @@ def _compute_confidence(r: SearchResult, half_life_days: int) -> float:
     if r.created and half_life_days > 0:
         try:
             age_days = (
-                datetime.now(timezone.utc) - datetime.fromisoformat(r.created)
+                datetime.now(UTC) - datetime.fromisoformat(r.created)
             ).total_seconds() / 86400
             decay = math.exp(-math.log(2) * max(0, age_days) / half_life_days)
             decay = max(0.0, min(1.0, decay))
@@ -149,8 +156,12 @@ def _compute_confidence(r: SearchResult, half_life_days: int) -> float:
         decay = 1.0
 
     provenance_weights = {
-        "user-told": 1.0, "planted": 0.8, "detected": 0.7,
-        "session": 0.6, "web-fetch": 0.5, "auto_decay": 0.3,
+        "user-told": 1.0,
+        "planted": 0.8,
+        "detected": 0.7,
+        "session": 0.6,
+        "web-fetch": 0.5,
+        "auto_decay": 0.3,
     }
     certainty_multipliers = {"high": 1.0, "medium": 0.8, "low": 0.6}
     prov_w = provenance_weights.get(r.provenance or "", 0.5)
@@ -203,7 +214,12 @@ async def search_knowledge(
     if ctx.deps.knowledge_store is None:
         # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
         if source not in (None, "memory", "library"):
-            return tool_output(f"No results for '{query}' (source={source!r} requires FTS)", ctx=ctx, count=0, results=[])
+            return tool_output(
+                f"No results for '{query}' (source={source!r} requires FTS)",
+                ctx=ctx,
+                count=0,
+                results=[],
+            )
         otel_trace.get_current_span().set_attribute("rag.backend", "grep")
         # Derive effective_kind so the source="memory" escape hatch works in grep mode.
         # Default (source=None or source="library"): library only (articles).
@@ -214,10 +230,7 @@ async def search_knowledge(
         else:
             effective_kind = "article"
         # Grep fallback: route to correct directory by kind
-        if effective_kind == "memory":
-            grep_dir = ctx.deps.memory_dir
-        else:
-            grep_dir = ctx.deps.library_dir
+        grep_dir = ctx.deps.memory_dir if effective_kind == "memory" else ctx.deps.library_dir
         memories = load_memories(grep_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
@@ -237,8 +250,16 @@ async def search_knowledge(
             # Assign source matching the kind partition convention
             result_source = "memory" if m.kind == "memory" else "library"
             lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
-            result_dicts.append({"source": result_source, "kind": m.kind, "title": m.path.stem,
-                                  "snippet": m.content[:100], "score": 0.0, "path": str(m.path)})
+            result_dicts.append(
+                {
+                    "source": result_source,
+                    "kind": m.kind,
+                    "title": m.path.stem,
+                    "snippet": m.content[:100],
+                    "score": 0.0,
+                    "path": str(m.path),
+                }
+            )
         return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
     # Sync Obsidian vault into index before searching
@@ -248,7 +269,9 @@ async def search_knowledge(
         except Exception as e:
             logger.warning(f"Obsidian sync failed: {e}")
 
-    otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge.search_backend)
+    otel_trace.get_current_span().set_attribute(
+        "rag.backend", ctx.deps.config.knowledge.search_backend
+    )
     # Default scope excludes source="memory" — memories are searched via search_memories.
     # Explicit source="memory" is kept as an escape hatch for direct memory queries.
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
@@ -285,21 +308,25 @@ async def search_knowledge(
         src_label = f"[{r.source}]" if r.source else ""
         title_str = r.title or Path(r.path).stem if r.path else "unknown"
         conf_str = f", conf: {r.confidence:.3f}" if r.confidence is not None else ""
-        display_title = f"⚠ Conflict: **{title_str}**" if r.path in conflict_paths else f"**{title_str}**"
+        display_title = (
+            f"⚠ Conflict: **{title_str}**" if r.path in conflict_paths else f"**{title_str}**"
+        )
         lines.append(f"{display_title} {src_label}{kind_label} (score: {r.score:.3f}{conf_str})")
         if r.snippet:
             lines.append(f"  {r.snippet}")
         lines.append("")
-        result_dicts.append({
-            "source": r.source,
-            "kind": r.kind,
-            "title": r.title,
-            "snippet": r.snippet,
-            "score": r.score,
-            "path": r.path,
-            "confidence": r.confidence,
-            "conflict": r.path in conflict_paths,
-        })
+        result_dicts.append(
+            {
+                "source": r.source,
+                "kind": r.kind,
+                "title": r.title,
+                "snippet": r.snippet,
+                "score": r.score,
+                "path": r.path,
+                "confidence": r.confidence,
+                "conflict": r.path in conflict_paths,
+            }
+        )
 
     return tool_output(
         "\n".join(lines).rstrip(),
@@ -367,6 +394,7 @@ async def save_article(
                     updated=fm2.get("updated"),
                 )
                 from co_cli.knowledge._chunker import chunk_text
+
                 consolidated_chunks = chunk_text(
                     body2.strip(),
                     chunk_size=ctx.deps.config.knowledge.chunk_size,
@@ -380,6 +408,7 @@ async def save_article(
         return result
 
     import uuid as _uuid
+
     article_id = str(_uuid.uuid4())
     slug = slugify(title[:50])
     filename = f"{slug}-{article_id[:6]}.md"
@@ -389,7 +418,7 @@ async def save_article(
         "kind": "article",
         "title": title,
         "origin_url": origin_url,
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": datetime.now(UTC).isoformat(),
         "tags": tags or [],
         "provenance": "web-fetch",
         "decay_protected": True,
@@ -399,8 +428,7 @@ async def save_article(
         frontmatter["related"] = related
 
     md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
-        f"{content.strip()}\n"
+        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{content.strip()}\n"
     )
 
     file_path = library_dir / filename
@@ -421,21 +449,18 @@ async def save_article(
                 created=frontmatter["created"],
             )
             from co_cli.knowledge._chunker import chunk_text
+
             article_chunks = chunk_text(
                 content,
                 chunk_size=ctx.deps.config.knowledge.chunk_size,
                 overlap=ctx.deps.config.knowledge.chunk_overlap,
             )
-            ctx.deps.knowledge_store.index_chunks(
-                "library", str(file_path), article_chunks
-            )
+            ctx.deps.knowledge_store.index_chunks("library", str(file_path), article_chunks)
         except Exception as e:
             logger.warning(f"Failed to index article {article_id}: {e}")
 
     return tool_output(
-        f"✓ Saved article {article_id}: {filename}\n"
-        f"Source: {origin_url}\n"
-        f"Location: {file_path}",
+        f"✓ Saved article {article_id}: {filename}\nSource: {origin_url}\nLocation: {file_path}",
         ctx=ctx,
         article_id=article_id,
         action="saved",
@@ -476,7 +501,10 @@ async def search_articles(
     """
     library_dir = ctx.deps.library_dir
 
-    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if (
+        ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
+        and ctx.deps.knowledge_store is not None
+    ):
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -515,18 +543,18 @@ async def search_articles(
                     lines.append(f"{r.snippet}\n")
                 # Normalize tags to list[str] for schema parity with grep path
                 tags_list = (
-                    fm_data.get("tags", [])
-                    if fm_data
-                    else (r.tags.split() if r.tags else [])
+                    fm_data.get("tags", []) if fm_data else (r.tags.split() if r.tags else [])
                 )
-                result_dicts.append({
-                    "article_id": article_id,
-                    "title": title,
-                    "origin_url": origin_url,
-                    "tags": tags_list,
-                    "snippet": r.snippet,
-                    "slug": Path(r.path).stem if r.path else "",
-                })
+                result_dicts.append(
+                    {
+                        "article_id": article_id,
+                        "title": title,
+                        "origin_url": origin_url,
+                        "tags": tags_list,
+                        "snippet": r.snippet,
+                        "slug": Path(r.path).stem if r.path else "",
+                    }
+                )
             return tool_output(
                 "\n".join(lines),
                 ctx=ctx,
@@ -540,9 +568,9 @@ async def search_articles(
     articles = load_memories(library_dir, kind="article")
     query_lower = query.lower()
     matches = [
-        a for a in articles
-        if query_lower in a.content.lower()
-        or any(query_lower in t.lower() for t in a.tags)
+        a
+        for a in articles
+        if query_lower in a.content.lower() or any(query_lower in t.lower() for t in a.tags)
     ]
     if tags:
         if tag_match_mode == "all":
@@ -586,14 +614,16 @@ async def search_articles(
             lines.append(f"Tags: {', '.join(a.tags)}")
         lines.append(f"{first_para}\n")
 
-        result_dicts.append({
-            "article_id": a.id,
-            "title": title,
-            "origin_url": origin_url,
-            "tags": a.tags,
-            "snippet": first_para,
-            "slug": a.path.stem,
-        })
+        result_dicts.append(
+            {
+                "article_id": a.id,
+                "title": title,
+                "origin_url": origin_url,
+                "tags": a.tags,
+                "snippet": first_para,
+                "slug": a.path.stem,
+            }
+        )
 
     return tool_output(
         "\n".join(lines),
@@ -706,21 +736,16 @@ def _consolidate_article(
     existing_tags = fm.get("tags", [])
     merged_tags = list(set(existing_tags + (new_tags or [])))
 
-    fm["updated"] = datetime.now(timezone.utc).isoformat()
+    fm["updated"] = datetime.now(UTC).isoformat()
     fm["tags"] = merged_tags
     fm["title"] = new_title
 
-    md_content = (
-        f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
-        f"{new_content.strip()}\n"
-    )
+    md_content = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{new_content.strip()}\n"
     path.write_text(md_content, encoding="utf-8")
     logger.info(f"Consolidated article {fm.get('id')} (same origin_url)")
 
     return tool_output_raw(
-        f"✓ Updated article {fm.get('id')}: {path.name}\n"
-        f"Source: {origin_url}\n"
-        f"Location: {path}",
+        f"✓ Updated article {fm.get('id')}: {path.name}\nSource: {origin_url}\nLocation: {path}",
         article_id=fm.get("id"),
         action="consolidated",
     )
@@ -729,4 +754,5 @@ def _consolidate_article(
 def _content_hash(content: str) -> str:
     """SHA256 hash of file content for FTS change detection."""
     import hashlib
+
     return hashlib.sha256(content.encode("utf-8")).hexdigest()

@@ -3,7 +3,7 @@
 import json
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from rich.console import Console
 from rich.text import Text
@@ -170,7 +170,7 @@ def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
     duration_ms = row["duration_ms"]
 
     start_ns = row["start_time"]
-    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc).astimezone()
+    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=UTC).astimezone()
     ts_str = ts.strftime("%H:%M:%S")
 
     attrs: dict = {}
@@ -206,7 +206,7 @@ def _format_span_line(row: sqlite3.Row, verbose: bool = False) -> list[Text]:
 
 
 def _trace_separator(trace_id: str, start_ns: int) -> Text:
-    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=timezone.utc).astimezone()
+    ts = datetime.fromtimestamp(start_ns / 1_000_000_000, tz=UTC).astimezone()
     ts_str = ts.strftime("%H:%M:%S")
     short_id = trace_id[:8] if trace_id else "?"
     label = f" trace:{short_id}  {ts_str} "
@@ -251,7 +251,7 @@ def _query_recent(
     where = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
     rows = conn.execute(
         f"SELECT * FROM spans {where} ORDER BY start_time DESC LIMIT ?",
-        params + [limit],
+        [*params, limit],
     ).fetchall()
     return list(reversed(rows))
 

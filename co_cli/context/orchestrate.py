@@ -12,21 +12,37 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from pydantic_ai import Agent, AgentRunResult, AgentRunResultEvent, DeferredToolRequests, DeferredToolResults
+from pydantic_ai import (
+    Agent,
+    AgentRunResult,
+    AgentRunResultEvent,
+    DeferredToolRequests,
+    DeferredToolResults,
+)
 
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
 ToolApprovalDecisions = DeferredToolResults
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError, UnexpectedModelBehavior
-from pydantic_ai.messages import (
-    FunctionToolCallEvent, FunctionToolResultEvent,
-    ModelMessage, ModelRequest, ModelResponse,
-    PartDeltaEvent, PartStartEvent, TextPart, TextPartDelta,
-    PartEndEvent, FinalResultEvent,
-    ThinkingPart, ThinkingPartDelta,
-    ToolCallPart, ToolReturnPart, UserPromptPart,
-)
 from opentelemetry import trace as otel_trace
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.messages import (
+    FinalResultEvent,
+    FunctionToolCallEvent,
+    FunctionToolResultEvent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    PartDeltaEvent,
+    PartEndEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 # Typed return value from run_turn() to chat loop
 TurnOutcome = Literal["continue", "error"]
@@ -39,18 +55,17 @@ logger = logging.getLogger(__name__)
 # an unresponsive LLM from hanging a turn indefinitely.
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 
-from co_cli.display._core import Frontend
-from co_cli.display._stream_renderer import StreamRenderer
-from co_cli.context.tool_display import get_tool_start_args_display, format_for_display
+from co_cli.config._core import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
     record_approval_choice,
     resolve_approval_subject,
 )
-from co_cli.config._core import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY
+from co_cli.context.tool_display import format_for_display, get_tool_start_args_display
 from co_cli.deps import CoDeps
-
+from co_cli.display._core import Frontend
+from co_cli.display._stream_renderer import StreamRenderer
 
 # ---------------------------------------------------------------------------
 # TurnResult — returned by run_turn()
@@ -97,6 +112,7 @@ class _TurnState:
         outcome               — set on error exit; read by run_turn() return and span
         interrupted           — set on CancelledError; drives _build_interrupted_turn_result
     """
+
     # pre-turn
     current_input: str | None
     current_history: list[ModelMessage]
@@ -188,7 +204,9 @@ async def _collect_deferred_tool_approvals(
         if not approved:
             logger.debug(
                 "tool_denied tool_name=%s subject_kind=%s subject_value=%s",
-                call.tool_name, subject.kind, subject.value,
+                call.tool_name,
+                subject.kind,
+                subject.value,
             )
 
     return approvals
@@ -260,7 +278,9 @@ async def _execute_stream_segment(
                     name = event.part.tool_name
                     # In summary mode annotations are suppressed — tool result panel is sufficient feedback
                     if reasoning_display != REASONING_DISPLAY_SUMMARY:
-                        frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+                        frontend.on_tool_start(
+                            tool_id, name, get_tool_start_args_display(name, event.part)
+                        )
                     renderer.install_progress(deps, tool_id)
                     continue
 
@@ -273,9 +293,7 @@ async def _execute_stream_segment(
                         # Close the tool surface cleanly — no result to display.
                         frontend.on_tool_complete(tool_id, None)
                         continue
-                    frontend.on_tool_complete(
-                        tool_id, format_for_display(event.result.content)
-                    )
+                    frontend.on_tool_complete(tool_id, format_for_display(event.result.content))
                     continue
 
                 if isinstance(event, AgentRunResultEvent):
@@ -367,14 +385,18 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
         msgs = msgs[:-1]
     # Abort marker — model sees this on the next turn so it knows
     # the previous turn was interrupted and can verify state.
-    abort_marker = ModelRequest(parts=[UserPromptPart(
-        content=(
-            "The user interrupted the previous turn. Some actions "
-            "may be incomplete. Verify current state before continuing."
-        ),
-    )])
+    abort_marker = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "The user interrupted the previous turn. Some actions "
+                    "may be incomplete. Verify current state before continuing."
+                ),
+            )
+        ]
+    )
     return TurnResult(
-        messages=msgs + [abort_marker],
+        messages=[*msgs, abort_marker],
         output=None,
         usage=turn_state.latest_usage,
         interrupted=True,
@@ -399,8 +421,7 @@ def _check_output_limits(
     """
     if turn_state.latest_result.response.finish_reason == "length":
         frontend.on_status(
-            "Response may be truncated (hit output token limit). "
-            "Use /continue to extend."
+            "Response may be truncated (hit output token limit). Use /continue to extend."
         )
     if deps.runtime.turn_usage is not None and deps.config.llm.supports_context_ratio_tracking():
         ratio = deps.runtime.turn_usage.input_tokens / deps.config.llm.num_ctx
@@ -491,7 +512,9 @@ async def run_turn(
                         turn_state, agent, deps, model_settings, reasoning_display, frontend
                     )
                     turn_state.current_history = turn_state.latest_result.all_messages()
-                    if not turn_state.latest_streamed_text and isinstance(turn_state.latest_result.output, str):
+                    if not turn_state.latest_streamed_text and isinstance(
+                        turn_state.latest_result.output, str
+                    ):
                         frontend.on_final_output(turn_state.latest_result.output)
 
                     _check_output_limits(turn_state, deps, frontend)
@@ -513,6 +536,7 @@ async def run_turn(
                         if not turn_state.overflow_recovery_attempted:
                             turn_state.overflow_recovery_attempted = True
                             from co_cli.context._history import emergency_compact
+
                             compacted = emergency_compact(turn_state.current_history)
                             if compacted is not None:
                                 turn_state.current_history = compacted
@@ -530,13 +554,20 @@ async def run_turn(
                         turn_state.tool_reformat_budget -= 1
                         frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
                         await asyncio.sleep(0.5)
-                        turn_state.current_history = turn_state.current_history + [ModelRequest(parts=[UserPromptPart(
-                            content=(
-                                "Your previous tool call was rejected by the "
-                                f"model provider: {e.body}. Please reformulate "
-                                "your tool call with valid JSON arguments."
+                        turn_state.current_history = [
+                            *turn_state.current_history,
+                            ModelRequest(
+                                parts=[
+                                    UserPromptPart(
+                                        content=(
+                                            "Your previous tool call was rejected by the "
+                                            f"model provider: {e.body}. Please reformulate "
+                                            "your tool call with valid JSON arguments."
+                                        ),
+                                    )
+                                ]
                             ),
-                        )])]
+                        ]
                         turn_state.current_input = None
                         continue
                     # All other HTTP errors (429/5xx already retried by SDK, terminal errors)
@@ -567,8 +598,14 @@ async def run_turn(
         finally:
             span.set_attribute("turn.outcome", turn_state.outcome)
             span.set_attribute("turn.interrupted", turn_state.interrupted)
-            span.set_attribute("turn.input_tokens",
-                (turn_state.latest_usage.input_tokens or 0) if turn_state.latest_usage else 0)
-            span.set_attribute("turn.output_tokens",
-                (turn_state.latest_usage.output_tokens or 0) if turn_state.latest_usage else 0)
-            deps.runtime.tool_progress_callback = None  # belt-and-suspenders; also cleared by reset_for_turn() at next turn entry
+            span.set_attribute(
+                "turn.input_tokens",
+                (turn_state.latest_usage.input_tokens or 0) if turn_state.latest_usage else 0,
+            )
+            span.set_attribute(
+                "turn.output_tokens",
+                (turn_state.latest_usage.output_tokens or 0) if turn_state.latest_usage else 0,
+            )
+            deps.runtime.tool_progress_callback = (
+                None  # belt-and-suspenders; also cleared by reset_for_turn() at next turn entry
+            )

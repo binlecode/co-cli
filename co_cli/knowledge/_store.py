@@ -24,12 +24,12 @@ import logging
 import re
 import struct
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from co_cli.knowledge._frontmatter import parse_frontmatter
-
 from co_cli.config._core import SEARCH_DB
+from co_cli.knowledge._frontmatter import parse_frontmatter
 
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
@@ -42,15 +42,75 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Common English stopwords — tokens that survive FTS5 but add no signal
-STOPWORDS: frozenset[str] = frozenset({
-    "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "shall", "can", "that", "this",
-    "these", "those", "it", "its", "as", "up", "if", "so", "no", "not",
-    "i", "me", "my", "we", "our", "you", "your", "he", "she", "they",
-    "what", "which", "who", "how", "when", "where", "why",
-})
+STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "as",
+        "up",
+        "if",
+        "so",
+        "no",
+        "not",
+        "i",
+        "me",
+        "my",
+        "we",
+        "our",
+        "you",
+        "your",
+        "he",
+        "she",
+        "they",
+        "what",
+        "which",
+        "who",
+        "how",
+        "when",
+        "where",
+        "why",
+    }
+)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -194,6 +254,7 @@ def _nonmemory_sources(source: str | list[str] | None) -> list[str] | None:
 @dataclass
 class SearchResult:
     """A single result from KnowledgeStore.search()."""
+
     source: str
     kind: str | None
     path: str
@@ -242,7 +303,11 @@ class KnowledgeStore:
         self._cross_encoder_url = config.knowledge.cross_encoder_reranker_url
         self._llm_reranker = config.knowledge.llm_reranker
         self._chunk_size = config.knowledge.chunk_size
-        self._chunk_overlap = max(0, min(config.knowledge.chunk_overlap, config.knowledge.chunk_size - 1)) if config.knowledge.chunk_size > 0 else 0
+        self._chunk_overlap = (
+            max(0, min(config.knowledge.chunk_overlap, config.knowledge.chunk_size - 1))
+            if config.knowledge.chunk_size > 0
+            else 0
+        )
 
         # Determine effective reranker provider from new config fields:
         # cross-encoder (TEI) takes priority; LLM listwise as fallback; none if neither configured.
@@ -250,12 +315,17 @@ class KnowledgeStore:
             self._reranker_provider = "tei"
         elif self._llm_reranker is not None:
             _p = self._llm_reranker.provider
-            self._reranker_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
+            self._reranker_provider = (
+                "ollama"
+                if _p in ("ollama-openai", "ollama")
+                else ("gemini" if _p == "gemini" else "none")
+            )
         else:
             self._reranker_provider = "none"
 
         from co_cli.knowledge._embedder import build_embedder
         from co_cli.knowledge._reranker import build_llm_reranker
+
         self._embed_fn = build_embedder(
             self._embedding_provider,
             self._llm_host,
@@ -265,7 +335,11 @@ class KnowledgeStore:
         )
         if self._llm_reranker is not None:
             _p = self._llm_reranker.provider
-            _llm_rerank_provider = "ollama" if _p in ("ollama-openai", "ollama") else ("gemini" if _p == "gemini" else "none")
+            _llm_rerank_provider = (
+                "ollama"
+                if _p in ("ollama-openai", "ollama")
+                else ("gemini" if _p == "gemini" else "none")
+            )
             _llm_rerank_model = self._llm_reranker.model
         else:
             _llm_rerank_provider = "none"
@@ -317,6 +391,7 @@ class KnowledgeStore:
     def _load_sqlite_vec(self) -> None:
         """Load the sqlite-vec extension into the current connection."""
         import sqlite_vec
+
         self._conn.enable_load_extension(True)
         sqlite_vec.load(self._conn)
         self._conn.enable_load_extension(False)
@@ -329,7 +404,7 @@ class KnowledgeStore:
         ).fetchone()
         if row is None:
             return None
-        m = re.search(r'float\[(\d+)\]', row[0] or "")
+        m = re.search(r"float\[(\d+)\]", row[0] or "")
         return int(m.group(1)) if m else None
 
     def _migrate_chunk_id(self) -> None:
@@ -416,8 +491,21 @@ class KnowledgeStore:
                    (source, kind, path, title, content, mtime, hash, tags, category,
                     created, updated, provenance, certainty, chunk_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-            (source, kind, path, title, content_str, mtime, hash, tags, category,
-             created, updated, provenance, certainty),
+            (
+                source,
+                kind,
+                path,
+                title,
+                content_str,
+                mtime,
+                hash,
+                tags,
+                category,
+                created,
+                updated,
+                provenance,
+                certainty,
+            ),
         )
         self._conn.commit()
 
@@ -426,10 +514,13 @@ class KnowledgeStore:
             emb = self._embed_cached(text)
             if emb is not None:
                 row = self._conn.execute(
-                    "SELECT rowid FROM docs WHERE source=? AND path=? AND chunk_id=0", (source, path)
+                    "SELECT rowid FROM docs WHERE source=? AND path=? AND chunk_id=0",
+                    (source, path),
                 ).fetchone()
                 if row:
-                    self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
+                    self._conn.execute(
+                        f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
+                    )
                     blob = struct.pack(f"{len(emb)}f", *emb)
                     self._conn.execute(
                         f"INSERT INTO {self._docs_vec_table}(rowid, embedding) VALUES (?, ?)",
@@ -458,8 +549,8 @@ class KnowledgeStore:
 
         if self._backend == "hybrid":
             existing_rowids = [
-                row[0] for row in
-                self._conn.execute(
+                row[0]
+                for row in self._conn.execute(
                     "SELECT rowid FROM chunks WHERE source=? AND doc_path=?",
                     (source, doc_path),
                 ).fetchall()
@@ -504,8 +595,8 @@ class KnowledgeStore:
         """Remove all chunk rows for (source, path), including FTS and vec entries."""
         if self._backend == "hybrid":
             rowids = [
-                row[0] for row in
-                self._conn.execute(
+                row[0]
+                for row in self._conn.execute(
                     "SELECT rowid FROM chunks WHERE source=? AND doc_path=?",
                     (source, path),
                 ).fetchall()
@@ -551,17 +642,27 @@ class KnowledgeStore:
 
         if self._backend == "hybrid":
             return self._hybrid_search(
-                query, source=source, kind=kind, tags=tags,
-                tag_match_mode=tag_match_mode, created_after=created_after,
-                created_before=created_before, limit=limit,
+                query,
+                source=source,
+                kind=kind,
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit,
             )
         # Fetch a larger candidate pool when reranker is active so it has
         # meaningful signal to reorder; otherwise fetch exactly what caller needs.
         fetch_limit = limit * 4 if self._reranker_provider != "none" else limit
         results = self._fts_search(
-            query, source=source, kind=kind, tags=tags,
-            tag_match_mode=tag_match_mode, created_after=created_after,
-            created_before=created_before, limit=fetch_limit,
+            query,
+            source=source,
+            kind=kind,
+            tags=tags,
+            tag_match_mode=tag_match_mode,
+            created_after=created_after,
+            created_before=created_before,
+            limit=fetch_limit,
         )
         return self._rerank_results(query, results, limit)
 
@@ -579,17 +680,27 @@ class KnowledgeStore:
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
         fts_mem, fts_chunks = self._fts_chunks_raw(
-            query, source=source, kind=kind, tags=tags,
-            tag_match_mode=tag_match_mode, created_after=created_after,
-            created_before=created_before, limit=limit * 4,
+            query,
+            source=source,
+            kind=kind,
+            tags=tags,
+            tag_match_mode=tag_match_mode,
+            created_after=created_after,
+            created_before=created_before,
+            limit=limit * 4,
         )
         try:
             emb = self._embed_cached(query)
             if emb is not None:
                 vec_mem, vec_chunks = self._vec_search(
-                    emb, source=source, kind=kind, tags=tags,
-                    tag_match_mode=tag_match_mode, created_after=created_after,
-                    created_before=created_before, limit=limit * 4,
+                    emb,
+                    source=source,
+                    kind=kind,
+                    tags=tags,
+                    tag_match_mode=tag_match_mode,
+                    created_after=created_after,
+                    created_before=created_before,
+                    limit=limit * 4,
                 )
                 merged = self._hybrid_merge(fts_mem, fts_chunks, vec_mem, vec_chunks)
                 return self._rerank_results(query, merged, limit)
@@ -635,28 +746,41 @@ class KnowledgeStore:
         all_rows: list[tuple[Any, str]] = []
 
         if _uses_memory_leg(source):
-            all_rows.extend(self._run_memory_fts(
-                fts_query, kind=kind, created_after=created_after,
-                created_before=created_before, limit=fetch_limit,
-            ))
+            all_rows.extend(
+                self._run_memory_fts(
+                    fts_query,
+                    kind=kind,
+                    created_after=created_after,
+                    created_before=created_before,
+                    limit=fetch_limit,
+                )
+            )
 
         if _uses_chunks_leg(source):
             nonmem = _nonmemory_sources(source)
-            all_rows.extend(self._run_chunks_fts(
-                fts_query, sources=nonmem, kind=kind, created_after=created_after,
-                created_before=created_before, limit=chunks_fetch_limit,
-            ))
+            all_rows.extend(
+                self._run_chunks_fts(
+                    fts_query,
+                    sources=nonmem,
+                    kind=kind,
+                    created_after=created_after,
+                    created_before=created_before,
+                    limit=chunks_fetch_limit,
+                )
+            )
 
         if tags:
             tag_set = set(tags)
             if tag_match_mode == "all":
                 all_rows = [
-                    (row, leg) for row, leg in all_rows
+                    (row, leg)
+                    for row, leg in all_rows
                     if tag_set <= {t for t in (row["tags"] or "").split() if t}
                 ]
             else:
                 all_rows = [
-                    (row, leg) for row, leg in all_rows
+                    (row, leg)
+                    for row, leg in all_rows
                     if tag_set & {t for t in (row["tags"] or "").split() if t}
                 ]
 
@@ -667,23 +791,25 @@ class KnowledgeStore:
             chunk_index = row["chunk_index"] if leg == "chunks" else None
             start_line = row["start_line"] if leg == "chunks" else None
             end_line = row["end_line"] if leg == "chunks" else None
-            results.append(SearchResult(
-                source=row["source"],
-                kind=row["kind"],
-                path=row["path"],
-                title=row["title"],
-                snippet=row["snippet"],
-                score=score,
-                tags=row["tags"],
-                category=row["category"],
-                created=row["created"],
-                updated=row["updated"],
-                provenance=row["provenance"],
-                certainty=row["certainty"],
-                chunk_index=chunk_index,
-                start_line=start_line,
-                end_line=end_line,
-            ))
+            results.append(
+                SearchResult(
+                    source=row["source"],
+                    kind=row["kind"],
+                    path=row["path"],
+                    title=row["title"],
+                    snippet=row["snippet"],
+                    score=score,
+                    tags=row["tags"],
+                    category=row["category"],
+                    created=row["created"],
+                    updated=row["updated"],
+                    provenance=row["provenance"],
+                    certainty=row["certainty"],
+                    chunk_index=chunk_index,
+                    start_line=start_line,
+                    end_line=end_line,
+                )
+            )
 
         # Deduplicate by path, keep highest score per document
         seen: dict[str, SearchResult] = {}
@@ -790,17 +916,28 @@ class KnowledgeStore:
         chunk_rows: list[tuple[Any, str]] = []
 
         if _uses_memory_leg(source):
-            memory_rows.extend(self._run_memory_fts(
-                fts_query, kind=kind, created_after=created_after,
-                created_before=created_before, limit=fetch_limit,
-            ))
+            memory_rows.extend(
+                self._run_memory_fts(
+                    fts_query,
+                    kind=kind,
+                    created_after=created_after,
+                    created_before=created_before,
+                    limit=fetch_limit,
+                )
+            )
 
         if _uses_chunks_leg(source):
             nonmem = _nonmemory_sources(source)
-            chunk_rows.extend(self._run_chunks_fts(
-                fts_query, sources=nonmem, kind=kind, created_after=created_after,
-                created_before=created_before, limit=chunks_fetch_limit,
-            ))
+            chunk_rows.extend(
+                self._run_chunks_fts(
+                    fts_query,
+                    sources=nonmem,
+                    kind=kind,
+                    created_after=created_after,
+                    created_before=created_before,
+                    limit=chunks_fetch_limit,
+                )
+            )
 
         if tags:
             tag_set = set(tags)
@@ -868,8 +1005,13 @@ class KnowledgeStore:
         mem_results: list[SearchResult] = []
         if _uses_memory_leg(source):
             raw = self._vec_docs_search(
-                blob, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
-                created_after=created_after, created_before=created_before, limit=limit * 4,
+                blob,
+                kind=kind,
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit * 4,
             )
             seen: dict[str, SearchResult] = {}
             for r in raw:
@@ -881,8 +1023,14 @@ class KnowledgeStore:
         if _uses_chunks_leg(source):
             nonmem = _nonmemory_sources(source)
             chunk_results = self._vec_chunks_search(
-                blob, sources=nonmem, kind=kind, tags=tags, tag_match_mode=tag_match_mode,
-                created_after=created_after, created_before=created_before, limit=limit * 4,
+                blob,
+                sources=nonmem,
+                kind=kind,
+                tags=tags,
+                tag_match_mode=tag_match_mode,
+                created_after=created_after,
+                created_before=created_before,
+                limit=limit * 4,
             )
 
         return mem_results, chunk_results
@@ -929,9 +1077,13 @@ class KnowledgeStore:
         if tags:
             tag_set = set(tags)
             if tag_match_mode == "all":
-                doc_rows = [r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
+                doc_rows = [
+                    r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}
+                ]
             else:
-                doc_rows = [r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
+                doc_rows = [
+                    r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}
+                ]
 
         return [
             SearchResult(
@@ -1013,9 +1165,13 @@ class KnowledgeStore:
         if tags:
             tag_set = set(tags)
             if tag_match_mode == "all":
-                doc_rows = [r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}]
+                doc_rows = [
+                    r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}
+                ]
             else:
-                doc_rows = [r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}]
+                doc_rows = [
+                    r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}
+                ]
         doc_meta = {row["path"]: row for row in doc_rows}
 
         results: list[SearchResult] = []
@@ -1024,23 +1180,25 @@ class KnowledgeStore:
             if meta is None:
                 continue
             dist = rowid_to_distance.get(c["rowid"], 1.0)
-            results.append(SearchResult(
-                source=meta["source"],
-                kind=meta["kind"],
-                path=c["doc_path"],
-                title=meta["title"],
-                snippet=None,
-                score=max(0.0, 1.0 - dist),
-                tags=meta["tags"],
-                category=meta["category"],
-                created=meta["created"],
-                updated=meta["updated"],
-                provenance=meta["provenance"],
-                certainty=meta["certainty"],
-                chunk_index=c["chunk_index"],
-                start_line=c["start_line"],
-                end_line=c["end_line"],
-            ))
+            results.append(
+                SearchResult(
+                    source=meta["source"],
+                    kind=meta["kind"],
+                    path=c["doc_path"],
+                    title=meta["title"],
+                    snippet=None,
+                    score=max(0.0, 1.0 - dist),
+                    tags=meta["tags"],
+                    category=meta["category"],
+                    created=meta["created"],
+                    updated=meta["updated"],
+                    provenance=meta["provenance"],
+                    certainty=meta["certainty"],
+                    chunk_index=c["chunk_index"],
+                    start_line=c["start_line"],
+                    end_line=c["end_line"],
+                )
+            )
         return results
 
     def _hybrid_merge(
@@ -1110,7 +1268,9 @@ class KnowledgeStore:
         for path, total_score in doc_rrf.items():
             winner_key = doc_winner_key[path]
             base = chunk_fts_by_key.get(winner_key) or chunk_vec_by_key[winner_key]
-            snippet = chunk_fts_by_key[winner_key].snippet if winner_key in chunk_fts_by_key else None
+            snippet = (
+                chunk_fts_by_key[winner_key].snippet if winner_key in chunk_fts_by_key else None
+            )
             chunk_merged.append(dataclasses.replace(base, score=total_score, snippet=snippet))
 
         merged = mem_merged + chunk_merged
@@ -1134,12 +1294,18 @@ class KnowledgeStore:
         if embedding is None:
             return None
 
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         blob = struct.pack(f"{len(embedding)}f", *embedding)
         self._conn.execute(
             "INSERT OR REPLACE INTO embedding_cache(provider, model, content_hash, embedding, created) VALUES (?, ?, ?, ?, ?)",
-            (self._embedding_provider, self._embedding_model, content_hash, blob,
-             datetime.now(timezone.utc).isoformat()),
+            (
+                self._embedding_provider,
+                self._embedding_model,
+                content_hash,
+                blob,
+                datetime.now(UTC).isoformat(),
+            ),
         )
         self._conn.commit()
         return embedding
@@ -1162,10 +1328,7 @@ class KnowledgeStore:
                 return self._tei_rerank(query, candidates, limit)
             texts = self._fetch_reranker_texts(candidates)
             scores = self._generate_rerank_scores(query, texts)
-            reranked = [
-                dataclasses.replace(r, score=scores[i])
-                for i, r in enumerate(candidates)
-            ]
+            reranked = [dataclasses.replace(r, score=scores[i]) for i, r in enumerate(candidates)]
             reranked.sort(key=lambda r: r.score, reverse=True)
             return reranked[:limit]
         except Exception as e:
@@ -1218,7 +1381,9 @@ class KnowledgeStore:
         """Generate relevance scores for texts. Returns [0.0]*n for unknown provider."""
         if self._reranker_provider in ("ollama", "gemini"):
             return self._llm_rerank(query, texts)
-        logger.warning(f"Unknown reranker provider {self._reranker_provider!r}; returning zero scores")
+        logger.warning(
+            f"Unknown reranker provider {self._reranker_provider!r}; returning zero scores"
+        )
         return [0.0] * len(texts)
 
     def _llm_rerank(self, query: str, texts: list[str]) -> list[float]:
@@ -1254,6 +1419,7 @@ class KnowledgeStore:
         """Rerank candidates using cross-encoder API at self._cross_encoder_url/rerank."""
         texts = self._fetch_reranker_texts(candidates)
         import httpx
+
         resp = httpx.post(
             f"{self._cross_encoder_url}/rerank",
             json={"query": query, "texts": texts},
@@ -1281,7 +1447,7 @@ class KnowledgeStore:
         for raw in query.lower().split():
             # Strip characters that break FTS5 double-quoted phrase strings.
             # Keep word chars and hyphens; drop everything else (backticks, quotes, etc.)
-            t = re.sub(r'[^\w-]', '', raw)
+            t = re.sub(r"[^\w-]", "", raw)
             if t and t not in STOPWORDS and len(t) > 1:
                 tokens.append(t)
         if not tokens:
@@ -1393,7 +1559,9 @@ class KnowledgeStore:
                 "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
             ).fetchone()
             if row:
-                self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
+                self._conn.execute(
+                    f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
+                )
         self._conn.execute(
             "DELETE FROM docs WHERE source = ? AND path = ?",
             (source, path),
@@ -1425,7 +1593,11 @@ class KnowledgeStore:
 
         if directory is not None:
             dir_prefix = str(directory)
-            rows = [r for r in rows if r["path"].startswith(dir_prefix + "/") or r["path"] == dir_prefix]
+            rows = [
+                r
+                for r in rows
+                if r["path"].startswith(dir_prefix + "/") or r["path"] == dir_prefix
+            ]
 
         # counts unique paths, not chunk rows — intentional
         to_delete = list({row["path"] for row in rows if row["path"] not in current_paths})
@@ -1440,7 +1612,9 @@ class KnowledgeStore:
                     "SELECT rowid FROM docs WHERE source=? AND path=?", (source, path)
                 ).fetchone()
                 if row:
-                    self._conn.execute(f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],))
+                    self._conn.execute(
+                        f"DELETE FROM {self._docs_vec_table} WHERE rowid=?", (row["rowid"],)
+                    )
             self._conn.execute(
                 "DELETE FROM docs WHERE source = ? AND path = ?",
                 (source, path),
@@ -1467,8 +1641,8 @@ class KnowledgeStore:
         # Clean chunk rows before doc rows to avoid orphaned vec references
         if self._backend == "hybrid":
             chunk_rowids = [
-                row[0] for row in
-                self._conn.execute(
+                row[0]
+                for row in self._conn.execute(
                     "SELECT rowid FROM chunks WHERE source = ?", (source,)
                 ).fetchall()
             ]
@@ -1498,9 +1672,7 @@ class KnowledgeStore:
         # Probe vec tables: verify the dim-suffixed tables exist and are accessible.
         if self._backend == "hybrid":
             for table in (self._docs_vec_table, self._chunks_vec_table):
-                self._conn.execute(
-                    f"SELECT rowid FROM {table} LIMIT 1"
-                ).fetchone()
+                self._conn.execute(f"SELECT rowid FROM {table} LIMIT 1").fetchone()
 
     def close(self) -> None:
         """Close the database connection."""

@@ -1,18 +1,27 @@
 """Core Settings model, config loading, and path constants."""
-import os
+
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
-from co_cli.config._llm import LlmSettings
 from co_cli.config._knowledge import KnowledgeSettings
-from co_cli.config._web import WebSettings
+from co_cli.config._llm import LlmSettings
 from co_cli.config._memory import MemorySettings
-from co_cli.config._subagent import SubagentSettings
 from co_cli.config._shell import ShellSettings
+from co_cli.config._subagent import SubagentSettings
+from co_cli.config._web import WebSettings
 
 APP_NAME = "co-cli"
 
@@ -34,9 +43,13 @@ REASONING_DISPLAY_OFF = "off"
 REASONING_DISPLAY_SUMMARY = "summary"
 REASONING_DISPLAY_FULL = "full"
 DEFAULT_REASONING_DISPLAY = REASONING_DISPLAY_SUMMARY
-VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset({
-    REASONING_DISPLAY_OFF, REASONING_DISPLAY_SUMMARY, REASONING_DISPLAY_FULL,
-})
+VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset(
+    {
+        REASONING_DISPLAY_OFF,
+        REASONING_DISPLAY_SUMMARY,
+        REASONING_DISPLAY_FULL,
+    }
+)
 
 
 def _ensure_dirs() -> None:
@@ -74,11 +87,23 @@ class MCPServerConfig(BaseModel):
     HTTP:  set ``url`` instead. No subprocess — connects to a remote server.
     Exactly one of ``command`` or ``url`` must be provided.
     """
-    command: str | None = Field(default=None, description="Executable to launch (e.g. 'npx', 'uvx', 'python'). Required for stdio transport.")
-    url: str | None = Field(default=None, description="Remote server URL for HTTP transport (StreamableHTTP or SSE). Mutually exclusive with command.")
-    args: list[str] = Field(default_factory=list, description="Command-line arguments (stdio only)")
+
+    command: str | None = Field(
+        default=None,
+        description="Executable to launch (e.g. 'npx', 'uvx', 'python'). Required for stdio transport.",
+    )
+    url: str | None = Field(
+        default=None,
+        description="Remote server URL for HTTP transport (StreamableHTTP or SSE). Mutually exclusive with command.",
+    )
+    args: list[str] = Field(
+        default_factory=list, description="Command-line arguments (stdio only)"
+    )
     timeout: int = Field(default=5, ge=1, le=60)
-    env: dict[str, str] = Field(default_factory=dict, description="Extra environment variables passed to subprocess (stdio only)")
+    env: dict[str, str] = Field(
+        default_factory=dict,
+        description="Extra environment variables passed to subprocess (stdio only)",
+    )
     approval: Literal["ask", "auto"] = Field(default="ask")
     prefix: str | None = Field(default=None)
 
@@ -118,10 +143,10 @@ class Settings(BaseModel):
     shell: ShellSettings = Field(default_factory=ShellSettings)
 
     # Flat — integration paths
-    obsidian_vault_path: Optional[str] = Field(default=None)
-    brave_search_api_key: Optional[str] = Field(default=None)
-    google_credentials_path: Optional[str] = Field(default=None)
-    library_path: Optional[str] = Field(default=None)
+    obsidian_vault_path: str | None = Field(default=None)
+    brave_search_api_key: str | None = Field(default=None)
+    google_credentials_path: str | None = Field(default=None)
+    library_path: str | None = Field(default=None)
 
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
@@ -147,7 +172,7 @@ class Settings(BaseModel):
             raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
         return v
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def fill_from_env(cls, data: dict, info: ValidationInfo) -> dict:
         """Env vars override all file-based values (highest precedence layer).
@@ -258,7 +283,7 @@ def load_config(
 
     user_config = _user_config_path if _user_config_path is not None else SETTINGS_FILE
     if user_config.exists():
-        with open(user_config, "r") as f:
+        with open(user_config) as f:
             try:
                 data = json.load(f)
             except Exception as e:
@@ -266,7 +291,7 @@ def load_config(
 
     project_config = find_project_config(_project_dir)
     if project_config is not None:
-        with open(project_config, "r") as f:
+        with open(project_config) as f:
             try:
                 data = _deep_merge_settings(data, json.load(f))
             except Exception as e:
@@ -276,8 +301,10 @@ def load_config(
     try:
         resolved = Settings.model_validate(data, context=context)
     except ValidationError as exc:
-        loaded = [str(user_config) if user_config.exists() else None,
-                  str(project_config) if project_config else None]
+        loaded = [
+            str(user_config) if user_config.exists() else None,
+            str(project_config) if project_config else None,
+        ]
         sources = [s for s in loaded if s]
         hint = f" — check: {', '.join(sources)}" if sources else ""
         raise ValueError(f"Invalid configuration{hint}:\n{exc}") from exc
@@ -304,8 +331,9 @@ def get_settings() -> Settings:
             _settings = load_config()
         except ValueError as e:
             import sys
+
             print(f"Configuration error: {e}", file=sys.stderr)
-            raise SystemExit(1)
+            raise SystemExit(1) from e
     return _settings
 
 

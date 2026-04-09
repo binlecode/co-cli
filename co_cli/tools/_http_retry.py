@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 import random
 import re
-from typing import Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
-
 
 RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 TERMINAL_STATUS_CODES = {400, 401, 403, 404, 422}
@@ -44,8 +43,8 @@ def _parse_retry_after_date(raw: str | None) -> float | None:
     except (TypeError, ValueError, IndexError):
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    now = datetime.now(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    now = datetime.now(UTC)
     return max(0.0, (dt - now).total_seconds())
 
 
@@ -147,7 +146,9 @@ def classify_web_http_error(
             else:
                 msg = f"{tool_name} rejected (HTTP {code}) for {target}."
             return WebRetryResult(
-                retryable=False, message=msg, status_code=code,
+                retryable=False,
+                message=msg,
+                status_code=code,
             )
 
         return WebRetryResult(

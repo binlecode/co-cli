@@ -1,15 +1,15 @@
 """Google Calendar tools using RunContext pattern."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
+
 from googleapiclient.discovery import build
-from pydantic_ai import RunContext, ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
 from co_cli.tools._google_auth import get_cached_google_creds
-from co_cli.tools.tool_errors import tool_error, handle_google_api_error
-from pydantic_ai.messages import ToolReturn
+from co_cli.tools.tool_errors import handle_google_api_error, tool_error
 from co_cli.tools.tool_output import tool_output
-
 
 _CALENDAR_NOT_CONFIGURED = (
     "Calendar: not configured. "
@@ -52,10 +52,7 @@ def _format_events(events: list[dict]) -> str:
 
         attendees = event.get("attendees", [])
         if attendees:
-            names = [
-                a.get("displayName") or a.get("email", "unknown")
-                for a in attendees
-            ]
+            names = [a.get("displayName") or a.get("email", "unknown") for a in attendees]
             output += f"  Attendees: {', '.join(names)}\n"
 
         event_link = event.get("htmlLink")
@@ -126,7 +123,7 @@ def list_calendar_events(
         return err
 
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_min = (
             (now - timedelta(days=days_back))
             .replace(hour=0, minute=0, second=0, microsecond=0)
@@ -192,7 +189,7 @@ def search_calendar_events(
         return err
 
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_min = (
             (now - timedelta(days=days_back))
             .replace(hour=0, minute=0, second=0, microsecond=0)
@@ -211,7 +208,11 @@ def search_calendar_events(
             orderBy="startTime",
         )
         if not events:
-            return tool_output(f"No events found matching '{query}' in the requested time range.", ctx=ctx, count=0)
+            return tool_output(
+                f"No events found matching '{query}' in the requested time range.",
+                ctx=ctx,
+                count=0,
+            )
         display = f"Events matching '{query}' ({len(events)}):\n" + _format_events(events)
         return tool_output(display, ctx=ctx, count=len(events))
     except ModelRetry:

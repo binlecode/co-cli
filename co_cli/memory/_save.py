@@ -7,7 +7,7 @@ Same pattern as _extraction_agent (memory/_extractor.py) and _summarizer_agent
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,8 +15,8 @@ import yaml
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ToolReturn
-
 from pydantic_ai.settings import ModelSettings
+
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.tools.tool_output import tool_output_raw
 
@@ -83,18 +83,17 @@ async def check_and_save(
     """
     import asyncio
 
-    user_prompt = (
-        f"Candidate memory:\n{content}\n\n"
-        f"Existing memories:\n{manifest}"
-    )
+    user_prompt = f"Candidate memory:\n{content}\n\nExisting memories:\n{manifest}"
 
     try:
         coro = _memory_save_agent.run(
-            user_prompt, model=model, model_settings=model_settings,
+            user_prompt,
+            model=model,
+            model_settings=model_settings,
         )
         result = await asyncio.wait_for(coro, timeout=timeout_seconds)
         return result.output
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.info("memory save agent timed out, falling back to SAVE_NEW")
         return SaveResult(action="SAVE_NEW")
     except Exception:
@@ -127,10 +126,10 @@ def overwrite_memory(
         ToolReturn with consolidated action metadata.
     """
     from co_cli.tools.memory import (
-        slugify,
         _classify_certainty,
-        _detect_provenance,
         _detect_category,
+        _detect_provenance,
+        slugify,
     )
 
     # Sanitize slug: reject path separators to prevent directory traversal
@@ -139,7 +138,9 @@ def overwrite_memory(
         return None
     target_path = memory_dir / f"{target_slug}.md"
     if not target_path.exists():
-        logger.warning(f"overwrite_memory: target {target_slug} not found, falling through to SAVE_NEW")
+        logger.warning(
+            f"overwrite_memory: target {target_slug} not found, falling through to SAVE_NEW"
+        )
         return None
 
     raw = target_path.read_text(encoding="utf-8")
@@ -150,7 +151,7 @@ def overwrite_memory(
     merged_tags = list(set(existing_tags + (new_tags or [])))
 
     # Refresh frontmatter
-    existing_fm["updated"] = datetime.now(timezone.utc).isoformat()
+    existing_fm["updated"] = datetime.now(UTC).isoformat()
     existing_fm["tags"] = merged_tags
     existing_fm["provenance"] = _detect_provenance(merged_tags, auto_save_tags)
     existing_fm["auto_category"] = _detect_category(merged_tags)
@@ -158,8 +159,7 @@ def overwrite_memory(
     existing_fm.setdefault("kind", "memory")
 
     md_content = (
-        f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n"
-        f"{new_content.strip()}\n"
+        f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n{new_content.strip()}\n"
     )
     target_path.write_text(md_content, encoding="utf-8")
 
@@ -169,6 +169,7 @@ def overwrite_memory(
     if knowledge_store is not None:
         try:
             import hashlib as _hashlib
+
             knowledge_store.index(
                 source="memory",
                 kind="memory",
@@ -186,8 +187,7 @@ def overwrite_memory(
             logger.warning(f"Failed to reindex memory {target_slug}: {e}")
 
     return tool_output_raw(
-        f"✓ Updated memory {existing_fm.get('id', target_slug)} (upsert)\n"
-        f"Location: {target_path}",
+        f"✓ Updated memory {existing_fm.get('id', target_slug)} (upsert)\nLocation: {target_path}",
         path=str(target_path),
         memory_id=existing_fm.get("id", target_slug),
         action="consolidated",

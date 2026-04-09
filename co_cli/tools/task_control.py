@@ -6,22 +6,21 @@ Background task state lives in ctx.deps.session.background_tasks (session-scoped
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from opentelemetry import trace as otel_trace
-from pydantic_ai import RunContext, ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
     _make_task_id,
-    spawn_task,
     kill_task,
+    spawn_task,
 )
-from pydantic_ai.messages import ToolReturn
-
 from co_cli.tools.tool_output import tool_output
 
 
@@ -58,13 +57,13 @@ async def start_background_task(
             cwd=cwd,
             description=description,
             status="running",
-            started_at=datetime.now(timezone.utc).isoformat(),
+            started_at=datetime.now(UTC).isoformat(),
         )
         ctx.deps.session.background_tasks[task_id] = state
         try:
             await spawn_task(state, ctx.deps.session)
         except Exception as e:
-            raise ModelRetry(f"Failed to start background task: {e}")
+            raise ModelRetry(f"Failed to start background task: {e}") from e
 
     display = f"[{task_id}] started — command: {command}"
     return tool_output(display, ctx=ctx, task_id=task_id, status="running")
@@ -141,7 +140,9 @@ async def cancel_background_task(
     """
     state = ctx.deps.session.background_tasks.get(task_id)
     if state is None:
-        return tool_output(f"Task not found: {task_id}", ctx=ctx, task_id=task_id, status="not_found")
+        return tool_output(
+            f"Task not found: {task_id}", ctx=ctx, task_id=task_id, status="not_found"
+        )
 
     if state.status != "running":
         return tool_output(
@@ -196,11 +197,15 @@ async def list_background_tasks(
         filter_note = f" with status={status_filter}" if status_filter else ""
         display = f"No background tasks{filter_note}."
     else:
-        lines = [f"Background tasks ({len(rows)}{' — ' + status_filter if status_filter else ''}):\n"]
+        lines = [
+            f"Background tasks ({len(rows)}{' — ' + status_filter if status_filter else ''}):\n"
+        ]
         for r in rows:
             started = (r["started_at"] or "queued")[:19]
             desc_prefix = f"{r['description']}: " if r.get("description") else ""
-            lines.append(f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})")
+            lines.append(
+                f"  [{r['task_id']}] {r['status']} — {desc_prefix}{r['command']}  ({started})"
+            )
         display = "\n".join(lines)
 
     return tool_output(display, ctx=ctx, tasks=rows, count=len(rows))

@@ -5,9 +5,9 @@ import shutil
 import subprocess
 from typing import Any
 
-import google.auth
 from google.oauth2.credentials import Credentials
-from co_cli.config._core import GOOGLE_TOKEN_PATH, ADC_PATH
+
+from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
 
 ALL_GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
@@ -37,16 +37,12 @@ def ensure_google_credentials(
 
     # 2. Default token path
     if GOOGLE_TOKEN_PATH.exists():
-        return Credentials.from_authorized_user_file(
-            str(GOOGLE_TOKEN_PATH), scopes=scopes
-        )
+        return Credentials.from_authorized_user_file(str(GOOGLE_TOKEN_PATH), scopes=scopes)
 
     # 3. ADC exists -> copy to co-cli config
     if ADC_PATH.exists():
         shutil.copy2(ADC_PATH, GOOGLE_TOKEN_PATH)
-        return Credentials.from_authorized_user_file(
-            str(GOOGLE_TOKEN_PATH), scopes=scopes
-        )
+        return Credentials.from_authorized_user_file(str(GOOGLE_TOKEN_PATH), scopes=scopes)
 
     # 4. Try gcloud interactive login
     if not shutil.which("gcloud"):
@@ -68,12 +64,9 @@ def ensure_google_credentials(
     # Copy ADC result to co-cli config
     if ADC_PATH.exists():
         shutil.copy2(ADC_PATH, GOOGLE_TOKEN_PATH)
-        return Credentials.from_authorized_user_file(
-            str(GOOGLE_TOKEN_PATH), scopes=scopes
-        )
+        return Credentials.from_authorized_user_file(str(GOOGLE_TOKEN_PATH), scopes=scopes)
 
     return None
-
 
 
 def get_cached_google_creds(deps: Any) -> Any | None:
@@ -87,9 +80,8 @@ def get_cached_google_creds(deps: Any) -> Any | None:
     """
     if not deps.session.google_creds_resolved:
         deps.session.google_creds = ensure_google_credentials(
-            deps.config.google_credentials_path, ALL_GOOGLE_SCOPES,
+            deps.config.google_credentials_path,
+            ALL_GOOGLE_SCOPES,
         )
         deps.session.google_creds_resolved = True
     return deps.session.google_creds
-
-

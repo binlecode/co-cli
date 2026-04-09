@@ -10,8 +10,8 @@ Usage in tools:
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 
 class ResourceBusyError(Exception):

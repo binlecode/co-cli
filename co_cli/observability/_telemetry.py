@@ -1,10 +1,12 @@
+import json
 import logging
 import sqlite3
-import json
 import time
 from pathlib import Path
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
 from co_cli.config._core import LOGS_DB
 
 logger = logging.getLogger(__name__)
@@ -57,9 +59,9 @@ class SQLiteSpanExporter(SpanExporter):
         rows = []
         for span in spans:
             # Standard OTel span ID formats
-            span_id = format(span.context.span_id, '016x')
-            trace_id = format(span.context.trace_id, '032x')
-            parent_id = format(span.parent.span_id, '016x') if span.parent else None
+            span_id = format(span.context.span_id, "016x")
+            trace_id = format(span.context.trace_id, "032x")
+            parent_id = format(span.parent.span_id, "016x") if span.parent else None
 
             # Duration calculation
             duration_ms = None
@@ -79,7 +81,7 @@ class SQLiteSpanExporter(SpanExporter):
                 event = {
                     "name": e.name,
                     "timestamp": e.timestamp,
-                    "attributes": dict(e.attributes) if e.attributes else {}
+                    "attributes": dict(e.attributes) if e.attributes else {},
                 }
                 events.append(event)
 
@@ -88,21 +90,23 @@ class SQLiteSpanExporter(SpanExporter):
             if span.resource:
                 resource = dict(span.resource.attributes)
 
-            rows.append((
-                span_id,
-                trace_id,
-                parent_id,
-                span.name,
-                span.kind.name if span.kind else "INTERNAL",
-                span.start_time,
-                span.end_time,
-                duration_ms,
-                status_code,
-                status_description,
-                json.dumps(dict(span.attributes) if span.attributes else {}),
-                json.dumps(events),
-                json.dumps(resource),
-            ))
+            rows.append(
+                (
+                    span_id,
+                    trace_id,
+                    parent_id,
+                    span.name,
+                    span.kind.name if span.kind else "INTERNAL",
+                    span.start_time,
+                    span.end_time,
+                    duration_ms,
+                    status_code,
+                    status_description,
+                    json.dumps(dict(span.attributes) if span.attributes else {}),
+                    json.dumps(events),
+                    json.dumps(resource),
+                )
+            )
 
         # Retry with exponential backoff for transient lock contention
         for attempt in range(_EXPORT_MAX_RETRIES):
@@ -115,8 +119,13 @@ class SQLiteSpanExporter(SpanExporter):
                 return SpanExportResult.SUCCESS
             except sqlite3.OperationalError as exc:
                 if "locked" in str(exc) and attempt < _EXPORT_MAX_RETRIES - 1:
-                    delay = _EXPORT_RETRY_BASE_SECONDS * (2 ** attempt)
-                    logger.warning("telemetry export retry %d/%d after lock: %s", attempt + 1, _EXPORT_MAX_RETRIES, exc)
+                    delay = _EXPORT_RETRY_BASE_SECONDS * (2**attempt)
+                    logger.warning(
+                        "telemetry export retry %d/%d after lock: %s",
+                        attempt + 1,
+                        _EXPORT_MAX_RETRIES,
+                        exc,
+                    )
                     time.sleep(delay)
                 else:
                     logger.error("telemetry export failed: %s", exc)

@@ -20,14 +20,14 @@ Config-shape validation lives on LlmSettings.validate_config() (config/_llm.py),
 
 import os
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from co_cli.config._core import Settings
     from co_cli.deps import CoDeps
-
 
 
 @dataclass
@@ -109,6 +109,7 @@ def check_ollama_model(host: str, model: str) -> CheckResult:
     """
     try:
         import httpx
+
         resp = httpx.get(f"{host}/api/tags", timeout=5)
         resp.raise_for_status()
         installed = {m["name"] for m in resp.json().get("models", [])}
@@ -143,12 +144,14 @@ def probe_ollama_context(host: str, model: str) -> CheckResult:
     """
     try:
         import httpx
+
         resp = httpx.post(f"{host}/api/show", json={"model": model}, timeout=5)
         resp.raise_for_status()
         data = resp.json()
     except Exception as err:
         return CheckResult(
-            ok=True, status="warn",
+            ok=True,
+            status="warn",
             detail=f"Ollama context probe skipped — {err}",
         )
 
@@ -166,13 +169,15 @@ def probe_ollama_context(host: str, model: str) -> CheckResult:
 
     if num_ctx <= 0:
         return CheckResult(
-            ok=True, status="warn",
+            ok=True,
+            status="warn",
             detail=f"Could not read num_ctx from Modelfile for {model}",
         )
 
     if num_ctx < MIN_AGENTIC_CONTEXT:
         return CheckResult(
-            ok=False, status="error",
+            ok=False,
+            status="error",
             detail=(
                 f"Model {model} has num_ctx={num_ctx:,} — minimum for agentic "
                 f"tool use is {MIN_AGENTIC_CONTEXT:,} (64K). "
@@ -182,7 +187,8 @@ def probe_ollama_context(host: str, model: str) -> CheckResult:
         )
 
     return CheckResult(
-        ok=True, status="ok",
+        ok=True,
+        status="ok",
         detail=f"Runtime num_ctx={num_ctx:,}",
         extra={"num_ctx": num_ctx},
     )
@@ -211,11 +217,17 @@ def check_agent_llm(config: "Settings") -> CheckResult:
 
     try:
         import httpx
+
         resp = httpx.get(f"{config.llm.host}/api/tags", timeout=5)
         resp.raise_for_status()
         installed = {m["name"] for m in resp.json().get("models", [])}
     except Exception as err:
-        return CheckResult(ok=True, status="warn", detail=f"Ollama check skipped — {err}", extra={"reason": "unreachable"})
+        return CheckResult(
+            ok=True,
+            status="warn",
+            detail=f"Ollama check skipped — {err}",
+            extra={"reason": "unreachable"},
+        )
 
     if config.llm.model not in installed:
         return CheckResult(
@@ -303,6 +315,7 @@ def check_tei(url: str) -> CheckResult:
     """Check a TEI service (embed or rerank) by GET to its base URL."""
     try:
         import httpx
+
         httpx.get(url, timeout=1)
         return CheckResult(ok=True, status="ok", detail=f"reachable at {url}")
     except Exception as err:
@@ -311,11 +324,17 @@ def check_tei(url: str) -> CheckResult:
 
 def _check_google(creds: str | None, token_path: Path, adc_path: Path) -> CheckResult:
     if creds and os.path.exists(os.path.expanduser(creds)):
-        return CheckResult(ok=True, status="ok", detail="configured (credentials file)", extra={"path": creds})
+        return CheckResult(
+            ok=True, status="ok", detail="configured (credentials file)", extra={"path": creds}
+        )
     if token_path.exists():
-        return CheckResult(ok=True, status="ok", detail="configured (token.json)", extra={"path": str(token_path)})
+        return CheckResult(
+            ok=True, status="ok", detail="configured (token.json)", extra={"path": str(token_path)}
+        )
     if adc_path.exists():
-        return CheckResult(ok=True, status="ok", detail="configured (ADC)", extra={"path": str(adc_path)})
+        return CheckResult(
+            ok=True, status="ok", detail="configured (ADC)", extra={"path": str(adc_path)}
+        )
     return CheckResult(ok=True, status="warn", detail="not configured")
 
 
@@ -359,26 +378,30 @@ def check_settings(config: "Settings") -> DoctorResult:
     Checks google, obsidian, brave, and MCP servers using values from config.
     No runtime services — callers that need knowledge/skills checks use check_runtime(deps).
     """
-    from co_cli.config._core import GOOGLE_TOKEN_PATH, ADC_PATH
+    from co_cli.config._core import ADC_PATH, GOOGLE_TOKEN_PATH
 
     checks: list[CheckItem] = []
 
     google_result = _check_google(config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
-    checks.append(CheckItem(
-        name="google",
-        status=google_result.status,
-        detail=google_result.detail,
-        extra=google_result.extra.get("path", ""),
-    ))
+    checks.append(
+        CheckItem(
+            name="google",
+            status=google_result.status,
+            detail=google_result.detail,
+            extra=google_result.extra.get("path", ""),
+        )
+    )
 
     obsidian_vault = str(config.obsidian_vault_path) if config.obsidian_vault_path else None
     obsidian_result = _check_obsidian(obsidian_vault)
-    checks.append(CheckItem(
-        name="obsidian",
-        status=obsidian_result.status,
-        detail=obsidian_result.detail,
-        extra=obsidian_result.extra.get("path", ""),
-    ))
+    checks.append(
+        CheckItem(
+            name="obsidian",
+            status=obsidian_result.status,
+            detail=obsidian_result.detail,
+            extra=obsidian_result.extra.get("path", ""),
+        )
+    )
 
     brave_result = _check_brave(config.brave_search_api_key)
     checks.append(CheckItem(name="brave", status=brave_result.status, detail=brave_result.detail))
@@ -386,12 +409,14 @@ def check_settings(config: "Settings") -> DoctorResult:
     # mcp: loop over config.mcp_servers, call check_mcp_server
     for name, cfg in (config.mcp_servers or {}).items():
         result = check_mcp_server(cfg.command, cfg.url)
-        checks.append(CheckItem(
-            name=f"mcp:{name}",
-            status=result.status,
-            detail=result.detail,
-            extra=str(result.extra.get("value", "")),
-        ))
+        checks.append(
+            CheckItem(
+                name=f"mcp:{name}",
+                status=result.status,
+                detail=result.detail,
+                extra=str(result.extra.get("value", "")),
+            )
+        )
 
     return DoctorResult(checks=checks)
 
@@ -423,7 +448,9 @@ def check_runtime(
 
     _emit_progress(progress, "Doctor: checking configured integrations...")
     google_result = _check_google(deps.config.google_credentials_path, GOOGLE_TOKEN_PATH, ADC_PATH)
-    _obsidian_vault = str(deps.config.obsidian_vault_path) if deps.config.obsidian_vault_path else None
+    _obsidian_vault = (
+        str(deps.config.obsidian_vault_path) if deps.config.obsidian_vault_path else None
+    )
     obsidian_result = _check_obsidian(_obsidian_vault)
     brave_result = _check_brave(deps.config.brave_search_api_key)
 
@@ -432,6 +459,7 @@ def check_runtime(
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
     from co_cli.commands._commands import get_skill_registry
+
     skills_result = _check_skills(get_skill_registry(deps.skill_commands))
 
     # Probe each configured MCP server via binary PATH/URL check
@@ -452,10 +480,7 @@ def check_runtime(
         ("skills", skills_result),
         *mcp_probes,
     ]
-    checks = [
-        {"name": name, "status": r.status, "detail": r.detail}
-        for name, r in named_checks
-    ]
+    checks = [{"name": name, "status": r.status, "detail": r.detail} for name, r in named_checks]
 
     # Build capabilities dict
     capabilities: dict[str, Any] = {
@@ -497,11 +522,13 @@ def check_runtime(
     findings: list[dict[str, str]] = []
     for name, result in named_checks:
         if result.status not in ("ok", "skipped"):
-            findings.append({
-                "component": name,
-                "issue": result.detail,
-                "severity": "warn" if result.status == "warn" else "error",
-            })
+            findings.append(
+                {
+                    "component": name,
+                    "issue": result.detail,
+                    "severity": "warn" if result.status == "warn" else "error",
+                }
+            )
 
     # Fallbacks: active degraded-mode operations
     fallbacks: list[str] = []

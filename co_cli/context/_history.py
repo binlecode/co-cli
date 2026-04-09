@@ -16,11 +16,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-
 from dataclasses import dataclass
 
 from pydantic_ai import RunContext
-from pydantic_ai.exceptions import ModelHTTPError, ModelAPIError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -92,9 +91,8 @@ def group_by_turn(messages: list[ModelMessage]) -> list[TurnGroup]:
     current_start: int = 0
 
     for i, msg in enumerate(messages):
-        is_boundary = (
-            isinstance(msg, ModelRequest)
-            and any(isinstance(p, UserPromptPart) for p in msg.parts)
+        is_boundary = isinstance(msg, ModelRequest) and any(
+            isinstance(p, UserPromptPart) for p in msg.parts
         )
         if is_boundary and current_msgs:
             groups.append(_make_turn_group(current_msgs, current_start))
@@ -133,22 +131,25 @@ def find_first_run_end(messages: list[ModelMessage]) -> int:
     the dropped middle section.
     """
     for i, msg in enumerate(messages):
-        if isinstance(msg, ModelResponse):
-            if any(isinstance(p, (TextPart, ThinkingPart)) for p in msg.parts):
-                return i
+        if isinstance(msg, ModelResponse) and any(
+            isinstance(p, (TextPart, ThinkingPart)) for p in msg.parts
+        ):
+            return i
     return 0
 
 
 def _static_marker(dropped_count: int) -> ModelRequest:
     """Build a structurally valid placeholder for dropped messages."""
-    return ModelRequest(parts=[
-        UserPromptPart(
-            content=(
-                f"[Earlier conversation trimmed — {dropped_count} messages "
-                "removed to stay within context budget]"
+    return ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    f"[Earlier conversation trimmed — {dropped_count} messages "
+                    "removed to stay within context budget]"
+                ),
             ),
-        ),
-    ])
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -186,15 +187,28 @@ def _compute_compaction_boundaries(
 
 OLDER_MSG_MAX_CHARS = 2_500
 
-FILE_TOOLS: frozenset[str] = frozenset({
-    "read_file", "write_file", "edit_file", "find_in_files", "list_directory",
-})
+FILE_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "find_in_files",
+        "list_directory",
+    }
+)
 
-COMPACTABLE_TOOLS: frozenset[str] = frozenset({
-    "read_file", "run_shell_command", "find_in_files",
-    "list_directory", "web_search", "web_fetch",
-    "read_article", "read_note",
-})
+COMPACTABLE_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "run_shell_command",
+        "find_in_files",
+        "list_directory",
+        "web_search",
+        "web_fetch",
+        "read_article",
+        "read_note",
+    }
+)
 COMPACTABLE_KEEP_RECENT = 5
 _CLEARED_PLACEHOLDER = "[tool result cleared — older than 5 most recent calls]"
 
@@ -205,9 +219,10 @@ def _find_last_turn_start(messages: list[ModelMessage]) -> int:
     Returns 0 when no such message exists (protect nothing — degenerate case).
     """
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], ModelRequest):
-            if any(isinstance(p, UserPromptPart) for p in messages[i].parts):
-                return i
+        if isinstance(messages[i], ModelRequest) and any(
+            isinstance(p, UserPromptPart) for p in messages[i].parts
+        ):
+            return i
     return 0
 
 
@@ -279,11 +294,13 @@ def truncate_tool_results(
                 and part.tool_name in COMPACTABLE_TOOLS
                 and id(part) not in keep_ids
             ):
-                new_parts.append(ToolReturnPart(
-                    tool_name=part.tool_name,
-                    content=_CLEARED_PLACEHOLDER,
-                    tool_call_id=part.tool_call_id,
-                ))
+                new_parts.append(
+                    ToolReturnPart(
+                        tool_name=part.tool_name,
+                        content=_CLEARED_PLACEHOLDER,
+                        tool_call_id=part.tool_call_id,
+                    )
+                )
                 msg_modified = True
             else:
                 new_parts.append(part)
@@ -316,7 +333,10 @@ def compact_assistant_responses(
         if not isinstance(msg, ModelResponse):
             continue
         for part in msg.parts:
-            if isinstance(part, (TextPart, ThinkingPart)) and len(part.content) > OLDER_MSG_MAX_CHARS:
+            if (
+                isinstance(part, (TextPart, ThinkingPart))
+                and len(part.content) > OLDER_MSG_MAX_CHARS
+            ):
                 part.content = _truncate_proportional(part.content, OLDER_MSG_MAX_CHARS)
 
     return messages
@@ -365,11 +385,14 @@ def _gather_compaction_context(
     if todos:
         pending = [t for t in todos if t.get("status") not in ("completed", "cancelled")]
         if pending:
-            todo_lines = [f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]]
+            todo_lines = [
+                f"- [{t.get('status', 'pending')}] {t.get('content', '?')}" for t in pending[:10]
+            ]
             context_parts.append("Active tasks:\n" + "\n".join(todo_lines))
 
     # 3. Always-on memories — standing context the model always sees
     from co_cli.memory.recall import load_always_on_memories
+
     memories = load_always_on_memories(ctx.deps.memory_dir)
     if memories:
         mem_lines = [m.content[:200] for m in memories[:5]]
@@ -379,9 +402,12 @@ def _gather_compaction_context(
     for msg in dropped:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, UserPromptPart) and isinstance(part.content, str):
-                    if part.content.startswith(_SUMMARY_MARKER_PREFIX):
-                        context_parts.append(f"Prior summary:\n{part.content}")
+                if (
+                    isinstance(part, UserPromptPart)
+                    and isinstance(part.content, str)
+                    and part.content.startswith(_SUMMARY_MARKER_PREFIX)
+                ):
+                    context_parts.append(f"Prior summary:\n{part.content}")
 
     if not context_parts:
         return None
@@ -405,7 +431,11 @@ def emergency_compact(messages: list[ModelMessage]) -> list[ModelMessage] | None
     if len(groups) <= 2:
         return None
     dropped_count = sum(len(g.messages) for g in groups[1:-1])
-    return groups_to_messages([groups[0]]) + [_static_marker(dropped_count)] + groups_to_messages([groups[-1]])
+    return [
+        *groups_to_messages([groups[0]]),
+        _static_marker(dropped_count),
+        *groups_to_messages([groups[-1]]),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -460,9 +490,12 @@ async def summarize_history_window(
         # not a transient failure, do not increment compaction_failure_count.
         log.info("Sliding window: model absent, using static marker")
     elif ctx.deps.runtime.compaction_failure_count >= 3:
-        log.warning("Sliding window: circuit breaker active (>= 3 consecutive failures), using static marker")
+        log.warning(
+            "Sliding window: circuit breaker active (>= 3 consecutive failures), using static marker"
+        )
     else:
         from co_cli.display._core import console
+
         console.print("[dim]Compacting conversation...[/dim]")
         # Context enrichment — gather side-channel context only when the LLM
         # summarizer will actually run. Skipped on static-marker fallback paths
@@ -482,13 +515,13 @@ async def summarize_history_window(
             ctx.deps.runtime.compaction_failure_count += 1
 
     if summary_text is not None:
-        summary_marker = ModelRequest(parts=[
-            UserPromptPart(
-                content=(
-                    f"[Summary of {dropped_count} earlier messages]\n{summary_text}"
+        summary_marker = ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(f"[Summary of {dropped_count} earlier messages]\n{summary_text}"),
                 ),
-            ),
-        ])
+            ]
+        )
         log.info("Sliding window: summarised %d messages inline", dropped_count)
     else:
         summary_marker = _static_marker(dropped_count)
@@ -497,14 +530,13 @@ async def summarize_history_window(
     # search_tools ToolReturnParts must survive compaction so the SDK's
     # ToolSearchToolset can reconstruct discovery state from message history.
     preserved_discovery = [
-        msg for msg in dropped
-        if isinstance(msg, ModelRequest) and any(
-            isinstance(p, ToolReturnPart) and p.tool_name == "search_tools"
-            for p in msg.parts
-        )
+        msg
+        for msg in dropped
+        if isinstance(msg, ModelRequest)
+        and any(isinstance(p, ToolReturnPart) and p.tool_name == "search_tools" for p in msg.parts)
     ]
 
-    return messages[:head_end] + [summary_marker] + preserved_discovery + messages[tail_start:]
+    return [*messages[:head_end], summary_marker, *preserved_discovery, *messages[tail_start:]]
 
 
 # ---------------------------------------------------------------------------
@@ -526,9 +558,8 @@ def _count_user_turns(messages: list[ModelMessage]) -> int:
     """Count ModelRequest messages that contain a non-system UserPromptPart."""
     count = 0
     for msg in messages:
-        if isinstance(msg, ModelRequest):
-            if any(isinstance(p, UserPromptPart) for p in msg.parts):
-                count += 1
+        if isinstance(msg, ModelRequest) and any(isinstance(p, UserPromptPart) for p in msg.parts):
+            count += 1
     return count
 
 
@@ -585,12 +616,14 @@ async def inject_opening_context(
     max_chars = ctx.deps.config.memory.injection_max_chars
     if len(memory_content) > max_chars:
         memory_content = memory_content[:max_chars]
-    injection = ModelRequest(parts=[
-        SystemPromptPart(
-            content=f"Relevant memories:\n{memory_content}",
-        ),
-    ])
-    return messages + [injection]
+    injection = ModelRequest(
+        parts=[
+            SystemPromptPart(
+                content=f"Relevant memories:\n{memory_content}",
+            ),
+        ]
+    )
+    return [*messages, injection]
 
 
 # ---------------------------------------------------------------------------
@@ -648,12 +681,12 @@ def detect_safety_issues(
                 if isinstance(part, ToolCallPart):
                     if not doom_streak_done:
                         args_str = json.dumps(
-                            part.args.args_dict() if hasattr(part.args, "args_dict") else str(part.args),
+                            part.args.args_dict()
+                            if hasattr(part.args, "args_dict")
+                            else str(part.args),
                             sort_keys=True,
                         )
-                        h = hashlib.md5(
-                            f"{part.tool_name}:{args_str}".encode()
-                        ).hexdigest()
+                        h = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
                         if last_hash is None:
                             consecutive_same = 1
                             last_hash = h
@@ -681,9 +714,11 @@ def detect_safety_issues(
                     else:
                         str_is_error = False
                     is_error = (
-                        (isinstance(part.metadata, dict) and part.metadata.get("error"))
-                        or (isinstance(content, str) and part.tool_name == "run_shell_command"
-                            and str_is_error)
+                        isinstance(part.metadata, dict) and part.metadata.get("error")
+                    ) or (
+                        isinstance(content, str)
+                        and part.tool_name == "run_shell_command"
+                        and str_is_error
                     )
                     if is_error and part.tool_name == "run_shell_command":
                         consecutive_shell_errors += 1
@@ -698,27 +733,35 @@ def detect_safety_issues(
 
     # Doom loop detection
     if not state.doom_loop_injected and consecutive_same >= doom_threshold:
-        injections.append(ModelRequest(parts=[
-            SystemPromptPart(
-                content=(
-                    "You are repeating the same tool call. "
-                    "Try a different approach or explain why you are stuck."
-                ),
-            ),
-        ]))
+        injections.append(
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(
+                        content=(
+                            "You are repeating the same tool call. "
+                            "Try a different approach or explain why you are stuck."
+                        ),
+                    ),
+                ]
+            )
+        )
         state.doom_loop_injected = True
         log.warning("Doom loop detected: %d identical tool calls", consecutive_same)
 
     # Shell reflection cap
     if not state.reflection_injected and consecutive_shell_errors >= max_refl:
-        injections.append(ModelRequest(parts=[
-            SystemPromptPart(
-                content=(
-                    "Shell reflection limit reached. Ask the user for help "
-                    "or try a fundamentally different approach."
-                ),
-            ),
-        ]))
+        injections.append(
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(
+                        content=(
+                            "Shell reflection limit reached. Ask the user for help "
+                            "or try a fundamentally different approach."
+                        ),
+                    ),
+                ]
+            )
+        )
         state.reflection_injected = True
         log.warning("Shell reflection cap: %d consecutive errors", consecutive_shell_errors)
 

@@ -2,19 +2,19 @@
 
 import asyncio
 import re
-from urllib.parse import urlparse
 from typing import Any
+from urllib.parse import urlparse
 
 import html2text
 import httpx
-from pydantic_ai import RunContext, ModelRetry
+from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
-from co_cli.tools.tool_errors import tool_error
 from co_cli.tools._http_retry import classify_web_http_error, compute_backoff_delay
-from pydantic_ai.messages import ToolReturn
-from co_cli.tools.tool_output import tool_output
 from co_cli.tools._url_safety import is_url_safe
+from co_cli.tools.tool_errors import tool_error
+from co_cli.tools.tool_output import tool_output
 
 _MAX_RESULTS = 8
 _SEARCH_TIMEOUT = 12
@@ -46,7 +46,9 @@ def _is_content_type_allowed(content_type: str) -> bool:
 
 
 def _is_domain_allowed(
-    hostname: str, allowed: list[str], blocked: list[str],
+    hostname: str,
+    allowed: list[str],
+    blocked: list[str],
 ) -> bool:
     """Check whether a hostname passes domain policy.
 
@@ -59,10 +61,7 @@ def _is_domain_allowed(
         if hostname == domain or hostname.endswith("." + domain):
             return False
     if allowed:
-        for domain in allowed:
-            if hostname == domain or hostname.endswith("." + domain):
-                return True
-        return False
+        return any(hostname == domain or hostname.endswith("." + domain) for domain in allowed)
     return True
 
 
@@ -70,9 +69,7 @@ def _get_api_key(ctx: RunContext[CoDeps]) -> str:
     """Extract and validate Brave Search API key from context."""
     key = ctx.deps.config.brave_search_api_key
     if not key:
-        raise ModelRetry(
-            "Web search not configured. Set BRAVE_SEARCH_API_KEY in settings or env."
-        )
+        raise ModelRetry("Web search not configured. Set BRAVE_SEARCH_API_KEY in settings or env.")
     return key
 
 
@@ -84,10 +81,7 @@ def _is_cloudflare_challenge(resp: httpx.Response) -> bool:
     returns 403 with ``cf-mitigated: challenge``.  Retrying with an honest
     tool-only User-Agent removes the mismatch and often succeeds.
     """
-    return (
-        resp.status_code == 403
-        and resp.headers.get("cf-mitigated") == "challenge"
-    )
+    return resp.status_code == 403 and resp.headers.get("cf-mitigated") == "challenge"
 
 
 def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
@@ -101,10 +95,7 @@ def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
     }
-    if hostname and (
-        hostname.endswith("wikipedia.org")
-        or hostname.endswith("wikimedia.org")
-    ):
+    if hostname and (hostname.endswith("wikipedia.org") or hostname.endswith("wikimedia.org")):
         headers["Api-User-Agent"] = _FETCH_USER_AGENT
     return headers
 
@@ -145,7 +136,9 @@ async def _http_get_with_retries(
             # honest headers before falling through to error handling.
             if cf_fallback_headers and _is_cloudflare_challenge(resp):
                 resp = await client.get(
-                    url, headers=cf_fallback_headers, params=params,
+                    url,
+                    headers=cf_fallback_headers,
+                    params=params,
                 )
             resp.raise_for_status()
             return resp
@@ -160,9 +153,7 @@ async def _http_get_with_retries(
                 return tool_error(decision.message)
 
             if attempt >= attempts_total:
-                return tool_error(
-                    f"{decision.message} Retries exhausted ({max_retries})."
-                )
+                return tool_error(f"{decision.message} Retries exhausted ({max_retries}).")
 
             delay = compute_backoff_delay(
                 attempt=attempt,
@@ -333,7 +324,9 @@ async def web_fetch(
 
     final_url = str(resp.url)
     if final_url != url and not is_url_safe(final_url):
-        raise ModelRetry("web_fetch blocked: redirect target resolves to a private or internal address.")
+        raise ModelRetry(
+            "web_fetch blocked: redirect target resolves to a private or internal address."
+        )
 
     content_type = resp.headers.get("content-type", "")
 

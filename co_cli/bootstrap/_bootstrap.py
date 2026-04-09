@@ -11,9 +11,9 @@ from opentelemetry import trace
 if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
-from co_cli.config._core import Settings, MCPServerConfig, settings
-from co_cli.context.types import SafetyState
+from co_cli.config._core import MCPServerConfig, Settings, settings
 from co_cli.context.session import find_latest_session, new_session, save_session
+from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
 from co_cli.tools.shell_backend import ShellBackend
@@ -43,7 +43,8 @@ def _resolve_mcp_env_tokens(config: Settings) -> dict[str, MCPServerConfig]:
 
 
 def _resolve_reranker(
-    config: Settings, statuses: list[str],
+    config: Settings,
+    statuses: list[str],
 ) -> None:
     """Resolve reranker availability, mutating config and appending degradation messages.
 
@@ -51,6 +52,7 @@ def _resolve_reranker(
     Skipped on grep — no index means no reranking.
     """
     from co_cli.bootstrap._check import check_cross_encoder, check_reranker_llm
+
     cross_result = check_cross_encoder(config)
     if cross_result.status not in ("ok", "skipped"):
         statuses.append(
@@ -72,7 +74,7 @@ def _discover_knowledge_backend(
     config: Settings,
     frontend: TerminalFrontend,
     degradations: dict[str, str],
-) -> "KnowledgeStore | None":
+) -> KnowledgeStore | None:
     """Discover which knowledge backend is available and construct the store.
 
     Three-tier fallback with graceful degradation:
@@ -99,6 +101,7 @@ def _discover_knowledge_backend(
         logger.info("Hybrid skipped: embedding provider is 'none'")
     else:
         from co_cli.bootstrap._check import check_embedder
+
         embedder_check = check_embedder(config)
         if embedder_check.status not in ("ok", "skipped"):
             logger.warning("Hybrid skipped: embedder unavailable — %s", embedder_check.detail)
@@ -154,12 +157,12 @@ def _discover_knowledge_backend(
 
 
 def _sync_knowledge_store(
-    store: "KnowledgeStore | None",
+    store: KnowledgeStore | None,
     config: Settings,
     frontend: TerminalFrontend,
     memory_dir: Path,
     library_dir: Path,
-) -> "KnowledgeStore | None":
+) -> KnowledgeStore | None:
     """Reconcile the knowledge store with current memory + library files on disk.
 
     Hash-based — skips unchanged files. On sync failure, closes the store and
@@ -221,6 +224,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     # override num_ctx with runtime Modelfile value when they differ.
     if config.llm.uses_ollama_openai():
         from co_cli.bootstrap._check import probe_ollama_context
+
         ctx_probe = probe_ollama_context(config.llm.host, config.llm.model)
         if ctx_probe.status == "error":
             raise ValueError(ctx_probe.detail)
@@ -228,7 +232,8 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         if runtime_num_ctx > 0 and runtime_num_ctx != config.llm.num_ctx:
             logger.info(
                 "Ollama runtime num_ctx=%d differs from config llm.num_ctx=%d — using runtime value",
-                runtime_num_ctx, config.llm.num_ctx,
+                runtime_num_ctx,
+                config.llm.num_ctx,
             )
             config.llm.num_ctx = runtime_num_ctx
 
@@ -256,8 +261,11 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     # Step 5: load skills (filesystem reads — three-pass precedence merge)
     from co_cli.commands._commands import _load_skills
+
     skill_commands = _load_skills(
-        paths["skills_dir"], settings=config, user_skills_dir=paths["user_skills_dir"],
+        paths["skills_dir"],
+        settings=config,
+        user_skills_dir=paths["user_skills_dir"],
     )
 
     # Step 6: discover knowledge backend + construct store (IO probes — three-tier fallback)
@@ -266,8 +274,11 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
 
     # Step 7: sync knowledge store with current files on disk
     knowledge_store = _sync_knowledge_store(
-        knowledge_store, config, frontend,
-        memory_dir=paths["memory_dir"], library_dir=paths["library_dir"],
+        knowledge_store,
+        config,
+        frontend,
+        memory_dir=paths["memory_dir"],
+        library_dir=paths["library_dir"],
     )
 
     # Step 8: assemble deps

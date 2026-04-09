@@ -4,12 +4,19 @@ import asyncio
 import os
 import signal
 
-
 # Allowlist: only these host env vars propagate to subprocess execution.
 # Tight by design — only the minimum needed for basic shell commands.
 _SAFE_ENV_VARS = {
-    "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL",
-    "TERM", "SHELL", "TMPDIR", "XDG_RUNTIME_DIR",
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "SHELL",
+    "TMPDIR",
+    "XDG_RUNTIME_DIR",
 }
 
 

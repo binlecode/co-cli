@@ -9,10 +9,9 @@ from pathlib import Path
 
 from rich.table import Table
 
-from co_cli.bootstrap._check import check_settings, check_agent_llm
-from co_cli.config._core import LOGS_DB, project_config_path, USER_DIR, Settings
+from co_cli.bootstrap._check import check_agent_llm, check_settings
+from co_cli.config._core import LOGS_DB, USER_DIR, Settings, project_config_path
 from co_cli.display._core import console
-
 
 _PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
 
@@ -44,10 +43,14 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
 
     # -- git branch --
     try:
-        git_branch: str | None = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
+        git_branch: str | None = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
     except Exception:
         git_branch = None
 
@@ -73,7 +76,9 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
         if provider_check.status == "error":
             llm_status = "misconfigured"
         elif provider_check.status == "warn":
-            llm_status = "offline" if provider_check.extra.get("reason") == "unreachable" else "online"
+            llm_status = (
+                "offline" if provider_check.extra.get("reason") == "unreachable" else "online"
+            )
         else:
             llm_status = "online"
 
@@ -82,10 +87,7 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
 
     google_item = doctor.by_name("google")
     if google_item and google_item.status == "ok":
-        if "ADC" in google_item.detail:
-            google = "adc"
-        else:
-            google = "configured"
+        google = "adc" if "ADC" in google_item.detail else "configured"
         google_detail = google_item.extra
     else:
         google = "not found"
@@ -135,7 +137,9 @@ def get_status(config: Settings, tool_count: int = 0) -> StatusResult:
         tool_count=tool_count,
         db_size=db_size,
         project_config=str(project_config_path) if project_config_path else None,
-        obsidian_vault_path=str(config.obsidian_vault_path) if config.obsidian_vault_path else None,
+        obsidian_vault_path=str(config.obsidian_vault_path)
+        if config.obsidian_vault_path
+        else None,
     )
 
 
@@ -167,24 +171,28 @@ def check_security(
     if Path(user_cfg).exists():
         mode = Path(user_cfg).stat().st_mode & 0o777
         if mode != 0o600:
-            findings.append(SecurityCheckResult(
-                severity="warn",
-                check_id="user-config-permissions",
-                detail=f"~/.co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
-                remediation=f"chmod 600 {user_cfg}",
-            ))
+            findings.append(
+                SecurityCheckResult(
+                    severity="warn",
+                    check_id="user-config-permissions",
+                    detail=f"~/.co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
+                    remediation=f"chmod 600 {user_cfg}",
+                )
+            )
 
     # Check 2: project settings.json permissions
     project_cfg = _project_config_path or project_config_path
     if project_cfg and Path(project_cfg).exists():
         mode = Path(project_cfg).stat().st_mode & 0o777
         if mode != 0o600:
-            findings.append(SecurityCheckResult(
-                severity="warn",
-                check_id="project-config-permissions",
-                detail=f".co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
-                remediation=f"chmod 600 {project_cfg}",
-            ))
+            findings.append(
+                SecurityCheckResult(
+                    severity="warn",
+                    check_id="project-config-permissions",
+                    detail=f".co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
+                    remediation=f"chmod 600 {project_cfg}",
+                )
+            )
 
     # Check 3: wildcard shell_safe_commands entries
     for label, cfg_path in [("user", user_cfg), ("project", project_cfg)]:
@@ -197,15 +205,17 @@ def check_security(
         shell_data = data.get("shell", {})
         safe_cmds = shell_data.get("safe_commands", []) if isinstance(shell_data, dict) else []
         if isinstance(safe_cmds, list) and "*" in safe_cmds:
-            findings.append(SecurityCheckResult(
-                severity="warn",
-                check_id=f"{label}-config-shell-wildcard",
-                detail=(
-                    f"shell.safe_commands contains '*' in {cfg_path} — "
-                    "all shell commands are auto-approved without prompting"
-                ),
-                remediation=f"Remove '*' from shell.safe_commands in {cfg_path}",
-            ))
+            findings.append(
+                SecurityCheckResult(
+                    severity="warn",
+                    check_id=f"{label}-config-shell-wildcard",
+                    detail=(
+                        f"shell.safe_commands contains '*' in {cfg_path} — "
+                        "all shell commands are auto-approved without prompting"
+                    ),
+                    remediation=f"Remove '*' from shell.safe_commands in {cfg_path}",
+                )
+            )
 
     return findings
 
@@ -214,7 +224,6 @@ def render_security_findings(findings: list[SecurityCheckResult]) -> None:
     """Print security findings to the console. No output when findings list is empty."""
     if not findings:
         return
-    from co_cli.display._core import console
     for f in findings:
         console.print(f"[yellow]WARN[/yellow] [{f.check_id}] {f.detail}")
         console.print(f"  Remediation: {f.remediation}")
@@ -231,15 +240,23 @@ def render_status_table(info: StatusResult) -> Table:
     table.add_row("Shell", "Active", info.shell)
     table.add_row("Google", info.google.title(), info.google_detail)
     table.add_row("Obsidian", info.obsidian.title(), info.obsidian_vault_path or "None")
-    table.add_row("Web Search", info.web_search.title(), "Brave API" if info.web_search == "configured" else "—")
+    table.add_row(
+        "Web Search",
+        info.web_search.title(),
+        "Brave API" if info.web_search == "configured" else "—",
+    )
     if info.mcp_servers:
         ready = sum(1 for _, s, _approval in info.mcp_servers if s == "ready")
         total = len(info.mcp_servers)
         status_str = f"{ready}/{total} ready" if ready < total else f"{total} ready"
         details = ", ".join(
             (
-                f"{name} (ready, approval-gated)" if approval_req else f"{name} (ready, auto-approved)"
-            ) if s == "ready" else f"{name} ({s})"
+                f"{name} (ready, approval-gated)"
+                if approval_req
+                else f"{name} (ready, auto-approved)"
+            )
+            if s == "ready"
+            else f"{name} ({s})"
             for name, s, approval_req in info.mcp_servers
         )
         table.add_row("MCP Servers", status_str, details)

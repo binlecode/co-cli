@@ -15,12 +15,12 @@ if TYPE_CHECKING:
     from co_cli.deps import CoDeps
     from co_cli.display._core import Frontend
 
-from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.memory._lifecycle import persist_memory as _persist_memory
-
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.memory._lifecycle import persist_memory as _persist_memory
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,7 @@ def _build_window(messages: list) -> str:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
-                    text = (
-                        part.content
-                        if isinstance(part.content, str)
-                        else str(part.content)
-                    )
+                    text = part.content if isinstance(part.content, str) else str(part.content)
                     lines.append(f"User: {text}")
         elif isinstance(msg, ModelResponse):
             for part in msg.parts:
@@ -124,7 +120,9 @@ async def analyze_for_signals(
 
     try:
         _model = deps.model.model if deps.model else None
-        result = await _extraction_agent.run(window, model=_model, model_settings=NOREASON_SETTINGS)
+        result = await _extraction_agent.run(
+            window, model=_model, model_settings=NOREASON_SETTINGS
+        )
         return result.output
     except Exception:
         logger.debug("Memory extractor failed", exc_info=True)
@@ -157,16 +155,26 @@ async def handle_extraction(
 
         if mem.confidence == "high" and auto_save_allowed:
             await _persist_memory(
-                deps, mem.candidate, tags, None,
-                on_failure="skip", model=_model, model_settings=NOREASON_SETTINGS,
+                deps,
+                mem.candidate,
+                tags,
+                None,
+                on_failure="skip",
+                model=_model,
+                model_settings=NOREASON_SETTINGS,
             )
             frontend.on_status(f"Learned: {mem.candidate[:80]}")
         else:
             choice = frontend.prompt_approval(f"Worth remembering: {mem.candidate}")
             if choice in ("y", "a"):
                 await _persist_memory(
-                    deps, mem.candidate, tags, None,
-                    on_failure="add", model=_model, model_settings=NOREASON_SETTINGS,
+                    deps,
+                    mem.candidate,
+                    tags,
+                    None,
+                    on_failure="add",
+                    model=_model,
+                    model_settings=NOREASON_SETTINGS,
                 )
 
 
@@ -198,8 +206,13 @@ async def _run_extraction_async(
             auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
             if mem.confidence == "high" and auto_save_allowed:
                 await _persist_memory(
-                    deps, mem.candidate, [mem.tag] + (["personality-context"] if mem.inject else []), None,
-                    on_failure="skip", model=_model, model_settings=NOREASON_SETTINGS,
+                    deps,
+                    mem.candidate,
+                    [mem.tag] + (["personality-context"] if mem.inject else []),
+                    None,
+                    on_failure="skip",
+                    model=_model,
+                    model_settings=NOREASON_SETTINGS,
                 )
                 frontend.on_status(f"Learned: {mem.candidate[:80]}")
             else:
@@ -246,7 +259,7 @@ async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
         return
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=timeout_ms / 1000)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.debug("Drain timeout — cancelling extraction")
         task.cancel()
         try:

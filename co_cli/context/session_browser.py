@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -88,13 +88,15 @@ def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
         title = _extract_title(path)
         try:
             st = path.stat()
-            last_modified = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+            last_modified = datetime.fromtimestamp(st.st_mtime, tz=UTC)
         except OSError:
             continue
-        summaries.append(SessionSummary(
-            session_id=session_id,
-            title=title,
-            last_modified=last_modified,
-            file_size=st.st_size,
-        ))
+        summaries.append(
+            SessionSummary(
+                session_id=session_id,
+                title=title,
+                last_modified=last_modified,
+                file_size=st.st_size,
+            )
+        )
     return summaries

@@ -3,6 +3,7 @@
 Extracted from _commands.py to break the circular import between deps.py and
 commands/_commands.py. This dataclass has no dependency on deps.py.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

@@ -66,7 +66,12 @@ def build_model(llm: LlmSettings) -> LlmModel:
             extra_body=extra,
         )
         _http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=_HTTP_CONNECT_TIMEOUT, read=_HTTP_READ_TIMEOUT, write=_HTTP_WRITE_TIMEOUT, pool=_HTTP_POOL_TIMEOUT)
+            timeout=httpx.Timeout(
+                connect=_HTTP_CONNECT_TIMEOUT,
+                read=_HTTP_READ_TIMEOUT,
+                write=_HTTP_WRITE_TIMEOUT,
+                pool=_HTTP_POOL_TIMEOUT,
+            )
         )
         _openai_client = AsyncOpenAI(
             base_url=f"{llm.host}/v1",
@@ -77,7 +82,9 @@ def build_model(llm: LlmSettings) -> LlmModel:
             model_name,
             provider=OpenAIProvider(openai_client=_openai_client),
         )
-        return LlmModel(model=model, settings=model_settings, context_window=inf.get("context_window"))
+        return LlmModel(
+            model=model, settings=model_settings, context_window=inf.get("context_window")
+        )
 
     if llm.uses_gemini():
         inf = get_model_inference("gemini", normalized)
@@ -87,6 +94,8 @@ def build_model(llm: LlmSettings) -> LlmModel:
             max_tokens=inf.get("max_tokens", 65536),
         )
         google_model = GoogleModel(model_name, provider=GoogleProvider(api_key=llm.api_key))
-        return LlmModel(model=google_model, settings=model_settings, context_window=inf.get("context_window"))
+        return LlmModel(
+            model=google_model, settings=model_settings, context_window=inf.get("context_window")
+        )
 
     raise ValueError(f"Unsupported provider: {llm.provider!r}")

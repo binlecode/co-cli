@@ -12,10 +12,9 @@ surfaces current state for completeness verification.
 from typing import Any
 
 from pydantic_ai import RunContext
-
-from co_cli.deps import CoDeps
 from pydantic_ai.messages import ToolReturn
 
+from co_cli.deps import CoDeps
 from co_cli.tools.tool_output import tool_output
 
 # Valid status and priority values
@@ -67,8 +66,7 @@ def write_todos(
         status = item.get("status", "pending")
         if status not in _VALID_STATUS:
             errors.append(
-                f"Item {i}: invalid status '{status}' — "
-                f"must be one of {sorted(_VALID_STATUS)}"
+                f"Item {i}: invalid status '{status}' — must be one of {sorted(_VALID_STATUS)}"
             )
             continue
 
@@ -84,8 +82,7 @@ def write_todos(
 
     if errors:
         return tool_output(
-            "Todo list NOT saved — validation errors:\n"
-            + "\n".join(f"  - {e}" for e in errors),
+            "Todo list NOT saved — validation errors:\n" + "\n".join(f"  - {e}" for e in errors),
             ctx=ctx,
             count=0,
             pending=0,
@@ -178,9 +175,7 @@ def read_todos(
         lines.append(f"  {icon} {t['content']}{priority_str}  ({t['status']})")
 
     if pending or in_progress:
-        lines.append(
-            f"\n{pending} pending, {in_progress} in_progress — work is not complete."
-        )
+        lines.append(f"\n{pending} pending, {in_progress} in_progress — work is not complete.")
     else:
         lines.append("\nAll items completed or cancelled.")
 

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from pydantic_ai.usage import RunUsage
 
 from co_cli.config._core import (
-    Settings,
-    USER_DIR,
     SEARCH_DB,
+    USER_DIR,
+    Settings,
 )
-
 from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from co_cli.tools.shell_backend import ShellBackend
 
 
-class ApprovalKindEnum(str, Enum):
+class ApprovalKindEnum(StrEnum):
     """Category of an approval subject — determines the scoping key stored in SessionApprovalRule."""
 
     SHELL = "shell"
@@ -53,12 +53,14 @@ class SessionApprovalRule:
 
 class VisibilityPolicy(Enum):
     """Whether a tool is visible to the model immediately or requires discovery via search_tools."""
+
     ALWAYS = "always"
     DEFERRED = "deferred"
 
 
 class ToolSource(Enum):
     """Origin of a registered tool."""
+
     NATIVE = "native"
     MCP = "mcp"
 
@@ -143,17 +145,17 @@ class CoDeps:
     """
 
     # Service handles
-    shell: "ShellBackend"
+    shell: ShellBackend
     # Config — the Settings instance, read-only after bootstrap
     config: Settings
     # Resource lock store (shared across parent + subagents)
-    resource_locks: "ResourceLockStore" = field(default=None, repr=False)
+    resource_locks: ResourceLockStore = field(default=None, repr=False)
     # Service handles (optional, set during bootstrap)
-    knowledge_store: "KnowledgeStore | None" = field(default=None, repr=False)
-    model: "LlmModel | None" = field(default=None, repr=False)
+    knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
+    model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
-    tool_index: dict[str, "ToolInfo"] = field(default_factory=dict)
-    skill_commands: dict[str, "SkillConfig"] = field(default_factory=dict)
+    tool_index: dict[str, ToolInfo] = field(default_factory=dict)
+    skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
@@ -175,6 +177,7 @@ class CoDeps:
     def __post_init__(self) -> None:
         if self.resource_locks is None:
             from co_cli.tools.resource_lock import ResourceLockStore
+
             self.resource_locks = ResourceLockStore()
 
 
@@ -182,7 +185,9 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
     """Resolve cwd-relative workspace paths from Settings. Used by create_deps()."""
     return {
         "workspace_root": cwd,
-        "obsidian_vault_path": Path(config.obsidian_vault_path) if config.obsidian_vault_path else None,
+        "obsidian_vault_path": Path(config.obsidian_vault_path)
+        if config.obsidian_vault_path
+        else None,
         "memory_dir": cwd / ".co-cli" / "memory",
         "skills_dir": cwd / ".co-cli" / "skills",
         "user_skills_dir": USER_DIR / "skills",
@@ -192,7 +197,7 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
     }
 
 
-def make_subagent_deps(base: "CoDeps") -> "CoDeps":
+def make_subagent_deps(base: CoDeps) -> CoDeps:
     """Create an isolated CoDeps copy for a sub-agent.
 
     Shares handles, registries, config, and paths by reference.

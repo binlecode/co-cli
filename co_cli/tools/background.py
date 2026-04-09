@@ -6,7 +6,7 @@ import asyncio
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ def _make_task_id() -> str:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _close_process_transport(proc: asyncio.subprocess.Process) -> None:
@@ -48,12 +48,15 @@ def _close_process_transport(proc: asyncio.subprocess.Process) -> None:
         transport.close()
 
 
-async def spawn_task(state: BackgroundTaskState, session: "CoSessionState") -> None:
+async def spawn_task(state: BackgroundTaskState, session: CoSessionState) -> None:
     """Create subprocess; store process on state; launch _monitor coroutine."""
     try:
         proc = await asyncio.create_subprocess_shell(
-            state.command, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, cwd=state.cwd, start_new_session=True,
+            state.command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=state.cwd,
+            start_new_session=True,
         )
     except Exception as e:
         state.status = "failed"
@@ -65,7 +68,7 @@ async def spawn_task(state: BackgroundTaskState, session: "CoSessionState") -> N
     state._monitor_task = asyncio.create_task(_monitor(state.task_id, session))
 
 
-async def _monitor(task_id: str, session: "CoSessionState") -> None:
+async def _monitor(task_id: str, session: CoSessionState) -> None:
     """Drain stdout/stderr line-by-line into output_lines; update state on EOF."""
     state = session.background_tasks.get(task_id)
     if state is None or state.process is None:
@@ -107,7 +110,7 @@ async def kill_task(state: BackgroundTaskState) -> None:
         await kill_process_tree(proc)
         try:
             await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=1.0)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             state.cleanup_incomplete = True
             state.cleanup_error = "process did not exit after cancellation within 1.0s"
             state.completed_at = _now()
@@ -123,7 +126,7 @@ async def kill_task(state: BackgroundTaskState) -> None:
             await asyncio.wait_for(asyncio.shield(state._monitor_task), timeout=1.0)
         except asyncio.CancelledError:
             raise
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             state.cleanup_incomplete = True
             state.cleanup_error = "monitor did not drain subprocess output within 1.0s"
             state.completed_at = _now()

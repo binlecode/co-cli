@@ -6,18 +6,18 @@ through persist_memory().
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
 from opentelemetry import trace as otel_trace
-
-from pydantic_ai.settings import ModelSettings
-from co_cli.knowledge._frontmatter import ArtifactTypeEnum
-from co_cli.deps import CoDeps
-from co_cli.memory._retention import enforce_retention
 from pydantic_ai.messages import ToolReturn
+from pydantic_ai.settings import ModelSettings
+
+from co_cli.deps import CoDeps
+from co_cli.knowledge._frontmatter import ArtifactTypeEnum
+from co_cli.memory._retention import enforce_retention
 from co_cli.tools.tool_output import tool_output_raw
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -64,7 +64,19 @@ async def persist_memory(
     """
     with _TRACER.start_as_current_span("co.memory.write") as span:
         span.set_attribute("memory.provenance", provenance or "auto")
-        return await _persist_memory_inner(deps, content, tags, related, provenance, title, on_failure, model, model_settings, artifact_type, always_on)
+        return await _persist_memory_inner(
+            deps,
+            content,
+            tags,
+            related,
+            provenance,
+            title,
+            on_failure,
+            model,
+            model_settings,
+            artifact_type,
+            always_on,
+        )
 
 
 async def _persist_memory_inner(
@@ -82,11 +94,11 @@ async def _persist_memory_inner(
 ) -> ToolReturn:
     # Import here to avoid module-level circular import
     from co_cli.tools.memory import (
+        _classify_certainty,
+        _detect_category,
+        _detect_provenance,
         load_memories,
         slugify,
-        _classify_certainty,
-        _detect_provenance,
-        _detect_category,
     )
 
     memory_dir = deps.memory_dir
@@ -102,10 +114,22 @@ async def _persist_memory_inner(
             )
 
     result = await _write_memory(
-        deps, content, tags, related, provenance, title,
-        model, model_settings, artifact_type, always_on,
-        memory_dir, on_failure, slugify, _classify_certainty,
-        _detect_provenance, _detect_category,
+        deps,
+        content,
+        tags,
+        related,
+        provenance,
+        title,
+        model,
+        model_settings,
+        artifact_type,
+        always_on,
+        memory_dir,
+        on_failure,
+        slugify,
+        _classify_certainty,
+        _detect_provenance,
+        _detect_category,
     )
 
     # Retention cap — runs outside the lock (idempotent, no read-modify-write race)
@@ -122,17 +146,14 @@ async def _persist_memory_inner(
         result.metadata["decay_count"] = decay_result["decayed"]
         result.metadata["decay_strategy"] = decay_result["strategy"]
         result.return_value += (
-            f"\n♻️ Decayed {decay_result['decayed']} old memories "
-            f"({decay_result['strategy']})"
+            f"\n♻️ Decayed {decay_result['decayed']} old memories ({decay_result['strategy']})"
         )
 
         # FTS: remove stale entries for deleted files
         if deps.knowledge_store is not None:
             try:
                 current_paths = {str(p) for p in memory_dir.rglob("*.md")}
-                deps.knowledge_store.remove_stale(
-                    "memory", current_paths, directory=memory_dir
-                )
+                deps.knowledge_store.remove_stale("memory", current_paths, directory=memory_dir)
             except Exception as e:
                 logger.warning(f"Failed to remove stale FTS entries: {e}")
 
@@ -178,14 +199,19 @@ async def _write_memory(
                     async with deps.resource_locks.try_acquire(target_path):
                         norm_tags = [t.lower() for t in tags] if tags else []
                         update_result = overwrite_memory(
-                            memory_dir, save_result.target_slug, content,
-                            norm_tags, deps.config.memory.auto_save_tags,
+                            memory_dir,
+                            save_result.target_slug,
+                            content,
+                            norm_tags,
+                            deps.config.memory.auto_save_tags,
                             knowledge_store=deps.knowledge_store,
                         )
                 except ResourceBusyError:
                     if on_failure == "skip":
                         logger.info("persist_memory: target file busy, skipping")
-                        return tool_output_raw("⚠ Memory save skipped (file busy)", action="skipped")
+                        return tool_output_raw(
+                            "⚠ Memory save skipped (file busy)", action="skipped"
+                        )
                     raise
                 # None = slug invalid or not found; fall through to SAVE_NEW
                 if update_result is not None:
@@ -193,6 +219,7 @@ async def _write_memory(
 
     # SAVE_NEW: create new memory file
     import uuid as _uuid
+
     memory_id = str(_uuid.uuid4())
     slug = slugify(content[:50])
     filename = f"{title}.md" if title else f"{slug}-{memory_id[:6]}.md"
@@ -204,9 +231,11 @@ async def _write_memory(
     frontmatter: dict[str, Any] = {
         "id": memory_id,
         "kind": "memory",
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": datetime.now(UTC).isoformat(),
         "tags": tags,
-        "provenance": provenance if provenance is not None else _detect_provenance(tags, deps.config.memory.auto_save_tags),
+        "provenance": provenance
+        if provenance is not None
+        else _detect_provenance(tags, deps.config.memory.auto_save_tags),
         "auto_category": _detect_category(tags),
         "certainty": _classify_certainty(content),
     }
@@ -218,8 +247,7 @@ async def _write_memory(
         frontmatter["always_on"] = True
 
     md_content = (
-        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n"
-        f"{content.strip()}\n"
+        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{content.strip()}\n"
     )
 
     try:
@@ -231,6 +259,7 @@ async def _write_memory(
             if deps.knowledge_store is not None:
                 try:
                     import hashlib as _hashlib
+
                     deps.knowledge_store.index(
                         source="memory",
                         kind="memory",
@@ -252,8 +281,7 @@ async def _write_memory(
         raise
 
     return tool_output_raw(
-        f"✓ Saved memory {memory_id}: {filename}\n"
-        f"Location: {file_path}",
+        f"✓ Saved memory {memory_id}: {filename}\nLocation: {file_path}",
         path=str(file_path),
         memory_id=memory_id,
         action="saved",

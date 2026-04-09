@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
+
 from co_cli.config._core import LOGS_DB, USER_DIR
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -282,19 +283,16 @@ def format_duration(ms: float | None) -> str:
     if ms is None:
         return "-"
     if ms < 1:
-        return f"{ms*1000:.0f}µs"
+        return f"{ms * 1000:.0f}µs"
     if ms < 1000:
         return f"{ms:.0f}ms"
-    return f"{ms/1000:.2f}s"
+    return f"{ms / 1000:.2f}s"
 
 
 def escape_html(text: str) -> str:
     """Escape HTML special characters."""
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 
@@ -319,7 +317,7 @@ def format_attr_value(value: str, truncate_at: int = 200) -> str:
         f'<span class="truncated-value">{truncated}…</span>'
         f'<span class="show-more">[expand]</span>'
         f'<div class="full-value">{escape_html(full_display)}</div>'
-        f'</span>'
+        f"</span>"
     )
 
 
@@ -331,9 +329,14 @@ def format_attributes(attrs: dict) -> str:
     html_parts = []
     # Priority keys to show first (OTel GenAI semantic conventions)
     priority_keys = [
-        "gen_ai.tool.name", "tool_arguments", "tool_response",
-        "gen_ai.request.model", "gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens",
-        "gen_ai.input.messages", "gen_ai.output.messages",
+        "gen_ai.tool.name",
+        "tool_arguments",
+        "tool_response",
+        "gen_ai.request.model",
+        "gen_ai.usage.input_tokens",
+        "gen_ai.usage.output_tokens",
+        "gen_ai.input.messages",
+        "gen_ai.output.messages",
     ]
 
     shown = set()
@@ -342,20 +345,24 @@ def format_attributes(attrs: dict) -> str:
             value = attrs[key]
             html_parts.append(
                 f'<div class="span-attr"><span class="span-attr-key">{escape_html(key)}</span>'
-                f'{format_attr_value(value, truncate_at=200)}</div>'
+                f"{format_attr_value(value, truncate_at=200)}</div>"
             )
             shown.add(key)
 
     # Show remaining (up to 10 more), skip logfire.* internal attributes
-    remaining = [(k, v) for k, v in attrs.items() if k not in shown and not k.startswith("logfire.")]
+    remaining = [
+        (k, v) for k, v in attrs.items() if k not in shown and not k.startswith("logfire.")
+    ]
     for key, value in remaining[:10]:
         html_parts.append(
             f'<div class="span-attr"><span class="span-attr-key">{escape_html(key)}</span>'
-            f'{format_attr_value(value, truncate_at=150)}</div>'
+            f"{format_attr_value(value, truncate_at=150)}</div>"
         )
 
     if len(remaining) > 10:
-        html_parts.append(f'<div class="span-attr"><em>... and {len(remaining)-10} more</em></div>')
+        html_parts.append(
+            f'<div class="span-attr"><em>... and {len(remaining) - 10} more</em></div>'
+        )
 
     return "\n".join(html_parts)
 
@@ -437,7 +444,7 @@ def generate_trace_html() -> str:
             trace_count=0,
             span_count=0,
             tool_count=0,
-            traces_html='<div class="empty">No traces yet. Run some commands first.</div>'
+            traces_html='<div class="empty">No traces yet. Run some commands first.</div>',
         )
 
     with sqlite3.connect(str(db_path)) as conn:
@@ -460,7 +467,7 @@ def generate_trace_html() -> str:
                 trace_count=0,
                 span_count=0,
                 tool_count=0,
-                traces_html='<div class="empty">No traces yet. Run some commands first.</div>'
+                traces_html='<div class="empty">No traces yet. Run some commands first.</div>',
             )
 
         # Stats
@@ -477,11 +484,14 @@ def generate_trace_html() -> str:
             trace_duration = (trace_end - trace_start) / 1_000_000  # ms
 
             # Get all spans for this trace
-            spans = conn.execute("""
+            spans = conn.execute(
+                """
                 SELECT * FROM spans
                 WHERE trace_id = ?
                 ORDER BY start_time
-            """, (trace_id,)).fetchall()
+            """,
+                (trace_id,),
+            ).fetchall()
 
             spans = [dict(s) for s in spans]
             tree = build_span_tree(spans)
@@ -493,19 +503,22 @@ def generate_trace_html() -> str:
 
             # Format time
             import datetime
+
             try:
-                time_str = datetime.datetime.fromtimestamp(
-                    trace_start / 1_000_000_000
-                ).strftime("%Y-%m-%d %H:%M:%S")
+                time_str = datetime.datetime.fromtimestamp(trace_start / 1_000_000_000).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
             except (ValueError, OSError):
                 time_str = "Unknown"
 
-            traces_html.append(TRACE_TEMPLATE.format(
-                time=time_str,
-                trace_id=trace_id[:16] + "...",
-                total_duration=format_duration(trace_duration),
-                spans_html=spans_html,
-            ))
+            traces_html.append(
+                TRACE_TEMPLATE.format(
+                    time=time_str,
+                    trace_id=trace_id[:16] + "...",
+                    total_duration=format_duration(trace_duration),
+                    spans_html=spans_html,
+                )
+            )
 
         return HTML_TEMPLATE.format(
             trace_count=len(traces),

@@ -4,7 +4,7 @@ Centralises per-tool display concerns so adding or changing a tool does not
 require touching core-loop code for cosmetic reasons.
 """
 
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ToolCallPart

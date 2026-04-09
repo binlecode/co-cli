@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +23,7 @@ def build_llm_reranker(
     """
     effective_model = model
     if not effective_model:
-        if provider == "gemini":
-            effective_model = "gemini-2.0-flash"
-        else:
-            effective_model = "qwen2.5:3b"
+        effective_model = "gemini-2.0-flash" if provider == "gemini" else "qwen2.5:3b"
 
     def _parse_ranked_indices(parsed: object, n: int) -> list[int]:
         """Extract 1-based ranked indices from JSON output."""
@@ -49,9 +46,15 @@ def build_llm_reranker(
     def _call(prompt: str, n: int) -> list[int]:
         if provider == "ollama":
             import httpx
+
             resp = httpx.post(
                 f"{ollama_host}/api/generate",
-                json={"model": effective_model, "prompt": prompt, "format": "json", "stream": False},
+                json={
+                    "model": effective_model,
+                    "prompt": prompt,
+                    "format": "json",
+                    "stream": False,
+                },
                 timeout=60.0,
             )
             resp.raise_for_status()
@@ -61,6 +64,7 @@ def build_llm_reranker(
         if provider == "gemini":
             from google import genai
             from google.genai import types
+
             client = genai.Client(api_key=api_key)
             response = client.models.generate_content(
                 model=effective_model,

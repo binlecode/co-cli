@@ -41,10 +41,13 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         llm_provider = config.llm.provider
 
     from co_cli.commands._commands import BUILTIN_COMMANDS, get_skill_registry
+
     tool_count = len(deps.tool_index)
     skill_count = len(get_skill_registry(deps.skill_commands))
     mcp_count = len(deps.config.mcp_servers or {})
-    cmd_count = len(BUILTIN_COMMANDS) + sum(1 for s in deps.skill_commands.values() if s.user_invocable)
+    cmd_count = len(BUILTIN_COMMANDS) + sum(
+        1 for s in deps.skill_commands.values() if s.user_invocable
+    )
 
     try:
         git_branch = subprocess.check_output(
@@ -81,6 +84,6 @@ def display_welcome_banner(deps: "CoDeps") -> None:
         f"    Dir: {Path.cwd().name}" + (f"  ({git_branch})" if git_branch else ""),
         "",
         f"    [success]✓ Ready{'  (degraded)' if deps.degradations else ''}[/success]",
-        f"    [dim]Type /help for commands, 'exit' to quit[/dim]",
+        "    [dim]Type /help for commands, 'exit' to quit[/dim]",
     ]
     console.print(Panel("\n".join(lines), border_style="accent", expand=False))

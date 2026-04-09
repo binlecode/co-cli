@@ -6,9 +6,14 @@ instructions, always-on memories, and personality continuity memories are
 added later via ``@agent.instructions`` in ``agent.py``.
 """
 
+from __future__ import annotations
+
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from co_cli.config._core import Settings
 
 _PROMPTS_DIR = Path(__file__).parent
 _RULES_DIR = _PROMPTS_DIR / "rules"
@@ -39,8 +44,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     if invalid_names:
         invalid_sorted = ", ".join(sorted(invalid_names))
         raise ValueError(
-            "Invalid rule filename(s): "
-            f"{invalid_sorted}. Expected format: NN_rule_id.md"
+            f"Invalid rule filename(s): {invalid_sorted}. Expected format: NN_rule_id.md"
         )
 
     order_counts: dict[int, int] = {}
@@ -56,10 +60,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     expected = list(range(1, len(parsed) + 1))
     if orders != expected:
         found = ", ".join(f"{n:02d}" for n in orders)
-        raise ValueError(
-            "Rule order prefixes must be contiguous starting at 01. "
-            f"Found: {found}"
-        )
+        raise ValueError(f"Rule order prefixes must be contiguous starting at 01. Found: {found}")
 
     return parsed
 
@@ -67,7 +68,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
 def build_static_instructions(
     provider: str,
     model_name: str,
-    config: "Settings",
+    config: Settings,
 ) -> str:
     """Build the static instructions string for the given model and personality.
 
@@ -92,12 +93,13 @@ def build_static_instructions(
 
     if config.personality:
         from co_cli.prompts.personalities._loader import (
-            load_soul_seed,
-            load_soul_examples,
-            load_soul_mindsets,
             load_character_memories,
             load_soul_critique,
+            load_soul_examples,
+            load_soul_mindsets,
+            load_soul_seed,
         )
+
         seed = load_soul_seed(config.personality)
         character_memories = load_character_memories(config.personality) or None
         mindsets = load_soul_mindsets(config.personality) or None
@@ -129,6 +131,7 @@ def build_static_instructions(
     # 6. Counter-steering (model-specific quirks)
     if model_name:
         from co_cli.prompts.model_quirks._loader import get_counter_steering
+
         counter_steering = get_counter_steering(provider, model_name)
         if counter_steering:
             parts.append(f"## Model-Specific Guidance\n\n{counter_steering}")

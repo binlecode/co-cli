@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from pydantic_ai import RunContext
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps
 from co_cli.tools.tool_errors import tool_error
-from pydantic_ai.messages import ToolReturn
-
 from co_cli.tools.tool_output import tool_output
 
 
@@ -263,9 +262,7 @@ async def write_file(
                 bytes=byte_count,
             )
     except ResourceBusyError:
-        return tool_error(
-            f"File {path} is being modified by another tool call — retry next turn"
-        )
+        return tool_error(f"File {path} is being modified by another tool call — retry next turn")
 
 
 async def edit_file(
@@ -295,6 +292,7 @@ async def edit_file(
         return tool_error(f"File not found: {path}")
 
     from co_cli.tools.resource_lock import ResourceBusyError
+
     try:
         async with ctx.deps.resource_locks.try_acquire(str(resolved)):
             content = resolved.read_text(encoding="utf-8")

@@ -1,4 +1,5 @@
 """Knowledge search, embedding, and chunking settings."""
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,13 +24,20 @@ class ModelConfig(BaseModel):
 
 class KnowledgeSettings(BaseModel):
     """Knowledge search, embedding, and chunking settings."""
+
     model_config = ConfigDict(extra="ignore")
 
-    search_backend: Literal["grep", "fts5", "hybrid"] = Field(default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND)
-    embedding_provider: Literal["ollama", "gemini", "tei", "none"] = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER)
+    search_backend: Literal["grep", "fts5", "hybrid"] = Field(
+        default=DEFAULT_KNOWLEDGE_SEARCH_BACKEND
+    )
+    embedding_provider: Literal["ollama", "gemini", "tei", "none"] = Field(
+        default=DEFAULT_KNOWLEDGE_EMBEDDING_PROVIDER
+    )
     embedding_model: str = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_MODEL)
     embedding_dims: int = Field(default=DEFAULT_KNOWLEDGE_EMBEDDING_DIMS, ge=1)
-    cross_encoder_reranker_url: str | None = Field(default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL)
+    cross_encoder_reranker_url: str | None = Field(
+        default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
+    )
     llm_reranker: ModelConfig | None = Field(default=None)
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
     chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)

@@ -78,16 +78,25 @@ def _get_task_settings(role_key: str, deps: CoDeps) -> ModelSettings | None:
 
 
 def _format_output(
-    role_key: str, data: Any, scope: str,
-    role: str, model_name: str, requests_used: int, request_limit: int,
+    role_key: str,
+    data: Any,
+    scope: str,
+    role: str,
+    model_name: str,
+    requests_used: int,
+    request_limit: int,
 ) -> tuple[str, dict[str, Any]]:
     """Format subagent output for display and extract metadata kwargs per role."""
     footer = f"[{role} · {model_name} · {requests_used}/{request_limit} req]"
     match role_key:
         case "coding":
             display = f"Scope: {scope}\nCoder analysis complete.\n{data.summary}\n{footer}"
-            meta = dict(summary=data.summary, diff_preview=data.diff_preview,
-                        files_touched=data.files_touched, confidence=data.confidence)
+            meta = dict(
+                summary=data.summary,
+                diff_preview=data.diff_preview,
+                files_touched=data.files_touched,
+                confidence=data.confidence,
+            )
         case "research":
             src = "\n".join(f"- {s}" for s in data.sources) if data.sources else "No sources"
             display = f"Scope: {scope}\n{data.summary}\n\nSources:\n{src}\n{footer}"
@@ -95,7 +104,9 @@ def _format_output(
         case "analysis":
             ev = "\n".join(f"- {e}" for e in data.evidence) if data.evidence else "No evidence"
             display = f"Scope: {scope}\n{data.conclusion}\n\nEvidence:\n{ev}\n{footer}"
-            meta = dict(conclusion=data.conclusion, evidence=data.evidence, reasoning=data.reasoning)
+            meta = dict(
+                conclusion=data.conclusion, evidence=data.evidence, reasoning=data.reasoning
+            )
         case "reasoning":
             steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(data.steps))
             display = f"Scope: {scope}\n{data.plan}\n\nSteps:\n{steps}\n\nConclusion:\n{data.conclusion}\n{footer}"
@@ -120,8 +131,12 @@ def _merge_turn_usage(ctx: RunContext[CoDeps], usage: RunUsage) -> None:
 
 
 async def _run_subagent_attempt(
-    agent: Any, prompt: str, ctx: RunContext[CoDeps],
-    budget: int, model_settings: Any, error_msg: str,
+    agent: Any,
+    prompt: str,
+    ctx: RunContext[CoDeps],
+    budget: int,
+    model_settings: Any,
+    error_msg: str,
 ) -> SubagentAttempt:
     """Run one subagent attempt with a fresh usage context.
 
@@ -145,8 +160,13 @@ async def _run_subagent_attempt(
 
 
 async def _run_subagent(
-    ctx: RunContext[CoDeps], role_key: str, prompt: str, max_requests: int,
-    *, domains: list[str] | None = None, inputs: list[str] | None = None,
+    ctx: RunContext[CoDeps],
+    role_key: str,
+    prompt: str,
+    max_requests: int,
+    *,
+    domains: list[str] | None = None,
+    inputs: list[str] | None = None,
 ) -> ToolReturn:
     """Common dispatch function for all tool subagents."""
     cfg = SUBAGENT_ROLES[role_key]
@@ -166,14 +186,21 @@ async def _run_subagent(
     if cfg.input_prepend and inputs:
         scoped_prompt = "Context:\n" + "\n".join(inputs) + "\n\nQuestion: " + prompt
     if domains:
-        scoped_prompt = f"{scoped_prompt}\nRestrict searches to these domains: {', '.join(domains)}"
+        scoped_prompt = (
+            f"{scoped_prompt}\nRestrict searches to these domains: {', '.join(domains)}"
+        )
 
     with _TRACER.start_as_current_span(f"subagent_{role_key}") as span:
         span.set_attribute("subagent.role", role_key)
         span.set_attribute("subagent.model", model_name)
         span.set_attribute("subagent.request_limit", request_limit)
         attempt_1 = await _run_subagent_attempt(
-            agent, scoped_prompt, ctx, max_requests, task_settings, cfg.error_msg,
+            agent,
+            scoped_prompt,
+            ctx,
+            max_requests,
+            task_settings,
+            cfg.error_msg,
         )
         data = attempt_1.output
         requests_used = attempt_1.usage.requests
@@ -183,32 +210,52 @@ async def _run_subagent(
             if remaining > 0 and (not data.summary or not data.sources):
                 retry_query = f"The previous search returned no results. Try with different keywords: {prompt} (alternative framing)."
                 attempt_2 = await _run_subagent_attempt(
-                    agent, retry_query, ctx, remaining, task_settings,
+                    agent,
+                    retry_query,
+                    ctx,
+                    remaining,
+                    task_settings,
                     cfg.error_msg.replace("failed", "retry failed"),
                 )
                 data = attempt_2.output
                 requests_used = attempt_1.usage.requests + attempt_2.usage.requests
             if not data.summary or not data.sources:
-                data = data.model_copy(update={
-                    "confidence": 0.0,
-                    "summary": data.summary or "No results found despite multiple searches.",
-                })
+                data = data.model_copy(
+                    update={
+                        "confidence": 0.0,
+                        "summary": data.summary or "No results found despite multiple searches.",
+                    }
+                )
 
         span.set_attribute("subagent.requests_used", requests_used)
 
-    scope = prompt[:ctx.deps.config.subagent.scope_chars]
+    scope = prompt[: ctx.deps.config.subagent.scope_chars]
     display, extra_meta = _format_output(
-        role_key, data, scope, role_key, model_name, requests_used, request_limit,
+        role_key,
+        data,
+        scope,
+        role_key,
+        model_name,
+        requests_used,
+        request_limit,
     )
     return tool_output(
-        display, ctx=ctx, **extra_meta, role=role_key, model_name=model_name,
-        requests_used=requests_used, request_limit=request_limit,
-        scope=scope, run_id=attempt_1.run_id,
+        display,
+        ctx=ctx,
+        **extra_meta,
+        role=role_key,
+        model_name=model_name,
+        requests_used=requests_used,
+        request_limit=request_limit,
+        scope=scope,
+        run_id=attempt_1.run_id,
     )
 
 
 async def run_coding_subagent(
-    ctx: RunContext[CoDeps], task: str, max_requests: int = 0,
+    ctx: RunContext[CoDeps],
+    task: str,
+    max_requests: int = 0,
 ) -> ToolReturn:
     """Delegate a coding analysis task to a read-only coder sub-agent.
 
@@ -220,8 +267,10 @@ async def run_coding_subagent(
 
 
 async def run_research_subagent(
-    ctx: RunContext[CoDeps], query: str,
-    domains: list[str] | None = None, max_requests: int = 0,
+    ctx: RunContext[CoDeps],
+    query: str,
+    domains: list[str] | None = None,
+    max_requests: int = 0,
 ) -> ToolReturn:
     """Delegate a research task to a web-search sub-agent.
 
@@ -234,8 +283,10 @@ async def run_research_subagent(
 
 
 async def run_analysis_subagent(
-    ctx: RunContext[CoDeps], question: str,
-    inputs: list[str] | None = None, max_requests: int = 0,
+    ctx: RunContext[CoDeps],
+    question: str,
+    inputs: list[str] | None = None,
+    max_requests: int = 0,
 ) -> ToolReturn:
     """Delegate a knowledge-base analysis task to a read-only sub-agent.
 
@@ -248,7 +299,9 @@ async def run_analysis_subagent(
 
 
 async def run_reasoning_subagent(
-    ctx: RunContext[CoDeps], problem: str, max_requests: int = 0,
+    ctx: RunContext[CoDeps],
+    problem: str,
+    max_requests: int = 0,
 ) -> ToolReturn:
     """Delegate a structured reasoning task to a thinking sub-agent (no tools).
 

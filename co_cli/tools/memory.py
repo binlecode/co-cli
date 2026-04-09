@@ -11,7 +11,7 @@ and knowledge_store is set in deps. Falls back to grep-based search otherwise.
 import logging
 import math
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,7 +22,10 @@ _LINE_NUM_RE = re.compile(r"\nLine \d+: ")
 import yaml
 from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
+from pydantic_ai.messages import ToolReturn
 
+from co_cli._model_settings import NOREASON_SETTINGS
+from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import (
     ArtifactTypeEnum,
     parse_frontmatter,
@@ -31,11 +34,7 @@ from co_cli.knowledge._frontmatter import (
 from co_cli.memory.recall import (
     MemoryEntry,
     load_memories,
-    load_always_on_memories,
 )
-from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.deps import CoDeps
-from pydantic_ai.messages import ToolReturn
 from co_cli.tools.tool_output import tool_output
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -64,15 +63,32 @@ def slugify(text: str) -> str:
     return slug.strip("-")[:50]
 
 
-_HEDGING_PATTERNS: frozenset[str] = frozenset({
-    "i think", "maybe", "probably", "might", "not sure",
-    "possibly", "i believe", "could be",
-})
+_HEDGING_PATTERNS: frozenset[str] = frozenset(
+    {
+        "i think",
+        "maybe",
+        "probably",
+        "might",
+        "not sure",
+        "possibly",
+        "i believe",
+        "could be",
+    }
+)
 
-_CERTAIN_PATTERNS: frozenset[str] = frozenset({
-    "always", "never", "definitely", "i always", "i never",
-    "i use", "i prefer", "i don't", "i do not",
-})
+_CERTAIN_PATTERNS: frozenset[str] = frozenset(
+    {
+        "always",
+        "never",
+        "definitely",
+        "i always",
+        "i never",
+        "i use",
+        "i prefer",
+        "i don't",
+        "i do not",
+    }
+)
 
 
 def _classify_certainty(content: str) -> str:
@@ -145,7 +161,7 @@ def _decay_multiplier(ts_iso: str, half_life_days: int) -> float:
     """
     try:
         created = _parse_created(ts_iso)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age_days = max(0, (now - created).days)
         return max(0.0, min(1.0, math.exp(-math.log(2) * age_days / half_life_days)))
     except Exception:
@@ -167,13 +183,10 @@ def grep_recall(
     matches = [
         m
         for m in memories
-        if query_lower in m.content.lower()
-        or any(query_lower in t.lower() for t in m.tags)
+        if query_lower in m.content.lower() or any(query_lower in t.lower() for t in m.tags)
     ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
     return matches[:max_results]
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -232,8 +245,13 @@ async def save_memory(
         span.set_attribute("memory.tags", ",".join(tags or []))
         _model = ctx.deps.model.model if ctx.deps.model else None
         result = await persist_memory(
-            ctx.deps, content, tags, related,
-            on_failure="add", model=_model, model_settings=NOREASON_SETTINGS,
+            ctx.deps,
+            content,
+            tags,
+            related,
+            on_failure="add",
+            model=_model,
+            model_settings=NOREASON_SETTINGS,
             always_on=always_on,
         )
         meta = result.metadata or {}
@@ -294,7 +312,10 @@ async def recall_memory(
     memory_dir = ctx.deps.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if (
+        ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
+        and ctx.deps.knowledge_store is not None
+    ):
         try:
             fts_results = ctx.deps.knowledge_store.search(
                 query,
@@ -324,23 +345,27 @@ async def recall_memory(
                     raw = p.read_text(encoding="utf-8")
                     fm, body = parse_frontmatter(raw)
                     validate_memory_frontmatter(fm)
-                    raw_matches.append(MemoryEntry(
-                        id=fm["id"],
-                        path=p,
-                        content=body.strip(),
-                        tags=fm.get("tags", []),
-                        created=fm["created"],
-                        updated=fm.get("updated"),
-                        decay_protected=fm.get("decay_protected", False),
-                        related=fm.get("related"),
-                        kind=fm.get("kind", "memory"),
-                        artifact_type=fm.get("artifact_type"),
-                        always_on=fm.get("always_on", False),
-                    ))
+                    raw_matches.append(
+                        MemoryEntry(
+                            id=fm["id"],
+                            path=p,
+                            content=body.strip(),
+                            tags=fm.get("tags", []),
+                            created=fm["created"],
+                            updated=fm.get("updated"),
+                            decay_protected=fm.get("decay_protected", False),
+                            related=fm.get("related"),
+                            kind=fm.get("kind", "memory"),
+                            artifact_type=fm.get("artifact_type"),
+                            always_on=fm.get("always_on", False),
+                        )
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to load FTS match {r.path}: {e}")
             # Exclude session-summary artifacts from default recall
-            raw_matches = [m for m in raw_matches if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
+            raw_matches = [
+                m for m in raw_matches if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY
+            ]
             # Composite relevance + decay scoring — preserves lexical signal alongside recency.
             # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
             # so higher relevance = better match before combining with decay.
@@ -419,8 +444,7 @@ async def recall_memory(
 
     # Format as markdown list
     lines = [
-        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} "
-        f"matching '{query}':\n"
+        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
     ]
     result_dicts: list[dict[str, Any]] = []
     for r in matches:
@@ -503,7 +527,10 @@ async def search_memories(
     memory_dir = ctx.deps.memory_dir
 
     # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid") and ctx.deps.knowledge_store is not None:
+    if (
+        ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
+        and ctx.deps.knowledge_store is not None
+    ):
         try:
             results = ctx.deps.knowledge_store.search(
                 query,
@@ -515,9 +542,13 @@ async def search_memories(
                 created_before=created_before,
                 limit=limit,
             )
-            otel_trace.get_current_span().set_attribute("rag.backend", ctx.deps.config.knowledge.search_backend)
+            otel_trace.get_current_span().set_attribute(
+                "rag.backend", ctx.deps.config.knowledge.search_backend
+            )
             if not results:
-                return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
+                return tool_output(
+                    f"No memories found matching '{query}'", ctx=ctx, count=0, results=[]
+                )
 
             # Exclude session-summary artifacts by reading each hit's frontmatter
             filtered = []
@@ -532,9 +563,13 @@ async def search_memories(
                 filtered.append(r)
             results = filtered
             if not results:
-                return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
+                return tool_output(
+                    f"No memories found matching '{query}'", ctx=ctx, count=0, results=[]
+                )
 
-            lines = [f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"]
+            lines = [
+                f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
+            ]
             result_dicts = []
             for r in results:
                 title_str = r.title or Path(r.path).stem if r.path else "unknown"
@@ -543,14 +578,16 @@ async def search_memories(
                     lines.append(f"Tags: {r.tags}")
                 if r.snippet:
                     lines.append(f"{r.snippet}\n")
-                result_dicts.append({
-                    "source": r.source,
-                    "kind": r.kind,
-                    "title": r.title,
-                    "snippet": r.snippet,
-                    "score": r.score,
-                    "path": r.path,
-                })
+                result_dicts.append(
+                    {
+                        "source": r.source,
+                        "kind": r.kind,
+                        "title": r.title,
+                        "snippet": r.snippet,
+                        "score": r.score,
+                        "path": r.path,
+                    }
+                )
             return tool_output(
                 "\n".join(lines).rstrip(),
                 ctx=ctx,
@@ -578,18 +615,22 @@ async def search_memories(
     if not matches:
         return tool_output(f"No memories found matching '{query}'", ctx=ctx, count=0, results=[])
 
-    lines = [f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"]
+    lines = [
+        f"Found {len(matches)} memor{'y' if len(matches) == 1 else 'ies'} matching '{query}':\n"
+    ]
     result_dicts = []
     for m in matches:
         lines.append(f"**{m.path.stem}** [{m.kind}]: {m.content[:100]}")
-        result_dicts.append({
-            "source": "memory",
-            "kind": m.kind,
-            "title": m.path.stem,
-            "snippet": m.content[:100],
-            "score": 0.0,
-            "path": str(m.path),
-        })
+        result_dicts.append(
+            {
+                "source": "memory",
+                "kind": m.kind,
+                "title": m.path.stem,
+                "snippet": m.content[:100],
+                "score": 0.0,
+                "path": str(m.path),
+            }
+        )
     return tool_output("\n".join(lines), ctx=ctx, count=len(matches), results=result_dicts)
 
 
@@ -652,7 +693,7 @@ async def list_memories(
     total = len(memories)
 
     # Paginate
-    page = memories[offset:offset + limit]
+    page = memories[offset : offset + limit]
 
     # Build summary dicts
     memory_dicts: list[dict[str, Any]] = []
@@ -691,16 +732,14 @@ async def list_memories(
             date_str = created_date
 
         # Format category
-        category_str = (
-            f" [{md['auto_category']}]" if md.get("auto_category") else ""
-        )
+        category_str = f" [{md['auto_category']}]" if md.get("auto_category") else ""
 
         # Format protection indicator
         protected_str = " 🔒" if md.get("decay_protected") else ""
 
         kind_str = f" [{md.get('kind', 'memory')}]"
         artifact_str = f" ({md['artifact_type']})" if md.get("artifact_type") else ""
-        display_id = str(md['id'])[:8] if isinstance(md['id'], str) else f"{md['id']:03d}"
+        display_id = str(md["id"])[:8] if isinstance(md["id"], str) else f"{md['id']:03d}"
         lines.append(
             f"**{display_id}** ({date_str}){kind_str}{artifact_str}{category_str}{protected_str} "
             f": {md['summary']}"
@@ -805,7 +844,7 @@ async def update_memory(
                 span.set_attribute("memory.action", "update")
 
                 updated_body = body_text.replace(old_norm, new_norm, 1)
-                fm["updated"] = datetime.now(timezone.utc).isoformat()
+                fm["updated"] = datetime.now(UTC).isoformat()
                 md_content = (
                     f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
                     f"{updated_body.strip()}\n"
@@ -815,6 +854,7 @@ async def update_memory(
                 if ctx.deps.knowledge_store is not None:
                     try:
                         import hashlib as _hashlib
+
                         ctx.deps.knowledge_store.index(
                             source="memory",
                             kind=fm.get("kind", "memory"),
@@ -836,7 +876,9 @@ async def update_memory(
                 slug=slug,
             )
     except ResourceBusyError:
-        return tool_error(f"Memory '{slug}' is being modified by another tool call — retry next turn")
+        return tool_error(
+            f"Memory '{slug}' is being modified by another tool call — retry next turn"
+        )
 
 
 async def append_memory(
@@ -878,7 +920,7 @@ async def append_memory(
                 span.set_attribute("memory.action", "append")
 
                 updated_body = body.rstrip() + "\n" + content
-                fm["updated"] = datetime.now(timezone.utc).isoformat()
+                fm["updated"] = datetime.now(UTC).isoformat()
                 md_content = (
                     f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n"
                     f"{updated_body.strip()}\n"
@@ -888,6 +930,7 @@ async def append_memory(
                 if ctx.deps.knowledge_store is not None:
                     try:
                         import hashlib as _hashlib
+
                         ctx.deps.knowledge_store.index(
                             source="memory",
                             kind=fm.get("kind", "memory"),
@@ -909,4 +952,6 @@ async def append_memory(
                 slug=slug,
             )
     except ResourceBusyError:
-        return tool_error(f"Memory '{slug}' is being modified by another tool call — retry next turn")
+        return tool_error(
+            f"Memory '{slug}' is being modified by another tool call — retry next turn"
+        )

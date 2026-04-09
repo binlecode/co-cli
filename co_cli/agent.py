@@ -8,39 +8,50 @@ if TYPE_CHECKING:
     from co_cli._model_factory import LlmModel
 
 from pydantic_ai import Agent, DeferredToolRequests, RunContext
-from pydantic_ai.toolsets import AbstractToolset, FunctionToolset, DeferredLoadingToolset
-from pydantic_ai.toolsets.combined import CombinedToolset
 from pydantic_ai.tools import ToolDefinition
+from pydantic_ai.toolsets import AbstractToolset, DeferredLoadingToolset, FunctionToolset
+from pydantic_ai.toolsets.combined import CombinedToolset
 
 from co_cli.config._core import Settings
-from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicy, ToolSource
-from co_cli.context._tool_lifecycle import CoToolLifecycle
 from co_cli.context._history import (
-    inject_opening_context,
-    truncate_tool_results,
     compact_assistant_responses,
     detect_safety_issues,
+    inject_opening_context,
     summarize_history_window,
+    truncate_tool_results,
 )
-from co_cli.tools.shell import run_shell_command
-from co_cli.tools.obsidian import list_notes, read_note, search_notes
-from co_cli.tools.google_drive import search_drive_files, read_drive_file
-from co_cli.tools.google_gmail import list_gmail_emails, search_gmail_emails, create_gmail_draft
-from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
-from co_cli.tools.web import web_search, web_fetch
-from co_cli.tools.memory import save_memory, list_memories, update_memory, append_memory, search_memories
+from co_cli.context._tool_lifecycle import CoToolLifecycle
+from co_cli.deps import CoDeps, ToolInfo, ToolSource, VisibilityPolicy
 from co_cli.memory.recall import load_always_on_memories
-from co_cli.tools.articles import save_article, search_articles, read_article, search_knowledge
-from co_cli.tools.todo import write_todos, read_todos
+from co_cli.tools.articles import read_article, save_article, search_articles, search_knowledge
 from co_cli.tools.capabilities import check_capabilities
-from co_cli.tools.files import list_directory, read_file, find_in_files, write_file, edit_file
-from co_cli.tools.subagent import run_coding_subagent, run_research_subagent, run_analysis_subagent, run_reasoning_subagent
-from co_cli.tools.task_control import (
-    start_background_task,
-    check_task_status,
-    cancel_background_task,
-    list_background_tasks,
+from co_cli.tools.files import edit_file, find_in_files, list_directory, read_file, write_file
+from co_cli.tools.google_calendar import list_calendar_events, search_calendar_events
+from co_cli.tools.google_drive import read_drive_file, search_drive_files
+from co_cli.tools.google_gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
+from co_cli.tools.memory import (
+    append_memory,
+    list_memories,
+    save_memory,
+    search_memories,
+    update_memory,
 )
+from co_cli.tools.obsidian import list_notes, read_note, search_notes
+from co_cli.tools.shell import run_shell_command
+from co_cli.tools.subagent import (
+    run_analysis_subagent,
+    run_coding_subagent,
+    run_reasoning_subagent,
+    run_research_subagent,
+)
+from co_cli.tools.task_control import (
+    cancel_background_task,
+    check_task_status,
+    list_background_tasks,
+    start_background_task,
+)
+from co_cli.tools.todo import read_todos, write_todos
+from co_cli.tools.web import web_fetch, web_search
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +64,7 @@ class ToolRegistry:
     the raw MCP toolsets (for bootstrap lifecycle management), and the tool_index
     (native entries; MCP entries added later by discover_mcp_tools()).
     """
+
     toolset: AbstractToolset[CoDeps]
     mcp_toolsets: list
     tool_index: dict[str, ToolInfo]
@@ -72,16 +84,14 @@ def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     if tool_def.name in resume:
         return True
     entry = ctx.deps.tool_index.get(tool_def.name)
-    if entry is not None and entry.visibility == VisibilityPolicy.ALWAYS:
-        return True
-    return False
+    return entry is not None and entry.visibility == VisibilityPolicy.ALWAYS
 
 
 def _build_mcp_toolsets(config: Settings) -> list:
     """Build MCP toolsets wrapped with DeferredLoadingToolset for SDK-native discovery."""
     if not config.mcp_servers:
         return []
-    from pydantic_ai.mcp import MCPServerStdio, MCPServerStreamableHTTP, MCPServerSSE
+    from pydantic_ai.mcp import MCPServerSSE, MCPServerStdio, MCPServerStreamableHTTP
 
     mcp_toolsets = []
     for name, cfg in config.mcp_servers.items():
@@ -90,7 +100,9 @@ def _build_mcp_toolsets(config: Settings) -> list:
             if cfg.url.rstrip("/").endswith("/sse"):
                 server = MCPServerSSE(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
             else:
-                server = MCPServerStreamableHTTP(cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout)
+                server = MCPServerStreamableHTTP(
+                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
+                )
         else:
             env = dict(cfg.env) if cfg.env else {}
             server = MCPServerStdio(
@@ -120,10 +132,10 @@ def _build_native_toolset(
     Returns (native_toolset, native_index) where native_index maps each tool name
     to its ToolInfo metadata.
     """
-    inner: FunctionToolset[CoDeps] = FunctionToolset()
+    native_toolset: FunctionToolset[CoDeps] = FunctionToolset()
     native_index: dict[str, ToolInfo] = {}
 
-    def _reg(
+    def _register_tool(
         fn: Any,
         *,
         approval: bool = False,
@@ -140,7 +152,7 @@ def _build_native_toolset(
         }
         if retries is not None:
             kwargs["retries"] = retries
-        inner.add_function(fn, **kwargs)
+        native_toolset.add_function(fn, **kwargs)
         native_index[name] = ToolInfo(
             name=name,
             description=description,
@@ -152,75 +164,102 @@ def _build_native_toolset(
         )
 
     # --- Always-visible tools (defer_loading=False) ---
-    _A = VisibilityPolicy.ALWAYS
+    _always_visible = VisibilityPolicy.ALWAYS
 
     # Capability introspection
-    _reg(check_capabilities, visibility=_A)
+    _register_tool(check_capabilities, visibility=_always_visible)
 
     # Session task tracking
-    _reg(write_todos, visibility=_A)
-    _reg(read_todos, visibility=_A)
+    _register_tool(write_todos, visibility=_always_visible)
+    _register_tool(read_todos, visibility=_always_visible)
 
     # Knowledge reads
-    _reg(search_memories, visibility=_A)
-    _reg(search_knowledge, visibility=_A)
-    _reg(search_articles, visibility=_A)
-    _reg(read_article, visibility=_A)
-    _reg(list_memories, visibility=_A)
+    _register_tool(search_memories, visibility=_always_visible)
+    _register_tool(search_knowledge, visibility=_always_visible)
+    _register_tool(search_articles, visibility=_always_visible)
+    _register_tool(read_article, visibility=_always_visible)
+    _register_tool(list_memories, visibility=_always_visible)
 
     # Workspace reads
-    _reg(list_directory, visibility=_A)
-    _reg(read_file, visibility=_A, max_result_size=80_000)
-    _reg(find_in_files, visibility=_A)
+    _register_tool(list_directory, visibility=_always_visible)
+    _register_tool(read_file, visibility=_always_visible, max_result_size=80_000)
+    _register_tool(find_in_files, visibility=_always_visible)
 
     # Web
-    _reg(web_search, visibility=_A, retries=3)
-    _reg(web_fetch, visibility=_A, retries=3)
+    _register_tool(web_search, visibility=_always_visible, retries=3)
+    _register_tool(web_fetch, visibility=_always_visible, retries=3)
 
     # Execution
-    _reg(run_shell_command, visibility=_A, max_result_size=30_000)
+    _register_tool(run_shell_command, visibility=_always_visible, max_result_size=30_000)
 
     # --- Deferred tools (defer_loading=True, discovered via SDK search_tools) ---
-    _D = VisibilityPolicy.DEFERRED
+    _deferred_visible = VisibilityPolicy.DEFERRED
 
     # File write tools
-    _reg(write_file, approval=True, visibility=_D, retries=1)
-    _reg(edit_file, approval=True, visibility=_D, retries=1)
+    _register_tool(write_file, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(edit_file, approval=True, visibility=_deferred_visible, retries=1)
 
     # Knowledge write tools
-    _reg(save_memory, approval=True, visibility=_D, retries=1)
-    _reg(save_article, approval=True, visibility=_D, retries=1)
-    _reg(update_memory, approval=True, visibility=_D, retries=1)
-    _reg(append_memory, approval=True, visibility=_D, retries=1)
+    _register_tool(save_memory, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(save_article, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(update_memory, approval=True, visibility=_deferred_visible, retries=1)
+    _register_tool(append_memory, approval=True, visibility=_deferred_visible, retries=1)
 
     # Background task tools
-    _reg(start_background_task, approval=True, visibility=_D)
-    _reg(check_task_status, visibility=_D)
-    _reg(cancel_background_task, visibility=_D)
-    _reg(list_background_tasks, visibility=_D)
+    _register_tool(start_background_task, approval=True, visibility=_deferred_visible)
+    _register_tool(check_task_status, visibility=_deferred_visible)
+    _register_tool(cancel_background_task, visibility=_deferred_visible)
+    _register_tool(list_background_tasks, visibility=_deferred_visible)
 
     # Sub-agent tools
-    _reg(run_coding_subagent, visibility=_D)
-    _reg(run_research_subagent, visibility=_D)
-    _reg(run_analysis_subagent, visibility=_D)
-    _reg(run_reasoning_subagent, visibility=_D)
+    _register_tool(run_coding_subagent, visibility=_deferred_visible)
+    _register_tool(run_research_subagent, visibility=_deferred_visible)
+    _register_tool(run_analysis_subagent, visibility=_deferred_visible)
+    _register_tool(run_reasoning_subagent, visibility=_deferred_visible)
 
     # Domain tools — conditional on config presence; excluded when integration absent
     if config.obsidian_vault_path:
-        _reg(list_notes, visibility=_D, integration="obsidian")
-        _reg(search_notes, visibility=_D, integration="obsidian")
-        _reg(read_note, visibility=_D, integration="obsidian")
+        _register_tool(list_notes, visibility=_deferred_visible, integration="obsidian")
+        _register_tool(search_notes, visibility=_deferred_visible, integration="obsidian")
+        _register_tool(read_note, visibility=_deferred_visible, integration="obsidian")
 
     if config.google_credentials_path:
-        _reg(search_drive_files, visibility=_D, integration="google_drive", retries=3)
-        _reg(read_drive_file, visibility=_D, integration="google_drive", retries=3)
-        _reg(list_gmail_emails, visibility=_D, integration="google_gmail", retries=3)
-        _reg(search_gmail_emails, visibility=_D, integration="google_gmail", retries=3)
-        _reg(list_calendar_events, visibility=_D, integration="google_calendar", retries=3)
-        _reg(search_calendar_events, visibility=_D, integration="google_calendar", retries=3)
-        _reg(create_gmail_draft, approval=True, visibility=_D, integration="google_gmail", retries=1)
+        _register_tool(
+            search_drive_files, visibility=_deferred_visible, integration="google_drive", retries=3
+        )
+        _register_tool(
+            read_drive_file, visibility=_deferred_visible, integration="google_drive", retries=3
+        )
+        _register_tool(
+            list_gmail_emails, visibility=_deferred_visible, integration="google_gmail", retries=3
+        )
+        _register_tool(
+            search_gmail_emails,
+            visibility=_deferred_visible,
+            integration="google_gmail",
+            retries=3,
+        )
+        _register_tool(
+            list_calendar_events,
+            visibility=_deferred_visible,
+            integration="google_calendar",
+            retries=3,
+        )
+        _register_tool(
+            search_calendar_events,
+            visibility=_deferred_visible,
+            integration="google_calendar",
+            retries=3,
+        )
+        _register_tool(
+            create_gmail_draft,
+            approval=True,
+            visibility=_deferred_visible,
+            integration="google_gmail",
+            retries=1,
+        )
 
-    return inner, native_index
+    return native_toolset, native_index
 
 
 def build_tool_registry(config: Settings) -> ToolRegistry:
@@ -235,7 +274,7 @@ def build_tool_registry(config: Settings) -> ToolRegistry:
 
     # Combine all toolsets under one filter so approval-resume narrowing
     # applies uniformly to native and MCP tools.
-    combined = CombinedToolset([native_toolset] + mcp_toolsets)
+    combined = CombinedToolset([native_toolset, *mcp_toolsets])
     filtered = combined.filtered(_approval_resume_filter)
 
     return ToolRegistry(
@@ -262,6 +301,7 @@ def build_agent(
     """
     if model is None:
         from co_cli._model_factory import build_model
+
         model = build_model(config.llm)
 
     if tool_registry is None:
@@ -270,6 +310,7 @@ def build_agent(
     # Assemble static instructions (personality, rules, counter-steering) once at build time.
     from co_cli.prompts._assembly import build_static_instructions
     from co_cli.prompts.model_quirks._loader import normalize_model_name
+
     normalized_model = normalize_model_name(config.llm.model)
     static_instructions = build_static_instructions(config.llm.provider, normalized_model, config)
 
@@ -332,12 +373,14 @@ def build_agent(
         if not ctx.deps.config.personality:
             return ""
         from co_cli.prompts.personalities._injector import _load_personality_memories
+
         return _load_personality_memories()
 
     @agent.instructions
     def add_category_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
         """Inject category-level awareness so the model discovers deferred tools via search_tools."""
         from co_cli.context._deferred_tool_prompt import build_category_awareness_prompt
+
         return build_category_awareness_prompt(ctx.deps.tool_index)
 
     return agent
@@ -366,7 +409,7 @@ async def discover_mcp_tools(
         # Walk .wrapped chain recursively to find MCPServer
         inner = toolset
         wrapper_count = 0
-        while hasattr(inner, 'wrapped'):
+        while hasattr(inner, "wrapped"):
             inner = inner.wrapped
             wrapper_count += 1
         if not isinstance(inner, MCPServer):
@@ -390,9 +433,7 @@ async def discover_mcp_tools(
                         integration=prefix or None,
                     )
         except Exception as e:
-            logger.warning(
-                "MCP tool list failed for %r: %s", prefix or "(no prefix)", e
-            )
+            logger.warning("MCP tool list failed for %r: %s", prefix or "(no prefix)", e)
             errors[prefix] = str(e)
 
     return sorted(mcp_tool_names), errors, mcp_index
