@@ -22,7 +22,7 @@ from co_cli.deps import CoDeps
 from co_cli.context.orchestrate import run_turn, TurnResult
 from co_cli.agent import build_agent
 from co_cli.observability._telemetry import SQLiteSpanExporter
-from co_cli.config._core import settings, DATA_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
+from co_cli.config._core import settings, USER_DIR, LOGS_DB, DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_FULL, VALID_REASONING_DISPLAY_MODES
 from co_cli.display._core import console, set_theme, PROMPT_CHAR, TerminalFrontend, Frontend
 from co_cli.bootstrap._render_status import get_status, render_status_table, check_security, render_security_findings
 from co_cli.bootstrap._banner import display_welcome_banner
@@ -143,7 +143,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
 
     completer = WordCompleter([f"/{name}" for name in BUILTIN_COMMANDS], sentence=True)
     session = PromptSession(
-        history=FileHistory(str(DATA_DIR / "history.txt")),
+        history=FileHistory(str(USER_DIR / "history.txt")),
         completer=completer,
         complete_while_typing=False,
     )

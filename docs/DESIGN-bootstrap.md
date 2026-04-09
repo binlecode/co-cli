@@ -9,7 +9,7 @@ co_cli.main  (module load)
 │
 ├─ co_cli.display._core → co_cli.config.settings (lazy init)
 │      _ensure_dirs() → load_config()
-│          Layer 1: ~/.config/co-cli/settings.json
+│          Layer 1: ~/.co-cli/settings.json
 │          Layer 2: <cwd>/.co-cli/settings.json → _deep_merge_settings()
 │          Layer 3: fill_from_env (CO_CLI_* env vars)
 │          → Settings singleton cached (nested sub-models: llm, knowledge, web, memory, subagent, shell)
@@ -64,12 +64,12 @@ REPL loop begins
 
 ### Settings Loading (`config/`)
 
-`Settings` is a Pydantic `BaseModel` with nested sub-models (`LlmSettings`, `KnowledgeSettings`, `WebSettings`, `MemorySettings`, `SubagentSettings`, `ShellSettings`), built by `load_config()` in `co_cli/config/_core.py` and accessed via a lazy module-level singleton (`settings`). First access triggers `_ensure_dirs()` to create `~/.config/co-cli/` and `~/.local/share/co-cli/` if missing, then `load_config()`.
+`Settings` is a Pydantic `BaseModel` with nested sub-models (`LlmSettings`, `KnowledgeSettings`, `WebSettings`, `MemorySettings`, `SubagentSettings`, `ShellSettings`), built by `load_config()` in `co_cli/config/_core.py` and accessed via a lazy module-level singleton (`settings`). First access triggers `_ensure_dirs()` to create `~/.co-cli/` if missing, then `load_config()`.
 
 Three-layer merge, later layers win:
 
 ```text
-Layer 1: ~/.config/co-cli/settings.json
+Layer 1: ~/.co-cli/settings.json
 Layer 2: <cwd>/.co-cli/settings.json via `_deep_merge_settings()`
 Layer 3: env vars via fill_from_env model_validator
 ```

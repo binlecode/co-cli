@@ -24,7 +24,7 @@ def ensure_google_credentials(
 
     Resolution order:
     1. Explicit credentials_path from settings -> use it
-    2. Default token path (~/.config/co-cli/google_token.json) exists -> use it
+    2. Default token path (~/.co-cli/google_token.json) exists -> use it
     3. ADC path exists -> copy to default token path, use it
     4. gcloud installed -> run interactive login, copy result, use it
     5. No gcloud -> return None (caller prints error + exits)

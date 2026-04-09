@@ -26,7 +26,7 @@ Co CLI uses OpenTelemetry (OTel) to trace every agent operation. All data stays 
 └─────────────────────────┼─────────────────────────────────┘
                           │
                           ▼
-            ~/.local/share/co-cli/co-cli-logs.db
+            ~/.co-cli/co-cli-logs.db
                           │
               ┌───────────┼───────────┐
               ▼           ▼           ▼
@@ -45,7 +45,7 @@ Run `co chat` in one terminal and `co tail` in another to watch the agent→mode
 │  Found 3 notes...     │       │  14:23:07  model  chat    │
 └──────────────────────┘       └──────────────────────────┘
                                        ▲ polls SQLite
-                              ~/.local/share/co-cli/co-cli-logs.db
+                              ~/.co-cli/co-cli-logs.db
 ```
 
 ## 2. Core Logic
@@ -140,7 +140,7 @@ The `SQLiteSpanExporter` opens a fresh connection per `export()` call and closes
 
 `get_span_type(name)` classifies spans by substring: names containing `agent` → agent, `tool` → tool, `model`/`chat` → model.
 
-The HTML file is written to `~/.local/share/co-cli/traces.html` and auto-opened in the browser. It requires no server — purely static.
+The HTML file is written to `~/.co-cli/traces.html` and auto-opened in the browser. It requires no server — purely static.
 
 ### Live Tail Viewer (`co tail`)
 
@@ -220,7 +220,7 @@ FROM spans WHERE name LIKE 'invoke_agent%' GROUP BY model;
 
 ### Privacy
 
-All data stays local. Tool responses and full conversation history are captured in span attributes. To clear all traces: `rm ~/.local/share/co-cli/co-cli-logs.db`.
+All data stays local. Tool responses and full conversation history are captured in span attributes. To clear all traces: `rm ~/.co-cli/co-cli-logs.db`.
 
 ## 3. Config
 
@@ -228,7 +228,7 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Setting | Env Var | Default | Description |
 |---------|--------|---------|-------------|
-| DB path | — | `~/.local/share/co-cli/co-cli-logs.db` | Span storage (XDG data dir) |
+| DB path | — | `~/.co-cli/co-cli-logs.db` | Span storage (user dotdir) |
 | Instrumentation version | — | `3` | Hardcoded in `main.py` for OTel GenAI spec compliance |
 
 ### `co tail` Flags
@@ -252,6 +252,6 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/observability/_tail.py` | Polling loop, per-type attribute extraction, verbose LLM output, `run_tail()` entry point |
 | `co_cli/datasette_metadata.json` | Datasette UI config for `co logs` |
 | `co_cli/main.py` | `@app.command()` wrappers for `logs`, `traces`, `tail`; module-level OTel bootstrap |
-| `co_cli/config/` | `DATA_DIR` — shared XDG data path (in `_core.py`) |
-| `~/.local/share/co-cli/co-cli-logs.db` | SQLite span storage |
-| `~/.local/share/co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |
+| `co_cli/config/` | `USER_DIR` — shared user-global path (in `_core.py`) |
+| `~/.co-cli/co-cli-logs.db` | SQLite span storage |
+| `~/.co-cli/traces.html` | Generated static HTML viewer (written by `co traces`) |

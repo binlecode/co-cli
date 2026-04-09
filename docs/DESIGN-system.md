@@ -57,7 +57,7 @@ flowchart LR
     MainAgent --> MCPTools[MCP toolsets]
 
     Native --> Workspace[Workspace + .co-cli]
-    Native --> XDG[XDG config/data stores]
+    Native --> UserDir[~/.co-cli user-global stores]
     MCPTools --> External[Remote servers / subprocess MCP]
 
     Main --> Telemetry[OTel + SQLiteSpanExporter]
@@ -245,13 +245,13 @@ The runtime writes to a small, explicit set of stores:
 
 | Store | Purpose | Writer |
 | --- | --- | --- |
-| `~/.local/share/co-cli/co-cli-logs.db` | OpenTelemetry span storage | `SQLiteSpanExporter` |
-| `~/.local/share/co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeStore` |
+| `~/.co-cli/co-cli-logs.db` | OpenTelemetry span storage | `SQLiteSpanExporter` |
+| `~/.co-cli/co-cli-search.db` | knowledge index storage | `KnowledgeStore` |
 | `<cwd>/.co-cli/memory/` | project-local memory markdown | memory lifecycle and memory tools |
-| configured library dir, default `~/.local/share/co-cli/library/` | article markdown store | article tools |
+| configured library dir, default `~/.co-cli/library/` | article markdown store | article tools |
 | `<cwd>/.co-cli/sessions/{id}.json` | session id, timestamps, compaction count | session helpers in `context/session.py` |
 | `<cwd>/.co-cli/sessions/{id}.jsonl` | JSONL conversation transcript (append-only) | `context/transcript.py` |
-| `~/.config/co-cli/google_token.json` | cached Google authorized-user credentials | Google auth helper |
+| `~/.co-cli/google_token.json` | cached Google authorized-user credentials | Google auth helper |
 
 ### 2.8 Failure And Degradation Boundaries
 
@@ -288,7 +288,7 @@ These are the system-level settings that most directly shape runtime assembly.
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred knowledge backend before degradation |
 | `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Embedding provider used for hybrid search |
 | `knowledge.cross_encoder_reranker_url` | `CO_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | Optional TEI reranker endpoint |
-| `library_path` | `CO_LIBRARY_PATH` | `~/.local/share/co-cli/library` | Global article store root; resolved to `deps.library_dir` |
+| `library_path` | `CO_LIBRARY_PATH` | `~/.co-cli/library` | Global article store root; resolved to `deps.library_dir` |
 | `reasoning_display` | `CO_CLI_REASONING_DISPLAY` | `summary` | Terminal reasoning display mode (`off`, `summary`, `full`) |
 
 ## 4. Files

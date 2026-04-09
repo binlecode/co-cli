@@ -9,8 +9,7 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.config._core import (
     Settings,
-    CONFIG_DIR,
-    DATA_DIR,
+    USER_DIR,
     SEARCH_DB,
 )
 
@@ -127,7 +126,7 @@ class CoRuntimeState:
 
 # Path defaults (relative to cwd; resolved at runtime in create_deps)
 _DEFAULT_SKILLS_DIR = Path(".co-cli/skills")
-_DEFAULT_USER_SKILLS_DIR = CONFIG_DIR / "skills"
+_DEFAULT_USER_SKILLS_DIR = USER_DIR / "skills"
 _DEFAULT_MEMORY_DIR = Path(".co-cli/memory")
 _DEFAULT_LIBRARY_DIR = Path(".co-cli/library")
 _DEFAULT_SESSIONS_DIR = Path(".co-cli/sessions")
@@ -186,10 +185,10 @@ def resolve_workspace_paths(config: Settings, cwd: Path) -> dict[str, Any]:
         "obsidian_vault_path": Path(config.obsidian_vault_path) if config.obsidian_vault_path else None,
         "memory_dir": cwd / ".co-cli" / "memory",
         "skills_dir": cwd / ".co-cli" / "skills",
-        "user_skills_dir": CONFIG_DIR / "skills",
+        "user_skills_dir": USER_DIR / "skills",
         "sessions_dir": cwd / ".co-cli" / "sessions",
         "tool_results_dir": cwd / ".co-cli" / "tool-results",
-        "library_dir": Path(config.library_path) if config.library_path else DATA_DIR / "library",
+        "library_dir": Path(config.library_path) if config.library_path else USER_DIR / "library",
     }
 
 

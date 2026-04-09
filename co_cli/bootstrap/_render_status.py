@@ -10,7 +10,7 @@ from pathlib import Path
 from rich.table import Table
 
 from co_cli.bootstrap._check import check_settings, check_agent_llm
-from co_cli.config._core import DATA_DIR, LOGS_DB, project_config_path, CONFIG_DIR, Settings
+from co_cli.config._core import LOGS_DB, project_config_path, USER_DIR, Settings
 from co_cli.display._core import console
 
 
@@ -163,14 +163,14 @@ def check_security(
     findings: list[SecurityCheckResult] = []
 
     # Check 1: user settings.json permissions
-    user_cfg = _user_config_path or (CONFIG_DIR / "settings.json")
+    user_cfg = _user_config_path or (USER_DIR / "settings.json")
     if Path(user_cfg).exists():
         mode = Path(user_cfg).stat().st_mode & 0o777
         if mode != 0o600:
             findings.append(SecurityCheckResult(
                 severity="warn",
                 check_id="user-config-permissions",
-                detail=f"~/.config/co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
+                detail=f"~/.co-cli/settings.json permissions are {oct(mode)} (expected 0o600)",
                 remediation=f"chmod 600 {user_cfg}",
             ))
 

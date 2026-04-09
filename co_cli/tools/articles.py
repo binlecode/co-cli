@@ -2,7 +2,7 @@
 
 Articles are externally-fetched knowledge items (web docs, reference material,
 research) stored as markdown files with YAML frontmatter in the user-global library
-(~/.local/share/co-cli/library/ by default, configurable via CO_LIBRARY_PATH).
+(~/.co-cli/library/ by default, configurable via CO_LIBRARY_PATH).
 They differ from memories in three ways:
 - kind: article (vs kind: memory)
 - origin_url: URL they were fetched from

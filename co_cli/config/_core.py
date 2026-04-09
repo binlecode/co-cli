@@ -16,15 +16,13 @@ from co_cli.config._shell import ShellSettings
 
 APP_NAME = "co-cli"
 
-# XDG Paths - Explicit XDG resolution so ~/.config/ is used even on macOS
-# (platformdirs would resolve to ~/Library/Application Support/ on macOS)
-CONFIG_DIR = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_NAME
-DATA_DIR = Path(os.getenv("XDG_DATA_HOME", Path.home() / ".local" / "share")) / APP_NAME
-GOOGLE_TOKEN_PATH = CONFIG_DIR / "google_token.json"
+# Canonical user-global root: ~/.co-cli (overridable via CO_CLI_HOME)
+USER_DIR = Path(os.getenv("CO_CLI_HOME", Path.home() / ".co-cli"))
+GOOGLE_TOKEN_PATH = USER_DIR / "google_token.json"
 ADC_PATH = Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
-SETTINGS_FILE = CONFIG_DIR / "settings.json"
-SEARCH_DB = DATA_DIR / "co-cli-search.db"
-LOGS_DB = DATA_DIR / "co-cli-logs.db"
+SETTINGS_FILE = USER_DIR / "settings.json"
+SEARCH_DB = USER_DIR / "co-cli-search.db"
+LOGS_DB = USER_DIR / "co-cli-logs.db"
 
 # Flat defaults (Settings-level, not grouped)
 DEFAULT_THEME = "light"
@@ -42,9 +40,8 @@ VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset({
 
 
 def _ensure_dirs() -> None:
-    """Create config and data directories (idempotent)."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    """Create the canonical user-global directory (idempotent)."""
+    USER_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _deep_merge_settings(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

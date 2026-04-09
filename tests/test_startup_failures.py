@@ -11,8 +11,7 @@ from pathlib import Path
 def _base_env(tmp_path: Path) -> dict[str, str]:
     """Build an isolated env so startup tests do not read user machine config."""
     env = os.environ.copy()
-    env["XDG_CONFIG_HOME"] = str(tmp_path / "xdg-config")
-    env["XDG_DATA_HOME"] = str(tmp_path / "xdg-data")
+    env["CO_CLI_HOME"] = str(tmp_path / "co-cli-home")
     env["PYTHONPATH"] = str(Path.cwd())
     return env
 

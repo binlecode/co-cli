@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import json
 import time
+from pathlib import Path
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace import ReadableSpan
 from co_cli.config._core import LOGS_DB
@@ -17,6 +18,7 @@ _EXPORT_RETRY_BASE_SECONDS = 0.1
 class SQLiteSpanExporter(SpanExporter):
     def __init__(self, db_path: str = str(LOGS_DB)):
         self.db_path = db_path
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:

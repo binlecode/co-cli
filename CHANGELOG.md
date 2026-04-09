@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.50] - 2026-04-08
+
+### Changed
+- **User-global paths**: Moved all user-global files from XDG split (`~/.config/co-cli/` + `~/.local/share/co-cli/`) to a single `~/.co-cli/` dotdir, matching the project-level `.co-cli/` convention. Override via `CO_CLI_HOME` env var.
+
+### Removed
+- `CONFIG_DIR` / `DATA_DIR` XDG constants — replaced by single `USER_DIR`
+- XDG legacy migration code (users should manually move files if upgrading from <0.7.50)
+
 ## [0.7.48] - 2026-04-08
 
 ### Changed

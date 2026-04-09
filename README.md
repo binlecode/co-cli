@@ -21,7 +21,7 @@ Before you begin, ensure you have the following installed:
     ```bash
     ollama run llama3
     ```
-    *You can use other models by updating `~/.config/co-cli/settings.json`.*
+    *You can use other models by updating `~/.co-cli/settings.json`.*
 
 3.  **[uv](https://github.com/astral-sh/uv)**: Python package manager.
     ```bash
@@ -45,15 +45,15 @@ Before you begin, ensure you have the following installed:
 
 3.  **Configure Co**:
 
-    Co uses XDG-compliant paths. Create your config file:
+    All user-global files live under `~/.co-cli/`. Create your config file:
 
     ```bash
-    mkdir -p ~/.config/co-cli
-    cp settings.reference.json ~/.config/co-cli/settings.json
+    mkdir -p ~/.co-cli
+    cp settings.reference.json ~/.co-cli/settings.json
     # Edit with your values
     ```
 
-    **`~/.config/co-cli/settings.json`** (user config):
+    **`~/.co-cli/settings.json`** (user config):
     ```json
     {
       "llm_provider": "gemini",
@@ -66,7 +66,7 @@ Before you begin, ensure you have the following installed:
     **Configuration precedence** (highest to lowest):
     1. Environment variables (for CI/automation)
     2. Project config (`.co-cli/settings.json` in cwd)
-    3. User config (`~/.config/co-cli/settings.json`)
+    3. User config (`~/.co-cli/settings.json`)
     4. Built-in defaults
 
     > Environment variables (e.g., `GEMINI_API_KEY`, `LLM_PROVIDER`) override all file-based settings.
@@ -76,10 +76,10 @@ Before you begin, ensure you have the following installed:
 ## Google Services (Drive/Gmail/Calendar)
 
 Just run `uv run co chat`. On first use, Co will:
-1. Check if credentials already exist (`~/.config/co-cli/google_token.json`)
+1. Check if credentials already exist (`~/.co-cli/google_token.json`)
 2. If not, detect and copy existing `gcloud` ADC credentials
 3. If no ADC exists, run `gcloud auth application-default login` automatically (opens browser)
-4. Copy the result to `~/.config/co-cli/google_token.json`
+4. Copy the result to `~/.co-cli/google_token.json`
 
 **Prerequisite:** Install [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
 
@@ -190,10 +190,10 @@ Three backends in degradation order: `hybrid → fts5 → grep`.
 | `knowledge_embedding_dims` | `1024` | Output vector dimensions — **must match the model** |
 | `knowledge_embed_api_url` | `"http://127.0.0.1:8283"` | TEI or compatible embedding API endpoint |
 
-> **Dimension mismatch fix**: if you change `knowledge_embedding_model` or `knowledge_embedding_dims`, the vec table schema becomes stale. Delete `~/.local/share/co-cli/search.db` — it rebuilds automatically on next `co chat`.
+> **Dimension mismatch fix**: if you change `knowledge_embedding_model` or `knowledge_embedding_dims`, the vec table schema becomes stale. Delete `~/.co-cli/co-cli-search.db` — it rebuilds automatically on next `co chat`.
 >
 > ```bash
-> rm ~/.local/share/co-cli/search.db
+> rm ~/.co-cli/co-cli-search.db
 > ```
 
 ---
@@ -225,7 +225,7 @@ Two `history_processors` prevent context overflow:
 
 ### Privacy
 *   **LLM**: Local (Ollama) or cloud (Gemini) — your choice.
-*   **Logs**: Stored locally in SQLite (`~/.local/share/co-cli/co-cli.db`).
+*   **Logs**: Stored locally in SQLite (`~/.co-cli/co-cli-logs.db`).
 *   **API Keys**: Managed via `settings.json` and never logged.
 
 ---

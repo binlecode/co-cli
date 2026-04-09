@@ -57,7 +57,7 @@ The skill name is always the filename stem. Built-in slash commands are reserved
 Skills are loaded in three passes, lowest-priority first:
 
 1. **bundled** — package defaults from `co_cli/skills/*.md` (version-controlled; no runtime security scan)
-2. **user-global** — `~/.config/co-cli/skills/*.md` (XDG path from `deps.user_skills_dir`; security scan applied)
+2. **user-global** — `~/.co-cli/skills/*.md` (from `deps.user_skills_dir`; security scan applied)
 3. **project-local** — `<cwd>/.co-cli/skills/*.md` (highest priority; security scan applied)
 
 Later passes win on name collision, so project-local overrides user-global, which overrides bundled.
@@ -188,7 +188,7 @@ The skill system is lightly configured. The main runtime dependencies are the re
 | Setting | Source | Purpose |
 | --- | --- | --- |
 | `deps.skills_dir` | resolved in `resolve_workspace_paths()` as `<cwd>/.co-cli/skills` | project-local skill directory |
-| `deps.user_skills_dir` | XDG path, defaults to `~/.config/co-cli/skills/` | user-global skill directory (middle tier) |
+| `deps.user_skills_dir` | defaults to `~/.co-cli/skills/` | user-global skill directory (middle tier) |
 | `settings` values referenced by `requires.settings` | `co_cli/config/` | load gating only |
 
 There is no separate skills config object today.

@@ -3,7 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from co_cli.config._core import LOGS_DB
+from co_cli.config._core import LOGS_DB, USER_DIR
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -518,7 +518,7 @@ def generate_trace_html() -> str:
 def write_trace_html(output_path: Path | None = None) -> Path:
     """Write trace HTML to file and return path."""
     if output_path is None:
-        output_path = DATA_DIR / "traces.html"
+        output_path = USER_DIR / "traces.html"
 
     html = generate_trace_html()
     output_path.write_text(html)
