@@ -16,7 +16,8 @@ settings.json
 co-cli-logs.db
 co-cli-search.db
 
-# Per-user ephemeral state (memory/, skills/, library/ are tracked)
+# Per-user ephemeral state
+.co-cli/memory/
 .co-cli/sessions/
 .co-cli/tool-results/
 .co-cli/settings.json
