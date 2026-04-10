@@ -140,39 +140,3 @@ def test_decay_below_limit_no_trigger(tmp_path: Path):
     assert len(after) == seed_count + 1, f"Expected {seed_count + 1} memories, got {len(after)}"
     has_consolidated = any("_consolidated" in p.read_text(encoding="utf-8") for p in after)
     assert not has_consolidated, "Decay triggered below capacity limit"
-
-
-def test_save_memory_writes_low_certainty(tmp_path: Path):
-    """save_memory writes certainty=low to frontmatter for hedging content."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-
-    ctx = _make_ctx(memory_dir, max_count=50)
-
-    async def _run() -> None:
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await save_memory(ctx, "I think I prefer dark mode", tags=["preference"])
-
-    asyncio.run(_run())
-    files = list(memory_dir.glob("*.md"))
-    assert len(files) == 1
-    fm = yaml.safe_load(files[0].read_text().split("---")[1])
-    assert fm.get("certainty") == "low"
-
-
-def test_save_memory_writes_high_certainty(tmp_path: Path):
-    """save_memory writes certainty=high to frontmatter for definitive content."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-
-    ctx = _make_ctx(memory_dir, max_count=50)
-
-    async def _run() -> None:
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            await save_memory(ctx, "I always use dark mode", tags=["preference"])
-
-    asyncio.run(_run())
-    files = list(memory_dir.glob("*.md"))
-    assert len(files) == 1
-    fm = yaml.safe_load(files[0].read_text().split("---")[1])
-    assert fm.get("certainty") == "high"

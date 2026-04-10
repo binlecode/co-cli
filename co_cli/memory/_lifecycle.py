@@ -36,6 +36,8 @@ async def persist_memory(
     model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
+    type_value: str | None = None,
+    description_value: str | None = None,
 ) -> ToolReturn:
     """Write a memory through the full lifecycle: upsert → write → retention.
 
@@ -76,6 +78,8 @@ async def persist_memory(
             model_settings,
             artifact_type,
             always_on,
+            type_value,
+            description_value,
         )
 
 
@@ -91,12 +95,11 @@ async def _persist_memory_inner(
     model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
+    type_value: str | None = None,
+    description_value: str | None = None,
 ) -> ToolReturn:
     # Import here to avoid module-level circular import
     from co_cli.tools.memory import (
-        _classify_certainty,
-        _detect_category,
-        _detect_provenance,
         load_memories,
         slugify,
     )
@@ -127,9 +130,8 @@ async def _persist_memory_inner(
         memory_dir,
         on_failure,
         slugify,
-        _classify_certainty,
-        _detect_provenance,
-        _detect_category,
+        type_value,
+        description_value,
     )
 
     # Retention cap — runs outside the lock (idempotent, no read-modify-write race)
@@ -174,9 +176,8 @@ async def _write_memory(
     memory_dir: Path,
     on_failure: Literal["add", "skip"],
     slugify: Any,
-    _classify_certainty: Any,
-    _detect_provenance: Any,
-    _detect_category: Any,
+    type_value: str | None,
+    description_value: str | None,
 ) -> ToolReturn:
     """Upsert check + per-file locked write."""
     from co_cli.tools.memory import load_memories
@@ -233,12 +234,11 @@ async def _write_memory(
         "kind": "memory",
         "created": datetime.now(UTC).isoformat(),
         "tags": tags,
-        "provenance": provenance
-        if provenance is not None
-        else _detect_provenance(tags, deps.config.memory.auto_save_tags),
-        "auto_category": _detect_category(tags),
-        "certainty": _classify_certainty(content),
     }
+    if type_value is not None:
+        frontmatter["type"] = type_value
+    if description_value is not None:
+        frontmatter["description"] = description_value
     if related:
         frontmatter["related"] = related
     if artifact_type is not None:
@@ -269,8 +269,9 @@ async def _write_memory(
                         mtime=file_path.stat().st_mtime,
                         hash=_hashlib.sha256(md_content.encode()).hexdigest(),
                         tags=" ".join(tags or []),
-                        category=_detect_category(tags),
                         created=frontmatter["created"],
+                        type=type_value,
+                        description=description_value,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to index memory {memory_id}: {e}")

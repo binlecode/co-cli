@@ -36,6 +36,8 @@ class MemoryEntry:
     kind: str = "memory"
     artifact_type: str | None = None
     always_on: bool = False
+    description: str | None = None
+    type: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +103,8 @@ def load_memories(
                     kind=entry_kind,
                     artifact_type=fm.get("artifact_type"),
                     always_on=fm.get("always_on", False),
+                    description=fm.get("description"),
+                    type=fm.get("type"),
                 )
             )
         except Exception as e:

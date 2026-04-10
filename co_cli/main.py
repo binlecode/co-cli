@@ -10,7 +10,7 @@ import typer
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.history import FileHistory
@@ -67,7 +67,7 @@ resource = Resource.create(
     }
 )
 tracer_provider = TracerProvider(resource=resource)
-tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
+tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
 trace.set_tracer_provider(tracer_provider)
 
 # Enable pydantic-ai instrumentation for all agents
@@ -178,7 +178,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             raise SystemExit(1) from e
 
         completer.words = _build_completer_words(deps.skill_commands)
-        agent = build_agent(config=deps.config, model=deps.model)
+        agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
         session_data = restore_session(deps, frontend)
         from co_cli.commands._commands import get_skill_registry
@@ -191,6 +191,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
         display_welcome_banner(deps)
+        frontend.clear_status()
 
         message_history: list[ModelMessage] = []
         last_interrupt_time = 0.0
@@ -198,7 +199,9 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         while True:
             _saved_env: dict[str, str | None] = {}
             try:
+                frontend.set_input_active(True)
                 user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
+                frontend.set_input_active(False)
                 last_interrupt_time = 0.0  # Reset on successful input
                 if user_input.lower() in ["exit", "quit"]:
                     break
@@ -249,8 +252,10 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                 )
 
             except EOFError:
+                frontend.set_input_active(False)
                 break
             except (KeyboardInterrupt, asyncio.CancelledError):
+                frontend.set_input_active(False)
                 now = time.monotonic()
                 if now - last_interrupt_time <= 2.0:
                     break

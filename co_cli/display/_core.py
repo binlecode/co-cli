@@ -212,6 +212,14 @@ class Frontend(Protocol):
         """Prompt user for approval. Returns 'y', 'n', or 'a'."""
         ...
 
+    def clear_status(self) -> None:
+        """Dismiss the status surface so the next prompt starts on a clean line."""
+        ...
+
+    def set_input_active(self, active: bool) -> None:
+        """Signal whether prompt_toolkit owns the terminal for user input."""
+        ...
+
     def cleanup(self) -> None:
         """Exception/cancellation cleanup — restore terminal state."""
         ...
@@ -240,6 +248,10 @@ class TerminalFrontend:
         self._tool_labels: dict[str, str] = {}
         # last text set via on_status or on_reasoning_progress; None when status surface is cleared
         self._status_text: str | None = None
+        # True while prompt_toolkit owns the terminal — buffer instead of rendering
+        self._input_active: bool = False
+        # Status messages buffered while input is active; flushed when input ends
+        self._pending_status: list[Text] = []
 
     def active_surface(self) -> str:
         """Return the currently active public display surface name."""
@@ -260,6 +272,19 @@ class TerminalFrontend:
     def active_status_text(self) -> str | None:
         """Return the text currently shown in the status surface, or None if inactive."""
         return self._status_text
+
+    def clear_status(self) -> None:
+        """Dismiss the status surface so the next prompt starts on a clean line."""
+        self._clear_status_live()
+
+    def set_input_active(self, active: bool) -> None:
+        """Signal whether prompt_toolkit owns the terminal for user input."""
+        self._input_active = active
+        if not active and self._pending_status:
+            for renderable in self._pending_status:
+                console.print(renderable)
+            self._pending_status.clear()
+            console.print("")
 
     def _clear_status_live(self) -> None:
         if self._status_live is not None:
@@ -376,6 +401,9 @@ class TerminalFrontend:
     def on_status(self, message: str) -> None:
         self._status_text = message
         renderable = Text(message, style="dim")
+        if self._input_active:
+            self._pending_status.append(renderable)
+            return
         if self._status_live is None:
             self._status_live = Live(
                 renderable,

@@ -18,6 +18,7 @@ from pydantic_ai.messages import ToolReturn
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.memory.recall import MemoryEntry
 from co_cli.tools.tool_output import tool_output_raw
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ _memory_save_agent: Agent[None, SaveResult] = Agent(
 )
 
 
-def build_memory_manifest(memories: list[Any]) -> str:
+def build_memory_manifest(memories: list[MemoryEntry]) -> str:
     """Build a one-line-per-entry manifest of existing memories.
 
     Args:
@@ -50,14 +51,14 @@ def build_memory_manifest(memories: list[Any]) -> str:
 
     Returns:
         Manifest string with one line per memory, capped at PAGE_SIZE entries.
+        Format: - [type] slug (ts): description
     """
     lines: list[str] = []
     for entry in memories[:PAGE_SIZE]:
         ts = entry.updated or entry.created
-        snippet = entry.content[:80].replace("\n", " ")
-        tags_str = ", ".join(entry.tags) if entry.tags else ""
+        desc = entry.description or entry.content[:80].replace("\n", " ")
         slug = entry.path.stem
-        lines.append(f"- {slug} ({ts}): {snippet}  [{tags_str}]")
+        lines.append(f"- [{entry.type or '?'}] {slug} ({ts}): {desc}")
     return "\n".join(lines)
 
 
@@ -108,11 +109,13 @@ def overwrite_memory(
     new_tags: list[str],
     auto_save_tags: list[str],
     knowledge_store: Any | None = None,
+    new_type: str | None = None,
+    new_description: str | None = None,
 ) -> ToolReturn | None:
     """Overwrite an existing memory file with new content (full body replace).
 
-    Preserves created timestamp, merges tags, refreshes provenance/category/certainty.
-    Re-indexes in FTS when knowledge_store is available.
+    Preserves created timestamp, merges tags. Re-indexes in FTS when knowledge_store
+    is available.
 
     Args:
         memory_dir: Path to the memory directory.
@@ -121,16 +124,13 @@ def overwrite_memory(
         new_tags: Tags from the candidate memory.
         auto_save_tags: Auto-save tag list from config.
         knowledge_store: Optional KnowledgeStore for FTS re-indexing.
+        new_type: Optional type value to write to frontmatter.
+        new_description: Optional description value to write to frontmatter.
 
     Returns:
         ToolReturn with consolidated action metadata.
     """
-    from co_cli.tools.memory import (
-        _classify_certainty,
-        _detect_category,
-        _detect_provenance,
-        slugify,
-    )
+    from co_cli.tools.memory import slugify
 
     # Sanitize slug: reject path separators to prevent directory traversal
     if "/" in target_slug or "\\" in target_slug or ".." in target_slug:
@@ -153,9 +153,10 @@ def overwrite_memory(
     # Refresh frontmatter
     existing_fm["updated"] = datetime.now(UTC).isoformat()
     existing_fm["tags"] = merged_tags
-    existing_fm["provenance"] = _detect_provenance(merged_tags, auto_save_tags)
-    existing_fm["auto_category"] = _detect_category(merged_tags)
-    existing_fm["certainty"] = _classify_certainty(new_content)
+    if new_type is not None:
+        existing_fm["type"] = new_type
+    if new_description is not None:
+        existing_fm["description"] = new_description
     existing_fm.setdefault("kind", "memory")
 
     md_content = (
@@ -179,9 +180,10 @@ def overwrite_memory(
                 mtime=target_path.stat().st_mtime,
                 hash=_hashlib.sha256(md_content.encode()).hexdigest(),
                 tags=" ".join(merged_tags),
-                category=existing_fm.get("auto_category"),
                 created=existing_fm.get("created"),
                 updated=existing_fm.get("updated"),
+                type=existing_fm.get("type"),
+                description=existing_fm.get("description"),
             )
         except Exception as e:
             logger.warning(f"Failed to reindex memory {target_slug}: {e}")

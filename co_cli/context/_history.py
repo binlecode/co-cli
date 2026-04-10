@@ -144,8 +144,9 @@ def _static_marker(dropped_count: int) -> ModelRequest:
         parts=[
             UserPromptPart(
                 content=(
-                    f"[Earlier conversation trimmed — {dropped_count} messages "
-                    "removed to stay within context budget]"
+                    f"This session is being continued from a previous conversation "
+                    f"that ran out of context. {dropped_count} earlier messages were "
+                    "removed. Recent messages are preserved verbatim."
                 ),
             ),
         ]
@@ -518,7 +519,12 @@ async def summarize_history_window(
         summary_marker = ModelRequest(
             parts=[
                 UserPromptPart(
-                    content=(f"[Summary of {dropped_count} earlier messages]\n{summary_text}"),
+                    content=(
+                        "This session is being continued from a previous conversation "
+                        "that ran out of context. The summary below covers the earlier "
+                        f"portion ({dropped_count} messages).\n\n{summary_text}\n\n"
+                        "Recent messages are preserved verbatim."
+                    ),
                 ),
             ]
         )

@@ -61,6 +61,10 @@ def _resolve_reranker(
         )
         logger.warning("TEI cross-encoder unavailable; degrading to none")
         config.knowledge.cross_encoder_reranker_url = None
+    elif cross_result.extra:
+        tei_batch = cross_result.extra.get("max_client_batch_size")
+        if isinstance(tei_batch, int) and tei_batch > 0:
+            config.knowledge.tei_rerank_batch_size = tei_batch
 
     reranker_result = check_reranker_llm(config)
     if reranker_result.status not in ("ok", "skipped"):
@@ -97,21 +101,23 @@ def _discover_knowledge_backend(
     _resolve_reranker(config, statuses)
 
     # --- Level 1: hybrid (sqlite-vec + embedding) ---
+    # Only attempt hybrid if that's what was configured; respect explicit fts5 choice.
     resolved_backend: KnowledgeBackendLiteral = "fts5"
-    if config.knowledge.embedding_provider == "none":
-        logger.info("Hybrid skipped: embedding provider is 'none'")
-    else:
-        from co_cli.bootstrap.check import check_embedder
-
-        embedder_check = check_embedder(config)
-        if embedder_check.status not in ("ok", "skipped"):
-            logger.warning("Hybrid skipped: embedder unavailable — %s", embedder_check.detail)
-            statuses.append(
-                f"  Knowledge degraded — embedder unavailable "
-                f"({embedder_check.detail}); using fts5"
-            )
+    if configured == "hybrid":
+        if config.knowledge.embedding_provider == "none":
+            logger.info("Hybrid skipped: embedding provider is 'none'")
         else:
-            resolved_backend = "hybrid"
+            from co_cli.bootstrap.check import check_embedder
+
+            embedder_check = check_embedder(config)
+            if embedder_check.status not in ("ok", "skipped"):
+                logger.warning("Hybrid skipped: embedder unavailable — %s", embedder_check.detail)
+                statuses.append(
+                    f"  Knowledge degraded — embedder unavailable "
+                    f"({embedder_check.detail}); using fts5"
+                )
+            else:
+                resolved_backend = "hybrid"
 
     for status in statuses:
         frontend.on_status(status)
@@ -290,6 +296,7 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
         model=llm_model,
         knowledge_store=knowledge_store,
         tool_index=tool_registry.tool_index,
+        tool_registry=tool_registry,
         skill_commands=skill_commands,
         runtime=runtime,
         degradations=degradations,

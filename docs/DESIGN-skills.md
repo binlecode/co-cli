@@ -115,7 +115,7 @@ There are two skill registries:
 | Registry | Purpose |
 | --- | --- |
 | `deps.skill_commands` | full loaded skill set used by slash-command dispatch |
-| `deps.skill_commands` | model-facing list of visible skills with name and description only |
+| `get_skill_registry(deps.skill_commands)` | model-facing list of visible skills (name + description); excludes entries with `disable_model_invocation=True` or blank descriptions |
 
 `set_skill_commands()` replaces `deps.skill_commands`. The model-facing skill registry is derived on read via `get_skill_registry()`, which excludes hidden skills by filtering out entries with `disable_model_invocation=True` or blank descriptions.
 

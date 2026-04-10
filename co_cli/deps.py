@@ -155,6 +155,7 @@ class CoDeps:
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
+    tool_registry: object | None = field(default=None, repr=False)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)

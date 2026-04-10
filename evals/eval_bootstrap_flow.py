@@ -85,7 +85,10 @@ async def main():
                 len(str(agent._system_prompts)) if hasattr(agent, "_system_prompts") else "Unknown"
             )
 
-            # Analyze MCP tools
+            # Analyze MCP servers & tools
+            registered_mcp_servers = (
+                list(deps.config.mcp_servers.keys()) if deps.config.mcp_servers else []
+            )
             mcp_tools = {k: v for k, v in deps.tool_index.items() if v.source.value == "mcp"}
             mcp_integrations = {}
             for t in mcp_tools.values():
@@ -97,6 +100,7 @@ async def main():
             print(f"LLM Model          : {model}")
             print(f"Personality Role   : {personality}")
             print(f"Knowledge Backend  : {backend}")
+            print(f"MCP Servers Reg'ed : {len(registered_mcp_servers)} ({registered_mcp_servers})")
             print(
                 f"Tools Discovered   : {tool_count} (Native: {tool_count - len(mcp_tools)}, MCP: {len(mcp_tools)})"
             )
@@ -122,6 +126,9 @@ async def main():
             else:
                 report_lines.append("- **Knowledge Store Configured**: No")
 
+            report_lines.append(
+                f"- **MCP Servers Reg'ed**: {len(registered_mcp_servers)} ({registered_mcp_servers})"
+            )
             report_lines.append(f"- **Tools Discovered**: {tool_count} (MCP: {len(mcp_tools)})")
             if mcp_integrations:
                 report_lines.append(f"  - MCP Integrations: {mcp_integrations}")

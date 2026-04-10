@@ -63,85 +63,6 @@ def slugify(text: str) -> str:
     return slug.strip("-")[:50]
 
 
-_HEDGING_PATTERNS: frozenset[str] = frozenset(
-    {
-        "i think",
-        "maybe",
-        "probably",
-        "might",
-        "not sure",
-        "possibly",
-        "i believe",
-        "could be",
-    }
-)
-
-_CERTAIN_PATTERNS: frozenset[str] = frozenset(
-    {
-        "always",
-        "never",
-        "definitely",
-        "i always",
-        "i never",
-        "i use",
-        "i prefer",
-        "i don't",
-        "i do not",
-    }
-)
-
-
-def _classify_certainty(content: str) -> str:
-    """Classify memory content into certainty bucket based on keyword heuristics.
-
-    Returns "low" if hedging language detected, "high" if certain assertions
-    detected, "medium" as default.
-    """
-    lower = content.lower()
-    if any(phrase in lower for phrase in _HEDGING_PATTERNS):
-        return "low"
-    if any(phrase in lower for phrase in _CERTAIN_PATTERNS):
-        return "high"
-    return "medium"
-
-
-def _detect_provenance(tags: list[str] | None, auto_save_tags: list[str]) -> str:
-    """Detect if memory was auto-saved (detected) or explicitly requested (user-told).
-
-    Args:
-        tags: Tags list from save_memory call
-        auto_save_tags: Tags that indicate auto-save (from config)
-
-    Returns:
-        "detected" if signal tags present, "user-told" otherwise
-    """
-    if not tags:
-        return "user-told"
-
-    signal_tags = set(auto_save_tags)
-    return "detected" if any(t in signal_tags for t in tags) else "user-told"
-
-
-def _detect_category(tags: list[str] | None) -> str | None:
-    """Extract primary category from tags.
-
-    Args:
-        tags: Tags list from save_memory call
-
-    Returns:
-        First matching category tag, or None if no category found
-    """
-    if not tags:
-        return None
-
-    categories = ["preference", "correction", "decision", "context", "pattern"]
-    for category in categories:
-        if category in tags:
-            return category
-
-    return None
-
-
 def _parse_created(created_str: str) -> datetime:
     """Parse an ISO8601 created timestamp to a timezone-aware datetime."""
     return datetime.fromisoformat(created_str.replace("Z", "+00:00"))
@@ -358,6 +279,8 @@ async def recall_memory(
                             kind=fm.get("kind", "memory"),
                             artifact_type=fm.get("artifact_type"),
                             always_on=fm.get("always_on", False),
+                            description=fm.get("description"),
+                            type=fm.get("type"),
                         )
                     )
                 except Exception as e:
@@ -711,7 +634,7 @@ async def list_memories(
                 "created": m.created,
                 "updated": m.updated,
                 "tags": m.tags,
-                "auto_category": _detect_category(m.tags),
+                "type": m.type,
                 "summary": summary,
                 "decay_protected": m.decay_protected,
             }
@@ -731,8 +654,8 @@ async def list_memories(
         else:
             date_str = created_date
 
-        # Format category
-        category_str = f" [{md['auto_category']}]" if md.get("auto_category") else ""
+        # Format type label
+        category_str = f" [{md['type']}]" if md.get("type") else ""
 
         # Format protection indicator
         protected_str = " 🔒" if md.get("decay_protected") else ""
@@ -866,6 +789,8 @@ async def update_memory(
                             tags=" ".join(fm.get("tags", [])),
                             created=fm.get("created"),
                             updated=fm.get("updated"),
+                            type=fm.get("type"),
+                            description=fm.get("description"),
                         )
                     except Exception as e:
                         logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
@@ -942,6 +867,8 @@ async def append_memory(
                             tags=" ".join(fm.get("tags", [])),
                             created=fm.get("created"),
                             updated=fm.get("updated"),
+                            type=fm.get("type"),
+                            description=fm.get("description"),
                         )
                     except Exception as e:
                         logger.warning(f"Failed to reindex appended memory '{slug}': {e}")

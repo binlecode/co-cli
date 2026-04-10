@@ -222,7 +222,6 @@ Configured via `mcp_servers` in `settings.json`. `command`+`args` = stdio subpro
 
 | Server | Prefix | Approval |
 |--------|--------|---------|
-| `github` | `github` | `ask` |
 | `context7` | `context7` | `auto` |
 
 ---

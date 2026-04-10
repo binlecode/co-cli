@@ -39,12 +39,15 @@ class MemoryCandidate(BaseModel):
     tag: Literal["user", "feedback", "project", "reference"]
     confidence: Literal["high", "low"]
     inject: bool = False
+    description: str = ""
+    update_slug: str | None = None
 
 
 class ExtractionResult(BaseModel):
     """Structured output from the memory extractor — up to N candidates."""
 
     memories: list[MemoryCandidate] = Field(default_factory=list, max_length=_MAX_CANDIDATES)
+    manifest_used: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +103,7 @@ async def analyze_for_signals(
     messages: list,
     *,
     deps: "CoDeps",
+    existing_manifest: str = "",
 ) -> ExtractionResult:
     """Run the memory extractor on the conversation window.
 
@@ -107,23 +111,42 @@ async def analyze_for_signals(
     Agent with structured output. Returns up to 3 memory candidates.
     Never crashes the main chat loop — exceptions return empty result.
 
+    When existing_manifest is non-empty, it is appended to the user prompt
+    so the extractor can avoid redundant candidates and set update_slug
+    for entries that update an existing memory.
+
     Args:
         messages: Full message history after run_turn() completes.
         deps: CoDeps for model access.
+        existing_manifest: Pre-built manifest string of existing memories.
+            When non-empty, appended to the user prompt.
 
     Returns:
         ExtractionResult with a list of MemoryCandidate entries.
+        manifest_used is set when existing_manifest is non-empty.
     """
     window = _build_window(messages)
     if not window.strip():
         return ExtractionResult()
 
+    manifest_section = (
+        f"\n\n## Existing memories\n\n{existing_manifest}\n\n"
+        "Do not output candidates already covered by this list. "
+        "If a candidate updates an existing entry, set `update_slug` to the matching slug."
+        if existing_manifest
+        else ""
+    )
+    user_prompt = window + manifest_section
+
     try:
         _model = deps.model.model if deps.model else None
         result = await _extraction_agent.run(
-            window, model=_model, model_settings=NOREASON_SETTINGS
+            user_prompt, model=_model, model_settings=NOREASON_SETTINGS
         )
-        return result.output
+        extraction = result.output
+        if existing_manifest:
+            extraction.manifest_used = existing_manifest
+        return extraction
     except Exception:
         logger.debug("Memory extractor failed", exc_info=True)
         return ExtractionResult()
@@ -153,6 +176,27 @@ async def handle_extraction(
         # Admission gate: auto-save only if type is in the allowlist
         auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
 
+        # Route candidates with update_slug directly to overwrite_memory
+        if mem.update_slug:
+            from co_cli.memory._save import overwrite_memory
+
+            memory_dir = deps.memory_dir
+            norm_tags = [t.lower() for t in tags]
+            update_result = overwrite_memory(
+                memory_dir,
+                mem.update_slug,
+                mem.candidate,
+                norm_tags,
+                deps.config.memory.auto_save_tags,
+                knowledge_store=deps.knowledge_store,
+                new_type=mem.tag,
+                new_description=mem.description or None,
+            )
+            if update_result is not None:
+                frontend.on_status(f"Updated: {mem.candidate[:80]}")
+                continue
+            # Fall through to SAVE_NEW if slug not found
+
         if mem.confidence == "high" and auto_save_allowed:
             await _persist_memory(
                 deps,
@@ -162,6 +206,8 @@ async def handle_extraction(
                 on_failure="skip",
                 model=_model,
                 model_settings=NOREASON_SETTINGS,
+                type_value=mem.tag,
+                description_value=mem.description or None,
             )
             frontend.on_status(f"Learned: {mem.candidate[:80]}")
         else:
@@ -175,6 +221,8 @@ async def handle_extraction(
                     on_failure="add",
                     model=_model,
                     model_settings=NOREASON_SETTINGS,
+                    type_value=mem.tag,
+                    description_value=mem.description or None,
                 )
 
 
@@ -196,23 +244,56 @@ async def _run_extraction_async(
     user from a background task. Handles CancelledError for clean shutdown.
     """
     try:
-        extraction = await analyze_for_signals(messages, deps=deps)
+        from co_cli.memory._save import build_memory_manifest
+        from co_cli.memory.recall import load_memories
+
+        memories = load_memories(deps.memory_dir, kind="memory")
+        memories.sort(key=lambda m: m.updated or m.created, reverse=True)
+        existing_manifest = build_memory_manifest(memories)
+        extraction = await analyze_for_signals(
+            messages, deps=deps, existing_manifest=existing_manifest
+        )
         if not extraction.memories:
             return
 
         _model = deps.model.model if deps.model else None
 
         for mem in extraction.memories:
+            tags = [mem.tag] + (["personality-context"] if mem.inject else [])
             auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
+
+            # Route candidates with update_slug directly to overwrite_memory
+            if mem.update_slug:
+                from co_cli.memory._save import overwrite_memory
+
+                memory_dir = deps.memory_dir
+                norm_tags = [t.lower() for t in tags]
+                update_result = overwrite_memory(
+                    memory_dir,
+                    mem.update_slug,
+                    mem.candidate,
+                    norm_tags,
+                    deps.config.memory.auto_save_tags,
+                    knowledge_store=deps.knowledge_store,
+                    new_type=mem.tag,
+                    new_description=mem.description or None,
+                )
+                if update_result is not None:
+                    frontend.on_status(f"Updated: {mem.candidate[:80]}")
+                    continue
+                # Fall through to SAVE_NEW if slug not found
+
             if mem.confidence == "high" and auto_save_allowed:
                 await _persist_memory(
                     deps,
                     mem.candidate,
-                    [mem.tag] + (["personality-context"] if mem.inject else []),
+                    tags,
                     None,
                     on_failure="skip",
                     model=_model,
                     model_settings=NOREASON_SETTINGS,
+                    type_value=mem.tag,
+                    description_value=mem.description or None,
                 )
                 frontend.on_status(f"Learned: {mem.candidate[:80]}")
             else:

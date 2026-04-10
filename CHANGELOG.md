@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.56] - 2026-04-10
+
+### Added
+- **Memory `type` and `description` fields**: new frontmatter fields on all memory writes; `MemoryTypeEnum` (`user`, `feedback`, `project`, `reference`) added to `_frontmatter.py`; `MemoryEntry` and `SearchResult` now carry both fields through load and FTS search paths
+- **Manifest-injected extraction**: `analyze_for_signals` receives the current memory manifest before extraction, enabling single-pass dedup — extractor can set `update_slug` to route candidates directly to `overwrite_memory`, eliminating the second LLM call for matched updates
+- **`update_slug` routing in extractor**: candidates with `update_slug` bypass `check_and_save` and go directly to `overwrite_memory`; fall-through to SAVE_NEW when slug not found
+- **`[type]` label in `list_memories`**: display now shows `[feedback]`/`[user]`/etc. instead of `[auto_category]`
+
+### Changed
+- **Memory manifest format**: `build_memory_manifest` now emits `- [type] slug (ts): description` lines instead of truncated content snippets
+- **`overwrite_memory` cleanup**: drops dead `provenance`/`auto_category`/`certainty` field refreshes; updates `type`/`description` when provided
+- **KnowledgeStore schema**: `type` and `description` columns added to `docs` table (migration-safe); `index()` and `sync_dir` project both fields; `provenance`/`certainty` removed from write path
+
+### Removed
+- **Dead frontmatter fields**: `auto_category`, `certainty`, `provenance` no longer written to new memory files (tolerated on read for legacy files)
+- **Dead helper functions**: `_detect_provenance`, `_detect_category`, `_classify_certainty` and associated constants removed from `tools/memory.py`
+
 ## [0.7.54] - 2026-04-10
 
 ### Changed

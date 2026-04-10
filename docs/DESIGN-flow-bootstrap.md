@@ -231,7 +231,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
 | `llm.num_ctx` | `LLM_NUM_CTX` | provider default | Context window target; may be overwritten by the Ollama runtime probe |
 | `knowledge.search_backend` | `CO_KNOWLEDGE_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
-| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `fastembed` | Determines whether hybrid search can stay enabled |
+| `knowledge.embedding_provider` | `CO_KNOWLEDGE_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
 | `library_path` | `CO_LIBRARY_PATH` | `~/.co-cli/library` | User-global article directory used during knowledge sync |
 | `mcp_servers` | `CO_CLI_MCP_SERVERS` | bundled defaults | MCP server definitions connected during startup |
 | `personality` | `CO_CLI_PERSONALITY` | `tars` | Personality selected before agent instruction assembly |

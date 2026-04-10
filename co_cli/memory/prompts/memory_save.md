@@ -13,5 +13,8 @@ Rules:
   richer phrasing).
 - When in doubt, prefer SAVE_NEW — false negatives (extra memory) are
   cheaper than false positives (lost information).
-- The target_slug must be the exact slug string from the manifest (the text
-  before the first parenthesis on each line). Copy it verbatim.
+- Each line in the manifest follows the format:
+  `- [type] slug (timestamp): description`
+  Example: `- [feedback] user-prefers-pytest (2026-04-09T...): User prefers pytest over unittest.`
+- The `target_slug` must be the exact slug string — the text between `'] '`
+  and `' ('` on each line. Copy it verbatim.

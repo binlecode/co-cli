@@ -12,6 +12,7 @@ DEFAULT_KNOWLEDGE_EMBED_API_URL = "http://127.0.0.1:8283"
 DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_KNOWLEDGE_CHUNK_SIZE = 600
 DEFAULT_KNOWLEDGE_CHUNK_OVERLAP = 80
+DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 
 
 class ModelConfig(BaseModel):
@@ -38,6 +39,7 @@ class KnowledgeSettings(BaseModel):
     cross_encoder_reranker_url: str | None = Field(
         default=DEFAULT_KNOWLEDGE_CROSS_ENCODER_RERANKER_URL
     )
+    tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
     llm_reranker: ModelConfig | None = Field(default=None)
     embed_api_url: str = Field(default=DEFAULT_KNOWLEDGE_EMBED_API_URL)
     chunk_size: int = Field(default=DEFAULT_KNOWLEDGE_CHUNK_SIZE, ge=0)

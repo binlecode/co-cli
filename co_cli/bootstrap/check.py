@@ -312,12 +312,22 @@ def check_mcp_server(command: str | None, url: str | None) -> CheckResult:
 
 
 def check_tei(url: str) -> CheckResult:
-    """Check a TEI service (embed or rerank) by GET to its base URL."""
+    """Check a TEI service (embed or rerank) by GET /info.
+
+    Returns server metadata (model_id, max_client_batch_size, etc.) in extra.
+    """
     try:
         import httpx
 
-        httpx.get(url, timeout=1)
-        return CheckResult(ok=True, status="ok", detail=f"reachable at {url}")
+        resp = httpx.get(f"{url.rstrip('/')}/info", timeout=2)
+        resp.raise_for_status()
+        info = resp.json()
+        return CheckResult(
+            ok=True,
+            status="ok",
+            detail=f"reachable at {url}",
+            extra=info,
+        )
     except Exception as err:
         return CheckResult(ok=False, status="error", detail=f"not reachable — {err}")
 

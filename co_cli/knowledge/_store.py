@@ -202,7 +202,7 @@ END;
 
 _MEMORY_FTS_SQL = """
 SELECT d.source, d.kind, d.path, d.title, d.tags, d.category, d.created, d.updated,
-       d.provenance, d.certainty,
+       d.provenance, d.certainty, d.type, d.description,
        snippet(docs_fts, 1, '>', '<', '...', 40) AS snippet,
        bm25(docs_fts) AS rank
   FROM docs_fts
@@ -271,6 +271,8 @@ class SearchResult:
     chunk_index: int | None = None
     start_line: int | None = None
     end_line: int | None = None
+    type: str | None = None
+    description: str | None = None
 
 
 class KnowledgeStore:
@@ -301,6 +303,7 @@ class KnowledgeStore:
         self._llm_api_key = config.llm.api_key
         self._embed_api_url = config.knowledge.embed_api_url
         self._cross_encoder_url = config.knowledge.cross_encoder_reranker_url
+        self._tei_batch_size = config.knowledge.tei_rerank_batch_size
         self._llm_reranker = config.knowledge.llm_reranker
         self._chunk_size = config.knowledge.chunk_size
         self._chunk_overlap = (
@@ -359,6 +362,14 @@ class KnowledgeStore:
         # Safe migration: add provenance and certainty columns to existing databases.
         # SQLite does not support ADD COLUMN IF NOT EXISTS; catch OperationalError on duplicate.
         for col in ("provenance TEXT", "certainty TEXT"):
+            try:
+                self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
+                self._conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+
+        # Migration: add type and description columns.
+        for col in ("type TEXT", "description TEXT"):
             try:
                 self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
                 self._conn.commit()
@@ -466,8 +477,9 @@ class KnowledgeStore:
         category: str | None = None,
         created: str | None = None,
         updated: str | None = None,
-        provenance: str | None = None,
-        certainty: str | None = None,
+        type: str | None = None,
+        description: str | None = None,
+        **_kwargs: object,
     ) -> None:
         """Insert or update a document in the index.
 
@@ -489,7 +501,7 @@ class KnowledgeStore:
         self._conn.execute(
             """INSERT INTO docs
                    (source, kind, path, title, content, mtime, hash, tags, category,
-                    created, updated, provenance, certainty, chunk_id)
+                    created, updated, type, description, chunk_id)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
             (
                 source,
@@ -503,8 +515,8 @@ class KnowledgeStore:
                 category,
                 created,
                 updated,
-                provenance,
-                certainty,
+                type,
+                description,
             ),
         )
         self._conn.commit()
@@ -808,6 +820,8 @@ class KnowledgeStore:
                     chunk_index=chunk_index,
                     start_line=start_line,
                     end_line=end_line,
+                    type=row["type"] if leg == "memory" else None,
+                    description=row["description"] if leg == "memory" else None,
                 )
             )
 
@@ -968,6 +982,8 @@ class KnowledgeStore:
                 chunk_index=row["chunk_index"] if leg == "chunks" else None,
                 start_line=row["start_line"] if leg == "chunks" else None,
                 end_line=row["end_line"] if leg == "chunks" else None,
+                type=row["type"] if leg == "memory" else None,
+                description=row["description"] if leg == "memory" else None,
             )
 
         # Memory: deduplicate to doc level
@@ -1059,7 +1075,7 @@ class KnowledgeStore:
         placeholders = ",".join("?" * len(rowids))
         sql = (
             f"SELECT rowid, source, kind, path, title, tags, category, created, updated, "
-            f"provenance, certainty FROM docs WHERE rowid IN ({placeholders})"
+            f"provenance, certainty, type, description FROM docs WHERE rowid IN ({placeholders})"
             f" AND source = 'memory'"
         )
         params: list[Any] = list(rowids)
@@ -1099,6 +1115,8 @@ class KnowledgeStore:
                 updated=row["updated"],
                 provenance=row["provenance"],
                 certainty=row["certainty"],
+                type=row["type"],
+                description=row["description"],
             )
             for row in doc_rows
         ]
@@ -1148,7 +1166,7 @@ class KnowledgeStore:
         doc_ph = ",".join("?" * len(doc_paths))
         doc_sql = (
             f"SELECT source, kind, path, title, tags, category, created, updated, "
-            f"provenance, certainty FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
+            f"provenance, certainty, type, description FROM docs WHERE path IN ({doc_ph}) AND chunk_id = 0"
         )
         doc_params: list[Any] = doc_paths
         if kind is not None:
@@ -1197,6 +1215,8 @@ class KnowledgeStore:
                     chunk_index=c["chunk_index"],
                     start_line=c["start_line"],
                     end_line=c["end_line"],
+                    type=None,
+                    description=None,
                 )
             )
         return results
@@ -1417,17 +1437,21 @@ class KnowledgeStore:
         limit: int,
     ) -> list[SearchResult]:
         """Rerank candidates using cross-encoder API at self._cross_encoder_url/rerank."""
-        texts = self._fetch_reranker_texts(candidates)
+        texts = [t or "" for t in self._fetch_reranker_texts(candidates)]
         import httpx
 
-        resp = httpx.post(
-            f"{self._cross_encoder_url}/rerank",
-            json={"query": query, "texts": texts},
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        # TEI returns: [{"index": i, "score": f}, ...] sorted by score desc
-        scored = {item["index"]: item["score"] for item in resp.json()}
+        scored: dict[int, float] = {}
+        for batch_start in range(0, len(texts), self._tei_batch_size):
+            batch = texts[batch_start : batch_start + self._tei_batch_size]
+            resp = httpx.post(
+                f"{self._cross_encoder_url}/rerank",
+                json={"query": query, "texts": batch},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            for item in resp.json():
+                scored[batch_start + item["index"]] = item["score"]
+
         reranked = [
             dataclasses.replace(candidates[i], score=scored.get(i, 0.0))
             for i in range(len(candidates))
@@ -1528,8 +1552,8 @@ class KnowledgeStore:
                     category=fm.get("auto_category"),
                     created=fm.get("created"),
                     updated=fm.get("updated"),
-                    provenance=fm.get("provenance"),
-                    certainty=fm.get("certainty"),
+                    type=fm.get("type"),
+                    description=fm.get("description"),
                 )
                 if _chunk_text is not None:
                     text_chunks = _chunk_text(

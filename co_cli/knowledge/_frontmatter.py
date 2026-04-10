@@ -23,16 +23,11 @@ class MemoryKindEnum(StrEnum):
     ARTICLE = "article"
 
 
-_VALID_PROVENANCE: frozenset[str] = frozenset(
-    {
-        "detected",
-        "user-told",
-        "planted",
-        "auto_decay",
-        "web-fetch",
-        "session",
-    }
-)
+class MemoryTypeEnum(StrEnum):
+    USER = "user"
+    FEEDBACK = "feedback"
+    PROJECT = "project"
+    REFERENCE = "reference"
 
 
 def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
@@ -110,10 +105,9 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     Optional fields:
         - kind: str ("memory" or "article")
         - origin_url: str or null (source URL for articles)
-        - provenance: str (detected | user-told | planted | auto_decay | web-fetch | session)
+        - type: str (user | feedback | project | reference)
+        - description: str (≤200 chars, no newlines — purpose hook for manifest dedup)
         - tags: list[str]
-        - auto_category: str (preference | correction | decision | context | pattern | character)
-        - certainty: str (high | medium | low)
         - updated: ISO8601 timestamp string (added when consolidated)
         - decay_protected: bool (prevent decay if true)
 
@@ -151,47 +145,31 @@ def validate_memory_frontmatter(fm: dict[str, Any]) -> None:
     ):
         raise ValueError("memory frontmatter field 'origin_url' must be a string or null")
 
-    if "provenance" in fm and fm["provenance"] is not None:
-        if not isinstance(fm["provenance"], str):
-            raise ValueError("memory frontmatter field 'provenance' must be a string or null")
-        if fm["provenance"] not in _VALID_PROVENANCE:
-            raise ValueError(
-                f"memory frontmatter field 'provenance' must be one of "
-                f"{sorted(_VALID_PROVENANCE)}, got {fm['provenance']!r}"
-            )
-
     if "tags" in fm:
         if not isinstance(fm["tags"], list):
             raise ValueError("memory frontmatter field 'tags' must be a list")
         if not all(isinstance(tag, str) for tag in fm["tags"]):
             raise ValueError("memory frontmatter field 'tags' must contain only strings")
 
-    if "auto_category" in fm and fm["auto_category"] is not None:
-        if not isinstance(fm["auto_category"], str):
-            raise ValueError("memory frontmatter field 'auto_category' must be a string or null")
-        valid_categories = {
-            "preference",
-            "correction",
-            "decision",
-            "context",
-            "pattern",
-            "character",
-        }
-        if fm["auto_category"] not in valid_categories:
+    if "type" in fm and fm["type"] is not None:
+        if not isinstance(fm["type"], str):
+            raise ValueError("memory frontmatter field 'type' must be a string or null")
+        valid_types = {e.value for e in MemoryTypeEnum}
+        if fm["type"] not in valid_types:
             logger.warning(
-                "memory frontmatter field 'auto_category' has unknown value %r — ignoring",
-                fm["auto_category"],
+                "memory frontmatter field 'type' has unknown value %r — ignoring",
+                fm["type"],
             )
 
-    if "certainty" in fm and fm["certainty"] is not None:
-        if not isinstance(fm["certainty"], str):
-            raise ValueError("memory frontmatter field 'certainty' must be a string or null")
-        valid_certainties = {"high", "medium", "low"}
-        if fm["certainty"] not in valid_certainties:
-            logger.warning(
-                "memory frontmatter field 'certainty' has unknown value %r — ignoring",
-                fm["certainty"],
-            )
+    if "description" in fm and fm["description"] is not None:
+        if not isinstance(fm["description"], str):
+            raise ValueError("memory frontmatter field 'description' must be a string or null")
+        if not fm["description"].strip():
+            raise ValueError("memory frontmatter field 'description' must not be empty")
+        if "\n" in fm["description"]:
+            raise ValueError("memory frontmatter field 'description' must not contain newlines")
+        if len(fm["description"]) > 200:
+            raise ValueError("memory frontmatter field 'description' must be ≤200 characters")
 
     if "updated" in fm:
         if not isinstance(fm["updated"], str):
