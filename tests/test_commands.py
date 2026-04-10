@@ -12,7 +12,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, User
 from pydantic_ai.result import DeferredToolRequests
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._settings import test_settings
+from tests._settings import make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
@@ -234,7 +234,7 @@ async def test_forget_command_deletes_file(tmp_path):
         message_history=[],
         deps=CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             memory_dir=memory_dir,
             session=CoSessionState(session_id="test-forget-file"),
         ),
@@ -310,7 +310,7 @@ def test_is_auto_approved_false_before_remember():
     """Subject is not auto-approved when no session rule has been stored."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         session=CoSessionState(session_id="test-autoapprove"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
@@ -321,7 +321,7 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
     """remember_tool_approval stores a session rule; subsequent is_auto_approved returns True."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         session=CoSessionState(session_id="test-remember"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
@@ -337,7 +337,7 @@ def test_remember_tool_approval_is_idempotent():
     """Calling remember_tool_approval twice does not duplicate the session rule."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         session=CoSessionState(session_id="test-idem"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
@@ -351,7 +351,7 @@ def test_record_approval_choice_with_remember_stores_rule():
     """record_approval_choice with remember=True stores a session rule via remember_tool_approval."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         session=CoSessionState(session_id="test-record"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
@@ -372,7 +372,7 @@ def test_record_approval_choice_deny_does_not_store_rule():
     """Denied approvals must not persist a session rule."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         session=CoSessionState(session_id="test-deny-record"),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
@@ -457,7 +457,7 @@ def test_cleanup_skill_restores_set_env_var():
     os.environ[key] = original
     try:
         os.environ[key] = "skill-injected-value"
-        deps = CoDeps(shell=ShellBackend(), config=test_settings())
+        deps = CoDeps(shell=ShellBackend(), config=make_settings())
         cleanup_skill_run_state({key: original}, deps)
         assert os.environ[key] == original
     finally:
@@ -472,7 +472,7 @@ def test_cleanup_skill_removes_absent_env_var():
     os.environ.pop(key, None)
     os.environ[key] = "skill-injected-value"
     try:
-        deps = CoDeps(shell=ShellBackend(), config=test_settings())
+        deps = CoDeps(shell=ShellBackend(), config=make_settings())
         cleanup_skill_run_state({key: None}, deps)
         assert key not in os.environ
     finally:
@@ -481,7 +481,7 @@ def test_cleanup_skill_removes_absent_env_var():
 
 def test_cleanup_skill_clears_active_skill_name():
     """active_skill_name is cleared to None after cleanup."""
-    deps = CoDeps(shell=ShellBackend(), config=test_settings())
+    deps = CoDeps(shell=ShellBackend(), config=make_settings())
     deps.runtime.active_skill_name = "my-skill"
     cleanup_skill_run_state({}, deps)
     assert deps.runtime.active_skill_name is None

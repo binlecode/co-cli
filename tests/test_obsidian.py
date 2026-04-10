@@ -3,7 +3,7 @@
 import pytest
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
@@ -30,7 +30,7 @@ def test_search_notes(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -71,7 +71,7 @@ def test_search_notes_folder_filter(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -101,7 +101,7 @@ def test_search_notes_tag_filter(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -128,7 +128,7 @@ def test_list_notes_pagination(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -166,7 +166,7 @@ def test_obsidian_list_and_read(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -207,14 +207,14 @@ def test_fts_folder_filter_excludes_siblings(tmp_path):
     (personal / "diary.md").write_text(f"# Diary\n{keyword} in personal note.")
 
     # Broad index — both folders indexed under source='obsidian'
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
             knowledge_store=idx,
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=vault,
         )
     )
@@ -243,14 +243,14 @@ def test_fts_folder_filter_excludes_common_prefix_sibling(tmp_path):
     (vault / "Work" / "standup.md").write_text(f"# Standup\n{keyword} in work note.")
     (vault / "Workbench" / "bench.md").write_text(f"# Bench\n{keyword} in workbench note.")
 
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
             knowledge_store=idx,
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=vault,
         )
     )
@@ -277,14 +277,14 @@ def test_fts_tag_filter_works_with_index(tmp_path):
         "---\ntags: [archived]\n---\n# Archived\nProject beta xylofts-tag-test was cancelled."
     )
 
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     idx.sync_dir("obsidian", vault)
 
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
             knowledge_store=idx,
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=vault,
         )
     )
@@ -309,7 +309,7 @@ def test_read_note_missing_file_raises_model_retry(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )
@@ -322,7 +322,7 @@ def test_read_note_path_traversal_blocked(tmp_path):
     ctx = _ctx(
         CoDeps(
             shell=ShellBackend(),
-            config=test_settings(),
+            config=make_settings(),
             obsidian_vault_path=tmp_path,
         )
     )

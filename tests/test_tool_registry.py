@@ -84,9 +84,9 @@ def test_category_awareness_prompt_includes_integration_categories() -> None:
 
 def test_category_awareness_prompt_excludes_absent_integrations() -> None:
     """Category awareness prompt omits integrations when their config is absent."""
-    from tests._settings import test_settings
+    from tests._settings import make_settings
 
-    config_no_integrations = test_settings(
+    config_no_integrations = make_settings(
         obsidian_vault_path=None,
         google_credentials_path=None,
     )

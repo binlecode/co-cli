@@ -4,7 +4,7 @@ Tests call check_runtime() with real CoDeps to exercise the binary probe
 path for MCP server checks.
 """
 
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.bootstrap.check import check_runtime
 from co_cli.config._core import MCPServerConfig
@@ -16,7 +16,7 @@ def test_check_runtime_mcp_probe_name_matches_config_key() -> None:
     """check_runtime() stores bare config key in mcp_probes, not 'mcp:<name>'."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(
+        config=make_settings(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),
         session=CoSessionState(),
@@ -30,7 +30,7 @@ def test_check_runtime_binary_probe_passes_when_command_on_path() -> None:
     """Binary on PATH → server reported healthy, no finding."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(
+        config=make_settings(
             mcp_servers={"mysvr": MCPServerConfig(command="ls")},
         ),
     )

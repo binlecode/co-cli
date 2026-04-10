@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.61] - 2026-04-10
+
+### Fixed
+- **Pytest warnings eliminated**: renamed `test_settings` helper to `make_settings` in `tests/_settings.py` — pytest was collecting it as a test function in all 19 importing files, emitting `PytestReturnNotNoneWarning` for each; all callsites updated
+
 ## [0.7.59] - 2026-04-10
 
 ### Removed

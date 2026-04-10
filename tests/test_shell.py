@@ -6,7 +6,7 @@ import os
 import pytest
 from pydantic_ai import ApprovalRequired, ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 from tests._timeouts import SUBPROCESS_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
@@ -28,8 +28,8 @@ def _make_ctx(*, tool_call_approved: bool = True, **config_overrides) -> RunCont
             mapped = key.replace("shell_", "")
             shell_fields[mapped] = config_overrides.pop(key)
     if shell_fields:
-        settings_fields["shell"] = test_settings().shell.model_copy(update=shell_fields)
-    config = test_settings(**settings_fields)
+        settings_fields["shell"] = make_settings().shell.model_copy(update=shell_fields)
+    config = make_settings(**settings_fields)
     deps = CoDeps(
         shell=shell,
         config=config,

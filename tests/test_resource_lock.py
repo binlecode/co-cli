@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
@@ -21,7 +21,7 @@ _AGENT = build_agent(config=settings)
 def _make_ctx(tmp_path: Path) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         workspace_root=tmp_path,
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

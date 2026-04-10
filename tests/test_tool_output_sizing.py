@@ -4,7 +4,7 @@ from pathlib import Path
 
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
@@ -25,7 +25,7 @@ def _make_ctx(tmp_path: Path, tool_name: str = "read_file") -> RunContext[CoDeps
     """Build a RunContext with tool_results_dir pointing at tmp_path."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         tool_results_dir=tmp_path / "tool-results",
     )
     return RunContext(
@@ -52,7 +52,7 @@ def _make_ctx_with_index(
     )
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         tool_results_dir=tmp_path / "tool-results",
         tool_index={tool_name: info},
     )
@@ -91,7 +91,7 @@ def test_tool_output_falls_back_when_tool_not_in_index(tmp_path: Path) -> None:
     """tool_output() falls back to global threshold when tool_name is not in tool_index."""
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
         tool_results_dir=tmp_path / "tool-results",
         tool_index={},
     )

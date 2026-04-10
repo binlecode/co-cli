@@ -6,7 +6,7 @@ import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
@@ -27,8 +27,8 @@ def _make_ctx(
     deps = CoDeps(
         shell=ShellBackend(),
         knowledge_store=knowledge_store,
-        config=test_settings(
-            knowledge=test_settings().knowledge.model_copy(
+        config=make_settings(
+            knowledge=make_settings().knowledge.model_copy(
                 update={"search_backend": knowledge_search_backend}
             )
         ),
@@ -93,7 +93,7 @@ async def test_save_article_dedup_by_url(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_save_article_indexes_into_fts(tmp_path: Path):
     """save_article indexes the article into the FTS knowledge index."""
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     ctx = _make_ctx(tmp_path, knowledge_store=idx, knowledge_search_backend="fts5")
 
     await save_article(

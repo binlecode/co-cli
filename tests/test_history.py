@@ -15,7 +15,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
@@ -56,8 +56,8 @@ def _make_processor_ctx() -> RunContext:
     """
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(
-            llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
         ),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -138,8 +138,8 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
     msgs = _make_messages(10)
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(
-            llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+        config=make_settings(
+            llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
         ),
         model=_LLM_MODEL,
     )
@@ -432,8 +432,8 @@ def _make_gather_ctx(
     session_todos: list[dict] | None = None,
 ) -> RunContext:
     """RunContext for _gather_compaction_context tests."""
-    config = test_settings(
-        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
     )
     session = CoSessionState(session_id="test-gather")
     if session_todos is not None:

@@ -5,7 +5,7 @@ from co_cli.config._core import Settings, load_config
 _BASE: Settings | None = None
 
 
-def test_settings(**overrides) -> Settings:
+def make_settings(**overrides) -> Settings:
     """Return real production settings with optional surgical overrides.
 
     Loads once from load_config() (user + project + env vars, fully validated).

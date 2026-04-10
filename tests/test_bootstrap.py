@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import yaml
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.bootstrap.core import (
     _discover_knowledge_backend,
@@ -29,7 +29,7 @@ def _make_deps(
     library_dir: Path | None = None,
     mcp_servers: dict | None = None,
 ) -> CoDeps:
-    config = test_settings(
+    config = make_settings(
         mcp_servers=mcp_servers if mcp_servers is not None else {},
     )
     runtime = CoRuntimeState(safety_state=SafetyState())
@@ -102,8 +102,8 @@ def test_sync_knowledge_store_indexes_article_only(tmp_path: Path) -> None:
         ),
     )
 
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "search_backend": "fts5",
                 "cross_encoder_reranker_url": None,
@@ -129,8 +129,8 @@ def test_sync_knowledge_store_indexes_article_only(tmp_path: Path) -> None:
 
 def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None:
     """_discover_knowledge_backend returns None when backend is grep — no store needed."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(update={"search_backend": "grep"}),
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(update={"search_backend": "grep"}),
     )
     degradations: dict[str, str] = {}
     store = _discover_knowledge_backend(config, TerminalFrontend(), degradations)
@@ -141,8 +141,8 @@ def test_discover_knowledge_backend_returns_none_on_grep(tmp_path: Path) -> None
 
 def test_discover_knowledge_backend_fts5_no_degradation(tmp_path: Path) -> None:
     """FTS5 configured with embedding disabled → store constructed, no degradation recorded."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "search_backend": "fts5",
                 "embedding_provider": "none",
@@ -179,8 +179,8 @@ def test_discover_knowledge_backend_degrades_hybrid_to_fts5_when_embedder_unavai
         ),
     )
 
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "search_backend": "hybrid",
                 "embedding_provider": "tei",
@@ -223,8 +223,8 @@ def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
         art_id=1,
         body="Finch's bunker contained decades of canned food and a working power grid.",
     )
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "search_backend": "fts5",
                 "cross_encoder_reranker_url": None,
@@ -292,8 +292,8 @@ def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
 
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
     """No reranker configured → config unchanged, no status messages."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": None,
                 "llm_reranker": None,
@@ -309,8 +309,8 @@ def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
 
 def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
     """TEI cross-encoder at a dead port → URL nulled, degradation status emitted."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": "http://127.0.0.1:19999",
                 "llm_reranker": None,
@@ -325,14 +325,14 @@ def test_resolve_reranker_tei_unavailable_nulls_url() -> None:
 
 def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
     """LLM reranker with gemini provider but no API key → check_reranker_llm returns error → reranker nulled."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": None,
                 "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
             }
         ),
-        llm=test_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
+        llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
@@ -342,14 +342,14 @@ def test_resolve_reranker_llm_unavailable_nulls_reranker() -> None:
 
 def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
     """LLM reranker with Ollama provider but unreachable host → reranker nulled (warn != ok)."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": None,
                 "llm_reranker": ModelConfig(provider="ollama-openai", model="reranker-model"),
             }
         ),
-        llm=test_settings().llm.model_copy(
+        llm=make_settings().llm.model_copy(
             update={"provider": "ollama-openai", "host": "http://localhost:1"}
         ),
     )
@@ -361,14 +361,14 @@ def test_resolve_reranker_llm_ollama_unreachable_degrades() -> None:
 
 def test_resolve_reranker_both_unavailable_degrades_independently() -> None:
     """TEI dead + LLM reranker with no API key → both nulled, two separate status messages."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={
                 "cross_encoder_reranker_url": "http://127.0.0.1:19999",
                 "llm_reranker": ModelConfig(provider="gemini", model="gemini-2.0-flash"),
             }
         ),
-        llm=test_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
+        llm=make_settings().llm.model_copy(update={"provider": "gemini", "api_key": None}),
     )
     statuses: list[str] = []
     _resolve_reranker(config, statuses)
@@ -423,7 +423,7 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
     readonly_dir.mkdir()
     os.chmod(readonly_dir, 0o555)
     try:
-        config = test_settings(mcp_servers={})
+        config = make_settings(mcp_servers={})
         runtime = CoRuntimeState(safety_state=SafetyState())
         deps = CoDeps(
             shell=ShellBackend(),

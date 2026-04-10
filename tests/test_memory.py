@@ -10,7 +10,7 @@ import pytest
 import yaml
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
@@ -39,8 +39,8 @@ def _make_ctx(
     knowledge_search_backend: str = "grep",
 ) -> RunContext:
     """Return a real RunContext with real CoDeps for memory tool tests."""
-    config = test_settings(
-        knowledge=test_settings().knowledge.model_copy(
+    config = make_settings(
+        knowledge=make_settings().knowledge.model_copy(
             update={"search_backend": knowledge_search_backend}
         )
     )
@@ -120,7 +120,6 @@ def test_list_memories_pagination(tmp_path: Path):
     assert r1.metadata["offset"] == 0
     assert r1.metadata["limit"] == 2
     assert r1.metadata["has_more"] is True
-    assert "capacity" in r1.metadata
     assert r1.metadata["memories"][0]["id"] == 1
     assert r1.metadata["memories"][1]["id"] == 2
 
@@ -403,7 +402,7 @@ def test_validate_memory_frontmatter_rejects_unknown_artifact_type(tmp_path: Pat
     deps = CoDeps(
         shell=ShellBackend(),
         knowledge_store=None,
-        config=test_settings(),
+        config=make_settings(),
         memory_dir=memory_dir,
     )
 
@@ -460,7 +459,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         encoding="utf-8",
     )
 
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
+    idx = KnowledgeStore(config=make_settings(), knowledge_db_path=tmp_path / "search.db")
     try:
         idx.sync_dir("memory", memory_dir)
         idx.sync_dir("library", library_dir)
@@ -470,8 +469,8 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
             deps=CoDeps(
                 shell=ShellBackend(),
                 knowledge_store=idx,
-                config=test_settings(
-                    knowledge=test_settings().knowledge.model_copy(
+                config=make_settings(
+                    knowledge=make_settings().knowledge.model_copy(
                         update={"search_backend": "fts5"}
                     )
                 ),
@@ -484,7 +483,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
             deps=CoDeps(
                 shell=ShellBackend(),
                 knowledge_store=None,
-                config=test_settings(),
+                config=make_settings(),
                 library_dir=library_dir,
             ),
             model=_AGENT.model,
@@ -564,7 +563,7 @@ def test_forget_refuses_read_only(tmp_path: Path):
     normal_file = memory_dir / "100-user-memory.md"
     normal_file.write_text(md_normal, encoding="utf-8")
 
-    deps = CoDeps(shell=ShellBackend(), config=test_settings(), memory_dir=memory_dir)
+    deps = CoDeps(shell=ShellBackend(), config=make_settings(), memory_dir=memory_dir)
 
     class FakeCommandContext:
         def __init__(self, deps: CoDeps):

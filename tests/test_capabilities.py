@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 from tests._timeouts import HTTP_HEALTH_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
@@ -22,7 +22,7 @@ _AGENT = build_agent(config=settings)
 async def test_new_runtime_fields_present() -> None:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
@@ -38,7 +38,7 @@ async def test_capabilities_emits_doctor_progress_updates() -> None:
     statuses: list[str] = []
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(),
+        config=make_settings(),
     )
     deps.runtime.tool_progress_callback = statuses.append
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
@@ -64,7 +64,7 @@ async def test_capabilities_progress_routes_to_frontend_via_curried_lambda() -> 
     """
     frontend = TerminalFrontend()
     tool_id = "cap1"
-    deps = CoDeps(shell=ShellBackend(), config=test_settings(mcp_servers={}))
+    deps = CoDeps(shell=ShellBackend(), config=make_settings(mcp_servers={}))
     deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: frontend.on_tool_progress(
         _tid, msg
     )

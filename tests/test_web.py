@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.usage import RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 from tests._timeouts import HTTP_EXTERNAL_TIMEOUT_SECS
 
 from co_cli.agent import build_agent
@@ -20,7 +20,7 @@ _AGENT = build_agent(config=settings)
 def _make_ctx(brave_search_api_key: str | None = None) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(brave_search_api_key=brave_search_api_key),
+        config=make_settings(brave_search_api_key=brave_search_api_key),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -33,9 +33,9 @@ def _make_policy_ctx(
 ) -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
-        config=test_settings(
+        config=make_settings(
             brave_search_api_key=brave_search_api_key,
-            web=test_settings().web.model_copy(
+            web=make_settings().web.model_copy(
                 update={
                     "fetch_allowed_domains": allowed_domains or [],
                     "fetch_blocked_domains": blocked_domains or [],

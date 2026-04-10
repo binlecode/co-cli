@@ -9,7 +9,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.usage import RequestUsage, RunUsage
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import Settings, settings
@@ -75,7 +75,7 @@ async def test_compaction_triggers_on_real_input_tokens():
     # 90_000 > int(100_000 * 0.85) = 85_000 → must compact
     msgs = _make_messages(10, last_input_tokens=90_000)
     # Use a non-Ollama provider so budget = _DEFAULT_TOKEN_BUDGET (100k), not llm_num_ctx
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "anthropic"}))
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "anthropic"}))
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs)
     assert len(result) < len(msgs)
@@ -98,8 +98,8 @@ async def test_compaction_fallback_when_no_usage_data():
     assert latest_response_input_tokens(msgs_no_usage) == 0
 
     # Char-estimate fallback: ~135 chars / 4 ≈ 33 tokens > threshold 25
-    config = test_settings(
-        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
     )
     ctx = _make_ctx(config)
     result = await summarize_history_window(ctx, msgs_no_usage)
@@ -119,8 +119,8 @@ async def test_compaction_triggers_on_ollama_budget():
     Compaction must trigger against llm_num_ctx, not _DEFAULT_TOKEN_BUDGET.
     """
     msgs = _make_messages(10, last_input_tokens=7_200)
-    config = test_settings(
-        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192})
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 8192})
     )
     assert config.llm.uses_ollama_openai()
     ctx = _make_ctx(config)
@@ -135,7 +135,7 @@ async def test_compaction_triggers_on_ollama_budget():
 
 def test_budget_gemini_model_spec():
     """Gemini model with context_window=1M → budget = 1M - 16384 output reserve."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
     budget = resolve_compaction_budget(config, 1_048_576)
     # max(1_048_576 - 16384, 1_048_576 // 2) = 1_032_192
     assert budget == 1_048_576 - 16_384
@@ -143,8 +143,8 @@ def test_budget_gemini_model_spec():
 
 def test_budget_ollama_llm_num_ctx_overrides_spec():
     """Ollama: llm_num_ctx overrides context_window from spec (Modelfile is truth)."""
-    config = test_settings(
-        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
     )
     budget = resolve_compaction_budget(config, 262_144)
     # llm_num_ctx (32768) overrides spec (262144), so effective ctx_window = 32768
@@ -154,8 +154,8 @@ def test_budget_ollama_llm_num_ctx_overrides_spec():
 
 def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
     """Ollama with no context_window in quirks → falls back to llm_num_ctx."""
-    config = test_settings(
-        llm=test_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
+    config = make_settings(
+        llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 32_768})
     )
     budget = resolve_compaction_budget(config, None)
     assert budget == 32_768
@@ -163,14 +163,14 @@ def test_budget_ollama_no_spec_falls_back_to_llm_num_ctx():
 
 def test_budget_no_context_window_returns_default():
     """No context_window (sub-agent/test path) → _DEFAULT_TOKEN_BUDGET."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
     budget = resolve_compaction_budget(config, None)
     assert budget == _DEFAULT_TOKEN_BUDGET
 
 
 def test_budget_floor_prevents_negative():
     """Small context_window → floor at context_window//2."""
-    config = test_settings(llm=test_settings().llm.model_copy(update={"provider": "gemini"}))
+    config = make_settings(llm=make_settings().llm.model_copy(update={"provider": "gemini"}))
     # context_window=20000: max(20000 - 16384, 10000) = max(3616, 10000) = 10000
     budget = resolve_compaction_budget(config, 20_000)
     assert budget == 10_000

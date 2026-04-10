@@ -1,6 +1,6 @@
 """Functional tests for agent factory — tool registration, approval wiring, and visibility policy."""
 
-from tests._settings import test_settings
+from tests._settings import make_settings
 
 from co_cli._model_factory import build_model
 from co_cli.agent import build_agent, build_tool_registry
@@ -70,7 +70,7 @@ def test_tool_registry_is_shared_across_agent_types():
 def test_build_agent_excludes_domain_tools_when_config_absent():
     """Domain tools absent from tool_index when config paths are not set."""
     result = build_tool_registry(
-        test_settings(obsidian_vault_path=None, google_credentials_path=None)
+        make_settings(obsidian_vault_path=None, google_credentials_path=None)
     )
     assert "list_notes" not in result.tool_index
     assert "list_gmail_emails" not in result.tool_index
