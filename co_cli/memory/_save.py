@@ -108,14 +108,12 @@ def overwrite_memory(
     new_content: str,
     new_tags: list[str],
     auto_save_tags: list[str],
-    knowledge_store: Any | None = None,
     new_type: str | None = None,
     new_description: str | None = None,
 ) -> ToolReturn | None:
     """Overwrite an existing memory file with new content (full body replace).
 
-    Preserves created timestamp, merges tags. Re-indexes in FTS when knowledge_store
-    is available.
+    Preserves created timestamp, merges tags.
 
     Args:
         memory_dir: Path to the memory directory.
@@ -123,14 +121,12 @@ def overwrite_memory(
         new_content: New body content (replaces old body entirely).
         new_tags: Tags from the candidate memory.
         auto_save_tags: Auto-save tag list from config.
-        knowledge_store: Optional KnowledgeStore for FTS re-indexing.
         new_type: Optional type value to write to frontmatter.
         new_description: Optional description value to write to frontmatter.
 
     Returns:
         ToolReturn with consolidated action metadata.
     """
-    from co_cli.tools.memory import slugify
 
     # Sanitize slug: reject path separators to prevent directory traversal
     if "/" in target_slug or "\\" in target_slug or ".." in target_slug:
@@ -165,28 +161,6 @@ def overwrite_memory(
     target_path.write_text(md_content, encoding="utf-8")
 
     logger.info(f"Overwrite memory {existing_fm.get('id', target_slug)} (upsert UPDATE)")
-
-    # FTS re-index
-    if knowledge_store is not None:
-        try:
-            import hashlib as _hashlib
-
-            knowledge_store.index(
-                source="memory",
-                kind="memory",
-                path=str(target_path),
-                title=slugify(new_content[:50]),
-                content=new_content.strip(),
-                mtime=target_path.stat().st_mtime,
-                hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                tags=" ".join(merged_tags),
-                created=existing_fm.get("created"),
-                updated=existing_fm.get("updated"),
-                type=existing_fm.get("type"),
-                description=existing_fm.get("description"),
-            )
-        except Exception as e:
-            logger.warning(f"Failed to reindex memory {target_slug}: {e}")
 
     return tool_output_raw(
         f"✓ Updated memory {existing_fm.get('id', target_slug)} (upsert)\nLocation: {target_path}",

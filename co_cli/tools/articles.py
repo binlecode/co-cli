@@ -187,13 +187,12 @@ async def search_knowledge(
 
     Source filter shortcuts:
     - source="library" → local articles only
-    - source="memory" → memories only (explicit override, not the default)
     - source="obsidian" → Obsidian vault notes only
 
     Default (source=None) searches library, obsidian, and drive — memories excluded.
     Use search_memories() for dedicated memory search.
 
-    Falls back to grep on knowledge files (articles by default) when FTS unavailable.
+    Falls back to grep on knowledge files (articles) when FTS unavailable.
     Obsidian and Drive require FTS — results are article-only in fallback mode.
 
     Returns a dict with:
@@ -204,7 +203,7 @@ async def search_knowledge(
     Args:
         query: Free-text search query.
         kind: Filter by kind — "memory" or "article". None = all.
-        source: Filter by source — "memory", "obsidian", or "drive". None = all.
+        source: Filter by source — "library", "obsidian", or "drive". None = all.
         limit: Max results to return (default 10).
         tags: Tag filter list. None = no filter.
         tag_match_mode: 'any' (OR) or 'all' (AND — doc must have every tag).
@@ -212,8 +211,8 @@ async def search_knowledge(
         created_before: ISO8601 date string; only return items created on or before this date.
     """
     if ctx.deps.knowledge_store is None:
-        # Fallback: grep knowledge files (memories + articles); obsidian/drive require FTS
-        if source not in (None, "memory", "library"):
+        # Fallback: grep knowledge files (articles); obsidian/drive require FTS
+        if source not in (None, "library"):
             return tool_output(
                 f"No results for '{query}' (source={source!r} requires FTS)",
                 ctx=ctx,
@@ -221,17 +220,8 @@ async def search_knowledge(
                 results=[],
             )
         otel_trace.get_current_span().set_attribute("rag.backend", "grep")
-        # Derive effective_kind so the source="memory" escape hatch works in grep mode.
-        # Default (source=None or source="library"): library only (articles).
-        if kind is not None:
-            effective_kind = kind
-        elif source == "memory":
-            effective_kind = "memory"
-        else:
-            effective_kind = "article"
-        # Grep fallback: route to correct directory by kind
-        grep_dir = ctx.deps.memory_dir if effective_kind == "memory" else ctx.deps.library_dir
-        memories = load_memories(grep_dir, kind=effective_kind)
+        effective_kind = kind if kind is not None else "article"
+        memories = load_memories(ctx.deps.library_dir, kind=effective_kind)
         if tags:
             if tag_match_mode == "all":
                 memories = [m for m in memories if all(t in m.tags for t in tags)]
@@ -272,8 +262,14 @@ async def search_knowledge(
     otel_trace.get_current_span().set_attribute(
         "rag.backend", ctx.deps.config.knowledge.search_backend
     )
-    # Default scope excludes source="memory" — memories are searched via search_memories.
-    # Explicit source="memory" is kept as an escape hatch for direct memory queries.
+    # Reject source="memory" — use search_memories() for memory search.
+    if source == "memory":
+        return tool_output(
+            "source='memory' is not supported by search_knowledge. Use search_memories() instead.",
+            ctx=ctx,
+            count=0,
+            results=[],
+        )
     fts_source = source if source is not None else ["library", "obsidian", "drive"]
     try:
         results = ctx.deps.knowledge_store.search(

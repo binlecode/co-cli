@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -259,106 +259,13 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
         asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
 
 
-def test_composite_bm25_decay_scoring(tmp_path: Path):
-    """High-relevance older memory outranks low-relevance newer memory via composite scoring.
-
-    Uses a background corpus (10 docs) to ensure positive IDF so BM25 TF differences
-    between M1 (15 occurrences of query term) and M2 (1 occurrence) are meaningful.
-    With only a 1-day age gap, the BM25 advantage of M1 overcomes the small recency
-    edge of M2, demonstrating that composite scoring is BM25-driven, not decay-only.
-    """
-    from co_cli.knowledge._store import KnowledgeStore
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-
-    # Background corpus — no query term; makes IDF positive so TF differences matter
-    for i in range(3, 13):
-        _write_memory(
-            memory_dir,
-            i,
-            f"Background note about software development entry number {i}",
-        )
-
-    # Memory 1: 1 day old, high BM25 — query term repeated 15 times
-    old_time = (datetime.now(UTC) - timedelta(days=1)).isoformat()
-    _write_memory(
-        memory_dir,
-        1,
-        "xylobm25score " * 15 + "development",
-        tags=["preference"],
-        created=old_time,
-    )
-    # Memory 2: created today, low BM25 — query term appears once
-    new_time = datetime.now(UTC).isoformat()
-    _write_memory(
-        memory_dir,
-        2,
-        "User occasionally uses xylobm25score for reference",
-        tags=["context"],
-        created=new_time,
-    )
-
-    idx = KnowledgeStore(
-        config=test_settings(
-            knowledge=test_settings().knowledge.model_copy(update={"search_backend": "fts5"})
-        ),
-        knowledge_db_path=tmp_path / "search.db",
-    )
-    idx.sync_dir("memory", memory_dir)
-
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
-    result = asyncio.run(recall_memory(ctx, "xylobm25score", max_results=5))
-
-    assert result.metadata["count"] >= 2, "Both memories should match the query"
-    # Memory 1 (id=1) must rank first: high BM25 (15 occurrences) outweighs
-    # the small recency advantage of M2 (1-day newer, decay diff ≈ 0.977 vs 1.0)
-    first_result = result.metadata["results"][0]
-    assert first_result["id"] == 1, (
-        f"High-relevance older memory (id=1) should rank first; got id={first_result['id']}"
-    )
-    idx.close()
-
-
-def test_forget_evicts_from_fts(tmp_path: Path):
-    """KnowledgeStore.remove() evicts a deleted memory from FTS results."""
-    from co_cli.knowledge._store import KnowledgeStore
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    # Write a uniquely-worded memory file
-    path = _write_memory(memory_dir, 1, "xyloquartz memory for forget eviction test")
-
-    # Index it
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
-    idx.sync_dir("memory", memory_dir)
-
-    # Verify it's searchable
-    results = idx.search("xyloquartz")
-    assert any(str(path) in r.path for r in results), "Memory should be findable before forget"
-
-    # Simulate /forget: delete the file then remove from index
-    path.unlink()
-    idx.remove("memory", str(path))
-
-    # Must no longer appear
-    results_after = idx.search("xyloquartz")
-    assert not any(str(path) in r.path for r in results_after), (
-        "Memory should be evicted after remove()"
-    )
-
-    idx.close()
-
-
 # ---------------------------------------------------------------------------
 # search_memories — dedicated memory search tool
 # ---------------------------------------------------------------------------
 
 
 def test_search_memories_finds_saved_memories(tmp_path: Path):
-    """search_memories returns saved memories with source='memory'."""
-    from co_cli.knowledge._store import KnowledgeStore
-
+    """search_memories returns saved memories via grep (not FTS)."""
     memory_dir = tmp_path / ".co-cli" / "memory"
 
     _write_memory(
@@ -368,15 +275,11 @@ def test_search_memories_finds_saved_memories(tmp_path: Path):
         memory_dir, 2, "User uses xyloquartz-search-test for all tests", tags=["context"]
     )
 
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
-    idx.sync_dir("memory", memory_dir)
-
-    ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5")
+    ctx = _make_ctx(memory_dir=memory_dir)
 
     result = asyncio.run(search_memories(ctx, "xyloquartz-search-test"))
     assert result.metadata["count"] >= 2
     assert all(r["source"] == "memory" for r in result.metadata["results"])
-    idx.close()
 
 
 def test_search_memories_empty_query_returns_guard(tmp_path: Path):
@@ -562,10 +465,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.sync_dir("memory", memory_dir)
         idx.sync_dir("library", library_dir)
 
-        fts_mem_ctx = _make_ctx(
-            memory_dir=memory_dir, knowledge_store=idx, knowledge_search_backend="fts5"
-        )
-        grep_mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=None)
+        mem_ctx = _make_ctx(memory_dir=memory_dir, knowledge_store=idx)
         fts_know_ctx = RunContext(
             deps=CoDeps(
                 shell=ShellBackend(),
@@ -600,19 +500,15 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
 
         tracer = _orig.get_tracer("test.rag_backend")
         with tracer.start_as_current_span("execute_tool test") as parent_span:
-            # (1) search_memories FTS path
-            asyncio.run(search_memories(fts_mem_ctx, "rag-backend-annotation-fts-test"))
-            assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
-
-            # (2) search_memories grep path
-            asyncio.run(search_memories(grep_mem_ctx, "rag-backend-annotation-fts-test"))
+            # (1) search_memories — always grep (FTS removed for memory)
+            asyncio.run(search_memories(mem_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") == "grep"
 
-            # (3) search_knowledge FTS path
+            # (2) search_knowledge FTS path
             asyncio.run(search_knowledge(fts_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") in ("fts5", "hybrid")
 
-            # (4) search_knowledge grep path
+            # (3) search_knowledge grep path
             asyncio.run(search_knowledge(grep_know_ctx, "rag-backend-annotation-fts-test"))
             assert parent_span.attributes.get("rag.backend") == "grep"
     finally:

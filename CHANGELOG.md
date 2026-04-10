@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.58] - 2026-04-10
+
+### Removed
+- **Memory FTS5 search paths eliminated**: `recall_memory` and `search_memories` now use grep-only recall (`load_memories` + `grep_recall`) as the sole path — the FTS5/BM25 primary branch and its 6-call-site write invariant are gone; stale search results from missed index calls are no longer possible
+- **`search_knowledge(source="memory")` removed**: callers receive a redirect error pointing to `search_memories()`; memory files are not indexed in `chunks_fts`
+- **Bootstrap memory sync removed**: `sync_dir("memory", ...)` no longer runs at startup; only the library dir is synced to FTS
+- **Dead `_store.py` memory-leg code removed**: `_uses_memory_leg`, `_run_memory_fts`, `_vec_docs_search`, and memory-leg branches in `_fts_search`, `_fts_chunks_raw`, `_vec_search`, `_hybrid_merge` all deleted; `chunks_fts` is now the sole active FTS leg
+
 ## [0.7.56] - 2026-04-10
 
 ### Added

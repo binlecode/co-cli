@@ -5,16 +5,18 @@ source can write to. The `source` column distinguishes origin. The `kind`
 column ('memory', 'article') distinguishes knowledge file types.
 
 Source namespace:
-  source='memory'   — kind:memory files (agent memories, lifecycle-managed)
   source='library'  — kind:article files (user-global saved references)
   source='obsidian' — Obsidian vault notes
   source='drive'    — Google Drive docs (indexed on read)
 
+Memory files (kind:memory) use grep-only search — they are not indexed in FTS.
+
 The index is derived and rebuildable — deleting search.db and restarting
 rebuilds cleanly from files.
 
-FTS5 BM25 ranking on docs_fts (memory) and chunks_fts (non-memory sources).
-Hybrid mode adds sqlite-vec vector similarity (docs_vec / chunks_vec) merged via RRF.
+FTS5 BM25 ranking on chunks_fts (library, obsidian, drive). docs_fts table
+retained for schema migration/reset only.
+Hybrid mode adds sqlite-vec vector similarity (chunks_vec) merged via RRF.
 Falls back to FTS5-only if embedding provider is unavailable.
 """
 
@@ -224,15 +226,6 @@ SELECT c.source, c.doc_path AS path,
 """
 
 
-def _uses_memory_leg(source: str | list[str] | None) -> bool:
-    """True when the memory (docs_fts) leg should be queried."""
-    if source is None:
-        return True
-    if isinstance(source, str):
-        return source == "memory"
-    return "memory" in source
-
-
 def _uses_chunks_leg(source: str | list[str] | None) -> bool:
     """True when the non-memory (chunks_fts/chunks_vec) leg should be queried."""
     if source is None:
@@ -284,7 +277,7 @@ class KnowledgeStore:
 
     Usage:
         idx = KnowledgeStore(config=Settings())
-        idx.sync_dir("memory", knowledge_dir)
+        idx.sync_dir("library", library_dir, kind_filter="article")
         results = idx.search("pytest testing")
         idx.close()
     """
@@ -646,8 +639,9 @@ class KnowledgeStore:
 
         Source filter shortcuts:
           source="library"  → library articles only
-          source="memory"   → memories only (explicit override, not the default)
+          source="obsidian" → Obsidian vault notes only
           source=["library", "obsidian", "drive"] → multiple sources via IN-clause
+          source="memory"   → not supported; returns [] (use search_memories() instead)
         """
         if self._build_fts_query(query) is None:
             return []
@@ -691,7 +685,7 @@ class KnowledgeStore:
         limit: int,
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector search with chunk-level RRF. Falls back to FTS5."""
-        fts_mem, fts_chunks = self._fts_chunks_raw(
+        fts_chunks = self._fts_chunks_raw(
             query,
             source=source,
             kind=kind,
@@ -704,7 +698,7 @@ class KnowledgeStore:
         try:
             emb = self._embed_cached(query)
             if emb is not None:
-                vec_mem, vec_chunks = self._vec_search(
+                vec_chunks = self._vec_search(
                     emb,
                     source=source,
                     kind=kind,
@@ -714,14 +708,14 @@ class KnowledgeStore:
                     created_before=created_before,
                     limit=limit * 4,
                 )
-                merged = self._hybrid_merge(fts_mem, fts_chunks, vec_mem, vec_chunks)
+                merged = self._hybrid_merge(fts_chunks, vec_chunks)
                 return self._rerank_results(query, merged, limit)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
 
         # Fallback: collapse chunk-level FTS results to doc-level
         fallback_seen: dict[str, SearchResult] = {}
-        for r in fts_mem + fts_chunks:
+        for r in fts_chunks:
             if r.path not in fallback_seen or r.score > fallback_seen[r.path].score:
                 fallback_seen[r.path] = r
         return sorted(fallback_seen.values(), key=lambda r: r.score, reverse=True)[:limit]
@@ -738,48 +732,26 @@ class KnowledgeStore:
         created_before: str | None,
         limit: int,
     ) -> list[SearchResult]:
-        """BM25 FTS5 search with source routing.
-
-        Memory sources → docs_fts leg.
-        Non-memory sources (library, obsidian, drive) → chunks_fts leg.
-        source=None or mixed → both legs, union by path.
-        """
+        """BM25 FTS5 search via chunks_fts (library, obsidian, drive). Deduplicates to doc level."""
         fts_query = self._build_fts_query(query)
         if fts_query is None:
             return []
 
         tags = list(dict.fromkeys(tags)) if tags else tags
-        fetch_limit = limit * 20 if tags else limit
         # Chunks leg always uses a larger pool: one document produces N chunk rows,
         # so limiting at chunk granularity causes a single long article to crowd out
         # other matching documents before Python-side doc-level dedup can run.
         chunks_fetch_limit = limit * 20
 
-        all_rows: list[tuple[Any, str]] = []
-
-        if _uses_memory_leg(source):
-            all_rows.extend(
-                self._run_memory_fts(
-                    fts_query,
-                    kind=kind,
-                    created_after=created_after,
-                    created_before=created_before,
-                    limit=fetch_limit,
-                )
-            )
-
-        if _uses_chunks_leg(source):
-            nonmem = _nonmemory_sources(source)
-            all_rows.extend(
-                self._run_chunks_fts(
-                    fts_query,
-                    sources=nonmem,
-                    kind=kind,
-                    created_after=created_after,
-                    created_before=created_before,
-                    limit=chunks_fetch_limit,
-                )
-            )
+        nonmem = _nonmemory_sources(source)
+        all_rows: list[tuple[Any, str]] = self._run_chunks_fts(
+            fts_query,
+            sources=nonmem,
+            kind=kind,
+            created_after=created_after,
+            created_before=created_before,
+            limit=chunks_fetch_limit,
+        )
 
         if tags:
             tag_set = set(tags)
@@ -797,12 +769,9 @@ class KnowledgeStore:
                 ]
 
         results: list[SearchResult] = []
-        for row, leg in all_rows:
+        for row, _leg in all_rows:
             rank = row["rank"]
             score = 1.0 / (1.0 + abs(rank))
-            chunk_index = row["chunk_index"] if leg == "chunks" else None
-            start_line = row["start_line"] if leg == "chunks" else None
-            end_line = row["end_line"] if leg == "chunks" else None
             results.append(
                 SearchResult(
                     source=row["source"],
@@ -817,11 +786,11 @@ class KnowledgeStore:
                     updated=row["updated"],
                     provenance=row["provenance"],
                     certainty=row["certainty"],
-                    chunk_index=chunk_index,
-                    start_line=start_line,
-                    end_line=end_line,
-                    type=row["type"] if leg == "memory" else None,
-                    description=row["description"] if leg == "memory" else None,
+                    chunk_index=row["chunk_index"],
+                    start_line=row["start_line"],
+                    end_line=row["end_line"],
+                    type=None,
+                    description=None,
                 )
             )
 
@@ -832,36 +801,6 @@ class KnowledgeStore:
                 seen[r.path] = r
         sorted_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
         return sorted_results[:limit]
-
-    def _run_memory_fts(
-        self,
-        fts_query: str,
-        *,
-        kind: str | None,
-        created_after: str | None,
-        created_before: str | None,
-        limit: int,
-    ) -> list[tuple[Any, str]]:
-        """Execute docs_fts (memory) leg. Returns (row, 'memory') tuples."""
-        sql = _MEMORY_FTS_SQL
-        params: list[Any] = [fts_query]
-        if kind is not None:
-            sql += " AND d.kind = ?"
-            params.append(kind)
-        if created_after is not None:
-            sql += " AND d.created >= ?"
-            params.append(created_after)
-        if created_before is not None:
-            sql += " AND d.created <= ?"
-            params.append(created_before)
-        sql += " ORDER BY rank LIMIT ?"
-        params.append(limit)
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"Memory FTS search error: {e}")
-            return []
-        return [(row, "memory") for row in rows]
 
     def _run_chunks_fts(
         self,
@@ -874,6 +813,9 @@ class KnowledgeStore:
         limit: int,
     ) -> list[tuple[Any, str]]:
         """Execute chunks_fts (non-memory) leg. Returns (row, 'chunks') tuples."""
+        # Empty explicit source list (e.g. from _nonmemory_sources("memory")) → no results.
+        if sources is not None and not sources:
+            return []
         sql = _CHUNKS_FTS_SQL
         params: list[Any] = [fts_query]
         if sources is not None and len(sources) == 1:
@@ -912,46 +854,24 @@ class KnowledgeStore:
         created_after: str | None,
         created_before: str | None,
         limit: int,
-    ) -> tuple[list[SearchResult], list[SearchResult]]:
-        """Return (memory_doc_results, nonmemory_chunk_results) for hybrid RRF.
-
-        Memory leg: doc-level (docs_fts), deduplicated — memory is never chunked.
-        Non-memory leg: chunk-level (chunks_fts), NOT deduplicated to doc level.
-        """
+    ) -> list[SearchResult]:
+        """Return chunk-level FTS results for hybrid RRF (non-memory sources only)."""
         fts_query = self._build_fts_query(query)
         if fts_query is None:
-            return [], []
+            return []
 
         tags = list(dict.fromkeys(tags)) if tags else tags
-        fetch_limit = limit * 20 if tags else limit
         chunks_fetch_limit = limit * 20
 
-        memory_rows: list[tuple[Any, str]] = []
-        chunk_rows: list[tuple[Any, str]] = []
-
-        if _uses_memory_leg(source):
-            memory_rows.extend(
-                self._run_memory_fts(
-                    fts_query,
-                    kind=kind,
-                    created_after=created_after,
-                    created_before=created_before,
-                    limit=fetch_limit,
-                )
-            )
-
-        if _uses_chunks_leg(source):
-            nonmem = _nonmemory_sources(source)
-            chunk_rows.extend(
-                self._run_chunks_fts(
-                    fts_query,
-                    sources=nonmem,
-                    kind=kind,
-                    created_after=created_after,
-                    created_before=created_before,
-                    limit=chunks_fetch_limit,
-                )
-            )
+        nonmem = _nonmemory_sources(source)
+        chunk_rows = self._run_chunks_fts(
+            fts_query,
+            sources=nonmem,
+            kind=kind,
+            created_after=created_after,
+            created_before=created_before,
+            limit=chunks_fetch_limit,
+        )
 
         if tags:
             tag_set = set(tags)
@@ -960,10 +880,9 @@ class KnowledgeStore:
                 if tag_match_mode == "all"
                 else (lambda rl: tag_set & {t for t in (rl[0]["tags"] or "").split() if t})
             )
-            memory_rows = [rl for rl in memory_rows if predicate(rl)]
             chunk_rows = [rl for rl in chunk_rows if predicate(rl)]
 
-        def _build(row: Any, leg: str) -> SearchResult:
+        def _build(row: Any) -> SearchResult:
             rank = row["rank"]
             score = 1.0 / (1.0 + abs(rank))
             return SearchResult(
@@ -979,25 +898,14 @@ class KnowledgeStore:
                 updated=row["updated"],
                 provenance=row["provenance"],
                 certainty=row["certainty"],
-                chunk_index=row["chunk_index"] if leg == "chunks" else None,
-                start_line=row["start_line"] if leg == "chunks" else None,
-                end_line=row["end_line"] if leg == "chunks" else None,
-                type=row["type"] if leg == "memory" else None,
-                description=row["description"] if leg == "memory" else None,
+                chunk_index=row["chunk_index"],
+                start_line=row["start_line"],
+                end_line=row["end_line"],
+                type=None,
+                description=None,
             )
 
-        # Memory: deduplicate to doc level
-        mem_seen: dict[str, SearchResult] = {}
-        for row, leg in memory_rows:
-            r = _build(row, leg)
-            if r.path not in mem_seen or r.score > mem_seen[r.path].score:
-                mem_seen[r.path] = r
-        mem_results = sorted(mem_seen.values(), key=lambda r: r.score, reverse=True)
-
-        # Non-memory: return chunk-level, not collapsed
-        chunk_results = [_build(row, leg) for row, leg in chunk_rows]
-
-        return mem_results, chunk_results
+        return [_build(row) for row, _leg in chunk_rows]
 
     def _vec_search(
         self,
@@ -1010,116 +918,20 @@ class KnowledgeStore:
         created_after: str | None,
         created_before: str | None,
         limit: int,
-    ) -> tuple[list[SearchResult], list[SearchResult]]:
-        """Vector search with source routing.
-
-        Returns (memory_doc_results, nonmemory_chunk_results).
-        Memory leg is doc-level (docs_vec); non-memory leg is chunk-level (chunks_vec).
-        """
-        blob = struct.pack(f"{len(embedding)}f", *embedding)
-
-        mem_results: list[SearchResult] = []
-        if _uses_memory_leg(source):
-            raw = self._vec_docs_search(
-                blob,
-                kind=kind,
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=limit * 4,
-            )
-            seen: dict[str, SearchResult] = {}
-            for r in raw:
-                if r.path not in seen or r.score > seen[r.path].score:
-                    seen[r.path] = r
-            mem_results = sorted(seen.values(), key=lambda r: r.score, reverse=True)
-
-        chunk_results: list[SearchResult] = []
-        if _uses_chunks_leg(source):
-            nonmem = _nonmemory_sources(source)
-            chunk_results = self._vec_chunks_search(
-                blob,
-                sources=nonmem,
-                kind=kind,
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=limit * 4,
-            )
-
-        return mem_results, chunk_results
-
-    def _vec_docs_search(
-        self,
-        blob: bytes,
-        *,
-        kind: str | None,
-        tags: list[str] | None,
-        tag_match_mode: Literal["any", "all"],
-        created_after: str | None,
-        created_before: str | None,
-        limit: int,
     ) -> list[SearchResult]:
-        """Vector search against docs_vec (memory sources only)."""
-        vec_rows = self._conn.execute(
-            f"SELECT rowid, distance FROM {self._docs_vec_table} WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (blob, limit),
-        ).fetchall()
-        if not vec_rows:
-            return []
-
-        rowid_to_distance = {row["rowid"]: row["distance"] for row in vec_rows}
-        rowids = list(rowid_to_distance.keys())
-        placeholders = ",".join("?" * len(rowids))
-        sql = (
-            f"SELECT rowid, source, kind, path, title, tags, category, created, updated, "
-            f"provenance, certainty, type, description FROM docs WHERE rowid IN ({placeholders})"
-            f" AND source = 'memory'"
+        """Vector search against chunks_vec (non-memory sources only)."""
+        blob = struct.pack(f"{len(embedding)}f", *embedding)
+        nonmem = _nonmemory_sources(source)
+        return self._vec_chunks_search(
+            blob,
+            sources=nonmem,
+            kind=kind,
+            tags=tags,
+            tag_match_mode=tag_match_mode,
+            created_after=created_after,
+            created_before=created_before,
+            limit=limit * 4,
         )
-        params: list[Any] = list(rowids)
-        if kind is not None:
-            sql += " AND kind = ?"
-            params.append(kind)
-        if created_after is not None:
-            sql += " AND created >= ?"
-            params.append(created_after)
-        if created_before is not None:
-            sql += " AND created <= ?"
-            params.append(created_before)
-
-        doc_rows = self._conn.execute(sql, params).fetchall()
-        if tags:
-            tag_set = set(tags)
-            if tag_match_mode == "all":
-                doc_rows = [
-                    r for r in doc_rows if tag_set <= {t for t in (r["tags"] or "").split() if t}
-                ]
-            else:
-                doc_rows = [
-                    r for r in doc_rows if tag_set & {t for t in (r["tags"] or "").split() if t}
-                ]
-
-        return [
-            SearchResult(
-                source=row["source"],
-                kind=row["kind"],
-                path=row["path"],
-                title=row["title"],
-                snippet=None,
-                score=max(0.0, 1.0 - rowid_to_distance.get(row["rowid"], 1.0)),
-                tags=row["tags"],
-                category=row["category"],
-                created=row["created"],
-                updated=row["updated"],
-                provenance=row["provenance"],
-                certainty=row["certainty"],
-                type=row["type"],
-                description=row["description"],
-            )
-            for row in doc_rows
-        ]
 
     def _vec_chunks_search(
         self,
@@ -1223,38 +1035,17 @@ class KnowledgeStore:
 
     def _hybrid_merge(
         self,
-        fts_mem: list[SearchResult],
         fts_chunks: list[SearchResult],
-        vec_mem: list[SearchResult],
         vec_chunks: list[SearchResult],
     ) -> list[SearchResult]:
         """RRF on chunk-level lists; collapse to doc-level after fusion.
 
-        Memory results (chunk_index=None) keyed by path.
         Non-memory results (chunk_index=int) keyed by (path, chunk_index).
         After RRF, doc score = sum of its chunks' RRF scores; winning chunk
         (highest per-key score) carries its snippet/chunk_index/start_line/end_line.
         k=60: Cormack 2009 standard.
         """
         k = 60
-
-        # --- Memory leg: RRF keyed on path ---
-        mem_rrf: dict[str, float] = {}
-        mem_fts_by_path: dict[str, SearchResult] = {}
-        mem_vec_by_path: dict[str, SearchResult] = {}
-
-        for i, r in enumerate(fts_mem):
-            mem_rrf[r.path] = mem_rrf.get(r.path, 0.0) + 1.0 / (k + i + 1)
-            mem_fts_by_path[r.path] = r
-        for j, r in enumerate(vec_mem):
-            mem_rrf[r.path] = mem_rrf.get(r.path, 0.0) + 1.0 / (k + j + 1)
-            mem_vec_by_path[r.path] = r
-
-        mem_merged: list[SearchResult] = []
-        for path, score in mem_rrf.items():
-            base = mem_fts_by_path.get(path) or mem_vec_by_path[path]
-            snippet = mem_fts_by_path[path].snippet if path in mem_fts_by_path else None
-            mem_merged.append(dataclasses.replace(base, score=score, snippet=snippet))
 
         # --- Non-memory leg: RRF keyed on (path, chunk_index) ---
         ChunkKey = tuple  # (path, chunk_index)
@@ -1293,9 +1084,8 @@ class KnowledgeStore:
             )
             chunk_merged.append(dataclasses.replace(base, score=total_score, snippet=snippet))
 
-        merged = mem_merged + chunk_merged
-        merged.sort(key=lambda r: r.score, reverse=True)
-        return merged
+        chunk_merged.sort(key=lambda r: r.score, reverse=True)
+        return chunk_merged
 
     def _embed_cached(self, text: str) -> list[float] | None:
         """Return embedding for text, using cache. Returns None on provider failure."""

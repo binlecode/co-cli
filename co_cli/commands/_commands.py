@@ -436,8 +436,6 @@ async def _cmd_forget(ctx: CommandContext, args: str) -> None:
         pass
 
     file_to_delete.unlink()
-    if ctx.deps.knowledge_store is not None:
-        ctx.deps.knowledge_store.remove("memory", str(file_to_delete))
     console.print(f"[success]✓ Deleted memory {arg}: {file_to_delete.name}[/success]")
     return None
 

@@ -52,7 +52,6 @@ flowchart TD
     ResumeModel --> Finalize
     Finalize --> Sessions
     Finalize --> Memories
-    Memories --> Index
     Library --> Index
 ```
 
@@ -177,19 +176,21 @@ Persistent knowledge is flat Markdown files with YAML frontmatter.
 
 ```text
 persist_memory()
-  -> acquire resource lock on memory_dir path
   -> upsert check (when resolved model available and title not preset):
      -> build manifest of existing memories (100 most recent, one line each, format: `[type] slug (ts): description`)
      -> _memory_save_agent decides SAVE_NEW or UPDATE(slug)
-     -> UPDATE: overwrite_memory() replaces body, merges tags, refreshes frontmatter, reindexes
-  -> SAVE_NEW: write new markdown file + index in KnowledgeStore
-  -> release lock
+     -> UPDATE: acquire resource lock on target file path
+                overwrite_memory() replaces body, merges tags, refreshes frontmatter
+                release lock
+  -> SAVE_NEW: acquire resource lock on new file path
+               write new markdown file
+               release lock
   -> enforce_retention() if memory_max_count exceeded (cut oldest non-protected)
 ```
 
 The memory save agent (`_save.py`) is a singleton `Agent[None, SaveResult]` following the same pattern as `_extraction_agent` and `_summarizer_agent`. It receives the candidate content + manifest and returns a structured decision. Zero context debt on the main agent. Falls back to SAVE_NEW on timeout or error.
 
-The resource lock (`memory:persist`) serialises concurrent callers (explicit save + auto-signal). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
+Per-file resource locks (keyed by absolute file path) serialise concurrent callers (explicit save + auto-signal). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
 
 Retention applies to `kind="memory"` only; articles are not part of the memory cap.
 
@@ -205,13 +206,12 @@ Retention applies to `kind="memory"` only; articles are not part of the memory c
 
 ```mermaid
 flowchart LR
-    Memories["memory_dir/*.md"] --> SyncMem["sync_dir('memory')"]
+    Memories["memory_dir/*.md"] --> MemGrep["load_memories + grep_recall"]
     Library["library_dir/*.md"] --> SyncLib["sync_dir('library')"]
     Obsidian["obsidian vault"] --> SyncObs["sync_dir('obsidian') on demand"]
     Drive["read_drive_file()"] --> CacheDrive["index + index_chunks on read"]
 
-    SyncMem --> Docs["docs + docs_fts"]
-    SyncLib --> Docs
+    SyncLib --> Docs["docs + docs_fts"]
     SyncObs --> Docs
     CacheDrive --> Docs
 
@@ -219,31 +219,32 @@ flowchart LR
     SyncObs --> Chunks
     CacheDrive --> Chunks
 
+    MemGrep --> MemTools["recall_memory / search_memories"]
     Docs --> Search["KnowledgeStore.search"]
     Chunks --> Search
-    Search --> Tools["search_memories / search_knowledge / search_articles"]
+    Search --> ArtTools["search_knowledge / search_articles"]
 ```
 
 | Structure | Role |
 | --- | --- |
-| `docs` + `docs_fts` | document-level records; memory retrieval uses this leg |
-| `chunks` + `chunks_fts` | chunk-level records for non-memory sources |
+| `docs` + `docs_fts` | document-level records; retained for schema migration/reset (not actively queried for memories) |
+| `chunks` + `chunks_fts` | chunk-level records for library, obsidian, and drive sources |
 | `embedding_cache` | cached embeddings keyed by provider, model, content hash |
 | `docs_vec_{dims}` / `chunks_vec_{dims}` | hybrid-mode sqlite-vec tables |
 
-Memory is never chunked. Bootstrap syncs memory and library dirs; Obsidian syncs lazily inside `search_knowledge()`; Drive files index after fetch.
+Memory is never chunked and is not indexed in FTS — memories use grep-only recall. Bootstrap syncs only the library dir; Obsidian syncs lazily inside `search_knowledge()`; Drive files index after fetch.
 
 | Entry point | Default scope | Notes |
 | --- | --- | --- |
-| `recall_memory()` | memory only | one-hop `related` expansion, composite relevance/decay scoring, excludes `session_summary` |
-| `search_memories()` | memory only | ranked search |
+| `recall_memory()` | memory only | grep-only; one-hop `related` expansion, decay scoring, excludes `session_summary` |
+| `search_memories()` | memory only | grep-only keyword search |
 | `search_articles()` | library articles only | summary-level index |
-| `search_knowledge()` | `["library", "obsidian", "drive"]` | `source="memory"` is explicit override |
+| `search_knowledge()` | `["library", "obsidian", "drive"]` | `source="memory"` rejected with redirect to `search_memories()` |
 
 | Backend | Behavior |
 | --- | --- |
 | `grep` | file-based fallback, no `KnowledgeStore` |
-| `fts5` | BM25 over `docs_fts` and `chunks_fts` |
+| `fts5` | BM25 over `chunks_fts` (library, obsidian, drive) |
 | `hybrid` | FTS + vector, RRF merge, optional TEI or LLM reranking |
 
 ### 2.6 Delegation & Background Tasks

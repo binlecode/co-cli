@@ -4,7 +4,7 @@
 
 ## 1. What & How
 
-Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time with per-tool `defer_loading` derived from `VisibilityPolicyEnum`. Each tool carries a `VisibilityPolicyEnum` enum (`ALWAYS` or `DEFERRED`) and a `ToolSourceEnum` enum (`NATIVE` or `MCP`). Always-visible tools (15) are visible on turn one; deferred tools become callable only after the SDK's built-in `search_tools` discovers them. MCP tools are wrapped with `DeferredLoadingToolset` and normalized into `tool_index` with `visibility=VisibilityPolicyEnum.DEFERRED` by default. All toolsets (native + MCP) are combined under a single `_approval_resume_filter` so approval-resume narrowing applies uniformly.
+Native tools take `RunContext[CoDeps]` as their first argument and return `ToolReturn` (from `pydantic_ai.messages`) via `tool_output()`. Registration is eager and config-gated: all eligible tools are added to a `FunctionToolset` at agent construction time with per-tool `defer_loading` derived from `VisibilityPolicyEnum`. Each tool carries a `VisibilityPolicyEnum` enum (`ALWAYS` or `DEFERRED`) and a `ToolSourceEnum` enum (`NATIVE` or `MCP`). Always-visible tools (14) are visible on turn one; deferred tools become callable only after the SDK's built-in `search_tools` discovers them. MCP tools are wrapped with `DeferredLoadingToolset` and normalized into `tool_index` with `visibility=VisibilityPolicyEnum.DEFERRED` by default. All toolsets (native + MCP) are combined under a single `_approval_resume_filter` so approval-resume narrowing applies uniformly.
 
 ```
 tools/
@@ -49,7 +49,7 @@ create_deps()
   └─ discover_mcp_tools() — walks .wrapped chain to MCPServer → tool_index.update(mcp_index)
 ```
 
-**Surface split:** 15 always-visible (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced at category level via `build_category_awareness_prompt` (~100 tokens); schemas become callable after the SDK's built-in `search_tools` discovers them.
+**Surface split:** 14 always-visible (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced at category level via `build_category_awareness_prompt` (~100 tokens); schemas become callable after the SDK's built-in `search_tools` discovers them.
 
 **Runtime toolset wrapper chain** — each layer serves one purpose:
 
@@ -271,7 +271,7 @@ Conditional tools excluded when gate is absent.
 | `list_calendar_events` | deferred | auto | `google_credentials_path` |
 | `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 32 tools (14 always-visible, 18 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
+**Unconditional pool (no integration gates):** 28 tools (14 always-visible, 14 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
 **Full pool (all gates active):** 38 tools (14 always-visible, 24 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
@@ -294,7 +294,7 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses FTS5/hybrid when `knowledge_store` is available, grep fallback otherwise. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`.
+YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses grep-only recall (`load_memories` + `grep_recall`) — memories are not indexed in FTS. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|

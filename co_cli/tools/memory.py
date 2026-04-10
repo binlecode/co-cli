@@ -4,15 +4,14 @@ This module provides tools for saving, recalling, and listing memories in the
 internal knowledge system. Memories are stored as markdown files with YAML
 frontmatter in .co-cli/memory/ (project-local).
 
-Retrieval uses FTS5 search when knowledge_search_backend is 'fts5' or 'hybrid'
-and knowledge_store is set in deps. Falls back to grep-based search otherwise.
+Retrieval uses grep-based search across all memory files. Results are sorted by
+recency. FTS5/BM25 is not used for memories — only for articles and external sources.
 """
 
 import logging
 import math
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Literal
 
 # Matches line-number prefixes injected by the Read tool (e.g. "1→ " or "Line 1: ")
@@ -29,7 +28,6 @@ from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import (
     ArtifactTypeEnum,
     parse_frontmatter,
-    validate_memory_frontmatter,
 )
 from co_cli.memory.recall import (
     MemoryEntry,
@@ -97,8 +95,6 @@ def grep_recall(
     """Case-insensitive substring search across memory content and tags.
 
     Sorts by recency (updated or created, newest first).
-    Temporal decay multiplier is not applied here — grep backend already
-    sorts by recency. Decay scoring is applied in the FTS5 path only.
     """
     query_lower = query.lower()
     matches = [
@@ -232,106 +228,18 @@ async def recall_memory(
     """
     memory_dir = ctx.deps.memory_dir
 
-    # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if (
-        ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
-        and ctx.deps.knowledge_store is not None
-    ):
-        try:
-            fts_results = ctx.deps.knowledge_store.search(
-                query,
-                source="memory",
-                kind="memory",
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=max_results * 4,
-            )
-            if not fts_results:
-                return tool_output(
-                    f"No memories found matching '{query}'",
-                    ctx=ctx,
-                    count=0,
-                    results=[],
-                )
-            # Load only the FTS-pointed files — O(k) not O(N)
-            path_to_bm25: dict[str, float] = {r.path: r.score for r in fts_results}
-            raw_matches: list[MemoryEntry] = []
-            for r in fts_results:
-                p = Path(r.path)
-                if not p.exists():
-                    continue
-                try:
-                    raw = p.read_text(encoding="utf-8")
-                    fm, body = parse_frontmatter(raw)
-                    validate_memory_frontmatter(fm)
-                    raw_matches.append(
-                        MemoryEntry(
-                            id=fm["id"],
-                            path=p,
-                            content=body.strip(),
-                            tags=fm.get("tags", []),
-                            created=fm["created"],
-                            updated=fm.get("updated"),
-                            decay_protected=fm.get("decay_protected", False),
-                            related=fm.get("related"),
-                            kind=fm.get("kind", "memory"),
-                            artifact_type=fm.get("artifact_type"),
-                            always_on=fm.get("always_on", False),
-                            description=fm.get("description"),
-                            type=fm.get("type"),
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to load FTS match {r.path}: {e}")
-            # Exclude session-summary artifacts from default recall
-            raw_matches = [
-                m for m in raw_matches if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY
-            ]
-            # Composite relevance + decay scoring — preserves lexical signal alongside recency.
-            # r.score uses 1/(1+abs(rank)) convention (lower = stronger match); reinvert
-            # so higher relevance = better match before combining with decay.
-            half_life = ctx.deps.config.memory.recall_half_life_days
-            scored: list[tuple[float, MemoryEntry]] = []
-            for entry in raw_matches:
-                relevance = 1.0 - path_to_bm25.get(str(entry.path), 0.5)
-                if entry.decay_protected:
-                    decay = 1.0
-                else:
-                    decay = _decay_multiplier(entry.created, half_life)
-                composite = 0.6 * relevance + 0.4 * decay
-                scored.append((composite, entry))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            matches = [e for _, e in scored][:max_results]
-        except Exception as e:
-            logger.warning(f"FTS recall failed, falling back to grep: {e}")
-            # Fall through to grep path
-            memories = load_memories(memory_dir)
-            if tags:
-                if tag_match_mode == "all":
-                    memories = [m for m in memories if all(t in m.tags for t in tags)]
-                else:
-                    memories = [m for m in memories if any(t in m.tags for t in tags)]
-            if created_after:
-                memories = [m for m in memories if m.created and m.created >= created_after]
-            if created_before:
-                memories = [m for m in memories if m.created and m.created <= created_before]
-            memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
-            matches = grep_recall(memories, query, max_results)
-    else:
-        memories = load_memories(memory_dir)
-        if tags:
-            if tag_match_mode == "all":
-                memories = [m for m in memories if all(t in m.tags for t in tags)]
-            else:
-                memories = [m for m in memories if any(t in m.tags for t in tags)]
-        if created_after:
-            memories = [m for m in memories if m.created and m.created >= created_after]
-        if created_before:
-            memories = [m for m in memories if m.created and m.created <= created_before]
-        memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
-        matches = grep_recall(memories, query, max_results)
+    memories = load_memories(memory_dir)
+    if tags:
+        if tag_match_mode == "all":
+            memories = [m for m in memories if all(t in m.tags for t in tags)]
+        else:
+            memories = [m for m in memories if any(t in m.tags for t in tags)]
+    if created_after:
+        memories = [m for m in memories if m.created and m.created >= created_after]
+    if created_before:
+        memories = [m for m in memories if m.created and m.created <= created_before]
+    memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
+    matches = grep_recall(memories, query, max_results)
 
     if not matches:
         return tool_output(
@@ -424,8 +332,8 @@ async def search_memories(
     created_after: str | None = None,
     created_before: str | None = None,
 ) -> ToolReturn:
-    """Dedicated semantic search over saved memories. Use this to look up
-    preferences, decisions, corrections, and context facts saved across sessions.
+    """Keyword search over saved memories. Use this to look up preferences,
+    decisions, corrections, and context facts saved across sessions.
 
     For knowledge articles and external sources, use search_knowledge instead.
 
@@ -449,79 +357,7 @@ async def search_memories(
 
     memory_dir = ctx.deps.memory_dir
 
-    # FTS path — active when backend is 'fts5' or 'hybrid' and index is available
-    if (
-        ctx.deps.config.knowledge.search_backend in ("fts5", "hybrid")
-        and ctx.deps.knowledge_store is not None
-    ):
-        try:
-            results = ctx.deps.knowledge_store.search(
-                query,
-                source="memory",
-                kind="memory",
-                tags=tags,
-                tag_match_mode=tag_match_mode,
-                created_after=created_after,
-                created_before=created_before,
-                limit=limit,
-            )
-            otel_trace.get_current_span().set_attribute(
-                "rag.backend", ctx.deps.config.knowledge.search_backend
-            )
-            if not results:
-                return tool_output(
-                    f"No memories found matching '{query}'", ctx=ctx, count=0, results=[]
-                )
-
-            # Exclude session-summary artifacts by reading each hit's frontmatter
-            filtered = []
-            for r in results:
-                if r.path:
-                    try:
-                        fm, _ = parse_frontmatter(Path(r.path).read_text(encoding="utf-8"))
-                        if fm.get("artifact_type") == ArtifactTypeEnum.SESSION_SUMMARY:
-                            continue
-                    except Exception:
-                        pass
-                filtered.append(r)
-            results = filtered
-            if not results:
-                return tool_output(
-                    f"No memories found matching '{query}'", ctx=ctx, count=0, results=[]
-                )
-
-            lines = [
-                f"Found {len(results)} memor{'y' if len(results) == 1 else 'ies'} matching '{query}':\n"
-            ]
-            result_dicts = []
-            for r in results:
-                title_str = r.title or Path(r.path).stem if r.path else "unknown"
-                lines.append(f"**{title_str}** (score: {r.score:.3f})")
-                if r.tags:
-                    lines.append(f"Tags: {r.tags}")
-                if r.snippet:
-                    lines.append(f"{r.snippet}\n")
-                result_dicts.append(
-                    {
-                        "source": r.source,
-                        "kind": r.kind,
-                        "title": r.title,
-                        "snippet": r.snippet,
-                        "score": r.score,
-                        "path": r.path,
-                    }
-                )
-            return tool_output(
-                "\n".join(lines).rstrip(),
-                ctx=ctx,
-                count=len(results),
-                results=result_dicts,
-            )
-        except Exception as e:
-            logger.warning(f"search_memories FTS error, falling back to grep: {e}")
-
     otel_trace.get_current_span().set_attribute("rag.backend", "grep")
-    # Grep fallback
     memories = load_memories(memory_dir, kind="memory")
     if tags:
         if tag_match_mode == "all":
@@ -774,27 +610,6 @@ async def update_memory(
                 )
                 match.write_text(md_content, encoding="utf-8")
 
-                if ctx.deps.knowledge_store is not None:
-                    try:
-                        import hashlib as _hashlib
-
-                        ctx.deps.knowledge_store.index(
-                            source="memory",
-                            kind=fm.get("kind", "memory"),
-                            path=str(match),
-                            title=slug,
-                            content=updated_body.strip(),
-                            mtime=match.stat().st_mtime,
-                            hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                            tags=" ".join(fm.get("tags", [])),
-                            created=fm.get("created"),
-                            updated=fm.get("updated"),
-                            type=fm.get("type"),
-                            description=fm.get("description"),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to reindex updated memory '{slug}': {e}")
-
             return tool_output(
                 f"Updated memory '{slug}'.\n{updated_body.strip()}",
                 ctx=ctx,
@@ -851,27 +666,6 @@ async def append_memory(
                     f"{updated_body.strip()}\n"
                 )
                 match.write_text(md_content, encoding="utf-8")
-
-                if ctx.deps.knowledge_store is not None:
-                    try:
-                        import hashlib as _hashlib
-
-                        ctx.deps.knowledge_store.index(
-                            source="memory",
-                            kind=fm.get("kind", "memory"),
-                            path=str(match),
-                            title=slug,
-                            content=updated_body.strip(),
-                            mtime=match.stat().st_mtime,
-                            hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                            tags=" ".join(fm.get("tags", [])),
-                            created=fm.get("created"),
-                            updated=fm.get("updated"),
-                            type=fm.get("type"),
-                            description=fm.get("description"),
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to reindex appended memory '{slug}': {e}")
 
             return tool_output(
                 f"Appended to '{slug}'.",

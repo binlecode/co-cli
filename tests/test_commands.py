@@ -218,32 +218,25 @@ async def test_approval_deny():
 
 
 @pytest.mark.asyncio
-async def test_forget_command_evicts_fts_row(tmp_path):
-    """/forget removes the file and evicts the FTS row in the same session."""
-    from co_cli.knowledge._store import KnowledgeStore
-
+async def test_forget_command_deletes_file(tmp_path):
+    """/forget removes the memory file; no FTS cleanup (memory is grep-only)."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
 
     content = (
         "---\nid: 1\nkind: memory\ncreated: '2026-01-01T00:00:00+00:00'\ntags: []\n---\n\n"
-        "xyloquartz-forget-fts eviction keyword\n"
+        "xyloquartz-forget-file deletion keyword\n"
     )
     memory_file = memory_dir / "001-test-forget.md"
     memory_file.write_text(content, encoding="utf-8")
-
-    idx = KnowledgeStore(config=test_settings(), knowledge_db_path=tmp_path / "search.db")
-    idx.sync_dir("memory", memory_dir)
-    assert len(idx.search("xyloquartz-forget-fts")) == 1
 
     ctx = CommandContext(
         message_history=[],
         deps=CoDeps(
             shell=ShellBackend(),
-            knowledge_store=idx,
             config=test_settings(),
             memory_dir=memory_dir,
-            session=CoSessionState(session_id="test-forget-fts"),
+            session=CoSessionState(session_id="test-forget-file"),
         ),
         agent=_AGENT,
     )
@@ -252,9 +245,6 @@ async def test_forget_command_evicts_fts_row(tmp_path):
 
     assert isinstance(result, LocalOnly)
     assert not memory_file.exists(), "File must be deleted by /forget"
-    assert len(idx.search("xyloquartz-forget-fts")) == 0, "FTS row must be evicted after /forget"
-
-    idx.close()
 
 
 # --- Safe command classification ---

@@ -182,9 +182,8 @@ def _sync_knowledge_store(
     with _TRACER.start_as_current_span("sync_knowledge") as span:
         try:
             if memory_dir.exists() or library_dir.exists():
-                mem_count = store.sync_dir("memory", memory_dir, kind_filter="memory")
                 art_count = store.sync_dir("library", library_dir, kind_filter="article")
-                count = mem_count + art_count
+                count = art_count
                 backend = config.knowledge.search_backend
                 span.set_attribute("count", count)
                 span.set_attribute("backend", backend)

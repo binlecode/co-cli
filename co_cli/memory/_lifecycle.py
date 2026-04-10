@@ -1,6 +1,6 @@
 """Memory lifecycle — write entrypoint for all memory save paths.
 
-Handles write, FTS indexing, and retention enforcement.
+Handles write and retention enforcement.
 Both the explicit save_memory tool and the auto-signal save path route
 through persist_memory().
 """
@@ -151,14 +151,6 @@ async def _persist_memory_inner(
             f"\n♻️ Decayed {decay_result['decayed']} old memories ({decay_result['strategy']})"
         )
 
-        # FTS: remove stale entries for deleted files
-        if deps.knowledge_store is not None:
-            try:
-                current_paths = {str(p) for p in memory_dir.rglob("*.md")}
-                deps.knowledge_store.remove_stale("memory", current_paths, directory=memory_dir)
-            except Exception as e:
-                logger.warning(f"Failed to remove stale FTS entries: {e}")
-
     return result
 
 
@@ -205,7 +197,6 @@ async def _write_memory(
                             content,
                             norm_tags,
                             deps.config.memory.auto_save_tags,
-                            knowledge_store=deps.knowledge_store,
                         )
                 except ResourceBusyError:
                     if on_failure == "skip":
@@ -254,27 +245,6 @@ async def _write_memory(
         async with deps.resource_locks.try_acquire(str(file_path)):
             file_path.write_text(md_content, encoding="utf-8")
             logger.info(f"Saved memory {memory_id} to {file_path}")
-
-            # FTS index integration — no-op when knowledge_store is None
-            if deps.knowledge_store is not None:
-                try:
-                    import hashlib as _hashlib
-
-                    deps.knowledge_store.index(
-                        source="memory",
-                        kind="memory",
-                        path=str(file_path),
-                        title=slugify(content[:50]),
-                        content=content.strip(),
-                        mtime=file_path.stat().st_mtime,
-                        hash=_hashlib.sha256(md_content.encode()).hexdigest(),
-                        tags=" ".join(tags or []),
-                        created=frontmatter["created"],
-                        type=type_value,
-                        description=description_value,
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to index memory {memory_id}: {e}")
     except ResourceBusyError:
         if on_failure == "skip":
             logger.info("persist_memory: new file busy, skipping")
