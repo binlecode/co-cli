@@ -123,7 +123,7 @@ async def test_summarize_history_window_static_marker_when_no_model():
         for p in m.parts
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
-    assert any("[Earlier conversation trimmed" in t for t in marker_texts)
+    assert any("This session is being continued" in t for t in marker_texts)
     assert len(result) < len(msgs)
 
 
@@ -154,7 +154,7 @@ async def test_circuit_breaker_skips_llm_after_three_failures():
         if hasattr(p, "content") and isinstance(p.content, str)
     ]
     # Circuit breaker active → static marker, no LLM call
-    assert any("[Earlier conversation trimmed" in t for t in marker_texts)
+    assert any("This session is being continued" in t for t in marker_texts)
     assert len(result) < len(msgs)
     # Failure count unchanged (no LLM attempt was made)
     assert deps.runtime.compaction_failure_count == 3
@@ -575,7 +575,7 @@ def test_emergency_compact_5_groups():
     result_groups = group_by_turn(result)
     # First group + marker (which has UserPromptPart so it's a group) + last group
     assert len(result_groups) == 3
-    # Marker should contain "[Earlier conversation trimmed"
+    # Marker should contain context-continuation text
     marker_texts = [
         p.content
         for m in result
@@ -583,7 +583,7 @@ def test_emergency_compact_5_groups():
         for p in m.parts
         if isinstance(p, UserPromptPart)
         and isinstance(p.content, str)
-        and "Earlier conversation trimmed" in p.content
+        and "This session is being continued" in p.content
     ]
     assert len(marker_texts) == 1
 

@@ -222,7 +222,7 @@ async def _write_memory(
 
     memory_id = str(_uuid.uuid4())
     slug = slugify(content[:50])
-    filename = f"{title}.md" if title else f"{slug}-{memory_id[:6]}.md"
+    filename = f"{title}.md" if title else f"{slug}.md"
     file_path = memory_dir / filename
 
     # Normalize tags to lowercase so detection functions match consistently

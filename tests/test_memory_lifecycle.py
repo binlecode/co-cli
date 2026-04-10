@@ -5,6 +5,7 @@ concurrency, overflow cut, and on_failure behavior.
 """
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -398,3 +399,64 @@ async def test_persist_memory_upsert_updates_existing(tmp_path: Path):
     else:
         # SAVE_NEW fallback is acceptable (model non-determinism)
         assert after_count == before_count + 1
+
+
+# ---------------------------------------------------------------------------
+# 10. Filename format — slug-only, no UUID suffix
+# ---------------------------------------------------------------------------
+
+
+def test_persist_memory_filename_is_slug_only(tmp_path: Path):
+    """persist_memory creates filename as {slug}.md with no UUID suffix."""
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
+
+    deps = _make_deps(memory_dir=memory_dir)
+    asyncio.run(
+        persist_memory(deps, "User prefers slug-only filename test content", ["preference"], None)
+    )
+
+    files = list(memory_dir.glob("*.md"))
+    assert len(files) == 1
+    filename = files[0].name
+    assert re.match(r"^[a-z0-9-]+\.md$", filename), f"Unexpected filename format: {filename}"
+    assert not re.search(r"-[0-9a-f]{6}\.md$", filename), (
+        f"Filename must not have a UUID suffix: {filename}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 11. Slug collision — SAVE_NEW overwrites existing file
+# ---------------------------------------------------------------------------
+
+
+def test_persist_memory_slug_collision_overwrites(tmp_path: Path):
+    """SAVE_NEW with same slug as existing file overwrites it — no new file created."""
+    from co_cli.tools.memory import slugify
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    memory_dir.mkdir(parents=True)
+
+    # content_a and content_b share identical first 50 characters → same slug
+    content_a = "User prefers the following terminal color scheme: dark"
+    content_b = "User prefers the following terminal color scheme: light"
+    assert content_a[:50] == content_b[:50], "Test setup: first 50 chars must match"
+
+    slug = slugify(content_a[:50])
+    pre_existing = memory_dir / f"{slug}.md"
+    pre_existing.write_text(
+        f"---\nid: pre-existing-id\nkind: memory\ntags: []\n---\n\n{content_a}\n",
+        encoding="utf-8",
+    )
+    before_count = len(list(memory_dir.glob("*.md")))
+
+    deps = _make_deps(memory_dir=memory_dir)
+    asyncio.run(persist_memory(deps, content_b, ["preference"], None))
+
+    after = list(memory_dir.glob("*.md"))
+    assert len(after) == before_count, (
+        f"Collision must overwrite existing file, not create a new one. "
+        f"Before: {before_count}, after: {len(after)}"
+    )
+    body = pre_existing.read_text(encoding="utf-8")
+    assert content_b.strip() in body, "File body must contain updated content B after overwrite"

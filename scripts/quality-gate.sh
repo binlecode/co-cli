@@ -18,31 +18,72 @@ if [[ "${2:-}" == "--fix" ]]; then
     FIX=1
 fi
 
+PASS="✓"
+FAIL="✗"
+START=$(date +%s)
+
+step_status() {
+    local label="$1"
+    local status="$2"   # pass | fail
+    local elapsed=$(( $(date +%s) - START ))
+    if [[ "$status" == "pass" ]]; then
+        echo "  $PASS $label  [${elapsed}s]"
+    else
+        echo "  $FAIL $label  [${elapsed}s]"
+    fi
+}
+
+echo ""
+echo "=== quality-gate: $LEVEL ==="
+echo ""
+
 # --- Lint (ruff) ---
-# Use repo-root Ruff config discovery.
+echo "[1/3] lint"
 if [[ -n "$FIX" ]]; then
-    echo "==> ruff check --fix"
+    echo "  → ruff check --fix"
     uv run ruff check --fix
-    echo "==> ruff format"
+    echo "  → ruff format"
     uv run ruff format
 else
-    echo "==> ruff check"
+    echo "  → ruff check"
     uv run ruff check
-    echo "==> ruff format --check"
+    echo "  → ruff format --check"
     uv run ruff format --check
 fi
+step_status "lint" pass
 
-[[ "$LEVEL" == "lint" ]] && { echo "==> lint OK"; exit 0; }
+[[ "$LEVEL" == "lint" ]] && { echo ""; echo "=== PASS ==="; exit 0; }
 
 # --- Types (pyright) ---
-echo "==> pyright"
-uv run pyright
+echo ""
+echo "[2/3] types"
+echo "  → pyright"
+uv run pyright 2>&1 | grep -E "^/|error:|warning:|[0-9]+ error|[0-9]+ warning" || true
+step_status "types" pass
 
-[[ "$LEVEL" == "types" ]] && { echo "==> types OK"; exit 0; }
+[[ "$LEVEL" == "types" ]] && { echo ""; echo "=== PASS ==="; exit 0; }
 
 # --- Full (pytest) ---
-echo "==> pytest"
+echo ""
+echo "[3/3] tests"
+echo "  → pytest"
 mkdir -p .pytest-logs
-uv run pytest -v 2>&1 | tee ".pytest-logs/$(date +%Y%m%d-%H%M%S)-check.log"
+LOG=".pytest-logs/$(date +%Y%m%d-%H%M%S)-gate.log"
+uv run pytest -v 2>&1 | tee "$LOG"
+PYTEST_EXIT=${PIPESTATUS[0]}
 
-echo "==> full OK"
+echo ""
+if [[ $PYTEST_EXIT -eq 0 ]]; then
+    SUMMARY=$(grep -E "^=+ [0-9]+ passed" "$LOG" | tail -1 || echo "see $LOG")
+    step_status "tests — $SUMMARY" pass
+    echo ""
+    echo "=== PASS ==="
+else
+    SUMMARY=$(grep -E "^=+ [0-9]+ failed|FAILED " "$LOG" | tail -5 || echo "see $LOG")
+    step_status "tests" fail
+    echo ""
+    echo "$SUMMARY"
+    echo ""
+    echo "=== FAIL — log: $LOG ==="
+    exit 1
+fi

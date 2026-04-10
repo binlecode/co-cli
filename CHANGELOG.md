@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.54] - 2026-04-10
+
+### Changed
+- **Memory filenames are now slug-only**: removed the 6-char UUID suffix from new memory files (`{slug}.md` instead of `{slug}-xxxxxx.md`), making duplicate-slug collisions visible on the filesystem and enabling overwrite-on-collision as a stronger dedup signal than UUID-suffixed accumulation
+- **Quality gate step logging**: `scripts/quality-gate.sh` now reports pass/fail status and elapsed time for each step (lint, types, tests)
+
+### Fixed
+- **Stale test assertions**: updated `test_history.py` assertions to match the renamed context-continuation marker text in `_history.py`
+
 ## [0.7.52] - 2026-04-09
 
 ### Changed
