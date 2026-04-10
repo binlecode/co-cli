@@ -148,55 +148,113 @@ The transcript writer is stateless — it derives the file path from `deps.sessi
 
 ### 2.4 Memory & Article Storage
 
-Persistent knowledge is flat Markdown files with YAML frontmatter.
+Persistent knowledge is flat Markdown files with YAML frontmatter stored in two directories:
 
 | Store | Path | Contents |
 | --- | --- | --- |
 | memory | `deps.memory_dir` (`.co-cli/memory/`) | conversation-derived memories and session-summary artifacts |
 | articles | `deps.library_dir` | saved external references and fetched docs |
 
-**Frontmatter schema** — `validate_memory_frontmatter()` enforces:
+#### 2.4.1 Data Model
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `id` | `int \| str` | required; new writes use UUID strings |
-| `created` | ISO8601 string | required |
-| `kind` | `"memory" \| "article"` | optional; defaults to `"memory"` |
-| `type` | `"user" \| "feedback" \| "project" \| "reference" \| null` | memory classification; warns on unknown values |
-| `description` | `str \| null` | ≤200 chars, no newlines; purpose hook for manifest dedup |
-| `updated` | ISO8601 string | optional; written on consolidation |
-| `tags` | `list[str]` | filtering and search |
-| `related` | `list[str] \| null` | one-hop links by slug |
-| `artifact_type` | `str \| null` | `session_summary` |
-| `origin_url` | `str \| null` | article source URL |
-| `decay_protected` | `bool` | prevents recall score decay |
-| `always_on` | `bool` | standing prompt injection |
-| `read_only` | `bool` | prevents deletion via `/memory forget` (BC-3 guard) |
+Every file is parsed into a `MemoryEntry` dataclass (`memory/recall.py`). `validate_memory_frontmatter()` enforces required fields and rejects malformed files with a warning (never crashes the load).
 
-**Memory write lifecycle** — all writes route through `persist_memory()`, which acts as an upsert:
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `id` | `int \| str` | yes | new writes use UUID strings |
+| `created` | ISO8601 string | yes | set at write time, never mutated |
+| `kind` | `"memory" \| "article"` | no | defaults to `"memory"` |
+| `type` | `"user" \| "feedback" \| "project" \| "reference" \| null` | no | memory classification; warns on unknown values |
+| `description` | `str \| null` | no | ≤200 chars, no newlines; purpose hook for manifest dedup |
+| `updated` | ISO8601 string | no | written on consolidation via `overwrite_memory()` |
+| `tags` | `list[str]` | no | searched by `grep_recall`; filter axis for `load_memories` |
+| `related` | `list[str] \| null` | no | one-hop slug links expanded by `recall_memory()` |
+| `artifact_type` | `str \| null` | no | `session_summary` — excluded from normal recall/search |
+| `origin_url` | `str \| null` | no | article source URL; dedup key in `save_article()` |
+| `always_on` | `bool` | no | standing prompt injection (capped at 5 entries) |
+| `read_only` | `bool` | no | prevents deletion via `/memory forget` (BC-3 guard) |
+
+#### 2.4.2 Read Path
+
+All read operations are file-based. Memory is never indexed in FTS or chunked — the knowledge index is only used for library, Obsidian, and Drive sources.
 
 ```text
-persist_memory()
-  -> upsert check (when resolved model available and title not preset):
-     -> build manifest of existing memories (100 most recent, one line each, format: `[type] slug (ts): description`)
-     -> _memory_save_agent decides SAVE_NEW or UPDATE(slug)
-     -> UPDATE: acquire resource lock on target file path
+load_memories(memory_dir, kind=None, tags=None)
+  -> glob *.md, parse frontmatter, validate
+  -> early-exit per file on kind or tag mismatch
+  -> returns list[MemoryEntry]
+
+grep_recall(entries, query, max_results)
+  -> case-insensitive substring match on content + tags
+  -> sort by updated or created (newest first)
+  -> return top max_results
+
+recall_memory(ctx, query)        ← agent tool
+  -> load_memories
+  -> grep_recall (top 10 candidates)
+  -> score: recency decay (half-life configurable) + tag-overlap boost + related expansion
+  -> exclude artifact_type="session_summary"
+  -> return top 5 scored entries
+
+search_memories(ctx, query)      ← agent tool
+  -> load_memories + grep_recall (top 20)
+  -> no scoring or decay
+```
+
+The always-on layer (`load_always_on_memories`) runs at instruction-build time: loads all memories, filters `always_on=True`, caps at 5, injects into the `add_always_on_memories` dynamic instruction layer.
+
+#### 2.4.3 Write Lifecycle
+
+All writes route through `persist_memory()`, which acts as an upsert:
+
+```text
+persist_memory(content, type, tags, ...)
+  -> upsert check (when resolved model available):
+     -> build manifest: 100 most recent memories, one line each
+        format: [type] slug (ts): description
+     -> _memory_save_agent (singleton Agent[None, SaveResult]) decides:
+        SAVE_NEW  — no matching existing entry
+        UPDATE(slug) — candidate updates an existing memory
+     -> UPDATE: acquire per-file resource lock
                 overwrite_memory() replaces body, merges tags, refreshes frontmatter
                 release lock
-  -> SAVE_NEW: acquire resource lock on new file path
-               write new markdown file
+  -> SAVE_NEW: acquire per-file resource lock
+               write new UUID-named markdown file
                release lock
 ```
 
-The memory save agent (`_save.py`) is a singleton `Agent[None, SaveResult]` following the same pattern as `_extraction_agent` and `_summarizer_agent`. It receives the candidate content + manifest and returns a structured decision. Zero context debt on the main agent. Falls back to SAVE_NEW on timeout or error.
+Per-file resource locks (keyed by absolute path) serialise concurrent callers (explicit save + auto-signal running in parallel). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
 
-Per-file resource locks (keyed by absolute file path) serialise concurrent callers (explicit save + auto-signal). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
+**Auto-signal saves** — after every clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). The extractor injects the existing memory manifest so it can avoid redundant candidates and set `update_slug` for entries that should consolidate into an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; high-confidence candidates in the `auto_save_tags` allowlist save automatically; low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag.
 
-**Auto-signal saves** — after a clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). The extractor injects the existing memory manifest into the prompt so it can avoid redundant candidates and set `update_slug` for entries that update an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; otherwise, high-confidence candidates in the `auto_save_tags` allowlist save automatically, and low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag.
+**Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"` via `index_session_summary()`. These are excluded from `recall_memory()` and `search_memories()` by predicate.
 
-**Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"`. These are excluded from normal recall/search.
+**Articles** — `save_article()` stores external references with `kind="article"` and dedup by exact `origin_url`. Articles skip the save-agent upsert path entirely.
 
-**Articles** — `save_article()` stores external references with `kind="article"`, `decay_protected=True`, and dedup by exact `origin_url`.
+#### 2.4.4 REPL Management
+
+The `/memory` built-in provides inventory and deletion without requiring an LLM turn. All subcommands share a common filter pipeline: `load_memories(kind=)` → `_apply_memory_filters(older_than, type)` → `grep_recall(query)`.
+
+| Command | Syntax | Behavior |
+| --- | --- | --- |
+| `/memory list` | `[query] [flags]` | one line per entry: `id[:8]  date  [kind]  type  content[:80]`; footer shows count |
+| `/memory count` | `[query] [flags]` | prints `N memories` |
+| `/memory forget` | `<query\|flag> [flags]` | preview matched entries → prompt `Delete N memories? [y/N]` → unlink on `y` |
+| `/forget` | `[query]` | **deprecated alias** — prints hint, routes to `/memory forget` |
+
+**Shared filter flags** (parsed by `_parse_memory_args`, applied by `_apply_memory_filters`):
+
+| Flag | Type | Effect |
+| --- | --- | --- |
+| `query` (positional) | string | case-insensitive substring match on content and tags via `grep_recall` |
+| `--older-than N` | int days | keep entries where `age_days > N` |
+| `--type X` | string | exact match on `type` field (`user`, `feedback`, `project`, `reference`) |
+| `--kind X` | string | passed to `load_memories(kind=X)` — `memory` or `article` |
+
+**Behavioral constraints on `/memory forget`:**
+- **BC-1** — no query and no flags → refuse and print usage; never bulk-deletes silently
+- **BC-2** — always displays a preview of matched entries and requires explicit `y` before any deletion, even for a single match
+- **BC-3** — `read_only=True` entries are skipped with a per-entry warning; the rest of the batch proceeds normally
 
 ### 2.5 Knowledge Index & Retrieval
 
@@ -320,17 +378,18 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
+| `co_cli/memory/recall.py` | `MemoryEntry` dataclass, `load_memories`, `load_always_on_memories` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
 | `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
 | `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/memory.py` | memory load, recall, search, update, append, always-on loading |
+| `co_cli/tools/memory.py` | `grep_recall`, agent tools: recall_memory, search_memories, update, append |
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
-| `co_cli/commands/_commands.py` | `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
+| `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/forget` (deprecated), `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
 | `co_cli/bootstrap/core.py` | knowledge backend discovery, store sync, session restore |
 | `co_cli/main.py` | `_finalize_turn()` persistence, `_chat_loop()` session-data sync |
