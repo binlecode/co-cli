@@ -81,15 +81,6 @@ def test_build_agent_excludes_domain_tools_when_config_absent():
     assert "web_search" in result.tool_index
 
 
-def test_tool_registry_excludes_domain_tools_when_config_absent():
-    """Domain tools absent from tool_index when config paths are not set (any agent type)."""
-    result = build_tool_registry(
-        test_settings(obsidian_vault_path=None, google_credentials_path=None)
-    )
-    assert "list_notes" not in result.tool_index
-    assert "list_gmail_emails" not in result.tool_index
-
-
 def test_tool_index_visibility_policy_metadata():
     """Native tools carry visibility-policy flags and source metadata in tool_index."""
     result = build_tool_registry(_CONFIG_WITH_INTEGRATIONS)

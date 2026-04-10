@@ -57,25 +57,6 @@ def test_search_tools_not_in_tool_index() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_deferred_tools_have_defer_loading_flag() -> None:
-    """Deferred tools are registered with VisibilityPolicyEnum.DEFERRED in tool_index."""
-    result = build_tool_registry(_CONFIG)
-    deferred_names = [
-        name
-        for name, info in result.tool_index.items()
-        if info.visibility == VisibilityPolicyEnum.DEFERRED
-    ]
-    assert len(deferred_names) > 0, "Must have at least one deferred tool"
-
-
-def test_always_tools_present_in_registry() -> None:
-    """Always-visible tools are present in tool_index with VisibilityPolicyEnum.ALWAYS."""
-    result = build_tool_registry(_CONFIG)
-    for name in ("check_capabilities", "read_file", "web_search", "run_shell_command"):
-        assert name in result.tool_index
-        assert result.tool_index[name].visibility == VisibilityPolicyEnum.ALWAYS
-
-
 # ---------------------------------------------------------------------------
 # Category awareness prompt
 # ---------------------------------------------------------------------------

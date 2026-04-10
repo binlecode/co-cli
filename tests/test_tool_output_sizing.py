@@ -1,4 +1,4 @@
-"""Tests for per-tool max_result_size wiring in tool_output() and persist_if_oversized()."""
+"""Tests for tool_output() and persist_if_oversized() — per-tool sizing and persistence mechanics."""
 
 from pathlib import Path
 
@@ -19,6 +19,21 @@ from co_cli.tools.tool_result_storage import (
 
 _CONFIG = settings
 _AGENT = build_agent(config=_CONFIG)
+
+
+def _make_ctx(tmp_path: Path, tool_name: str = "read_file") -> RunContext[CoDeps]:
+    """Build a RunContext with tool_results_dir pointing at tmp_path."""
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=test_settings(),
+        tool_results_dir=tmp_path / "tool-results",
+    )
+    return RunContext(
+        deps=deps,
+        model=_AGENT.model,
+        usage=RunUsage(),
+        tool_name=tool_name,
+    )
 
 
 def _make_ctx_with_index(
@@ -105,3 +120,38 @@ def test_persist_if_oversized_default_max_size(tmp_path: Path) -> None:
     content = "z" * 100
     result = persist_if_oversized(content, tmp_path, "test_tool")
     assert result == content
+
+
+def test_tool_output_persists_oversized_content(tmp_path: Path) -> None:
+    """tool_output() with ctx and oversized content persists to disk and returns placeholder."""
+    ctx = _make_ctx(tmp_path)
+    big_content = "x" * (TOOL_RESULT_MAX_SIZE + 1)
+
+    result = tool_output(big_content, ctx=ctx)
+
+    display = result.return_value
+    assert display.startswith(PERSISTED_OUTPUT_TAG)
+    assert "read_file" in display
+    results_dir = tmp_path / "tool-results"
+    assert results_dir.exists()
+    files = list(results_dir.iterdir())
+    assert len(files) == 1
+    assert str(files[0]) in display
+    assert files[0].read_text(encoding="utf-8") == big_content
+
+
+def test_persist_if_oversized_idempotent(tmp_path: Path) -> None:
+    """Same content produces the same file — content-addressed hash."""
+    results_dir = tmp_path / "tool-results"
+    content = "z" * (TOOL_RESULT_MAX_SIZE + 1)
+
+    result1 = persist_if_oversized(content, results_dir, "read_file")
+    files_after_first = list(results_dir.iterdir())
+
+    result2 = persist_if_oversized(content, results_dir, "read_file")
+    files_after_second = list(results_dir.iterdir())
+
+    assert result1 == result2
+    assert len(files_after_first) == 1
+    assert len(files_after_second) == 1
+    assert files_after_first[0] == files_after_second[0]

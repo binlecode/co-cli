@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.59] - 2026-04-10
+
+### Removed
+- **Test suite cleanse**: deleted `test_tool_result_storage.py` (merged 2 unique tests into `test_tool_output_sizing.py`, dropped 1 exact duplicate and 1 covered-elsewhere test); removed 3 subsumed tests (`test_tool_registry_excludes_domain_tools_when_config_absent`, `test_deferred_tools_have_defer_loading_flag`, `test_always_tools_present_in_registry`) caught by broader existing coverage; moved 2 misplaced background-tool tests from `test_tool_calling_functional.py` into `test_background.py`; fixed stale `kind` frontmatter in `test_memory_decay.py` seed helper — 391 → 385 collected tests
+
 ## [0.7.58] - 2026-04-10
 
 ### Removed

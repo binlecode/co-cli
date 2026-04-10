@@ -9,21 +9,19 @@ Covers:
 """
 
 import asyncio
-from datetime import UTC
 
 import pytest
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.result import DeferredToolRequests
-from pydantic_ai.usage import RunUsage
 from tests._frontend import SilentFrontend
 from tests._ollama import ensure_ollama_warm
-from tests._timeouts import FILE_DB_TIMEOUT_SECS, LLM_TOOL_CONTEXT_TIMEOUT_SECS
+from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli._model_factory import build_model
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.agent import build_agent, build_tool_registry
+from co_cli.agent import build_tool_registry
 from co_cli.config._core import settings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
@@ -212,77 +210,3 @@ async def test_intent_routing_observation_no_tool():
                 assert not isinstance(part, ToolCallPart), (
                     f"Expected no tool call for observation statement, got {part.tool_name!r}"
                 )
-
-
-@pytest.mark.asyncio
-async def test_check_task_status_surfaces_description_and_started_at(tmp_path):
-    """check_task_status result includes description and started_at from task metadata."""
-    import asyncio
-    from datetime import datetime
-
-    from tests._settings import test_settings
-
-    from co_cli.deps import CoDeps
-    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
-    from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import check_task_status
-
-    deps = CoDeps(shell=ShellBackend(), config=test_settings())
-    agent = build_agent(config=settings)
-    ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
-
-    task_description = "test-background-task-description"
-    state = BackgroundTaskState(
-        task_id=_make_task_id(),
-        command="echo hello",
-        cwd=str(tmp_path),
-        description=task_description,
-        status="running",
-        started_at=datetime.now(UTC).isoformat(),
-    )
-    deps.session.background_tasks[state.task_id] = state
-
-    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        await spawn_task(state, deps.session)
-        await asyncio.sleep(0.3)
-        result = await check_task_status(ctx, state.task_id)
-
-    assert (result.metadata or {}).get("description") == task_description
-    assert (result.metadata or {}).get("started_at") is not None
-
-
-@pytest.mark.asyncio
-async def test_list_background_tasks_surfaces_description(tmp_path):
-    """list_background_tasks includes task descriptions in both metadata and display output."""
-    from datetime import datetime
-
-    from tests._settings import test_settings
-
-    from co_cli.deps import CoDeps
-    from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
-    from co_cli.tools.shell_backend import ShellBackend
-    from co_cli.tools.task_control import list_background_tasks
-
-    deps = CoDeps(shell=ShellBackend(), config=test_settings())
-    agent = build_agent(config=settings)
-    ctx = RunContext(deps=deps, model=agent.model, usage=RunUsage())
-
-    task_description = "background task list description"
-    state = BackgroundTaskState(
-        task_id=_make_task_id(),
-        command="echo hello",
-        cwd=str(tmp_path),
-        description=task_description,
-        status="running",
-        started_at=datetime.now(UTC).isoformat(),
-    )
-    deps.session.background_tasks[state.task_id] = state
-
-    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-        await spawn_task(state, deps.session)
-        await asyncio.sleep(0.3)
-        result = await list_background_tasks(ctx)
-
-    assert result.metadata["count"] == 1
-    assert result.metadata["tasks"][0]["description"] == task_description
-    assert task_description in result.return_value

@@ -34,6 +34,7 @@ def _seed_memory(
     filename = f"{memory_id:03d}-{slug}.md"
     fm: dict = {
         "id": memory_id,
+        "kind": "memory",
         "created": created,
         "tags": tags or [],
         "provenance": "user-told",
