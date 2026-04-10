@@ -28,8 +28,6 @@ async def persist_memory(
     content: str,
     tags: list[str] | None,
     related: list[str] | None,
-    provenance: str | None = None,
-    title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
     model: Any = None,
     model_settings: ModelSettings | None = None,
@@ -50,8 +48,6 @@ async def persist_memory(
         content: Memory text in third person.
         tags: Categorization tags.
         related: Slugs of related memories for knowledge linking.
-        provenance: Override provenance value. When None, auto-detected from tags.
-        title: Override filename stem. When provided, upsert check is skipped.
         on_failure: Behavior on resource conflict. "add" = raise ResourceBusyError
                     (explicit save path, model retries). "skip" = drop write silently
                     (auto-signal path).
@@ -62,15 +58,12 @@ async def persist_memory(
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
     """
-    with _TRACER.start_as_current_span("co.memory.write") as span:
-        span.set_attribute("memory.provenance", provenance or "auto")
+    with _TRACER.start_as_current_span("co.memory.write"):
         return await _persist_memory_inner(
             deps,
             content,
             tags,
             related,
-            provenance,
-            title,
             on_failure,
             model,
             model_settings,
@@ -86,8 +79,6 @@ async def _persist_memory_inner(
     content: str,
     tags: list[str] | None,
     related: list[str] | None,
-    provenance: str | None = None,
-    title: str | None = None,
     on_failure: Literal["add", "skip"] = "add",
     model: Any = None,
     model_settings: ModelSettings | None = None,
@@ -116,8 +107,6 @@ async def _persist_memory_inner(
         content,
         tags,
         related,
-        provenance,
-        title,
         model,
         model_settings,
         artifact_type,
@@ -137,8 +126,6 @@ async def _write_memory(
     content: str,
     tags: list[str] | None,
     related: list[str] | None,
-    provenance: str | None,
-    title: str | None,
     model: Any,
     model_settings: ModelSettings | None,
     artifact_type: str | None,
@@ -153,9 +140,9 @@ async def _write_memory(
     from co_cli.tools.memory import load_memories
     from co_cli.tools.resource_lock import ResourceBusyError
 
-    # Upsert check: when a model is available and title is not preset,
-    # consult the memory save agent to decide create vs update.
-    if title is None and model is not None:
+    # Upsert check: when a model is available, consult the memory save agent
+    # to decide create vs update.
+    if model is not None:
         from co_cli.memory._save import build_memory_manifest, check_and_save, overwrite_memory
 
         memories = load_memories(memory_dir, kind="memory")
@@ -192,7 +179,7 @@ async def _write_memory(
 
     memory_id = str(_uuid.uuid4())
     slug = slugify(content[:50])
-    filename = f"{title}.md" if title else f"{slug}.md"
+    filename = f"{slug}.md"
     file_path = memory_dir / filename
 
     # Normalize tags to lowercase so detection functions match consistently

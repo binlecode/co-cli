@@ -35,7 +35,9 @@ def build_embedder(
                 return resp.json()["embeddings"][0]
 
             if provider == "gemini":
-                from google import genai
+                from google import (
+                    genai,  # type: ignore[attr-defined]  # google-generativeai lacks pyright stubs
+                )
 
                 client = genai.Client(api_key=api_key)
                 result = client.models.embed_content(

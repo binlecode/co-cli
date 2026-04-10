@@ -34,13 +34,14 @@ def tool_output(
     **metadata: Any,
 ) -> ToolReturn:
     """Construct a ToolReturn with display as return_value and extras as metadata."""
-    info = ctx.deps.tool_index.get(ctx.tool_name)
+    tool_name = ctx.tool_name or ""
+    info = ctx.deps.tool_index.get(tool_name)
     threshold = info.max_result_size if info else TOOL_RESULT_MAX_SIZE
     if len(display) > threshold:
         display = persist_if_oversized(
             display,
             ctx.deps.tool_results_dir,
-            ctx.tool_name,
+            tool_name,
             max_size=threshold,
         )
     return ToolReturn(return_value=display, metadata=metadata or None)

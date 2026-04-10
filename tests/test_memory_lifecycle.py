@@ -31,6 +31,55 @@ _LLM_MODEL = build_model(_CONFIG.llm)
 # ---------------------------------------------------------------------------
 
 
+class _NullFrontend:
+    """Silent Frontend implementation for tests — captures status calls, no terminal output."""
+
+    def __init__(self) -> None:
+        self.status_messages: list[str] = []
+
+    def on_text_delta(self, accumulated: str) -> None:
+        pass
+
+    def on_text_commit(self, final: str) -> None:
+        pass
+
+    def on_thinking_delta(self, accumulated: str) -> None:
+        pass
+
+    def on_thinking_commit(self, final: str) -> None:
+        pass
+
+    def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
+        pass
+
+    def on_tool_progress(self, tool_id: str, message: str) -> None:
+        pass
+
+    def on_tool_complete(self, tool_id: str, result: Any) -> None:
+        pass
+
+    def on_status(self, message: str) -> None:
+        self.status_messages.append(message)
+
+    def on_reasoning_progress(self, text: str) -> None:
+        pass
+
+    def on_final_output(self, text: str) -> None:
+        pass
+
+    def prompt_approval(self, description: str) -> str:
+        return "y"
+
+    def clear_status(self) -> None:
+        pass
+
+    def set_input_active(self, active: bool) -> None:
+        pass
+
+    def cleanup(self) -> None:
+        pass
+
+
 def _seed_memory(
     memory_dir: Path,
     memory_id: int,
@@ -38,7 +87,6 @@ def _seed_memory(
     *,
     days_ago: int = 0,
     tags: list[str] | None = None,
-    decay_protected: bool = False,
 ) -> MemoryEntry:
     """Write a test memory file and return a MemoryEntry."""
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -50,11 +98,7 @@ def _seed_memory(
         "kind": "memory",
         "created": created,
         "tags": tags or [],
-        "provenance": "user-told",
-        "auto_category": None,
     }
-    if decay_protected:
-        fm["decay_protected"] = True
     md = f"---\n{yaml.dump(fm, default_flow_style=False)}---\n\n{content}\n"
     path = memory_dir / filename
     path.write_text(md, encoding="utf-8")
@@ -64,7 +108,6 @@ def _seed_memory(
         content=content,
         tags=tags or [],
         created=created,
-        decay_protected=decay_protected,
     )
 
 
@@ -382,3 +425,48 @@ def test_persist_memory_slug_collision_overwrites(tmp_path: Path):
     )
     body = pre_existing.read_text(encoding="utf-8")
     assert content_b.strip() in body, "File body must contain updated content B after overwrite"
+
+
+# ---------------------------------------------------------------------------
+# 12. handle_extraction UPDATE path — no TypeError, no new-file fall-through (BC-1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_extraction_update_path_applies_correctly(tmp_path: Path):
+    """handle_extraction UPDATE path applies overwrite — no TypeError, no SAVE_NEW fall-through."""
+    from co_cli.memory._extractor import ExtractionResult, MemoryCandidate, handle_extraction
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    entry = _seed_memory(memory_dir, 1, "User prefers pytest for testing", tags=["preference"])
+    slug = entry.path.stem
+    before_count = len(list(memory_dir.glob("*.md")))
+
+    deps = _make_deps(memory_dir=memory_dir)
+    frontend = _NullFrontend()
+
+    extraction = ExtractionResult(
+        memories=[
+            MemoryCandidate(
+                candidate="User prefers pytest for all testing purposes",
+                tag="feedback",
+                confidence="high",
+                update_slug=slug,
+            )
+        ]
+    )
+
+    async with asyncio.timeout(10):
+        await handle_extraction(extraction, deps, frontend)
+
+    after_count = len(list(memory_dir.glob("*.md")))
+    assert after_count == before_count, (
+        f"UPDATE must not create a new file. Before: {before_count}, after: {after_count}"
+    )
+    updated_body = entry.path.read_text(encoding="utf-8")
+    assert "all testing purposes" in updated_body, (
+        "Existing file body must be updated by overwrite"
+    )
+    assert any("Updated:" in msg for msg in frontend.status_messages), (
+        "Frontend must receive on_status('Updated: ...') on successful overwrite"
+    )

@@ -1,6 +1,6 @@
 """Sub-agent helpers — result types and agent factories for co_cli/tools/subagent.py."""
 
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -34,18 +34,21 @@ def make_coder_agent(model: Any) -> Agent[CoDeps, CoderOutput]:
 
     Caller passes model_settings at agent.run() time.
     """
-    agent: Agent[CoDeps, CoderOutput] = _make_base_agent(
-        model,
-        CoderOutput,
-        (
-            "You are a read-only code analysis agent. "
-            "Investigate the codebase using the available file tools and return a structured analysis. "
-            "You cannot write or modify files. Focus on understanding the code as-is."
+    agent = cast(
+        Agent[CoDeps, CoderOutput],
+        _make_base_agent(
+            model,
+            CoderOutput,
+            (
+                "You are a read-only code analysis agent. "
+                "Investigate the codebase using the available file tools and return a structured analysis. "
+                "You cannot write or modify files. Focus on understanding the code as-is."
+            ),
         ),
     )
-    agent.tool(list_directory, requires_approval=False)
-    agent.tool(read_file, requires_approval=False)
-    agent.tool(find_in_files, requires_approval=False)
+    agent.tool(list_directory, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match; cast above is correct
+    agent.tool(read_file, requires_approval=False)  # type: ignore[arg-type]  # same as above
+    agent.tool(find_in_files, requires_approval=False)  # type: ignore[arg-type]  # same as above
     return agent
 
 
@@ -65,19 +68,22 @@ def make_research_agent(model: Any) -> Agent[CoDeps, ResearchOutput]:
 
     Caller passes model_settings at agent.run() time.
     """
-    agent: Agent[CoDeps, ResearchOutput] = _make_base_agent(
-        model,
-        ResearchOutput,
-        (
-            "You are a read-only research agent. "
-            "Search the web and fetch pages to answer the query. "
-            "Synthesize what you find into a grounded summary with sources. "
-            "Return a ResearchOutput with summary, sources (URLs), and confidence (0.0–1.0). "
-            "Set confidence=0.0 only if you found nothing after exhausting available searches."
+    agent = cast(
+        Agent[CoDeps, ResearchOutput],
+        _make_base_agent(
+            model,
+            ResearchOutput,
+            (
+                "You are a read-only research agent. "
+                "Search the web and fetch pages to answer the query. "
+                "Synthesize what you find into a grounded summary with sources. "
+                "Return a ResearchOutput with summary, sources (URLs), and confidence (0.0–1.0). "
+                "Set confidence=0.0 only if you found nothing after exhausting available searches."
+            ),
         ),
     )
-    agent.tool(web_search, requires_approval=False)
-    agent.tool(web_fetch, requires_approval=False)
+    agent.tool(web_search, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match; cast above is correct
+    agent.tool(web_fetch, requires_approval=False)  # type: ignore[arg-type]  # same as above
     return agent
 
 
@@ -99,19 +105,22 @@ def make_analysis_agent(model: Any) -> Agent[CoDeps, AnalysisOutput]:
 
     Caller passes model_settings at agent.run() time.
     """
-    agent: Agent[CoDeps, AnalysisOutput] = _make_base_agent(
-        model,
-        AnalysisOutput,
-        (
-            "You are a read-only analysis agent. "
-            "Use the available search tools to gather evidence, then compare, evaluate, "
-            "and synthesize the provided inputs. "
-            "Return a structured AnalysisOutput with a clear conclusion, "
-            "supporting evidence list, and your reasoning."
+    agent = cast(
+        Agent[CoDeps, AnalysisOutput],
+        _make_base_agent(
+            model,
+            AnalysisOutput,
+            (
+                "You are a read-only analysis agent. "
+                "Use the available search tools to gather evidence, then compare, evaluate, "
+                "and synthesize the provided inputs. "
+                "Return a structured AnalysisOutput with a clear conclusion, "
+                "supporting evidence list, and your reasoning."
+            ),
         ),
     )
-    agent.tool(search_knowledge, requires_approval=False)
-    agent.tool(search_drive_files, requires_approval=False)
+    agent.tool(search_knowledge, requires_approval=False)  # type: ignore[arg-type]  # pydantic-ai tool() overloads require exact AgentDepsT match; cast above is correct
+    agent.tool(search_drive_files, requires_approval=False)  # type: ignore[arg-type]  # same as above
     return agent
 
 
@@ -134,15 +143,18 @@ def make_thinking_agent(model: Any) -> Agent[CoDeps, ThinkingOutput]:
 
     Caller passes model_settings at agent.run() time.
     """
-    return _make_base_agent(
-        model,
-        ThinkingOutput,
-        (
-            "You are a reasoning agent. "
-            "Decompose the problem, reason step-by-step, and return a structured result. "
-            "Return a ThinkingOutput with: "
-            "plan (1–3 sentence high-level approach), "
-            "steps (ordered action steps), "
-            "and conclusion (synthesized answer or recommendation)."
+    return cast(
+        Agent[CoDeps, ThinkingOutput],
+        _make_base_agent(
+            model,
+            ThinkingOutput,
+            (
+                "You are a reasoning agent. "
+                "Decompose the problem, reason step-by-step, and return a structured result. "
+                "Return a ThinkingOutput with: "
+                "plan (1–3 sentence high-level approach), "
+                "steps (ordered action steps), "
+                "and conclusion (synthesized answer or recommendation)."
+            ),
         ),
     )

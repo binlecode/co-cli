@@ -179,13 +179,14 @@ def search_notes(
 
             # Check ALL keywords match (AND logic)
             matches = [p.search(content) for p in patterns]
-            if not all(matches):
+            first_match = matches[0] if matches else None
+            if not all(matches) or first_match is None:
                 continue
 
             results.append(
                 {
                     "file": str(note.relative_to(vault)),
-                    "snippet": _snippet_around(content, matches[0]),
+                    "snippet": _snippet_around(content, first_match),
                 }
             )
         except Exception:

@@ -76,6 +76,7 @@ def list_gmail_emails(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
     service, err = _get_gmail_service(ctx)
     if err:
         return err
+    assert service is not None
 
     try:
         response = service.users().messages().list(userId="me", maxResults=max_results).execute()
@@ -114,6 +115,7 @@ def search_gmail_emails(ctx: RunContext[CoDeps], query: str, max_results: int = 
     service, err = _get_gmail_service(ctx)
     if err:
         return err
+    assert service is not None
 
     try:
         response = (
@@ -149,6 +151,7 @@ def create_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str
     service, err = _get_gmail_service(ctx)
     if err:
         return err
+    assert service is not None
 
     try:
         message = MIMEText(body)

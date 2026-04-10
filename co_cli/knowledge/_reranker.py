@@ -62,7 +62,9 @@ def build_llm_reranker(
             return _parse_ranked_indices(json.loads(raw), n)
 
         if provider == "gemini":
-            from google import genai
+            from google import (
+                genai,  # type: ignore[attr-defined]  # google-generativeai lacks pyright stubs
+            )
             from google.genai import types
 
             client = genai.Client(api_key=api_key)

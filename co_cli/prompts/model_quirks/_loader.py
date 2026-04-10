@@ -45,7 +45,7 @@ The body is optional (models needing only inference tuning leave it empty).
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 
 from co_cli.knowledge._frontmatter import parse_frontmatter
 
@@ -171,12 +171,12 @@ def get_model_inference(provider: str, model_name: str | None) -> ModelInference
         num_ctx / extra_body.
     """
     if not model_name:
-        return dict(DEFAULT_INFERENCE)
+        return cast(ModelInference, dict(DEFAULT_INFERENCE))
 
     quirks = _load_quirk(provider.lower(), model_name)
     if quirks and "inference" in quirks:
-        return dict(quirks["inference"])
-    return dict(DEFAULT_INFERENCE)
+        return cast(ModelInference, dict(quirks["inference"]))
+    return cast(ModelInference, dict(DEFAULT_INFERENCE))
 
 
 def get_counter_steering(provider: str, model_name: str) -> str:

@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
@@ -174,7 +175,7 @@ class Settings(BaseModel):
 
         Flat env vars are mapped into the nested sub-model structure.
         """
-        env_source: dict = (info.context or {}).get("env") if info.context else None
+        env_source: Mapping[str, str] | None = info.context.get("env") if info.context else None
         if env_source is None:
             env_source = os.environ
 

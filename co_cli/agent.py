@@ -104,6 +104,11 @@ def _build_mcp_toolsets(config: Settings) -> list:
                     cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
                 )
         else:
+            if cfg.command is None:
+                logger.warning(
+                    "MCP server %r: command required when url is not set — skipped", name
+                )
+                continue
             env = dict(cfg.env) if cfg.env else {}
             server = MCPServerStdio(
                 cfg.command,

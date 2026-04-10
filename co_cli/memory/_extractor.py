@@ -188,7 +188,6 @@ async def handle_extraction(
                 mem.candidate,
                 norm_tags,
                 deps.config.memory.auto_save_tags,
-                knowledge_store=deps.knowledge_store,
                 new_type=mem.tag,
                 new_description=mem.description or None,
             )
@@ -274,7 +273,6 @@ async def _run_extraction_async(
                     mem.candidate,
                     norm_tags,
                     deps.config.memory.auto_save_tags,
-                    knowledge_store=deps.knowledge_store,
                     new_type=mem.tag,
                     new_description=mem.description or None,
                 )

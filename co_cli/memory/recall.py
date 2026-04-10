@@ -31,7 +31,6 @@ class MemoryEntry:
     tags: list[str]
     created: str  # ISO8601
     updated: str | None = None
-    decay_protected: bool = False
     related: list[str] | None = None
     kind: str = "memory"
     artifact_type: str | None = None
@@ -98,7 +97,6 @@ def load_memories(
                     tags=fm.get("tags", []),
                     created=fm["created"],
                     updated=fm.get("updated"),
-                    decay_protected=fm.get("decay_protected", False),
                     related=fm.get("related"),
                     kind=entry_kind,
                     artifact_type=fm.get("artifact_type"),

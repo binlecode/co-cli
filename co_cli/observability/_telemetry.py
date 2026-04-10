@@ -2,6 +2,7 @@ import json
 import logging
 import sqlite3
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -55,9 +56,11 @@ class SQLiteSpanExporter(SpanExporter):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_parent ON spans(parent_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_start ON spans(start_time DESC)")
 
-    def export(self, spans: list[ReadableSpan]) -> SpanExportResult:
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         rows = []
         for span in spans:
+            if span.context is None:
+                continue
             # Standard OTel span ID formats
             span_id = format(span.context.span_id, "016x")
             trace_id = format(span.context.trace_id, "032x")

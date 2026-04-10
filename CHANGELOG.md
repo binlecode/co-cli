@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.65] - 2026-04-10
+
+### Fixed
+- **Memory UPDATE regression**: removed stale `knowledge_store=` kwarg from both `overwrite_memory()` call sites in `_extractor.py` — auto-extraction UPDATE paths were silently falling through to SAVE_NEW (creating duplicates) due to a TypeError from the deleted FTS parameter. Added BC-1 integration test to guard against regression.
+
+### Removed
+- **Dead write-chain parameters**: stripped `provenance` and `title` from the full `persist_memory` → `_persist_memory_inner` → `_write_memory` call chain — neither was ever written to frontmatter or had active callers; `title` was also removed from a stale `_cmd_new` call site.
+- **`_decay_multiplier()` function**: deleted dead exponential-decay helper from `tools/memory.py` (orphaned since FTS removal in v0.7.58); removed `import math` with it.
+- **`MemoryEntry.decay_protected` field**: removed from dataclass, frontmatter loading, and `list_memories` output — the retention system that consumed it was deleted in v0.7.63.
+- **Stale test fixture keys**: removed `provenance` and `auto_category` from `_seed_memory()` helper — neither key is written or read by any live code path.
+
+### Changed
+- **Pyright: 0 warnings**: resolved all 49 pre-existing type warnings across 13 files (`agent.py`, `config/_core.py`, `context/_history.py`, `deps.py`, `knowledge/_store.py`, `knowledge/_embedder.py`, `knowledge/_reranker.py`, `observability/_telemetry.py`, `prompts/model_quirks/_loader.py`, `tools/_subagent_builders.py`, `tools/google_gmail.py`, `tools/obsidian.py`, `tools/tool_output.py`).
+
 ## [0.7.63] - 2026-04-10
 
 ### Removed

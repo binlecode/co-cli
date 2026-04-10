@@ -17,6 +17,7 @@ from co_cli.context.types import MemoryRecallState, SafetyState
 
 if TYPE_CHECKING:
     from co_cli._model_factory import LlmModel
+    from co_cli.agent import ToolRegistry
     from co_cli.commands._skill_types import SkillConfig
     from co_cli.knowledge._store import KnowledgeStore
     from co_cli.tools.background import BackgroundTaskState
@@ -149,13 +150,13 @@ class CoDeps:
     # Config — the Settings instance, read-only after bootstrap
     config: Settings
     # Resource lock store (shared across parent + subagents)
-    resource_locks: ResourceLockStore = field(default=None, repr=False)
+    resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
     # Service handles (optional, set during bootstrap)
     knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
     # Bootstrap-set registries
     tool_index: dict[str, ToolInfo] = field(default_factory=dict)
-    tool_registry: object | None = field(default=None, repr=False)
+    tool_registry: ToolRegistry | None = field(default=None, repr=False)
     skill_commands: dict[str, SkillConfig] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)

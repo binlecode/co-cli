@@ -268,6 +268,10 @@ class SearchResult:
     description: str | None = None
 
 
+# Type alias for the (path, chunk_index) key used in RRF merging.
+type _ChunkKey = tuple[str, int | None]
+
+
 class KnowledgeStore:
     """SQLite FTS5 index for ranked search across knowledge sources.
 
@@ -347,8 +351,8 @@ class KnowledgeStore:
             self._llm_api_key,
         )
 
-        self._conn = sqlite3.connect(str(self._db_path))
-        self._conn.row_factory = sqlite3.Row
+        self._conn = sqlite3.connect(str(self._db_path))  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
+        self._conn.row_factory = sqlite3.Row  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
 
@@ -358,7 +362,7 @@ class KnowledgeStore:
             try:
                 self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
                 self._conn.commit()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
                 pass  # column already exists
 
         # Migration: add type and description columns.
@@ -366,7 +370,7 @@ class KnowledgeStore:
             try:
                 self._conn.execute(f"ALTER TABLE docs ADD COLUMN {col}")
                 self._conn.commit()
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
                 pass  # column already exists
 
         self._migrate_chunk_id()
@@ -838,7 +842,7 @@ class KnowledgeStore:
         params.append(limit)
         try:
             rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError as e:
+        except sqlite3.OperationalError as e:  # type: ignore[attr-defined]  # pysqlite3 is a binary extension without type stubs
             logger.warning(f"Chunks FTS search error: {e}")
             return []
         return [(row, "chunks") for row in rows]
@@ -1048,10 +1052,9 @@ class KnowledgeStore:
         k = 60
 
         # --- Non-memory leg: RRF keyed on (path, chunk_index) ---
-        ChunkKey = tuple  # (path, chunk_index)
-        chunk_rrf: dict[ChunkKey, float] = {}
-        chunk_fts_by_key: dict[ChunkKey, SearchResult] = {}
-        chunk_vec_by_key: dict[ChunkKey, SearchResult] = {}
+        chunk_rrf: dict[_ChunkKey, float] = {}
+        chunk_fts_by_key: dict[_ChunkKey, SearchResult] = {}
+        chunk_vec_by_key: dict[_ChunkKey, SearchResult] = {}
 
         for i, r in enumerate(fts_chunks):
             key = (r.path, r.chunk_index)
@@ -1065,7 +1068,7 @@ class KnowledgeStore:
 
         # Accumulate doc scores; track winning chunk per doc
         doc_rrf: dict[str, float] = {}
-        doc_winner_key: dict[str, ChunkKey] = {}
+        doc_winner_key: dict[str, _ChunkKey] = {}
         doc_winner_score: dict[str, float] = {}
 
         for key, score in chunk_rrf.items():

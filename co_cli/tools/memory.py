@@ -9,7 +9,6 @@ recency. FTS5/BM25 is not used for memories — only for articles and external s
 """
 
 import logging
-import math
 import re
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -64,27 +63,6 @@ def slugify(text: str) -> str:
 def _parse_created(created_str: str) -> datetime:
     """Parse an ISO8601 created timestamp to a timezone-aware datetime."""
     return datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-
-
-def _decay_multiplier(ts_iso: str, half_life_days: int) -> float:
-    """Compute exponential decay weight for a memory's age.
-
-    Returns a value in [0, 1]:
-      - age_days == 0 → 1.0 (no decay)
-      - age_days == half_life_days → ~0.5
-      - future-dated → 1.0 (clock-skew guard)
-
-    Args:
-        ts_iso: ISO8601 creation timestamp string
-        half_life_days: Number of days for weight to halve
-    """
-    try:
-        created = _parse_created(ts_iso)
-        now = datetime.now(UTC)
-        age_days = max(0, (now - created).days)
-        return max(0.0, min(1.0, math.exp(-math.log(2) * age_days / half_life_days)))
-    except Exception:
-        return 1.0
 
 
 def grep_recall(
@@ -465,7 +443,6 @@ async def list_memories(
                 "tags": m.tags,
                 "type": m.type,
                 "summary": summary,
-                "decay_protected": m.decay_protected,
             }
         )
 

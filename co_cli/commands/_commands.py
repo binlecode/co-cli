@@ -462,14 +462,11 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         console.print("[yellow]Could not summarize session — history not cleared.[/yellow]")
         return None
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     await _save_memory_impl(
         ctx.deps,
         content=summary,
         tags=[],
         related=[],
-        provenance="session",
-        title=f"session-{timestamp}",
         artifact_type=ArtifactTypeEnum.SESSION_SUMMARY,
     )
 
@@ -484,7 +481,7 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     except OSError as e:
         logger.warning("New session save failed: %s", e)
 
-    console.print(f"[dim]Session checkpointed as session-{timestamp}.md. Starting fresh.[/dim]")
+    console.print("[dim]Session checkpointed. Starting fresh.[/dim]")
     return []
 
 
@@ -774,7 +771,6 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
 
 async def _cmd_background(ctx: CommandContext, args: str) -> None:
     """Run a command in the background. Usage: /background <cmd>"""
-    from datetime import datetime
 
     from co_cli.tools.background import BackgroundTaskState, _make_task_id, spawn_task
 

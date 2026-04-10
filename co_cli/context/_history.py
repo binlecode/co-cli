@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from typing import cast
 
 from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
@@ -618,7 +619,8 @@ async def inject_opening_context(
         return messages
 
     # Inject as a system message at the end of the message list
-    memory_content = result.return_value
+    # recall_memory always returns a str via tool_output(); cast narrows ToolReturnContent
+    memory_content = cast(str, result.return_value)
     max_chars = ctx.deps.config.memory.injection_max_chars
     if len(memory_content) > max_chars:
         memory_content = memory_content[:max_chars]
@@ -687,7 +689,7 @@ def detect_safety_issues(
                 if isinstance(part, ToolCallPart):
                     if not doom_streak_done:
                         args_str = json.dumps(
-                            part.args.args_dict()
+                            part.args.args_dict()  # type: ignore[union-attr]  # part.args is str|dict|None at type level; hasattr guard is correct at runtime
                             if hasattr(part.args, "args_dict")
                             else str(part.args),
                             sort_keys=True,
