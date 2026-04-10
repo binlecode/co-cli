@@ -169,7 +169,7 @@ Persistent knowledge is flat Markdown files with YAML frontmatter.
 | `related` | `list[str] \| null` | one-hop links by slug |
 | `artifact_type` | `str \| null` | `session_summary` |
 | `origin_url` | `str \| null` | article source URL |
-| `decay_protected` | `bool` | retention exemption |
+| `decay_protected` | `bool` | prevents recall score decay |
 | `always_on` | `bool` | standing prompt injection |
 
 **Memory write lifecycle** — all writes route through `persist_memory()`, which acts as an upsert:
@@ -185,14 +185,11 @@ persist_memory()
   -> SAVE_NEW: acquire resource lock on new file path
                write new markdown file
                release lock
-  -> enforce_retention() if memory_max_count exceeded (cut oldest non-protected)
 ```
 
 The memory save agent (`_save.py`) is a singleton `Agent[None, SaveResult]` following the same pattern as `_extraction_agent` and `_summarizer_agent`. It receives the candidate content + manifest and returns a structured decision. Zero context debt on the main agent. Falls back to SAVE_NEW on timeout or error.
 
 Per-file resource locks (keyed by absolute file path) serialise concurrent callers (explicit save + auto-signal). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
-
-Retention applies to `kind="memory"` only; articles are not part of the memory cap.
 
 **Auto-signal saves** — after a clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). The extractor injects the existing memory manifest into the prompt so it can avoid redundant candidates and set `update_slug` for entries that update an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; otherwise, high-confidence candidates in the `auto_save_tags` allowlist save automatically, and low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag.
 
@@ -276,7 +273,6 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
-| `memory.max_count` | `CO_CLI_MEMORY_MAX_COUNT` | `200` | memory-only retention cap |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
 | `memory.auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["user", "feedback", "project", "reference"]` | memory types that auto-save at high confidence |
 | `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
@@ -325,7 +321,6 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
 | `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
-| `co_cli/memory/_retention.py` | cut-only memory retention |
 | `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |

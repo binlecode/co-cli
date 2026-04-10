@@ -174,11 +174,6 @@ async def save_memory(
         meta = result.metadata or {}
         span.set_attribute("memory.action", meta.get("action", "unknown"))
         span.set_attribute("memory.memory_id", meta.get("memory_id", ""))
-        if meta.get("decay_triggered"):
-            span.set_attribute("memory.decay_triggered", True)
-            span.set_attribute("memory.decay_count", meta.get("decay_count", 0))
-            span.set_attribute("memory.decay_strategy", meta.get("decay_strategy", ""))
-
     return result
 
 
@@ -407,7 +402,7 @@ async def list_memories(
     For personal notes, use list_notes. For cloud documents, use
     search_drive_files.
 
-    Use this for a full inventory or capacity check. Keep paginating until
+    Use this for a full inventory. Keep paginating until
     has_more is false when you need a complete listing.
 
     Returns a dict with:
@@ -417,7 +412,6 @@ async def list_memories(
     - offset: starting position of this page
     - limit: page size requested
     - has_more: true if more pages exist beyond this one
-    - capacity: configured memory capacity limit
     - memories: list of summary dicts with id, created, tags, summary, kind
 
     Args:
@@ -443,7 +437,6 @@ async def list_memories(
             offset=offset,
             limit=limit,
             has_more=False,
-            capacity=ctx.deps.config.memory.max_count,
             memories=[],
         )
 
@@ -479,7 +472,7 @@ async def list_memories(
     has_more = offset + limit < total
 
     # Format as markdown list with lifecycle indicators
-    lines = [f"Total memories: {total}/{ctx.deps.config.memory.max_count}\n"]
+    lines = [f"Total memories: {total}\n"]
 
     for md in memory_dicts:
         # Format dates
@@ -493,14 +486,11 @@ async def list_memories(
         # Format type label
         category_str = f" [{md['type']}]" if md.get("type") else ""
 
-        # Format protection indicator
-        protected_str = " 🔒" if md.get("decay_protected") else ""
-
         kind_str = f" [{md.get('kind', 'memory')}]"
         artifact_str = f" ({md['artifact_type']})" if md.get("artifact_type") else ""
         display_id = str(md["id"])[:8] if isinstance(md["id"], str) else f"{md['id']:03d}"
         lines.append(
-            f"**{display_id}** ({date_str}){kind_str}{artifact_str}{category_str}{protected_str} "
+            f"**{display_id}** ({date_str}){kind_str}{artifact_str}{category_str} "
             f": {md['summary']}"
         )
 
@@ -518,7 +508,6 @@ async def list_memories(
         offset=offset,
         limit=limit,
         has_more=has_more,
-        capacity=ctx.deps.config.memory.max_count,
         memories=memory_dicts,
     )
 

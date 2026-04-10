@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.63] - 2026-04-10
+
+### Removed
+- **Memory retention enforcement**: deleted `_retention.py` and the enforcement block in `_lifecycle.py` — `persist_memory` is now a pure write; no memory files are ever auto-deleted. Grep-based recall surfaces relevant memories regardless of count, making eviction pure downside (silent data loss, zero recall benefit).
+- **`max_count` config field**: removed `MemorySettings.max_count` and `CO_CLI_MEMORY_MAX_COUNT` env var — the capacity concept no longer exists.
+- **`list_memories` capacity display**: removed `Total memories: N/max` fraction, `capacity` metadata key, and `🔒` protection indicator — the indicator with no enforcement was user-visible misinformation.
+
 ## [0.7.61] - 2026-04-10
 
 ### Fixed

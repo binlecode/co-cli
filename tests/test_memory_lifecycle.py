@@ -1,7 +1,7 @@
-"""Functional tests for memory lifecycle — upsert, lock-based on_failure, retention.
+"""Functional tests for memory lifecycle — upsert, lock-based on_failure.
 
 Covers persist_memory write, upsert routing via memory save agent, resource lock
-concurrency, overflow cut, and on_failure behavior.
+concurrency, and on_failure behavior.
 """
 
 import asyncio
@@ -70,14 +70,8 @@ def _seed_memory(
 
 def _make_deps(
     memory_dir: Path | None = None,
-    max_count: int = 200,
 ) -> CoDeps:
-    cfg = _CONFIG.model_copy(
-        update={
-            "memory": _CONFIG.memory.model_copy(update={"max_count": max_count}),
-        }
-    )
-    deps_kwargs = {"shell": ShellBackend(), "config": cfg}
+    deps_kwargs = {"shell": ShellBackend(), "config": _CONFIG}
     if memory_dir is not None:
         deps_kwargs["memory_dir"] = memory_dir
     return CoDeps(**deps_kwargs)
@@ -105,79 +99,7 @@ def test_persist_memory_writes_new_file(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 2. Overflow cut — oldest unprotected entries cut until total <= cap
-# ---------------------------------------------------------------------------
-
-
-def test_overflow_cut_oldest_unprotected(tmp_path: Path):
-    """After persist_memory, total > max_count triggers cut of oldest unprotected."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    max_count = 5
-    for i in range(1, max_count + 1):
-        _seed_memory(
-            memory_dir,
-            i,
-            f"Old memory number {i}",
-            days_ago=max_count - i + 10,
-            decay_protected=(i == 1),
-        )
-
-    deps = _make_deps(memory_dir=memory_dir, max_count=max_count)
-    asyncio.run(persist_memory(deps, "Brand new important memory", ["test"], None))
-
-    after = list(memory_dir.glob("*.md"))
-    assert len(after) <= max_count, f"Total {len(after)} should be <= {max_count}"
-
-    # Protected memory (id=1) must survive
-    remaining_ids: set[int] = set()
-    for p in after:
-        raw = p.read_text(encoding="utf-8")
-        if "---" in raw:
-            fm = yaml.safe_load(raw.split("---")[1])
-            if isinstance(fm, dict) and "id" in fm:
-                remaining_ids.add(fm["id"])
-    assert 1 in remaining_ids, "Protected memory (id=1) must survive overflow cut"
-
-
-# ---------------------------------------------------------------------------
-# 3. Retention cap isolates memories — article is never evicted
-# ---------------------------------------------------------------------------
-
-
-def test_retention_cap_excludes_articles(tmp_path: Path):
-    """Retention cap counts only memories; articles must never be deleted."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-
-    # Seed 3 memories (oldest to newest) and 1 article
-    for i in range(1, 4):
-        _seed_memory(memory_dir, i, f"Old memory {i}", days_ago=10 - i)
-    # Seed article as a regular md file with kind:article frontmatter
-    article_path = memory_dir / "100-my-article.md"
-    article_fm = {
-        "id": 100,
-        "kind": "article",
-        "created": "2026-01-01T00:00:00+00:00",
-        "tags": [],
-        "decay_protected": True,
-        "origin_url": "https://example.com",
-    }
-    article_path.write_text(
-        f"---\n{yaml.dump(article_fm, default_flow_style=False)}---\n\nArticle body.\n",
-        encoding="utf-8",
-    )
-
-    # max_count=3: saving one more memory should evict oldest memory, not the article
-    deps = _make_deps(memory_dir=memory_dir, max_count=3)
-    asyncio.run(persist_memory(deps, "Brand new memory triggers retention", ["test"], None))
-
-    remaining = list(memory_dir.glob("*.md"))
-    assert article_path in remaining, "Article must never be evicted by memory retention cap"
-    assert len(remaining) <= 4, f"Total files {len(remaining)} should be <= 4"
-
-
-# ---------------------------------------------------------------------------
-# 4. Lock conflict — on_failure="add" → ResourceBusyError raised
+# 2. Lock conflict — on_failure="add" → ResourceBusyError raised
 # ---------------------------------------------------------------------------
 
 

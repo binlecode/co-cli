@@ -306,7 +306,7 @@ YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses grep-only reca
 
 #### Knowledge — Articles (`tools/articles.py`)
 
-Decay-protected markdown files in `library_dir`. Never pruned by retention policy.
+Decay-protected markdown files in `library_dir`. Never auto-deleted.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|

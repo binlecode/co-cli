@@ -17,7 +17,6 @@ from pydantic_ai.settings import ModelSettings
 
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import ArtifactTypeEnum
-from co_cli.memory._retention import enforce_retention
 from co_cli.tools.tool_output import tool_output_raw
 
 _TRACER = otel_trace.get_tracer("co.memory")
@@ -39,7 +38,7 @@ async def persist_memory(
     type_value: str | None = None,
     description_value: str | None = None,
 ) -> ToolReturn:
-    """Write a memory through the full lifecycle: upsert → write → retention.
+    """Write a memory through the full lifecycle: upsert → write.
 
     Entry point for all write paths (explicit save_memory tool and
     auto-signal save). When a memory save agent is available (model is not None),
@@ -62,7 +61,6 @@ async def persist_memory(
 
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
-        May include decay_triggered, decay_count, decay_strategy keys.
     """
     with _TRACER.start_as_current_span("co.memory.write") as span:
         span.set_attribute("memory.provenance", provenance or "auto")
@@ -99,10 +97,7 @@ async def _persist_memory_inner(
     description_value: str | None = None,
 ) -> ToolReturn:
     # Import here to avoid module-level circular import
-    from co_cli.tools.memory import (
-        load_memories,
-        slugify,
-    )
+    from co_cli.tools.memory import slugify
 
     memory_dir = deps.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
@@ -133,23 +128,6 @@ async def _persist_memory_inner(
         type_value,
         description_value,
     )
-
-    # Retention cap — runs outside the lock (idempotent, no read-modify-write race)
-    all_memories = load_memories(memory_dir, kind="memory")
-    total_count = len(all_memories)
-
-    if total_count > deps.config.memory.max_count:
-        logger.info(
-            f"Memory limit exceeded ({total_count}/{deps.config.memory.max_count}) "
-            f"- triggering retention cut"
-        )
-        decay_result = await enforce_retention(deps, all_memories)
-        result.metadata["decay_triggered"] = True
-        result.metadata["decay_count"] = decay_result["decayed"]
-        result.metadata["decay_strategy"] = decay_result["strategy"]
-        result.return_value += (
-            f"\n♻️ Decayed {decay_result['decayed']} old memories ({decay_result['strategy']})"
-        )
 
     return result
 
