@@ -21,6 +21,8 @@ from co_cli.commands._skill_types import SkillConfig
 from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
+from co_cli.memory.recall import MemoryEntry, load_memories
+from co_cli.tools.memory import grep_recall
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,9 @@ class CommandContext:
     # Holds the live WordCompleter from chat_loop() — typed Any to keep _commands.py
     # free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
+    # Injectable input function for testable confirmation prompts.
+    # When None, callers fall back to console.input().
+    input_fn: Callable[[str], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -379,65 +384,9 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
 
 async def _cmd_forget(ctx: CommandContext, args: str) -> None:
-    """Delete a memory by ID."""
-
-    from co_cli.knowledge._frontmatter import parse_frontmatter
-
-    if not args.strip():
-        console.print("[bold red]Usage:[/bold red] /forget <memory_id>")
-        console.print("[dim]Example: /forget 5  or  /forget a1b2c3d4[/dim]")
-        return None
-
-    arg = args.strip()
-    memory_dir = ctx.deps.memory_dir
-    if not memory_dir.exists():
-        console.print("[dim]No memory directory found.[/dim]")
-        return None
-
-    # Legacy integer path: glob {id:03d}-*.md
-    file_to_delete = None
-    try:
-        memory_id_int = int(arg)
-        matching_files = list(memory_dir.glob(f"{memory_id_int:03d}-*.md"))
-        if matching_files:
-            file_to_delete = matching_files[0]
-    except ValueError:
-        pass
-
-    # UUID prefix path: scan frontmatter for startswith match
-    if file_to_delete is None and len(arg) >= 6:
-        for p in memory_dir.glob("*.md"):
-            try:
-                raw = p.read_text(encoding="utf-8")
-                fm, _ = parse_frontmatter(raw)
-                fid = str(fm.get("id", ""))
-                if fid.startswith(arg):
-                    file_to_delete = p
-                    break
-            except Exception:
-                continue
-
-    if file_to_delete is None:
-        console.print(f"[bold red]Memory {arg} not found[/bold red]")
-        console.print("[dim]Use /list_memories to see available IDs.[/dim]")
-        return None
-
-    # Guard: refuse to delete read-only system assets
-    try:
-        raw = file_to_delete.read_text(encoding="utf-8")
-        fm, _ = parse_frontmatter(raw)
-        if fm.get("read_only"):
-            console.print(
-                "[bold red]Cannot delete system memory[/bold red] — "
-                "this is a read-only character asset."
-            )
-            return None
-    except Exception:
-        pass
-
-    file_to_delete.unlink()
-    console.print(f"[success]✓ Deleted memory {arg}: {file_to_delete.name}[/success]")
-    return None
+    """Deprecated alias for /memory forget — prints a hint and delegates."""
+    console.print("[dim]→ /forget is deprecated — use /memory forget[/dim]")
+    await _cmd_memory(ctx, "forget " + args)
 
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
@@ -1104,6 +1053,180 @@ async def _cmd_sessions(ctx: CommandContext, args: str) -> None:
     return None
 
 
+# -- /memory ---------------------------------------------------------------
+
+_MEMORY_USAGE = (
+    "[bold]Usage:[/bold] /memory list|count|forget [query] [--older-than N] [--type X] [--kind X]"
+)
+
+
+def _parse_memory_args(args: str) -> tuple[str | None, dict[str, Any]]:
+    """Parse /memory subcommand args into (query, filters).
+
+    Flags: --older-than N (int days), --type X (str), --kind X (str).
+    Remaining non-flag tokens are joined as the query string.
+    Returns (None, filters) when no query tokens are present.
+    """
+    tokens = args.split()
+    filters: dict[str, Any] = {}
+    query_tokens: list[str] = []
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok == "--older-than" and idx + 1 < len(tokens):
+            try:
+                filters["older_than_days"] = int(tokens[idx + 1])
+                idx += 2
+                continue
+            except ValueError:
+                pass
+        elif tok == "--type" and idx + 1 < len(tokens):
+            filters["type"] = tokens[idx + 1]
+            idx += 2
+            continue
+        elif tok == "--kind" and idx + 1 < len(tokens):
+            filters["kind"] = tokens[idx + 1]
+            idx += 2
+            continue
+        query_tokens.append(tok)
+        idx += 1
+    query = " ".join(query_tokens) if query_tokens else None
+    return query, filters
+
+
+def _apply_memory_filters(
+    entries: list[MemoryEntry], filters: dict[str, Any]
+) -> list[MemoryEntry]:
+    """Apply older_than_days and type filters to a loaded entry list.
+
+    kind is handled upstream via load_memories(kind=...) and is not re-applied here.
+    """
+    result = entries
+    if "older_than_days" in filters:
+        cutoff_days = filters["older_than_days"]
+        now = datetime.now(UTC)
+        result = [
+            m
+            for m in result
+            if (now - datetime.fromisoformat(m.created.replace("Z", "+00:00"))).days > cutoff_days
+        ]
+    if "type" in filters:
+        type_filter = filters["type"]
+        result = [m for m in result if m.type == type_filter]
+    return result
+
+
+async def _subcmd_memory_list(
+    ctx: CommandContext, query: str | None, filters: dict[str, Any]
+) -> None:
+    """Display matching memories — one line each, with a count footer."""
+    kind_filter = filters.get("kind")
+    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = _apply_memory_filters(entries, filters)
+    if query is not None:
+        entries = grep_recall(entries, query, max_results=len(entries) or 1)
+    if not entries:
+        console.print("[dim]No memories found.[/dim]")
+    else:
+        for m in entries:
+            id_prefix = str(m.id)[:8]
+            created = m.created[:10]
+            type_label = m.type or ""
+            snippet = m.content[:80]
+            console.print(f"{id_prefix}  {created}  [{m.kind}]  {type_label}  {snippet}")
+    console.print(f"[dim]{len(entries)} memories[/dim]")
+
+
+async def _subcmd_memory_count(
+    ctx: CommandContext, query: str | None, filters: dict[str, Any]
+) -> None:
+    """Print the count of matching memories."""
+    kind_filter = filters.get("kind")
+    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = _apply_memory_filters(entries, filters)
+    if query is not None:
+        entries = grep_recall(entries, query, max_results=len(entries) or 1)
+    console.print(f"{len(entries)} memories")
+
+
+async def _subcmd_memory_forget(
+    ctx: CommandContext, query: str | None, filters: dict[str, Any]
+) -> None:
+    """Delete matching memories after user confirmation.
+
+    BC-1: refuses if no query and no filters supplied.
+    BC-2: always prompts for y/N confirmation before deleting.
+    BC-3: skips read_only entries with a per-entry warning.
+    """
+    # BC-1: reject bare /memory forget with no selector
+    if query is None and not filters:
+        console.print(
+            "[bold red]Usage:[/bold red] /memory forget <query>"
+            " [--older-than N] [--type X] [--kind X]"
+        )
+        console.print("[dim]Provide a query or at least one filter to select memories.[/dim]")
+        return None
+
+    kind_filter = filters.get("kind")
+    entries = load_memories(ctx.deps.memory_dir, kind=kind_filter)
+    entries = _apply_memory_filters(entries, filters)
+    if query is not None:
+        entries = grep_recall(entries, query, max_results=len(entries) or 1)
+
+    if not entries:
+        console.print("[dim]No memories matched.[/dim]")
+        return None
+
+    # BC-2: preview + confirm
+    for m in entries:
+        id_prefix = str(m.id)[:8]
+        created = m.created[:10]
+        type_label = m.type or ""
+        snippet = m.content[:80]
+        console.print(f"{id_prefix}  {created}  [{m.kind}]  {type_label}  {snippet}")
+
+    prompt_text = f"Delete {len(entries)} memories? [y/N] "
+    response = (ctx.input_fn or console.input)(prompt_text)
+    if response.strip().lower() != "y":
+        console.print("[dim]Aborted.[/dim]")
+        return None
+
+    deleted = 0
+    for m in entries:
+        # BC-3: skip read_only entries
+        if m.read_only:
+            console.print(
+                f"[bold yellow]Skipped[/bold yellow] {str(m.id)[:8]} — read-only memory."
+            )
+            continue
+        m.path.unlink()
+        deleted += 1
+
+    console.print(f"[success]✓ Deleted {deleted} memories.[/success]")
+    return None
+
+
+async def _cmd_memory(ctx: CommandContext, args: str) -> None:
+    """Dispatch /memory subcommands: list, count, forget."""
+    parts = args.strip().split(maxsplit=1)
+    if not parts:
+        console.print(_MEMORY_USAGE)
+        return None
+    subcommand = parts[0].lower()
+    rest = parts[1] if len(parts) > 1 else ""
+    query, filters = _parse_memory_args(rest)
+    if subcommand == "list":
+        await _subcmd_memory_list(ctx, query, filters)
+    elif subcommand == "count":
+        await _subcmd_memory_count(ctx, query, filters)
+    elif subcommand == "forget":
+        await _subcmd_memory_forget(ctx, query, filters)
+    else:
+        console.print(f"[bold red]Unknown /memory subcommand:[/bold red] {subcommand}")
+        console.print(_MEMORY_USAGE)
+    return None
+
+
 # -- Registry --------------------------------------------------------------
 
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {
@@ -1118,7 +1241,16 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "compact": SlashCommand(
         "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
     ),
-    "forget": SlashCommand("forget", "Delete a memory by ID", _cmd_forget),
+    "memory": SlashCommand(
+        "memory",
+        "List, count, or delete memories — /memory list|count|forget [query] [flags]",
+        _cmd_memory,
+    ),
+    "forget": SlashCommand(
+        "forget",
+        "[deprecated] Delete a memory — use /memory forget",
+        _cmd_forget,
+    ),
     "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),
     "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),
     "background": SlashCommand("background", "Run a command in the background", _cmd_background),

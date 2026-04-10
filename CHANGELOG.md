@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.67] - 2026-04-10
+
+### Added
+- **`/memory` command**: new REPL built-in with `list`, `count`, and `forget` subcommands — shared filter surface (`--older-than N`, `--type X`, `--kind X`, freetext query) lets users audit and bulk-delete their memory store without spinning up an LLM turn.
+- **`MemoryEntry.read_only`**: new field populated from frontmatter; `/memory forget` skips read-only entries with a per-entry warning (BC-3).
+- **`CommandContext.input_fn`**: injectable confirmation callback enabling fully deterministic tests for destructive REPL commands.
+
+### Changed
+- **`/forget` deprecated**: now prints a hint and routes to `/memory forget`; existing `/forget <query>` workflows continue to work (BC-4).
+
 ## [0.7.65] - 2026-04-10
 
 ### Fixed

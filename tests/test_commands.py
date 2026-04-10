@@ -219,7 +219,7 @@ async def test_approval_deny():
 
 @pytest.mark.asyncio
 async def test_forget_command_deletes_file(tmp_path):
-    """/forget removes the memory file; no FTS cleanup (memory is grep-only)."""
+    """/forget alias routes to /memory forget and deletes a matched file on y confirm."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
 
@@ -239,12 +239,13 @@ async def test_forget_command_deletes_file(tmp_path):
             session=CoSessionState(session_id="test-forget-file"),
         ),
         agent=_AGENT,
+        input_fn=lambda _: "y",
     )
 
-    result = await dispatch("/forget 1", ctx)
+    result = await dispatch("/forget xyloquartz-forget-file", ctx)
 
     assert isinstance(result, LocalOnly)
-    assert not memory_file.exists(), "File must be deleted by /forget"
+    assert not memory_file.exists(), "File must be deleted by /forget alias"
 
 
 # --- Safe command classification ---
@@ -485,3 +486,260 @@ def test_cleanup_skill_clears_active_skill_name():
     deps.runtime.active_skill_name = "my-skill"
     cleanup_skill_run_state({}, deps)
     assert deps.runtime.active_skill_name is None
+
+
+# ---------------------------------------------------------------------------
+# /memory list and /memory count
+# ---------------------------------------------------------------------------
+
+
+def _write_memory(
+    memory_dir: Path, filename: str, entry_id: str, content: str, **fm_extra
+) -> Path:
+    """Write a minimal valid memory file and return its path."""
+    from datetime import UTC, datetime
+
+    created = fm_extra.pop("created", datetime.now(UTC).isoformat())
+    kind = fm_extra.pop("kind", "memory")
+    tags = fm_extra.pop("tags", [])
+    tags_yaml = "[" + ", ".join(tags) + "]"
+    extra_lines = "".join(f"{k}: {v}\n" for k, v in fm_extra.items())
+    raw = (
+        f"---\nid: {entry_id}\nkind: {kind}\ncreated: '{created}'\ntags: {tags_yaml}\n"
+        f"{extra_lines}---\n\n{content}\n"
+    )
+    path = memory_dir / filename
+    path.write_text(raw, encoding="utf-8")
+    return path
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_list_all(tmp_path):
+    """/memory list with no filters shows all seeded memories."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "a.md", "aaa-0001", "alpha content")
+    _write_memory(memory_dir, "b.md", "bbb-0002", "beta content")
+    _write_memory(memory_dir, "c.md", "ccc-0003", "gamma content")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory list", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "aaa-0001" in out
+    assert "bbb-0002" in out
+    assert "ccc-0003" in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_list_query(tmp_path):
+    """/memory list <keyword> returns only entries whose content contains the keyword."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "a.md", "aaa-0001", "unique-zeta-keyword in here")
+    _write_memory(memory_dir, "b.md", "bbb-0002", "nothing special")
+    _write_memory(memory_dir, "c.md", "ccc-0003", "also nothing relevant")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory list unique-zeta-keyword", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "aaa-0001" in out
+    assert "bbb-0002" not in out
+    assert "ccc-0003" not in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_list_older_than(tmp_path):
+    """/memory list --older-than 30 returns only entries older than 30 days."""
+    from datetime import UTC, datetime, timedelta
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    old_date = (datetime.now(UTC) - timedelta(days=100)).isoformat()
+    recent_date = (datetime.now(UTC) - timedelta(days=5)).isoformat()
+    _write_memory(memory_dir, "old.md", "old-entry-id", "old content", created=old_date)
+    _write_memory(memory_dir, "recent.md", "new-entry-id", "recent content", created=recent_date)
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory list --older-than 30", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "old-entr" in out
+    assert "new-entr" not in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_list_type(tmp_path):
+    """/memory list --type feedback returns only entries with type: feedback."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "fb.md", "fb-entry-id", "feedback content", type="feedback")
+    _write_memory(memory_dir, "pr.md", "pr-entry-id", "project content", type="project")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory list --type feedback", ctx)
+
+    assert isinstance(result, LocalOnly)
+    out = cap.get()
+    assert "fb-entry" in out
+    assert "pr-entry" not in out
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_count_all(tmp_path):
+    """/memory count prints the total number of memories."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "a.md", "id-alpha", "alpha")
+    _write_memory(memory_dir, "b.md", "id-beta", "beta")
+    _write_memory(memory_dir, "c.md", "id-gamma", "gamma")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory count", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "3" in cap.get()
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_count_query(tmp_path):
+    """/memory count <keyword> prints the count of matching entries only."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "a.md", "id-match1", "xylophone-unique-token here")
+    _write_memory(memory_dir, "b.md", "id-match2", "xylophone-unique-token also")
+    _write_memory(memory_dir, "c.md", "id-nomatch", "nothing relevant at all")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    with console.capture() as cap:
+        result = await dispatch("/memory count xylophone-unique-token", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "2" in cap.get()
+
+
+# ---------------------------------------------------------------------------
+# /memory forget
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_no_args(tmp_path):
+    """/memory forget with no args prints usage and deletes nothing (BC-1)."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    mem_file = _write_memory(memory_dir, "a.md", "id-should-stay", "some content")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    result = await dispatch("/memory forget", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert mem_file.exists(), "File must NOT be deleted when no args supplied"
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_confirm_yes(tmp_path):
+    """/memory forget <query> with y confirmation deletes all matched files."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    f1 = _write_memory(memory_dir, "a.md", "id-del-1", "zeta-forget-token content")
+    f2 = _write_memory(memory_dir, "b.md", "id-del-2", "zeta-forget-token also here")
+    f3 = _write_memory(memory_dir, "c.md", "id-keep", "unrelated content")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx.input_fn = lambda _: "y"
+    result = await dispatch("/memory forget zeta-forget-token", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert not f1.exists(), "Matched file 1 must be deleted"
+    assert not f2.exists(), "Matched file 2 must be deleted"
+    assert f3.exists(), "Unmatched file must NOT be deleted"
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_confirm_no(tmp_path):
+    """/memory forget aborts when user answers n — no files deleted."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    f1 = _write_memory(memory_dir, "a.md", "id-safe-1", "omega-abort-token content")
+    f2 = _write_memory(memory_dir, "b.md", "id-safe-2", "omega-abort-token also")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx.input_fn = lambda _: "n"
+    result = await dispatch("/memory forget omega-abort-token", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert f1.exists(), "File 1 must NOT be deleted on n confirmation"
+    assert f2.exists(), "File 2 must NOT be deleted on n confirmation"
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_no_match(tmp_path):
+    """/memory forget <query> with no matching entries prints No memories matched."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    _write_memory(memory_dir, "a.md", "id-exists", "some totally different content")
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx.input_fn = lambda _: "y"
+    with console.capture() as cap:
+        result = await dispatch("/memory forget nonexistent-zzz-query", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert "No memories matched" in cap.get()
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_forget_read_only_skipped(tmp_path):
+    """/memory forget skips read_only=True entries with a warning (BC-3)."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    protected = _write_memory(
+        memory_dir, "ro.md", "id-protected", "read-only-target content", read_only=True
+    )
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx.input_fn = lambda _: "y"
+    result = await dispatch("/memory forget read-only-target", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert protected.exists(), "read_only file must NOT be deleted"
+
+
+# ---------------------------------------------------------------------------
+# /memory registration and /forget alias (TASK-3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cmd_memory_registered(tmp_path):
+    """/memory list dispatches successfully — command is registered in BUILTIN_COMMANDS."""
+    ctx = _make_ctx(memory_dir=tmp_path)
+    result = await dispatch("/memory list", ctx)
+    assert isinstance(result, LocalOnly)
+
+
+@pytest.mark.asyncio
+async def test_cmd_forget_alias(tmp_path):
+    """/forget <query> routes through /memory forget and deletes matched entry on y confirm (BC-4)."""
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir()
+    mem_file = _write_memory(
+        memory_dir, "alias.md", "alias-test-id", "bc4-alias-unique-token content"
+    )
+
+    ctx = _make_ctx(memory_dir=memory_dir)
+    ctx.input_fn = lambda _: "y"
+    result = await dispatch("/forget bc4-alias-unique-token", ctx)
+
+    assert isinstance(result, LocalOnly)
+    assert not mem_file.exists(), "/forget alias must delete the matched memory"

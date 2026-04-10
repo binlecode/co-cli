@@ -539,42 +539,53 @@ def test_load_soul_mindsets_from_role_path():
     assert len(result) > 100
 
 
-def test_forget_refuses_read_only(tmp_path: Path):
-    """'/forget' refuses to delete files with read_only: true."""
-    import asyncio
-
+@pytest.mark.asyncio
+async def test_forget_refuses_read_only(tmp_path: Path):
+    """/memory forget skips read_only files and deletes normal ones."""
     import yaml
 
-    from co_cli.commands._commands import _cmd_forget
-    from co_cli.deps import CoDeps
-    from co_cli.tools.shell_backend import ShellBackend
+    from co_cli.commands._commands import CommandContext, dispatch
 
     # Seed a read_only file
     memory_dir = tmp_path / "memory"
     memory_dir.mkdir()
-    fm_ro = {"id": 99, "created": "2026-01-01T00:00:00+00:00", "read_only": True, "tags": []}
-    md_ro = f"---\n{yaml.dump(fm_ro, default_flow_style=False)}---\n\nSystem memory.\n"
+    fm_ro = {
+        "id": "ro-system-id",
+        "created": "2026-01-01T00:00:00+00:00",
+        "read_only": True,
+        "tags": [],
+    }
+    md_ro = f"---\n{yaml.dump(fm_ro, default_flow_style=False)}---\n\nro-system-token content.\n"
     ro_file = memory_dir / "099-system-asset.md"
     ro_file.write_text(md_ro, encoding="utf-8")
 
     # Seed a normal (deletable) file
-    fm_normal = {"id": 100, "created": "2026-01-01T00:00:00+00:00", "tags": []}
-    md_normal = f"---\n{yaml.dump(fm_normal, default_flow_style=False)}---\n\nUser memory.\n"
+    fm_normal = {"id": "normal-user-id", "created": "2026-01-01T00:00:00+00:00", "tags": []}
+    md_normal = (
+        f"---\n{yaml.dump(fm_normal, default_flow_style=False)}---\n\nnormal-user-token content.\n"
+    )
     normal_file = memory_dir / "100-user-memory.md"
     normal_file.write_text(md_normal, encoding="utf-8")
 
     deps = CoDeps(shell=ShellBackend(), config=make_settings(), memory_dir=memory_dir)
+    # agent slot is unused by _subcmd_memory_forget — only deps and input_fn are accessed
+    ctx_ro = CommandContext(
+        message_history=[],
+        deps=deps,
+        agent=None,  # type: ignore[arg-type] — not accessed in this code path
+        input_fn=lambda _: "y",
+    )
 
-    class FakeCommandContext:
-        def __init__(self, deps: CoDeps):
-            self.deps = deps
+    # read_only file must survive /memory forget
+    await dispatch("/memory forget ro-system-token", ctx_ro)
+    assert ro_file.exists(), "read_only file must survive /memory forget"
 
-    ctx = FakeCommandContext(deps)
-
-    # Try to forget the read_only file — should be refused
-    asyncio.run(_cmd_forget(ctx, "99"))
-    assert ro_file.exists(), "read_only file must survive /forget"
-
-    # Try to forget the normal file — should be deleted
-    asyncio.run(_cmd_forget(ctx, "100"))
-    assert not normal_file.exists(), "normal file must be deleted by /forget"
+    ctx_normal = CommandContext(
+        message_history=[],
+        deps=deps,
+        agent=None,  # type: ignore[arg-type]
+        input_fn=lambda _: "y",
+    )
+    # Normal file must be deleted
+    await dispatch("/memory forget normal-user-token", ctx_normal)
+    assert not normal_file.exists(), "normal file must be deleted by /memory forget"

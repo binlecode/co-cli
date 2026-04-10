@@ -171,6 +171,7 @@ Persistent knowledge is flat Markdown files with YAML frontmatter.
 | `origin_url` | `str \| null` | article source URL |
 | `decay_protected` | `bool` | prevents recall score decay |
 | `always_on` | `bool` | standing prompt injection |
+| `read_only` | `bool` | prevents deletion via `/memory forget` (BC-3 guard) |
 
 **Memory write lifecycle** — all writes route through `persist_memory()`, which acts as an upsert:
 

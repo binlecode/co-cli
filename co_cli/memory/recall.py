@@ -37,6 +37,7 @@ class MemoryEntry:
     always_on: bool = False
     description: str | None = None
     type: str | None = None
+    read_only: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ def load_memories(
                     always_on=fm.get("always_on", False),
                     description=fm.get("description"),
                     type=fm.get("type"),
+                    read_only=fm.get("read_only", False),
                 )
             )
         except Exception as e:
