@@ -78,6 +78,9 @@ pythonVersion = "3.12"
 include = ["co_cli"]
 exclude = ["tests", "evals", "scripts"]
 typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+reportMissingTypeStubs = false
 # pydantic-ai SDK generics (Agent, RunContext, ToolReturnContent) and
 # stub-less packages (pysqlite3, google-genai) produce false positives
 # that cannot be fixed without casts everywhere. Downgrade to warnings
