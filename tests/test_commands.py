@@ -214,40 +214,6 @@ async def test_approval_deny():
 # --- /new session checkpoint ---
 
 
-# --- /forget FTS eviction ---
-
-
-@pytest.mark.asyncio
-async def test_forget_command_deletes_file(tmp_path):
-    """/forget alias routes to /memory forget and deletes a matched file on y confirm."""
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True)
-
-    content = (
-        "---\nid: 1\nkind: memory\ncreated: '2026-01-01T00:00:00+00:00'\ntags: []\n---\n\n"
-        "xyloquartz-forget-file deletion keyword\n"
-    )
-    memory_file = memory_dir / "001-test-forget.md"
-    memory_file.write_text(content, encoding="utf-8")
-
-    ctx = CommandContext(
-        message_history=[],
-        deps=CoDeps(
-            shell=ShellBackend(),
-            config=make_settings(),
-            memory_dir=memory_dir,
-            session=CoSessionState(session_id="test-forget-file"),
-        ),
-        agent=_AGENT,
-        input_fn=lambda _: "y",
-    )
-
-    result = await dispatch("/forget xyloquartz-forget-file", ctx)
-
-    assert isinstance(result, LocalOnly)
-    assert not memory_file.exists(), "File must be deleted by /forget alias"
-
-
 # --- Safe command classification ---
 
 
@@ -698,25 +664,8 @@ async def test_cmd_memory_forget_no_match(tmp_path):
     assert "No memories matched" in cap.get()
 
 
-@pytest.mark.asyncio
-async def test_cmd_memory_forget_read_only_skipped(tmp_path):
-    """/memory forget skips read_only=True entries with a warning (BC-3)."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    protected = _write_memory(
-        memory_dir, "ro.md", "id-protected", "read-only-target content", read_only=True
-    )
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-    ctx.input_fn = lambda _: "y"
-    result = await dispatch("/memory forget read-only-target", ctx)
-
-    assert isinstance(result, LocalOnly)
-    assert protected.exists(), "read_only file must NOT be deleted"
-
-
 # ---------------------------------------------------------------------------
-# /memory registration and /forget alias (TASK-3)
+# /memory registration
 # ---------------------------------------------------------------------------
 
 
@@ -726,20 +675,3 @@ async def test_cmd_memory_registered(tmp_path):
     ctx = _make_ctx(memory_dir=tmp_path)
     result = await dispatch("/memory list", ctx)
     assert isinstance(result, LocalOnly)
-
-
-@pytest.mark.asyncio
-async def test_cmd_forget_alias(tmp_path):
-    """/forget <query> routes through /memory forget and deletes matched entry on y confirm (BC-4)."""
-    memory_dir = tmp_path / "memory"
-    memory_dir.mkdir()
-    mem_file = _write_memory(
-        memory_dir, "alias.md", "alias-test-id", "bc4-alias-unique-token content"
-    )
-
-    ctx = _make_ctx(memory_dir=memory_dir)
-    ctx.input_fn = lambda _: "y"
-    result = await dispatch("/forget bc4-alias-unique-token", ctx)
-
-    assert isinstance(result, LocalOnly)
-    assert not mem_file.exists(), "/forget alias must delete the matched memory"

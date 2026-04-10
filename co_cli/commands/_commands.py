@@ -383,12 +383,6 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     return ReplaceTranscript(history=new_history, compaction_applied=True)
 
 
-async def _cmd_forget(ctx: CommandContext, args: str) -> None:
-    """Deprecated alias for /memory forget — prints a hint and delegates."""
-    console.print("[dim]→ /forget is deprecated — use /memory forget[/dim]")
-    await _cmd_memory(ctx, "forget " + args)
-
-
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
     from co_cli.context.summarization import index_session_summary
@@ -1154,11 +1148,9 @@ async def _subcmd_memory_forget(
 ) -> None:
     """Delete matching memories after user confirmation.
 
-    BC-1: refuses if no query and no filters supplied.
-    BC-2: always prompts for y/N confirmation before deleting.
-    BC-3: skips read_only entries with a per-entry warning.
+    Refuses if no query and no filters supplied.
+    Always prompts for y/N confirmation before deleting.
     """
-    # BC-1: reject bare /memory forget with no selector
     if query is None and not filters:
         console.print(
             "[bold red]Usage:[/bold red] /memory forget <query>"
@@ -1177,7 +1169,6 @@ async def _subcmd_memory_forget(
         console.print("[dim]No memories matched.[/dim]")
         return None
 
-    # BC-2: preview + confirm
     for m in entries:
         id_prefix = str(m.id)[:8]
         created = m.created[:10]
@@ -1191,18 +1182,10 @@ async def _subcmd_memory_forget(
         console.print("[dim]Aborted.[/dim]")
         return None
 
-    deleted = 0
     for m in entries:
-        # BC-3: skip read_only entries
-        if m.read_only:
-            console.print(
-                f"[bold yellow]Skipped[/bold yellow] {str(m.id)[:8]} — read-only memory."
-            )
-            continue
         m.path.unlink()
-        deleted += 1
 
-    console.print(f"[success]✓ Deleted {deleted} memories.[/success]")
+    console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
     return None
 
 
@@ -1245,11 +1228,6 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
         "memory",
         "List, count, or delete memories — /memory list|count|forget [query] [flags]",
         _cmd_memory,
-    ),
-    "forget": SlashCommand(
-        "forget",
-        "[deprecated] Delete a memory — use /memory forget",
-        _cmd_forget,
     ),
     "approvals": SlashCommand("approvals", "Manage session approval rules", _cmd_approvals),
     "skills": SlashCommand("skills", "List and inspect loaded skills", _cmd_skills),

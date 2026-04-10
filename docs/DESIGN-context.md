@@ -172,7 +172,6 @@ Every file is parsed into a `MemoryEntry` dataclass (`memory/recall.py`). `valid
 | `artifact_type` | `str \| null` | no | `session_summary` — excluded from normal recall/search |
 | `origin_url` | `str \| null` | no | article source URL; dedup key in `save_article()` |
 | `always_on` | `bool` | no | standing prompt injection (capped at 5 entries) |
-| `read_only` | `bool` | no | prevents deletion via `/memory forget` (BC-3 guard) |
 
 #### 2.4.2 Read Path
 
@@ -240,7 +239,6 @@ The `/memory` built-in provides inventory and deletion without requiring an LLM 
 | `/memory list` | `[query] [flags]` | one line per entry: `id[:8]  date  [kind]  type  content[:80]`; footer shows count |
 | `/memory count` | `[query] [flags]` | prints `N memories` |
 | `/memory forget` | `<query\|flag> [flags]` | preview matched entries → prompt `Delete N memories? [y/N]` → unlink on `y` |
-| `/forget` | `[query]` | **deprecated alias** — prints hint, routes to `/memory forget` |
 
 **Shared filter flags** (parsed by `_parse_memory_args`, applied by `_apply_memory_filters`):
 
@@ -252,9 +250,8 @@ The `/memory` built-in provides inventory and deletion without requiring an LLM 
 | `--kind X` | string | passed to `load_memories(kind=X)` — `memory` or `article` |
 
 **Behavioral constraints on `/memory forget`:**
-- **BC-1** — no query and no flags → refuse and print usage; never bulk-deletes silently
-- **BC-2** — always displays a preview of matched entries and requires explicit `y` before any deletion, even for a single match
-- **BC-3** — `read_only=True` entries are skipped with a per-entry warning; the rest of the batch proceeds normally
+- No query and no flags → refuse and print usage; never bulk-deletes silently
+- Always displays a preview of matched entries and requires explicit `y` before any deletion, even for a single match
 
 ### 2.5 Knowledge Index & Retrieval
 
@@ -390,6 +387,6 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |
 | `co_cli/tools/background.py` | session-scoped background task state and subprocess monitor |
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
-| `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/forget` (deprecated), `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
+| `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
 | `co_cli/bootstrap/core.py` | knowledge backend discovery, store sync, session restore |
 | `co_cli/main.py` | `_finalize_turn()` persistence, `_chat_loop()` session-data sync |
