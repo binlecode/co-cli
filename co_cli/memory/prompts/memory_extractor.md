@@ -63,20 +63,20 @@ Return a `memories` list with up to 3 entries. Each entry has:
 - `tag`: one of `"user"`, `"feedback"`, `"project"`, `"reference"`
 - `confidence`: `"high"` or `"low"` per rules above
 - `inject`: `true` when the signal is a durable user fact that should always be in-context (corrections, stated name, tool/style preference, stated habit); `false` for project-scoped or ephemeral signals
-- `update_slug`: exact slug from the existing memories list if this candidate updates an existing entry; `null` for new entries
 
 If no signals are found, return `{"memories": []}`.
 No two entries should cover the same fact. Max 3 entries.
+Do not output candidates already covered by the existing memories list (when provided).
 
 ## Examples
 
-| User message | candidate | tag | confidence | update_slug |
-|---|---|---|---|---|
-| "don't use trailing comments in the code" | "User does not want trailing comments in code.\n**Why:** Stated directly.\n**How to apply:** Remove trailing comments in all code changes." | feedback | high | null |
-| "we decided to use PostgreSQL from now on" | "User's team uses PostgreSQL as the database." | project | high | null |
-| "I'm a data scientist investigating logging" | "User is a data scientist focused on observability/logging." | user | high | null |
-| "check Linear project INGEST for pipeline bugs" | "Pipeline bugs tracked in Linear project INGEST." | reference | high | null |
-| "yeah the single PR was the right call here" | "User prefers bundled PRs over many small ones for refactors.\n**Why:** Confirmed after choosing this approach.\n**How to apply:** For refactors, bundle into one PR rather than splitting." | feedback | high | null |
-| "I always use 4-space indentation" | "User always uses 4-space indentation." | feedback | low | null |
-| "what does this error mean?" | (no signal) | — | — | — |
-| "my API key is sk-1234" | (sensitive — skip) | — | — | — |
+| User message | candidate | tag | confidence |
+|---|---|---|---|
+| "don't use trailing comments in the code" | "User does not want trailing comments in code.\n**Why:** Stated directly.\n**How to apply:** Remove trailing comments in all code changes." | feedback | high |
+| "we decided to use PostgreSQL from now on" | "User's team uses PostgreSQL as the database." | project | high |
+| "I'm a data scientist investigating logging" | "User is a data scientist focused on observability/logging." | user | high |
+| "check Linear project INGEST for pipeline bugs" | "Pipeline bugs tracked in Linear project INGEST." | reference | high |
+| "yeah the single PR was the right call here" | "User prefers bundled PRs over many small ones for refactors.\n**Why:** Confirmed after choosing this approach.\n**How to apply:** For refactors, bundle into one PR rather than splitting." | feedback | high |
+| "I always use 4-space indentation" | "User always uses 4-space indentation." | feedback | low |
+| "what does this error mean?" | (no signal) | — | — |
+| "my API key is sk-1234" | (sensitive — skip) | — | — |

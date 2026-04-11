@@ -41,7 +41,6 @@ class MemoryCandidate(BaseModel):
     confidence: Literal["high", "low"]
     inject: bool = False
     description: str = ""
-    update_slug: str | None = None
 
 
 class ExtractionResult(BaseModel):
@@ -112,8 +111,7 @@ async def analyze_for_signals(
     Never crashes the main chat loop — exceptions return empty result.
 
     When existing_manifest is non-empty, it is appended to the user prompt
-    so the extractor can avoid redundant candidates and set update_slug
-    for entries that update an existing memory.
+    so the extractor can avoid redundant candidates.
 
     Args:
         messages: Full message history after run_turn() completes.
@@ -130,8 +128,7 @@ async def analyze_for_signals(
 
     manifest_section = (
         f"\n\n## Existing memories\n\n{existing_manifest}\n\n"
-        "Do not output candidates already covered by this list. "
-        "If a candidate updates an existing entry, set `update_slug` to the matching slug."
+        "Do not output candidates already covered by this list."
         if existing_manifest
         else ""
     )
@@ -157,31 +154,13 @@ async def _process_candidate(
 ) -> None:
     """Process a single extracted memory candidate.
 
-    Handles tag-building, admission gate, update-slug routing, and persistence.
+    Handles tag-building, admission gate, and persistence. All dedup routing
+    is delegated to persist_memory (which runs the save agent with proper locking).
     When interactive=True, low-confidence candidates are surfaced for user approval.
     When interactive=False (background), low-confidence candidates are logged and skipped.
     """
     tags = [mem.tag] + (["personality-context"] if mem.inject else [])
     auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
-
-    if mem.update_slug:
-        from co_cli.memory._save import overwrite_memory
-
-        norm_tags = [t.lower() for t in tags]
-        update_result = overwrite_memory(
-            deps.memory_dir,
-            mem.update_slug,
-            mem.candidate,
-            norm_tags,
-            tag=mem.tag,
-            description=mem.description or None,
-            name=mem.name or None,
-        )
-        if update_result is not None:
-            frontend.on_status(f"Updated: {mem.candidate[:80]}")
-            return
-        # Fall through to SAVE_NEW if slug not found
-
     _model = deps.model.model if deps.model else None
 
     if mem.confidence == "high" and auto_save_allowed:
