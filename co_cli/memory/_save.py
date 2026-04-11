@@ -107,7 +107,7 @@ def overwrite_memory(
     target_slug: str,
     content: str,
     tags: list[str],
-    tag: str | None = None,
+    type_: str | None = None,
     description: str | None = None,
     name: str | None = None,
 ) -> ToolReturn | None:
@@ -120,7 +120,7 @@ def overwrite_memory(
         target_slug: Filename stem of the memory to overwrite.
         content: New body content (replaces old body entirely).
         tags: Tags from the candidate memory (merged with existing).
-        tag: Optional taxonomy tag (user/feedback/project/reference) to write to frontmatter.
+        type_: Optional taxonomy type (user/feedback/project/reference) to write to frontmatter.
         description: Optional purpose hook to write to frontmatter.
         name: Optional short identifier (≤60 chars) to write to frontmatter.
 
@@ -149,8 +149,8 @@ def overwrite_memory(
     # Refresh frontmatter
     existing_fm["updated"] = datetime.now(UTC).isoformat()
     existing_fm["tags"] = merged_tags
-    if tag is not None:
-        existing_fm["type"] = tag
+    if type_ is not None:
+        existing_fm["type"] = type_
     if name is not None:
         existing_fm["name"] = name
     if description is not None:

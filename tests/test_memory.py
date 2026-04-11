@@ -534,7 +534,7 @@ def test_overwrite_memory_writes_type_to_frontmatter(tmp_path: Path):
         slug,
         "Updated content",
         ["preference"],
-        tag="preference",
+        type_="preference",
         description="User prefers pytest",
     )
 

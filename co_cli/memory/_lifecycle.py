@@ -6,6 +6,7 @@ through persist_memory().
 """
 
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -23,6 +24,12 @@ _TRACER = otel_trace.get_tracer("co.memory")
 logger = logging.getLogger(__name__)
 
 
+def slugify(text: str) -> str:
+    """Convert text to URL-friendly slug (max 50 chars)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower())
+    return slug.strip("-")[:50]
+
+
 async def persist_memory(
     deps: CoDeps,
     content: str,
@@ -33,7 +40,7 @@ async def persist_memory(
     model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
-    tag: str | None = None,
+    type_: str | None = None,
     description: str | None = None,
     name: str | None = None,
 ) -> ToolReturn:
@@ -61,10 +68,6 @@ async def persist_memory(
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
     """
-    # Must stay as a local import inside the function body — module-level import
-    # creates a circular dependency between _lifecycle.py and memory.py.
-    from co_cli.tools.memory import slugify
-
     memory_dir = deps.memory_dir
     memory_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,8 +92,7 @@ async def persist_memory(
             always_on,
             memory_dir,
             on_failure,
-            slugify,
-            tag,
+            type_,
             description,
             name,
         )
@@ -107,8 +109,7 @@ async def _write_memory(
     always_on: bool,
     memory_dir: Path,
     on_failure: Literal["add", "skip"],
-    slugify: Any,
-    tag: str | None,
+    type_: str | None,
     description: str | None,
     name: str | None,
 ) -> ToolReturn:
@@ -137,7 +138,7 @@ async def _write_memory(
                             save_result.target_slug,
                             content,
                             norm_tags,
-                            tag=tag,
+                            type_=type_,
                             description=description,
                         )
                 except ResourceBusyError:
@@ -169,8 +170,8 @@ async def _write_memory(
         "created": datetime.now(UTC).isoformat(),
         "tags": tags,
     }
-    if tag is not None:
-        frontmatter["type"] = tag
+    if type_ is not None:
+        frontmatter["type"] = type_
     if name is not None:
         frontmatter["name"] = name
     if description is not None:

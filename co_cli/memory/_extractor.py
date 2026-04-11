@@ -172,7 +172,7 @@ async def _process_candidate(
             on_failure="skip",
             model=_model,
             model_settings=NOREASON_SETTINGS,
-            tag=mem.tag,
+            type_=mem.tag,
             description=mem.description or None,
             name=mem.name or None,
         )
@@ -188,7 +188,7 @@ async def _process_candidate(
                 on_failure="add",
                 model=_model,
                 model_settings=NOREASON_SETTINGS,
-                tag=mem.tag,
+                type_=mem.tag,
                 description=mem.description or None,
                 name=mem.name or None,
             )

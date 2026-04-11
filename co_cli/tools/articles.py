@@ -29,7 +29,8 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import SearchResult
-from co_cli.tools.memory import filter_memories, grep_recall, load_memories, slugify
+from co_cli.memory._lifecycle import slugify
+from co_cli.tools.memory import filter_memories, grep_recall, load_memories
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)

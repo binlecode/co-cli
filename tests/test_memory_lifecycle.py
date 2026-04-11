@@ -397,7 +397,7 @@ def test_persist_memory_filename_is_slug_only(tmp_path: Path):
 
 def test_persist_memory_slug_collision_overwrites(tmp_path: Path):
     """SAVE_NEW with same slug as existing file overwrites it — no new file created."""
-    from co_cli.tools.memory import slugify
+    from co_cli.memory._lifecycle import slugify
 
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)

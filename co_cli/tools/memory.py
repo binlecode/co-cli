@@ -42,24 +42,6 @@ logger = logging.getLogger(__name__)
 # (extracted to break context/ → tools/ cycle)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def slugify(text: str) -> str:
-    """Convert text to URL-friendly slug (max 50 chars).
-
-    Args:
-        text: Text to slugify
-
-    Returns:
-        Slugified text (lowercase, hyphens, no special chars)
-    """
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower())
-    return slug.strip("-")[:50]
-
-
 def grep_recall(
     memories: list[MemoryEntry],
     query: str,

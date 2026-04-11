@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.75] - 2026-04-10
+## [0.7.76] - 2026-04-10
 
 ### Added
 - **`MemoryCandidate.name`**: extractor now captures the LLM-provided short identifier (≤60 chars) as a `name` field; used as the slug source on new writes, producing human-readable filenames instead of truncated body prefixes. Written to frontmatter as `name`.
 
 ### Changed
-- **Memory write param naming**: `persist_memory`, `_write_memory`, and `overwrite_memory` now use plain `tag`, `name`, `description`, `content`, `tags` — removing the `new_`/`mem_` prefixes that were noise without a conflicting set in scope. `tag` writes to frontmatter `"type"` key.
+- **Memory write param naming**: `persist_memory`, `_write_memory`, and `overwrite_memory` now use plain `type_`, `name`, `description`, `content`, `tags` — removing all prefixes (`new_`/`mem_`/`tag`). `type_` uses PEP 8 trailing underscore to avoid shadowing the builtin.
+- **`slugify` moved to `_lifecycle.py`**: was defined in `tools/memory.py` and passed as `slugify: Any` param to avoid circular imports. Now lives in the write module where it's used, imported directly by `tools/articles.py`.
 - **`load_memories` import**: `_lifecycle.py` now imports directly from `co_cli.memory.recall` (was indirectly via `co_cli.tools.memory`).
 - **Stale comment**: removed `load_always_on_memories` from the re-export comment in `tools/memory.py` (it is not re-exported there).
 
