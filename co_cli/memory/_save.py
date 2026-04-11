@@ -98,7 +98,7 @@ async def check_and_save(
         logger.info("memory save agent timed out, falling back to SAVE_NEW")
         return SaveResult(action="SAVE_NEW")
     except Exception:
-        logger.debug("memory save agent failed, falling back to SAVE_NEW", exc_info=True)
+        logger.warning("memory save agent failed, falling back to SAVE_NEW", exc_info=True)
         return SaveResult(action="SAVE_NEW")
 
 

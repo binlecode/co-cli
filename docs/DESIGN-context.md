@@ -168,7 +168,7 @@ Every file is parsed into a `MemoryEntry` dataclass (`memory/recall.py`). `valid
 | `description` | `str \| null` | no | ≤200 chars, no newlines; purpose hook for manifest dedup |
 | `updated` | ISO8601 string | no | written on consolidation via `overwrite_memory()` |
 | `tags` | `list[str]` | no | searched by `grep_recall`; filter axis for `load_memories` |
-| `related` | `list[str] \| null` | no | one-hop slug links expanded by `recall_memory()` |
+| `related` | `list[str] \| null` | no | one-hop slug links expanded by `_recall_for_context()` |
 | `artifact_type` | `str \| null` | no | `session_summary` — excluded from normal recall/search |
 | `origin_url` | `str \| null` | no | article source URL; dedup key in `save_article()` |
 | `always_on` | `bool` | no | standing prompt injection (capped at 5 entries) |
@@ -188,12 +188,12 @@ grep_recall(entries, query, max_results)
   -> sort by updated or created (newest first)
   -> return top max_results
 
-recall_memory(ctx, query)        ← agent tool
-  -> load_memories
-  -> grep_recall (top 10 candidates)
-  -> score: recency decay (half-life configurable) + tag-overlap boost + related expansion
+_recall_for_context(ctx, query)  ← internal, called by inject_opening_context only
+  -> load_memories, optional tag/date filters
   -> exclude artifact_type="session_summary"
-  -> return top 5 scored entries
+  -> grep_recall: case-insensitive substring match, sort by recency, top max_results
+  -> one-hop related slug expansion (up to 5 hops)
+  -> return matched + related entries
 
 search_memories(ctx, query)      ← agent tool
   -> load_memories + grep_recall (top 20)
@@ -226,7 +226,7 @@ Per-file resource locks (keyed by absolute path) serialise concurrent callers (e
 
 **Auto-signal saves** — after every clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). The extractor injects the existing memory manifest so it can avoid redundant candidates and set `update_slug` for entries that should consolidate into an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; high-confidence candidates in the `auto_save_tags` allowlist save automatically; low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag.
 
-**Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"` via `index_session_summary()`. These are excluded from `recall_memory()` and `search_memories()` by predicate.
+**Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"` via `index_session_summary()`. These are excluded from `_recall_for_context()` and `search_memories()` by predicate.
 
 **Articles** — `save_article()` stores external references with `kind="article"` and dedup by exact `origin_url`. Articles skip the save-agent upsert path entirely.
 
@@ -272,7 +272,7 @@ flowchart LR
     SyncObs --> Chunks
     CacheDrive --> Chunks
 
-    MemGrep --> MemTools["recall_memory / search_memories"]
+    MemGrep --> MemTools["_recall_for_context / search_memories"]
     Docs --> Search["KnowledgeStore.search"]
     Chunks --> Search
     Search --> ArtTools["search_knowledge / search_articles"]
@@ -289,7 +289,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 
 | Entry point | Default scope | Notes |
 | --- | --- | --- |
-| `recall_memory()` | memory only | grep-only; one-hop `related` expansion, decay scoring, excludes `session_summary` |
+| `_recall_for_context()` | memory only | grep-only; sort by recency, one-hop `related` expansion, excludes `session_summary`; internal — called by `inject_opening_context` |
 | `search_memories()` | memory only | grep-only keyword search |
 | `search_articles()` | library articles only | summary-level index |
 | `search_knowledge()` | `["library", "obsidian", "drive"]` | `source="memory"` rejected with redirect to `search_memories()` |
@@ -381,7 +381,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/memory.py` | `grep_recall`, agent tools: recall_memory, search_memories, update, append |
+| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context` (internal), agent tools: search_memories, update, append |
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |

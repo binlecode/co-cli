@@ -13,52 +13,51 @@ flowchart TD
     B -->|blank| A
     B -->|non-empty| C{"starts with '/'?"}
 
-    C -->|yes| D["dispatch()"]
-    C -->|no| G["raw user_input"]
+    C -->|yes| D["dispatch_command()"]
+    C -->|no| H["_run_foreground_turn()"]
 
     D -->|LocalOnly| A
-    D -->|ReplaceTranscript| E["adopt new history; persist compaction count when needed"]
+    D -->|ReplaceTranscript| E["adopt new history; sync rotated session_data when needed; persist compaction boundary/count when applied"]
     E --> A
-    D -->|DelegateToAgent| F["set active_skill_name; apply skill_env; delegated_input becomes user_input"]
+    D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
-    G --> H["_run_foreground_turn()"]
     F --> H
-    H --> I["compactor.on_turn_start()"]
-    I --> J["run_turn(): deps.runtime.reset_for_turn(); init _TurnState; start co.turn span"]
-    J --> K["_execute_stream_segment() using main agent"]
-    K --> L{"segment output"}
+    H --> I["run_turn(): deps.runtime.reset_for_turn(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
+    I --> J["_execute_stream_segment() via agent.run_stream_events(...)"]
+    J --> K{"segment result / exception"}
 
-    L -->|DeferredToolRequests| M["_run_approval_loop()"]
-    M --> N["set resume_tool_names = approved deferred names; collect approvals"]
-    N --> O["_execute_stream_segment() using main agent"]
-    O --> L
+    K -->|DeferredToolRequests| L["_run_approval_loop()"]
+    L --> M["set resume_tool_names; collect approvals; current_input=None; current_history=latest_result.all_messages(); deferred_tool_results=approvals"]
+    M --> J
 
-    L -->|final output| P["adopt latest_result.all_messages(); fallback render if no text streamed; run output-limit checks"]
-    P --> Q["return TurnResult(outcome='continue')"]
+    K -->|final result| N["adopt latest_result.all_messages(); fallback render if no text streamed; run _check_output_limits()"]
+    N --> O["return TurnResult(outcome='continue')"]
 
-    L -->|HTTP 400 with reformat budget left| R["append reflection request; current_input=None; sleep 0.5s"]
-    R --> K
-    L -->|terminal HTTP error or ModelAPIError| T["return TurnResult(outcome='error')"]
-    L -->|TimeoutError| T
-    L -->|KeyboardInterrupt/CancelledError| U["truncate to last clean point; append abort marker"]
+    K -->|first context overflow 400/413 + compactable history| P["emergency_compact(current_history); current_input=None; status banner; retry"]
+    P --> J
+    K -->|second overflow or no compaction boundary| R
+    K -->|HTTP 400 with reformulation budget| Q["append provider-error reflection request; current_input=None; sleep 0.5s; retry"]
+    Q --> J
+    K -->|terminal ModelHTTPError / ModelAPIError / UnexpectedModelBehavior / TimeoutError| R["return TurnResult(outcome='error')"]
+    K -->|KeyboardInterrupt / CancelledError| S["_build_interrupted_turn_result(): drop trailing unanswered tool-call response; append abort marker"]
 
-    Q --> V["_cleanup_skill_run_state() in finally"]
-    T --> V
-    U --> V
-    V --> W["_finalize_turn(): signal detection; touch/save session; spawn next compaction precompute; optional error banner"]
-    W --> A
+    O --> T["cleanup_skill_run_state() in finally"]
+    R --> T
+    S --> T
+    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; touch/save session; append transcript tail; optional error banner"]
+    U --> A
 ```
 
 Execution owners:
 
 | Owner | Responsibility |
 | --- | --- |
-| `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
-| `_run_foreground_turn()` | compaction harvest, `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
-| `run_turn()` | one orchestrated LLM turn, including error handling, approval resumes, output checks, and interrupt handling |
-| `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery |
+| `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement/session sync, and skill-env setup |
+| `_run_foreground_turn()` | `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
+| `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
+| `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
-| `_finalize_turn()` | history adoption, signal detection, session persistence, next-turn compaction spawn, and generic error banner |
+| `_finalize_turn()` | clean-turn memory extraction, session persistence, transcript append, and generic error banner |
 
 Two boundary rules keep the loop legible:
 
@@ -247,7 +246,7 @@ Memory recall is also per-turn, not sticky:
 - `inject_opening_context()` stores counters in `deps.session.memory_recall_state`
 - it recalls only once per new user turn
 - failure to recall silently leaves history unchanged
-- the recall scoring policy itself lives in `tools/memory.py::recall_memory()`
+- the recall logic itself lives in `tools/memory.py::_recall_for_context()` (internal — called by `inject_opening_context`, not registered as an agent tool)
 
 ### 2.5 Retries, Output Limits, Errors, And Interrupts
 

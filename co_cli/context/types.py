@@ -17,7 +17,6 @@ class MemoryRecallState:
     """
 
     recall_count: int = 0
-    model_request_count: int = 0
     last_recall_user_turn: int = 0
 
 

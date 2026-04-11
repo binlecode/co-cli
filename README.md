@@ -161,7 +161,7 @@ Co remembers preferences, decisions, and project context across sessions. All kn
 
 **Memory** — conversation-derived knowledge:
 - Storage: `.co-cli/memory/*.md` (markdown with YAML frontmatter)
-- Tools: `save_memory`, `recall_memory`, `search_knowledge`
+- Tools: `save_memory`, `search_memories`, `search_knowledge`
 
 **Articles** — saved references and web content:
 - Storage: `.co-cli/library/*.md`

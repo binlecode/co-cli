@@ -58,36 +58,8 @@ async def persist_memory(
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
     """
-    with _TRACER.start_as_current_span("co.memory.write"):
-        return await _persist_memory_inner(
-            deps,
-            content,
-            tags,
-            related,
-            on_failure,
-            model,
-            model_settings,
-            artifact_type,
-            always_on,
-            type_value,
-            description_value,
-        )
-
-
-async def _persist_memory_inner(
-    deps: CoDeps,
-    content: str,
-    tags: list[str] | None,
-    related: list[str] | None,
-    on_failure: Literal["add", "skip"] = "add",
-    model: Any = None,
-    model_settings: ModelSettings | None = None,
-    artifact_type: str | None = None,
-    always_on: bool = False,
-    type_value: str | None = None,
-    description_value: str | None = None,
-) -> ToolReturn:
-    # Import here to avoid module-level circular import
+    # Must stay as a local import inside the function body — module-level import
+    # creates a circular dependency between _lifecycle.py and memory.py.
     from co_cli.tools.memory import slugify
 
     memory_dir = deps.memory_dir
@@ -102,23 +74,22 @@ async def _persist_memory_inner(
                 f"Valid values: {sorted(valid_artifact_types)}"
             )
 
-    result = await _write_memory(
-        deps,
-        content,
-        tags,
-        related,
-        model,
-        model_settings,
-        artifact_type,
-        always_on,
-        memory_dir,
-        on_failure,
-        slugify,
-        type_value,
-        description_value,
-    )
-
-    return result
+    with _TRACER.start_as_current_span("co.memory.write"):
+        return await _write_memory(
+            deps,
+            content,
+            tags,
+            related,
+            model,
+            model_settings,
+            artifact_type,
+            always_on,
+            memory_dir,
+            on_failure,
+            slugify,
+            type_value,
+            description_value,
+        )
 
 
 async def _write_memory(
@@ -162,6 +133,8 @@ async def _write_memory(
                             content,
                             norm_tags,
                             deps.config.memory.auto_save_tags,
+                            new_type=type_value,
+                            new_description=description_value,
                         )
                 except ResourceBusyError:
                     if on_failure == "skip":

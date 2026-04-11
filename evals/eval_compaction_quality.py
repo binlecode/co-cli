@@ -1229,7 +1229,7 @@ async def step_6_full_chain() -> bool:
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
     if recall_fired:
-        print(f"    recall_memory called (recall_count {recall_pre} → {recall_post})")
+        print(f"    _recall_for_context called (recall_count {recall_pre} → {recall_post})")
         print(
             f"    Injections: {p4_injections} ({'memory injected' if p4_injections else 'no matches → no injection'})"
         )
@@ -1242,7 +1242,7 @@ async def step_6_full_chain() -> bool:
             if isinstance(p, UserPromptPart)
         )
         print(
-            f"    recall_memory skipped (user_turn={user_turns}, last_recall_turn={ctx.deps.session.memory_recall_state.last_recall_user_turn})"
+            f"    _recall_for_context skipped (user_turn={user_turns}, last_recall_turn={ctx.deps.session.memory_recall_state.last_recall_user_turn})"
         )
         print(f"    Injections: {p4_injections}")
     print("    PASS")
@@ -1574,12 +1574,12 @@ async def step_7_multi_cycle() -> bool:
     p4_injections = len(msgs) - len_pre_p4
     recall_fired = recall_post > recall_pre
     if recall_fired:
-        print(f"    recall_memory called (recall_count {recall_pre} → {recall_post})")
+        print(f"    _recall_for_context called (recall_count {recall_pre} → {recall_post})")
         print(
             f"    Injections: {p4_injections} ({'memory injected' if p4_injections else 'no matches → no injection'})"
         )
     else:
-        print("    recall_memory skipped (already recalled for this user turn)")
+        print("    _recall_for_context skipped (already recalled for this user turn)")
         print(f"    Injections: {p4_injections}")
     print("    PASS")
 

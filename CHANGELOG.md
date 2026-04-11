@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.69] - 2026-04-10
+
+### Fixed
+- **Memory UPDATE path drops type/description**: `overwrite_memory` on the dedup UPDATE path now correctly writes `type` and `description` frontmatter fields — previously silently discarded, causing memories to lose their classification on consolidation.
+
+### Changed
+- **Memory lifecycle cleanup**: removed write-only fields (`ExtractionResult.manifest_used`, `MemoryRecallState.model_request_count`), eliminated pass-through wrapper `_persist_memory_inner`, extracted `_process_candidate` helper to deduplicate per-candidate logic in the extractor, renamed `recall_memory` → `_recall_for_context` to match its internal-only role, and raised silent dedup-agent crash log from debug to warning.
+
 ## [0.7.67] - 2026-04-10
 
 ### Added

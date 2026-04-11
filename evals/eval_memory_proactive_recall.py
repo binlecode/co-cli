@@ -6,7 +6,7 @@ injection from inject_opening_context. This is a history processor (not a
 tool), so the recall is NOT visible as a ToolCallPart — the eval scans for
 SystemPromptPart containing "Relevant memories:".
 
-Target flow:   _history.py:inject_opening_context() → recall_memory() →
+Target flow:   _history.py:inject_opening_context() → _recall_for_context() →
                SystemPromptPart injection
 Critical impact: this is the difference between "assistant that remembers"
                  and "assistant with a memory tool".

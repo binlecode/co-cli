@@ -478,7 +478,7 @@ async def search_articles(
     to load the full body after identifying an article here.
 
     Use search_articles for externally-fetched reference material.
-    Use recall_memory for conversation-derived facts.
+    Use search_memories for conversation-derived facts.
 
     Results are ranked by recency (most recently updated first).
     Use short keyword queries for best results.

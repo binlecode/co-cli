@@ -577,7 +577,7 @@ async def inject_opening_context(
     """Inject recalled memories on every new user turn.
 
     Runs before every model request. Recall fires unconditionally on each
-    new user turn — no heuristic gate. recall_memory is FTS5/BM25 or grep
+    new user turn — no heuristic gate. _recall_for_context is FTS5/BM25 or grep
     fallback — zero LLM cost in both cases. Returns empty when nothing matches.
 
     State is stored on ctx.deps.session.memory_recall_state.
@@ -592,7 +592,6 @@ async def inject_opening_context(
     # Safety invariant: memory_recall_state is initialised fresh per session in
     # CoSessionState.__post_init__; it does not leak across sessions.
     state: MemoryRecallState = ctx.deps.session.memory_recall_state
-    state.model_request_count += 1  # keep for observability
 
     user_turn_count = _count_user_turns(messages)
 
@@ -605,21 +604,21 @@ async def inject_opening_context(
         return messages
 
     # Recall memories for the current topic
-    from co_cli.tools.memory import recall_memory
+    from co_cli.tools.memory import _recall_for_context
 
     try:
-        result = await recall_memory(ctx, user_msg, max_results=3)
+        result = await _recall_for_context(ctx, user_msg, max_results=3)
         state.recall_count += 1
         state.last_recall_user_turn = user_turn_count
     except Exception:
-        log.debug("inject_opening_context: recall_memory failed", exc_info=True)
+        log.debug("inject_opening_context: _recall_for_context failed", exc_info=True)
         return messages
 
     if (result.metadata or {}).get("count", 0) == 0:
         return messages
 
     # Inject as a system message at the end of the message list
-    # recall_memory always returns a str via tool_output(); cast narrows ToolReturnContent
+    # _recall_for_context always returns a str via tool_output(); cast narrows ToolReturnContent
     memory_content = cast(str, result.return_value)
     max_chars = ctx.deps.config.memory.injection_max_chars
     if len(memory_content) > max_chars:

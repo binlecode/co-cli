@@ -16,9 +16,9 @@ from co_cli.agent import build_agent
 from co_cli.config._core import settings
 from co_cli.deps import CoDeps
 from co_cli.tools.memory import (
+    _recall_for_context,
     append_memory,
     list_memories,
-    recall_memory,
     search_memories,
     update_memory,
 )
@@ -83,21 +83,21 @@ def _write_memory(
 
 
 # ---------------------------------------------------------------------------
-# recall_memory read-only invariant
+# _recall_for_context read-only invariant
 # ---------------------------------------------------------------------------
 
 
 def test_recall_does_not_mutate_files(tmp_path: Path):
-    """recall_memory must not change any file's mtime (read-only path)."""
+    """_recall_for_context must not change any file's mtime (read-only path)."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     _write_memory(memory_dir, 1, "User prefers dark theme", tags=["preference"])
 
     before = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-    result = asyncio.run(recall_memory(_make_ctx(memory_dir=memory_dir), "dark theme"))
+    result = asyncio.run(_recall_for_context(_make_ctx(memory_dir=memory_dir), "dark theme"))
     assert result.metadata["count"] >= 1
     after = {str(p): p.stat().st_mtime for p in memory_dir.glob("*.md")}
-    assert before == after, "recall_memory must not modify any file's mtime"
+    assert before == after, "_recall_for_context must not modify any file's mtime"
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ def _write_memory_with_artifact_type(
 
 
 def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
-    """recall_memory must not return entries with artifact_type == session_summary."""
+    """_recall_for_context must not return entries with artifact_type == session_summary."""
     memory_dir = tmp_path / ".co-cli" / "memory"
     keyword = "artifact-exclusion-test-recall"
 
@@ -343,7 +343,7 @@ def test_recall_excludes_session_summary_artifacts(tmp_path: Path):
     )
 
     ctx = _make_ctx(memory_dir=memory_dir)
-    result = asyncio.run(recall_memory(ctx, keyword))
+    result = asyncio.run(_recall_for_context(ctx, keyword))
 
     ids_returned = [r["id"] for r in result.metadata["results"]]
     assert 1 in ids_returned, "durable memory must be returned"
@@ -514,6 +514,36 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.close()
 
     assert otel_trace.get_tracer_provider() is _orig
+
+
+# ---------------------------------------------------------------------------
+# overwrite_memory — type/description frontmatter on UPDATE path
+# ---------------------------------------------------------------------------
+
+
+def test_overwrite_memory_writes_type_to_frontmatter(tmp_path: Path):
+    """overwrite_memory with new_type writes type field to frontmatter (regression: UPDATE path)."""
+    from co_cli.memory._save import overwrite_memory
+
+    memory_dir = tmp_path / ".co-cli" / "memory"
+    path = _write_memory(memory_dir, 1, "Original content", tags=["preference"])
+    slug = path.stem
+
+    overwrite_memory(
+        memory_dir,
+        slug,
+        "Updated content",
+        ["preference"],
+        ["preference"],
+        new_type="preference",
+        new_description="User prefers pytest",
+    )
+
+    written = path.read_text(encoding="utf-8")
+    assert "type: preference" in written, "overwrite_memory must write type to frontmatter"
+    assert "description: User prefers pytest" in written, (
+        "overwrite_memory must write description to frontmatter"
+    )
 
 
 # ---------------------------------------------------------------------------

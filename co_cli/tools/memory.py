@@ -116,7 +116,7 @@ async def save_memory(
     or sensitive information (credentials, health, financial).
 
     Optionally include related memory slugs for knowledge linking (see
-    recall_memory). Not required — save directly when the user asks you
+    search_memories). Not required — save directly when the user asks you
     to remember something.
 
     Write content in third person: "User prefers pytest over unittest",
@@ -155,7 +155,7 @@ async def save_memory(
     return result
 
 
-async def recall_memory(
+async def _recall_for_context(
     ctx: RunContext[CoDeps],
     query: str,
     max_results: int = 5,
@@ -164,26 +164,11 @@ async def recall_memory(
     created_after: str | None = None,
     created_before: str | None = None,
 ) -> ToolReturn:
-    """Search the internal memory system by keyword. Memories hold cross-session
-    knowledge: preferences, decisions, corrections, and research findings.
-    Call proactively at conversation start to load context relevant to the
-    user's topic. Results include one-hop related memories — connected
-    knowledge surfaces automatically.
-
-    For personal notes in the Obsidian vault, use search_notes instead.
-    For cloud documents, use search_drive_files.
+    """Used by inject_opening_context to surface relevant memories before each model request.
 
     Matches against memory content and tags (case-insensitive substring).
     Results are sorted by recency (most recently updated first).
-
-    Also useful before saving new memories, to discover related knowledge
-    for linking. Call at the start of a new topic to load relevant context
-    from prior conversations.
-
-    Use short keyword queries for best results (e.g. "python testing",
-    "database", "dark mode").
-    Long phrases may miss matches — the search is substring-based, not semantic.
-    If no results are returned, try broader or alternative keywords.
+    Results include one-hop related memories — connected knowledge surfaces automatically.
 
     Returns a dict with:
     - display: formatted memory list — show directly to the user
@@ -376,7 +361,7 @@ async def list_memories(
     Returns one page at a time (default 20 per page).
 
     Memories are cross-session knowledge: preferences, decisions, corrections,
-    and research findings. For targeted lookup by keyword, use recall_memory.
+    and research findings. For targeted lookup by keyword, use search_memories.
     For personal notes, use list_notes. For cloud documents, use
     search_drive_files.
 

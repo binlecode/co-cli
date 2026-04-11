@@ -47,7 +47,6 @@ class ExtractionResult(BaseModel):
     """Structured output from the memory extractor — up to N candidates."""
 
     memories: list[MemoryCandidate] = Field(default_factory=list, max_length=_MAX_CANDIDATES)
-    manifest_used: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +122,6 @@ async def analyze_for_signals(
 
     Returns:
         ExtractionResult with a list of MemoryCandidate entries.
-        manifest_used is set when existing_manifest is non-empty.
     """
     window = _build_window(messages)
     if not window.strip():
@@ -143,13 +141,77 @@ async def analyze_for_signals(
         result = await _extraction_agent.run(
             user_prompt, model=_model, model_settings=NOREASON_SETTINGS
         )
-        extraction = result.output
-        if existing_manifest:
-            extraction.manifest_used = existing_manifest
-        return extraction
+        return result.output
     except Exception:
         logger.debug("Memory extractor failed", exc_info=True)
         return ExtractionResult()
+
+
+async def _process_candidate(
+    mem: MemoryCandidate,
+    deps: "CoDeps",
+    frontend: "Frontend",
+    *,
+    interactive: bool,
+) -> None:
+    """Process a single extracted memory candidate.
+
+    Handles tag-building, admission gate, update-slug routing, and persistence.
+    When interactive=True, low-confidence candidates are surfaced for user approval.
+    When interactive=False (background), low-confidence candidates are logged and skipped.
+    """
+    tags = [mem.tag] + (["personality-context"] if mem.inject else [])
+    auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
+
+    if mem.update_slug:
+        from co_cli.memory._save import overwrite_memory
+
+        norm_tags = [t.lower() for t in tags]
+        update_result = overwrite_memory(
+            deps.memory_dir,
+            mem.update_slug,
+            mem.candidate,
+            norm_tags,
+            deps.config.memory.auto_save_tags,
+            new_type=mem.tag,
+            new_description=mem.description or None,
+        )
+        if update_result is not None:
+            frontend.on_status(f"Updated: {mem.candidate[:80]}")
+            return
+        # Fall through to SAVE_NEW if slug not found
+
+    _model = deps.model.model if deps.model else None
+
+    if mem.confidence == "high" and auto_save_allowed:
+        await _persist_memory(
+            deps,
+            mem.candidate,
+            tags,
+            None,
+            on_failure="skip",
+            model=_model,
+            model_settings=NOREASON_SETTINGS,
+            type_value=mem.tag,
+            description_value=mem.description or None,
+        )
+        frontend.on_status(f"Learned: {mem.candidate[:80]}")
+    elif interactive:
+        choice = frontend.prompt_approval(f"Worth remembering: {mem.candidate}")
+        if choice in ("y", "a"):
+            await _persist_memory(
+                deps,
+                mem.candidate,
+                tags,
+                None,
+                on_failure="add",
+                model=_model,
+                model_settings=NOREASON_SETTINGS,
+                type_value=mem.tag,
+                description_value=mem.description or None,
+            )
+    else:
+        logger.debug("Deferred (async, low-confidence): %s", mem.candidate[:80])
 
 
 async def handle_extraction(
@@ -163,66 +225,11 @@ async def handle_extraction(
     high confidence. Types not in the list require user confirmation regardless
     of confidence. Empty list = all signals require confirmation.
     """
-    candidates = extraction.memories
-
-    if not candidates:
+    if not extraction.memories:
         return
 
-    _model = deps.model.model if deps.model else None
-
-    for mem in candidates:
-        tags = [mem.tag] + (["personality-context"] if mem.inject else [])
-
-        # Admission gate: auto-save only if type is in the allowlist
-        auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
-
-        # Route candidates with update_slug directly to overwrite_memory
-        if mem.update_slug:
-            from co_cli.memory._save import overwrite_memory
-
-            memory_dir = deps.memory_dir
-            norm_tags = [t.lower() for t in tags]
-            update_result = overwrite_memory(
-                memory_dir,
-                mem.update_slug,
-                mem.candidate,
-                norm_tags,
-                deps.config.memory.auto_save_tags,
-                new_type=mem.tag,
-                new_description=mem.description or None,
-            )
-            if update_result is not None:
-                frontend.on_status(f"Updated: {mem.candidate[:80]}")
-                continue
-            # Fall through to SAVE_NEW if slug not found
-
-        if mem.confidence == "high" and auto_save_allowed:
-            await _persist_memory(
-                deps,
-                mem.candidate,
-                tags,
-                None,
-                on_failure="skip",
-                model=_model,
-                model_settings=NOREASON_SETTINGS,
-                type_value=mem.tag,
-                description_value=mem.description or None,
-            )
-            frontend.on_status(f"Learned: {mem.candidate[:80]}")
-        else:
-            choice = frontend.prompt_approval(f"Worth remembering: {mem.candidate}")
-            if choice in ("y", "a"):
-                await _persist_memory(
-                    deps,
-                    mem.candidate,
-                    tags,
-                    None,
-                    on_failure="add",
-                    model=_model,
-                    model_settings=NOREASON_SETTINGS,
-                    type_value=mem.tag,
-                    description_value=mem.description or None,
-                )
+    for mem in extraction.memories:
+        await _process_candidate(mem, deps, frontend, interactive=True)
 
 
 # ---------------------------------------------------------------------------
@@ -255,47 +262,8 @@ async def _run_extraction_async(
         if not extraction.memories:
             return
 
-        _model = deps.model.model if deps.model else None
-
         for mem in extraction.memories:
-            tags = [mem.tag] + (["personality-context"] if mem.inject else [])
-            auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
-
-            # Route candidates with update_slug directly to overwrite_memory
-            if mem.update_slug:
-                from co_cli.memory._save import overwrite_memory
-
-                memory_dir = deps.memory_dir
-                norm_tags = [t.lower() for t in tags]
-                update_result = overwrite_memory(
-                    memory_dir,
-                    mem.update_slug,
-                    mem.candidate,
-                    norm_tags,
-                    deps.config.memory.auto_save_tags,
-                    new_type=mem.tag,
-                    new_description=mem.description or None,
-                )
-                if update_result is not None:
-                    frontend.on_status(f"Updated: {mem.candidate[:80]}")
-                    continue
-                # Fall through to SAVE_NEW if slug not found
-
-            if mem.confidence == "high" and auto_save_allowed:
-                await _persist_memory(
-                    deps,
-                    mem.candidate,
-                    tags,
-                    None,
-                    on_failure="skip",
-                    model=_model,
-                    model_settings=NOREASON_SETTINGS,
-                    type_value=mem.tag,
-                    description_value=mem.description or None,
-                )
-                frontend.on_status(f"Learned: {mem.candidate[:80]}")
-            else:
-                logger.debug("Deferred (async, low-confidence): %s", mem.candidate[:80])
+            await _process_candidate(mem, deps, frontend, interactive=False)
     except asyncio.CancelledError:
         logger.debug("Background memory extraction cancelled")
     except Exception:

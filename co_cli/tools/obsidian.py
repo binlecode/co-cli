@@ -71,7 +71,7 @@ def search_notes(
     query is broad.
 
     This tool searches the user's Obsidian note vault (local markdown files).
-    For stored preferences and decisions, use recall_memory instead. For cloud
+    For stored preferences and decisions, use search_memories instead. For cloud
     documents, use search_drive_files.
 
     Returns a dict with:
