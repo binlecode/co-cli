@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.70] - 2026-04-10
+
+### Changed
+- **Remove `_parse_created` dead function**: `tools/memory.py` — function defined but never called anywhere; removed.
+- **Remove `auto_save_tags` dead parameter**: `overwrite_memory()` accepted the parameter but never used it; removed from signature and both call sites (`_lifecycle.py`, `_extractor.py`).
+- **Extract `filter_memories` helper**: shared tag + date-range filter extracted from 4 inline copies across `tools/memory.py` and `tools/articles.py` into a single `filter_memories()` function.
+- **Narrow `drain_pending_extraction` exception catch**: `except (asyncio.CancelledError, Exception)` after `task.cancel()` narrowed to `except asyncio.CancelledError` — only expected exception after cancellation.
+
 ## [0.7.69] - 2026-04-10
 
 ### Fixed

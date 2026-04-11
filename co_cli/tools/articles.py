@@ -29,7 +29,7 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import SearchResult
-from co_cli.tools.memory import grep_recall, load_memories, slugify
+from co_cli.tools.memory import filter_memories, grep_recall, load_memories, slugify
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
@@ -222,15 +222,7 @@ async def search_knowledge(
         otel_trace.get_current_span().set_attribute("rag.backend", "grep")
         effective_kind = kind if kind is not None else "article"
         memories = load_memories(ctx.deps.library_dir, kind=effective_kind)
-        if tags:
-            if tag_match_mode == "all":
-                memories = [m for m in memories if all(t in m.tags for t in tags)]
-            else:
-                memories = [m for m in memories if any(t in m.tags for t in tags)]
-        if created_after:
-            memories = [m for m in memories if m.created and m.created >= created_after]
-        if created_before:
-            memories = [m for m in memories if m.created and m.created <= created_before]
+        memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
         matches = grep_recall(memories, query, limit)
         if not matches:
             return tool_output(f"No results found for '{query}'", ctx=ctx, count=0, results=[])
@@ -569,15 +561,7 @@ async def search_articles(
         for a in articles
         if query_lower in a.content.lower() or any(query_lower in t.lower() for t in a.tags)
     ]
-    if tags:
-        if tag_match_mode == "all":
-            matches = [a for a in matches if all(t in a.tags for t in tags)]
-        else:
-            matches = [a for a in matches if any(t in a.tags for t in tags)]
-    if created_after:
-        matches = [a for a in matches if a.created and a.created >= created_after]
-    if created_before:
-        matches = [a for a in matches if a.created and a.created <= created_before]
+    matches = filter_memories(matches, tags, tag_match_mode, created_after, created_before)
     matches.sort(key=lambda a: a.updated or a.created, reverse=True)
     matches = matches[:max_results]
 

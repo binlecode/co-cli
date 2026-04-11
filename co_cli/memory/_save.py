@@ -107,7 +107,6 @@ def overwrite_memory(
     target_slug: str,
     new_content: str,
     new_tags: list[str],
-    auto_save_tags: list[str],
     new_type: str | None = None,
     new_description: str | None = None,
 ) -> ToolReturn | None:
@@ -120,7 +119,6 @@ def overwrite_memory(
         target_slug: Filename stem of the memory to overwrite.
         new_content: New body content (replaces old body entirely).
         new_tags: Tags from the candidate memory.
-        auto_save_tags: Auto-save tag list from config.
         new_type: Optional type value to write to frontmatter.
         new_description: Optional description value to write to frontmatter.
 

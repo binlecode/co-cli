@@ -172,7 +172,6 @@ async def _process_candidate(
             mem.update_slug,
             mem.candidate,
             norm_tags,
-            deps.config.memory.auto_save_tags,
             new_type=mem.tag,
             new_description=mem.description or None,
         )
@@ -311,7 +310,7 @@ async def drain_pending_extraction(timeout_ms: int = 10_000) -> None:
         task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
             pass
     except Exception:
         logger.debug("Drain failed", exc_info=True)

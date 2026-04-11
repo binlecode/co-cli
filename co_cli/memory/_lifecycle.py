@@ -132,7 +132,6 @@ async def _write_memory(
                             save_result.target_slug,
                             content,
                             norm_tags,
-                            deps.config.memory.auto_save_tags,
                             new_type=type_value,
                             new_description=description_value,
                         )

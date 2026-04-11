@@ -60,11 +60,6 @@ def slugify(text: str) -> str:
     return slug.strip("-")[:50]
 
 
-def _parse_created(created_str: str) -> datetime:
-    """Parse an ISO8601 created timestamp to a timezone-aware datetime."""
-    return datetime.fromisoformat(created_str.replace("Z", "+00:00"))
-
-
 def grep_recall(
     memories: list[MemoryEntry],
     query: str,
@@ -82,6 +77,38 @@ def grep_recall(
     ]
     matches.sort(key=lambda m: m.updated or m.created, reverse=True)
     return matches[:max_results]
+
+
+def filter_memories(
+    entries: list[MemoryEntry],
+    tags: list[str] | None = None,
+    tag_match_mode: Literal["any", "all"] = "any",
+    created_after: str | None = None,
+    created_before: str | None = None,
+) -> list[MemoryEntry]:
+    """Filter a list of MemoryEntry by tags and date range.
+
+    Args:
+        entries: Source list to filter (not mutated).
+        tags: Exact tag filter list. None = no filter.
+        tag_match_mode: 'any' (OR) or 'all' (AND — entry must have every tag).
+        created_after: ISO8601 date string; keep entries created on or after this date.
+        created_before: ISO8601 date string; keep entries created on or before this date.
+
+    Returns:
+        Filtered list (new list, same MemoryEntry objects).
+    """
+    result = entries
+    if tags:
+        if tag_match_mode == "all":
+            result = [m for m in result if all(t in m.tags for t in tags)]
+        else:
+            result = [m for m in result if any(t in m.tags for t in tags)]
+    if created_after:
+        result = [m for m in result if m.created and m.created >= created_after]
+    if created_before:
+        result = [m for m in result if m.created and m.created <= created_before]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -187,15 +214,7 @@ async def _recall_for_context(
     memory_dir = ctx.deps.memory_dir
 
     memories = load_memories(memory_dir)
-    if tags:
-        if tag_match_mode == "all":
-            memories = [m for m in memories if all(t in m.tags for t in tags)]
-        else:
-            memories = [m for m in memories if any(t in m.tags for t in tags)]
-    if created_after:
-        memories = [m for m in memories if m.created and m.created >= created_after]
-    if created_before:
-        memories = [m for m in memories if m.created and m.created <= created_before]
+    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
     memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
     matches = grep_recall(memories, query, max_results)
 
@@ -317,15 +336,7 @@ async def search_memories(
 
     otel_trace.get_current_span().set_attribute("rag.backend", "grep")
     memories = load_memories(memory_dir, kind="memory")
-    if tags:
-        if tag_match_mode == "all":
-            memories = [m for m in memories if all(t in m.tags for t in tags)]
-        else:
-            memories = [m for m in memories if any(t in m.tags for t in tags)]
-    if created_after:
-        memories = [m for m in memories if m.created and m.created >= created_after]
-    if created_before:
-        memories = [m for m in memories if m.created and m.created <= created_before]
+    memories = filter_memories(memories, tags, tag_match_mode, created_after, created_before)
     memories = [m for m in memories if m.artifact_type != ArtifactTypeEnum.SESSION_SUMMARY]
 
     matches = grep_recall(memories, query, limit)
