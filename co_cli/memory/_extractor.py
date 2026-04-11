@@ -35,6 +35,7 @@ _MAX_CANDIDATES = 3
 class MemoryCandidate(BaseModel):
     """A single memory-worthy signal extracted from conversation."""
 
+    name: str = ""
     candidate: str
     tag: Literal["user", "feedback", "project", "reference"]
     confidence: Literal["high", "low"]
@@ -172,8 +173,9 @@ async def _process_candidate(
             mem.update_slug,
             mem.candidate,
             norm_tags,
-            new_type=mem.tag,
-            new_description=mem.description or None,
+            tag=mem.tag,
+            description=mem.description or None,
+            name=mem.name or None,
         )
         if update_result is not None:
             frontend.on_status(f"Updated: {mem.candidate[:80]}")
@@ -191,8 +193,9 @@ async def _process_candidate(
             on_failure="skip",
             model=_model,
             model_settings=NOREASON_SETTINGS,
-            type_value=mem.tag,
-            description_value=mem.description or None,
+            tag=mem.tag,
+            description=mem.description or None,
+            name=mem.name or None,
         )
         frontend.on_status(f"Learned: {mem.candidate[:80]}")
     elif interactive:
@@ -206,8 +209,9 @@ async def _process_candidate(
                 on_failure="add",
                 model=_model,
                 model_settings=NOREASON_SETTINGS,
-                type_value=mem.tag,
-                description_value=mem.description or None,
+                tag=mem.tag,
+                description=mem.description or None,
+                name=mem.name or None,
             )
     else:
         logger.debug("Deferred (async, low-confidence): %s", mem.candidate[:80])

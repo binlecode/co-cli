@@ -33,8 +33,9 @@ async def persist_memory(
     model_settings: ModelSettings | None = None,
     artifact_type: str | None = None,
     always_on: bool = False,
-    type_value: str | None = None,
-    description_value: str | None = None,
+    tag: str | None = None,
+    description: str | None = None,
+    name: str | None = None,
 ) -> ToolReturn:
     """Write a memory through the full lifecycle: upsert → write.
 
@@ -54,6 +55,8 @@ async def persist_memory(
         model: pydantic-ai model object for the memory save agent. When None,
                upsert check is skipped (direct write).
         model_settings: ModelSettings for inference (e.g. NOREASON_SETTINGS).
+        name: Short identifier (≤60 chars) from the extractor. Used as slug
+              source when non-empty; falls back to content[:50].
 
     Returns:
         ToolReturn with display, path, memory_id, action metadata keys.
@@ -87,8 +90,9 @@ async def persist_memory(
             memory_dir,
             on_failure,
             slugify,
-            type_value,
-            description_value,
+            tag,
+            description,
+            name,
         )
 
 
@@ -104,11 +108,12 @@ async def _write_memory(
     memory_dir: Path,
     on_failure: Literal["add", "skip"],
     slugify: Any,
-    type_value: str | None,
-    description_value: str | None,
+    tag: str | None,
+    description: str | None,
+    name: str | None,
 ) -> ToolReturn:
     """Upsert check + per-file locked write."""
-    from co_cli.tools.memory import load_memories
+    from co_cli.memory.recall import load_memories
     from co_cli.tools.resource_lock import ResourceBusyError
 
     # Upsert check: when a model is available, consult the memory save agent
@@ -132,8 +137,8 @@ async def _write_memory(
                             save_result.target_slug,
                             content,
                             norm_tags,
-                            new_type=type_value,
-                            new_description=description_value,
+                            tag=tag,
+                            description=description,
                         )
                 except ResourceBusyError:
                     if on_failure == "skip":
@@ -150,7 +155,8 @@ async def _write_memory(
     import uuid as _uuid
 
     memory_id = str(_uuid.uuid4())
-    slug = slugify(content[:50])
+    # Use LLM-provided name as slug source when available; fall back to content prefix
+    slug = slugify(name) if name else slugify(content[:50])
     filename = f"{slug}.md"
     file_path = memory_dir / filename
 
@@ -163,10 +169,12 @@ async def _write_memory(
         "created": datetime.now(UTC).isoformat(),
         "tags": tags,
     }
-    if type_value is not None:
-        frontmatter["type"] = type_value
-    if description_value is not None:
-        frontmatter["description"] = description_value
+    if tag is not None:
+        frontmatter["type"] = tag
+    if name is not None:
+        frontmatter["name"] = name
+    if description is not None:
+        frontmatter["description"] = description
     if related:
         frontmatter["related"] = related
     if artifact_type is not None:

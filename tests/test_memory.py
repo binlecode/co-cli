@@ -522,7 +522,7 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
 
 
 def test_overwrite_memory_writes_type_to_frontmatter(tmp_path: Path):
-    """overwrite_memory with new_type writes type field to frontmatter (regression: UPDATE path)."""
+    """overwrite_memory with tag writes type field to frontmatter (regression: UPDATE path)."""
     from co_cli.memory._save import overwrite_memory
 
     memory_dir = tmp_path / ".co-cli" / "memory"
@@ -534,8 +534,8 @@ def test_overwrite_memory_writes_type_to_frontmatter(tmp_path: Path):
         slug,
         "Updated content",
         ["preference"],
-        new_type="preference",
-        new_description="User prefers pytest",
+        tag="preference",
+        description="User prefers pytest",
     )
 
     written = path.read_text(encoding="utf-8")

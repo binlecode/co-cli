@@ -38,8 +38,8 @@ _TRACER = otel_trace.get_tracer("co.memory")
 
 logger = logging.getLogger(__name__)
 
-# MemoryEntry, load_memories, load_always_on_memories
-# are re-imported from co_cli.memory.recall (extracted to break context/ → tools/ cycle)
+# MemoryEntry and load_memories are re-imported from co_cli.memory.recall
+# (extracted to break context/ → tools/ cycle)
 
 
 # ---------------------------------------------------------------------------

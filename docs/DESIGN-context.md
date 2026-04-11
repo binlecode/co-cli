@@ -165,6 +165,7 @@ Every file is parsed into a `MemoryEntry` dataclass (`memory/recall.py`). `valid
 | `created` | ISO8601 string | yes | set at write time, never mutated |
 | `kind` | `"memory" \| "article"` | no | defaults to `"memory"` |
 | `type` | `"user" \| "feedback" \| "project" \| "reference" \| null` | no | memory classification; warns on unknown values |
+| `name` | `str \| null` | no | short identifier ≤60 chars (e.g. `user-prefers-pytest`); used as slug source when present |
 | `description` | `str \| null` | no | ≤200 chars, no newlines; purpose hook for manifest dedup |
 | `updated` | ISO8601 string | no | written on consolidation via `overwrite_memory()` |
 | `tags` | `list[str]` | no | searched by `grep_recall`; filter axis for `load_memories` |
@@ -207,7 +208,7 @@ The always-on layer (`load_always_on_memories`) runs at instruction-build time: 
 All writes route through `persist_memory()`, which acts as an upsert:
 
 ```text
-persist_memory(content, type, tags, ...)
+persist_memory(content, tags, ..., tag, name, description)
   -> upsert check (when resolved model available):
      -> build manifest: 100 most recent memories, one line each
         format: [type] slug (ts): description
@@ -216,15 +217,17 @@ persist_memory(content, type, tags, ...)
         UPDATE(slug) — candidate updates an existing memory
      -> UPDATE: acquire per-file resource lock
                 overwrite_memory() replaces body, merges tags, refreshes frontmatter
+                  (tag → "type", name → "name", description → "description")
                 release lock
   -> SAVE_NEW: acquire per-file resource lock
+               slug = slugify(name) if name else slugify(content[:50])
                write new UUID-named markdown file
                release lock
 ```
 
 Per-file resource locks (keyed by absolute path) serialise concurrent callers (explicit save + auto-signal running in parallel). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
 
-**Auto-signal saves** — after every clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). The extractor injects the existing memory manifest so it can avoid redundant candidates and set `update_slug` for entries that should consolidate into an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; high-confidence candidates in the `auto_save_tags` allowlist save automatically; low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag.
+**Auto-signal saves** — after every clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). Each candidate carries `name` (short identifier ≤60 chars), `description` (purpose hook ≤200 chars), `candidate` (full body), `tag`, `confidence`, `inject`, and optionally `update_slug`. The extractor injects the existing memory manifest so it can avoid redundant candidates and set `update_slug` for entries that should consolidate into an existing memory. Candidates with `update_slug` route to `overwrite_memory()`; high-confidence candidates in the `auto_save_tags` allowlist save automatically; low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag. The `name` field drives the slug on new writes, producing human-readable filenames.
 
 **Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"` via `index_session_summary()`. These are excluded from `_recall_for_context()` and `search_memories()` by predicate.
 

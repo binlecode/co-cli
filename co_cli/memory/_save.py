@@ -105,10 +105,11 @@ async def check_and_save(
 def overwrite_memory(
     memory_dir: Path,
     target_slug: str,
-    new_content: str,
-    new_tags: list[str],
-    new_type: str | None = None,
-    new_description: str | None = None,
+    content: str,
+    tags: list[str],
+    tag: str | None = None,
+    description: str | None = None,
+    name: str | None = None,
 ) -> ToolReturn | None:
     """Overwrite an existing memory file with new content (full body replace).
 
@@ -117,10 +118,11 @@ def overwrite_memory(
     Args:
         memory_dir: Path to the memory directory.
         target_slug: Filename stem of the memory to overwrite.
-        new_content: New body content (replaces old body entirely).
-        new_tags: Tags from the candidate memory.
-        new_type: Optional type value to write to frontmatter.
-        new_description: Optional description value to write to frontmatter.
+        content: New body content (replaces old body entirely).
+        tags: Tags from the candidate memory (merged with existing).
+        tag: Optional taxonomy tag (user/feedback/project/reference) to write to frontmatter.
+        description: Optional purpose hook to write to frontmatter.
+        name: Optional short identifier (≤60 chars) to write to frontmatter.
 
     Returns:
         ToolReturn with consolidated action metadata.
@@ -141,20 +143,22 @@ def overwrite_memory(
     existing_fm, _ = parse_frontmatter(raw)
 
     # Merge tags (union)
-    existing_tags = existing_fm.get("tags", [])
-    merged_tags = list(set(existing_tags + (new_tags or [])))
+    stored_tags = existing_fm.get("tags", [])
+    merged_tags = list(set(stored_tags + (tags or [])))
 
     # Refresh frontmatter
     existing_fm["updated"] = datetime.now(UTC).isoformat()
     existing_fm["tags"] = merged_tags
-    if new_type is not None:
-        existing_fm["type"] = new_type
-    if new_description is not None:
-        existing_fm["description"] = new_description
+    if tag is not None:
+        existing_fm["type"] = tag
+    if name is not None:
+        existing_fm["name"] = name
+    if description is not None:
+        existing_fm["description"] = description
     existing_fm.setdefault("kind", "memory")
 
     md_content = (
-        f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n{new_content.strip()}\n"
+        f"---\n{yaml.dump(existing_fm, default_flow_style=False)}---\n\n{content.strip()}\n"
     )
     target_path.write_text(md_content, encoding="utf-8")
 
