@@ -18,6 +18,7 @@ from pydantic_ai.messages import ModelRequest
 
 from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.commands._skill_types import SkillConfig
+from co_cli.config._core import VALID_REASONING_DISPLAY_MODES
 from co_cli.deps import ApprovalKindEnum, CoDeps
 from co_cli.display._core import console
 from co_cli.knowledge._frontmatter import parse_frontmatter
@@ -1210,6 +1211,36 @@ async def _cmd_memory(ctx: CommandContext, args: str) -> None:
     return None
 
 
+# -- Reasoning display command ---------------------------------------------
+
+_REASONING_CYCLE = ["off", "summary", "full"]
+
+
+async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
+    """Show or set the reasoning display mode for this session."""
+    token = args.strip().lower()
+    if not token:
+        console.print(
+            f"Reasoning display: [highlight]{ctx.deps.session.reasoning_display}[/highlight]"
+        )
+        return None
+    if token in ("next", "cycle"):
+        current = ctx.deps.session.reasoning_display
+        idx = _REASONING_CYCLE.index(current) if current in _REASONING_CYCLE else 0
+        ctx.deps.session.reasoning_display = _REASONING_CYCLE[(idx + 1) % len(_REASONING_CYCLE)]
+    elif token in VALID_REASONING_DISPLAY_MODES:
+        ctx.deps.session.reasoning_display = token
+    else:
+        console.print(
+            f"[error]Unknown reasoning mode: {token!r}. Valid: off, summary, full, next[/error]"
+        )
+        return None
+    console.print(
+        f"Reasoning display: [highlight]{ctx.deps.session.reasoning_display}[/highlight]"
+    )
+    return None
+
+
 # -- Registry --------------------------------------------------------------
 
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {
@@ -1236,6 +1267,11 @@ BUILTIN_COMMANDS: dict[str, SlashCommand] = {
     "cancel": SlashCommand("cancel", "Cancel a running background task", _cmd_cancel),
     "resume": SlashCommand("resume", "Resume a past session", _cmd_resume),
     "sessions": SlashCommand("sessions", "List past sessions", _cmd_sessions),
+    "reasoning": SlashCommand(
+        "reasoning",
+        "Show or set reasoning display: /reasoning [off|summary|full|next]",
+        _cmd_reasoning,
+    ),
 }
 
 

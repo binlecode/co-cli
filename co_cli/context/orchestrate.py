@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # an unresponsive LLM from hanging a turn indefinitely.
 _LLM_SEGMENT_HANG_TIMEOUT_SECS: int = 120
 
-from co_cli.config._core import DEFAULT_REASONING_DISPLAY, REASONING_DISPLAY_SUMMARY
+from co_cli.config._core import REASONING_DISPLAY_SUMMARY
 from co_cli.context.tool_approvals import (
     decode_tool_args,
     is_auto_approved,
@@ -232,7 +232,6 @@ async def _execute_stream_segment(
     agent: SessionAgent,
     deps: CoDeps,
     model_settings: ModelSettings | None,
-    reasoning_display: str,
     frontend: Frontend,
 ) -> None:
     """Run one stream segment and update turn state in-place.
@@ -248,7 +247,7 @@ async def _execute_stream_segment(
     StreamRenderer. Tool display metadata is owned by tool_display.
     """
     result: SessionRunResult | None = None
-    renderer = StreamRenderer(frontend, reasoning_display=reasoning_display)
+    renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
 
     try:
         async with asyncio.timeout(_LLM_SEGMENT_HANG_TIMEOUT_SECS):
@@ -287,7 +286,7 @@ async def _execute_stream_segment(
                     tool_id = event.tool_call_id
                     name = event.part.tool_name
                     # In summary mode annotations are suppressed — tool result panel is sufficient feedback
-                    if reasoning_display != REASONING_DISPLAY_SUMMARY:
+                    if deps.session.reasoning_display != REASONING_DISPLAY_SUMMARY:
                         frontend.on_tool_start(
                             tool_id, name, get_tool_start_args_display(name, event.part)
                         )
@@ -331,7 +330,6 @@ async def _run_approval_loop(
     agent: SessionAgent,
     deps: CoDeps,
     model_settings: ModelSettings | None,
-    reasoning_display: str,
     frontend: Frontend,
 ) -> None:
     """Run approval-resume segments until no deferred tool requests remain.
@@ -354,9 +352,7 @@ async def _run_approval_loop(
         turn_state.current_input = None
         turn_state.current_history = latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
-        await _execute_stream_segment(
-            turn_state, agent, deps, model_settings, reasoning_display, frontend
-        )
+        await _execute_stream_segment(turn_state, agent, deps, model_settings, frontend)
     deps.runtime.resume_tool_names = None
 
 
@@ -492,7 +488,6 @@ async def run_turn(
     deps: CoDeps,
     message_history: list[ModelMessage],
     model_settings: ModelSettings | None = None,
-    reasoning_display: str = DEFAULT_REASONING_DISPLAY,
     frontend: Frontend,
 ) -> TurnResult:
     """Execute one LLM turn: streaming, approval chaining, error handling.
@@ -520,12 +515,10 @@ async def run_turn(
             while True:
                 try:
                     await _execute_stream_segment(
-                        turn_state, agent, deps, model_settings, reasoning_display, frontend
+                        turn_state, agent, deps, model_settings, frontend
                     )
 
-                    await _run_approval_loop(
-                        turn_state, agent, deps, model_settings, reasoning_display, frontend
-                    )
+                    await _run_approval_loop(turn_state, agent, deps, model_settings, frontend)
                     latest_result = turn_state.latest_result
                     assert latest_result is not None
                     turn_state.current_history = latest_result.all_messages()

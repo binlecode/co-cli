@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai.usage import RunUsage
 
 from co_cli.config._core import (
+    DEFAULT_REASONING_DISPLAY,
     SEARCH_DB,
     USER_DIR,
     Settings,
@@ -95,6 +96,8 @@ class CoSessionState:
     session_id: str = ""
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
+    # User-preference: set at session start from CLI/config, mutable via /reasoning command.
+    reasoning_display: str = DEFAULT_REASONING_DISPLAY
 
 
 @dataclass
@@ -203,13 +206,14 @@ def make_subagent_deps(base: CoDeps) -> CoDeps:
     """Create an isolated CoDeps copy for a sub-agent.
 
     Shares handles, registries, config, and paths by reference.
-    Session: inherits credentials and approval rules; resets per-session fields.
+    Session: inherits credentials, approval rules, and reasoning_display; resets per-session fields.
     Runtime: reset to clean defaults.
     """
     inherited_session = CoSessionState(
         google_creds=base.session.google_creds,
         google_creds_resolved=base.session.google_creds_resolved,
         session_approval_rules=list(base.session.session_approval_rules),
+        reasoning_display=base.session.reasoning_display,
     )
     return CoDeps(
         shell=base.shell,

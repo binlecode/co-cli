@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.72] - 2026-04-10
+
+### Added
+- **`/reasoning` command**: new REPL built-in lets users toggle reasoning display mode mid-session without restarting — `/reasoning [off|summary|full|next]` shows current mode (no-arg), cycles through modes (`next`), or sets directly. Change takes effect on the next agent turn.
+
+### Changed
+- **`reasoning_display` moved to `CoSessionState`**: the field is now session-owned and mutable via slash command. Parameter threading through `_run_foreground_turn`, `run_turn`, `_execute_stream_segment`, and `_run_approval_loop` removed. Sub-agent turns inherit the user's toggled mode via `make_subagent_deps`.
+
+### Added
+- **`DESIGN-tui.md`**: new DESIGN doc covering the full TUI layer — REPL loop, prompt-toolkit completer, slash command dispatch, all `BUILTIN_COMMANDS` entries, return type contract, and the session/runtime state boundary.
+
 ## [0.7.70] - 2026-04-10
 
 ### Changed

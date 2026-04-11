@@ -280,20 +280,16 @@ Interrupt handling is conservative:
 
 `_run_foreground_turn()` sequences the full wrapper around `run_turn()`:
 
-1. `compactor.on_turn_start(deps)`
-2. `run_turn(...)`
-3. `_cleanup_skill_run_state(saved_env, deps)` in `finally`
-4. `_finalize_turn(...)`
+1. `run_turn(...)`
+2. `cleanup_skill_run_state(saved_env, deps)` in `finally`
+3. `_finalize_turn(...)`
 
 `_finalize_turn()` then performs the remaining non-orchestration work:
 
-1. adopt `turn_result.messages` as the next transcript
-2. run memory signal detection only when the turn was clean:
-   - not interrupted
-   - not `outcome == "error"`
-3. `touch_session()` and `save_session()`
-4. `compactor.on_turn_end(next_history, deps)`
-5. print a generic error banner when `turn_result.outcome == "error"`
+1. fire-and-forget memory extraction when the turn was clean (not interrupted, not `outcome == "error"`)
+2. `touch_session()` and `save_session()`
+3. `append_transcript()` — positional tail slice of new messages
+4. print a generic error banner when `turn_result.outcome == "error"`
 
 Skill dispatch is intentionally scoped to one delegated turn:
 

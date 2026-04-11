@@ -138,7 +138,6 @@ async def _run_foreground_turn(
     saved_env: dict[str, str | None],
     deps: CoDeps,
     frontend: Frontend,
-    reasoning_display: str,
 ) -> tuple[list[ModelMessage], dict]:
     """Execute one foreground turn: run turn, cleanup, finalize.
 
@@ -151,7 +150,6 @@ async def _run_foreground_turn(
             user_input=user_input,
             deps=deps,
             message_history=message_history,
-            reasoning_display=reasoning_display,
             frontend=frontend,
         )
     finally:
@@ -176,6 +174,7 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         except ValueError as e:
             console.print(f"[bold red]Startup error:[/bold red] {e}")
             raise SystemExit(1) from e
+        deps.session.reasoning_display = reasoning_display
 
         completer.words = _build_completer_words(deps.skill_commands)
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
@@ -248,7 +247,6 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     saved_env=_saved_env,
                     deps=deps,
                     frontend=frontend,
-                    reasoning_display=reasoning_display,
                 )
 
             except EOFError:

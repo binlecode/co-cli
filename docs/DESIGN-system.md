@@ -113,6 +113,7 @@ The specialized DESIGN docs own the detailed behavior inside each boundary:
 
 - bootstrap order and degradation policy: [DESIGN-flow-bootstrap.md](DESIGN-flow-bootstrap.md)
 - turn execution, approvals, and retries: [DESIGN-core-loop.md](DESIGN-core-loop.md)
+- REPL loop, completer, and slash commands: [DESIGN-tui.md](DESIGN-tui.md)
 - memories, sessions, transcripts, and knowledge search: [DESIGN-context.md](DESIGN-context.md)
 - tool registration and approval behavior: [DESIGN-tools.md](DESIGN-tools.md)
 - skill loading and dispatch: [DESIGN-skills.md](DESIGN-skills.md)
@@ -147,6 +148,7 @@ These settings most directly affect top-level system assembly.
 | `co_cli/observability/_telemetry.py` | SQLite-backed telemetry exporter used by the session runtime |
 | `docs/DESIGN-flow-bootstrap.md` | Startup sequencing and degradation details |
 | `docs/DESIGN-core-loop.md` | Foreground-turn behavior and approval resumes |
+| `docs/DESIGN-tui.md` | REPL loop, completer, slash command registry and dispatch |
 | `docs/DESIGN-context.md` | Prompt context, persistence, and knowledge retrieval |
 | `docs/DESIGN-tools.md` | Tool surface, approval classes, and visibility |
 | `docs/DESIGN-skills.md` | Skill loading and slash-command delegation |

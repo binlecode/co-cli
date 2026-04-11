@@ -118,10 +118,10 @@ Session identity, metadata, and conversation transcripts are managed as paired f
 
 **Per-turn persistence** — `_finalize_turn()` is the single write point:
 
-1. `touch_session()` updates `last_used_at`, `save_session()` overwrites the `.json`
-2. `append_transcript()` appends new messages (positional tail slice) to the `.jsonl`
-3. Signal detection runs on clean turns
-4. Compaction state updated
+1. Fire-and-forget memory extraction on clean turns (not interrupted, not `outcome == "error"`)
+2. `touch_session()` updates `last_used_at`, `save_session()` overwrites the `.json`
+3. `append_transcript()` appends new messages (positional tail slice) to the `.jsonl`
+4. Error banner printed when `turn_result.outcome == "error"`
 
 The transcript writer is stateless — it derives the file path from `deps.session.session_id` on every call. When `/new` rotates the ID, the next write goes to a new file automatically.
 
