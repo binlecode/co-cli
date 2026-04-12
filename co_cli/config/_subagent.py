@@ -7,6 +7,7 @@ DEFAULT_SUBAGENT_MAX_REQUESTS_CODER = 10
 DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH = 10
 DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS = 8
 DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING = 3
+DEFAULT_SUBAGENT_MAX_REQUESTS_MEMORY = 6
 
 
 class SubagentSettings(BaseModel):
@@ -19,3 +20,4 @@ class SubagentSettings(BaseModel):
     max_requests_research: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_RESEARCH, ge=1)
     max_requests_analysis: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_ANALYSIS, ge=1)
     max_requests_thinking: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_THINKING, ge=1)
+    max_requests_memory: int = Field(default=DEFAULT_SUBAGENT_MAX_REQUESTS_MEMORY, ge=1)

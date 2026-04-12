@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.78] - 2026-04-11
+
+### Added
+- **Memory write subagent infrastructure**: `MemoryActionEnum`, `memory` write-dispatcher tool (create/edit/append/delete with atomic writes, path confinement, and resource locking), `SaveMemoryAgentOutput` structured output, `_save_memory_agent` singleton, and `_run_save_memory_agent()` dispatch in `tools/subagent.py`. `max_requests_memory` config added to `SubagentSettings`.
+
 ## [0.7.76] - 2026-04-10
 
 ### Added
