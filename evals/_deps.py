@@ -27,7 +27,6 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     ``make_eval_deps(brave_search_api_key=None)``.
     Service fields (shell, knowledge_store, model) can
     also be passed as overrides and are extracted before building CoDeps.
-    session_id is routed to CoSessionState.
     """
     s = get_settings()
 
@@ -35,8 +34,8 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
     shell = overrides.pop("shell", ShellBackend())
     knowledge_store = overrides.pop("knowledge_store", None)
     model = overrides.pop("model", None)
-    session_id_override = overrides.pop("session_id", "eval")
-    # Discard legacy overrides that no longer map to Settings fields
+    # Discard legacy overrides that no longer map to current fields
+    overrides.pop("session_id", None)
     overrides.pop("mcp_servers", None)
 
     return CoDeps(
@@ -44,7 +43,7 @@ def make_eval_deps(**overrides: Any) -> CoDeps:
         knowledge_store=knowledge_store,
         model=model,
         config=s,
-        session=CoSessionState(session_id=session_id_override),
+        session=CoSessionState(),
     )
 
 

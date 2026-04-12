@@ -1,6 +1,6 @@
 """JSONL transcript persistence for co-cli chat sessions.
 
-Transcripts are stored as JSONL files at .co-cli/sessions/{session-id}.jsonl.
+Transcripts are stored as JSONL files at the session path (a Path object).
 Each line is a single-element list serialized via ModelMessagesTypeAdapter,
 containing one ModelMessage (request or response).
 
@@ -33,20 +33,16 @@ MAX_TRANSCRIPT_READ_BYTES = 50 * 1024 * 1024  # 50 MB
 COMPACT_BOUNDARY_MARKER = '{"type":"compact_boundary"}'
 
 
-def append_messages(
-    sessions_dir: Path,
-    session_id: str,
-    messages: list[ModelMessage],
-) -> None:
+def append_messages(path: Path, messages: list[ModelMessage]) -> None:
     """Append new ModelMessage entries as JSONL lines to the session transcript.
 
     Each message is serialized as a single-element list via ModelMessagesTypeAdapter.
-    Writer is stateless — derives transcript path from session_id on every call.
+    Creates the file (and parent directories) on first call.
     """
     if not messages:
         return
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    path = sessions_dir / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    short_id = path.stem[-8:]
     try:
         with path.open("a", encoding="utf-8") as f:
             for msg in messages:
@@ -54,27 +50,27 @@ def append_messages(
                 f.write(line.decode("utf-8") + "\n")
         path.chmod(0o600)
     except OSError as e:
-        logger.warning("Transcript write failed for session %s: %s", session_id[:8], e)
+        logger.warning("Transcript write failed for session %s: %s", short_id, e)
 
 
-def write_compact_boundary(sessions_dir: Path, session_id: str) -> None:
+def write_compact_boundary(path: Path) -> None:
     """Write a compact boundary marker to the session transcript.
 
     On resume, load_transcript skips all messages before the last boundary
     (for files above SKIP_PRECOMPACT_THRESHOLD). This avoids loading the
     full uncompacted history — only post-compaction messages are returned.
     """
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    path = sessions_dir / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    short_id = path.stem[-8:]
     try:
         with path.open("a", encoding="utf-8") as f:
             f.write(COMPACT_BOUNDARY_MARKER + "\n")
         path.chmod(0o600)
     except OSError as e:
-        logger.warning("Compact boundary write failed for session %s: %s", session_id[:8], e)
+        logger.warning("Compact boundary write failed for session %s: %s", short_id, e)
 
 
-def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
+def load_transcript(path: Path) -> list[ModelMessage]:
     """Load a transcript from a session's JSONL file.
 
     For files above SKIP_PRECOMPACT_THRESHOLD (5 MB), messages before the
@@ -85,10 +81,10 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
     Returns the deserialized list of ModelMessage objects.
     Skips malformed lines with a warning.
     """
-    path = sessions_dir / f"{session_id}.jsonl"
     if not path.exists():
         return []
 
+    short_id = path.stem[-8:]
     try:
         file_size = path.stat().st_size
     except OSError:
@@ -114,7 +110,6 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
                 line = line.strip()
                 if not line:
                     continue
-                # Detect compact boundary marker
                 if line == COMPACT_BOUNDARY_MARKER:
                     if skip_precompact:
                         all_messages.clear()
@@ -130,7 +125,7 @@ def load_transcript(sessions_dir: Path, session_id: str) -> list[ModelMessage]:
                         path.name,
                     )
     except OSError as e:
-        logger.warning("Transcript read failed for session %s: %s", session_id[:8], e)
+        logger.warning("Transcript read failed for session %s: %s", short_id, e)
 
     if skip_precompact and boundary_found:
         logger.info(

@@ -414,16 +414,11 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         artifact_type=ArtifactTypeEnum.SESSION_SUMMARY,
     )
 
-    # Rotate session ID — transcript writer is stateless (derives path from
-    # deps.session.session_id), so the next write goes to a new file.
-    from co_cli.context.session import new_session, save_session
+    # Rotate session path — transcript writer derives path from deps.session.session_path,
+    # so assigning a new path ensures the next write goes to a new file.
+    from co_cli.context.session import new_session_path
 
-    session_data = new_session()
-    ctx.deps.session.session_id = session_data["session_id"]
-    try:
-        save_session(ctx.deps.sessions_dir, session_data)
-    except OSError as e:
-        logger.warning("New session save failed: %s", e)
+    ctx.deps.session.session_path = new_session_path(ctx.deps.sessions_dir)
 
     console.print("[dim]Session checkpointed. Starting fresh.[/dim]")
     return []
@@ -604,7 +599,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
         console.print("[bold yellow]Security scan warnings:[/bold yellow]")
         for w in warnings:
             console.print(f"  [yellow]{w}[/yellow]")
-        answer = console.input("Install anyway? [y/N] ")
+        answer = (ctx.input_fn or console.input)("Install anyway? [y/N] ")
         if answer.strip().lower() != "y":
             console.print("[dim]Install cancelled.[/dim]")
             return
@@ -612,7 +607,7 @@ async def _install_skill(ctx: CommandContext, target: str, force: bool = False) 
     # Confirm overwrite if file already exists (skip when force=True)
     dest = ctx.deps.skills_dir / filename
     if dest.exists() and not force:
-        answer = console.input(f"Overwrite existing skill '{filename}'? [y/N] ")
+        answer = (ctx.input_fn or console.input)(f"Overwrite existing skill '{filename}'? [y/N] ")
         if answer.strip().lower() != "y":
             console.print("[dim]Install cancelled.[/dim]")
             return
@@ -824,11 +819,11 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
     selected_idx = items.index(selection)
     selected = sessions[selected_idx]
 
-    messages = load_transcript(ctx.deps.sessions_dir, selected.session_id)
+    messages = load_transcript(selected.path)
     if not messages:
         console.print("[dim]Could not load transcript (empty or too large).[/dim]")
         return None
-    ctx.deps.session.session_id = selected.session_id
+    ctx.deps.session.session_path = selected.path
     return ReplaceTranscript(history=messages)
 
 

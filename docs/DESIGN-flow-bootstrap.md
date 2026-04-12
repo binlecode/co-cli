@@ -53,7 +53,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ build_agent(config=deps.config, model=deps.model) → Agent
 │
 ├─ restore_session(deps, frontend)
-│      fresh → restore session_id; stale → new session
+│      found → deps.session.session_path = existing path; none found → new_session_path()
 │
 ├─ frontend.on_status("  {skill_count} skill(s) loaded")
 │
@@ -188,19 +188,18 @@ Once `create_deps()` returns, `chat_loop()` updates completion words with loaded
 
 ### Step 12. Restore or create the session
 
-Bootstrap then restores the freshest session file from `deps.sessions_dir` or creates a new one. This is the point where `deps.session.session_id` is set.
+Bootstrap runs `migrate_session_files()` to convert any legacy `{uuid}.jsonl` files to the new `YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl` format and removes stale `.json` sidecars. It then scans `*.jsonl` by filename (lexicographic sort = chronological sort) and sets `deps.session.session_path` to the most recent file.
 
 ```text
-session_data = find_latest_session(...)
+migrate_session_files(deps.sessions_dir)   # rename legacy files, drop .json sidecars
+path = find_latest_session(deps.sessions_dir)
 if found:
-    deps.session.session_id = restored id
+    deps.session.session_path = path
 else:
-    session_data = new_session()
-    deps.session.session_id = new id
-    save_session(...)
+    deps.session.session_path = new_session_path(deps.sessions_dir)  # path only, no file write
 ```
 
-The returned `session_data` stays local to `chat_loop()` and is reused for turn-by-turn persistence after startup. Session file schema and ongoing lifecycle are owned by [DESIGN-context.md](DESIGN-context.md).
+No session file is written at startup — the file is created on the first `append_messages` call after the first turn. Session filename format and ongoing lifecycle are owned by [DESIGN-context.md](DESIGN-context.md).
 
 ### Step 13. Print startup status and enter the REPL boundary
 
@@ -249,5 +248,5 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |
 | `co_cli/config/_core.py` | Defines `Settings`, layered config loading, and env override mapping |
 | `co_cli/commands/_commands.py` | Loads skills during bootstrap and later refreshes them in the REPL |
-| `co_cli/context/session.py` | Reads, creates, and persists session files |
+| `co_cli/context/session.py` | Session filename generation, latest-session discovery, migration from legacy format, new-path factory |
 | `co_cli/knowledge/_store.py` | Implements the indexed knowledge store used when bootstrap enables it |

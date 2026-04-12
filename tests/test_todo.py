@@ -13,11 +13,11 @@ from co_cli.tools.todo import read_todos, write_todos
 _AGENT = build_agent(config=settings)
 
 
-def _make_ctx(session_id: str = "test-todo") -> RunContext:
+def _make_ctx() -> RunContext:
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id=session_id),
+        session=CoSessionState(),
     )
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 

@@ -13,7 +13,7 @@ from co_cli.bootstrap.core import (
     restore_session,
 )
 from co_cli.config._knowledge import ModelConfig
-from co_cli.context.session import find_latest_session, new_session, save_session
+from co_cli.context.session import session_filename
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.display._core import TerminalFrontend
@@ -240,54 +240,55 @@ def test_sync_knowledge_store_failure_returns_none(tmp_path: Path) -> None:
     assert result is None, "_sync_knowledge_store must return None when sync fails"
 
 
-def test_restore_session_existing_returns_same_id(tmp_path: Path) -> None:
-    """restore_session() with an existing session in sessions/ must restore the same session_id."""
+def test_restore_session_existing_returns_path(tmp_path: Path) -> None:
+    """restore_session() with an existing session must restore its path."""
+    from datetime import UTC, datetime
+
     sessions_dir = tmp_path / "sessions"
-    session_data = new_session()
-    save_session(sessions_dir, session_data)
-    original_id = session_data["session_id"]
+    sessions_dir.mkdir(parents=True)
+    created_at = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
+    name = session_filename(created_at, "aaaaaaaa-0000-0000-0000-000000000000")
+    existing = sessions_dir / name
+    existing.touch()
 
     deps = _make_deps(tmp_path)
-    restore_session(deps, TerminalFrontend())
+    result = restore_session(deps, TerminalFrontend())
 
-    assert deps.session.session_id == original_id, (
-        "restore_session() must restore the on-disk session_id"
+    assert result == existing, "restore_session() must return the existing session path"
+    assert deps.session.session_path == existing, (
+        "restore_session() must set deps.session.session_path to the existing path"
     )
 
 
-def test_restore_session_empty_dir_creates_new_id(tmp_path: Path) -> None:
-    """restore_session() with no sessions creates and persists a new session_id."""
+def test_restore_session_empty_dir_creates_new_path(tmp_path: Path) -> None:
+    """restore_session() with no sessions returns a new path without writing a file."""
     deps = _make_deps(tmp_path)
-    restore_session(deps, TerminalFrontend())
+    result = restore_session(deps, TerminalFrontend())
 
-    assert deps.session.session_id != ""
-    # Verify standard UUID format (with dashes)
-    assert "-" in deps.session.session_id, "Session ID must use standard UUID format with dashes"
-    sessions_dir = tmp_path / "sessions"
-    on_disk = find_latest_session(sessions_dir)
-    assert on_disk is not None
-    assert on_disk["session_id"] == deps.session.session_id, (
-        "restore_session() must persist the new session_id to disk"
-    )
+    assert isinstance(result, Path), "restore_session() must return a Path"
+    assert result.suffix == ".jsonl", "New session path must have .jsonl suffix"
+    assert deps.session.session_path == result, "session_path must be set in deps"
+    # File is NOT written until first append_transcript
+    assert not result.exists(), "New session file must not exist until first append_transcript"
 
 
 def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
-    """restore_session() must pick the most recently modified session file."""
-    import time
+    """restore_session() must pick the most recent session by lexicographic filename sort."""
+    from datetime import UTC, datetime
 
     sessions_dir = tmp_path / "sessions"
-    old = new_session()
-    save_session(sessions_dir, old)
-    time.sleep(0.05)
-    recent = new_session()
-    save_session(sessions_dir, recent)
+    sessions_dir.mkdir(parents=True)
+    older = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
+    newer = datetime(2026, 4, 11, 12, 0, 0, tzinfo=UTC)
+    old_path = sessions_dir / session_filename(older, "aaaaaaaa-0000-0000-0000-000000000000")
+    new_path = sessions_dir / session_filename(newer, "bbbbbbbb-0000-0000-0000-000000000000")
+    old_path.touch()
+    new_path.touch()
 
     deps = _make_deps(tmp_path)
-    restore_session(deps, TerminalFrontend())
+    result = restore_session(deps, TerminalFrontend())
 
-    assert deps.session.session_id == recent["session_id"], (
-        "restore_session() must pick the most recently modified session"
-    )
+    assert result == new_path, "restore_session() must pick the most recently dated session"
 
 
 def test_resolve_reranker_nothing_configured_returns_unchanged() -> None:
@@ -402,23 +403,22 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
     )
 
 
-def test_restore_session_corrupt_json_creates_new_session(tmp_path: Path) -> None:
-    """restore_session() with corrupt session files creates a new session instead of crashing."""
+def test_restore_session_stale_json_no_jsonl_creates_new_session(tmp_path: Path) -> None:
+    """restore_session() with only stale .json files (no paired .jsonl) creates a new session."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
+    # Stale JSON sidecar with no paired .jsonl — migration skips it; find_latest_session finds nothing
     (sessions_dir / "bad-session.json").write_text("not valid json{{{", encoding="utf-8")
 
     deps = _make_deps(tmp_path)
     result = restore_session(deps, TerminalFrontend())
 
-    assert isinstance(result, dict), (
-        "restore_session() must return a session dict even with corrupt file"
-    )
-    assert deps.session.session_id != "", "session_id must be set after corrupt file recovery"
+    assert isinstance(result, Path), "restore_session() must return a Path"
+    assert deps.session.session_path == result
 
 
-def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
-    """restore_session() must not raise when save_session() fails due to a permissions error."""
+def test_restore_session_readonly_dir_does_not_raise(tmp_path: Path) -> None:
+    """restore_session() must not raise when sessions_dir is read-only (no write on session create)."""
     readonly_dir = tmp_path / "readonly_sessions"
     readonly_dir.mkdir()
     os.chmod(readonly_dir, 0o555)
@@ -436,9 +436,7 @@ def test_restore_session_oserror_on_save_does_not_raise(tmp_path: Path) -> None:
             library_dir=tmp_path / "library",
         )
         result = restore_session(deps, TerminalFrontend())
-        assert isinstance(result, dict), (
-            "restore_session() must return a session dict even when save fails"
-        )
-        assert deps.session.session_id != "", "session_id must be set in deps even when save fails"
+        assert isinstance(result, Path), "restore_session() must return a Path"
+        assert deps.session.session_path == result
     finally:
         os.chmod(readonly_dir, 0o755)

@@ -42,7 +42,7 @@ flowchart TD
     subgraph Storage["persistent stores"]
         Memories[".co-cli/memory/*.md"]
         Library["library_dir/*.md"]
-        Sessions[".co-cli/sessions/*.json + *.jsonl"]
+        Sessions[".co-cli/sessions/YYYY-MM-DD-T...Z-{uuid8}.jsonl"]
         Index["KnowledgeStore / co-cli-search.db"]
     end
 
@@ -106,38 +106,34 @@ LLM summarization falls back to a static marker when model registry is absent, f
 
 ### 2.3 Session & Transcript Persistence
 
-Session identity, metadata, and conversation transcripts are managed as paired files under `.co-cli/sessions/`:
+Each session is a single JSONL file under `.co-cli/sessions/` using a lexicographically sortable name:
 
 ```text
 .co-cli/sessions/
-├── {session-id}.json      ← metadata (session_id, created_at, last_used_at, compaction_count)
-└── {session-id}.jsonl     ← append-only transcript (one ModelMessage per line)
+└── YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl   ← append-only transcript
 ```
 
-**Startup** — `restore_session()` scans `*.json` by mtime, validates session IDs as UUIDs (path traversal guard), and restores the most recent. If none found, creates a new session. The REPL shows a `/resume` hint when a prior transcript exists.
+Example: `2026-04-11-T142305Z-550e8400.jsonl`. The timestamp prefix makes lexicographic sort == chronological sort. The 8-char UUID suffix is the short display ID.
+
+**Startup** — `restore_session()` runs `migrate_session_files()` first (renames legacy `{uuid}.jsonl` files, removes any `{uuid}.json` sidecars), then scans `*.jsonl` by filename (lexicographic sort — no `stat()`), and sets `deps.session.session_path` to the most recent file path. If none found, `new_session_path()` builds a path for the new session but does not write the file — the file is created on the first `append_messages` call.
 
 **Per-turn persistence** — `_finalize_turn()` is the single write point:
 
 1. Fire-and-forget memory extraction on clean turns (not interrupted, not `outcome == "error"`)
-2. `touch_session()` updates `last_used_at`, `save_session()` overwrites the `.json`
-3. `append_transcript()` appends new messages (positional tail slice) to the `.jsonl`
-4. Error banner printed when `turn_result.outcome == "error"`
-
-The transcript writer is stateless — it derives the file path from `deps.session.session_id` on every call. When `/new` rotates the ID, the next write goes to a new file automatically.
+2. `append_messages()` appends new messages (positional tail slice) to `deps.session.session_path`; creates parent dirs on first call
+3. Error banner printed when `turn_result.outcome == "error"`
 
 **Transcript format** — JSONL, each line is a single-element list serialized via pydantic-ai's `ModelMessagesTypeAdapter`. Preserves all discriminated union part types across round-trip.
 
 **Transcript loading** (`/resume`) — `load_transcript()` reads the full `.jsonl`, skips malformed lines with a warning.
 
-**Session rotation** (`/new`) — summarizes current session into a `session_summary` memory artifact, creates fresh session ID, returns empty history. The REPL loop detects the session ID divergence and syncs `session_data` from the new `.json` file.
+**Session rotation** (`/new`) — summarizes current session into a `session_summary` memory artifact, assigns a new `deps.session.session_path` via `new_session_path()`, returns empty history. The next `append_messages` call creates the new file automatically.
 
-**Session resume** (`/resume`) — `list_sessions()` presents an interactive picker (title from first user prompt, message count from JSONL line count). Selection loads transcript and swaps `deps.session.session_id`.
+**Session resume** (`/resume`) — `list_sessions()` presents an interactive picker (title from first user prompt, file size from stat). Selection loads transcript from `selected.path` and sets `deps.session.session_path = selected.path`.
 
-**Dual-track state** — session identity lives in two synchronized locations: `deps.session.session_id` (in-memory, used by transcript writer and telemetry) and `session_data` (local var in REPL loop, used by `touch_session()`/`save_session()`). The REPL loop syncs them after any `/new` or `/resume` by reloading from disk.
+**Session path in telemetry** — the 8-char suffix (`session_path.stem[-8:]`) is carried in OTel spans, agent run metadata, and sub-agent metadata. Sub-agents receive a fresh empty `Path()`, not the parent's path.
 
-**Session ID in telemetry** — carried in OTel spans, agent run metadata, and sub-agent metadata. Sub-agents receive a fresh session ID, not the parent's.
-
-**Security** — session IDs are UUID-validated before path construction (rejects crafted IDs). Files are `chmod 0o600`. No user input in paths — IDs are generated internally, `/resume` uses an interactive picker.
+**Security** — session paths are constructed from internally-generated timestamps and UUIDs; no user input enters path construction. `/resume` uses an interactive picker. Files are `chmod 0o600`.
 
 **Behavioral constraints:**
 - Transcripts are append-only — never rewritten, never truncated
@@ -373,8 +369,8 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/prompts/personalities/_validator.py` | personality discovery and file validation |
 | `co_cli/context/_history.py` | history processors, compaction boundaries, emergency compaction, context enrichment |
 | `co_cli/context/summarization.py` | summarizer agent, compaction budget, token estimation |
-| `co_cli/context/session.py` | session metadata: create, load, save, find latest, touch, UUID validation |
-| `co_cli/context/transcript.py` | JSONL transcript: append, load, list sessions, title extraction |
+| `co_cli/context/session.py` | session filename generation, latest-session discovery, migration from legacy format, new-path factory |
+| `co_cli/context/transcript.py` | JSONL transcript: append, load, compact boundary |
 | `co_cli/context/_deferred_tool_prompt.py` | `build_category_awareness_prompt()` — category-level prompt for deferred tool discovery |
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
@@ -392,4 +388,4 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/tools/tool_output.py` | `ToolReturn` construction and optional oversized-result persistence |
 | `co_cli/commands/_commands.py` | slash-command dispatch; `/memory`, `/resume`, `/compact`, `/new`, `/sessions`, `/history`, task-control |
 | `co_cli/bootstrap/core.py` | knowledge backend discovery, store sync, session restore |
-| `co_cli/main.py` | `_finalize_turn()` persistence, `_chat_loop()` session-data sync |
+| `co_cli/main.py` | `_finalize_turn()` transcript persistence, `_chat_loop()` REPL session lifecycle |

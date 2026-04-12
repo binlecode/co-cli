@@ -46,7 +46,6 @@ from co_cli.config._core import (
     settings,
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
-from co_cli.context.session import increment_compaction, load_session, save_session, touch_session
 from co_cli.context.skill_env import cleanup_skill_run_state
 from co_cli.context.transcript import append_messages as append_transcript
 from co_cli.context.transcript import write_compact_boundary
@@ -96,13 +95,12 @@ def _default(ctx: typer.Context):
 async def _finalize_turn(
     turn_result: TurnResult,
     message_history: list[ModelMessage],
-    session_data: dict,
     deps: CoDeps,
     frontend: Frontend,
-) -> tuple[list[ModelMessage], dict]:
-    """Consolidate post-turn lifecycle: history, signals, session, errors.
+) -> list[ModelMessage]:
+    """Consolidate post-turn lifecycle: history, signals, transcript, errors.
 
-    Returns (next_message_history, next_session_data).
+    Returns next_message_history.
     Does NOT handle skill-run cleanup — that is done by cleanup_skill_run_state() in finally.
     Does NOT handle /compact or built-in slash-command persistence.
     """
@@ -114,35 +112,30 @@ async def _finalize_turn(
     if not turn_result.interrupted and turn_result.outcome != "error":
         fire_and_forget_extraction(next_history, deps=deps, frontend=frontend)
 
-    # Touch session and persist
-    next_session = touch_session(session_data)
-    save_session(deps.sessions_dir, next_session)
-
     # Append new messages to transcript (positional tail slice)
     new_messages = turn_result.messages[len(message_history) :]
-    append_transcript(deps.sessions_dir, deps.session.session_id, new_messages)
+    append_transcript(deps.session.session_path, new_messages)
 
     # Emit error banner when outcome is error
     if turn_result.outcome == "error":
         console.print("[error]An error occurred during this turn.[/error]")
 
-    return next_history, next_session
+    return next_history
 
 
 async def _run_foreground_turn(
     *,
     message_history: list[ModelMessage],
-    session_data: dict,
     agent: Agent[CoDeps, str | DeferredToolRequests],
     user_input: str,
     saved_env: dict[str, str | None],
     deps: CoDeps,
     frontend: Frontend,
-) -> tuple[list[ModelMessage], dict]:
+) -> list[ModelMessage]:
     """Execute one foreground turn: run turn, cleanup, finalize.
 
     cleanup_skill_run_state is guaranteed via finally.
-    Returns (next_message_history, next_session_data).
+    Returns next_message_history.
     """
     try:
         turn_result = await run_turn(
@@ -154,7 +147,7 @@ async def _run_foreground_turn(
         )
     finally:
         cleanup_skill_run_state(saved_env, deps)
-    return await _finalize_turn(turn_result, message_history, session_data, deps, frontend)
+    return await _finalize_turn(turn_result, message_history, deps, frontend)
 
 
 async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
@@ -179,14 +172,13 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
         completer.words = _build_completer_words(deps.skill_commands)
         agent = build_agent(config=deps.config, model=deps.model, tool_registry=deps.tool_registry)
 
-        session_data = restore_session(deps, frontend)
+        restore_session(deps, frontend)
         from co_cli.commands._commands import get_skill_registry
 
         frontend.on_status(f"  {len(get_skill_registry(deps.skill_commands))} skill(s) loaded")
 
         # Resume hint: check if a transcript exists for the current session
-        transcript_path = deps.sessions_dir / f"{deps.session.session_id}.jsonl"
-        if transcript_path.exists():
+        if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
         display_welcome_banner(deps)
@@ -218,17 +210,8 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     outcome = await dispatch_command(user_input, cmd_ctx)
                     if isinstance(outcome, ReplaceTranscript):
                         message_history = outcome.history
-                        # Sync session_data if session ID rotated (/new, /resume)
-                        if deps.session.session_id != session_data.get("session_id"):
-                            rotated = load_session(
-                                deps.sessions_dir / f"{deps.session.session_id}.json"
-                            )
-                            if rotated:
-                                session_data = rotated
                         if outcome.compaction_applied:
-                            write_compact_boundary(deps.sessions_dir, deps.session.session_id)
-                            session_data = increment_compaction(session_data)
-                            save_session(deps.sessions_dir, session_data)
+                            write_compact_boundary(deps.session.session_path)
                         continue
                     elif isinstance(outcome, DelegateToAgent):
                         # Skill dispatched — fall through to LLM turn with delegated input
@@ -239,9 +222,8 @@ async def _chat_loop(reasoning_display: str = DEFAULT_REASONING_DISPLAY):
                     else:  # LocalOnly
                         continue
 
-                message_history, session_data = await _run_foreground_turn(
+                message_history = await _run_foreground_turn(
                     message_history=message_history,
-                    session_data=session_data,
                     agent=agent,
                     user_input=user_input,
                     saved_env=_saved_env,

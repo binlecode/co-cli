@@ -18,10 +18,7 @@ def _make_ctx(reasoning_display: str = DEFAULT_REASONING_DISPLAY) -> CommandCont
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(mcp_servers={}),
-        session=CoSessionState(
-            session_id="test-reasoning",
-            reasoning_display=reasoning_display,
-        ),
+        session=CoSessionState(reasoning_display=reasoning_display),
     )
     return CommandContext(
         message_history=[],

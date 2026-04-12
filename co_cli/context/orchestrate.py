@@ -258,7 +258,7 @@ async def _execute_stream_segment(
                 model_settings=model_settings,
                 usage=turn_state.latest_usage,
                 deferred_tool_results=turn_state.tool_approval_decisions,
-                metadata={"session_id": deps.session.session_id},
+                metadata={"session_id": deps.session.session_path.stem[-8:]},
             ):
                 if isinstance(event, PartStartEvent):
                     if isinstance(event.part, ThinkingPart):

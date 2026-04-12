@@ -110,7 +110,7 @@ async def main():
             if deps.skill_commands:
                 print(f"  Skills List      : {list(deps.skill_commands.keys())}")
             print(f"System Prompts Len : {system_prompt_length}")
-            print(f"Session ID         : {deps.session.session_id}")
+            print(f"Session ID         : {deps.session.session_path.stem[-8:]}")
             print("----------------------------------------\n")
 
             # Add to report
@@ -133,7 +133,7 @@ async def main():
             if mcp_integrations:
                 report_lines.append(f"  - MCP Integrations: {mcp_integrations}")
             report_lines.append(f"- **Skills Discovered**: {skill_count}")
-            report_lines.append(f"- **Session ID**: {deps.session.session_id}")
+            report_lines.append(f"- **Session ID**: {deps.session.session_path.stem[-8:]}")
             report_lines.append(f"- **Paths Resolved**: {deps.memory_dir}, {deps.library_dir}")
 
             report_lines.append("")

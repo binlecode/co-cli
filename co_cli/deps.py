@@ -93,7 +93,7 @@ class CoSessionState:
     session_approval_rules: list[SessionApprovalRule] = field(default_factory=list)
     drive_page_tokens: dict[str, list[str]] = field(default_factory=dict)
     session_todos: list[dict] = field(default_factory=list)
-    session_id: str = ""
+    session_path: Path = field(default_factory=Path)
     memory_recall_state: MemoryRecallState = field(default_factory=MemoryRecallState)
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
@@ -154,6 +154,8 @@ class CoDeps:
     config: Settings
     # Resource lock store (shared across parent + subagents)
     resource_locks: ResourceLockStore = field(default=None, repr=False)  # type: ignore[assignment]  # __post_init__ always initializes from None
+    # File mtime registry — shared across parent + subagents by reference for staleness detection
+    file_read_mtimes: dict[str, float] = field(default_factory=dict, repr=False)
     # Service handles (optional, set during bootstrap)
     knowledge_store: KnowledgeStore | None = field(default=None, repr=False)
     model: LlmModel | None = field(default=None, repr=False)
@@ -219,6 +221,7 @@ def make_subagent_deps(base: CoDeps) -> CoDeps:
         shell=base.shell,
         config=base.config,
         resource_locks=base.resource_locks,
+        file_read_mtimes=base.file_read_mtimes,
         knowledge_store=base.knowledge_store,
         model=base.model,
         tool_index=base.tool_index,

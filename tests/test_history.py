@@ -69,7 +69,7 @@ def _make_compact_ctx(message_history: list | None = None) -> CommandContext:
         shell=ShellBackend(),
         model=_LLM_MODEL,
         config=_CONFIG,
-        session=CoSessionState(session_id="test-history"),
+        session=CoSessionState(),
     )
     return CommandContext(
         message_history=message_history or [],
@@ -435,7 +435,7 @@ def _make_gather_ctx(
     config = make_settings(
         llm=make_settings().llm.model_copy(update={"provider": "ollama-openai", "num_ctx": 30})
     )
-    session = CoSessionState(session_id="test-gather")
+    session = CoSessionState()
     if session_todos is not None:
         session.session_todos = session_todos
     deps = CoDeps(

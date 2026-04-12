@@ -164,7 +164,7 @@ def _make_ctx(
             host=settings.llm.host,
         ),
     )
-    session = CoSessionState(session_id="eval-compaction")
+    session = CoSessionState()
     if session_todos:
         session.session_todos = session_todos
     deps = CoDeps(
@@ -1169,7 +1169,7 @@ async def step_6_full_chain() -> bool:
             host=settings.llm.host,
         ),
     )
-    session = CoSessionState(session_id="eval-chain-6")
+    session = CoSessionState()
     session.session_todos = [
         {"content": "Update api/urls.py for JWT", "status": "pending"},
         {"content": "Add PyJWT to requirements", "status": "pending"},
@@ -1522,7 +1522,7 @@ async def step_7_multi_cycle() -> bool:
         shell=ShellBackend(),
         config=config,
         model=_LLM_MODEL,
-        session=CoSessionState(session_id="eval-chain-7"),
+        session=CoSessionState(),
     )
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
@@ -1863,7 +1863,7 @@ async def step_9_circuit_breaker() -> bool:
         shell=ShellBackend(),
         config=config,
         model=_LLM_MODEL,
-        session=CoSessionState(session_id="eval-breaker"),
+        session=CoSessionState(),
     )
     deps.runtime.compaction_failure_count = 3
     ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())

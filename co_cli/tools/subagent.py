@@ -149,7 +149,7 @@ async def _run_subagent_attempt(
             deps=make_subagent_deps(ctx.deps),
             usage_limits=UsageLimits(request_limit=budget),
             model_settings=model_settings,
-            metadata={"session_id": ctx.deps.session.session_id},
+            metadata={"session_id": ctx.deps.session.session_path.stem[-8:]},
         )
     except Exception as exc:
         raise ModelRetry(error_msg) from exc

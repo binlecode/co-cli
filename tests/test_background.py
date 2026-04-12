@@ -27,7 +27,7 @@ from co_cli.tools.background import BackgroundTaskState, _make_task_id, kill_tas
 
 
 def _fresh_session() -> CoSessionState:
-    return CoSessionState(session_id="test-background")
+    return CoSessionState()
 
 
 def _make_state(command: str, cwd: str = "/tmp", description: str = "") -> BackgroundTaskState:

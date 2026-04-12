@@ -37,7 +37,7 @@ def _make_ctx(
         config=settings,
         skills_dir=skills_dir or (tmp_path / ".co-cli" / "skills"),
         user_skills_dir=user_skills_dir or (tmp_path / "user-skills"),
-        session=CoSessionState(session_id="test-skills"),
+        session=CoSessionState(),
     )
     return CommandContext(
         message_history=[],

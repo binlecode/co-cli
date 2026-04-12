@@ -17,7 +17,7 @@ flowchart TD
     C -->|no| H["_run_foreground_turn()"]
 
     D -->|LocalOnly| A
-    D -->|ReplaceTranscript| E["adopt new history; sync rotated session_data when needed; persist compaction boundary/count when applied"]
+    D -->|ReplaceTranscript| E["adopt new history; persist compaction boundary when applied"]
     E --> A
     D -->|DelegateToAgent| F["set active_skill_name; snapshot/apply skill_env; delegated_input becomes user_input"]
 
@@ -44,7 +44,7 @@ flowchart TD
     O --> T["cleanup_skill_run_state() in finally"]
     R --> T
     S --> T
-    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; touch/save session; append transcript tail; optional error banner"]
+    T --> U["_finalize_turn(): fire-and-forget memory extraction on clean turns; append transcript tail; optional error banner"]
     U --> A
 ```
 
@@ -52,12 +52,12 @@ Execution owners:
 
 | Owner | Responsibility |
 | --- | --- |
-| `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement/session sync, and skill-env setup |
+| `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
 | `_run_foreground_turn()` | `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
 | `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
 | `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
-| `_finalize_turn()` | clean-turn memory extraction, session persistence, transcript append, and generic error banner |
+| `_finalize_turn()` | clean-turn memory extraction, transcript append, and generic error banner |
 
 Two boundary rules keep the loop legible:
 
@@ -287,9 +287,8 @@ Interrupt handling is conservative:
 `_finalize_turn()` then performs the remaining non-orchestration work:
 
 1. fire-and-forget memory extraction when the turn was clean (not interrupted, not `outcome == "error"`)
-2. `touch_session()` and `save_session()`
-3. `append_transcript()` — positional tail slice of new messages
-4. print a generic error banner when `turn_result.outcome == "error"`
+2. `append_messages()` — positional tail slice of new messages written to `deps.session.session_path`
+3. print a generic error banner when `turn_result.outcome == "error"`
 
 Skill dispatch is intentionally scoped to one delegated turn:
 
@@ -344,5 +343,5 @@ These settings most directly shape one-turn orchestration behavior. Context-stor
 | `co_cli/tools/shell.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/_stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/_core.py` | terminal frontend surfaces, tool panels, status rendering, and approval prompts |
-| `co_cli/context/session.py` | session touch/save/increment helpers used after each turn |
+| `co_cli/context/session.py` | session filename generation, latest-session discovery, migration from legacy format |
 | `co_cli/context/skill_env.py` | skill-run environment save/restore and active-skill-name cleanup |

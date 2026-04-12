@@ -53,7 +53,7 @@ def _make_deps(session_id: str) -> CoDeps:
         model=_LLM_MODEL,
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id=session_id),
+        session=CoSessionState(),
     )
 
 

@@ -70,7 +70,7 @@ def _make_ctx(
         model=_LLM_MODEL,
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-commands"),
+        session=CoSessionState(),
         **({"memory_dir": memory_dir} if memory_dir is not None else {}),
     )
     return CommandContext(
@@ -156,7 +156,7 @@ async def test_approval_approve():
         model=_LLM_MODEL,
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-approval"),
+        session=CoSessionState(),
     )
     await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     try:
@@ -194,7 +194,7 @@ async def test_approval_deny():
         model=_LLM_MODEL,
         tool_index=dict(_TOOL_REG.tool_index),
         config=_CONFIG_NO_MCP,
-        session=CoSessionState(session_id="test-denial"),
+        session=CoSessionState(),
     )
     await ensure_ollama_warm(_SUMM_MODEL, _CONFIG_NO_MCP.llm.host)
     try:
@@ -278,7 +278,7 @@ def test_is_auto_approved_false_before_remember():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id="test-autoapprove"),
+        session=CoSessionState(),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
     assert is_auto_approved(subject, deps) is False
@@ -289,7 +289,7 @@ def test_remember_tool_approval_stores_rule_and_auto_approves():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id="test-remember"),
+        session=CoSessionState(),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git log"})
     remember_tool_approval(subject, deps)
@@ -305,7 +305,7 @@ def test_remember_tool_approval_is_idempotent():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id="test-idem"),
+        session=CoSessionState(),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git status"})
     remember_tool_approval(subject, deps)
@@ -319,7 +319,7 @@ def test_record_approval_choice_with_remember_stores_rule():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id="test-record"),
+        session=CoSessionState(),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
     approvals = DeferredToolResults()
@@ -340,7 +340,7 @@ def test_record_approval_choice_deny_does_not_store_rule():
     deps = CoDeps(
         shell=ShellBackend(),
         config=make_settings(),
-        session=CoSessionState(session_id="test-deny-record"),
+        session=CoSessionState(),
     )
     subject = resolve_approval_subject("run_shell_command", {"cmd": "git push"})
     approvals = DeferredToolResults()

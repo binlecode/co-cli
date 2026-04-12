@@ -5,17 +5,18 @@ content loading — delegates to ``_transcript.py`` for I/O primitives.
 
 Public API:
     SessionSummary    — frozen dataclass for listing UI
-    list_sessions     — list past sessions by mtime descending
+    list_sessions     — list past sessions by filename descending (= chronological)
     format_file_size  — human-readable byte size
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from co_cli.context.session import parse_session_filename
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,11 @@ class SessionSummary:
     """Lightweight summary of a past session for listing/picker UI."""
 
     session_id: str
+    path: Path
     title: str
     last_modified: datetime
     file_size: int
+    created_at: datetime | None = None
 
 
 def _extract_title(path: Path, max_bytes: int = 4096) -> str:
@@ -42,6 +45,8 @@ def _extract_title(path: Path, max_bytes: int = 4096) -> str:
             if not line:
                 continue
             try:
+                import json
+
                 data = json.loads(line)
                 if isinstance(data, list):
                     for msg in data:
@@ -50,7 +55,7 @@ def _extract_title(path: Path, max_bytes: int = 4096) -> str:
                                 content = part.get("content", "")
                                 if content:
                                     return content[:80] + ("..." if len(content) > 80 else "")
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except (ValueError, KeyError, TypeError):
                 continue
     except OSError:
         pass
@@ -67,11 +72,14 @@ def format_file_size(size: int) -> str:
 
 
 def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
-    """List past sessions with title extraction, sorted by mtime descending.
+    """List past sessions sorted by filename descending (= most recent first).
 
-    Title is extracted from the first 4KB of the .jsonl file (head read only).
-    File size comes from stat — no full file scan. Matches fork-claude-code's
-    lite listing pattern (stat-based, no content parsing for listing).
+    For new-format files (YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl), session_id is
+    the 8-char UUID suffix and created_at is parsed from the filename prefix.
+    For legacy filenames, session_id is the full stem and created_at is None.
+
+    Title is extracted from the first 4KB of the JSONL file (head read only).
+    File size and last_modified come from stat — no full file scan.
     """
     if not sessions_dir.exists():
         return []
@@ -79,12 +87,17 @@ def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
     if not jsonl_files:
         return []
 
-    # Sort by mtime descending (most recent first)
-    jsonl_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Lexicographic sort descending (new-format filenames = chronological order)
+    jsonl_files.sort(key=lambda p: p.name, reverse=True)
 
     summaries: list[SessionSummary] = []
     for path in jsonl_files:
-        session_id = path.stem
+        parsed = parse_session_filename(path.name)
+        if parsed is not None:
+            session_id, created_at = parsed[0], parsed[1]
+        else:
+            session_id = path.stem
+            created_at = None
         title = _extract_title(path)
         try:
             st = path.stat()
@@ -94,9 +107,11 @@ def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
         summaries.append(
             SessionSummary(
                 session_id=session_id,
+                path=path,
                 title=title,
                 last_modified=last_modified,
                 file_size=st.st_size,
+                created_at=created_at,
             )
         )
     return summaries

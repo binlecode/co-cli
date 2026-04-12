@@ -54,8 +54,9 @@ async def check_capabilities(ctx: RunContext[CoDeps]) -> ToolReturn:
     else:
         lines.append("Reasoning model: not configured (doctor fail-fast)")
 
-    if ctx.deps.session.session_id:
-        lines.append(f"Session: {ctx.deps.session.session_id[:8]}...")
+    short_id = ctx.deps.session.session_path.stem[-8:]
+    if short_id:
+        lines.append(f"Session: {short_id}...")
 
     mcp_configured = len(ctx.deps.config.mcp_servers or {})
     mcp_live = caps["mcp_count"]

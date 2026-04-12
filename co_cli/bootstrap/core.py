@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from co_cli.knowledge._store import KnowledgeStore
 
 from co_cli.config._core import MCPServerConfig, Settings, settings
-from co_cli.context.session import find_latest_session, new_session, save_session
+from co_cli.context.session import find_latest_session, migrate_session_files, new_session_path
 from co_cli.context.types import SafetyState
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display._core import TerminalFrontend
@@ -303,25 +303,27 @@ async def create_deps(frontend: TerminalFrontend, stack: AsyncExitStack) -> CoDe
     )
 
 
-def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> dict:
-    """Restore the most recent session from sessions/ dir, or create a new one."""
+def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
+    """Restore the most recent session from sessions/ dir, or create a new session path.
+
+    Runs migration of old-format session pairs before loading.
+    Returns the session Path (existing or newly constructed — file not created until
+    first append_transcript call).
+    """
     with _TRACER.start_as_current_span("restore_session") as span:
-        session_data = find_latest_session(deps.sessions_dir)
-        if session_data is not None:
-            deps.session.session_id = session_data["session_id"]
-            short_id = deps.session.session_id[:8]
+        migrate_session_files(deps.sessions_dir)
+        session_path = find_latest_session(deps.sessions_dir)
+        if session_path is not None:
+            deps.session.session_path = session_path
+            short_id = session_path.stem[-8:]
             span.set_attribute("status", "restored")
             span.set_attribute("session_id", short_id)
             frontend.on_status(f"  Session restored — {short_id}...")
         else:
-            session_data = new_session()
-            deps.session.session_id = session_data["session_id"]
-            short_id = deps.session.session_id[:8]
+            session_path = new_session_path(deps.sessions_dir)
+            deps.session.session_path = session_path
+            short_id = session_path.stem[-8:]
             span.set_attribute("status", "new")
             span.set_attribute("session_id", short_id)
-            try:
-                save_session(deps.sessions_dir, session_data)
-            except OSError as e:
-                frontend.on_status(f"  Session save failed — {e}; session will not persist")
             frontend.on_status(f"  Session new — {short_id}...")
-        return session_data
+        return session_path

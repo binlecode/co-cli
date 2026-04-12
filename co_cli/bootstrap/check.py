@@ -518,7 +518,7 @@ def check_runtime(
 
     # Build status dict from session state
     status: dict[str, Any] = {
-        "session_id": deps.session.session_id,
+        "session_id": deps.session.session_path.stem[-8:],
         "active_skill": deps.runtime.active_skill_name,
         "tool_names": list(tool_index.keys()),
         "tool_approvals": {name: tc.approval for name, tc in tool_index.items()},

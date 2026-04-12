@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.84] - 2026-04-12
+
+### Changed
+- **Session sidecar eliminated**: each session is now a single `YYYY-MM-DD-THHMMSSz-{uuid8}.jsonl` file — no more paired `.json` metadata. Filename is lexicographically sortable, self-describing, and collision-resistant.
+- **`CoSessionState.session_path: Path`**: replaces `session_id: str`. Display short ID is `path.stem[-8:]`. `session_data` dict removed from `_finalize_turn`, `_run_foreground_turn`, and `_chat_loop`.
+- **`transcript.py` path API**: `append_messages`, `load_transcript`, and `write_compact_boundary` now accept `Path` directly — no session ID threading.
+- **Bootstrap migration**: `migrate_session_files()` runs once on startup, renames legacy `{uuid}.jsonl` files to the new format, and removes `.json` sidecars non-destructively.
+
 ## [0.7.82] - 2026-04-11
 
 ### Removed

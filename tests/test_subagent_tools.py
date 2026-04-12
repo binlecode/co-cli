@@ -1,6 +1,7 @@
 """Functional tests for subagent tool wiring and deps isolation."""
 
 from copy import copy
+from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
@@ -55,7 +56,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
             memory=make_settings().memory.model_copy(update={"injection_max_chars": 5000}),
         ),
         session=CoSessionState(
-            session_id="parent-session",
+            session_path=Path("/tmp/parent-session.jsonl"),
             google_creds_resolved=True,
             session_approval_rules=[SessionApprovalRule(ApprovalKindEnum.SHELL, "git")],
             drive_page_tokens={"folder": ["tok1"]},
@@ -85,7 +86,7 @@ def test_make_subagent_deps_resets_session_state() -> None:
     # Session: isolated fields reset to clean defaults
     assert isolated.session.drive_page_tokens == {}
     assert isolated.session.session_todos == []
-    assert isolated.session.session_id == ""
+    assert isolated.session.session_path == Path()
 
     # Runtime resets to clean defaults
     assert isolated.runtime.turn_usage is None
