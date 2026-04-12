@@ -7,17 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.7.80] - 2026-04-11
+## [0.7.82] - 2026-04-11
 
-### Added
-- **Memory save agent prompt**: filled `memory_save_agent.md` with full instructions sourced from fork-cc `buildMemoryLines()` — XML type taxonomy (user/feedback/project/reference), dedup protocol, and MEMORY.md two-step write protocol. Save subagent now receives structured guidance instead of a stub.
-- **Extractor prompt enriched**: replaced simplified type taxonomy in `memory_extractor.md` with canonical fork-cc XML type descriptions; added "do not investigate" constraint; preserved existing confidence rules, output format, and examples.
-- **Prompt builder functions**: `build_extraction_user_prompt(line_count, manifest)` and `build_save_user_prompt(instruction)` in `co_cli/memory/prompt_builders.py`; both callsites wired — no inline f-string prompt assembly at call sites.
-
-## [0.7.78] - 2026-04-11
-
-### Added
-- **Memory write subagent infrastructure**: `MemoryActionEnum`, `memory` write-dispatcher tool (create/edit/append/delete with atomic writes, path confinement, and resource locking), `SaveMemoryAgentOutput` structured output, `_save_memory_agent` singleton, and `_run_save_memory_agent()` dispatch in `tools/subagent.py`. `max_requests_memory` config added to `SubagentSettings`.
+### Removed
+- **Revert memory write subagent infrastructure (v0.7.78)**: removed `_save_memory_agent` singleton, `memory` write-dispatcher tool, `SaveMemoryAgentOutput`, `_run_save_memory_agent()`, and `max_requests_memory` config — superseded by transcript-as-memory architecture where extractor is sole writer and main agent holds no memory write tools.
+- **Revert memory prompt builders (v0.7.80)**: removed `prompt_builders.py`, `memory_save_agent.md`, and extractor prompt fork-cc enrichment — will be re-added cleanly under the new TODO-transcript-as-memory delivery.
 
 ## [0.7.76] - 2026-04-10
 

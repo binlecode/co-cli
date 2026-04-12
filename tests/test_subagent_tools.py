@@ -1,33 +1,17 @@
 """Functional tests for subagent tool wiring and deps isolation."""
 
-import inspect
 from copy import copy
-from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-from pydantic_ai import ModelRetry, RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import make_settings
 
 from co_cli.agent import build_agent
 from co_cli.config._core import settings
-from co_cli.config._subagent import SubagentSettings
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, make_subagent_deps
-from co_cli.memory.save_agent import (
-    MemoryActionEnum,
-    SaveMemoryAgentOutput,
-    _save_memory_agent,
-    memory,
-)
-from co_cli.tools.files import find_in_files, list_directory, read_file
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.subagent import (
-    _merge_turn_usage,
-    _run_save_memory_agent,
-    _run_subagent_attempt,
-    run_coding_subagent,
-)
+from co_cli.tools.subagent import _merge_turn_usage, run_coding_subagent
 
 # Cache agent at module level — build_agent() is expensive; model reference is stable.
 _AGENT = build_agent(config=settings)
@@ -43,17 +27,6 @@ def _make_ctx() -> RunContext:
     return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
 
 
-def _make_memory_ctx(memory_dir: Path) -> RunContext:
-    """Return a real RunContext with no model and a custom memory_dir."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=None,
-        config=make_settings(),
-        memory_dir=memory_dir,
-    )
-    return RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-
-
 @pytest.mark.asyncio
 async def test_run_coding_subagent_no_model() -> None:
     """Raises ModelRetry when model is None (no model configured).
@@ -61,8 +34,10 @@ async def test_run_coding_subagent_no_model() -> None:
     All four subagent tools share the same guard pattern: ``if not deps.model``.
     This test exercises the pattern via the coding tool; the others are identical.
     """
+    from pydantic_ai import ModelRetry as _ModelRetry
+
     ctx = _make_ctx()
-    with pytest.raises(ModelRetry, match="unavailable"):
+    with pytest.raises(_ModelRetry, match="unavailable"):
         await run_coding_subagent(ctx, "analyze foo")
 
 
@@ -147,306 +122,3 @@ def test_merge_turn_usage_alias_then_accumulate() -> None:
 
     # Snapshot is not mutated — confirms copy() in _run_subagent_attempt decouples usage
     assert snapshot.input_tokens == 10
-
-
-# --- New tests for TASK-1 ---
-
-
-@pytest.mark.asyncio
-async def test_save_memory_agent_no_model() -> None:
-    """_run_save_memory_agent raises ModelRetry when deps.model is None."""
-    ctx = _make_ctx()
-    with pytest.raises(ModelRetry, match="unavailable"):
-        await _run_save_memory_agent(ctx, "write a memory about testing", 3)
-
-
-def test_memory_action_enum() -> None:
-    """MemoryActionEnum has all four members; invalid value raises ValueError."""
-    assert MemoryActionEnum.CREATE == "create"
-    assert MemoryActionEnum.EDIT == "edit"
-    assert MemoryActionEnum.APPEND == "append"
-    assert MemoryActionEnum.DELETE == "delete"
-    with pytest.raises(ValueError):
-        MemoryActionEnum("invalid")
-
-
-@pytest.mark.asyncio
-async def test_memory_path_guard(tmp_path: Path) -> None:
-    """memory() raises ValueError for paths escaping memory_dir for all actions."""
-    ctx = _make_memory_ctx(tmp_path)
-    for action in MemoryActionEnum:
-        with pytest.raises(ValueError, match="outside memory directory"):
-            await memory(ctx, action, "../escape.md", content="x", search="x", replacement="y")
-
-
-@pytest.mark.asyncio
-async def test_memory_create_atomic(tmp_path: Path) -> None:
-    """action=create writes file atomically; no .tmp sibling on success; cleanup block present."""
-    ctx = _make_memory_ctx(tmp_path)
-    await memory(ctx, MemoryActionEnum.CREATE, "test.md", content="hello")
-
-    target = tmp_path / "test.md"
-    assert target.exists()
-    assert target.read_text(encoding="utf-8") == "hello"
-
-    # No .tmp sibling remains after successful create
-    assert not (tmp_path / "test.md.tmp").exists()
-
-    # Structural: tmp.unlink cleanup block must be present in the implementation
-    source = inspect.getsource(memory)
-    assert "tmp.unlink" in source
-
-
-@pytest.mark.asyncio
-async def test_memory_create_exists(tmp_path: Path) -> None:
-    """action=create raises FileExistsError when file already exists."""
-    ctx = _make_memory_ctx(tmp_path)
-    await memory(ctx, MemoryActionEnum.CREATE, "test.md", content="first")
-    with pytest.raises(FileExistsError):
-        await memory(ctx, MemoryActionEnum.CREATE, "test.md", content="second")
-    # Original file unchanged
-    assert (tmp_path / "test.md").read_text(encoding="utf-8") == "first"
-
-
-@pytest.mark.asyncio
-async def test_memory_edit_unique_match(tmp_path: Path) -> None:
-    """action=edit raises ValueError for duplicate matches when replace_all=False; succeeds with True."""
-    ctx = _make_memory_ctx(tmp_path)
-    target = tmp_path / "test.md"
-    target.write_text("foo foo foo", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="found 3 times"):
-        await memory(ctx, MemoryActionEnum.EDIT, "test.md", search="foo", replacement="bar")
-
-    # replace_all=True succeeds
-    await memory(
-        ctx, MemoryActionEnum.EDIT, "test.md", search="foo", replacement="bar", replace_all=True
-    )
-    assert target.read_text(encoding="utf-8") == "bar bar bar"
-
-
-@pytest.mark.asyncio
-async def test_memory_edit_not_found(tmp_path: Path) -> None:
-    """action=edit raises ValueError when search string is absent."""
-    ctx = _make_memory_ctx(tmp_path)
-    (tmp_path / "test.md").write_text("hello world", encoding="utf-8")
-    with pytest.raises(ValueError, match="not found"):
-        await memory(ctx, MemoryActionEnum.EDIT, "test.md", search="missing", replacement="x")
-
-
-@pytest.mark.asyncio
-async def test_memory_append(tmp_path: Path) -> None:
-    """action=append adds content to end of file; missing file raises FileNotFoundError."""
-    ctx = _make_memory_ctx(tmp_path)
-    target = tmp_path / "test.md"
-    target.write_text("line one\n", encoding="utf-8")
-
-    await memory(ctx, MemoryActionEnum.APPEND, "test.md", content="line two")
-    assert target.read_text(encoding="utf-8") == "line one\nline two"
-
-    with pytest.raises(FileNotFoundError):
-        await memory(ctx, MemoryActionEnum.APPEND, "missing.md", content="x")
-
-
-@pytest.mark.asyncio
-async def test_memory_delete(tmp_path: Path) -> None:
-    """action=delete removes the file; missing file raises FileNotFoundError."""
-    ctx = _make_memory_ctx(tmp_path)
-    target = tmp_path / "test.md"
-    target.write_text("content", encoding="utf-8")
-
-    await memory(ctx, MemoryActionEnum.DELETE, "test.md")
-    assert not target.exists()
-
-    with pytest.raises(FileNotFoundError):
-        await memory(ctx, MemoryActionEnum.DELETE, "test.md")
-
-
-def test_save_memory_agent_output_shape() -> None:
-    """SaveMemoryAgentOutput instantiates with valid fields; confidence rejects out-of-range values."""
-    out = SaveMemoryAgentOutput(
-        summary="wrote feedback",
-        files_touched=["feedback_testing.md"],
-        actions=["CREATED feedback_testing.md"],
-        confidence=0.9,
-    )
-    assert out.confidence == 0.9
-    assert out.files_touched == ["feedback_testing.md"]
-
-    with pytest.raises(ValidationError):
-        SaveMemoryAgentOutput(summary="x", files_touched=[], actions=[], confidence=1.5)
-    with pytest.raises(ValidationError):
-        SaveMemoryAgentOutput(summary="x", files_touched=[], actions=[], confidence=-0.1)
-
-
-def test_max_requests_memory_config() -> None:
-    """SubagentSettings default has max_requests_memory == 6."""
-    cfg = SubagentSettings()
-    assert cfg.max_requests_memory == 6
-
-
-def test_save_memory_agent_tools() -> None:
-    """_save_memory_agent registers exactly the expected 4 tools."""
-    tool_names = set(_save_memory_agent._function_toolset.tools)
-    assert tool_names == {"read_file", "list_directory", "find_in_files", "memory"}
-
-
-def test_run_subagent_attempt_accepts_model() -> None:
-    """_run_subagent_attempt has a model parameter with default None."""
-    sig = inspect.signature(_run_subagent_attempt)
-    assert "model" in sig.parameters
-    assert sig.parameters["model"].default is None
-
-
-def test_run_save_memory_agent_dispatch() -> None:
-    """_run_save_memory_agent is importable from co_cli.tools.subagent."""
-    from co_cli.tools.subagent import _run_save_memory_agent as fn
-
-    assert callable(fn)
-
-
-@pytest.mark.asyncio
-async def test_save_memory_agent_read_tools_callable(tmp_path: Path) -> None:
-    """read_file, list_directory, and find_in_files are callable with the deps shape
-    that _run_save_memory_agent produces via make_subagent_deps.
-
-    workspace_root = tmp_path; memory_dir = tmp_path / ".co-cli/memory".
-    Read tools use workspace_root with workspace-relative paths (.co-cli/memory/…).
-    This mirrors how the save-agent will read memory files in production.
-    """
-    mem_dir = tmp_path / ".co-cli" / "memory"
-    mem_dir.mkdir(parents=True)
-    (mem_dir / "test_entry.md").write_text("unique_marker_abc", encoding="utf-8")
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=None,
-        config=make_settings(),
-        workspace_root=tmp_path,
-        memory_dir=mem_dir,
-    )
-    ctx = RunContext(deps=deps, model=_AGENT.model, usage=RunUsage())
-
-    # list_directory: enumerate files in the memory subdirectory
-    result = await list_directory(ctx, path=".co-cli/memory")
-    assert result.metadata.get("count", 0) >= 1
-    names = [e["name"] for e in result.metadata["entries"]]
-    assert "test_entry.md" in names
-
-    # read_file: read a specific memory file via workspace-relative path
-    result = await read_file(ctx, path=".co-cli/memory/test_entry.md")
-    assert "unique_marker_abc" in result.return_value
-
-    # find_in_files: search memory content by pattern across memory files
-    result = await find_in_files(ctx, pattern="unique_marker_abc", glob=".co-cli/memory/**/*.md")
-    assert result.metadata["count"] >= 1
-    assert any("test_entry.md" in m["file"] for m in result.metadata["matches"])
-
-
-# --- TASK-2: prompt builders and prompt file content assertions ---
-
-from co_cli.memory.prompt_builders import build_extraction_user_prompt, build_save_user_prompt
-
-
-def test_build_extraction_user_prompt_with_manifest() -> None:
-    """build_extraction_user_prompt includes line count and manifest section when manifest is non-empty."""
-    window = "User: hello\nCo: hi"
-    manifest = "feedback_testing.md — User prefers pytest"
-    line_count = len(window.splitlines())
-    framing = build_extraction_user_prompt(line_count, manifest)
-
-    assert str(line_count) in framing
-    assert "Existing memory files" in framing
-    assert manifest in framing
-    assert "update an existing file" in framing
-
-    # Full assembled user_prompt starts with window and contains manifest framing
-    user_prompt = window + "\n\n" + framing
-    assert user_prompt.startswith(window)
-    assert "Existing memory files" in user_prompt
-
-
-def test_build_extraction_user_prompt_empty_manifest() -> None:
-    """build_extraction_user_prompt omits manifest section when manifest is empty."""
-    framing = build_extraction_user_prompt(10, "")
-    assert "10" in framing
-    assert "Existing memory files" not in framing
-
-
-def test_build_save_user_prompt_contains_instruction() -> None:
-    """build_save_user_prompt wraps the instruction in save-task framing."""
-    instruction = "User prefers dark mode in all UIs"
-    result = build_save_user_prompt(instruction)
-    assert instruction in result
-    assert len(result) > len(instruction)
-
-
-def test_save_agent_prompt_required_sections() -> None:
-    """memory_save_agent.md contains frontmatter block, all four types, body structure, dedup rule, MEMORY.md two-step protocol."""
-    content = Path("co_cli/memory/prompts/memory_save_agent.md").read_text(encoding="utf-8")
-
-    # Frontmatter block fields
-    assert "---" in content
-    assert "name:" in content
-    assert "description:" in content
-    assert "type:" in content
-
-    # All four type values
-    for type_val in ("user", "feedback", "project", "reference"):
-        assert f"<name>{type_val}</name>" in content
-
-    # Body structure fields for feedback/project types
-    assert "**Why:**" in content
-    assert "**How to apply:**" in content
-
-    # Dedup rule
-    assert "duplicate" in content.lower()
-
-    # MEMORY.md two-step write protocol
-    assert "MEMORY.md" in content
-    assert "Step 1" in content
-    assert "Step 2" in content
-
-
-def test_save_agent_prompt_no_fork_cc_tools() -> None:
-    """memory_save_agent.md uses co-cli tool names only — no backtick-wrapped fork-cc tool names."""
-    content = Path("co_cli/memory/prompts/memory_save_agent.md").read_text(encoding="utf-8")
-
-    for forbidden in ("Write", "Edit", "Bash", "Read", "Glob", "Grep"):
-        assert f"`{forbidden}`" not in content, (
-            f"Found forbidden fork-cc tool `{forbidden}` in save agent prompt"
-        )
-
-    # Co-cli tool names present
-    assert "memory" in content
-    assert "read_file" in content
-    assert "list_directory" in content
-    assert "find_in_files" in content
-
-
-def test_extractor_prompt_required_sections() -> None:
-    """memory_extractor.md contains XML type taxonomy, what-not-to-save; no how-to-save or MEMORY.md write protocol."""
-    content = Path("co_cli/memory/prompts/memory_extractor.md").read_text(encoding="utf-8")
-
-    # XML types taxonomy from fork-cc
-    assert "<types>" in content
-    assert "<type>" in content
-    assert "<name>feedback</name>" in content
-
-    # What-not-to-save section
-    assert "What NOT to save" in content
-
-    # No how-to-save section or MEMORY.md write protocol
-    assert "How to save" not in content
-    assert "Step 1" not in content
-    assert "Step 2" not in content
-
-
-def test_extractor_prompt_no_tool_names() -> None:
-    """memory_extractor.md does not reference backtick-wrapped fork-cc tool names."""
-    content = Path("co_cli/memory/prompts/memory_extractor.md").read_text(encoding="utf-8")
-
-    for forbidden in ("Write", "Edit", "Bash", "Glob", "Grep"):
-        assert f"`{forbidden}`" not in content, (
-            f"Found forbidden fork-cc tool `{forbidden}` in extractor prompt"
-        )

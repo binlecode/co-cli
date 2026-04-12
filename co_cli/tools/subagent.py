@@ -13,9 +13,6 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps, make_subagent_deps
-from co_cli.memory.prompt_builders import build_save_user_prompt
-from co_cli.memory.save_agent import SaveMemoryAgentOutput as _SaveMemoryAgentOutput
-from co_cli.memory.save_agent import _save_memory_agent
 from co_cli.tools._subagent_builders import (
     make_analysis_agent,
     make_coder_agent,
@@ -140,13 +137,11 @@ async def _run_subagent_attempt(
     budget: int,
     model_settings: Any,
     error_msg: str,
-    model: Any = None,
 ) -> SubagentAttempt:
     """Run one subagent attempt with a fresh usage context.
 
     Creates fresh deps per call. Merges child usage into parent turn on success.
     Raises ModelRetry on any failure — no partial accounting on failure.
-    model: when non-None, passed to agent.run() for singleton agents that have no baked model.
     """
     try:
         result = await agent.run(
@@ -155,7 +150,6 @@ async def _run_subagent_attempt(
             usage_limits=UsageLimits(request_limit=budget),
             model_settings=model_settings,
             metadata={"session_id": ctx.deps.session.session_id},
-            **({"model": model} if model is not None else {}),
         )
     except Exception as exc:
         raise ModelRetry(error_msg) from exc
@@ -362,41 +356,3 @@ async def run_reasoning_subagent(
         max_requests: Max LLM requests (0 = config default).
     """
     return await _run_subagent(ctx, "reasoning", problem, max_requests)
-
-
-async def _run_save_memory_agent(
-    ctx: RunContext[CoDeps],
-    instruction: str,
-    max_requests: int,
-) -> ToolReturn:
-    """Run the save_memory subagent with a natural-language instruction.
-
-    Not registered in SUBAGENT_ROLES — memory dispatch has a different output
-    shape and uses a module-level singleton with model passed at run() time.
-    Called by the save_memory tool (TASK-3).
-    """
-    if max_requests < 1:
-        max_requests = ctx.deps.config.subagent.max_requests_memory
-    if not ctx.deps.model:
-        raise ModelRetry("Memory sub-agent is unavailable — handle directly.")
-    attempt = await _run_subagent_attempt(
-        _save_memory_agent,
-        build_save_user_prompt(instruction),
-        ctx,
-        max_requests,
-        NOREASON_SETTINGS,
-        "Memory sub-agent failed — handle this task directly.",
-        model=ctx.deps.model.model,
-    )
-    data: _SaveMemoryAgentOutput = attempt.output
-    display = f"Memory write complete.\n{data.summary}\nFiles: {', '.join(data.files_touched)}"
-    return tool_output(
-        display,
-        ctx=ctx,
-        summary=data.summary,
-        files_touched=data.files_touched,
-        actions=data.actions,
-        confidence=data.confidence,
-        requests_used=attempt.usage.requests,
-        run_id=attempt.run_id,
-    )
