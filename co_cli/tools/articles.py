@@ -17,6 +17,7 @@ Use search_articles for summary-level lookup; use read_article for full body.
 
 import logging
 import math
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -29,11 +30,15 @@ from pydantic_ai.messages import ToolReturn
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import parse_frontmatter
 from co_cli.knowledge._store import SearchResult
-from co_cli.memory._lifecycle import slugify
 from co_cli.tools.memory import filter_memories, grep_recall, load_memories
 from co_cli.tools.tool_output import tool_output, tool_output_raw
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(text: str) -> str:
+    """Convert text to URL-friendly slug (max 50 chars)."""
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:50]
 
 
 _NEGATION_MARKERS: frozenset[str] = frozenset(
@@ -400,7 +405,7 @@ async def save_article(
     import uuid as _uuid
 
     article_id = str(_uuid.uuid4())
-    slug = slugify(title[:50])
+    slug = _slugify(title[:50])
     filename = f"{slug}-{article_id[:6]}.md"
 
     frontmatter: dict[str, Any] = {

@@ -10,7 +10,7 @@ Native tools take `RunContext[CoDeps]` as their first argument and return `ToolR
 tools/
   files.py           — workspace filesystem (list, read, find, write, edit)
   shell.py           — conditionally approved subprocess execution
-  memory.py          — memory write/recall/edit
+  memory.py          — memory recall
   articles.py        — knowledge article save and search
   obsidian.py        — Obsidian vault notes search and read
   google_drive.py    — Google Drive search and read
@@ -49,7 +49,7 @@ create_deps()
   └─ discover_mcp_tools() — walks .wrapped chain to MCPServer → tool_index.update(mcp_index)
 ```
 
-**Surface split:** 14 always-visible (reads, web, shell, system) + ~24 deferred (writes, connectors, delegation, background). Deferred tools are announced at category level via `build_category_awareness_prompt` (~100 tokens); schemas become callable after the SDK's built-in `search_tools` discovers them.
+**Surface split:** 14 always-visible (reads, web, shell, system) + ~21 deferred (writes, connectors, delegation, background). Deferred tools are announced at category level via `build_category_awareness_prompt` (~100 tokens); schemas become callable after the SDK's built-in `search_tools` discovers them.
 
 **Runtime toolset wrapper chain** — each layer serves one purpose:
 
@@ -87,7 +87,7 @@ SDK idioms that drive the design:
 
 | Tier | `retries=` | Tools |
 |------|-----------|-------|
-| Write-once | 1 | `write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `create_gmail_draft` |
+| Write-once | 1 | `write_file`, `edit_file`, `save_article`, `create_gmail_draft` |
 | Network read | 3 | `web_search`, `web_fetch`, `list/search_gmail_emails`, `search/read_drive_file`, `list/search_calendar_events` |
 | Default | `config.tool_retries` | all others |
 
@@ -179,7 +179,7 @@ Three approval classes:
 
 | Class | Condition | Examples |
 |-------|-----------|---------|
-| Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_memory`, `save_article`, `update_memory`, `append_memory`, `start_background_task`, `create_gmail_draft` |
+| Always deferred | `requires_approval=True` | `write_file`, `edit_file`, `save_article`, `start_background_task`, `create_gmail_draft` |
 | Shell inline | Registered `auto`; classified inside tool body | `run_shell_command` |
 | Always auto | `requires_approval=False` | reads, web, system, subagents, all read-only connector tools |
 
@@ -206,11 +206,12 @@ Approval controls permission; resource locks control correctness. When pydantic-
 
 | Tool | Lock key | Why |
 |------|----------|-----|
+| `write_file` | resolved absolute path | prevents race with concurrent `edit_file` on the same path |
 | `edit_file` | resolved absolute path | read-modify-write; second edit reads stale content |
-| `update_memory` | memory slug | read-modify-write on `.md` body |
-| `append_memory` | memory slug | read-append-write on `.md` body |
 
-Tools that do NOT need locking: `write_file` (blind overwrite, no read step), `save_memory` / `save_article` (UUID IDs eliminate IO conflict; dedup is best-effort under concurrency), `run_shell_command` (too broad to guard), `create_gmail_draft` (independent external resources).
+Tools that do NOT need locking: `save_article` (UUID IDs eliminate IO conflict; dedup is best-effort under concurrency), `run_shell_command` (too broad to guard), `create_gmail_draft` (independent external resources).
+
+**Session-scoped staleness guard** — `CoDeps.file_read_mtimes: dict[str, float]` (shared by reference across parent and subagents alongside `resource_locks`) records the mtime at which each path was last read. `write_file` and `edit_file` compare the current on-disk mtime against the recorded value before writing; a mismatch returns `tool_error("File changed since last read")`. New-file writes (path absent from the dict) skip the check entirely. The guard is advisory: it detects within-session races only, not modifications by external processes between sessions.
 
 ---
 
@@ -248,9 +249,6 @@ Conditional tools excluded when gate is absent.
 | `run_shell_command` | always | auto¹ | — |
 | `write_file` | deferred | deferred | — |
 | `edit_file` | deferred | deferred | — |
-| `save_memory` | deferred | deferred | — |
-| `update_memory` | deferred | deferred | — |
-| `append_memory` | deferred | deferred | — |
 | `save_article` | deferred | deferred | — |
 | `start_background_task` | deferred | deferred | — |
 | `check_task_status` | deferred | auto | — |
@@ -271,8 +269,8 @@ Conditional tools excluded when gate is absent.
 | `list_calendar_events` | deferred | auto | `google_credentials_path` |
 | `search_calendar_events` | deferred | auto | `google_credentials_path` |
 
-**Unconditional pool (no integration gates):** 28 tools (14 always-visible, 14 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
-**Full pool (all gates active):** 38 tools (14 always-visible, 24 deferred).
+**Unconditional pool (no integration gates):** 25 tools (14 always-visible, 11 deferred). `search_tools` is the SDK's built-in `ToolSearchToolset` — not registered in co-cli's `tool_index`.
+**Full pool (all gates active):** 35 tools (14 always-visible, 21 deferred).
 
 ¹ `run_shell_command` registered `auto`; DENY / ALLOW / REQUIRE_APPROVAL classification runs inside the tool body.
 
@@ -287,20 +285,17 @@ All paths pre-resolved by `CoToolLifecycle.before_tool_execute` and verified aga
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
 | `list_directory` | `path="."`, `pattern="*"`, `max_entries=200` | Lists dir contents filtered by glob; entries tagged `[dir]` or `[file]`. Recursive patterns (`**`) sorted by mtime; tolerates broken symlinks |
-| `read_file` | `path`, `start_line?`, `end_line?` | Returns `cat -n` numbered content (`{n:>6}\t{line}`); optional 1-indexed line range; returns error on binary files |
+| `read_file` | `path`, `start_line?`, `end_line?` | Returns `cat -n` numbered content (`{n:>6}\t{line}`); optional 1-indexed line range; BOM-detects UTF-16; returns error on binary files; records mtime in `file_read_mtimes` |
 | `find_in_files` | `pattern` (regex), `glob="**/*"`, `max_matches=50` | Regex search; skips binary files; returns `file:line: text` |
-| `write_file` | `path`, `content` | Overwrites file; creates parent dirs; returns byte count |
-| `edit_file` | `path`, `search`, `replacement`, `replace_all=False` | Exact-string replace; fails on ambiguous match unless `replace_all=True` |
+| `write_file` | `path`, `content` | Overwrites file (UTF-8); creates parent dirs; returns byte count; session-scoped staleness check inside resource lock (skipped for new files not yet in `file_read_mtimes`) |
+| `edit_file` | `path`, `search`, `replacement`, `replace_all=False` | Exact-string replace; staleness check before acquiring lock; 10 MB hard block; BOM-detects UTF-16; fails on ambiguous match unless `replace_all=True` |
 
 #### Knowledge — Memory (`tools/memory.py`)
 
-YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses grep-only recall (`load_memories` + `grep_recall`) — memories are not indexed in FTS. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`.
+YAML-frontmatter markdown files in `.co-cli/memory/`. Search uses grep-only recall (`load_memories` + `grep_recall`) — memories are not indexed in FTS. `always_on=True` memories are injected as standing context every turn via `load_always_on_memories()`. Memory writes are handled exclusively by the extractor agent via `save_insight` — the main agent has read-only access.
 
 | Tool | Key Parameters | Behavior |
 |------|---------------|---------|
-| `save_memory` | `content`, `tags?`, `related?`, `always_on=False` | Upsert via memory save agent; returns `action="saved"` or `"consolidated"` |
-| `update_memory` | `slug`, `old_content`, `new_content` | Surgical exact-passage replacement; rejects line-number artifacts |
-| `append_memory` | `slug`, `content` | Appends to end of existing memory file |
 | `list_memories` | `offset=0`, `limit=20`, `kind?` | Paginated inventory with lifecycle metadata and `has_more` |
 | `search_memories` | `query`, `limit=10`, `tags?`, `tag_match_mode?`, `created_after?`, `created_before?` | FTS5/hybrid search; grep fallback |
 
@@ -416,7 +411,8 @@ Background task lifecycle: `start` → `running` → `completed` / `failed` / `c
 |------|---------|
 | `co_cli/tools/files.py` | `list_directory`, `read_file`, `find_in_files`, `write_file`, `edit_file` |
 | `co_cli/tools/shell.py` | `run_shell_command` — conditionally approved subprocess execution |
-| `co_cli/tools/memory.py` | `save_memory`, `update_memory`, `append_memory`, `list_memories`, `search_memories` |
+| `co_cli/tools/memory.py` | `list_memories`, `search_memories` (read-only; write path owned by extractor) |
+| `co_cli/tools/insights.py` | `save_insight` — extractor-only write tool; always creates a new UUID-suffixed memory file |
 | `co_cli/tools/articles.py` | `save_article`, `search_articles`, `read_article`, `search_knowledge` |
 | `co_cli/tools/obsidian.py` | `list_notes`, `search_notes`, `read_note` |
 | `co_cli/tools/google_drive.py` | `search_drive_files`, `read_drive_file` |

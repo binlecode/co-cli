@@ -12,9 +12,6 @@ from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 _NATIVE_CATEGORIES: dict[str, str] = {
     "write_file": "file editing",
     "edit_file": "file editing",
-    "save_memory": "memory management",
-    "update_memory": "memory management",
-    "append_memory": "memory management",
     "save_article": "memory management",
     "start_background_task": "background tasks",
     "check_task_status": "background tasks",

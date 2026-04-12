@@ -110,7 +110,9 @@ async def _finalize_turn(
 
     # Memory extraction — fire-and-forget on clean (non-interrupted, non-error) turns
     if not turn_result.interrupted and turn_result.outcome != "error":
-        fire_and_forget_extraction(next_history, deps=deps, frontend=frontend)
+        cursor = deps.session.last_extracted_message_idx
+        delta = next_history[cursor:] if 0 <= cursor <= len(next_history) else next_history[-20:]
+        fire_and_forget_extraction(delta, deps=deps, frontend=frontend, cursor_start=cursor)
 
     # Append new messages to transcript (positional tail slice)
     new_messages = turn_result.messages[len(message_history) :]

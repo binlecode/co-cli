@@ -83,6 +83,28 @@ def _write_memory(
 
 
 # ---------------------------------------------------------------------------
+# Agent tool registration — write tools absent, read tools present
+# ---------------------------------------------------------------------------
+
+
+def test_write_tools_not_registered_in_agent():
+    """save_memory, update_memory, append_memory must NOT be registered in the main agent."""
+    # Toolset layout: agent.toolsets[1] = FilteredToolset wrapping CombinedToolset;
+    # toolsets[0] of the combined set is the FunctionToolset with registered tools.
+    names = set(_AGENT.toolsets[1].wrapped.toolsets[0].tools.keys())
+    assert "save_memory" not in names, "save_memory must not be registered in main agent"
+    assert "update_memory" not in names, "update_memory must not be registered in main agent"
+    assert "append_memory" not in names, "append_memory must not be registered in main agent"
+
+
+def test_read_tools_registered_in_agent():
+    """search_memories and list_memories must remain registered in the main agent."""
+    names = set(_AGENT.toolsets[1].wrapped.toolsets[0].tools.keys())
+    assert "search_memories" in names, "search_memories must be registered in main agent"
+    assert "list_memories" in names, "list_memories must be registered in main agent"
+
+
+# ---------------------------------------------------------------------------
 # _recall_for_context read-only invariant
 # ---------------------------------------------------------------------------
 
@@ -161,8 +183,6 @@ def test_update_memory_raises_not_found(tmp_path: Path):
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(memory_dir=memory_dir)
 
-    import pytest
-
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(update_memory(ctx, "999-nonexistent", "old", "new"))
 
@@ -174,7 +194,6 @@ def test_update_memory_raises_zero_occurrences(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
 
     slug = path.stem
-    import pytest
 
     with pytest.raises(ValueError, match="not found"):
         asyncio.run(update_memory(ctx, slug, "unittest", "mocha"))
@@ -187,7 +206,6 @@ def test_update_memory_raises_ambiguous(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
 
     slug = path.stem
-    import pytest
 
     with pytest.raises(ValueError, match="2 times"):
         asyncio.run(update_memory(ctx, slug, "pytest", "mocha"))
@@ -200,7 +218,6 @@ def test_update_memory_rejects_line_prefix(tmp_path: Path):
     ctx = _make_ctx(memory_dir=memory_dir)
 
     slug = path.stem
-    import pytest
 
     # Simulate Read tool artifact: "1→ User prefers pytest"
     with pytest.raises(ValueError, match="line-number prefixes"):
@@ -251,8 +268,6 @@ def test_append_memory_missing_slug_raises(tmp_path: Path):
     memory_dir = tmp_path / ".co-cli" / "memory"
     memory_dir.mkdir(parents=True)
     ctx = _make_ctx(memory_dir=memory_dir)
-
-    import pytest
 
     with pytest.raises(FileNotFoundError, match="not found"):
         asyncio.run(append_memory(ctx, "999-nonexistent", "extra line"))
@@ -391,34 +406,11 @@ def test_list_memories_displays_artifact_type(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_memory_frontmatter_rejects_unknown_artifact_type(tmp_path: Path, caplog: Any):
-    """persist_memory rejects unknown artifact_type on write; load_memories tolerates it on read."""
-    from co_cli.memory._lifecycle import persist_memory
+def test_load_memories_tolerates_unknown_artifact_type(tmp_path: Path, caplog: Any):
+    """load_memories must load entries with unknown artifact_type and emit a warning."""
     from co_cli.tools.memory import load_memories
 
     memory_dir = tmp_path / ".co-cli" / "memory"
-    memory_dir.mkdir(parents=True, exist_ok=True)
-
-    deps = CoDeps(
-        shell=ShellBackend(),
-        knowledge_store=None,
-        config=make_settings(),
-        memory_dir=memory_dir,
-    )
-
-    # Write-strict: persist_memory must reject an unknown artifact_type
-    with pytest.raises(ValueError, match="unknown artifact_type"):
-        asyncio.run(
-            persist_memory(
-                deps,
-                content="Test memory for artifact type validation",
-                tags=[],
-                related=[],
-                artifact_type="future_unknown_type",
-            )
-        )
-
-    # Read-tolerant: load_memories must load the entry without raising, and emit a warning
     _write_memory_with_artifact_type(
         memory_dir, 1, "Memory with unknown artifact type", artifact_type="future_unknown_type"
     )
@@ -514,35 +506,6 @@ def test_rag_backend_annotation_on_search_spans(tmp_path: Path):
         idx.close()
 
     assert otel_trace.get_tracer_provider() is _orig
-
-
-# ---------------------------------------------------------------------------
-# overwrite_memory — type/description frontmatter on UPDATE path
-# ---------------------------------------------------------------------------
-
-
-def test_overwrite_memory_writes_type_to_frontmatter(tmp_path: Path):
-    """overwrite_memory with tag writes type field to frontmatter (regression: UPDATE path)."""
-    from co_cli.memory._save import overwrite_memory
-
-    memory_dir = tmp_path / ".co-cli" / "memory"
-    path = _write_memory(memory_dir, 1, "Original content", tags=["preference"])
-    slug = path.stem
-
-    overwrite_memory(
-        memory_dir,
-        slug,
-        "Updated content",
-        ["preference"],
-        type_="preference",
-        description="User prefers pytest",
-    )
-
-    written = path.read_text(encoding="utf-8")
-    assert "type: preference" in written, "overwrite_memory must write type to frontmatter"
-    assert "description: User prefers pytest" in written, (
-        "overwrite_memory must write description to frontmatter"
-    )
 
 
 # ---------------------------------------------------------------------------

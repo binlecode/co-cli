@@ -220,7 +220,6 @@ class Settings(BaseModel):
             },
             "memory": {
                 "recall_half_life_days": "CO_MEMORY_RECALL_HALF_LIFE_DAYS",
-                "auto_save_tags": "CO_CLI_MEMORY_AUTO_SAVE_TAGS",
                 "injection_max_chars": "CO_CLI_MEMORY_INJECTION_MAX_CHARS",
             },
             "subagent": {

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.86] - 2026-04-12
+
+### Changed
+- **Single-writer memory**: main agent no longer holds any write-path memory tools (`save_memory`, `update_memory`, `append_memory` removed from agent surface). The post-turn insights extractor is now the sole writer, calling `save_insight` directly for each detected signal.
+- **Tool-calling extractor**: `_extractor.py` rewritten as an `Agent[CoDeps, str]` with `save_insight` as its only tool, replacing the structured-output `ExtractionResult` + `_lifecycle`/`_save` pipeline.
+- **Cursor-based delta**: `CoSessionState.last_extracted_message_idx` prevents re-scanning already-extracted turns; cursor only advances on successful extraction.
+
+### Added
+- **`save_insight` tool** (`co_cli/tools/insights.py`): extractor-only write tool; always creates a new UUID-suffixed `.md` file — two identical calls produce two distinct files, no dedup, no resource locks.
+- **Tool content in extractor window**: `_build_window()` now includes `ToolCallPart` and `ToolReturnPart` lines so file reads and grep results are visible to the extractor.
+
+### Removed
+- **`_lifecycle.py` and `_save.py`**: upsert pipeline, save-agent singleton, and manifest dedup eliminated.
+- **`auto_save_tags` config field**: `MemorySettings` now has only `recall_half_life_days` and `injection_max_chars`.
+
 ## [0.7.84] - 2026-04-12
 
 ### Changed

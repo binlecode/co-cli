@@ -44,7 +44,7 @@ class SessionApprovalRule:
       PATH   — file write/edit (value = bare parent_dir, e.g. "/proj/src");
                shared across write_file and edit_file for the same directory
       DOMAIN — web fetch (value = hostname, e.g. "docs.python.org")
-      TOOL   — named tool (value = tool_name, e.g. "save_memory");
+      TOOL   — named tool (value = tool_name, e.g. "save_article");
                covers MCP tools and generic tools; can_remember=True
     value: the scoped key used for matching future requests
     """
@@ -98,6 +98,8 @@ class CoSessionState:
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY
+    # Cursor for delta-based memory extraction — index of first unextracted message in history.
+    last_extracted_message_idx: int = 0
 
 
 @dataclass

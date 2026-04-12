@@ -199,35 +199,29 @@ search_memories(ctx, query)      ← agent tool
 
 The always-on layer (`load_always_on_memories`) runs at instruction-build time: loads all memories, filters `always_on=True`, caps at 5, injects into the `add_always_on_memories` dynamic instruction layer.
 
-#### 2.4.3 Write Lifecycle
+#### 2.4.3 Write Path
 
-All writes route through `persist_memory()`, which acts as an upsert:
+The main agent has no write-path memory tools. All memory writes are owned exclusively by the extractor agent (`_extractor.py`) — a separate `Agent[CoDeps, None]` with `save_insight` as its only tool.
 
 ```text
-persist_memory(content, tags, ..., tag, name, description)
-  -> upsert check (when resolved model available):
-     -> build manifest: 100 most recent memories, one line each
-        format: [type] slug (ts): description
-     -> _memory_save_agent (singleton Agent[None, SaveResult]) decides:
-        SAVE_NEW  — no matching existing entry
-        UPDATE(slug) — candidate updates an existing memory
-     -> UPDATE: acquire per-file resource lock
-                overwrite_memory() replaces body, merges tags, refreshes frontmatter
-                  (tag → "type", name → "name", description → "description")
-                release lock
-  -> SAVE_NEW: acquire per-file resource lock
-               slug = slugify(name) if name else slugify(content[:50])
-               write new UUID-named markdown file
-               release lock
+fire_and_forget_extraction(delta, deps, frontend, cursor_start)
+  -> builds a text window from delta (user turns, assistant text, tool calls, tool results)
+  -> runs _insights_extractor_agent.run(window, deps=deps) in a background task
+  -> on success: advances deps.session.last_extracted_message_idx = cursor_start + len(delta)
+  -> on failure or exception: cursor unchanged (delta re-processed on next turn)
+
+save_insight(ctx, content, type_=None, name=None, description=None, tags=None, always_on=False)
+  -> slug = slugify(name) if name else slugify(content[:50])
+  -> filename = f"{slug}-{uuid[:8]}.md"   # UUID suffix: two identical calls → two files
+  -> write YAML frontmatter + content to deps.memory_dir
+  -> no dedup, no resource locks — always creates a new file
 ```
 
-Per-file resource locks (keyed by absolute path) serialise concurrent callers (explicit save + auto-signal running in parallel). `on_failure="skip"` (auto-signal path) returns `action="skipped"` on lock conflict; `on_failure="add"` (explicit path) raises `ResourceBusyError` for model retry.
+The extractor prompt instructs the model to classify observations into four types (`user`, `feedback`, `project`, `reference`) and call `save_insight` directly, with a cap of 3 calls per window. The cursor advances only on successful completion, so a failed extraction retries on the next turn.
 
-**Auto-signal saves** — after every clean foreground turn, `analyze_for_signals()` extracts up to 3 candidates across 4 types (`user`, `feedback`, `project`, `reference`). Each candidate carries `name` (short identifier ≤60 chars), `description` (purpose hook ≤200 chars), `candidate` (full body), `tag`, `confidence`, and `inject`. The extractor injects the existing memory manifest so it can avoid redundant candidates. All candidates route through `persist_memory()` — the save agent handles dedup with proper locking. High-confidence candidates in the `auto_save_tags` allowlist save automatically; low-confidence candidates ask the user. `inject=True` adds the `personality-context` tag. The `name` field drives the slug on new writes, producing human-readable filenames.
+**Session-summary artifacts** — `/new` writes a memory file directly with `artifact_type="session_summary"`. These are excluded from `_recall_for_context()` and `search_memories()` by predicate.
 
-**Session-summary artifacts** — `/new` creates a memory with `artifact_type="session_summary"` via `index_session_summary()`. These are excluded from `_recall_for_context()` and `search_memories()` by predicate.
-
-**Articles** — `save_article()` stores external references with `kind="article"` and dedup by exact `origin_url`. Articles skip the save-agent upsert path entirely.
+**Articles** — `save_article()` stores external references with `kind="article"` and dedup by exact `origin_url`.
 
 #### 2.4.4 REPL Management
 
@@ -329,7 +323,6 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | age decay in recall scoring |
-| `memory.auto_save_tags` | `CO_CLI_MEMORY_AUTO_SAVE_TAGS` | `["user", "feedback", "project", "reference"]` | memory types that auto-save at high confidence |
 | `memory.injection_max_chars` | `CO_CLI_MEMORY_INJECTION_MAX_CHARS` | `2000` | cap for always-on and recalled injection |
 
 ### Knowledge
@@ -375,12 +368,11 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/tools/tool_result_storage.py` | oversized tool-result persistence |
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/recall.py` | `MemoryEntry` dataclass, `load_memories`, `load_always_on_memories` |
-| `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
-| `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
-| `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
+| `co_cli/memory/_extractor.py` | cursor-based delta extraction; `fire_and_forget_extraction`, `drain_pending_extraction`, `_build_window` |
+| `co_cli/tools/insights.py` | `save_insight` — extractor-only write tool; UUID-suffix always-new file write |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |
-| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context` (internal), agent tools: search_memories, update, append |
+| `co_cli/tools/memory.py` | `grep_recall`, `_recall_for_context` (internal), agent tools: `search_memories`, `list_memories` |
 | `co_cli/tools/articles.py` | article save/search/read plus cross-source `search_knowledge()` |
 | `co_cli/tools/google_drive.py` | Drive fetch plus opportunistic index/chunk caching |
 | `co_cli/tools/subagent.py` | inline sub-agent tools and result metadata |

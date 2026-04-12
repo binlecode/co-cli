@@ -1,8 +1,9 @@
-"""Memory management tools for persistent knowledge.
+"""Memory recall tools for persistent knowledge.
 
-This module provides tools for saving, recalling, and listing memories in the
+This module provides tools for recalling and listing memories from the
 internal knowledge system. Memories are stored as markdown files with YAML
-frontmatter in .co-cli/memory/ (project-local).
+frontmatter in .co-cli/memory/ (project-local). Write path is owned
+exclusively by the extractor (co_cli/memory/_extractor.py via save_insight).
 
 Retrieval uses grep-based search across all memory files. Results are sorted by
 recency. FTS5/BM25 is not used for memories — only for articles and external sources.
@@ -22,7 +23,6 @@ from opentelemetry import trace as otel_trace
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps
 from co_cli.knowledge._frontmatter import (
     ArtifactTypeEnum,
@@ -96,72 +96,6 @@ def filter_memories(
 # ---------------------------------------------------------------------------
 # Public tools
 # ---------------------------------------------------------------------------
-
-
-async def save_memory(
-    ctx: RunContext[CoDeps],
-    content: str,
-    tags: list[str] | None = None,
-    related: list[str] | None = None,
-    always_on: bool = False,
-) -> ToolReturn:
-    """Saves a memory. If a near-duplicate exists, the existing memory is
-    updated instead of creating a new file. Always use save_memory to persist
-    facts — never call update_memory for dedup purposes. update_memory is for
-    surgical find-and-replace edits only.
-
-    When to save — detect these signals proactively:
-    - Preference: "I always use 4-space indentation", "I prefer dark themes"
-    - Correction: "Actually we switched from Flask to FastAPI last month"
-    - Decision: "We've decided to use Kubernetes for production"
-    - Pattern: "We always review PRs before merging"
-    - Research finding: persist results after investigating something
-
-    Save when you detect the signal — do not wait for "remember this."
-    Duplicates and near-matches are auto-consolidated, so saving liberally
-    is safe.
-
-    Do NOT save: workspace paths, transient errors, session-only context,
-    or sensitive information (credentials, health, financial).
-
-    Optionally include related memory slugs for knowledge linking (see
-    search_memories). Not required — save directly when the user asks you
-    to remember something.
-
-    Write content in third person: "User prefers pytest over unittest",
-    not "I prefer pytest". Keeps memories unambiguous when recalled later.
-
-    Returns a dict with:
-    - display: confirmation message — show directly to the user
-    - memory_id: assigned ID
-    - action: "saved" (new) or "consolidated" (merged with existing duplicate)
-
-    Args:
-        content: Memory text in third person (markdown, < 500 chars recommended).
-        tags: Categorization tags. Use signal type as first tag:
-              ["preference", ...], ["correction", ...], ["decision", ...].
-        related: Slugs of related memories for knowledge linking
-                 (e.g. ["003-user-prefers-pytest"]).
-    """
-    from co_cli.memory._lifecycle import persist_memory
-
-    with _TRACER.start_as_current_span("co.memory.save") as span:
-        span.set_attribute("memory.tags", ",".join(tags or []))
-        _model = ctx.deps.model.model if ctx.deps.model else None
-        result = await persist_memory(
-            ctx.deps,
-            content,
-            tags,
-            related,
-            on_failure="add",
-            model=_model,
-            model_settings=NOREASON_SETTINGS,
-            always_on=always_on,
-        )
-        meta = result.metadata or {}
-        span.set_attribute("memory.action", meta.get("action", "unknown"))
-        span.set_attribute("memory.memory_id", meta.get("memory_id", ""))
-    return result
 
 
 async def _recall_for_context(

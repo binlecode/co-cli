@@ -386,9 +386,14 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
 
 async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
     """Checkpoint current session to knowledge and start fresh."""
+    import re
+    import uuid
+    from datetime import UTC, datetime
+
+    import yaml
+
     from co_cli.context.summarization import index_session_summary
     from co_cli.knowledge._frontmatter import ArtifactTypeEnum
-    from co_cli.memory._lifecycle import persist_memory as _save_memory_impl
 
     if not ctx.message_history:
         console.print("[dim]Nothing to checkpoint — history is empty.[/dim]")
@@ -406,13 +411,21 @@ async def _cmd_new(ctx: CommandContext, _args: str) -> list[Any] | None:
         console.print("[yellow]Could not summarize session — history not cleared.[/yellow]")
         return None
 
-    await _save_memory_impl(
-        ctx.deps,
-        content=summary,
-        tags=[],
-        related=[],
-        artifact_type=ArtifactTypeEnum.SESSION_SUMMARY,
+    memory_dir = ctx.deps.memory_dir
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    memory_id = str(uuid.uuid4())
+    slug = re.sub(r"[^a-z0-9]+", "-", summary[:50].lower()).strip("-")[:50]
+    frontmatter: dict = {
+        "id": memory_id,
+        "kind": "memory",
+        "created": datetime.now(UTC).isoformat(),
+        "tags": [],
+        "artifact_type": ArtifactTypeEnum.SESSION_SUMMARY.value,
+    }
+    md_content = (
+        f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{summary.strip()}\n"
     )
+    (memory_dir / f"{slug}.md").write_text(md_content, encoding="utf-8")
 
     # Rotate session path — transcript writer derives path from deps.session.session_path,
     # so assigning a new path ensures the next write goes to a new file.

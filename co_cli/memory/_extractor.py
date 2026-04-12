@@ -1,217 +1,107 @@
-"""Post-turn memory extractor — general-purpose memory extraction.
+"""Post-turn insights extractor — extracts durable signals from conversation windows.
 
-Scans the post-turn message history for memory-worthy content across all
-4 memory types (user, feedback, project, reference). Returns up to 3
-candidates per extraction. Confidence determines whether each candidate
-is saved automatically (high) or surfaced for approval (low).
+Scans the post-turn message history (including tool calls and results) for
+insight-worthy signals across all 4 types (user, feedback, project, reference).
+Calls save_insight for each detected signal. Cursor-based delta prevents
+re-scanning already-extracted turns.
 """
 
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
     from co_cli.display._core import Frontend
 
-from pydantic import BaseModel, Field
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from co_cli._model_settings import NOREASON_SETTINGS
-from co_cli.memory._lifecycle import persist_memory as _persist_memory
+from co_cli.tools.insights import save_insight
 
 logger = logging.getLogger(__name__)
 
-_MAX_CANDIDATES = 3
-
 
 # ---------------------------------------------------------------------------
-# Structured output schema
-# ---------------------------------------------------------------------------
-
-
-class MemoryCandidate(BaseModel):
-    """A single memory-worthy signal extracted from conversation."""
-
-    name: str = ""
-    candidate: str
-    tag: Literal["user", "feedback", "project", "reference"]
-    confidence: Literal["high", "low"]
-    inject: bool = False
-    description: str = ""
-
-
-class ExtractionResult(BaseModel):
-    """Structured output from the memory extractor — up to N candidates."""
-
-    memories: list[MemoryCandidate] = Field(default_factory=list, max_length=_MAX_CANDIDATES)
-
-
-# ---------------------------------------------------------------------------
-# Window builder — formats recent turns for LLM context
+# Window builder — formats delta turns for LLM context
 # ---------------------------------------------------------------------------
 
 
 def _build_window(messages: list) -> str:
-    """Extract recent conversation turns as plain text for the memory extractor.
+    """Extract conversation turns from a delta slice as plain text.
 
-    Collects User/Co turn pairs from message history, capped at 20 lines
-    (covering roughly 10 turns). Broader window for general memory extraction.
+    Collects User/Co text lines and interleaved tool call/return lines.
+    Caps at max 10 text lines and max 10 tool lines, then merges back
+    in original turn order.
 
     Args:
-        messages: Full message history.
+        messages: Delta message slice (history[cursor:]).
 
     Returns:
-        Formatted string of alternating User/Co lines.
+        Formatted string of interleaved User/Co and tool lines.
     """
-    lines: list[str] = []
+    # Each entry: (original_index, kind, line_text)
+    tagged: list[tuple[int, str, str]] = []
+    idx = 0
 
     for msg in messages:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
                 if isinstance(part, UserPromptPart):
                     text = part.content if isinstance(part.content, str) else str(part.content)
-                    lines.append(f"User: {text}")
+                    tagged.append((idx, "text", f"User: {text}"))
+                    idx += 1
+                elif isinstance(part, ToolReturnPart):
+                    content = part.content if isinstance(part.content, str) else str(part.content)
+                    # Skip Read-tool output (line-number prefix pattern)
+                    if content.startswith("1\u2192 "):
+                        continue
+                    # Skip very long content with no sentence boundary in the first 200 chars
+                    if len(content) > 1000 and not any(
+                        ch in content[:200] for ch in (".", "!", "?")
+                    ):
+                        continue
+                    tagged.append(
+                        (idx, "tool", f"Tool result ({part.tool_name}): {content[:300]}")
+                    )
+                    idx += 1
         elif isinstance(msg, ModelResponse):
             for part in msg.parts:
                 if isinstance(part, TextPart):
-                    lines.append(f"Co: {part.content}")
+                    tagged.append((idx, "text", f"Co: {part.content}"))
+                    idx += 1
+                elif isinstance(part, ToolCallPart):
+                    args_str = str(part.args)[:200]
+                    tagged.append((idx, "tool", f"Tool({part.tool_name}): {args_str}"))
+                    idx += 1
 
-    # Cap at last 20 lines (~10 turns) for broader extraction context
-    return "\n".join(lines[-20:])
+    text_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "text"]
+    tool_entries = [(orig_idx, line) for orig_idx, kind, line in tagged if kind == "tool"]
+
+    # Apply independent caps: last 10 of each, then merge in original order
+    merged = text_entries[-10:] + tool_entries[-10:]
+    merged.sort(key=lambda entry: entry[0])
+
+    return "\n".join(line for _, line in merged)
 
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_extractor.md"
 
-_extraction_agent: Agent[None, ExtractionResult] = Agent(
-    output_type=ExtractionResult,
+# Module-level insights extractor agent — tool-calling pattern.
+# No model at init; model passed at .run() time (same as prior _extraction_agent pattern).
+_insights_extractor_agent: Agent["CoDeps", str] = Agent(
     instructions=_PROMPT_PATH.read_text(encoding="utf-8").strip(),
-    retries=0,
-    output_retries=0,
+    tools=[save_insight],
 )
-
-
-# ---------------------------------------------------------------------------
-# Extraction — multi-candidate structured analysis
-# ---------------------------------------------------------------------------
-
-
-async def analyze_for_signals(
-    messages: list,
-    *,
-    deps: "CoDeps",
-    existing_manifest: str = "",
-) -> ExtractionResult:
-    """Run the memory extractor on the conversation window.
-
-    Builds a conversation window from recent messages and runs a lightweight
-    Agent with structured output. Returns up to 3 memory candidates.
-    Never crashes the main chat loop — exceptions return empty result.
-
-    When existing_manifest is non-empty, it is appended to the user prompt
-    so the extractor can avoid redundant candidates.
-
-    Args:
-        messages: Full message history after run_turn() completes.
-        deps: CoDeps for model access.
-        existing_manifest: Pre-built manifest string of existing memories.
-            When non-empty, appended to the user prompt.
-
-    Returns:
-        ExtractionResult with a list of MemoryCandidate entries.
-    """
-    window = _build_window(messages)
-    if not window.strip():
-        return ExtractionResult()
-
-    manifest_section = (
-        f"\n\n## Existing memories\n\n{existing_manifest}\n\n"
-        "Do not output candidates already covered by this list."
-        if existing_manifest
-        else ""
-    )
-    user_prompt = window + manifest_section
-
-    try:
-        _model = deps.model.model if deps.model else None
-        result = await _extraction_agent.run(
-            user_prompt, model=_model, model_settings=NOREASON_SETTINGS
-        )
-        return result.output
-    except Exception:
-        logger.debug("Memory extractor failed", exc_info=True)
-        return ExtractionResult()
-
-
-async def _process_candidate(
-    mem: MemoryCandidate,
-    deps: "CoDeps",
-    frontend: "Frontend",
-    *,
-    interactive: bool,
-) -> None:
-    """Process a single extracted memory candidate.
-
-    Handles tag-building, admission gate, and persistence. All dedup routing
-    is delegated to persist_memory (which runs the save agent with proper locking).
-    When interactive=True, low-confidence candidates are surfaced for user approval.
-    When interactive=False (background), low-confidence candidates are logged and skipped.
-    """
-    tags = [mem.tag] + (["personality-context"] if mem.inject else [])
-    auto_save_allowed = mem.tag in deps.config.memory.auto_save_tags
-    _model = deps.model.model if deps.model else None
-
-    if mem.confidence == "high" and auto_save_allowed:
-        await _persist_memory(
-            deps,
-            mem.candidate,
-            tags,
-            None,
-            on_failure="skip",
-            model=_model,
-            model_settings=NOREASON_SETTINGS,
-            type_=mem.tag,
-            description=mem.description or None,
-            name=mem.name or None,
-        )
-        frontend.on_status(f"Learned: {mem.candidate[:80]}")
-    elif interactive:
-        choice = frontend.prompt_approval(f"Worth remembering: {mem.candidate}")
-        if choice in ("y", "a"):
-            await _persist_memory(
-                deps,
-                mem.candidate,
-                tags,
-                None,
-                on_failure="add",
-                model=_model,
-                model_settings=NOREASON_SETTINGS,
-                type_=mem.tag,
-                description=mem.description or None,
-                name=mem.name or None,
-            )
-    else:
-        logger.debug("Deferred (async, low-confidence): %s", mem.candidate[:80])
-
-
-async def handle_extraction(
-    extraction: ExtractionResult,
-    deps: "CoDeps",
-    frontend: "Frontend",
-) -> None:
-    """Apply admission policy then persist or prompt for each extracted candidate.
-
-    Admission control: memory_auto_save_tags gates which types auto-save at
-    high confidence. Types not in the list require user confirmation regardless
-    of confidence. Empty list = all signals require confirmation.
-    """
-    if not extraction.memories:
-        return
-
-    for mem in extraction.memories:
-        await _process_candidate(mem, deps, frontend, interactive=True)
 
 
 # ---------------------------------------------------------------------------
@@ -222,30 +112,32 @@ _in_flight: asyncio.Task[None] | None = None
 
 
 async def _run_extraction_async(
-    messages: list,
+    delta: list,
     deps: "CoDeps",
     frontend: "Frontend",
+    *,
+    cursor_start: int,
 ) -> None:
-    """Background extraction: analyze + handle, high-confidence only.
+    """Background extraction: run _insights_extractor_agent on the delta window.
 
-    Low-confidence candidates are logged and skipped — no way to prompt the
-    user from a background task. Handles CancelledError for clean shutdown.
+    Advances deps.session.last_extracted_message_idx on success only.
+    Handles CancelledError for clean shutdown.
+    Never crashes the main chat loop.
     """
+    from opentelemetry import trace as otel_trace
+
+    tracer = otel_trace.get_tracer("co.memory")
     try:
-        from co_cli.memory._save import build_memory_manifest
-        from co_cli.memory.recall import load_memories
-
-        memories = load_memories(deps.memory_dir, kind="memory")
-        memories.sort(key=lambda m: m.updated or m.created, reverse=True)
-        existing_manifest = build_memory_manifest(memories)
-        extraction = await analyze_for_signals(
-            messages, deps=deps, existing_manifest=existing_manifest
-        )
-        if not extraction.memories:
+        window = _build_window(delta)
+        if not window.strip():
+            deps.session.last_extracted_message_idx = cursor_start + len(delta)
             return
-
-        for mem in extraction.memories:
-            await _process_candidate(mem, deps, frontend, interactive=False)
+        _model = deps.model.model if deps.model else None
+        with tracer.start_as_current_span("co.insight.extraction"):
+            await _insights_extractor_agent.run(
+                window, deps=deps, model=_model, model_settings=NOREASON_SETTINGS
+            )
+        deps.session.last_extracted_message_idx = cursor_start + len(delta)
     except asyncio.CancelledError:
         logger.debug("Background memory extraction cancelled")
     except Exception:
@@ -263,9 +155,11 @@ def _on_extraction_done(task: asyncio.Task[None]) -> None:
 
 
 def fire_and_forget_extraction(
-    messages: list,
+    delta: list,
     deps: "CoDeps",
     frontend: "Frontend",
+    *,
+    cursor_start: int,
 ) -> None:
     """Launch extraction as a background task. Skips if one is already running."""
     global _in_flight
@@ -274,7 +168,7 @@ def fire_and_forget_extraction(
         return
 
     _in_flight = asyncio.get_running_loop().create_task(
-        _run_extraction_async(messages, deps, frontend),
+        _run_extraction_async(delta, deps, frontend, cursor_start=cursor_start),
         name="memory_extraction",
     )
     _in_flight.add_done_callback(_on_extraction_done)

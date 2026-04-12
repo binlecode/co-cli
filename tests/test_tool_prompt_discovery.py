@@ -67,12 +67,16 @@ def test_subagent_tools_discoverable_by_keywords() -> None:
     )
 
 
-def test_memory_write_tools_discoverable_by_keywords() -> None:
-    """Memory write tools surface for memory/save queries."""
+def test_memory_write_tools_not_in_agent() -> None:
+    """Memory write tools must not be registered in the agent at all."""
     descs = _deferred_descriptions()
-    assert "memory" in descs["save_memory"]
-    assert "memory" in descs["update_memory"]
-    assert "memory" in descs["append_memory"]
+    # Write tools removed from agent in P1 refactor
+    assert "save_memory" not in descs, "save_memory must not be registered in agent"
+    assert "update_memory" not in descs, "update_memory must not be registered in agent"
+    assert "append_memory" not in descs, "append_memory must not be registered in agent"
+    # Read tools are always-visible (not deferred), so present in tool_index but not deferred
+    assert "search_memories" in _NATIVE_INDEX
+    assert "list_memories" in _NATIVE_INDEX
 
 
 def test_article_write_tool_discoverable_by_keywords() -> None:

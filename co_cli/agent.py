@@ -30,11 +30,8 @@ from co_cli.tools.google_calendar import list_calendar_events, search_calendar_e
 from co_cli.tools.google_drive import read_drive_file, search_drive_files
 from co_cli.tools.google_gmail import create_gmail_draft, list_gmail_emails, search_gmail_emails
 from co_cli.tools.memory import (
-    append_memory,
     list_memories,
-    save_memory,
     search_memories,
-    update_memory,
 )
 from co_cli.tools.obsidian import list_notes, read_note, search_notes
 from co_cli.tools.shell import run_shell_command
@@ -205,10 +202,7 @@ def _build_native_toolset(
     _register_tool(edit_file, approval=True, visibility=_deferred_visible, retries=1)
 
     # Knowledge write tools
-    _register_tool(save_memory, approval=True, visibility=_deferred_visible, retries=1)
     _register_tool(save_article, approval=True, visibility=_deferred_visible, retries=1)
-    _register_tool(update_memory, approval=True, visibility=_deferred_visible, retries=1)
-    _register_tool(append_memory, approval=True, visibility=_deferred_visible, retries=1)
 
     # Background task tools
     _register_tool(start_background_task, approval=True, visibility=_deferred_visible)
