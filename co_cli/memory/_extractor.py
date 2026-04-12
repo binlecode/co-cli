@@ -21,6 +21,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.memory._lifecycle import persist_memory as _persist_memory
+from co_cli.memory.prompt_builders import build_extraction_user_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -126,13 +127,8 @@ async def analyze_for_signals(
     if not window.strip():
         return ExtractionResult()
 
-    manifest_section = (
-        f"\n\n## Existing memories\n\n{existing_manifest}\n\n"
-        "Do not output candidates already covered by this list."
-        if existing_manifest
-        else ""
-    )
-    user_prompt = window + manifest_section
+    line_count = len(window.splitlines())
+    user_prompt = window + "\n\n" + build_extraction_user_prompt(line_count, existing_manifest)
 
     try:
         _model = deps.model.model if deps.model else None

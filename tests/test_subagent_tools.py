@@ -341,3 +341,112 @@ async def test_save_memory_agent_read_tools_callable(tmp_path: Path) -> None:
     result = await find_in_files(ctx, pattern="unique_marker_abc", glob=".co-cli/memory/**/*.md")
     assert result.metadata["count"] >= 1
     assert any("test_entry.md" in m["file"] for m in result.metadata["matches"])
+
+
+# --- TASK-2: prompt builders and prompt file content assertions ---
+
+from co_cli.memory.prompt_builders import build_extraction_user_prompt, build_save_user_prompt
+
+
+def test_build_extraction_user_prompt_with_manifest() -> None:
+    """build_extraction_user_prompt includes line count and manifest section when manifest is non-empty."""
+    window = "User: hello\nCo: hi"
+    manifest = "feedback_testing.md — User prefers pytest"
+    line_count = len(window.splitlines())
+    framing = build_extraction_user_prompt(line_count, manifest)
+
+    assert str(line_count) in framing
+    assert "Existing memory files" in framing
+    assert manifest in framing
+    assert "update an existing file" in framing
+
+    # Full assembled user_prompt starts with window and contains manifest framing
+    user_prompt = window + "\n\n" + framing
+    assert user_prompt.startswith(window)
+    assert "Existing memory files" in user_prompt
+
+
+def test_build_extraction_user_prompt_empty_manifest() -> None:
+    """build_extraction_user_prompt omits manifest section when manifest is empty."""
+    framing = build_extraction_user_prompt(10, "")
+    assert "10" in framing
+    assert "Existing memory files" not in framing
+
+
+def test_build_save_user_prompt_contains_instruction() -> None:
+    """build_save_user_prompt wraps the instruction in save-task framing."""
+    instruction = "User prefers dark mode in all UIs"
+    result = build_save_user_prompt(instruction)
+    assert instruction in result
+    assert len(result) > len(instruction)
+
+
+def test_save_agent_prompt_required_sections() -> None:
+    """memory_save_agent.md contains frontmatter block, all four types, body structure, dedup rule, MEMORY.md two-step protocol."""
+    content = Path("co_cli/memory/prompts/memory_save_agent.md").read_text(encoding="utf-8")
+
+    # Frontmatter block fields
+    assert "---" in content
+    assert "name:" in content
+    assert "description:" in content
+    assert "type:" in content
+
+    # All four type values
+    for type_val in ("user", "feedback", "project", "reference"):
+        assert f"<name>{type_val}</name>" in content
+
+    # Body structure fields for feedback/project types
+    assert "**Why:**" in content
+    assert "**How to apply:**" in content
+
+    # Dedup rule
+    assert "duplicate" in content.lower()
+
+    # MEMORY.md two-step write protocol
+    assert "MEMORY.md" in content
+    assert "Step 1" in content
+    assert "Step 2" in content
+
+
+def test_save_agent_prompt_no_fork_cc_tools() -> None:
+    """memory_save_agent.md uses co-cli tool names only — no backtick-wrapped fork-cc tool names."""
+    content = Path("co_cli/memory/prompts/memory_save_agent.md").read_text(encoding="utf-8")
+
+    for forbidden in ("Write", "Edit", "Bash", "Read", "Glob", "Grep"):
+        assert f"`{forbidden}`" not in content, (
+            f"Found forbidden fork-cc tool `{forbidden}` in save agent prompt"
+        )
+
+    # Co-cli tool names present
+    assert "memory" in content
+    assert "read_file" in content
+    assert "list_directory" in content
+    assert "find_in_files" in content
+
+
+def test_extractor_prompt_required_sections() -> None:
+    """memory_extractor.md contains XML type taxonomy, what-not-to-save; no how-to-save or MEMORY.md write protocol."""
+    content = Path("co_cli/memory/prompts/memory_extractor.md").read_text(encoding="utf-8")
+
+    # XML types taxonomy from fork-cc
+    assert "<types>" in content
+    assert "<type>" in content
+    assert "<name>feedback</name>" in content
+
+    # What-not-to-save section
+    assert "What NOT to save" in content
+
+    # No how-to-save section or MEMORY.md write protocol
+    assert "How to save" not in content
+    assert "Step 1" not in content
+    assert "Step 2" not in content
+
+
+def test_extractor_prompt_no_tool_names() -> None:
+    """memory_extractor.md does not reference backtick-wrapped fork-cc tool names."""
+    content = Path("co_cli/memory/prompts/memory_extractor.md").read_text(encoding="utf-8")
+
+    for forbidden in ("Write", "Edit", "Bash", "Glob", "Grep"):
+        assert f"`{forbidden}`" not in content, (
+            f"Found forbidden fork-cc tool `{forbidden}` in extractor prompt"
+        )

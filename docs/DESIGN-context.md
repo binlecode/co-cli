@@ -361,6 +361,7 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `subagent.max_requests_research` | `CO_CLI_SUBAGENT_MAX_REQUESTS_RESEARCH` | `10` | research sub-agent budget |
 | `subagent.max_requests_analysis` | `CO_CLI_SUBAGENT_MAX_REQUESTS_ANALYSIS` | `8` | analysis sub-agent budget |
 | `subagent.max_requests_thinking` | `CO_CLI_SUBAGENT_MAX_REQUESTS_THINKING` | `3` | reasoning sub-agent budget |
+| `subagent.max_requests_memory` | `CO_CLI_SUBAGENT_MAX_REQUESTS_MEMORY` | `6` | memory write sub-agent budget |
 
 ## 4. Files
 
@@ -380,7 +381,9 @@ Memory is never chunked and is not indexed in FTS — memories use grep-only rec
 | `co_cli/context/types.py` | `MemoryRecallState` and `SafetyState` |
 | `co_cli/memory/recall.py` | `MemoryEntry` dataclass, `load_memories`, `load_always_on_memories` |
 | `co_cli/memory/_lifecycle.py` | unified memory write lifecycle |
-| `co_cli/memory/_save.py` | singleton memory save agent, manifest builder, overwrite_memory |
+| `co_cli/memory/_save.py` | singleton memory save agent (`_memory_save_agent`), manifest builder, `overwrite_memory` |
+| `co_cli/memory/save_agent.py` | memory write-dispatcher agent singleton (`_save_memory_agent`), `MemoryActionEnum`, `memory` write tool, `SaveMemoryAgentOutput` |
+| `co_cli/memory/prompt_builders.py` | user-turn prompt builders for the save agent and extraction agent |
 | `co_cli/memory/_extractor.py` | post-turn memory extraction and admission |
 | `co_cli/knowledge/_frontmatter.py` | frontmatter parsing and validation |
 | `co_cli/knowledge/_store.py` | SQLite schema, indexing, backend routing, hybrid merge, reranking, sync |

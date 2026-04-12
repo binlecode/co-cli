@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.80] - 2026-04-11
+
+### Added
+- **Memory save agent prompt**: filled `memory_save_agent.md` with full instructions sourced from fork-cc `buildMemoryLines()` — XML type taxonomy (user/feedback/project/reference), dedup protocol, and MEMORY.md two-step write protocol. Save subagent now receives structured guidance instead of a stub.
+- **Extractor prompt enriched**: replaced simplified type taxonomy in `memory_extractor.md` with canonical fork-cc XML type descriptions; added "do not investigate" constraint; preserved existing confidence rules, output format, and examples.
+- **Prompt builder functions**: `build_extraction_user_prompt(line_count, manifest)` and `build_save_user_prompt(instruction)` in `co_cli/memory/prompt_builders.py`; both callsites wired — no inline f-string prompt assembly at call sites.
+
 ## [0.7.78] - 2026-04-11
 
 ### Added

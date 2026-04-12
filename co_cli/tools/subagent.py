@@ -13,6 +13,7 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from co_cli._model_settings import NOREASON_SETTINGS
 from co_cli.deps import CoDeps, make_subagent_deps
+from co_cli.memory.prompt_builders import build_save_user_prompt
 from co_cli.memory.save_agent import SaveMemoryAgentOutput as _SaveMemoryAgentOutput
 from co_cli.memory.save_agent import _save_memory_agent
 from co_cli.tools._subagent_builders import (
@@ -380,7 +381,7 @@ async def _run_save_memory_agent(
         raise ModelRetry("Memory sub-agent is unavailable — handle directly.")
     attempt = await _run_subagent_attempt(
         _save_memory_agent,
-        instruction,
+        build_save_user_prompt(instruction),
         ctx,
         max_requests,
         NOREASON_SETTINGS,
