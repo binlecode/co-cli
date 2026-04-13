@@ -72,27 +72,39 @@ Acceptance criteria:
 
 ## Phase 2 — Workflow change (~2h, requires atomic multi-file coordination)
 
-### 5. exec-plans lifecycle (replace TODO delete)
+### ✓ DONE — 5. exec-plans lifecycle (replace TODO delete)
 
 Current workflow explicitly deletes `docs/TODO-<slug>.md` after Gate 2 PASS. Plan, decisions,
 and scope history disappear.
 
-**Coordination risk**: this change touches CLAUDE.md workflow section, the `orchestrate-dev`
-and `deliver` skill prompts, and the auto-memory entry about temp file deletion rules. All three
-must update atomically — if any stays in "delete" mode, the agent workflow will diverge from the
-new policy mid-delivery.
+Reference design: `hermes-harness` at `~/workspace_genai/hermes-harness`.
+
+**Naming convention**: `YYYY-MM-DD-<slug>.md` — date is the creation date. Migration uses
+today's date (2026-04-13) for all existing TODOs.
+
+**Coordination risk**: all files below must land in one commit — if any stays in "delete" mode,
+the agent workflow diverges from the new policy mid-delivery:
+- `CLAUDE.md` (artifact lifecycle + dev workflow sections)
+- `orchestrate-dev` skill prompt
+- `deliver` skill prompt
+- auto-memory temp-file deletion entry (replace, not update)
+- `test_repo_structure.py` (add dir assertions)
 
 Tasks:
-- [ ] create `docs/exec-plans/active/` and `docs/exec-plans/completed/`
-- [ ] update CLAUDE.md workflow: move plan to `completed/` on ship instead of deleting; update artifact lifecycle section
-- [ ] update `orchestrate-dev` skill: move TODO to `completed/` instead of deleting
-- [ ] update `deliver` skill: same
-- [ ] migrate all current `docs/TODO-*.md` files to `docs/exec-plans/active/`
-- [ ] update auto-memory entry for temp file deletion rules
+- [x] create `docs/exec-plans/active/` with `.gitkeep`
+- [x] create `docs/exec-plans/completed/` with `.gitkeep`
+- [x] update `tests/test_repo_structure.py`: assert both `docs/exec-plans/active/` and `docs/exec-plans/completed/` exist
+- [x] update `CLAUDE.md` artifact lifecycle section: plans live at `docs/exec-plans/active/YYYY-MM-DD-<slug>.md`; on ship use `git mv` to `completed/`; remove "Delete TODO-<slug>.md" line from dev workflow diagram
+- [x] update `orchestrate-dev` skill: use timestamped naming, emit `git mv active/ → completed/` at ship — not delete
+- [x] update `deliver` skill: same
+- [x] replace auto-memory entry: remove temp-file deletion rule; write new entry describing exec-plans lifecycle
+- [x] migrate all `docs/TODO-*.md` files: rename to `2026-04-13-<slug>.md` and move to `docs/exec-plans/active/` via `git mv`
 
 Acceptance criteria:
-- no `TODO-*.md` is ever deleted; completed ones live in `docs/exec-plans/completed/`
-- CLAUDE.md, both skill prompts, and memory all agree on the new lifecycle
+- `docs/exec-plans/active/` and `docs/exec-plans/completed/` exist and are git-tracked
+- structural test asserts both dirs exist
+- CLAUDE.md, both skill prompts, and memory all agree: `git mv` to `completed/`, no deletion
+- all current TODO files migrated with timestamped names in `active/`
 - git log shows the full lifecycle of every plan
 
 ---
@@ -105,14 +117,17 @@ CHANGELOG.md is manually maintained and duplicates commit history. Dropping it o
 once automated releases exist to replace it as the release artifact.
 
 Tasks:
-- [ ] add `.github/workflows/release.yml` triggering on `v*` tags
-- [ ] build wheel with `uv build`, attach to GitHub Release
-- [ ] add note to CLAUDE.md: "git history is the changelog; releases use GitHub Releases"
-- [ ] archive or remove CHANGELOG.md
+- [x] add `.github/workflows/release.yml` triggering on `v*` tags
+- [x] build wheel with `uv build`, attach to GitHub Release
+- [x] add note to CLAUDE.md: "git history is the changelog; releases use GitHub Releases"
+- [x] archive or remove CHANGELOG.md
+- [x] remove "Step 3 — Sync CHANGELOG.md" section from `orchestrate-dev` SKILL.md Phase 5
+- [x] remove CHANGELOG.md block from `deliver` SKILL.md Phase 4
 
 Acceptance criteria:
 - `git tag vX.Y.Z && git push origin vX.Y.Z` produces a GitHub Release with wheel attached
 - no actively-maintained CHANGELOG.md in repo
+- neither skill prompt references CHANGELOG.md
 
 ---
 
@@ -190,7 +205,7 @@ Tasks:
 | 1 | 3 | Structural tests | 1h | |
 | 1 | 4 | GitHub Actions CI | 1h | Audit test scope first |
 | 2 | 5 | exec-plans lifecycle | 2h | Atomic: CLAUDE.md + 2 skills + memory |
-| 3 | 6+7 | Release automation + drop CHANGELOG | 1.5h | Coupled — ship together |
+| 3 | 6+7 | Release automation + drop CHANGELOG | 2h | Coupled — ship together; includes skill cleanup |
 | 3 | 8 | `docs/ARCHITECTURE.md` entrypoint | 1h | |
 | 4 | 9 | Split CLAUDE.md + HARNESS.md | 2h | Medium disruption |
 | 4 | 10 | `docs/product-specs/` | 1h | |

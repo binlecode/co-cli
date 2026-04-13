@@ -107,20 +107,12 @@ Mark completed tasks `✓ DONE` in the plan file (if a slug was used).
 - Even patch = feature/enhancement
 - Odd patch = bugfix
 
-**CHANGELOG.md** — add a release section above the previous latest entry:
-```markdown
-## [<new-version>] - <YYYY-MM-DD>
-
-### Changed / Added / Fixed
-- **<title>**: <what changed and why — one line per logical change, not per task>
-```
-
 **Archive plan** — if a slug was used and review-impl returns PASS, move the plan to completed:
 ```
 git mv docs/exec-plans/active/YYYY-MM-DD-<slug>.md docs/exec-plans/completed/
 ```
 
-**Commit** — stage only delivery files + `pyproject.toml` + `CHANGELOG.md` + the plan archive move (if applicable). Never include unrelated files. If anything is ambiguous, ask before staging.
+**Commit** — stage only delivery files + `pyproject.toml` + the plan archive move (if applicable). Never include unrelated files. If anything is ambiguous, ask before staging.
 
 Commit message:
 - `feat:` / `fix:` / `refactor:` prefix

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.7.90"
+version = "0.7.92"
 description = "Co — personal AI assistant CLI with approval-gated shell, Google Drive/Gmail/Calendar, Obsidian, and OTel tracing"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -33,7 +33,6 @@ co = "co_cli.main:app"
 
 [dependency-groups]
 dev = [
-    "pyright>=1.1.408",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
@@ -55,6 +54,9 @@ select = [
     "B",      # flake8-bugbear
     "SIM",    # flake8-simplify
     "RUF",    # ruff-specific rules
+    "C90",    # McCabe complexity — enforces modular, non-tangled functions
+    "PT",     # pytest style — enforces test discipline
+    "T20",    # no stray print() calls in production code
 ]
 ignore = [
     "E402",   # module-import-not-at-top — conditional/deferred imports are intentional
@@ -69,33 +71,20 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["co_cli"]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.per-file-ignores]
+"evals/**/*.py" = ["T201", "C901"]  # evals use print intentionally; test scenarios are inherently complex
+"scripts/**/*.py" = ["T201"]        # scripts use print intentionally
+"tests/**/*.py" = ["C901"]          # comprehensive test functions naturally exceed complexity limits
+"tests/_*.py" = ["T201"]            # test infrastructure helpers use print for progress output
+"strip_audit_log.py" = ["T201"]     # root-level one-off script, print is intentional
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
-[tool.pyright]
-pythonVersion = "3.12"
-include = ["co_cli"]
-exclude = ["tests", "evals", "scripts"]
-typeCheckingMode = "standard"
-venvPath = "."
-venv = ".venv"
-reportMissingTypeStubs = false
-# pydantic-ai SDK generics (Agent, RunContext, ToolReturnContent) and
-# stub-less packages (pysqlite3, google-genai) produce false positives
-# that cannot be fixed without casts everywhere. Downgrade to warnings
-# so the gate passes while still surfacing them for review.
-reportArgumentType = "warning"
-reportAttributeAccessIssue = "warning"
-reportOptionalMemberAccess = "warning"
-reportReturnType = "warning"
-reportIndexIssue = "warning"
-reportInvalidTypeForm = "warning"
-reportOperatorIssue = "warning"
-reportGeneralClassIssue = "warning"
-reportCallIssue = "warning"
-reportAssignmentType = "warning"
-reportIncompatibleMethodOverride = "warning"
 
 [tool.pytest.ini_options]
 addopts = "-x --durations=0 -p _co_harness"
